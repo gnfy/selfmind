@@ -12,6 +12,7 @@ import (
 const (
 	LocalControlTokenHeader        = "X-SelfMind-Local-Control-Token"
 	ShutdownReasonServiceReconcile = "service_reconcile"
+	ModelControlProtocolVersion    = 2
 )
 
 type ActiveRunStatus struct {
@@ -93,17 +94,19 @@ type ModelProbeResponse struct {
 }
 
 type ModelChangeRequest struct {
-	Action             string                `json:"action"`
-	Route              string                `json:"route,omitempty"`
-	Provider           string                `json:"provider,omitempty"`
-	Model              string                `json:"model,omitempty"`
-	Reasoning          *string               `json:"reasoning,omitempty"`
-	ServiceTier        *string               `json:"service_tier,omitempty"`
-	ChangeID           string                `json:"change_id,omitempty"`
-	ExpectedGeneration int64                 `json:"expected_generation,omitempty"`
-	ReplacePending     bool                  `json:"replace_pending,omitempty"`
-	Patches            []ModelSelectionPatch `json:"patches,omitempty"`
-	ValidateRoutes     []string              `json:"validate_routes,omitempty"`
+	Action             string                      `json:"action"`
+	Route              string                      `json:"route,omitempty"`
+	Provider           string                      `json:"provider,omitempty"`
+	Model              string                      `json:"model,omitempty"`
+	Reasoning          *string                     `json:"reasoning,omitempty"`
+	ServiceTier        *string                     `json:"service_tier,omitempty"`
+	ChangeID           string                      `json:"change_id,omitempty"`
+	ExpectedGeneration int64                       `json:"expected_generation,omitempty"`
+	ReplacePending     bool                        `json:"replace_pending,omitempty"`
+	Patches            []ModelSelectionPatch       `json:"patches,omitempty"`
+	ValidateRoutes     []string                    `json:"validate_routes,omitempty"`
+	CredentialStage    string                      `json:"credential_stage,omitempty"`
+	ProviderPatches    []modelchange.ProviderPatch `json:"provider_patches,omitempty"`
 }
 
 type ModelSelectionPatch struct {
@@ -114,9 +117,11 @@ type ModelSelectionPatch struct {
 	ServiceTier *string `json:"service_tier,omitempty"`
 	Reset       bool    `json:"reset,omitempty"`
 	APIKey      string  `json:"api_key,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
 }
 
 type ModelChangeResponse struct {
+	ProtocolVersion  int                       `json:"protocol_version,omitempty"`
 	Status           *modelchange.Status       `json:"status,omitempty"`
 	Change           *modelchange.Change       `json:"change,omitempty"`
 	Notices          []string                  `json:"notices,omitempty"`
@@ -124,6 +129,7 @@ type ModelChangeResponse struct {
 	NeedsRestart     bool                      `json:"needs_restart,omitempty"`
 	Probes           []modelchange.ProbeResult `json:"probes,omitempty"`
 	RestartScheduled bool                      `json:"restart_scheduled,omitempty"`
+	CredentialStage  string                    `json:"credential_stage,omitempty"`
 }
 
 type MCPServerFailure struct {

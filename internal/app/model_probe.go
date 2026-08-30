@@ -47,6 +47,9 @@ func ResolveModelRuntime(ctx context.Context, cfg *config.Config, role string) (
 	selection := modelruntime.Selection{}
 	if role != "" && !strings.EqualFold(role, "primary") {
 		if strings.EqualFold(role, "auxiliary") {
+			if !cfg.AuxiliaryEnabled() {
+				return modelruntime.Runtime{}, fmt.Errorf("background model work is disabled")
+			}
 			auxiliary := cfg.EffectiveAuxiliary()
 			if strings.TrimSpace(auxiliary.Provider) == "" && strings.TrimSpace(auxiliary.Model) == "" {
 				return modelruntime.Runtime{}, fmt.Errorf("auxiliary model is not configured")
@@ -239,7 +242,7 @@ func ProbeConfiguredModelRoles(ctx context.Context, cfg *config.Config) []ModelR
 	targets := make(map[string]*roleProbeTarget)
 	var unresolved []ModelRoleProbe
 	auxiliary := cfg.EffectiveAuxiliary()
-	if strings.TrimSpace(auxiliary.Provider) != "" || strings.TrimSpace(auxiliary.Model) != "" {
+	if cfg.AuxiliaryEnabled() && (strings.TrimSpace(auxiliary.Provider) != "" || strings.TrimSpace(auxiliary.Model) != "") {
 		selection := modelruntime.Selection{
 			Provider: auxiliary.Provider, Model: auxiliary.Model,
 			ContextLength: auxiliary.ContextLength, ReasoningEffort: auxiliary.Reasoning,
@@ -254,6 +257,9 @@ func ProbeConfiguredModelRoles(ctx context.Context, cfg *config.Config) []ModelR
 		}
 	}
 	for _, roleName := range roleNames {
+		if !cfg.AuxiliaryEnabled() && isAuxiliaryModelRole(llm.ModelRole(roleName)) {
+			continue
+		}
 		roleCfg := cfg.Models.Roles[roleName]
 		if roleConfigEmpty(roleCfg) {
 			continue

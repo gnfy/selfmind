@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"selfmind/internal/gateway/api"
@@ -348,8 +350,16 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	attachAuth(req)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
+	var requestWritten atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				requestWritten.Store(true)
+			}
+		},
+	}))
+	resp, requestErr := http.DefaultClient.Do(req)
+	if requestErr != nil {
 		if opts.DataDir != "" {
 			manager := NewManager(opts.DataDir, "")
 			if _, ok := manager.RunningRecord(); !ok {
@@ -359,22 +369,30 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 		if opts.Force {
 			return forceStopFromDataDir(opts.DataDir)
 		}
-		return err
-	}
-	if resp.StatusCode >= 400 {
-		data, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
-		if opts.Force {
-			return forceStopFromDataDir(opts.DataDir)
+		// A request that never reached the transport cannot have initiated a
+		// shutdown. Once the full request was written, however, an EOF is
+		// ambiguous: older Gateways closed their HTTP server before flushing the
+		// acceptance response. Continue only when the local runtime receipt can
+		// prove that exact owner subsequently disappeared or was replaced.
+		if opts.DataDir == "" || !requestWritten.Load() {
+			return requestErr
 		}
-		return fmt.Errorf("%s: %s", resp.Status, string(data))
+	} else {
+		if resp.StatusCode >= 400 {
+			data, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if opts.Force {
+				return forceStopFromDataDir(opts.DataDir)
+			}
+			return fmt.Errorf("%s: %s", resp.Status, string(data))
+		}
+		// Release the shutdown request's keep-alive connection before waiting for
+		// the daemon PID to disappear. Holding the response body open makes
+		// http.Server.Shutdown wait for its full ten-second deadline, needlessly
+		// extending the local blackout on every model change.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 	}
-	// Release the shutdown request's keep-alive connection before waiting for
-	// the daemon PID to disappear. Holding the response body open makes
-	// http.Server.Shutdown wait for its full ten-second deadline, needlessly
-	// extending the local blackout on every model change.
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
 
 	deadline := time.Now().Add(timeout)
 	serviceReconcile := strings.EqualFold(strings.TrimSpace(opts.Reason), api.ShutdownReasonServiceReconcile)
@@ -410,6 +428,9 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 	}
 	if opts.Force {
 		return forceStopFromDataDir(opts.DataDir)
+	}
+	if requestErr != nil {
+		return requestErr
 	}
 	return nil
 }

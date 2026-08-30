@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// TestFormatProducesExpandableToken is the invariant the two divergent literal
-// patterns broke: a token this package builds must survive its own detector and
-// must never carry a bracket or a line break, whatever the label contains.
+// TestFormatProducesExpandableToken pins the invariant that a token this
+// package builds survives its own detector and never spans lines.
 func TestFormatProducesExpandableToken(t *testing.T) {
 	labels := []string{
 		"main.go.. (80 lines) .. end",
@@ -20,10 +19,6 @@ func TestFormatProducesExpandableToken(t *testing.T) {
 	for _, label := range labels {
 		for _, kind := range []string{KindPaste, KindImage} {
 			token := Format(kind, 0, label)
-			inner := strings.TrimSuffix(strings.TrimPrefix(token, "[[ "), " ]]")
-			if strings.ContainsAny(inner, "[]") {
-				t.Fatalf("token %q (label %q) carries a bracket inside its delimiters", token, label)
-			}
 			if strings.ContainsAny(token, "\r\n") {
 				t.Fatalf("token %q (label %q) spans lines", token, label)
 			}
@@ -37,18 +32,26 @@ func TestFormatProducesExpandableToken(t *testing.T) {
 	}
 }
 
-// TestContainsUnresolvedStillCatchesLegacyTokens keeps the guard permissive: an
-// older client (or a recalled history entry) can still submit the bracketed
-// label form, and the daemon must keep rejecting it.
-func TestContainsUnresolvedStillCatchesLegacyTokens(t *testing.T) {
+func TestFormatUsesHumanOneBasedOrdinal(t *testing.T) {
+	if got := Format(KindPaste, 0, "80 lines"); got != "[Paste #1 · 80 lines]" {
+		t.Fatalf("Format paste = %q", got)
+	}
+	if got := Format(KindImage, 1, "screenshot.png"); got != "[Image #2 · screenshot.png]" {
+		t.Fatalf("Format image = %q", got)
+	}
+}
+
+// Former double-bracket placeholders are ordinary text. There is deliberately
+// no compatibility detector or expansion path for them.
+func TestContainsUnresolvedIgnoresLegacyTokens(t *testing.T) {
 	legacy := []string{
 		"Inspect this content: [[ paste:0 main.go.. [80 lines] .. end ]]",
 		"[[ paste:12 [1.2K lines] ]]",
 		"look at [[ image:0 shot [1].png ]] please",
 	}
 	for _, text := range legacy {
-		if !ContainsUnresolved(text) {
-			t.Fatalf("legacy token not detected: %q", text)
+		if ContainsUnresolved(text) {
+			t.Fatalf("legacy token unexpectedly detected: %q", text)
 		}
 	}
 }
@@ -60,6 +63,8 @@ func TestContainsUnresolvedIgnoresOrdinaryText(t *testing.T) {
 		"array[[0]] indexing",
 		"paste:0 without delimiters",
 		"[[ paste:abc not an index ]]",
+		"[Paste #0 · invalid ordinal]",
+		"[paste #1 · wrong case]",
 	}
 	for _, text := range safe {
 		if ContainsUnresolved(text) {

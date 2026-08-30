@@ -81,28 +81,78 @@ func TestApprovalRequestArmsPanel(t *testing.T) {
 	}
 }
 
+func TestApprovalPromptStaysInActiveRegion(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	model.processState().Update(processEvent{
+		kind: processStreamDelta, content: "UNDERLYING_REASONING", phase: llm.AssistantPhaseCommentary,
+	})
+	model.activePlanJSON = `{"plan":[{"step":"UNDERLYING_PLAN","status":"in_progress"}]}`
+	model.editor.SetValue("UNDERLYING_DRAFT")
+
+	updated, _ := model.Update(sampleApproval("apr_inline"))
+	model = updated.(*uiModel)
+	view := stripANSI(model.View())
+
+	if !strings.Contains(view, "Would you like to make the following edits?") || !strings.Contains(view, "Yes, proceed") {
+		t.Fatalf("inline approval is missing its decision content:\n%s", view)
+	}
+	for _, visible := range []string{"UNDERLYING_REASONING", "UNDERLYING_PLAN", "UNDERLYING_DRAFT"} {
+		if !strings.Contains(view, visible) {
+			t.Fatalf("inline approval hid active-region content %q:\n%s", visible, view)
+		}
+	}
+}
+
+func TestInlineApprovalCapturesKeysOverPager(t *testing.T) {
+	model, calls := newApprovalTestModel()
+	model.openHelp()
+
+	updated, _ := model.Update(sampleApproval("apr_over_pager"))
+	model = updated.(*uiModel)
+	if view := stripANSI(model.View()); !strings.Contains(view, "Would you like to make the following edits?") {
+		t.Fatalf("inline approval should temporarily preempt the pager:\n%s", view)
+	}
+	updated, _ = model.Update(keyRunes("y"))
+	model = updated.(*uiModel)
+
+	if len(*calls) != 1 || (*calls)[0].id != "apr_over_pager" || (*calls)[0].decision != "approved" {
+		t.Fatalf("inline approval did not capture the decision over pager: calls=%+v", *calls)
+	}
+	if model.approvalPrompt != nil {
+		t.Fatal("approved inline prompt remained active")
+	}
+	if view := stripANSI(model.View()); !strings.Contains(view, "Keyboard") {
+		t.Fatalf("pager should return after the approval resolves:\n%s", view)
+	}
+}
+
 // TestApprovalPanelSuppressesSpinnerLine: while the panel is up, the
-// "Preparing to run <tool>" spinner/activity line is redundant noise and must
-// disappear from the active region. It returns once the run resumes.
+// model-wait spinner is redundant noise and must disappear from the active
+// region. It returns only when a subsequent structured model_wait arrives.
 func TestApprovalPanelSuppressesSpinnerLine(t *testing.T) {
 	model, _ := newApprovalTestModel()
-	model.thinking = true
-	model.activityText = "Preparing to run write_file."
+	model.startModelWait("Waiting for the model")
 
 	updated, _ := model.Update(sampleApproval("apr_1"))
 	model = updated.(*uiModel)
 
-	if active := stripANSI(model.renderActiveBlock(100)); strings.Contains(active, "Preparing to run") {
+	if active := stripANSI(model.renderActiveBlock(100)); strings.Contains(active, "Waiting for the model") {
 		t.Fatalf("hybrid active region must hide the spinner line while the panel is up:\n%s", active)
 	}
-	// Resolving the approval resumes the run and restores the working indicator.
+	// Resolving the approval resumes the run, but does not guess that the model is
+	// waiting. The next structured phase restarts the spinner.
 	updated, _ = model.Update(keyRunes("y"))
 	model = updated.(*uiModel)
 	if !model.thinking {
 		t.Fatal("run should resume as working after the decision")
 	}
-	if active := stripANSI(model.renderActiveBlock(100)); !strings.Contains(active, "Working") {
-		t.Fatalf("spinner line should return after the decision:\n%s", active)
+	if active := stripANSI(model.renderActiveBlock(100)); strings.TrimSpace(active) != "" {
+		t.Fatalf("spinner returned before model_wait:\n%s", active)
+	}
+	updated, _ = model.Update(MsgAgentActivity{Phase: modelWaitPhase, Content: "Waiting for the model to decide after tool results"})
+	model = updated.(*uiModel)
+	if active := stripANSI(model.renderActiveBlock(100)); !strings.Contains(active, "Waiting for the model") {
+		t.Fatalf("spinner did not restart on model_wait:\n%s", active)
 	}
 }
 

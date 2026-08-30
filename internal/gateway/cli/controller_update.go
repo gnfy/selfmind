@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
@@ -31,24 +32,14 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// In-session update announcement: consumed only when idle (update_notice.go).
 	m.maybeAnnounceUpdate()
 
-	spinnerCmd := tea.Cmd(nil)
-	if m.thinking {
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		spinnerCmd = cmd
-
-		// Animate "Thinking..." dots every ~500ms
-		if _, ok := msg.(spinner.TickMsg); ok {
-			m.thinkingDots = int(time.Since(m.thinkingStart).Seconds() * 2)
-		}
-	}
+	var spinnerCmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.common.Width, m.common.Height = msg.Width, msg.Height
 		if m.editor != nil {
-			m.editor.SetLayoutWidth(msg.Width)
+			m.editor.SetLayout(msg.Width, msg.Height)
 		}
 		if m.pager != nil {
 			m.pager.Resize(msg.Width, msg.Height)
@@ -70,11 +61,14 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.maybeShowStartupDigest(msg.Width)
 
 	case spinner.TickMsg:
+		if !m.waitingForModel {
+			return m, nil
+		}
+		m.spinner, spinnerCmd = m.spinner.Update(msg)
 		return m, spinnerCmd
 
 	case MsgWorkingTick:
 		if m.thinking || m.toolExecuting != "" || (m.daemonRunActive && !m.backgroundDaemonRunActive()) {
-			m.thinkingDots++
 			return m, workingTick()
 		}
 		return m, nil
@@ -86,33 +80,36 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cursorBlinkTick()
 
-	case MsgStreamFlush:
-		m.streamFlushPending = false
-		if m.flushLiveStreamPending() {
-		}
-		return m, m.scheduleStreamFlush()
-
 	case MsgAgentActivity:
 		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
-		m.activityText = strings.TrimSpace(msg.Content)
-		if !m.passiveDaemonEvent(msg.Event) {
-			m.thinking = true
-			if m.thinkingStart.IsZero() {
-				m.thinkingStart = time.Now()
-			}
+		if strings.EqualFold(strings.TrimSpace(msg.Phase), modelWaitPhase) && !m.passiveDaemonEvent(msg.Event) {
+			return m, m.startModelWait(msg.Content)
 		}
+		m.stopModelWait()
+		m.activityText = ""
 		return m, spinnerCmd
 
+	case MsgBackgroundNotice:
+		if content := strings.TrimSpace(textutil.CleanUTF8(msg.Content)); content != "" {
+			kind := noticeWarning
+			if msg.Success {
+				kind = noticeSuccess
+			}
+			m.addNotice(kind, content)
+		}
+		return m, nil
+
 	case MsgModelValidationDone:
+		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""
 		if m.modelManager == nil {
 			return m, nil
 		}
 		if msg.Err != nil {
-			m.modelManager.SetRouteValidation(msg.Route, false, msg.Err.Error())
+			m.modelManager.SetRouteValidation(msg.Route, false, msg.Err.Error(), "")
 			return m, nil
 		}
 		ok := len(msg.Response.Probes) > 0
@@ -132,10 +129,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !ok && message == "" {
 			message = "validation returned no evidence"
 		}
-		m.modelManager.SetRouteValidation(msg.Route, ok, message)
+		m.modelManager.SetRouteValidation(msg.Route, ok, message, msg.Response.CredentialStage)
 		return m, nil
 
 	case MsgModelChangeDone:
+		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""
 		if msg.Err != nil {
@@ -215,7 +213,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.addErrorMessage(fmt.Sprintf("Model change %s requires recovery: %s", status.Pending.ID, status.Pending.Failure))
 			} else {
 				if msg.OpenManager {
-					m.modelManager = components.NewModelManager(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height)
+					m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
 				}
 				return m, m.observeModelChange(false, 250*time.Millisecond)
 			}
@@ -237,7 +235,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if msg.OpenManager {
-			m.modelManager = components.NewModelManager(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height)
+			m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
 		}
 		return m, nil
 
@@ -253,6 +251,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.observeModelChange(false, 100*time.Millisecond)
 
 	case MsgModelManagerOpen:
+		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""
 		if msg.Err != nil {
@@ -263,14 +262,21 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addErrorMessage("Could not load model routes: the daemon returned no status.")
 			return m, nil
 		}
+		if msg.Response.ProtocolVersion < api.ModelControlProtocolVersion {
+			m.addErrorMessage("The running SelfMind service is too old for Provider connections. Run `selfmind gateway restart --drain`, then reopen Model Manager.")
+			return m, nil
+		}
 		m.modelManagerStatus = modelManagerStatusFrom(*msg.Response.Status)
-		m.modelManager = components.NewModelManager(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height)
+		m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
 		return m, nil
 
 	case tea.KeyMsg:
 		// Same signal, different purpose: the approval panel must not arm while
 		// the person is mid-keystroke (approvalTypingIdleDelay).
 		m.noteInputActivity(time.Now())
+		if m.approvalPrompt != nil {
+			return m.handleKey(msg)
+		}
 		if m.modelManager != nil {
 			action := m.modelManager.Update(msg)
 			if action.RecoveryAction != "" {
@@ -279,19 +285,19 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if action.ValidationRoute != "" {
 				if len(action.Draft) == 0 {
-					m.modelManager.SetRouteValidation(action.ValidationRoute, true, "")
+					m.modelManager.SetRouteValidation(action.ValidationRoute, true, "", "")
 					return m, nil
 				}
 				m.thinking = true
 				m.thinkingStart = time.Now()
 				m.activityText = "Validating model selection"
-				return m, m.validateModelManager(action.ValidationRoute, action.Draft)
+				return m, m.validateModelManager(action.ValidationRoute, action.Draft, action.ProviderDraft, m.modelManager.CredentialStage())
 			}
-			if action.Closed && len(action.Draft) > 0 {
+			if action.Closed && (len(action.Draft) > 0 || len(action.ProviderDraft) > 0) {
 				m.thinking = true
 				m.thinkingStart = time.Now()
 				m.activityText = "Applying model changes"
-				return m, m.submitModelManager(action.Draft)
+				return m, m.submitModelManager(action.Draft, action.ProviderDraft, m.modelManager.CredentialStage())
 			}
 			if action.Closed {
 				m.modelManager = nil
@@ -315,21 +321,13 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		msg.Content = textutil.CleanUTF8(msg.Content)
+		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""
-		phaseChanged := msg.Phase != llm.AssistantPhaseUnspecified &&
-			m.liveStreamPhase != llm.AssistantPhaseUnspecified &&
-			msg.Phase != m.liveStreamPhase
-		if phaseChanged && (strings.TrimSpace(m.liveStreamContent) != "" || m.streamController.Pending()) {
-			m.finalizeLiveStream("", m.liveStreamPhase)
-		}
-		if msg.Phase != llm.AssistantPhaseUnspecified {
-			m.liveStreamPhase = msg.Phase
-		}
-		if committed := m.streamController.Push(msg.Content); committed != "" {
-			m.commitLiveStream(committed)
-		}
-		return m, m.scheduleStreamFlush()
+		m.applyProcessEffects(m.processState().Update(processEvent{
+			kind: processStreamDelta, content: msg.Content, phase: msg.Phase,
+		}))
+		return m, spinnerCmd
 
 	case MsgSkillCompletionLoaded:
 		// A refresh failure leaves the previous inventory in place: completion is
@@ -343,6 +341,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.finishSkillInvocationResolution(msg)
 
 	case MsgAgentDone:
+		m.stopModelWait()
 		m.exitPromptActive = false
 		if queuedTurn(msg.Turn) {
 			msg.Response = textutil.CleanUTF8(msg.Response)
@@ -440,6 +439,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runTokens = 0
 		m.activePlanJSON = ""
 		if !localMatch {
+			m.stopModelWait()
 			m.thinking = false
 			m.activityText = ""
 			m.toolExecuting = ""
@@ -503,13 +503,13 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addMessage("notice", backgroundResultNotice(backgroundWatchID, backgroundOrigin, msg.Status, msg.Summary))
 			return m, spinnerCmd
 		}
+		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""
 		m.toolExecuting = ""
 		m.activePlanJSON = ""
 		m.finalizeOpenToolMessages("Completion was not observed before the run ended.")
-		m.flushLiveStreamPending()
-		if strings.TrimSpace(m.liveStreamContent) != "" {
+		if m.processState().HasStreamContent() {
 			m.finalizeLiveStream("", llm.AssistantPhaseFinalAnswer)
 		} else {
 			m.finalizeLiveStream(msg.Summary, llm.AssistantPhaseFinalAnswer)
@@ -568,11 +568,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgApprovalRequest:
+		m.stopModelWait()
 		if m.hasApprovalRequest(msg.ID) {
 			return m, nil
 		}
-		// The daemon is blocked waiting for approval. Arm the interactive panel
-		// (active region); if one is already up, queue FIFO and re-arm after the
+		// The daemon is blocked waiting for approval. Arm the inline panel;
+		// if one is already up, queue FIFO and re-arm after the
 		// current decision. No redundant text notice — the panel is the prompt.
 		if m.approvalFlowActive() {
 			m.approvalQueue = append(m.approvalQueue, msg)
@@ -607,6 +608,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgClarifyRequest:
+		m.stopModelWait()
 		m.armClarifyPrompt(tools.ClarifyRequest{Question: msg.Question, Choices: msg.Choices}, true)
 		return m, nil
 
@@ -632,22 +634,20 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if strings.TrimSpace(msg.ToolCallID) == "" {
 			return m, spinnerCmd
 		}
-		if isTerminalRunStatus(m.runStatus) || m.toolMessageIndex(msg.ToolCallID, msg.Event.RunID) >= 0 {
+		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
-		m.finalizeLiveStream("", llm.AssistantPhaseCommentary)
+		effects := m.processState().Update(processEvent{
+			kind: processToolStarted, toolName: msg.ToolName, toolCallID: msg.ToolCallID,
+			toolArgs: msg.Args, runID: msg.Event.RunID,
+		})
+		m.applyProcessEffects(effects)
+		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""
 		if !m.passiveDaemonEvent(msg.Event) {
 			m.toolExecuting = msg.ToolName
 		}
-		m.addMessage("tool", "")
-		last := &m.messages[len(m.messages)-1]
-		last.ToolName = msg.ToolName
-		last.ToolCallID = msg.ToolCallID
-		last.RunID = msg.Event.RunID
-		last.ToolArgs = msg.Args
-		last.IsRunning = true
 		return m, spinnerCmd
 
 	case MsgToolDone:
@@ -658,62 +658,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		msg.Result = textutil.CleanUTF8(msg.Result)
-		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName, msg.Event.RunID)
-		if idx >= 0 {
-			last := &m.messages[idx]
-			if strings.TrimSpace(msg.ToolName) != "" {
-				last.ToolName = msg.ToolName
-			}
-			if msg.ToolCallID != "" {
-				last.ToolCallID = msg.ToolCallID
-			}
-			last.Duration = msg.Duration
-			last.IsRunning = false
-			last.RunningDetail = ""
-			if msg.Err != nil {
-				existing := strings.TrimSpace(last.Content)
-				errText := fmt.Sprintf("%s error: %v", msg.ToolName, msg.Err)
-				if existing != "" {
-					last.Content = existing + "\n" + errText
-				} else {
-					last.Content = errText
-				}
-				last.IsError = true
-			} else {
-				if strings.TrimSpace(msg.Result) != "" {
-					last.Content = msg.Result
-				}
-				last.IsError = false
-			}
-			// The tool cell is now final — commit it to scrollback (hybrid mode).
-			m.commit(last)
-		} else if strings.TrimSpace(msg.ToolCallID) != "" &&
-			m.toolMessageIndex(msg.ToolCallID, msg.Event.RunID) < 0 &&
-			m.currentToolEvent(msg.Event) {
-			// A completion for this run that has no tracked start is not discarded
-			// and never guessed onto another active call. Give it a standalone,
-			// already-completed history cell: the explicit orphan destination.
-			toolName := strings.TrimSpace(msg.ToolName)
-			if toolName == "" {
-				toolName = "tool"
-			}
-			m.messages = append(m.messages, ChatMessage{
-				Role:       "tool",
-				ToolName:   toolName,
-				ToolCallID: msg.ToolCallID,
-				RunID:      msg.Event.RunID,
-				Content:    msg.Result,
-				Duration:   msg.Duration,
-				IsError:    msg.Err != nil,
-				Timestamp:  time.Now(),
-			})
-			orphan := &m.messages[len(m.messages)-1]
-			if msg.Err != nil {
-				orphan.Content = fmt.Sprintf("%s error: %v", toolName, msg.Err)
-			}
-			m.commit(orphan)
-		}
-		if !m.anyToolRunning() && !m.passiveDaemonEvent(msg.Event) {
+		m.applyProcessEffects(m.processState().Update(processEvent{
+			kind: processToolCompleted, toolName: msg.ToolName, toolCallID: msg.ToolCallID,
+			runID: msg.Event.RunID, result: msg.Result, err: msg.Err, duration: msg.Duration,
+			allowOrphan: m.currentToolEvent(msg.Event),
+		}))
+		if !m.processState().HasRunningTools() && !m.passiveDaemonEvent(msg.Event) {
 			m.toolExecuting = ""
 		}
 		return m, spinnerCmd
@@ -737,9 +687,13 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
+		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""
-		m.appendToolOutput(msg.ToolCallID, msg.ToolName, msg.Event.RunID, msg.Content)
+		m.applyProcessEffects(m.processState().Update(processEvent{
+			kind: processToolOutput, toolName: msg.ToolName, toolCallID: msg.ToolCallID,
+			runID: msg.Event.RunID, content: textutil.CleanUTF8(msg.Content),
+		}))
 		return m, spinnerCmd
 
 	case MsgToolHeartbeat:
@@ -749,24 +703,13 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
-		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName, msg.Event.RunID)
-		if idx >= 0 {
-			if msg.ToolName != "" && !m.passiveDaemonEvent(msg.Event) {
-				m.toolExecuting = msg.ToolName
-			}
-			last := &m.messages[idx]
-			if msg.ToolName == "" || last.ToolName == "" || last.ToolName == msg.ToolName {
-				if msg.ToolName != "" {
-					last.ToolName = msg.ToolName
-				}
-				if msg.ToolCallID != "" {
-					last.ToolCallID = msg.ToolCallID
-				}
-				if !isGenericToolHeartbeat(msg.ToolName, msg.Content) {
-					last.RunningDetail = msg.Content
-				}
-			}
+		if msg.ToolName != "" && !m.passiveDaemonEvent(msg.Event) {
+			m.toolExecuting = msg.ToolName
 		}
+		m.applyProcessEffects(m.processState().Update(processEvent{
+			kind: processToolHeartbeat, toolName: msg.ToolName, toolCallID: msg.ToolCallID,
+			runID: msg.Event.RunID, detail: textutil.CleanUTF8(msg.Content),
+		}))
 		return m, spinnerCmd
 
 	case MsgLearningEvent:
@@ -845,7 +788,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Composer-local navigation and completion are arbitrated inside Editor so
 	// recalled slash commands cannot reopen a popup that steals history arrows.
-	// Shift+Enter or Ctrl+J inserts a newline (multi-line input).
+	// Ctrl+J inserts a newline (multi-line input); plain Enter submits.
 	case tea.KeyCtrlJ:
 		result := m.editor.HandleKey(msg)
 		return m, result.Cmd
@@ -904,10 +847,10 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if result := m.editor.HandleKey(msg); result.Action != components.ComposerActionSubmit {
 				return m, result.Cmd
 			}
-			// Shift+Enter / Ctrl+J already handled above via KeyCtrlJ.
+			// Ctrl+J is handled above via KeyCtrlJ.
 			// Here plain Enter submits
 			// Use ExpandValue() to replace paste placeholders with actual content.
-			// The display form (with compact [[ paste:N ]] / [[ image:N ]] tokens)
+			// The display form (with compact [Paste #N · size] / [Image #N · name] tokens)
 			// is what the transcript echoes; the expanded form is what runs.
 			preview := m.editor.PreviewSubmission()
 			display := preview.Display
@@ -916,8 +859,8 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// A placeholder that survived expansion means its payload can no
-			// longer be recovered (an edited token, or one restored from an older
-			// client). Refuse locally and KEEP the composer: resetting it here is
+			// longer be recovered (an edited token or unmatched current-format
+			// token). Refuse locally and KEEP the composer: resetting it here is
 			// what previously turned the daemon's "paste it again" into a dead
 			// end, because the snippet buffer was already gone.
 			if stranded := preview.Unresolved; stranded != "" {
@@ -941,25 +884,19 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.clarifyGateway = false
 					m.clarifyChoices = nil
 					m.clarifyReq = tools.ClarifyRequest{}
-					m.thinking = true
 					m.runStatus = "working"
-					m.thinkingStart = time.Now()
-					m.thinkingDots = 0
-					m.activityText = "Waiting for the task to continue"
-					return m, tea.Batch(m.answerClarifyViaGateway(response), m.spinner.Tick, workingTick())
+					waitCmd := m.startModelWait("Waiting for the model to continue the task")
+					return m, tea.Batch(m.answerClarifyViaGateway(response), waitCmd, workingTick())
 				}
 				m.clarifyBridge.Submit(m.clarifyReq, response)
 				m.clarifyMode = false
 				m.clarifyGateway = false
 				m.clarifyChoices = nil
 				m.clarifyReq = tools.ClarifyRequest{}
-				m.thinking = true
 				m.runStatus = "working"
-				m.thinkingStart = time.Now()
-				m.thinkingDots = 0
 				m.runTokens = 0
-				m.activityText = "Thinking about the response"
-				return m, tea.Batch(m.spinner.Tick, workingTick())
+				waitCmd := m.startModelWait("Waiting for the model to respond")
+				return m, tea.Batch(waitCmd, workingTick())
 			}
 
 			// An armed /resume picker reads the next bare number as a menu pick.
@@ -994,16 +931,13 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.steerCh = make(chan string, 16)
 			m.localRequestActive = true
 			m.localRequestInput = input
-			m.thinking = true
 			m.runStatus = "working"
-			m.thinkingStart = time.Now()
-			m.thinkingDots = 0
 			m.runTokens = 0
-			m.activityText = "Thinking about the request"
+			waitCmd := m.startModelWait("Waiting for the model to choose the first step")
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFn = cancel
 			ctx = kernel.WithSteering(ctx, m.steerCh)
-			return m, tea.Batch(m.runAgent(ctx, input), m.spinner.Tick, workingTick())
+			return m, tea.Batch(m.runAgent(ctx, input), waitCmd, workingTick())
 		}
 	}
 	result := m.editor.HandleKey(msg)

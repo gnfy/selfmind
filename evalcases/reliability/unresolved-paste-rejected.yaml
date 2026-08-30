@@ -9,11 +9,7 @@ ci:
   reason: credentialless
   platforms: [linux, darwin]
 turns:
-  # The current composer's token shape (parenthesised label). The legacy
-  # bracketed form must stay rejected too and is pinned by
-  # internal/platform/pastetoken tests, which is also where both sides now read
-  # the pattern from.
-  - input: "Inspect this content: [[ paste:0 main.go.. (80 lines) .. end ]]"
+  - input: "Inspect this content: [Paste #1 · 80 lines]"
 expect:
   http_status: 400
   require_no_task: true

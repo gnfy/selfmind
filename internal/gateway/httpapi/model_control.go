@@ -102,7 +102,7 @@ func buildModelDraft(service *modelchange.Service, req api.ModelChangeRequest) (
 		}
 		built, buildErr := modelchange.BuildCandidate(candidate, modelchange.SelectionPatch{
 			Route: route, Provider: patch.Provider, Model: patch.Model,
-			Reasoning: reasoning, ServiceTier: serviceTier,
+			Reasoning: reasoning, ServiceTier: serviceTier, Enabled: patch.Enabled,
 		})
 		if buildErr != nil {
 			return modelchange.Snapshot{}, 0, nil, buildErr
@@ -129,47 +129,37 @@ func modelDraftCredentials(req api.ModelChangeRequest) map[string]string {
 	return credentials
 }
 
+func buildProviderDraft(service *modelchange.Service, req api.ModelChangeRequest) ([]modelchange.ProviderChange, error) {
+	if len(req.ProviderPatches) == 0 {
+		return nil, nil
+	}
+	if service == nil {
+		return nil, fmt.Errorf("model management is unavailable")
+	}
+	cfg, err := config.LoadConfig(config.Options{Path: service.ConfigPath})
+	if err != nil {
+		return nil, err
+	}
+	return modelchange.BuildProviderChanges(cfg, req.ProviderPatches)
+}
+
 func applyModelDraftCredentials(cfg *config.Config, credentials map[string]string) error {
 	if cfg == nil {
 		return fmt.Errorf("config is required")
 	}
 	for provider, apiKey := range credentials {
-		switch provider {
-		case "openai":
-			cfg.Providers.OpenAI.APIKey = apiKey
-		case "anthropic":
-			cfg.Providers.Anthropic.APIKey = apiKey
-		case "google", "gemini":
-			cfg.Providers.Google.APIKey = apiKey
-		default:
-			if strings.HasPrefix(provider, "custom:") {
-				name := strings.TrimPrefix(provider, "custom:")
-				for index := range cfg.Providers.Custom {
-					if strings.EqualFold(strings.TrimSpace(cfg.Providers.Custom[index].Name), name) {
-						cfg.Providers.Custom[index].APIKey = apiKey
-					}
+		if _, custom := cfg.Providers.CustomProvider(provider); custom {
+			name := modelruntime.NormalizeProviderID(strings.TrimPrefix(provider, "custom:"))
+			for index := range cfg.Providers.Custom {
+				if modelruntime.NormalizeProviderID(cfg.Providers.Custom[index].Name) == name {
+					cfg.Providers.Custom[index].APIKey = apiKey
 				}
 			}
-			if cfg.ProviderProfiles == nil {
-				cfg.ProviderProfiles = make(map[string]config.ProviderEndpoint)
-			}
-			endpoint := cfg.ProviderProfiles[provider]
-			endpoint.APIKey = apiKey
-			cfg.ProviderProfiles[provider] = endpoint
+			continue
 		}
-	}
-	return nil
-}
-
-func saveModelDraftCredentials(cfg *config.Config, credentials map[string]string) error {
-	if len(credentials) == 0 {
-		return nil
-	}
-	store := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile)
-	for provider, apiKey := range credentials {
-		if err := store.SaveAPIKey(provider, apiKey); err != nil {
-			return fmt.Errorf("save %s credential: %w", provider, err)
-		}
+		endpoint, _ := cfg.Providers.BuiltinEndpoint(provider)
+		endpoint.APIKey = apiKey
+		cfg.Providers.SetBuiltinEndpoint(provider, endpoint)
 	}
 	return nil
 }
@@ -189,6 +179,12 @@ func modelProbesPassed(probes []modelchange.ProbeResult) bool {
 func formatModelStatus(status modelchange.Status) string {
 	var out strings.Builder
 	fmt.Fprintln(&out, "Model routes")
+	fmt.Fprintf(&out, "Foreground readiness: %s\n", readinessLabel(status.ForegroundReady(), status.Readiness.ForegroundReason))
+	if status.Readiness.BackgroundEnabled {
+		fmt.Fprintf(&out, "Background readiness: %s\n", readinessLabel(status.BackgroundReady(), status.Readiness.BackgroundReason))
+	} else {
+		fmt.Fprintln(&out, "Background readiness: disabled")
+	}
 	formatRouteLine(&out, "Running primary", status.Running.Primary)
 	formatRouteLine(&out, "Running background", status.Running.Auxiliary)
 	if status.Configured != status.Running {
@@ -204,17 +200,34 @@ func formatModelStatus(status modelchange.Status) string {
 	for _, route := range modelchange.ManagedRoleRoutes() {
 		selection := modelchange.SelectionForRoute(status.Configured, route)
 		if strings.TrimSpace(selection.Provider) == "" && strings.TrimSpace(selection.Model) == "" {
-			fmt.Fprintf(&out, "%s: uses background model\n", route)
+			fmt.Fprintf(&out, "%s: uses background model · %s\n", route,
+				readinessLabel(status.RouteReady(route), status.RouteReadiness(route).Reason))
 			continue
 		}
 		formatRouteLine(&out, string(route), selection)
+		fmt.Fprintf(&out, "%s readiness: %s\n", route,
+			readinessLabel(status.RouteReady(route), status.RouteReadiness(route).Reason))
 	}
 	fmt.Fprintf(&out, "Generation: %d\n", status.Generation)
 	fmt.Fprint(&out, "Open the interactive Model Manager with `selfmind model` or bare `/model` in the TUI.")
 	return strings.TrimSpace(out.String())
 }
 
+func readinessLabel(ready bool, reason string) string {
+	if ready {
+		return "ready"
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		return "not ready — " + reason
+	}
+	return "not ready"
+}
+
 func formatRouteLine(out *strings.Builder, label string, selection config.ModelSelectionConfig) {
+	if selection.Enabled != nil && !*selection.Enabled {
+		fmt.Fprintf(out, "%s: disabled\n", label)
+		return
+	}
 	fmt.Fprintf(out, "%s: %s/%s reasoning=%s", label, dash(selection.Provider), dash(selection.Model), auto(selection.Reasoning))
 	if strings.TrimSpace(selection.ServiceTier) != "" {
 		fmt.Fprintf(out, " service_tier=%s", selection.ServiceTier)

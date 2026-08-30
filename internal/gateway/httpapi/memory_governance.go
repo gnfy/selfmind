@@ -74,7 +74,7 @@ func (d *Server) StartMemoryGovernance(ctx context.Context) func() {
 	if d == nil || d.MemoryConsolidator == nil || d.Control == nil {
 		return func() {}
 	}
-	if !d.modelReadyForWork() {
+	if !d.backgroundReadyForWork() {
 		return func() {}
 	}
 	done := make(chan struct{})
@@ -117,7 +117,7 @@ func (d *Server) runMemoryGovernancePass(ctx context.Context) time.Duration {
 }
 
 func (d *Server) runMemoryGovernancePassAt(ctx context.Context, now time.Time) time.Duration {
-	if !d.modelReadyForWork() {
+	if !d.backgroundReadyForWork() {
 		return memoryReadinessRetryDelay
 	}
 	interval := d.MemoryConsolidator.Interval()

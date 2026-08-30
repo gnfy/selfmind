@@ -28,6 +28,15 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 		return
 	}
 	switch event.Type {
+	case "background.notice":
+		var payload struct {
+			Message string `json:"message"`
+			Kind    string `json:"kind"`
+		}
+		_ = json.Unmarshal(event.Payload, &payload)
+		if message := strings.TrimSpace(payload.Message); message != "" {
+			m.program.Send(MsgBackgroundNotice{Content: message, Success: payload.Kind == "success"})
+		}
 	case "run.started":
 		var payload struct {
 			Input      string `json:"input"`

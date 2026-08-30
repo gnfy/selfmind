@@ -292,6 +292,11 @@ Gateway HTTP control endpoints:
 | `GET` | `/v1/tasks/events` | recent events for the current or specified task |
 
 Shutdown enters draining state, rejects new runs, waits for active runs, and can be force-stopped by CLI when requested.
+The shutdown endpoint flushes its complete acceptance response before allowing
+the runtime owner to close the HTTP server. For upgrade compatibility, the CLI
+also reconciles a lost response only when the request was fully written and the
+local runtime receipt proves that the original owner disappeared or was
+replaced; an EOF while that owner remains is still an error.
 
 ## Identity, Tasks, Workspaces
 

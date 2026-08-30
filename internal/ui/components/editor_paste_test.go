@@ -41,7 +41,7 @@ func TestLargePasteRoundTripsThroughExpandValue(t *testing.T) {
 	e.Update(pasteMsg(doc))
 
 	display := e.Value()
-	if !strings.Contains(display, "[[ paste:0 ") {
+	if !strings.Contains(display, "[Paste #1 · 20 lines]") {
 		t.Fatalf("large paste did not collapse to a token: %q", display)
 	}
 	if strings.Contains(display, "row 05") {
@@ -84,11 +84,8 @@ func TestPasteTokenLabelCountsTerminalLines(t *testing.T) {
 		e.Update(pasteMsg(body))
 
 		display := e.Value()
-		if !strings.Contains(display, "(12 lines)") {
+		if display != "[Paste #1 · 12 lines]" {
 			t.Fatalf("separator %q: label = %q, want 12 lines", sep, display)
-		}
-		if inner := strings.TrimSuffix(strings.TrimPrefix(display, "[[ "), " ]]"); strings.ContainsAny(inner, "[]") {
-			t.Fatalf("separator %q: label carries a bracket: %q", sep, display)
 		}
 		if expanded := e.ExpandValue(); pastetoken.ContainsUnresolved(expanded) {
 			t.Fatalf("separator %q: token survived expansion: %q", sep, expanded)
@@ -149,8 +146,8 @@ func TestImageTokenWithBracketsInFileNameExpands(t *testing.T) {
 	path := "/mnt/c/Users/u/Pictures/Screenshot [1].png"
 
 	token := e.AttachImage(path)
-	if strings.ContainsAny(strings.TrimSuffix(strings.TrimPrefix(token, "[[ "), " ]]"), "[]") {
-		t.Fatalf("token keeps brackets from the file name: %q", token)
+	if token != "[Image #1 · Screenshot 1.png]" {
+		t.Fatalf("sanitized image token = %q", token)
 	}
 
 	expanded := e.ExpandValue()
@@ -169,15 +166,27 @@ func TestEditedTokenIsReportedNotSilentlySubmitted(t *testing.T) {
 	e := pasteEditor(1000, 10)
 	e.Update(pasteMsg(crDocument(20)))
 
-	edited := strings.Replace(e.Value(), "paste:0", "paste:1", 1)
+	edited := strings.Replace(e.Value(), "#1", "#2", 1)
 	e.SetValue(edited)
 
 	stranded := e.UnresolvedToken()
 	if stranded == "" {
 		t.Fatal("an edited token must be reported as unresolved")
 	}
-	if !strings.Contains(stranded, "paste:1") {
+	if !strings.Contains(stranded, "#2") {
 		t.Fatalf("UnresolvedToken = %q, want the edited token", stranded)
+	}
+}
+
+func TestLargeSingleLinePasteUsesCharacterCountWithoutPreview(t *testing.T) {
+	e := pasteEditor(8, 0)
+	e.Update(pasteMsg("你好abcdef"))
+
+	if got := e.Value(); got != "[Paste #1 · 8 chars]" {
+		t.Fatalf("single-line token = %q", got)
+	}
+	if strings.Contains(e.Value(), "你好") {
+		t.Fatalf("token leaked payload preview: %q", e.Value())
 	}
 }
 

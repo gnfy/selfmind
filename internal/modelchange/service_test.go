@@ -79,6 +79,103 @@ func TestPrepareConfirmAndStartupApply(t *testing.T) {
 	}
 }
 
+func TestCredentialStageSharesModelChangeCommitAndHealthyBoundaries(t *testing.T) {
+	service, path := newTestService(t)
+	credentials := &fakeCredentialTransaction{}
+	service.Credentials = credentials
+	candidate := SnapshotFromConfig(mustLoadConfig(t, path))
+	candidate.Primary.Model = "credential-candidate"
+	prepared, err := service.Prepare(context.Background(), PrepareRequest{
+		Candidate: candidate, Source: "cli", CredentialStage: "stage-one",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credentials.overlays != 1 || credentials.commits != 0 {
+		t.Fatalf("after validation: %+v", credentials)
+	}
+	if _, err := service.BeginDraining(prepared.Change.ID); err != nil {
+		t.Fatal(err)
+	}
+	if credentials.commits != 0 {
+		t.Fatal("credentials committed while the old daemon could still serve requests")
+	}
+	if _, err := service.MarkRestarting(prepared.Change.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if credentials.commits != 1 {
+		t.Fatalf("credential commits = %d", credentials.commits)
+	}
+	if _, rolledBack, err := service.ReconcileStartup(context.Background()); err != nil || rolledBack {
+		t.Fatalf("startup reconcile rolledBack=%v err=%v", rolledBack, err)
+	}
+	if _, err := service.MarkStartupHealthy(); err != nil {
+		t.Fatal(err)
+	}
+	if credentials.finalizes != 1 || credentials.rollbacks != 0 {
+		t.Fatalf("healthy credential transaction = %+v", credentials)
+	}
+}
+
+func TestCredentialStageRollsBackWithRejectedStartupCandidate(t *testing.T) {
+	service, path := newTestService(t)
+	credentials := &fakeCredentialTransaction{}
+	service.Credentials = credentials
+	candidate := SnapshotFromConfig(mustLoadConfig(t, path))
+	candidate.Primary.Model = "rejected-candidate"
+	prepared, err := service.Prepare(context.Background(), PrepareRequest{
+		Candidate: candidate, Source: "cli", CredentialStage: "stage-two",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.BeginDraining(prepared.Change.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.MarkRestarting(prepared.Change.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	service.Validate = func(_ context.Context, _ *config.Config, routes []Route) []ProbeResult {
+		return []ProbeResult{{Route: routes[0], Error: "candidate rejected", FailureClass: FailureModel}}
+	}
+	_, rolledBack, err := service.ReconcileStartup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rolledBack || credentials.rollbacks != 1 || credentials.finalizes != 0 {
+		t.Fatalf("rollback=%v credential transaction=%+v", rolledBack, credentials)
+	}
+}
+
+type fakeCredentialTransaction struct {
+	overlays  int
+	commits   int
+	rollbacks int
+	finalizes int
+	discards  int
+}
+
+func (f *fakeCredentialTransaction) OverlayStage(string, *config.Config) error {
+	f.overlays++
+	return nil
+}
+func (f *fakeCredentialTransaction) CommitStage(string) error {
+	f.commits++
+	return nil
+}
+func (f *fakeCredentialTransaction) RollbackStage(string) error {
+	f.rollbacks++
+	return nil
+}
+func (f *fakeCredentialTransaction) FinalizeStage(string) error {
+	f.finalizes++
+	return nil
+}
+func (f *fakeCredentialTransaction) DiscardStage(string) error {
+	f.discards++
+	return nil
+}
+
 func TestModelReadinessRequiresVerifiedRunningBoundary(t *testing.T) {
 	service, path := newUnverifiedTestService(t)
 	status, err := service.Inspect()
@@ -111,8 +208,32 @@ func TestModelReadinessRequiresVerifiedRunningBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.ModelReady() {
-		t.Fatal("manual configuration drift retained Model Readiness")
+	if !status.ModelReady() || status.BackgroundReady() || !status.Readiness.Degraded {
+		t.Fatalf("background-only drift did not preserve degraded foreground readiness: %+v", status.Readiness)
+	}
+}
+
+func TestProviderConfigDriftRequiresStartupVerification(t *testing.T) {
+	service, path := newTestService(t)
+	cfg := mustLoadConfig(t, path)
+	cfg.Providers.SetBuiltinEndpoint("deepseek", config.ProviderEndpoint{BaseURL: "https://proxy.example/v1"})
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ForegroundReady() || !strings.Contains(status.Readiness.ForegroundReason, "provider connections differ") {
+		t.Fatalf("provider drift readiness = %+v", status.Readiness)
+	}
+	status, rolledBack, err := service.ReconcileStartup(context.Background())
+	if err != nil || rolledBack || status.Pending == nil || status.Pending.Source != "manual-provider-config" {
+		t.Fatalf("provider drift startup = status:%+v rolledBack:%v err:%v", status, rolledBack, err)
+	}
+	status, err = service.MarkStartupHealthy()
+	if err != nil || !status.ForegroundReady() {
+		t.Fatalf("verified provider drift = status:%+v err:%v", status, err)
 	}
 }
 
@@ -150,6 +271,102 @@ func TestInitialProbeFailureKeepsModelManagerRepairSurfaceAvailable(t *testing.T
 	candidate.Primary.Model = "repair-candidate"
 	if _, err := service.Prepare(context.Background(), PrepareRequest{Candidate: candidate, Source: "model-manager", RequireConfirmation: true}); err != nil {
 		t.Fatalf("Model Manager could not open a repair transaction: %v", err)
+	}
+}
+
+func TestInitialBackgroundFailureLeavesForegroundReadyAndReportsDegraded(t *testing.T) {
+	service, _ := newUnverifiedTestService(t)
+	service.Validate = func(_ context.Context, _ *config.Config, routes []Route) []ProbeResult {
+		results := make([]ProbeResult, 0, len(routes))
+		for _, route := range routes {
+			result := ProbeResult{Route: route, OK: route == RoutePrimary}
+			if !result.OK {
+				result.Error = "background unavailable"
+				result.FailureClass = FailureInfrastructure
+			}
+			results = append(results, result)
+		}
+		return results
+	}
+	status, rolledBack, err := service.ReconcileStartup(context.Background())
+	if err != nil || rolledBack {
+		t.Fatalf("status=%+v rolledBack=%v err=%v", status, rolledBack, err)
+	}
+	if !status.ForegroundReady() || status.BackgroundReady() || !status.Readiness.Degraded {
+		t.Fatalf("split readiness = %+v", status.Readiness)
+	}
+	if !status.ModelReady() {
+		t.Fatal("foreground queue remained blocked by a background-only startup failure")
+	}
+}
+
+func TestSemanticRecallFailureDoesNotStarveOtherBackgroundRoutes(t *testing.T) {
+	service, _ := newUnverifiedTestService(t)
+	service.Validate = func(_ context.Context, _ *config.Config, routes []Route) []ProbeResult {
+		results := make([]ProbeResult, 0, len(routes))
+		for _, route := range routes {
+			result := ProbeResult{Route: route, OK: route != RouteSemanticRecall}
+			if !result.OK {
+				result.Error = "context deadline exceeded"
+				result.FailureClass = FailureInfrastructure
+			}
+			results = append(results, result)
+		}
+		return results
+	}
+	status, rolledBack, err := service.ReconcileStartup(context.Background())
+	if err != nil || rolledBack {
+		t.Fatalf("status=%+v rolledBack=%v err=%v", status, rolledBack, err)
+	}
+	if !status.ForegroundReady() || status.BackgroundReady() {
+		t.Fatalf("aggregate readiness = %+v", status.Readiness)
+	}
+	for _, route := range []Route{RouteAuxiliary, RouteFastClassifier, RouteMemoryExtract, RouteBackgroundReview, RouteSkillCurator, RouteSummarizer} {
+		if !status.RouteReady(route) {
+			t.Fatalf("%s was starved by semantic_recall: %+v", route, status.RouteReadiness(route))
+		}
+	}
+	if status.RouteReady(RouteSemanticRecall) {
+		t.Fatal("failed semantic_recall route became ready")
+	}
+
+	status, err = service.RecordRouteProbe(ProbeResult{Route: RouteSemanticRecall, OK: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.RouteReady(RouteSemanticRecall) || !status.BackgroundReady() {
+		t.Fatalf("semantic recovery was not persisted: %+v", status.Readiness)
+	}
+	reloaded, err := service.Inspect()
+	if err != nil || !reloaded.RouteReady(RouteSemanticRecall) {
+		t.Fatalf("reloaded semantic readiness = %+v err=%v", reloaded.Readiness, err)
+	}
+}
+
+func TestDisabledBackgroundIsReadyWithoutAProbe(t *testing.T) {
+	service, path := newUnverifiedTestService(t)
+	cfg := mustLoadConfig(t, path)
+	disabled := false
+	cfg.Models.Auxiliary.Enabled = &disabled
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	service.Validate = func(_ context.Context, _ *config.Config, routes []Route) []ProbeResult {
+		return []ProbeResult{{Route: RoutePrimary, OK: true}}
+	}
+	status, _, err := service.ReconcileStartup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.MarkStartupHealthy(); err != nil {
+		t.Fatal(err)
+	}
+	status, err = service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.BackgroundReady() || status.Readiness.BackgroundEnabled || status.Readiness.Degraded {
+		t.Fatalf("disabled background readiness = %+v", status.Readiness)
 	}
 }
 

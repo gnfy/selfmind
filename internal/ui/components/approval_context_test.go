@@ -72,25 +72,33 @@ func TestApprovalPromptShowsExactRuleInsteadOfBroaderClass(t *testing.T) {
 	}
 }
 
-// TestApprovalPromptWrapsLongCommand proves a long command is WRAPPED rather
-// than middle-truncated: a command whose middle is replaced by "…" cannot be
-// judged, which defeats the panel.
-func TestApprovalPromptWrapsLongCommand(t *testing.T) {
-	long := "bash -lc 'GOWORK=off go test ./internal/tools/... ./internal/gateway/httpapi/... -run TestApprovalRequestCarriesExecutionContext -count=1'"
-	view := NewApprovalPrompt("terminal", long, "").View(80)
-
-	if !strings.Contains(view, "bash -lc 'GOWORK=off go test") {
-		t.Fatalf("panel should show the command head:\n%s", view)
-	}
-	if !strings.Contains(view, "-count=1'") {
-		t.Fatalf("panel should reach the command tail instead of truncating it:\n%s", view)
-	}
-	// The unboxed Codex-style list must still stay within its width budget.
-	lines := strings.Split(view, "\n")
-	for i, line := range lines {
-		if got := runewidth.StringWidth(stripANSIForTest(line)); got > approvalPanelMaxWidth {
-			t.Fatalf("line %d width = %d, want <= %d:\n%s", i, got, approvalPanelMaxWidth, view)
+// TestApprovalPromptWrapsLongCommandLosslessly reproduces the real approval
+// defect: a wide terminal was still forced through a 76-column, three-line
+// target window, which replaced the middle of the command with an ellipsis.
+// Approval is an authorization surface, so the redacted target may wrap but
+// must remain lossless at every supported width.
+func TestApprovalPromptWrapsLongCommandLosslessly(t *testing.T) {
+	command := `for t in lid-tm-nginx-section-cd-develop lid-tm-nginx-api-cd-develop; do echo "--- $t"; gcloud builds triggers describe "$t" --project=trackingmore-dev --region=global --format="value(name,substitutions)" 2>&1 || true; done`
+	for _, width := range []int{80, 240} {
+		view := stripANSIForTest(NewApprovalPrompt("terminal", command, "").View(width))
+		if strings.Contains(view, "…") {
+			t.Fatalf("width %d: approval truncated the command:\n%s", width, view)
 		}
+		if unwrapped := strings.ReplaceAll(view, "\n", ""); !strings.Contains(unwrapped, command) {
+			t.Fatalf("width %d: wrapped approval does not contain the full command:\n%s", width, view)
+		}
+		for i, line := range strings.Split(view, "\n") {
+			if got := runewidth.StringWidth(line); got > width {
+				t.Fatalf("width %d: line %d overflows (%d columns):\n%s", width, i, got, view)
+			}
+		}
+	}
+}
+
+func TestApprovalTargetWrapPreservesCommandWhitespace(t *testing.T) {
+	command := "printf '%s  %s' alpha beta\nprintf '\\t%s' gamma"
+	if got := strings.Join(wrapDisplayLosslessly(command, 200), "\n"); got != command {
+		t.Fatalf("lossless approval wrap = %q, want %q", got, command)
 	}
 }
 

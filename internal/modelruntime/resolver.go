@@ -163,6 +163,12 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(providerName)), "custom:") {
 		return r.resolveCustom(providerName, selection, modelName)
 	}
+	if _, custom := r.cfg.Providers.CustomProvider(providerName); custom {
+		if profile, builtin := r.registry.Resolve(providerName); builtin {
+			return Runtime{}, fmt.Errorf("custom provider %q conflicts with built-in provider %s; choose a different custom id", providerName, profile.ID)
+		}
+		return r.resolveCustom(providerName, selection, modelName)
+	}
 
 	profile, ok := r.registry.Resolve(providerName)
 	if !ok {
@@ -233,7 +239,10 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 	}
 	for _, cp := range r.cfg.Providers.Custom {
 		if strings.EqualFold(cp.Name, name) || strings.EqualFold("custom:"+cp.Name, providerName) {
-			credential := r.store.Resolve("custom:" + cp.Name)
+			credential := r.store.Resolve(cp.Name)
+			if credential.Token == "" {
+				credential = r.store.Resolve("custom:" + cp.Name)
+			}
 			apiKey := firstNonEmpty(selection.APIKey, cp.APIKey, credential.Token)
 			credentialSource := "config:custom"
 			if strings.TrimSpace(selection.APIKey) != "" {
@@ -242,33 +251,48 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 				credentialSource = credential.Source
 			}
 			protocol := NormalizeProtocol(firstNonEmpty(selection.Protocol, cp.Protocol, ProtocolOpenAICompatible))
+			authType := customAuthType(cp.Auth)
+			if apiKey == "" && authType != AuthNone {
+				return Runtime{}, fmt.Errorf("no credentials found for provider %s", NormalizeProviderID(cp.Name))
+			}
 			model := firstNonEmpty(modelName, cp.Model, selection.Model)
 			contextLength, contextSource := resolvedCustomContextLength(
 				selection.ContextLength,
-				customModelContextLength(cp, model),
+				firstPositive(cp.ContextLength, customModelContextLength(cp, model)),
 				KnownContextLength("custom:"+cp.Name, model),
 			)
-			resolvedQuirks := mergeProviderQuirks(defaultQuirksForProtocol(protocol), selection.Quirks)
+			configuredQuirks := quirksFromConfig(cp.Quirks)
+			switch authType {
+			case AuthNone:
+				configuredQuirks.AuthHeader = "auto"
+			case AuthAPIKey:
+				if strings.EqualFold(strings.TrimSpace(cp.Auth), "x-api-key") || strings.EqualFold(strings.TrimSpace(cp.Auth), "x_api_key") {
+					configuredQuirks.AuthHeader = AuthHeaderXAPIKey
+				} else if strings.EqualFold(strings.TrimSpace(cp.Auth), "bearer") {
+					configuredQuirks.AuthHeader = AuthHeaderBearer
+				}
+			}
+			resolvedQuirks := mergeProviderQuirks(defaultQuirksForProtocol(protocol), configuredQuirks, selection.Quirks)
 			if err := ValidateProviderQuirks(resolvedQuirks); err != nil {
 				return Runtime{}, fmt.Errorf("provider custom:%s quirks: %w", cp.Name, err)
 			}
 			return Runtime{
-				Provider: "custom:" + cp.Name, DisplayName: cp.Name,
+				Provider: NormalizeProviderID(cp.Name), DisplayName: cp.Name,
 				Model:            model,
 				Protocol:         protocol,
 				BaseURL:          firstNonEmpty(selection.BaseURL, cp.BaseURL),
 				APIKey:           apiKey,
 				CredentialSource: credentialSource,
-				AuthType:         AuthAPIKey,
-				Headers:          mergeHeaders(r.cfg.Model.Headers, r.cfg.Model.ExtraHeaders, selection.Headers, selection.ExtraHeaders),
-				ExtraBody:        mergeExtraMaps(selection.ExtraBody),
-				ExtraQuery:       mergeExtraMaps(selection.ExtraQuery),
+				AuthType:         authType,
+				Headers:          mergeHeaders(r.cfg.Model.Headers, r.cfg.Model.ExtraHeaders, cp.ExtraHeaders, selection.Headers, selection.ExtraHeaders),
+				ExtraBody:        mergeExtraMaps(cp.ExtraBody, selection.ExtraBody),
+				ExtraQuery:       mergeExtraMaps(cp.ExtraQuery, selection.ExtraQuery),
 				ContextLength:    contextLength,
 				ContextSource:    contextSource,
-				MaxTokens:        selection.MaxTokens,
-				ReasoningEffort:  selection.ReasoningEffort,
-				Thinking:         selection.Thinking,
-				ServiceTier:      selection.ServiceTier,
+				MaxTokens:        firstPositive(selection.MaxTokens, cp.MaxTokens),
+				ReasoningEffort:  firstNonEmpty(selection.ReasoningEffort, cp.ReasoningEffort),
+				Thinking:         firstThinking(selection.Thinking, cp.Thinking),
+				ServiceTier:      firstNonEmpty(selection.ServiceTier, cp.ServiceTier),
 				Quirks:           resolvedQuirks,
 			}, nil
 		}
@@ -322,6 +346,9 @@ func customModelContextLength(cp config.CustomProvider, model string) int {
 
 func (r *Resolver) endpointFor(provider string) config.ProviderEndpoint {
 	id := NormalizeProviderID(provider)
+	if endpoint, ok := r.cfg.Providers.BuiltinEndpoint(id); ok {
+		return endpoint
+	}
 	switch id {
 	case "openai", "openai-api":
 		return r.cfg.Providers.OpenAI
@@ -348,6 +375,15 @@ func (r *Resolver) endpointFor(provider string) config.ProviderEndpoint {
 		return config.ProviderEndpoint{}
 	default:
 		return config.ProviderEndpoint{}
+	}
+}
+
+func customAuthType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none":
+		return AuthNone
+	default:
+		return AuthAPIKey
 	}
 }
 

@@ -29,6 +29,7 @@ import (
 	"selfmind/internal/gateway/weixin"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelchange"
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/promptassets"
@@ -101,7 +102,11 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Model transitions are reconciled only after this process owns
 	// gateway.lock. launchd/systemd may briefly start competing processes; they
 	// must not each increment attempts or mutate the same candidate transaction.
-	modelChanges := &modelchange.Service{ConfigPath: cfg.Path, Validate: app.ValidateModelChange}
+	modelChanges := &modelchange.Service{
+		ConfigPath:  cfg.Path,
+		Validate:    app.ValidateModelChange,
+		Credentials: modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile),
+	}
 	modelStatus, modelRolledBack, err := modelChanges.ReconcileStartup(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile model configuration: %w", err)
@@ -318,6 +323,37 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			}
 		}()
 	}
+	semanticExpander := app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts)
+	semanticReadiness := modelStatus.RouteReadiness(modelchange.RouteSemanticRecall)
+	if pending := modelStatus.Pending; pending != nil && pending.Status == modelchange.StatusStarting {
+		for _, probe := range pending.Probes {
+			if probe.Route == modelchange.RouteSemanticRecall {
+				semanticReadiness = modelchange.RouteReadiness{
+					Ready: probe.OK, FailureClass: probe.FailureClass, Reason: probe.Error,
+				}
+				break
+			}
+		}
+	}
+	semanticHealth := httpapi.NewSemanticRecallHealth(httpapi.SemanticRecallHealthOptions{
+		Expander: semanticExpander, Initial: semanticReadiness,
+		Probe: func(probeCtx context.Context) modelchange.ProbeResult {
+			results := app.ValidateModelChange(probeCtx, cfg, []modelchange.Route{modelchange.RouteSemanticRecall})
+			for _, result := range results {
+				if result.Route == modelchange.RouteSemanticRecall {
+					return result
+				}
+			}
+			return modelchange.ProbeResult{
+				Route: modelchange.RouteSemanticRecall, Error: "semantic_recall probe returned no evidence",
+				FailureClass: modelchange.FailureInfrastructure,
+			}
+		},
+		Record: func(result modelchange.ProbeResult) error {
+			_, recordErr := modelChanges.RecordRouteProbe(result)
+			return recordErr
+		},
+	})
 
 	gatewayAPI := &httpapi.Server{
 		Control:                controlStore,
@@ -389,7 +425,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
-		Recall: httpapi.NewRecallEngine(controlStore, mem, app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts)),
+		Recall: httpapi.NewRecallEngine(controlStore, mem, semanticHealth),
 		// Structured session APIs for thin clients (/v1/sessions): the daemon
 		// session index, person-partitioned (ACTIVE PLAN P0-3).
 		Sessions: mem,
@@ -510,14 +546,22 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return fmt.Errorf("commit healthy model startup: %w", err)
 	}
 	modelStartupHealthy = healthyModelStatus.ModelReady()
-	if modelStartupHealthy {
-		// Every model-backed background executor starts only after the same
-		// startup probes + listener health boundary that releases foreground
-		// work. A control-plane-only daemon leaves their durable jobs untouched.
+	if semanticHealth != nil {
+		semanticHealth.SetNotifier(gatewayAPI.PublishBackgroundNotice)
+		stopSemanticRecallHealth := semanticHealth.Start(ctx)
+		defer stopSemanticRecallHealth()
+	}
+	if healthyModelStatus.RouteReady(modelchange.RouteAuxiliary) {
+		// Maintenance roles use their own route plus the verified auxiliary floor.
+		// A failed semantic_recall override degrades lexical expansion only.
 		stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
 		defer stopMaintenanceWorker()
 		stopMemoryGovernance := gatewayAPI.StartMemoryGovernance(ctx)
 		defer stopMemoryGovernance()
+	} else if modelStartupHealthy {
+		log.Warn("gateway: auxiliary model readiness is incomplete; maintenance and learning remain parked", "hint", "run `selfmind model`")
+	}
+	if modelStartupHealthy {
 		if gwDeps.CronScheduler != nil {
 			gwDeps.CronScheduler.SetExecutor(httpapi.NewCronExecutor(gatewayAPI, gwDeps.CronScheduler))
 			if err := app.StartCron(gwDeps.CronScheduler); err != nil {

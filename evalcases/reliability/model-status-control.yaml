@@ -1,5 +1,5 @@
 id: reliability_model_status_control
-title: "model route status remains a model-free cross-channel control"
+title: "provider and model readiness status remains a model-free cross-channel control"
 suite: reliability
 workspace: isolated
 channel: cli
@@ -16,6 +16,8 @@ expect:
   max_duration_seconds: 30
   contains:
     - "Model routes"
+    - "Foreground readiness:"
+    - "Background readiness:"
     - "Running primary"
     - "Running background"
     - "fast_classifier: uses background model"

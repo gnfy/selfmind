@@ -382,7 +382,7 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 			Content:    str(p["message"]),
 		}, true
 	case ev.Type == "agent.thinking" || ev.Type == "agent.step":
-		return llm.StreamEvent{EventType: ev.Type, Content: str(p["message"])}, true
+		return llm.StreamEvent{EventType: ev.Type, Content: str(p["message"]), Payload: p}, true
 	case ev.Type == "approval.requested":
 		// Surface the pending approval so the client TUI can prompt; approval_id
 		// and the compact action target ride in Payload, tool in ToolName,

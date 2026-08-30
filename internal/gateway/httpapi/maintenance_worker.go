@@ -98,7 +98,7 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 	if d == nil || d.Control == nil || (d.PostRunAnalyzer == nil && d.SkillReviewer == nil && d.SkillCurator == nil) {
 		return func() {}
 	}
-	if !d.modelReadyForWork() {
+	if !d.backgroundReadyForWork() {
 		return func() {}
 	}
 	// The gateway lock guarantees one daemon. Any job left running at boot lost
@@ -159,7 +159,7 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 }
 
 func (d *Server) runMaintenancePass(ctx context.Context) {
-	if !d.modelReadyForWork() {
+	if !d.backgroundReadyForWork() {
 		return
 	}
 	d.runMaintenancePassAt(ctx, time.Now())

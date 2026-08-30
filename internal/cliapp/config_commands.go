@@ -50,8 +50,8 @@ var configMigrations = []configMigration{
 	{From: []string{"providers", "openai_api_key"}, To: []string{"providers", "openai", "api_key"}, Label: "providers.openai_api_key -> providers.openai.api_key"},
 	{From: []string{"providers", "anthropic_api_key"}, To: []string{"providers", "anthropic", "api_key"}, Label: "providers.anthropic_api_key -> providers.anthropic.api_key"},
 	{From: []string{"providers", "gemini_api_key"}, To: []string{"providers", "google", "api_key"}, Label: "providers.gemini_api_key -> providers.google.api_key"},
-	{From: []string{"providers", "openrouter_api_key"}, To: []string{"provider_profiles", "openrouter", "api_key"}, Label: "providers.openrouter_api_key -> provider_profiles.openrouter.api_key"},
-	{From: []string{"providers", "minimax_api_key"}, To: []string{"provider_profiles", "minimax", "api_key"}, Label: "providers.minimax_api_key -> provider_profiles.minimax.api_key"},
+	{From: []string{"providers", "openrouter_api_key"}, To: []string{"providers", "openrouter", "api_key"}, Label: "providers.openrouter_api_key -> providers.openrouter.api_key"},
+	{From: []string{"providers", "minimax_api_key"}, To: []string{"providers", "minimax", "api_key"}, Label: "providers.minimax_api_key -> providers.minimax.api_key"},
 	{From: []string{"model", "provider"}, To: []string{"models", "primary", "provider"}, Label: "model.provider -> models.primary.provider"},
 	{From: []string{"model", "default"}, To: []string{"models", "primary", "model"}, Label: "model.default -> models.primary.model"},
 	{From: []string{"model", "context_length"}, To: []string{"models", "primary", "context_length"}, Label: "model.context_length -> models.primary.context_length"},
@@ -194,24 +194,64 @@ func (a *App) runConfigUpgrade() int {
 	upgraded := cloneYAMLNode(originalDoc)
 	addMissingConfigDefaults(upgraded, canonicalDoc)
 	applyConfigMigrations(upgraded)
+	credentialStage, err := stageMigratedProviderCredentials(cfg, upgraded)
+	if err != nil {
+		fmt.Fprintf(a.stderr, "Migrate provider credentials: %v\n", err)
+		return 1
+	}
+	credentialStore := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile)
+	discardCredentialStage := func() {
+		if credentialStage != "" {
+			_ = credentialStore.DiscardStage(credentialStage)
+		}
+	}
 	out, err := encodeConfigYAML(upgraded)
 	if err != nil {
+		discardCredentialStage()
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
 	if bytes.Equal(bytes.TrimSpace(original), bytes.TrimSpace(out)) {
+		discardCredentialStage()
 		fmt.Fprintf(a.stdout, "Config already up to date: %s\n", cfg.Path)
 		return 0
 	}
 
 	backup, err := backupConfigFile(cfg.Path, original)
 	if err != nil {
+		discardCredentialStage()
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
 	if err := writeConfigBytesAtomic(cfg.Path, out); err != nil {
+		discardCredentialStage()
 		fmt.Fprintln(a.stderr, err)
 		return 1
+	}
+	if credentialStage != "" {
+		if err := credentialStore.CommitStage(credentialStage); err != nil {
+			restoreErr := writeConfigBytesAtomic(cfg.Path, original)
+			_ = credentialStore.DiscardStage(credentialStage)
+			if restoreErr != nil {
+				fmt.Fprintf(a.stderr, "Commit migrated provider credentials: %v; restore config: %v\n", err, restoreErr)
+			} else {
+				fmt.Fprintf(a.stderr, "Commit migrated provider credentials: %v (config restored)\n", err)
+			}
+			return 1
+		}
+		if err := credentialStore.FinalizeStage(credentialStage); err != nil {
+			rollbackErr := credentialStore.RollbackStage(credentialStage)
+			restoreErr := writeConfigBytesAtomic(cfg.Path, original)
+			fmt.Fprintf(a.stderr, "Finalize migrated provider credentials: %v", err)
+			if rollbackErr != nil {
+				fmt.Fprintf(a.stderr, "; rollback credentials: %v", rollbackErr)
+			}
+			if restoreErr != nil {
+				fmt.Fprintf(a.stderr, "; restore config: %v", restoreErr)
+			}
+			fmt.Fprintln(a.stderr)
+			return 1
+		}
 	}
 	fmt.Fprintf(a.stdout, "Config upgraded: %s\n", cfg.Path)
 	fmt.Fprintf(a.stdout, "Backup: %s\n", backup)
@@ -219,6 +259,69 @@ func (a *App) runConfigUpgrade() int {
 	printConfigReportList(a.stdout, "Migrated legacy keys", report.Legacy)
 	printConfigReportList(a.stdout, "Removed deprecated keys", report.Deprecated)
 	return 0
+}
+
+func stageMigratedProviderCredentials(cfg *config.Config, doc *yaml.Node) (string, error) {
+	if cfg == nil {
+		return "", nil
+	}
+	providers := yamlMappingValue(yamlDocumentRoot(doc), "providers")
+	if providers == nil || providers.Kind != yaml.MappingNode {
+		return "", nil
+	}
+	credentials := make(map[string]string)
+	for index := 0; index+1 < len(providers.Content); index += 2 {
+		id, entry := providers.Content[index].Value, providers.Content[index+1]
+		if id != "custom" {
+			if err := collectProviderEntryCredential(credentials, id, entry); err != nil {
+				return "", err
+			}
+			continue
+		}
+		switch entry.Kind {
+		case yaml.MappingNode:
+			for child := 0; child+1 < len(entry.Content); child += 2 {
+				if err := collectProviderEntryCredential(credentials, entry.Content[child].Value, entry.Content[child+1]); err != nil {
+					return "", err
+				}
+			}
+		case yaml.SequenceNode:
+			for _, child := range entry.Content {
+				if child.Kind == yaml.MappingNode {
+					id := strings.TrimSpace(yamlScalarString(yamlMappingValue(child, "name")))
+					if err := collectProviderEntryCredential(credentials, id, child); err != nil {
+						return "", err
+					}
+				}
+			}
+		}
+	}
+	if len(credentials) == 0 {
+		return "", nil
+	}
+	return modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).StageAPIKeys("", credentials)
+}
+
+func collectProviderEntryCredential(credentials map[string]string, provider string, entry *yaml.Node) error {
+	if entry == nil || entry.Kind != yaml.MappingNode {
+		return nil
+	}
+	value := strings.TrimSpace(yamlScalarString(yamlMappingValue(entry, "api_key")))
+	if value == "" {
+		yamlDeleteMappingValue(entry, "api_key")
+		return nil
+	}
+	if strings.Contains(value, "${") {
+		// Environment references are reusable configuration, not embedded secret
+		// values. Keep the reference and never copy its resolved process value.
+		return nil
+	}
+	if strings.TrimSpace(provider) == "" {
+		return fmt.Errorf("provider id is required for an embedded api_key")
+	}
+	credentials[provider] = value
+	yamlDeleteMappingValue(entry, "api_key")
+	return nil
 }
 
 func (a *App) collectConfigDiagnostics() configDiagnostics {
@@ -403,6 +506,12 @@ func inspectConfigUpgrade(path string, originalDoc, canonicalDoc *yaml.Node) con
 		} else {
 			report.Legacy = append(report.Legacy, m.Label)
 		}
+	}
+	if profiles := yamlMappingValue(originalRoot, "provider_profiles"); profiles != nil && profiles.Kind == yaml.MappingNode && len(profiles.Content) > 0 {
+		report.Legacy = append(report.Legacy, "provider_profiles.* -> providers / providers.custom")
+	}
+	if custom := yamlPathNode(originalRoot, []string{"providers", "custom"}); custom != nil && custom.Kind == yaml.SequenceNode {
+		report.Legacy = append(report.Legacy, "providers.custom[] -> providers.custom.<id>")
 	}
 	report.Missing = append(report.Missing, missingKimiAuxiliaryDefault(originalRoot)...)
 	sort.Strings(report.Missing)
@@ -598,7 +707,7 @@ func hasKimiCodingConfig(root *yaml.Node) bool {
 	if strings.EqualFold(strings.TrimSpace(yamlScalarString(yamlPathNode(root, []string{"model", "provider"}))), "kimi-coding") {
 		return true
 	}
-	return yamlPathExists(root, []string{"provider_profiles", "kimi-coding"})
+	return yamlPathExists(root, []string{"providers", "kimi-coding"}) || yamlPathExists(root, []string{"provider_profiles", "kimi-coding"})
 }
 
 func yamlScalarString(node *yaml.Node) string {
@@ -674,8 +783,64 @@ func applyConfigMigrations(doc *yaml.Node) {
 		}
 		moveYAMLPath(root, m.From, m.To)
 	}
+	migrateCustomProviderList(root)
+	migrateProviderProfiles(root)
+	pruneEmptyMapping(root, []string{"providers", "custom"})
 	pruneEmptyMapping(root, []string{"agent"})
 	pruneEmptyMapping(root, []string{"model"})
+}
+
+func migrateCustomProviderList(root *yaml.Node) {
+	providers := yamlEnsureMappingPath(root, []string{"providers"})
+	legacy := yamlMappingValue(providers, "custom")
+	if legacy == nil || legacy.Kind != yaml.SequenceNode {
+		return
+	}
+	custom := &yaml.Node{Kind: yaml.MappingNode}
+	for _, entry := range legacy.Content {
+		if entry.Kind != yaml.MappingNode {
+			continue
+		}
+		id := modelruntime.NormalizeProviderID(yamlScalarString(yamlMappingValue(entry, "name")))
+		if id == "" || yamlMappingValue(custom, id) != nil {
+			continue
+		}
+		candidate := cloneYAMLNode(entry)
+		yamlDeleteMappingValue(candidate, "name")
+		yamlSetMappingValue(custom, id, candidate)
+	}
+	yamlSetMappingValue(providers, "custom", custom)
+}
+
+func migrateProviderProfiles(root *yaml.Node) {
+	profiles := yamlMappingValue(root, "provider_profiles")
+	if profiles == nil || profiles.Kind != yaml.MappingNode {
+		return
+	}
+	providers := yamlEnsureMappingPath(root, []string{"providers"})
+	custom := yamlMappingValue(providers, "custom")
+	registry := modelruntime.NewRegistry()
+	for index := 0; index+1 < len(profiles.Content); index += 2 {
+		id := modelruntime.NormalizeProviderID(profiles.Content[index].Value)
+		if id == "" {
+			continue
+		}
+		if profile, builtin := registry.Resolve(id); builtin {
+			id = profile.ID
+			if yamlMappingValue(providers, id) == nil {
+				yamlSetMappingValue(providers, id, cloneYAMLNode(profiles.Content[index+1]))
+			}
+			continue
+		}
+		if custom == nil || custom.Kind != yaml.MappingNode {
+			custom = &yaml.Node{Kind: yaml.MappingNode}
+			yamlSetMappingValue(providers, "custom", custom)
+		}
+		if yamlMappingValue(custom, id) == nil {
+			yamlSetMappingValue(custom, id, cloneYAMLNode(profiles.Content[index+1]))
+		}
+	}
+	yamlDeleteMappingValue(root, "provider_profiles")
 }
 
 func moveYAMLPath(root *yaml.Node, from, to []string) {

@@ -2,6 +2,8 @@ package modelruntime
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"selfmind/internal/platform/config"
 )
 
 type Credential struct {
@@ -57,6 +61,231 @@ func (s *CredentialStore) Resolve(provider string) Credential {
 	return Credential{Token: token, Source: "selfmind-auth:" + s.path}
 }
 
+// ResolveStaged returns a candidate credential without making it active. Stage
+// identifiers are opaque and contain no secret material.
+func (s *CredentialStore) ResolveStaged(stageID, provider string) Credential {
+	if s == nil || strings.TrimSpace(s.path) == "" || strings.TrimSpace(stageID) == "" {
+		return Credential{}
+	}
+	payload, err := readJSONFile(s.path)
+	if err != nil {
+		return Credential{}
+	}
+	stage, _ := nestedMap(payload, "staged", strings.TrimSpace(stageID))
+	providers, _ := stage["providers"].(map[string]interface{})
+	entry, _ := providers[NormalizeProviderID(provider)].(map[string]interface{})
+	if entry == nil {
+		return Credential{}
+	}
+	token := firstToken(entry, "api_key")
+	if token == "" {
+		return Credential{}
+	}
+	return Credential{Token: token, Source: "selfmind-auth-stage:" + strings.TrimSpace(stageID)}
+}
+
+// OverlayStage applies staged credentials to an in-memory candidate config for
+// validation. It never writes secrets to config.yaml.
+func (s *CredentialStore) OverlayStage(stageID string, cfg *config.Config) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	if cfg == nil {
+		return fmt.Errorf("candidate config is required")
+	}
+	payload, err := readJSONFile(s.path)
+	if err != nil {
+		return fmt.Errorf("read credential stage %q: %w", stageID, err)
+	}
+	stage, ok := nestedMap(payload, "staged", stageID)
+	if !ok {
+		return fmt.Errorf("credential stage %q was not found", stageID)
+	}
+	providers, _ := stage["providers"].(map[string]interface{})
+	for provider, raw := range providers {
+		entry, _ := raw.(map[string]interface{})
+		apiKey := firstToken(entry, "api_key")
+		if apiKey == "" {
+			continue
+		}
+		if _, custom := cfg.Providers.CustomProvider(provider); custom {
+			customID := NormalizeProviderID(strings.TrimPrefix(provider, "custom:"))
+			for index := range cfg.Providers.Custom {
+				if NormalizeProviderID(cfg.Providers.Custom[index].Name) == customID {
+					cfg.Providers.Custom[index].APIKey = apiKey
+				}
+			}
+			continue
+		}
+		endpoint, _ := cfg.Providers.BuiltinEndpoint(provider)
+		endpoint.APIKey = apiKey
+		cfg.Providers.SetBuiltinEndpoint(provider, endpoint)
+	}
+	return nil
+}
+
+// StageAPIKeys records candidate secrets separately from the active provider
+// map. Reusing an uncommitted stage merges additional provider credentials,
+// which lets an interactive manager validate routes one at a time.
+func (s *CredentialStore) StageAPIKeys(stageID string, credentials map[string]string) (string, error) {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return "", fmt.Errorf("credential store path is empty")
+	}
+	clean := make(map[string]string, len(credentials))
+	for provider, apiKey := range credentials {
+		provider = NormalizeProviderID(provider)
+		apiKey = strings.TrimSpace(apiKey)
+		if provider != "" && apiKey != "" {
+			clean[provider] = apiKey
+		}
+	}
+	if len(clean) == 0 {
+		return strings.TrimSpace(stageID), nil
+	}
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		var err error
+		stageID, err = newCredentialStageID()
+		if err != nil {
+			return "", err
+		}
+	}
+	err := s.mutate(func(payload map[string]interface{}) error {
+		staged := ensureMap(payload, "staged")
+		cutoff := time.Now().UTC().Add(-24 * time.Hour)
+		for id, raw := range staged {
+			candidate, _ := raw.(map[string]interface{})
+			status, _ := candidate["status"].(string)
+			createdAt, _ := candidate["created_at"].(string)
+			created, _ := time.Parse(time.RFC3339Nano, createdAt)
+			if status != "committed" && !created.IsZero() && created.Before(cutoff) {
+				delete(staged, id)
+			}
+		}
+		stage, _ := staged[stageID].(map[string]interface{})
+		if stage == nil {
+			stage = map[string]interface{}{
+				"created_at": time.Now().UTC().Format(time.RFC3339Nano),
+				"status":     "staged",
+				"providers":  map[string]interface{}{},
+			}
+			staged[stageID] = stage
+		}
+		if status, _ := stage["status"].(string); status == "committed" {
+			return fmt.Errorf("credential stage %q is already committed", stageID)
+		}
+		providers := ensureMap(stage, "providers")
+		for provider, apiKey := range clean {
+			providers[provider] = map[string]interface{}{"api_key": apiKey}
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return stageID, nil
+}
+
+// CommitStage atomically swaps every staged provider secret into the active
+// map while retaining an exact rollback image in the same credential file.
+func (s *CredentialStore) CommitStage(stageID string) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	return s.mutate(func(payload map[string]interface{}) error {
+		stage, ok := nestedMap(payload, "staged", stageID)
+		if !ok {
+			return fmt.Errorf("credential stage %q was not found", stageID)
+		}
+		if status, _ := stage["status"].(string); status == "committed" {
+			return nil
+		}
+		candidates, _ := stage["providers"].(map[string]interface{})
+		if len(candidates) == 0 {
+			return fmt.Errorf("credential stage %q is empty", stageID)
+		}
+		active := ensureMap(payload, "providers")
+		previous := make(map[string]interface{}, len(candidates))
+		for provider, raw := range candidates {
+			if old, exists := active[provider]; exists {
+				previous[provider] = cloneJSONValue(old)
+			} else {
+				previous[provider] = nil
+			}
+			candidate, _ := raw.(map[string]interface{})
+			entry, _ := active[provider].(map[string]interface{})
+			if entry == nil {
+				entry = map[string]interface{}{}
+			} else {
+				entry = cloneJSONValue(entry).(map[string]interface{})
+			}
+			entry["api_key"] = firstToken(candidate, "api_key")
+			active[provider] = entry
+		}
+		stage["previous"] = previous
+		stage["status"] = "committed"
+		stage["committed_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+		return nil
+	})
+}
+
+// RollbackStage restores the active provider entries captured by CommitStage.
+// An uncommitted stage is simply discarded.
+func (s *CredentialStore) RollbackStage(stageID string) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	return s.mutate(func(payload map[string]interface{}) error {
+		staged, _ := payload["staged"].(map[string]interface{})
+		stage, _ := staged[stageID].(map[string]interface{})
+		if stage == nil {
+			return nil
+		}
+		if status, _ := stage["status"].(string); status == "committed" {
+			active := ensureMap(payload, "providers")
+			previous, _ := stage["previous"].(map[string]interface{})
+			for provider, raw := range previous {
+				if raw == nil {
+					delete(active, provider)
+				} else {
+					active[provider] = cloneJSONValue(raw)
+				}
+			}
+		}
+		delete(staged, stageID)
+		if len(staged) == 0 {
+			delete(payload, "staged")
+		}
+		return nil
+	})
+}
+
+// DiscardStage removes a candidate stage. It is rollback-safe if a caller is
+// recovering from a partially completed transaction.
+func (s *CredentialStore) DiscardStage(stageID string) error {
+	return s.RollbackStage(stageID)
+}
+
+// FinalizeStage forgets the rollback image after the replacement daemon has
+// reached the verified healthy boundary.
+func (s *CredentialStore) FinalizeStage(stageID string) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	return s.mutate(func(payload map[string]interface{}) error {
+		staged, _ := payload["staged"].(map[string]interface{})
+		delete(staged, stageID)
+		if len(staged) == 0 {
+			delete(payload, "staged")
+		}
+		return nil
+	})
+}
+
 // SaveAPIKey writes one provider secret to SelfMind's dedicated credential
 // file. The file is separate from reusable config, mode 0600, and replaced
 // atomically so a daemon can safely resolve it while setup is running.
@@ -68,6 +297,36 @@ func (s *CredentialStore) SaveAPIKey(provider, apiKey string) error {
 	if provider == "" {
 		return fmt.Errorf("credential provider is required")
 	}
+	return s.mutate(func(payload map[string]interface{}) error {
+		providers := ensureMap(payload, "providers")
+		entry, _ := providers[provider].(map[string]interface{})
+		if entry == nil {
+			entry = map[string]interface{}{}
+		}
+		apiKey = strings.TrimSpace(apiKey)
+		if apiKey == "" {
+			delete(entry, "api_key")
+		} else {
+			entry["api_key"] = apiKey
+		}
+		if len(entry) == 0 {
+			delete(providers, provider)
+		} else {
+			providers[provider] = entry
+		}
+		return nil
+	})
+}
+
+func (s *CredentialStore) mutate(update func(map[string]interface{}) error) error {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return fmt.Errorf("credential store path is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return err
+	}
+	unlock := lockAuthFile(s.path)
+	defer unlock()
 	payload := map[string]interface{}{}
 	if data, err := os.ReadFile(s.path); err == nil {
 		if err := json.Unmarshal(data, &payload); err != nil {
@@ -76,34 +335,14 @@ func (s *CredentialStore) SaveAPIKey(provider, apiKey string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	providers, _ := payload["providers"].(map[string]interface{})
-	if providers == nil {
-		providers = map[string]interface{}{}
-		payload["providers"] = providers
-	}
-	entry, _ := providers[provider].(map[string]interface{})
-	if entry == nil {
-		entry = map[string]interface{}{}
-	}
-	apiKey = strings.TrimSpace(apiKey)
-	if apiKey == "" {
-		delete(entry, "api_key")
-	} else {
-		entry["api_key"] = apiKey
-	}
-	if len(entry) == 0 {
-		delete(providers, provider)
-	} else {
-		providers[provider] = entry
+	if err := update(payload); err != nil {
+		return err
 	}
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
-	}
 	temp, err := os.CreateTemp(filepath.Dir(s.path), ".auth-*.tmp")
 	if err != nil {
 		return err
@@ -126,6 +365,36 @@ func (s *CredentialStore) SaveAPIKey(provider, apiKey string) error {
 		return err
 	}
 	return os.Rename(tempPath, s.path)
+}
+
+func nestedMap(payload map[string]interface{}, outer, inner string) (map[string]interface{}, bool) {
+	parent, _ := payload[outer].(map[string]interface{})
+	child, ok := parent[inner].(map[string]interface{})
+	return child, ok
+}
+
+func ensureMap(payload map[string]interface{}, key string) map[string]interface{} {
+	value, _ := payload[key].(map[string]interface{})
+	if value == nil {
+		value = map[string]interface{}{}
+		payload[key] = value
+	}
+	return value
+}
+
+func cloneJSONValue(value interface{}) interface{} {
+	data, _ := json.Marshal(value)
+	var cloned interface{}
+	_ = json.Unmarshal(data, &cloned)
+	return cloned
+}
+
+func newCredentialStageID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", fmt.Errorf("create credential stage: %w", err)
+	}
+	return hex.EncodeToString(id[:]), nil
 }
 
 type ExternalCredentialResolver struct{}

@@ -134,13 +134,11 @@ func (m *uiModel) finishSkillInvocationResolution(msg MsgSkillInvocationResolved
 	// The typed command was already echoed by handleCommand; only the loaded
 	// skill notice is added here.
 	m.setStatusNotice(noticeInfo, fmt.Sprintf("Loaded skill context: %s", msg.DisplayName))
-	m.thinking = true
 	m.runStatus = "working"
-	m.thinkingStart = time.Now()
 	m.runTokens = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
-	return tea.Batch(m.runAgent(ctx, msg.Prompt), m.spinner.Tick)
+	return tea.Batch(m.runAgent(ctx, msg.Prompt), m.startModelWait("Waiting for the model to choose the first step"), workingTick())
 }
 
 func (m *uiModel) handleMigration() tea.Cmd {
@@ -863,6 +861,7 @@ func (m *uiModel) handleCompact() tea.Cmd {
 	}
 	tail := append([]ChatMessage{}, m.messages[len(m.messages)-keep:]...)
 	m.messages = append([]ChatMessage{marker}, tail...)
+	m.commit(&m.messages[0])
 	return nil
 }
 
@@ -897,7 +896,7 @@ func (m *uiModel) tryClipboardImagePaste() (tea.Cmd, bool) {
 }
 
 // attachClipboardImage registers a saved clipboard-image path as an editor
-// image attachment shown as a compact [[ image:N name ]] token (mirroring
+// image attachment shown as a compact [Image #N · name] token (mirroring
 // large-paste placeholders), stripping any leading command token first. The
 // raw path never enters the composer text — ExpandValue substitutes it back at
 // submit time, where the existing path→attachment pipeline picks it up. This
@@ -908,8 +907,7 @@ func (m *uiModel) attachClipboardImage(path, stripPrefix string) {
 		cur := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m.editor.Value()), stripPrefix))
 		m.editor.SetValue(cur)
 	}
-	token := m.editor.AttachImage(path)
-	m.addMessage("assistant", "📎 Image attached from the clipboard as "+token+". Add your question and press Enter to send (delete the token to detach).")
+	m.editor.AttachImage(path)
 }
 
 // handleCapture saves the last recorded turn as a replayable eval case (the

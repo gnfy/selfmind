@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -968,6 +969,24 @@ func writeJSON(w http.ResponseWriter, status int, value interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
+}
+
+// writeJSONFlushed commits a complete, length-delimited response to the
+// transport before returning. Lifecycle endpoints use it when their successful
+// response can immediately cause the owning HTTP server to close.
+func writeJSONFlushed(w http.ResponseWriter, status int, value interface{}) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(status)
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	return http.NewResponseController(w).Flush()
 }
 
 func writeError(w http.ResponseWriter, status int, err error) {

@@ -12,6 +12,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/modelchange"
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
 )
@@ -100,7 +101,7 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	result := api.ModelChangeResponse{}
+	result := api.ModelChangeResponse{ProtocolVersion: api.ModelControlProtocolVersion}
 	action := strings.ToLower(strings.TrimSpace(req.Action))
 	switch action {
 	case "status":
@@ -126,23 +127,36 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 			routes = append(routes, route)
 		}
 		credentials := modelDraftCredentials(req)
+		providerChanges, providerErr := buildProviderDraft(d.ModelChanges, req)
+		if providerErr != nil {
+			http.Error(w, providerErr.Error(), http.StatusBadRequest)
+			return
+		}
+		cfg, loadErr := config.LoadConfig(config.Options{Path: d.ModelChanges.ConfigPath})
+		if loadErr != nil {
+			http.Error(w, loadErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		store := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile)
 		probes, err := d.ModelChanges.ValidateCandidateWithConfig(r.Context(), candidate, routes, func(cfg *config.Config) error {
+			modelchange.ApplyProviderChanges(cfg, providerChanges, true)
+			if err := store.OverlayStage(req.CredentialStage, cfg); err != nil {
+				return err
+			}
 			return applyModelDraftCredentials(cfg, credentials)
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		result.CredentialStage = strings.TrimSpace(req.CredentialStage)
 		if modelProbesPassed(probes) && len(credentials) > 0 {
-			cfg, loadErr := config.LoadConfig(config.Options{Path: d.ModelChanges.ConfigPath})
-			if loadErr != nil {
-				http.Error(w, loadErr.Error(), http.StatusInternalServerError)
+			stage, stageErr := store.StageAPIKeys(result.CredentialStage, credentials)
+			if stageErr != nil {
+				http.Error(w, stageErr.Error(), http.StatusInternalServerError)
 				return
 			}
-			if saveErr := saveModelDraftCredentials(cfg, credentials); saveErr != nil {
-				http.Error(w, saveErr.Error(), http.StatusInternalServerError)
-				return
-			}
+			result.CredentialStage = stage
 		}
 		result.Notices = notices
 		result.Probes = probes
@@ -152,9 +166,16 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
+		providerChanges, providerErr := buildProviderDraft(d.ModelChanges, req)
+		if providerErr != nil {
+			http.Error(w, providerErr.Error(), http.StatusBadRequest)
+			return
+		}
 		prepare := modelchange.PrepareRequest{
 			Candidate: candidate, ExpectedGeneration: generation,
 			ReplacePending: req.ReplacePending, ForceRevalidate: true,
+			CredentialStage: req.CredentialStage,
+			ProviderChanges: providerChanges,
 		}
 		prepare.Source = "local-cli"
 		prepare.RequireConfirmation = action == "prepare"
@@ -240,12 +261,16 @@ func (d *Server) handleGatewayShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	drainTimeout := shutdownTimeoutForReason(d.drainTimeout(), reason)
-	started := d.RequestGatewayShutdown(drainTimeout, reason)
+	responseReady := make(chan struct{})
+	started := d.requestGatewayShutdown(drainTimeout, reason, responseReady)
+	if started {
+		defer close(responseReady)
+	}
 	status := http.StatusAccepted
 	if !started {
 		status = http.StatusOK
 	}
-	writeJSON(w, status, map[string]interface{}{
+	_ = writeJSONFlushed(w, status, map[string]interface{}{
 		"accepted": started,
 		"status":   d.GatewayStatus(),
 	})
@@ -373,6 +398,16 @@ func (d *Server) ActiveRunCount() int {
 }
 
 func (d *Server) RequestGatewayShutdown(timeout time.Duration, reason string) bool {
+	return d.requestGatewayShutdown(timeout, reason, nil)
+}
+
+// requestGatewayShutdown optionally waits for the HTTP acceptance response to
+// be fully written before the process owner is told to close the server. The
+// local shutdown endpoint uses this gate because a no-work drain completes in
+// the same scheduler turn; without it, runner's immediate Server.Close can cut
+// off the 202 response and leave the restart client with EOF after a successful
+// shutdown. Signal- and context-originated shutdowns pass nil and start at once.
+func (d *Server) requestGatewayShutdown(timeout time.Duration, reason string, responseReady <-chan struct{}) bool {
 	d.mu.Lock()
 	if d.shutdownPending {
 		// Replacing a candidate before the safe boundary keeps the existing
@@ -388,7 +423,12 @@ func (d *Server) RequestGatewayShutdown(timeout time.Duration, reason string) bo
 	d.draining = true
 	d.drainReason = reason
 	d.mu.Unlock()
-	go d.shutdownAfterDrain(timeout, reason)
+	go func() {
+		if responseReady != nil {
+			<-responseReady
+		}
+		d.shutdownAfterDrain(timeout, reason)
+	}()
 	return true
 }
 

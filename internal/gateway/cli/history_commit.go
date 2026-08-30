@@ -3,10 +3,12 @@ package cli
 import (
 	"fmt"
 	"strings"
+	"time"
+
+	uitheme "selfmind/internal/ui/theme"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"selfmind/internal/kernel/llm"
 	"selfmind/internal/ui/layout"
 )
 
@@ -33,9 +35,6 @@ func (m *uiModel) trimHistoryWindow() {
 	}
 }
 
-// composerHintStyle dims the mid-turn guidance hint shown above the input.
-var composerHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Italic(true)
-
 // composerHint returns a hint shown above the input WHILE a run is active and
 // the user has typed something — so they know Enter will inject the text as
 // guidance into the running task (not start a new turn). Empty otherwise.
@@ -46,7 +45,10 @@ func (m *uiModel) composerHint() string {
 	if strings.TrimSpace(m.editor.Value()) == "" {
 		return ""
 	}
-	return composerHintStyle.Render(glyphArrowInto + " Enter sends as guidance to the running task")
+	return lipgloss.NewStyle().
+		Foreground(m.common.Theme.Color(uitheme.Accent)).
+		Italic(true).
+		Render(glyphArrowInto + " Enter sends as guidance to the running task")
 }
 
 // clearHybridScreen wipes the terminal (screen + visible scrollback) and
@@ -115,7 +117,7 @@ func (m *uiModel) commit(msg *ChatMessage) {
 		return
 	}
 	msg.Committed = true
-	rendered := prepareTerminalCell(renderCell(*msg, m.commitWidth()), m.commitWidth())
+	rendered := prepareTerminalCell(m.renderCell(*msg, m.commitWidth()), m.commitWidth())
 	if rendered != "" {
 		m.pendingPrintln = append(m.pendingPrintln, rendered)
 	}
@@ -141,47 +143,37 @@ func (m *uiModel) flushPendingPrintln(cmd tea.Cmd) tea.Cmd {
 	return tea.Sequence(cmds...)
 }
 
-// renderActiveBlock renders the not-yet-committed tail: in-progress tool cells,
-// the live assistant stream, and the thinking spinner. This is the only
+// renderActiveBlock renders the process surface and its single working spinner.
+// This is the only
 // transcript content the hybrid View draws each frame, so its cost is bounded
 // by what is currently in flight, not by history length.
 func (m *uiModel) renderActiveBlock(width int) string {
 	st := m.common.Styles
 	var lines []string
-	for i := range m.messages {
-		if m.messages[i].Committed {
-			continue
-		}
-		rendered := prepareTerminalCell(renderCell(m.messages[i], width), width)
-		if rendered == "" {
-			continue
-		}
-		lines = append(lines, strings.Split(rendered, "\n")...)
+	activeRows := m.processRowBudget(width)
+	showSpinner := m.waitingForModel && m.approvalPrompt == nil && activeRows > 0
+	processRows := activeRows
+	if showSpinner {
+		processRows--
 	}
-	if strings.TrimSpace(m.liveStreamContent) != "" {
-		phase := m.liveStreamPhase
-		if phase == llm.AssistantPhaseUnspecified {
-			// Until the kernel reaches a tool/final boundary this is a mutable
-			// preview, not a canonical answer. Render it as subordinate progress;
-			// MsgAgentDone will commit the authoritative final with its gutter.
-			phase = llm.AssistantPhaseCommentary
-		}
-		rendered := prepareTerminalCell(renderAssistantMessagePhase(stripANSI(m.liveStreamContent), width, phase), width)
-		if rendered != "" {
-			lines = append(lines, strings.Split(rendered, "\n")...)
-		}
+	if rendered := m.processState().RenderWithTheme(processViewport{width: width, maxRows: processRows}, m.common.Theme); strings.TrimSpace(rendered) != "" {
+		lines = append(lines, strings.Split(rendered, "\n")...)
 	}
 	// While the approval panel is up, the run is paused on the user: the
 	// spinner/activity line ("Preparing to run <tool>…") would be noise next to
 	// the panel, so it is suppressed until the decision resumes the run.
-	if m.thinking && m.approvalPrompt == nil {
+	if showSpinner {
 		spinnerView := m.spinner.View()
-		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
 		label := strings.TrimSpace(m.activityText)
 		if label == "" {
-			label = "Working"
+			label = "Waiting for the model"
 		}
-		lines = append(lines, st.Chat.Thinking.Render(spinnerView+" "+label+dots))
+		elapsed := int(time.Since(m.thinkingStart).Seconds())
+		if elapsed < 1 {
+			elapsed = 1
+		}
+		label = fmt.Sprintf("%s (%ds)", trimActivityElapsed(label), elapsed)
+		lines = append(lines, st.Chat.Thinking.Render(spinnerView+" "+label))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -189,16 +181,17 @@ func (m *uiModel) renderActiveBlock(width int) string {
 // viewActiveRegion is the hybrid-mode View: only the active region, pinned at
 // the bottom of the terminal. Finalized history lives in scrollback above it.
 func (m *uiModel) viewActiveRegion() string {
-	if m.modelManager != nil {
+	if m.modelManager != nil && m.approvalPrompt == nil {
 		return m.modelManager.View()
 	}
-	if m.pager != nil {
+	if m.pager != nil && m.approvalPrompt == nil {
 		return m.pager.View()
 	}
 	mainW := m.width
 	st := m.common.Styles
 
 	m.editor.SetCursorVisible(m.cursorVisible)
+	m.editor.SetLayout(m.width, m.height)
 	inputH := m.editor.PreferredHeight()
 	inputArea := m.editor.Draw(layout.Rect{W: m.width, H: inputH})
 	statusBar := st.Status.Panel.Width(m.width).Render(m.statusLine())
@@ -209,9 +202,6 @@ func (m *uiModel) viewActiveRegion() string {
 	if active := m.renderActiveBlock(mainW); strings.TrimSpace(active) != "" {
 		parts = append(parts, active)
 	}
-	// Transient approval dialog: active-region content per the hybrid contract
-	// (docs/tui-terminal-first-hybrid.md §3) — it must never scroll away into
-	// history while undecided.
 	if notification != "" {
 		parts = append(parts, notification)
 	}
@@ -225,7 +215,8 @@ func (m *uiModel) viewActiveRegion() string {
 		parts = append(parts, plan)
 	}
 	// A blocking approval stays closest to the composer so the next expected
-	// user action remains obvious even when a plan is visible.
+	// user action remains obvious. It temporarily preempts a pager/model overlay
+	// without hiding the active process, Plan, draft, or status context.
 	if m.approvalPrompt != nil {
 		parts = append(parts, m.approvalPrompt.View(mainW))
 	}

@@ -46,6 +46,30 @@ func TestMaintenancePassStopsWhenAReadyModelBecomesPending(t *testing.T) {
 	}
 }
 
+func TestSemanticRecallDegradationKeepsMaintenanceFloorReady(t *testing.T) {
+	service, _ := testModelChangeService(t)
+	if _, err := service.AcceptMigrationReadiness(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RecordRouteProbe(modelchange.ProbeResult{
+		Route: modelchange.RouteSemanticRecall, Error: "context deadline exceeded",
+		FailureClass: modelchange.FailureInfrastructure,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{ModelChanges: service}
+	if !daemon.backgroundReadyForWork() {
+		t.Fatal("semantic_recall degradation parked unrelated maintenance")
+	}
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.BackgroundReady() || !status.RouteReady(modelchange.RouteAuxiliary) {
+		t.Fatalf("role-scoped readiness = %+v", status.Readiness)
+	}
+}
+
 func TestMaintenanceWorkerSeesCurrentGenerationJob(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)
 	task := seedTask(t, store, identity, "fresh terminal task", "done", 1)

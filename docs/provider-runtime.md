@@ -40,7 +40,8 @@ profile.
 
 HTTP headers merge low-to-high as legacy `model.headers`,
 `model.extra_headers`, built-in profile headers, legacy provider `headers`,
-`provider_profiles.<id>.extra_headers`, and role/selection extra headers;
+`providers.<id>.extra_headers` (or `providers.custom.<id>.extra_headers`), and
+role/selection extra headers;
 adapters set protocol defaults (`content-type`, auth, `anthropic-version`)
 first and then apply the merged map, so yaml can
 override any of them as an emergency compatibility escape hatch until a
@@ -52,6 +53,64 @@ and `extra_query` merge provider-to-role, with the higher layer winning;
 request-body objects merge recursively. The transport applies those options
 only at the final HTTP boundary, so CLI, IM, cron, and future remote clients
 share one wire contract.
+
+## User configuration
+
+Provider connections own endpoints, authentication shape, and wire options;
+model routes own model IDs and interactive tuning. Built-in defaults stay in
+Go and are omitted from generated YAML. A built-in override is written directly
+under its stable provider ID:
+
+```yaml
+providers:
+  deepseek:
+    base_url: "https://gateway.example.com/v1"
+    extra_headers:
+      X-Client-Name: "SelfMind"
+
+models:
+  primary:
+    provider: "deepseek"
+    model: "deepseek-chat"
+  auxiliary:
+    enabled: false
+```
+
+User-defined connections live in the single `providers.custom` namespace. The
+map key is the stable provider ID referenced by model routes; it is not a vendor
+type and must not collide with a built-in ID. Custom connections intentionally
+expose only three protocol families and three authentication shapes:
+
+```yaml
+providers:
+  custom:
+    company-gateway:
+      base_url: "https://ai.example.com/v1"
+      protocol: "openai-compatible" # or anthropic-compatible / responses-compatible
+      auth: "bearer"                # or x-api-key / none
+
+models:
+  primary:
+    provider: "company-gateway"
+    model: "company-coder"
+```
+
+Credentials are stored in SelfMind's private auth store rather than YAML.
+`extra_headers` is for non-secret metadata: duplicate names are rejected
+case-insensitively, transport-owned headers are rejected, and credential-bearing
+headers such as `Authorization` and `x-api-key` must use the credential store.
+Credential-shaped keys are likewise rejected recursively in `extra_body` and
+`extra_query`, so non-secret connection snapshots remain safe to persist.
+`quirks` is a typed protocol-encoding surface, not an arbitrary header bag.
+OpenRouter's built-in `HTTP-Referer` and `X-Title` defaults therefore remain
+ordinary profile headers and can be overridden with
+`providers.openrouter.extra_headers`.
+
+`provider_profiles` and `custom:<id>` remain compatibility reads only. Run
+`selfmind config upgrade` to back up and rewrite old provider blocks into the
+new shape. Environment references such as `${OPENAI_API_KEY}` remain references;
+literal embedded provider API keys are moved to the private auth store during
+that explicit upgrade.
 
 `ProviderQuirks.PromptCache` opts an Anthropic-protocol provider into explicit prompt-cache breakpoints: the adapter attaches `cache_control: {"type":"ephemeral"}` to the last system content block and a rolling breakpoint on the last content block of the most recent message before the final user message (never more than 4 breakpoints). Built-in native Anthropic and MiniMax profiles enable it because those endpoints document the contract. Custom endpoints default off, and direct Kimi Coding remains off because its native coding endpoint has not established the same contract. With the quirk off, request bytes are unchanged. Usage accounting normalizes Anthropic cache reads/creation and OpenAI-compatible `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, plus reported reasoning tokens, into `llm.UsageStats`. The kernel `token.updated` event records hit, miss, creation, output, and reasoning totals. `/diag context` renders the latest run totals and hit rate; `selfmind usage` renders the person-scoped 24-hour execution and token report. Neither command embeds provider prices.
 
@@ -107,7 +166,8 @@ SelfMind distinguishes two commonly confused fields:
 Resolution priority:
 
 1. explicit role/primary `context_length` override
-2. `provider_profiles.<id>.context_length`
+2. `providers.<id>.context_length` or
+   `providers.custom.<id>.context_length`
 3. built-in provider profile metadata
 4. provider/local model metadata (for example Codex `models_cache.json`)
 5. custom provider `models.<model>.context_length`
@@ -127,13 +187,15 @@ model capabilities, not a global hardcoded enum. The Model Manager validates
 them when metadata is discoverable and otherwise preserves the explicit value
 for compatible private endpoints.
 
-For local onboarding, an auxiliary selection with no provider/model defaults
-to the primary provider/model. When Model Readiness is absent, a bare
+For local onboarding, an enabled auxiliary selection with no provider/model
+defaults to the primary provider/model. It can instead be explicitly disabled
+with `models.auxiliary.enabled: false`. When foreground readiness is absent, a bare
 interactive launch opens the same Model Manager as `selfmind model`; explicit
 `selfmind setup` points to that entry rather than implementing another picker.
-The Manager shows and validates both routes, so the background route is not a
-hidden side effect. Its initial transaction materializes both slots. The applied
-transaction in `model-state.json` is the sole authority for Model Readiness.
+The Manager first exposes Provider connections, then shows and validates Main
+and Background routes. Its initial transaction materializes enabled slots. The
+applied transaction in `model-state.json` is the sole authority for foreground
+and background readiness.
 Onboarding does not copy route or verification facts, so a
 later applied route change cannot reopen an unrelated workspace or background
 service stage. A valid legacy setup receipt is accepted once as migration
@@ -142,9 +204,10 @@ After auxiliary is explicit, changing primary never overwrites it. Logical
 background roles remain available as advanced `models.roles.<role>` overrides
 and inherit auxiliary when omitted.
 
-## Transactional route changes
+## Transactional provider and route changes
 
-All user-facing model changes converge on one daemon-owned transaction service.
+All user-facing provider, credential, and model-route changes converge on one
+daemon-owned transaction service.
 `selfmind model` and bare `/model` in the TUI open the same Model Manager; the
 IM surface exposes a read-only summary rather than a second mutation grammar.
 An online change follows this state machine:
@@ -173,9 +236,17 @@ snapshots, and rollback creates a fresh validated transaction from a previous
 applied snapshot.
 
 The state file is `model-state.json` beside the selected `config.yaml`. It
-contains route selections, the verified-running timestamp, phase transitions,
-probe summaries, generations, restart attempts, and history, but no
-credentials, provider headers, or raw authentication data. The validated
+contains route selections, non-secret provider connection snapshots, separate
+foreground/background and per-role verification evidence, phase transitions, probe
+summaries, generations, restart attempts, and history, but no credentials or
+raw authentication data. A newly entered key is first represented by an opaque
+credential-stage ID. Validation overlays the stage without changing the active
+credential. Provider and route configuration is committed at the safe boundary;
+the staged credential is committed only after the old daemon releases ownership,
+and the exact previous credential image is retained until the replacement daemon
+passes startup probes and real `/health`. Cancellation discards an uncommitted
+stage, and automatic rollback restores provider, route, and credential state as
+one unit. The validated
 candidate is written to YAML only at the
 safe boundary, after the current run is idle. Startup probes it again, then
 records it as running only after runtime construction and the real `/health`
@@ -184,19 +255,26 @@ failure automatically restores the last running snapshot. Network, quota,
 listener, service-manager, and unknown failures preserve the evidence in
 `recovery_required`; the Model Manager's Change status screen offers retry or
 restore against the last healthy routes.
-Schema-v1 and schema-v2 state is backed up before migrating to the current
+Schema-v1 through schema-v4 state is backed up before migrating to the current
 readiness-aware state machine.
 Direct YAML edits are shown as configured but unverified until the next daemon
 startup; another model transaction is refused while such drift exists.
-Gateway status exposes only a hash of the effective route snapshot. Onboarding
-uses that non-secret fingerprint to reject model drift before allowing Runtime
-Degraded foreground use; live health alone never establishes Model Readiness.
-Provider credentials and endpoint configuration are never part of the hash.
-While Model Readiness is incomplete, model-free controls remain available but
-every new agent-backed message is durably queued instead of executing on an
-unverified route, and each model-backed maintenance or memory pass stops at the
-same boundary. Cancelling a preview that restores Model Readiness immediately
-wakes the parked queue in order. An explicit restore first waits for the
+Gateway status exposes a non-secret hash of the effective route snapshot and
+separate readiness details. Foreground readiness is the gate for user agent
+work; each background role retains independent readiness. Maintenance roles may
+continue through their verified auxiliary fallback floor when an unrelated
+override is unavailable. In particular, an explicit `semantic_recall` failure
+degrades turn-start expansion to deterministic lexical recall without falling
+back to auxiliary or parking other maintenance. Transient timeout, rate, and
+network failures retry with bounded backoff; authentication, missing-model, and
+configuration failures wait for human repair. A successful bounded probe
+persists recovery and resumes normal role work without draining a backlog.
+Aggregate background readiness remains a summary of all enabled roles. A failed or disabled Background route does
+not take a verified Main route offline: status reports degraded or disabled
+background work and the foreground queue continues. If foreground readiness is
+missing, model-free controls remain available but new agent-backed messages are
+durably queued. Cancelling a preview that restores foreground readiness
+immediately wakes the parked queue in order. An explicit restore first waits for the
 process holding the failed candidate to release Gateway ownership, clears the
 prior running proof, restores the last healthy selection, and starts a
 replacement process. Managed restore waits only for the process started by the
@@ -217,10 +295,10 @@ probe for Main and a background or maintenance-JSON probe for Background and
 its six managed roles. The final daemon transaction resolves and probes the
 whole draft again inside the daemon environment before changing service state.
 This prevents a shell credential from appearing healthy while the background
-runtime cannot use it. A newly entered API key is copied to the `0600` SelfMind
-auth store only after its probe succeeds; service definitions contain paths and
-non-credential environment only. A failed probe keeps the draft editable and
-never masquerades as verified.
+runtime cannot use it. A newly entered API key stays in an opaque staged auth
+record during validation and is never written to YAML; service definitions
+contain paths and non-credential environment only. A failed probe keeps the
+draft editable and never masquerades as verified.
 
 For Anthropic Messages, `thinking_mode: anthropic` maps an explicit reasoning
 effort to an enabled thinking budget (`low=4096`, `medium/default=8192`,
@@ -286,7 +364,7 @@ The built-in `openrouter` profile declares `HTTP-Referer` (app link), `X-Title`
 profile headers rather than adapter defaults on purpose: a profile configured
 with any other protocol, and every streaming call, bypasses the OpenRouter
 adapter's own request builder, so adapter-set attribution reached almost no
-real request. `provider_profiles.openrouter.extra_headers` still overrides
+real request. `providers.openrouter.extra_headers` still overrides
 each of them for forks and proxies.
 
 ## DeepSeek V4
@@ -319,10 +397,10 @@ models:
     provider: "kimi-coding"
     model: "kimi-for-coding"
 
-provider_profiles:
-  kimi-coding:
-    api_key: "${KIMI_CODING_API_KEY}"
 ```
+
+Store the API key through Model Manager or `selfmind model`; it is not written
+to this YAML.
 
 Default behavior:
 
@@ -344,10 +422,10 @@ models:
     provider: "minimax"
     model: "MiniMax-M3"
 
-provider_profiles:
-  minimax:
-    api_key: "${MINIMAX_API_KEY}"
 ```
+
+Store the API key through Model Manager or `selfmind model`; it is not written
+to this YAML.
 
 OAuth config:
 

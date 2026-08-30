@@ -149,10 +149,11 @@ func TestGatewayModelChangeValidatesWholeDraftWithoutWriting(t *testing.T) {
 	}
 }
 
-func TestGatewayModelValidationSavesNewProviderCredentialOnlyAfterSuccessfulProbe(t *testing.T) {
+func TestGatewayModelValidationStagesNewProviderCredentialOnlyAfterSuccessfulProbe(t *testing.T) {
 	service, path := testModelChangeService(t)
 	service.Validate = func(_ context.Context, cfg *config.Config, routes []modelchange.Route) []modelchange.ProbeResult {
-		if cfg.ProviderProfiles["deepseek"].APIKey != "sk-deepseek" {
+		endpoint, _ := cfg.Providers.BuiltinEndpoint("deepseek")
+		if endpoint.APIKey != "sk-deepseek" {
 			return []modelchange.ProbeResult{{Route: routes[0], Error: "credential was not available to probe"}}
 		}
 		return []modelchange.ProbeResult{{Route: routes[0], OK: true, Provider: "deepseek", Model: "deepseek-chat"}}
@@ -176,19 +177,31 @@ func TestGatewayModelValidationSavesNewProviderCredentialOnlyAfterSuccessfulProb
 	if strings.Contains(recorder.Body.String(), "sk-deepseek") {
 		t.Fatal("response leaked credential")
 	}
+	var response api.ModelChangeResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.CredentialStage == "" {
+		t.Fatal("successful validation did not return a credential stage")
+	}
 	cfg, err := config.LoadConfig(config.Options{Path: path})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).Resolve("deepseek").Token; got != "sk-deepseek" {
-		t.Fatalf("stored token = %q", got)
+	store := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile)
+	if got := store.Resolve("deepseek").Token; got != "" {
+		t.Fatalf("validation changed active token = %q", got)
+	}
+	if got := store.ResolveStaged(response.CredentialStage, "deepseek").Token; got != "sk-deepseek" {
+		t.Fatalf("staged token = %q", got)
 	}
 }
 
 func TestGatewayModelValidationDoesNotSaveCredentialAfterFailedProbe(t *testing.T) {
 	service, path := testModelChangeService(t)
 	service.Validate = func(_ context.Context, cfg *config.Config, routes []modelchange.Route) []modelchange.ProbeResult {
-		if cfg.ProviderProfiles["deepseek"].APIKey != "sk-rejected" {
+		endpoint, _ := cfg.Providers.BuiltinEndpoint("deepseek")
+		if endpoint.APIKey != "sk-rejected" {
 			t.Fatal("credential was not available to transient probe config")
 		}
 		return []modelchange.ProbeResult{{Route: routes[0], Error: "authentication failed"}}
@@ -252,6 +265,92 @@ func TestGatewayModelChangeAppliesPrimaryBackgroundAndRolesInOneTransaction(t *t
 	}
 	if got := modelchange.SelectionForRoute(response.Change.Candidate, modelchange.RouteMemoryExtract); got.Provider != "anthropic" || got.Model != "claude-role" {
 		t.Fatalf("role = %+v", got)
+	}
+}
+
+func TestGatewayCustomProviderRouteAndCredentialUseOneTransaction(t *testing.T) {
+	service, path := testModelChangeService(t)
+	service.Validate = func(_ context.Context, cfg *config.Config, routes []modelchange.Route) []modelchange.ProbeResult {
+		provider, ok := cfg.Providers.CustomProvider("company-gateway")
+		if !ok || provider.BaseURL != "https://llm.company.example/v1" || provider.APIKey != "sk-company" {
+			return []modelchange.ProbeResult{{Route: routes[0], Error: "candidate connection was incomplete"}}
+		}
+		return []modelchange.ProbeResult{{Route: routes[0], OK: true, Provider: "company-gateway", Model: "company-model"}}
+	}
+	server := &Server{ModelChanges: service, LocalControlToken: "local-secret", ModelRestartFunc: func(string) error { return nil }}
+	patch := api.ModelSelectionPatch{Route: "primary", Provider: "company-gateway", Model: "company-model", APIKey: "sk-company"}
+	providerPatch := modelchange.ProviderPatch{Connection: modelchange.ProviderConnection{
+		ID: "company-gateway", Custom: true, BaseURL: "https://llm.company.example/v1",
+		Protocol: "openai-compatible", Auth: "bearer",
+	}}
+	validateBody, _ := json.Marshal(api.ModelChangeRequest{
+		Action: "validate", Patches: []api.ModelSelectionPatch{patch},
+		ProviderPatches: []modelchange.ProviderPatch{providerPatch}, ValidateRoutes: []string{"primary"},
+	})
+	validateReq := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(validateBody))
+	validateReq.RemoteAddr = "127.0.0.1:43210"
+	validateReq.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	validateRecorder := httptest.NewRecorder()
+	server.handleGatewayModelChange(validateRecorder, validateReq)
+	if validateRecorder.Code != http.StatusOK {
+		t.Fatalf("validate status=%d body=%s", validateRecorder.Code, validateRecorder.Body.String())
+	}
+	var validated api.ModelChangeResponse
+	if err := json.Unmarshal(validateRecorder.Body.Bytes(), &validated); err != nil {
+		t.Fatal(err)
+	}
+	if validated.CredentialStage == "" {
+		t.Fatal("custom provider credential was not staged")
+	}
+	cfg := mustLoadGatewayConfig(t, path)
+	store := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile)
+	if got := store.Resolve("company-gateway").Token; got != "" {
+		t.Fatalf("validation activated credential %q", got)
+	}
+	patch.APIKey = ""
+	applyBody, _ := json.Marshal(api.ModelChangeRequest{
+		Action: "apply", Patches: []api.ModelSelectionPatch{patch},
+		ProviderPatches: []modelchange.ProviderPatch{providerPatch}, CredentialStage: validated.CredentialStage,
+	})
+	applyReq := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(applyBody))
+	applyReq.RemoteAddr = "127.0.0.1:43210"
+	applyReq.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	applyRecorder := httptest.NewRecorder()
+	server.handleGatewayModelChange(applyRecorder, applyReq)
+	if applyRecorder.Code != http.StatusOK && applyRecorder.Code != http.StatusAccepted {
+		t.Fatalf("apply status=%d body=%s", applyRecorder.Code, applyRecorder.Body.String())
+	}
+	var applied api.ModelChangeResponse
+	if err := json.Unmarshal(applyRecorder.Body.Bytes(), &applied); err != nil {
+		t.Fatal(err)
+	}
+	if applied.Change == nil {
+		t.Fatalf("apply response = %+v", applied)
+	}
+	if _, err := service.BeginDraining(applied.Change.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Resolve("company-gateway").Token; got != "" {
+		t.Fatalf("draining activated credential %q", got)
+	}
+	if _, err := service.MarkRestarting(applied.Change.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.Resolve("company-gateway").Token; got != "sk-company" {
+		t.Fatalf("restart-boundary credential = %q", got)
+	}
+	if _, rolledBack, err := service.ReconcileStartup(context.Background()); err != nil || rolledBack {
+		t.Fatalf("startup rolledBack=%v err=%v", rolledBack, err)
+	}
+	if _, err := service.MarkStartupHealthy(); err != nil {
+		t.Fatal(err)
+	}
+	committed := mustLoadGatewayConfig(t, path)
+	if committed.EffectivePrimary().Provider != "company-gateway" {
+		t.Fatalf("committed primary = %+v", committed.EffectivePrimary())
+	}
+	if provider, ok := committed.Providers.CustomProvider("company-gateway"); !ok || provider.BaseURL != "https://llm.company.example/v1" {
+		t.Fatalf("committed provider = %+v ok=%v", provider, ok)
 	}
 }
 
@@ -353,7 +452,8 @@ func testModelChangeService(t *testing.T) (*modelchange.Service, string) {
 		t.Fatal(err)
 	}
 	service := &modelchange.Service{
-		ConfigPath: path,
+		ConfigPath:  path,
+		Credentials: modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile),
 		Validate: func(_ context.Context, cfg *config.Config, routes []modelchange.Route) []modelchange.ProbeResult {
 			results := make([]modelchange.ProbeResult, 0, len(routes))
 			for _, route := range routes {
@@ -366,4 +466,13 @@ func testModelChangeService(t *testing.T) (*modelchange.Service, string) {
 		},
 	}
 	return service, path
+}
+
+func mustLoadGatewayConfig(t *testing.T, path string) *config.Config {
+	t.Helper()
+	cfg, err := config.LoadConfig(config.Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
@@ -23,7 +24,7 @@ import (
 
 // PasteSnippet stores the real content for a placeholder token.
 type PasteSnippet struct {
-	Token string // the placeholder, e.g. "[[ paste:0 PrivacyDistiller.. [80 lines] .. scrubPII ]]"
+	Token string // the placeholder, e.g. "[Paste #1 · 80 lines]"
 	Text  string // actual pasted content
 }
 
@@ -33,13 +34,10 @@ type PasteSnippet struct {
 // a slash command); ExpandValue substitutes the path back at submit time so
 // the existing path→attachment pipeline picks it up unchanged.
 type ImageAttachment struct {
-	Token string // the placeholder, e.g. "[[ image:0 screenshot.png ]]"
+	Token string // the placeholder, e.g. "[Image #1 · screenshot.png]"
 	Path  string // absolute local file path
 	Name  string // display base name
 }
-
-// wsRe collapses whitespace in previews.
-var wsRe = regexp.MustCompile(`\s+`)
 
 // pasteLineBreakRe matches every line separator a terminal can deliver. A
 // bracketed paste arrives with bare CR in Windows Terminal/WSL, so counting
@@ -47,7 +45,7 @@ var wsRe = regexp.MustCompile(`\s+`)
 // configured line threshold permanently unreachable.
 var pasteLineBreakRe = regexp.MustCompile(`\r\n|\r|\n`)
 
-const maxComposerInputLines = 4
+const maxComposerInputLines = 6
 
 // Editor wraps textarea + textinput with large-paste detection.
 // When a multi-line paste exceeds the configured thresholds, the actual
@@ -68,6 +66,7 @@ type Editor struct {
 	cursorVisible   bool
 	hintIndex       int // selected row in the slash-command suggestion popup
 	layoutWidth     int // last known total composer width, for wrap-aware height
+	layoutHeight    int // last known terminal height, for proportional height cap
 	history         []composerDraft
 	historyIndex    int
 	historyBytes    int64
@@ -100,9 +99,8 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 	t.Placeholder = "Ask SelfMind to inspect, change, test, or remember"
 	t.Prompt = "" // Handled manually in Draw
 
-	editorBG := lipgloss.Color(common.PaletteEditorBG)
-	baseStyle := lipgloss.NewStyle().Background(editorBG)
-	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(common.PaletteEditorHint)).Background(editorBG)
+	baseStyle := c.Styles.Editor.Text.Copy().UnsetForeground()
+	placeholderStyle := c.Styles.Editor.Placeholder
 
 	// Keep the textarea visually merged with the filled composer band.
 	t.FocusedStyle.Base = baseStyle
@@ -120,11 +118,12 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 	t.Cursor.SetMode(cursor.CursorStatic)
 	t.Cursor.Focus()
 
-	// Override Enter so it does NOT insert newline — we use it for submit in controller.
-	// Shift+Enter and Ctrl+J insert newlines instead.
+	// Override Enter so it does NOT insert a newline — the controller uses it
+	// for submit. Ctrl+J is the portable multiline key: legacy terminal input
+	// cannot distinguish Shift+Enter from plain Enter.
 	t.KeyMap.InsertNewline = key.NewBinding(
-		key.WithKeys("shift+enter", "ctrl+j"),
-		key.WithHelp("shift+enter", "new line"),
+		key.WithKeys("ctrl+j"),
+		key.WithHelp("ctrl+j", "new line"),
 	)
 
 	t.Focus()
@@ -313,6 +312,24 @@ func (e *Editor) AttachImage(path string) string {
 	return token
 }
 
+// ActiveImageCount reports attachments whose exact token is still present in
+// the editable draft. The registry retains payload ownership until submit or
+// reset, but deleting a token immediately detaches it from the visible and
+// outgoing message state.
+func (e *Editor) ActiveImageCount() int {
+	if e == nil || e.secure {
+		return 0
+	}
+	value := e.textarea.Value()
+	count := 0
+	for _, image := range e.images {
+		if strings.Contains(value, image.Token) {
+			count++
+		}
+	}
+	return count
+}
+
 // ExpandValue replaces paste placeholders with the actual clipboard content
 // and image placeholders with their local file paths. Call this before
 // submitting.
@@ -336,11 +353,10 @@ func (e *Editor) ExpandValue() string {
 	return strings.NewReplacer(pairs...).Replace(val)
 }
 
-// UnresolvedToken returns a placeholder that survived ExpandValue, or "" when
-// the value is safe to submit. It only fires when the token text itself was
-// edited (or came from an older client), because a registered token always
-// substitutes exactly. The caller must keep the composer intact and let the
-// person fix it: the payload is unrecoverable once the composer is reset.
+// UnresolvedToken returns a current-format placeholder that survived
+// ExpandValue, or "" when the value is safe to submit. It fires when a token
+// was edited or pasted without a matching client-owned payload. Former `[[...]]`
+// placeholders are ordinary text and deliberately have no compatibility path.
 func (e *Editor) UnresolvedToken() string {
 	return pastetoken.FindUnresolved(e.ExpandValue())
 }
@@ -413,11 +429,19 @@ func (e *Editor) PreferredHeight() int {
 	if e.secure {
 		return 3
 	}
-	return e.visibleInputLineCount() + 2 + len(e.matchingCommands())
+	return e.visibleInputLineCount() + 2 + e.suggestionHeight()
 }
 
-// SetLayoutWidth records the total composer width so PreferredHeight can
-// account for soft-wrapped rows before the next Draw.
+// SetLayout records terminal dimensions so PreferredHeight can account for
+// soft wrapping and cap long drafts to one third of the visible terminal.
+func (e *Editor) SetLayout(width, height int) {
+	e.SetLayoutWidth(width)
+	if height > 0 {
+		e.layoutHeight = height
+	}
+}
+
+// SetLayoutWidth remains available to narrow component callers and tests.
 func (e *Editor) SetLayoutWidth(w int) {
 	if w > 0 {
 		e.layoutWidth = w
@@ -449,35 +473,43 @@ func (e *Editor) CursorAtTextBoundary() bool {
 // Draw renders the editor into the given layout rect.
 func (e *Editor) Draw(rect layout.Rect) string {
 	e.SetLayoutWidth(rect.W)
-	availableW := rect.W - 2
-	if availableW < 10 {
-		availableW = rect.W
-	}
+	width := max(1, rect.W)
+	borderStyle := lipgloss.NewStyle().Foreground(e.common.Styles.Border)
+	labelStyle := lipgloss.NewStyle().Foreground(e.common.Styles.Primary).Bold(true)
+	hintStyle := e.common.Styles.Subtle
 
 	if e.secure {
-		prompt := e.common.Styles.Editor.Prompt.Render(" secret › ")
-		inputW := availableW - 10
+		prompt := e.common.Styles.Editor.Prompt.Render("› ")
+		inputW := width - 2
 		if inputW < 1 {
 			inputW = 1
 		}
 		e.textinput.Width = inputW
-		return e.common.Styles.Editor.Panel.
-			Width(rect.W).
-			Render(lipgloss.JoinHorizontal(lipgloss.Top, prompt, e.textinput.View()))
+		body := lipgloss.JoinHorizontal(lipgloss.Top, prompt, e.textinput.View())
+		return lipgloss.JoinVertical(lipgloss.Left,
+			renderOpenBoundary("Secret", nil, width, borderStyle, labelStyle, hintStyle),
+			body,
+			borderStyle.Render(strings.Repeat("─", width)),
+		)
 	}
 
 	inputH := e.visibleInputLineCount()
 	prompt := e.common.Styles.Editor.Prompt.Render("› ")
 	e.textarea.SetHeight(inputH)
-	textW := editorTextWidth(rect.W)
+	textW := editorTextWidth(width)
 	e.textarea.SetWidth(textW)
-	view := renderEditorValue(e.textarea.Value(), e.textarea.Placeholder, inputH, textW, e.common.Styles.Editor.Cursor, e.cursorVisible, e.textarea.Line(), e.textarea.LineInfo())
+	view, viewport := renderEditorValue(e.textarea.Value(), e.textarea.Placeholder, inputH, textW,
+		e.common.Styles.Editor.Text, e.common.Styles.Editor.Placeholder, e.common.Styles.Editor.Cursor,
+		e.cursorVisible, e.textarea.Line(), e.textarea.LineInfo())
 
-	input := e.common.Styles.Editor.Panel.
-		Width(rect.W).
-		Render(lipgloss.JoinHorizontal(lipgloss.Top, prompt, view))
+	label := e.composerLabel(viewport)
+	input := lipgloss.JoinVertical(lipgloss.Left,
+		renderOpenBoundary(label, e.composerBoundaryHints(), width, borderStyle, labelStyle, hintStyle),
+		lipgloss.JoinHorizontal(lipgloss.Top, prompt, view),
+		borderStyle.Render(strings.Repeat("─", width)),
+	)
 
-	suggestions := e.renderSuggestions(rect.W)
+	suggestions := e.renderSuggestions(width)
 	if suggestions == "" {
 		return input
 	}
@@ -497,20 +529,30 @@ func (e *Editor) visibleInputLineCount() int {
 	if lines < 1 {
 		return 1
 	}
-	if lines > maxComposerInputLines {
-		return maxComposerInputLines
+	if maxRows := e.maxInputRows(); lines > maxRows {
+		return maxRows
 	}
 	return lines
+}
+
+func (e *Editor) maxInputRows() int {
+	if e.layoutHeight <= 0 {
+		return maxComposerInputLines
+	}
+	rows := e.layoutHeight / 3
+	if rows < 2 {
+		rows = 2
+	}
+	if rows > maxComposerInputLines {
+		rows = maxComposerInputLines
+	}
+	return rows
 }
 
 // editorTextWidth maps the composer's total width to the text-column width,
 // mirroring the prompt and padding math in Draw.
 func editorTextWidth(rectW int) int {
-	availableW := rectW - 2
-	if availableW < 10 {
-		availableW = rectW
-	}
-	textW := availableW - 2
+	textW := rectW - 2
 	if textW < 1 {
 		textW = 1
 	}
@@ -597,6 +639,18 @@ func editorWrappedRowCount(value string, width int) int {
 // suggestionRows is the number of popup rows shown at once. It windows the
 // rendering only; every match stays selectable.
 const suggestionRows = 8
+
+func (e *Editor) suggestionHeight() int {
+	n := len(e.matchingCommands())
+	if n == 0 {
+		return 0
+	}
+	height := min(n, suggestionRows)
+	if n > suggestionRows {
+		height++ // position footer rendered below the window
+	}
+	return height
+}
 
 func (e *Editor) matchingCommands() []CommandHint {
 	if e.browsingHistory() {
@@ -693,10 +747,10 @@ func (e *Editor) renderSuggestions(width int) string {
 	// codex-style: highlight the selected row by foreground color only (bright
 	// cyan for the whole row), dim the rest. No background blocks — those read as
 	// mismatched bars over a themed/transparent terminal background.
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Bold(true).Width(14)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	selNameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("45")).Bold(true).Width(14)
-	selDescStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51"))
+	nameStyle := e.common.Styles.Editor.CompletionName
+	descStyle := e.common.Styles.Editor.CompletionDescription
+	selNameStyle := e.common.Styles.Editor.CompletionSelectedName
+	selDescStyle := e.common.Styles.Editor.CompletionSelectedDescription
 	innerW := width - 2
 	if innerW < 1 {
 		innerW = 1
@@ -725,7 +779,77 @@ func (e *Editor) renderSuggestions(width int) string {
 		Render(strings.Join(rows, "\n"))
 }
 
-func renderEditorValue(value, placeholder string, height, width int, cursorStyle lipgloss.Style, cursorVisible bool, cursorLine int, lineInfo textarea.LineInfo) string {
+type editorViewport struct {
+	start int // one-based visible row
+	end   int // one-based visible row
+	total int
+}
+
+func (v editorViewport) overflowed() bool {
+	return v.total > 0 && v.total > v.end-v.start+1
+}
+
+func (e *Editor) composerLabel(viewport editorViewport) string {
+	label := "Message"
+	if position, total, ok := e.HistoryPosition(); ok {
+		label = fmt.Sprintf("History %d/%d", position, total)
+	}
+	if viewport.overflowed() {
+		lines := fmt.Sprintf("Lines %d–%d/%d", viewport.start, viewport.end, viewport.total)
+		if label == "Message" {
+			return lines
+		}
+		return label + " · " + lines
+	}
+	return label
+}
+
+func (e *Editor) composerBoundaryHints() []string {
+	count := e.ActiveImageCount()
+	if count == 0 {
+		return []string{"Ctrl+J newline · Ctrl+V image", "Ctrl+V image"}
+	}
+	imageLabel := fmt.Sprintf("%d images", count)
+	if count == 1 {
+		imageLabel = "1 image"
+	}
+	return []string{
+		imageLabel + " · Ctrl+J newline · Ctrl+V more",
+		imageLabel + " · Ctrl+V more",
+		imageLabel,
+	}
+}
+
+func renderOpenBoundary(label string, hints []string, width int, borderStyle, labelStyle, hintStyle lipgloss.Style) string {
+	if width < 1 {
+		return ""
+	}
+	const prefix = "── "
+	available := width - runewidth.StringWidth(prefix) - 1
+	if available < 1 {
+		return borderStyle.Render(strings.Repeat("─", width))
+	}
+	label = truncateDisplayWidth(label, available)
+	used := runewidth.StringWidth(prefix) + runewidth.StringWidth(label) + 1
+	for _, hint := range hints {
+		const minimumRuleWidth = 3
+		hintWidth := runewidth.StringWidth(hint)
+		if used+minimumRuleWidth+1+hintWidth > width {
+			continue
+		}
+		tail := width - used - 1 - hintWidth
+		return borderStyle.Render(prefix) + labelStyle.Render(label) +
+			borderStyle.Render(" "+strings.Repeat("─", tail)) + " " + hintStyle.Render(hint)
+	}
+
+	tail := width - used
+	if tail < 0 {
+		tail = 0
+	}
+	return borderStyle.Render(prefix) + labelStyle.Render(label) + borderStyle.Render(" "+strings.Repeat("─", tail))
+}
+
+func renderEditorValue(value, placeholder string, height, width int, textStyle, placeholderStyle, cursorStyle lipgloss.Style, cursorVisible bool, cursorLine int, lineInfo textarea.LineInfo) (string, editorViewport) {
 	if height < 1 {
 		height = 1
 	}
@@ -733,7 +857,7 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 		width = 1
 	}
 	if value == "" {
-		return renderEmptyEditorLine(placeholder, width, cursorStyle, cursorVisible)
+		return renderEmptyEditorLine(placeholder, width, placeholderStyle, cursorStyle, cursorVisible), editorViewport{start: 1, end: 1, total: 1}
 	}
 
 	// Soft-wrap every logical line the same way the underlying textarea does,
@@ -787,9 +911,7 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 		visible = append(visible, "")
 	}
 
-	bg := lipgloss.Color(common.PaletteEditorBG)
-	lineStyle := lipgloss.NewStyle().Background(bg).Width(width)
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(common.PaletteEditorText)).Background(bg)
+	lineStyle := textStyle.Copy().UnsetForeground().Width(width)
 
 	for i, row := range visible {
 		globalRow := start + i
@@ -801,7 +923,7 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 		}
 		visible[i] = lineStyle.Render(rendered)
 	}
-	return strings.Join(visible, "\n")
+	return strings.Join(visible, "\n"), editorViewport{start: start + 1, end: end, total: len(rows)}
 }
 
 func renderEditorCursorLine(row string, width int, textStyle, cursorStyle lipgloss.Style, cursorVisible bool, cursorOffset int) string {
@@ -854,15 +976,13 @@ func editorCursorParts(row string, width int, cursorOffset int) (string, string,
 	return before, cursorText, after
 }
 
-func renderEmptyEditorLine(placeholder string, width int, cursorStyle lipgloss.Style, cursorVisible bool) string {
+func renderEmptyEditorLine(placeholder string, width int, placeholderStyle, cursorStyle lipgloss.Style, cursorVisible bool) string {
 	if width < 1 {
 		width = 1
 	}
-	bg := lipgloss.Color(common.PaletteEditorBG)
-	lineStyle := lipgloss.NewStyle().Background(bg).Width(width)
-	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(common.PaletteEditorHint)).Background(bg)
+	lineStyle := placeholderStyle.Copy().UnsetForeground().Width(width)
 
-	cursorStyleToUse := lipgloss.NewStyle().Background(bg)
+	cursorStyleToUse := placeholderStyle.Copy().UnsetForeground()
 	if cursorVisible {
 		cursorStyleToUse = cursorStyle
 	}
@@ -928,27 +1048,6 @@ func stripTrailingPasteNewlines(text string) string {
 	return strings.TrimRight(text, "\r\n")
 }
 
-// edgePreview returns a short preview of text showing head and tail.
-// head: first N runes, tail: last M runes. If text fits, returns it unchanged.
-//
-// Cutting is rune-based on purpose: byte slicing split a CJK character in half,
-// and the resulting invalid byte was then repaired differently by each consumer
-// (the textarea coerces to U+FFFD, the token registry kept the raw byte), so the
-// composer's own token no longer matched itself.
-func edgePreview(s string, head int, tail int) string {
-	if s == "" {
-		return ""
-	}
-	// Collapse whitespace for preview (same as Hermes).
-	one := wsRe.ReplaceAllString(s, " ")
-	one = strings.TrimSpace(one)
-	runes := []rune(one)
-	if len(runes) <= head+tail+4 {
-		return one
-	}
-	return strings.TrimRight(string(runes[:head]), " \t") + ".. " + strings.TrimLeft(string(runes[len(runes)-tail:]), " \t")
-}
-
 // fmtK formats a number in compact form (e.g. 1234 → "1.2K").
 // Uses the same approach as Hermes: Intl.NumberFormat with compact notation.
 func fmtK(n int) string {
@@ -961,25 +1060,13 @@ func fmtK(n int) string {
 	return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
 }
 
-// pasteTokenLabel generates a user-visible placeholder label matching Hermes exactly:
-// "PrivacyDistiller implementation.. [80 lines] .. scrubPII"
-// or: "[80 lines]" if no preview available.
-// pasteTokenLabel renders the size hint shown inside a paste token. It uses
-// parentheses, not brackets: pastetoken.Format would sanitize brackets away
-// anyway, and keeping them out here means the displayed label matches the token
-// byte for byte.
+// pasteTokenLabel keeps placeholders compact and payload-free. Multi-line
+// content reports lines; a single long line reports Unicode characters.
 func pasteTokenLabel(text string, lineCount int) string {
-	preview := edgePreview(text, 16, 28)
-	if preview == "" {
-		return fmt.Sprintf("(%s lines)", fmtK(lineCount))
+	if lineCount > 1 {
+		return fmt.Sprintf("%s lines", fmtK(lineCount))
 	}
-	// Split preview on ".. " boundary (from edgePreview).
-	if idx := strings.Index(preview, ".. "); idx >= 0 {
-		head := strings.TrimRight(preview[:idx], " \t")
-		tail := strings.TrimLeft(preview[idx+3:], " \t")
-		return fmt.Sprintf("%s.. (%s lines) .. %s", head, fmtK(lineCount), tail)
-	}
-	return fmt.Sprintf("%s (%s lines)", preview, fmtK(lineCount))
+	return fmt.Sprintf("%s chars", fmtK(utf8.RuneCountInString(text)))
 }
 
 // normalizePasteNewlines turns CRLF and bare CR into LF so a pasted document

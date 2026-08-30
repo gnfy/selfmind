@@ -244,7 +244,7 @@ func codexResponsesQuirks() ProviderQuirks {
 // The headers belong to the profile rather than to one adapter so every
 // protocol carries them — a profile configured as `openai_chat`, or any
 // streaming call, never reaches the OpenRouter adapter's own request builder.
-// Being a profile layer also keeps `provider_profiles.openrouter.extra_headers`
+// Being a profile layer also keeps `providers.openrouter.extra_headers`
 // able to override them.
 func openRouterAttributionHeaders() map[string]string {
 	return map[string]string{
@@ -483,9 +483,9 @@ func NormalizeProtocol(value string) string {
 		return ProtocolOpenAICompatible
 	case "openai_chat":
 		return ProtocolOpenAIChat
-	case "anthropic", "anthropic-messages", "anthropic_messages":
+	case "anthropic", "anthropic-compatible", "anthropic-messages", "anthropic_messages":
 		return ProtocolAnthropic
-	case "responses", "codex-responses", "codex_responses", "openai_responses":
+	case "responses", "responses-compatible", "codex-responses", "codex_responses", "openai_responses":
 		return ProtocolResponses
 	default:
 		return strings.ToLower(strings.TrimSpace(value))

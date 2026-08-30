@@ -1,9 +1,12 @@
 id: reliability_approval_surface_control
-title: "approval notification surface is a durable model-free control"
+title: "inline approval surface remains a durable model-free control"
 suite: reliability
 workspace: isolated
 channel: cli
 model_required: false
+
+# This pins the production model-free approval control path. Focused TUI tests
+# own the active-region layout, lossless target wrapping, and keyboard priority.
 
 turns:
   - input: "/notify phone-first"

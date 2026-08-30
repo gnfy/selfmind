@@ -390,6 +390,12 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /copy
 ```
 
+在本机 TUI 中，`Ctrl+V` 会从 GUI 剪贴板附加图片，`/paste-image` 是明确的
+备用入口。在 macOS 上，`Cmd+V` 由终端程序处理，应视为文字粘贴，而不是图片
+快捷键。原生 Linux 需要 `wl-paste` 或 `xclip`；SSH 会话无法访问本机 GUI
+剪贴板，应改用图片路径或通过 IM 发送图片。提交前删除完整的
+`[Image #N · name]` token，就会解除该图片的附件引用。
+
 - `/memory` 展示便于人类阅读的记忆索引；子命令可查看、纠正、置顶、遗忘
   和审计 canonical memory。
 - `/skills bind <name>` 为当前任务指定一个默认逻辑 Skill；`/skills unbind`

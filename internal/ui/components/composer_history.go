@@ -195,6 +195,16 @@ func (e *Editor) browsingHistory() bool {
 	return e.Value() == e.history[e.historyIndex].Text && e.CursorAtTextBoundary()
 }
 
+// HistoryPosition returns the one-based position of the exact recalled draft.
+// Once the person edits it or moves the cursor into the text, the composer is a
+// normal draft again and no history label is shown.
+func (e *Editor) HistoryPosition() (position, total int, ok bool) {
+	if !e.browsingHistory() {
+		return 0, len(e.history), false
+	}
+	return e.historyIndex + 1, len(e.history), true
+}
+
 func (e *Editor) navigateHistory(delta int) bool {
 	if e == nil || e.secure || len(e.history) == 0 {
 		return false

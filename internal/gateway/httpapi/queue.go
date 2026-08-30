@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/log"
 )
 
@@ -26,6 +27,21 @@ func (d *Server) modelReadyForWork() bool {
 		return false
 	}
 	return status.ModelReady()
+}
+
+func (d *Server) backgroundReadyForWork() bool {
+	if d == nil || d.ModelChanges == nil {
+		return true
+	}
+	status, err := d.ModelChanges.Inspect()
+	if err != nil {
+		log.Warn("gateway: background model readiness check failed; parking maintenance", "error", err)
+		return false
+	}
+	// Maintenance roles have their own provider chains and may fall back to the
+	// verified auxiliary floor. A failed semantic_recall override must not park
+	// post-run learning or memory governance.
+	return status.RouteReady(modelchange.RouteAuxiliary)
 }
 
 func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {

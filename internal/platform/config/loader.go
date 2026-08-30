@@ -15,29 +15,14 @@ import (
 const defaultConfigTemplate = `
 model:
   # headers apply to EVERY provider request as the lowest-priority layer;
-  # provider_profiles.<id>.headers and models.roles.<role>.headers override
+  # providers.<id>.headers and models.roles.<role>.headers override
   # them key by key, and can also override built-in compatibility headers
   # (e.g. anthropic-version) as an emergency escape hatch until a release
   # ships the fix. Example:
   # headers:
   #   User-Agent: "my-org-agent/1.0"
 
-providers:
-  openai:
-    api_key: ""
-    base_url: "https://api.openai.com/v1"
-    protocol: "openai_chat"
-  anthropic:
-    api_key: ""
-    base_url: "https://api.anthropic.com"
-    protocol: "anthropic_messages"
-  google:
-    api_key: ""
-    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    protocol: "openai_compatible"
-  custom: []
-
-provider_profiles: {}
+providers: {}
 
 auth:
   credentials_file: "~/.selfmind/auth.json"
@@ -161,6 +146,12 @@ editor:
   large_paste_chars: 1000
   large_paste_lines: 10
 
+# TUI colors follow terminal capabilities by default. dark/light select a
+# contrast palette without painting the terminal background; mono disables
+# color while retaining structure, weight, and glyphs.
+tui:
+  theme: "auto" # auto | dark | light | mono
+
 # Person-local CLI input history (up/down-arrow recall across sessions), stored
 # as ~/.selfmind/input_history.jsonl. max_bytes also bounds rich in-session
 # history; persistence: "none" disables disk writes but not in-session recall.
@@ -226,6 +217,7 @@ type Config struct {
 	Cron             CronConfig                  `mapstructure:"cron" yaml:"cron,omitempty"`
 	FlightRecorder   FlightRecorderConfig        `mapstructure:"flight_recorder" yaml:"flight_recorder,omitempty"`
 	Editor           EditorConfig                `mapstructure:"editor" yaml:"editor,omitempty"`
+	TUI              TUIConfig                   `mapstructure:"tui" yaml:"tui,omitempty"`
 	Memory           MemoryConfig                `mapstructure:"memory" yaml:"memory,omitempty"`
 	Tasks            TaskConfig                  `mapstructure:"tasks" yaml:"tasks,omitempty"`
 	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
@@ -269,7 +261,7 @@ type ModelConfig struct {
 	Default       string `mapstructure:"default" yaml:"default,omitempty"`
 	ContextLength int    `mapstructure:"context_length" yaml:"context_length,omitempty"`
 	// ExtraHeaders are sent with every provider request as the lowest-priority
-	// operator layer. Prefer provider_profiles for vendor-specific values.
+	// operator layer. Prefer providers.<id> for connection-specific values.
 	ExtraHeaders map[string]string `mapstructure:"extra_headers" yaml:"extra_headers,omitempty"`
 	// Headers is the legacy spelling kept for config compatibility. New config
 	// should use extra_headers, which wins on duplicate keys.
@@ -295,6 +287,12 @@ type IntentThresholdsConfig struct {
 type EditorConfig struct {
 	LargePasteChars int `mapstructure:"large_paste_chars" yaml:"large_paste_chars,omitempty"`
 	LargePasteLines int `mapstructure:"large_paste_lines" yaml:"large_paste_lines,omitempty"`
+}
+
+// TUIConfig controls terminal presentation. Theme deliberately stays a small
+// contrast/capability choice rather than a named-theme or custom-palette API.
+type TUIConfig struct {
+	Theme string `mapstructure:"theme" yaml:"theme,omitempty"`
 }
 
 // HistoryConfig governs CLI Composer history. MaxBytes bounds both the
@@ -785,6 +783,10 @@ type ProvidersConfig struct {
 	OpenAI    ProviderEndpoint `mapstructure:"openai" yaml:"openai,omitempty"`
 	Anthropic ProviderEndpoint `mapstructure:"anthropic" yaml:"anthropic,omitempty"`
 	Google    ProviderEndpoint `mapstructure:"google" yaml:"google,omitempty"`
+	// Builtins holds endpoint overrides for every other built-in provider. The
+	// YAML surface remains providers.<provider-id>; the mapstructure `remain`
+	// tag keeps the config package independent from modelruntime's registry.
+	Builtins map[string]ProviderEndpoint `mapstructure:",remain" yaml:"-"`
 
 	AnthropicAPIKey  string `mapstructure:"anthropic_api_key" yaml:"-"`
 	OpenAIAPIKey     string `mapstructure:"openai_api_key" yaml:"-"`
@@ -843,13 +845,17 @@ type ModelsConfig struct {
 
 // ModelSelectionConfig is a user-facing model selection. Primary owns the
 // foreground conversation; auxiliary supplies the default for bounded
-// background roles. Provider profiles own transport/authentication.
+// background roles. Provider connections own transport/authentication.
 type ModelSelectionConfig struct {
 	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
 	Model         string `mapstructure:"model" yaml:"model,omitempty"`
 	Reasoning     string `mapstructure:"reasoning" yaml:"reasoning,omitempty"`
 	ServiceTier   string `mapstructure:"service_tier" yaml:"service_tier,omitempty"`
 	ContextLength int    `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	// Enabled is used by the auxiliary route only. Nil preserves the local
+	// default (enabled, inheriting Main when no selection is present); false is
+	// an explicit user decision to disable background model work.
+	Enabled *bool `mapstructure:"enabled" yaml:"enabled,omitempty"`
 }
 
 type ModelRoleConfig struct {
@@ -876,12 +882,22 @@ type ModelRoleConfig struct {
 }
 
 type CustomProvider struct {
-	Name     string                           `mapstructure:"name" yaml:"name,omitempty"`
-	BaseURL  string                           `mapstructure:"base_url" yaml:"base_url,omitempty"`
-	APIKey   string                           `mapstructure:"api_key" yaml:"api_key,omitempty"`
-	Protocol string                           `mapstructure:"protocol" yaml:"protocol,omitempty"`
-	Model    string                           `mapstructure:"model" yaml:"model,omitempty"`
-	Models   map[string]CustomModelProperties `mapstructure:"models" yaml:"models,omitempty"`
+	Name            string                           `mapstructure:"name" yaml:"name,omitempty"`
+	BaseURL         string                           `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	APIKey          string                           `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	Protocol        string                           `mapstructure:"protocol" yaml:"protocol,omitempty"`
+	Auth            string                           `mapstructure:"auth" yaml:"auth,omitempty"`
+	ExtraHeaders    map[string]string                `mapstructure:"extra_headers" yaml:"extra_headers,omitempty"`
+	ExtraBody       map[string]interface{}           `mapstructure:"extra_body" yaml:"extra_body,omitempty"`
+	ExtraQuery      map[string]interface{}           `mapstructure:"extra_query" yaml:"extra_query,omitempty"`
+	ContextLength   int                              `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	MaxTokens       int                              `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
+	ReasoningEffort string                           `mapstructure:"reasoning_effort" yaml:"reasoning_effort,omitempty"`
+	Thinking        map[string]interface{}           `mapstructure:"thinking" yaml:"thinking,omitempty"`
+	ServiceTier     string                           `mapstructure:"service_tier" yaml:"service_tier,omitempty"`
+	Quirks          ProviderQuirks                   `mapstructure:"quirks" yaml:"quirks,omitempty"`
+	Model           string                           `mapstructure:"model" yaml:"model,omitempty"`   // legacy provider-level default
+	Models          map[string]CustomModelProperties `mapstructure:"models" yaml:"models,omitempty"` // legacy metadata
 }
 
 type CustomModelProperties struct {
@@ -965,6 +981,12 @@ func LoadConfig(options ...Options) (*Config, error) {
 			return nil, fmt.Errorf("error reading config file %s: %w", path, err)
 		}
 	}
+	if err := validateProviderYAML(path); err != nil {
+		return nil, fmt.Errorf("invalid provider configuration: %w", err)
+	}
+	if err := prepareProviderConfig(v); err != nil {
+		return nil, fmt.Errorf("invalid provider configuration: %w", err)
+	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
@@ -972,6 +994,14 @@ func LoadConfig(options ...Options) (*Config, error) {
 	}
 	cfg.Path = path
 	cfg.Normalize()
+	if err := cfg.ValidateTUI(); err != nil {
+		return nil, err
+	}
+	for _, provider := range cfg.Providers.Custom {
+		if err := validateCustomProvider(provider); err != nil {
+			return nil, err
+		}
+	}
 	return &cfg, nil
 }
 
@@ -987,6 +1017,9 @@ func SaveConfig(path string, cfg *Config) error {
 	}
 	cfg.Path = path
 	cfg.Normalize()
+	if err := cfg.ValidateTUI(); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -1062,6 +1095,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.credentials_file", "~/.selfmind/auth.json")
 	v.SetDefault("editor.large_paste_chars", 1000)
 	v.SetDefault("editor.large_paste_lines", 10)
+	v.SetDefault("tui.theme", "auto")
 	v.SetDefault("history.persistence", "save-all")
 	v.SetDefault("history.max_bytes", 524288)
 	v.SetDefault("history.load_entries", 200)
@@ -1122,6 +1156,7 @@ func setDefaults(v *viper.Viper) {
 }
 
 func (c *Config) Normalize() {
+	c.TUI.Theme = strings.ToLower(strings.TrimSpace(firstNonEmpty(c.TUI.Theme, "auto")))
 	if c.Models.Roles == nil {
 		c.Models.Roles = make(map[string]ModelRoleConfig)
 	}
@@ -1209,8 +1244,27 @@ func (c *Config) Normalize() {
 		c.Providers.Custom[i].Name = strings.TrimSpace(c.Providers.Custom[i].Name)
 		c.Providers.Custom[i].BaseURL = expandEnvRef(c.Providers.Custom[i].BaseURL)
 		c.Providers.Custom[i].APIKey = expandEnvRef(c.Providers.Custom[i].APIKey)
-		c.Providers.Custom[i].Protocol = firstNonEmpty(c.Providers.Custom[i].Protocol, "openai_compatible")
+		c.Providers.Custom[i].Protocol = normalizeCustomProtocol(c.Providers.Custom[i].Protocol)
+		c.Providers.Custom[i].Auth = normalizeCustomAuth(c.Providers.Custom[i].Auth, c.Providers.Custom[i].Protocol)
+		c.Providers.Custom[i].ExtraHeaders = normalizeHeaders(c.Providers.Custom[i].ExtraHeaders)
+		c.Providers.Custom[i].ExtraBody = normalizeExtraMap(c.Providers.Custom[i].ExtraBody)
+		c.Providers.Custom[i].ExtraQuery = normalizeExtraMap(c.Providers.Custom[i].ExtraQuery)
+		c.Providers.Custom[i].ReasoningEffort = normalizeReasoning(c.Providers.Custom[i].ReasoningEffort)
+		c.Providers.Custom[i].ServiceTier = expandEnvRef(c.Providers.Custom[i].ServiceTier)
+		c.Providers.Custom[i].Quirks = normalizeProviderQuirks(c.Providers.Custom[i].Quirks)
 		c.Providers.Custom[i].Model = expandEnvRef(c.Providers.Custom[i].Model)
+	}
+	for name, endpoint := range c.Providers.Builtins {
+		id := normalizeProviderConfigID(name)
+		if id == "" || id == "custom" {
+			delete(c.Providers.Builtins, name)
+			continue
+		}
+		endpoint = normalizeEndpoint(endpoint, "", "", "")
+		if id != name {
+			delete(c.Providers.Builtins, name)
+		}
+		c.Providers.Builtins[id] = endpoint
 	}
 	for name, endpoint := range c.ProviderProfiles {
 		trimmed := strings.TrimSpace(name)
@@ -1262,6 +1316,17 @@ func (c *Config) Normalize() {
 	}
 	if strings.TrimSpace(c.Agent.Model) == "" {
 		c.Agent.Model = c.Model.Default
+	}
+}
+
+// ValidateTUI rejects misspelled modes instead of silently selecting a palette
+// with the wrong contrast. Terminal probing belongs to the TUI process.
+func (c *Config) ValidateTUI() error {
+	switch c.TUI.Theme {
+	case "auto", "dark", "light", "mono":
+		return nil
+	default:
+		return fmt.Errorf("invalid tui.theme %q: want auto, dark, light, or mono", c.TUI.Theme)
 	}
 }
 
@@ -1386,6 +1451,9 @@ func (c *Config) EffectiveAuxiliary() ModelSelectionConfig {
 		return ModelSelectionConfig{}
 	}
 	auxiliary := c.Models.Auxiliary
+	if auxiliary.Enabled != nil && !*auxiliary.Enabled {
+		return auxiliary
+	}
 	auxiliary.Provider = strings.TrimSpace(auxiliary.Provider)
 	auxiliary.Model = strings.TrimSpace(auxiliary.Model)
 	if auxiliary.Provider == "" && auxiliary.Model == "" {
@@ -1403,7 +1471,7 @@ func (c *Config) EffectiveAuxiliary() ModelSelectionConfig {
 // overwrites an auxiliary model the person has already accepted or customized.
 // Auxiliary-specific reasoning, service tier, and context tuning are retained.
 func (c *Config) InitializeAuxiliaryFromPrimary() bool {
-	if c == nil || strings.TrimSpace(c.Models.Auxiliary.Provider) != "" || strings.TrimSpace(c.Models.Auxiliary.Model) != "" {
+	if c == nil || !c.AuxiliaryEnabled() || strings.TrimSpace(c.Models.Auxiliary.Provider) != "" || strings.TrimSpace(c.Models.Auxiliary.Model) != "" {
 		return false
 	}
 	primary := c.EffectivePrimary()
@@ -1415,13 +1483,19 @@ func (c *Config) InitializeAuxiliaryFromPrimary() bool {
 	return true
 }
 
+// AuxiliaryEnabled reports whether bounded background model work is enabled.
+// Omission preserves the one-model local-install default.
+func (c *Config) AuxiliaryEnabled() bool {
+	return c != nil && (c.Models.Auxiliary.Enabled == nil || *c.Models.Auxiliary.Enabled)
+}
+
 // ResolveAuxiliaryRole applies the model routing precedence used by automatic
 // background work: an explicit role override wins, then models.auxiliary.
 // Explicit role fields may be partial and inherit the auxiliary selection.
 // The caller chooses which logical roles are auxiliary; capability-specific
 // roles such as vision are not redirected merely because this method exists.
 func (c *Config) ResolveAuxiliaryRole(role string) (ModelRoleConfig, string, bool) {
-	if c == nil {
+	if c == nil || !c.AuxiliaryEnabled() {
 		return ModelRoleConfig{}, "", false
 	}
 	role = strings.TrimSpace(role)
@@ -1445,7 +1519,7 @@ func (c *Config) ResolveAuxiliaryRole(role string) (ModelRoleConfig, string, boo
 func modelSelectionConfigEmpty(selection ModelSelectionConfig) bool {
 	return strings.TrimSpace(selection.Provider) == "" && strings.TrimSpace(selection.Model) == "" &&
 		strings.TrimSpace(selection.Reasoning) == "" && strings.TrimSpace(selection.ServiceTier) == "" &&
-		selection.ContextLength <= 0
+		selection.ContextLength <= 0 && selection.Enabled == nil
 }
 
 func modelRoleConfigEmpty(role ModelRoleConfig) bool {
@@ -1462,7 +1536,7 @@ func modelRoleConfigEmpty(role ModelRoleConfig) bool {
 // route is unavailable, so it is never an override: callers append it after a
 // role's own configuration and de-duplicate by physical route.
 func (c *Config) AuxiliaryRoleFloor() (ModelRoleConfig, bool) {
-	if c == nil {
+	if c == nil || !c.AuxiliaryEnabled() {
 		return ModelRoleConfig{}, false
 	}
 	auxiliary := c.EffectiveAuxiliary()

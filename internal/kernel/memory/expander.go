@@ -64,11 +64,21 @@ func SemanticRecallPromptDefaults() string {
 // Nil-receiver safe: callers may hold a typed-nil expander behind an interface
 // (e.g. the gateway recall engine when no semantic_recall role is configured).
 func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
-	if se == nil || !se.enabled || se.provider == nil {
+	expanded, err := se.ExpandWithError(ctx, query)
+	if err != nil {
 		return query
 	}
+	return expanded
+}
+
+// ExpandWithError exposes provider health to the role supervisor while keeping
+// Expand's historical fail-open contract for ordinary callers.
+func (se *SemanticExpander) ExpandWithError(ctx context.Context, query string) (string, error) {
+	if se == nil || !se.enabled || se.provider == nil {
+		return query, nil
+	}
 	if query == "" {
-		return query
+		return query, nil
 	}
 	mc := llm.ModelContextFrom(ctx)
 	mc.Role = llm.RoleSemanticRecall
@@ -79,7 +89,7 @@ func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
 	entry, ok := se.cache[query]
 	se.mu.Unlock()
 	if ok && time.Since(entry.cachedAt) < se.cacheTTL {
-		return entry.result
+		return entry.result, nil
 	}
 
 	systemPrompt := promptassets.AppendOperatorGuidance(semanticRecallSystemPrompt,
@@ -91,7 +101,7 @@ func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
 		{Role: "user", Content: semanticRecallInput(query)},
 	})
 	if err != nil {
-		return query
+		return query, err
 	}
 
 	terms := strings.Fields(resp)
@@ -101,7 +111,7 @@ func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
 	expanded := strings.Join(terms, " ")
 	normalizedQuery := strings.Join(strings.Fields(query), " ")
 	if expanded == "" || expanded == normalizedQuery {
-		return query
+		return query, nil
 	}
 
 	// Merge original query with expanded terms for FTS5 OR search
@@ -115,5 +125,5 @@ func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
 	se.mu.Lock()
 	se.cache[query] = cacheEntry{result: result, cachedAt: time.Now()}
 	se.mu.Unlock()
-	return result
+	return result, nil
 }

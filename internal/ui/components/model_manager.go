@@ -2,10 +2,12 @@ package components
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	uitheme "selfmind/internal/ui/theme"
 )
 
 var modelManagerRoles = []string{
@@ -30,6 +32,12 @@ type ModelManagerStatus struct {
 	BackgroundModel       string
 	BackgroundReasoning   string
 	BackgroundServiceTier string
+	BackgroundEnabled     bool
+	ForegroundReady       bool
+	BackgroundReady       bool
+	ReadinessDegraded     bool
+	ForegroundReason      string
+	BackgroundReason      string
 	RoleOverrides         map[string]ModelManagerSubmission
 	Pending               string
 	RecoveryRequired      bool
@@ -50,6 +58,19 @@ type ModelManagerProvider struct {
 	CredentialRequired bool
 	CredentialReady    bool
 	Models             []ModelManagerModel
+	Custom             bool
+	BaseURL            string
+	Protocol           string
+	Auth               string
+}
+
+type ModelManagerProviderSubmission struct {
+	ID       string
+	Custom   bool
+	BaseURL  string
+	Protocol string
+	Auth     string
+	Delete   bool
 }
 
 type ModelManagerSubmission struct {
@@ -60,6 +81,7 @@ type ModelManagerSubmission struct {
 	ServiceTier string
 	Reset       bool
 	APIKey      string
+	Enabled     *bool
 }
 
 type ModelManagerAction struct {
@@ -68,6 +90,7 @@ type ModelManagerAction struct {
 	Draft           []ModelManagerSubmission
 	ValidationRoute string
 	RecoveryAction  string
+	ProviderDraft   []ModelManagerProviderSubmission
 }
 
 type modelManagerScreen int
@@ -83,11 +106,18 @@ const (
 	modelScreenServiceTier
 	modelScreenReview
 	modelScreenStatus
+	modelScreenConnections
+	modelScreenConnectionDetail
+	modelScreenConnectionName
+	modelScreenConnectionURL
+	modelScreenConnectionProtocol
+	modelScreenConnectionAuth
 )
 
 // ModelManager owns one transient, multi-route draft. The daemon remains the
 // authority for probes, persistence, generation checks, and safe restarts.
 type ModelManager struct {
+	theme              uitheme.Theme
 	status             ModelManagerStatus
 	providers          []ModelManagerProvider
 	screen             modelManagerScreen
@@ -99,19 +129,31 @@ type ModelManager struct {
 	reasoning          int
 	serviceTier        int
 	draft              map[string]ModelManagerSubmission
+	providerDraft      map[string]ModelManagerProviderSubmission
 	validation         map[string]string
 	credentials        map[string]string
 	credentialInput    []rune
+	credentialStage    string
 	editingCustomModel bool
 	customModelInput   []rune
+	connection         int
+	connectionNew      bool
+	connectionInput    []rune
+	connectionEditing  ModelManagerProviderSubmission
 	width              int
 	height             int
 }
 
 func NewModelManager(status ModelManagerStatus, providers []ModelManagerProvider, width, height int) *ModelManager {
+	return NewModelManagerWithTheme(status, providers, width, height, uitheme.Default())
+}
+
+func NewModelManagerWithTheme(status ModelManagerStatus, providers []ModelManagerProvider, width, height int, t uitheme.Theme) *ModelManager {
 	m := &ModelManager{
+		theme:  t,
 		status: status, providers: append([]ModelManagerProvider(nil), providers...),
-		draft: make(map[string]ModelManagerSubmission), validation: make(map[string]string), credentials: make(map[string]string),
+		draft: make(map[string]ModelManagerSubmission), providerDraft: make(map[string]ModelManagerProviderSubmission),
+		validation: make(map[string]string), credentials: make(map[string]string),
 		width: width, height: height,
 	}
 	if m.status.RoleOverrides == nil {
@@ -137,9 +179,12 @@ func (m *ModelManager) Resize(width, height int) {
 
 // SetRouteValidation records the daemon-owned automatic probe result for one
 // completed selection. A failure remains visible and the draft stays editable.
-func (m *ModelManager) SetRouteValidation(route string, ok bool, message string) {
+func (m *ModelManager) SetRouteValidation(route string, ok bool, message, credentialStage string) {
 	route = normalizeManagerRoute(route)
 	if ok {
+		if stage := strings.TrimSpace(credentialStage); stage != "" {
+			m.credentialStage = stage
+		}
 		m.validation[route] = "validated"
 		validated, exists := m.draft[route]
 		if !exists || strings.TrimSpace(validated.APIKey) == "" {
@@ -167,6 +212,10 @@ func (m *ModelManager) SetRouteValidation(route string, ok bool, message string)
 	m.validation[route] = message
 }
 
+// CredentialStage returns the daemon-issued opaque handle for credentials
+// already validated in this draft. It contains no secret material.
+func (m *ModelManager) CredentialStage() string { return m.credentialStage }
+
 func (m *ModelManager) Update(msg tea.KeyMsg) ModelManagerAction {
 	if m.status.RecoveryRequired {
 		switch msg.String() {
@@ -181,6 +230,9 @@ func (m *ModelManager) Update(msg tea.KeyMsg) ModelManagerAction {
 	}
 	if m.editingCustomModel {
 		return m.updateCustomModel(msg)
+	}
+	if m.screen == modelScreenConnectionName || m.screen == modelScreenConnectionURL {
+		return m.updateConnectionInput(msg)
 	}
 	if m.screen == modelScreenCredential {
 		return m.updateCredential(msg)
@@ -264,12 +316,14 @@ func (m *ModelManager) choose() ModelManagerAction {
 		case 2:
 			m.screen, m.index = modelScreenRoles, 0
 		case 3:
-			m.screen, m.index = modelScreenStatus, 0
+			m.screen, m.index = modelScreenConnections, 0
 		case 4:
-			if len(m.draft) > 0 {
+			m.screen, m.index = modelScreenStatus, 0
+		case 5:
+			if len(m.draft) > 0 || len(m.providerDraft) > 0 {
 				m.screen, m.index = modelScreenReview, 0
 			}
-		case 5:
+		case 6:
 			return ModelManagerAction{Closed: true}
 		}
 	case modelScreenRoles:
@@ -285,13 +339,21 @@ func (m *ModelManager) choose() ModelManagerAction {
 		case 0:
 			m.setDraft(ModelManagerSubmission{Route: m.route, Reset: true})
 			m.screen, m.index = modelScreenMenu, 2
-			return ModelManagerAction{Draft: m.Draft(), ValidationRoute: m.route}
+			return m.draftAction(m.route)
 		case 1:
 			m.beginRoute(m.route)
 		default:
 			m.screen, m.index = modelScreenRoles, m.roleIndex
 		}
 	case modelScreenProvider:
+		if m.route == "background" && m.index >= len(m.providers) {
+			disabled := false
+			selection := m.configuredSelection("background")
+			selection.Enabled = &disabled
+			m.setDraft(selection)
+			m.screen, m.index = modelScreenMenu, 1
+			return m.draftAction(m.route)
+		}
 		if len(m.providers) == 0 {
 			return ModelManagerAction{}
 		}
@@ -328,11 +390,21 @@ func (m *ModelManager) choose() ModelManagerAction {
 			menuIndex = 1
 		}
 		m.screen, m.index = modelScreenMenu, menuIndex
-		return ModelManagerAction{Draft: m.Draft(), ValidationRoute: m.route}
+		return m.draftAction(m.route)
 	case modelScreenReview:
-		return ModelManagerAction{Closed: true, Draft: m.Draft()}
+		return ModelManagerAction{Closed: true, Draft: m.Draft(), ProviderDraft: m.ProviderDraft()}
 	case modelScreenStatus:
-		m.screen, m.index = modelScreenMenu, 3
+		m.screen, m.index = modelScreenMenu, 4
+	case modelScreenConnections:
+		return m.chooseConnection()
+	case modelScreenConnectionDetail:
+		return m.chooseConnectionDetail()
+	case modelScreenConnectionProtocol:
+		m.connectionEditing.Protocol = []string{"openai-compatible", "anthropic-compatible", "responses-compatible"}[m.index]
+		m.screen, m.index = modelScreenConnectionAuth, 0
+	case modelScreenConnectionAuth:
+		m.connectionEditing.Auth = []string{"bearer", "x-api-key", "none"}[m.index]
+		m.finishConnectionEdit()
 	}
 	return ModelManagerAction{}
 }
@@ -358,7 +430,12 @@ func (m *ModelManager) setDraft(submission ModelManagerSubmission) {
 func submissionsEqual(a, b ModelManagerSubmission) bool {
 	return a.Route == b.Route && a.Provider == b.Provider && a.Model == b.Model &&
 		normalizeAutoOption(a.Reasoning) == normalizeAutoOption(b.Reasoning) &&
-		normalizeAutoOption(a.ServiceTier) == normalizeAutoOption(b.ServiceTier) && a.Reset == b.Reset
+		normalizeAutoOption(a.ServiceTier) == normalizeAutoOption(b.ServiceTier) && a.Reset == b.Reset &&
+		submissionEnabled(a) == submissionEnabled(b)
+}
+
+func submissionEnabled(selection ModelManagerSubmission) bool {
+	return selection.Enabled == nil || *selection.Enabled
 }
 
 func (m *ModelManager) Draft() []ModelManagerSubmission {
@@ -372,15 +449,165 @@ func (m *ModelManager) Draft() []ModelManagerSubmission {
 	return out
 }
 
+func (m *ModelManager) ProviderDraft() []ModelManagerProviderSubmission {
+	ids := make([]string, 0, len(m.providerDraft))
+	for id := range m.providerDraft {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make([]ModelManagerProviderSubmission, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, m.providerDraft[id])
+	}
+	return out
+}
+
+func (m *ModelManager) draftAction(route string) ModelManagerAction {
+	return ModelManagerAction{Draft: m.Draft(), ProviderDraft: m.ProviderDraft(), ValidationRoute: route}
+}
+
+func (m *ModelManager) chooseConnection() ModelManagerAction {
+	if m.index < len(m.providers) {
+		m.connection = m.index
+		provider := m.providers[m.connection]
+		m.connectionEditing = ModelManagerProviderSubmission{
+			ID: provider.ID, Custom: provider.Custom, BaseURL: provider.BaseURL,
+			Protocol: provider.Protocol, Auth: provider.Auth,
+		}
+		m.connectionNew = false
+		m.screen, m.index = modelScreenConnectionDetail, 0
+		return ModelManagerAction{}
+	}
+	if m.index == len(m.providers) {
+		m.connectionNew = true
+		m.connectionEditing = ModelManagerProviderSubmission{Custom: true, Protocol: "openai-compatible", Auth: "bearer"}
+		m.connectionInput = nil
+		m.screen, m.index = modelScreenConnectionName, 0
+		return ModelManagerAction{}
+	}
+	m.screen, m.index = modelScreenMenu, 3
+	return ModelManagerAction{}
+}
+
+func (m *ModelManager) chooseConnectionDetail() ModelManagerAction {
+	if m.index == 0 {
+		m.connectionInput = []rune(m.connectionEditing.BaseURL)
+		m.screen, m.index = modelScreenConnectionURL, 0
+		return ModelManagerAction{}
+	}
+	if m.connectionEditing.Custom && m.index == 1 {
+		deleted := m.connectionEditing
+		deleted.Delete = true
+		m.providerDraft[deleted.ID] = deleted
+		for index := range m.providers {
+			if strings.EqualFold(m.providers[index].ID, deleted.ID) {
+				m.providers = append(m.providers[:index], m.providers[index+1:]...)
+				break
+			}
+		}
+		m.screen, m.index = modelScreenConnections, 0
+		return ModelManagerAction{ProviderDraft: m.ProviderDraft()}
+	}
+	m.screen, m.index = modelScreenConnections, min(m.connection, len(m.providers))
+	return ModelManagerAction{}
+}
+
+func (m *ModelManager) updateConnectionInput(msg tea.KeyMsg) ModelManagerAction {
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.connectionInput = nil
+		if m.connectionNew && m.screen == modelScreenConnectionName {
+			m.screen, m.index = modelScreenConnections, len(m.providers)
+		} else {
+			m.screen, m.index = modelScreenConnectionDetail, 0
+		}
+	case "enter":
+		value := strings.TrimSpace(string(m.connectionInput))
+		if m.screen == modelScreenConnectionName {
+			id := normalizeConnectionID(value)
+			if id == "" || m.providerIDExists(id) {
+				return ModelManagerAction{}
+			}
+			m.connectionEditing.ID = id
+			m.connectionInput = nil
+			m.screen = modelScreenConnectionURL
+			return ModelManagerAction{}
+		}
+		if m.connectionEditing.Custom && value == "" {
+			return ModelManagerAction{}
+		}
+		m.connectionEditing.BaseURL = strings.TrimRight(value, "/")
+		m.connectionInput = nil
+		if m.connectionEditing.Custom {
+			m.screen, m.index = modelScreenConnectionProtocol, optionIndex([]string{"openai-compatible", "anthropic-compatible", "responses-compatible"}, m.connectionEditing.Protocol)
+		} else {
+			m.finishConnectionEdit()
+		}
+	case "backspace":
+		if len(m.connectionInput) > 0 {
+			m.connectionInput = m.connectionInput[:len(m.connectionInput)-1]
+		}
+	default:
+		if len(msg.Runes) > 0 {
+			m.connectionInput = append(m.connectionInput, msg.Runes...)
+		}
+	}
+	return ModelManagerAction{}
+}
+
+func (m *ModelManager) finishConnectionEdit() {
+	connection := m.connectionEditing
+	connection.Delete = false
+	m.providerDraft[connection.ID] = connection
+	updated := false
+	for index := range m.providers {
+		if strings.EqualFold(m.providers[index].ID, connection.ID) {
+			m.providers[index].BaseURL = connection.BaseURL
+			m.providers[index].Protocol = connection.Protocol
+			m.providers[index].Auth = connection.Auth
+			m.providers[index].CredentialRequired = connection.Auth != "none"
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		m.providers = append(m.providers, ModelManagerProvider{
+			ID: connection.ID, Label: connection.ID, Custom: true,
+			BaseURL: connection.BaseURL, Protocol: connection.Protocol, Auth: connection.Auth,
+			CredentialRequired: connection.Auth != "none", CredentialReady: connection.Auth == "none",
+		})
+	}
+	m.connectionNew = false
+	m.screen, m.index = modelScreenConnections, 0
+}
+
+func (m *ModelManager) providerIDExists(id string) bool {
+	for _, provider := range m.providers {
+		if strings.EqualFold(provider.ID, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeConnectionID(value string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "_", "-")
+}
+
 func (m *ModelManager) currentSubmission() ModelManagerSubmission {
 	provider := m.currentProvider()
 	model := m.currentModel()
-	return ModelManagerSubmission{
+	submission := ModelManagerSubmission{
 		Route: m.route, Provider: provider.ID, Model: model.ID,
 		Reasoning:   m.option(m.reasoningOptions(), m.reasoning),
 		ServiceTier: m.option(m.serviceTierOptions(), m.serviceTier),
 		APIKey:      m.credentials[provider.ID],
 	}
+	if m.route == "background" {
+		enabled := true
+		submission.Enabled = &enabled
+	}
+	return submission
 }
 
 func (m *ModelManager) option(options []string, index int) string {
@@ -403,7 +630,8 @@ func (m *ModelManager) configuredSelection(route string) ModelManagerSubmission 
 	case "primary":
 		return ModelManagerSubmission{Route: route, Provider: m.status.PrimaryProvider, Model: m.status.PrimaryModel, Reasoning: autoOption(m.status.PrimaryReasoning), ServiceTier: autoOption(m.status.PrimaryServiceTier)}
 	case "background":
-		return ModelManagerSubmission{Route: route, Provider: m.status.BackgroundProvider, Model: m.status.BackgroundModel, Reasoning: autoOption(m.status.BackgroundReasoning), ServiceTier: autoOption(m.status.BackgroundServiceTier)}
+		enabled := m.status.BackgroundEnabled
+		return ModelManagerSubmission{Route: route, Provider: m.status.BackgroundProvider, Model: m.status.BackgroundModel, Reasoning: autoOption(m.status.BackgroundReasoning), ServiceTier: autoOption(m.status.BackgroundServiceTier), Enabled: &enabled}
 	default:
 		if selection, ok := m.status.RoleOverrides[route]; ok {
 			selection.Route = route
@@ -482,9 +710,18 @@ func (m *ModelManager) back() {
 	case modelScreenServiceTier:
 		m.screen, m.index = modelScreenReasoning, m.reasoning
 	case modelScreenReview:
-		m.screen, m.index = modelScreenMenu, 4
+		m.screen, m.index = modelScreenMenu, 5
 	case modelScreenStatus:
+		m.screen, m.index = modelScreenMenu, 4
+	case modelScreenConnections:
 		m.screen, m.index = modelScreenMenu, 3
+	case modelScreenConnectionDetail:
+		m.screen, m.index = modelScreenConnections, m.connection
+	case modelScreenConnectionProtocol:
+		m.connectionInput = []rune(m.connectionEditing.BaseURL)
+		m.screen, m.index = modelScreenConnectionURL, 0
+	case modelScreenConnectionAuth:
+		m.screen, m.index = modelScreenConnectionProtocol, 0
 	}
 }
 
@@ -504,8 +741,9 @@ func (m *ModelManager) options() []string {
 			"Main model — " + m.routeSummary("primary"),
 			"Background model — " + m.routeSummary("background"),
 			fmt.Sprintf("Role overrides — %d explicit", m.explicitRoleCount()),
+			fmt.Sprintf("Provider connections — %d custom", m.customProviderCount()),
 			"Change status",
-			fmt.Sprintf("Review and apply — %d change(s)", len(m.draft)),
+			fmt.Sprintf("Review and apply — %d change(s)", len(m.draft)+len(m.providerDraft)),
 			"Exit",
 		}
 	case modelScreenRoles:
@@ -517,7 +755,7 @@ func (m *ModelManager) options() []string {
 	case modelScreenRoleChoice:
 		return []string{"Use background model", "Choose an explicit model", "Back"}
 	case modelScreenProvider:
-		out := make([]string, 0, len(m.providers))
+		out := make([]string, 0, len(m.providers)+1)
 		for _, provider := range m.providers {
 			label := provider.Label
 			if label == "" {
@@ -528,6 +766,9 @@ func (m *ModelManager) options() []string {
 			} else {
 				out = append(out, fmt.Sprintf("%s (%s)", label, provider.ID))
 			}
+		}
+		if m.route == "background" {
+			out = append(out, "Disable background model work")
 		}
 		return out
 	case modelScreenModel:
@@ -545,9 +786,42 @@ func (m *ModelManager) options() []string {
 		return []string{"Apply all changes"}
 	case modelScreenStatus:
 		return []string{"Back"}
+	case modelScreenConnections:
+		out := make([]string, 0, len(m.providers)+2)
+		for _, provider := range m.providers {
+			kind := "built-in"
+			if provider.Custom {
+				kind = "custom"
+			}
+			state := strings.TrimSpace(provider.BaseURL)
+			if state == "" {
+				state = "defaults"
+			}
+			out = append(out, fmt.Sprintf("%s — %s · %s", provider.ID, kind, state))
+		}
+		return append(out, "Add custom connection…", "Back")
+	case modelScreenConnectionDetail:
+		if m.connectionEditing.Custom {
+			return []string{"Edit connection", "Delete connection", "Back"}
+		}
+		return []string{"Edit base URL override", "Back"}
+	case modelScreenConnectionProtocol:
+		return []string{"openai-compatible", "anthropic-compatible", "responses-compatible"}
+	case modelScreenConnectionAuth:
+		return []string{"bearer", "x-api-key", "none"}
 	default:
 		return nil
 	}
+}
+
+func (m *ModelManager) customProviderCount() int {
+	count := 0
+	for _, provider := range m.providers {
+		if provider.Custom {
+			count++
+		}
+	}
+	return count
 }
 
 func (m *ModelManager) routeSummary(route string) string {
@@ -557,6 +831,9 @@ func (m *ModelManager) routeSummary(route string) string {
 	}
 	if selection.Reset {
 		return "Uses background model"
+	}
+	if route == "background" && !submissionEnabled(selection) {
+		return "disabled"
 	}
 	label := strings.Trim(strings.TrimSpace(selection.Provider)+"/"+strings.TrimSpace(selection.Model), "/")
 	if label == "" {
@@ -583,20 +860,23 @@ func (m *ModelManager) explicitRoleCount() int {
 }
 
 func (m *ModelManager) View() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("255"))
-	accent := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("75"))
-	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	selected := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("0")).Background(lipgloss.Color("75"))
+	title := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Color(uitheme.TextPrimary))
+	accent := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Color(uitheme.Accent))
+	muted := lipgloss.NewStyle().Foreground(m.theme.Color(uitheme.TextSecondary))
+	selected := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Color(uitheme.SelectionText)).Background(m.theme.Color(uitheme.SelectionBackground))
 	lines := []string{"", title.Render("Model Manager")}
 	lines = append(lines,
 		muted.Render("Running main:       ")+emptyAsDash(m.status.RunningPrimary),
 		muted.Render("Running background: ")+emptyAsDash(m.status.RunningBackground),
 	)
+	if m.status.ReadinessDegraded {
+		lines = append(lines, accent.Render("Readiness: foreground ready · background degraded"))
+	}
 	if m.status.Pending != "" {
 		lines = append(lines, accent.Render("Pending: ")+m.status.Pending)
 	}
 	if m.status.RecoveryRequired {
-		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("203")).Render("Gateway recovery required"))
+		lines = append(lines, "", lipgloss.NewStyle().Bold(true).Foreground(m.theme.Color(uitheme.Error)).Render("Gateway recovery required"))
 		if failure := strings.TrimSpace(m.status.RecoveryFailure); failure != "" {
 			lines = append(lines, muted.Render(failure))
 		}
@@ -610,11 +890,27 @@ func (m *ModelManager) View() string {
 		masked := strings.Repeat("•", len(m.credentialInput))
 		return strings.Join(append(lines, "", "  API key: "+masked+"█", "", muted.Render("Enter continue  Esc back")), "\n")
 	}
+	if m.screen == modelScreenConnectionName || m.screen == modelScreenConnectionURL {
+		label := "Connection ID"
+		if m.screen == modelScreenConnectionURL {
+			label = "Base URL"
+		}
+		return strings.Join(append(lines, "", "  "+label+": "+string(m.connectionInput)+"█", "", muted.Render("Enter continue  Esc back")), "\n")
+	}
 	if m.screen == modelScreenReview {
+		for _, provider := range m.ProviderDraft() {
+			value := provider.BaseURL
+			if provider.Delete {
+				value = "Delete"
+			}
+			lines = append(lines, fmt.Sprintf("  %-20s %s", "provider "+provider.ID, value))
+		}
 		for _, selection := range m.Draft() {
 			value := selection.Provider + "/" + selection.Model
 			if selection.Reset {
 				value = "Uses background model"
+			} else if selection.Route == "background" && !submissionEnabled(selection) {
+				value = "Disabled"
 			}
 			lines = append(lines, fmt.Sprintf("  %-20s %s", selection.Route, value))
 			if state := m.validation[selection.Route]; state != "" {
@@ -628,6 +924,8 @@ func (m *ModelManager) View() string {
 			"  Configured main:       "+emptyAsDash(m.status.ConfiguredPrimary),
 			"  Configured background: "+emptyAsDash(m.status.ConfiguredBackground),
 			fmt.Sprintf("  Generation:            %d", m.status.Generation),
+			"  Foreground readiness:  "+managerReadinessLabel(m.status.ForegroundReady, m.status.ForegroundReason),
+			"  Background readiness:  "+managerBackgroundReadinessLabel(m.status),
 			"",
 		)
 	}
@@ -643,6 +941,23 @@ func (m *ModelManager) View() string {
 		footer = "↑/↓ choose  Enter open  Esc close"
 	}
 	return strings.Join(append(lines, "", muted.Render(footer)), "\n")
+}
+
+func managerReadinessLabel(ready bool, reason string) string {
+	if ready {
+		return "ready"
+	}
+	if reason = strings.TrimSpace(reason); reason != "" {
+		return "not ready — " + reason
+	}
+	return "not ready"
+}
+
+func managerBackgroundReadinessLabel(status ModelManagerStatus) string {
+	if !status.BackgroundEnabled {
+		return "disabled"
+	}
+	return managerReadinessLabel(status.BackgroundReady, status.BackgroundReason)
 }
 
 func (m *ModelManager) screenTitle() string {
@@ -667,6 +982,18 @@ func (m *ModelManager) screenTitle() string {
 		return "Review one atomic change"
 	case modelScreenStatus:
 		return "Change status / recovery"
+	case modelScreenConnections:
+		return "Provider connections"
+	case modelScreenConnectionDetail:
+		return "Provider " + m.connectionEditing.ID
+	case modelScreenConnectionName:
+		return "Add custom connection"
+	case modelScreenConnectionURL:
+		return "Connection endpoint"
+	case modelScreenConnectionProtocol:
+		return "Compatible protocol"
+	case modelScreenConnectionAuth:
+		return "Authentication"
 	default:
 		return "Settings"
 	}

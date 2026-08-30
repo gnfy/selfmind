@@ -89,6 +89,24 @@ func TestBuildCandidateSupportsBackgroundRoleOverride(t *testing.T) {
 	}
 }
 
+func TestBuildCandidateCanDisableBackgroundWithoutProviderOrModel(t *testing.T) {
+	current := Snapshot{
+		Primary:   config.ModelSelectionConfig{Provider: "openai", Model: "gpt-main"},
+		Auxiliary: config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-chat"},
+	}
+	disabled := false
+	result, err := BuildCandidate(current, SelectionPatch{Route: RouteAuxiliary, Enabled: &disabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Snapshot.Auxiliary.Enabled == nil || *result.Snapshot.Auxiliary.Enabled {
+		t.Fatalf("auxiliary selection = %+v", result.Snapshot.Auxiliary)
+	}
+	if got := ChangedRoutes(current, result.Snapshot); len(got) != 1 || got[0] != RouteAuxiliary {
+		t.Fatalf("changed routes = %v", got)
+	}
+}
+
 func TestResetRoleOverrideReturnsRoleToBackground(t *testing.T) {
 	current := Snapshot{
 		Auxiliary: config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-background"},

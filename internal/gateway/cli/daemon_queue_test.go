@@ -158,9 +158,9 @@ func TestWatcherFinalizationRunRendersResultNotProcess(t *testing.T) {
 	if len(m.messages) != afterStart {
 		t.Fatalf("background run added %d transcript cells: %+v", len(m.messages)-afterStart, m.messages[afterStart:])
 	}
-	if m.liveStreamContent != "" || m.activePlanJSON != "" || m.activityText != "" || m.statusMsg != "" {
+	if m.processState().HasStreamContent() || m.activePlanJSON != "" || m.activityText != "" || m.statusMsg != "" {
 		t.Fatalf("background run leaked live state: stream=%q plan=%q activity=%q status=%q",
-			m.liveStreamContent, m.activePlanJSON, m.activityText, m.statusMsg)
+			m.processState().previewContent(), m.activePlanJSON, m.activityText, m.statusMsg)
 	}
 
 	updated, _ = m.Update(MsgDaemonRunFinished{
@@ -187,8 +187,8 @@ func TestWatcherFinalizationRunRendersResultNotProcess(t *testing.T) {
 	// A trailing event from that run must not surface after it ended.
 	updated, _ = m.Update(MsgStream{Content: "late delta", Event: ref("evt_late")})
 	m = updated.(*uiModel)
-	if m.liveStreamContent != "" || len(m.messages) != afterStart+1 {
-		t.Fatalf("trailing background event rendered: stream=%q cells=%d", m.liveStreamContent, len(m.messages))
+	if m.processState().HasStreamContent() || len(m.messages) != afterStart+1 {
+		t.Fatalf("trailing background event rendered: stream=%q cells=%d", m.processState().previewContent(), len(m.messages))
 	}
 }
 
@@ -226,8 +226,8 @@ func TestCronRunRendersResultWithoutStartNoticeOrProcess(t *testing.T) {
 		updated, _ = m.Update(msg)
 		m = updated.(*uiModel)
 	}
-	if len(m.messages) != 0 || m.liveStreamContent != "" {
-		t.Fatalf("cron progress leaked: cells=%d stream=%q", len(m.messages), m.liveStreamContent)
+	if len(m.messages) != 0 || m.processState().HasStreamContent() {
+		t.Fatalf("cron progress leaked: cells=%d stream=%q", len(m.messages), m.processState().previewContent())
 	}
 
 	updated, _ = m.Update(MsgDaemonRunFinished{
@@ -268,8 +268,9 @@ func TestForegroundRunStillStreamsAfterBackgroundRun(t *testing.T) {
 		Event:      uiEventRef{Source: eventSourceDaemon, RunID: "run_user", EventID: "evt_user_tool"},
 	})
 	m = updated.(*uiModel)
-	if last := m.messages[len(m.messages)-1]; last.Role != "tool" || last.ToolName != "read_file" {
-		t.Fatalf("foreground tool cell missing: role=%q tool=%q", last.Role, last.ToolName)
+	tools := m.processState().tools
+	if len(tools) != 1 || tools[0].Role != "tool" || tools[0].ToolName != "read_file" {
+		t.Fatalf("foreground tool cell missing: %+v", tools)
 	}
 }
 

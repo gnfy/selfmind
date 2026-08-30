@@ -462,6 +462,13 @@ These commands depend on local TUI state and are not sent through IM channels.
 /copy
 ```
 
+For a local TUI, `Ctrl+V` attaches an image from the GUI clipboard and
+`/paste-image` is the explicit fallback. On macOS, `Cmd+V` is owned by the
+terminal application and should be treated as text paste, not as the image
+shortcut. Native Linux needs `wl-paste` or `xclip`; SSH sessions have no local
+GUI clipboard, so provide an image path or send the image through IM. Deleting
+the complete `[Image #N · name]` token before submit detaches that image.
+
 - `/memory` presents the human-oriented memory index; its subcommands inspect,
   correct, pin, forget, and audit canonical memories.
 - `/skills bind <name>` assigns the current task one default logical Skill;

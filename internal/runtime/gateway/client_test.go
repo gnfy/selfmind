@@ -35,6 +35,84 @@ func TestRequestShutdownCanAbortCancellableSafeBoundaryWait(t *testing.T) {
 	}
 }
 
+func TestRequestShutdownAcceptsLostResponseOnlyAfterOwnerRelease(t *testing.T) {
+	dataDir := t.TempDir()
+	manager := NewManager(dataDir, "")
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.WriteStatus("running", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { manager.Cleanup("test cleanup") })
+
+	released := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking unavailable", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		go func() {
+			time.Sleep(25 * time.Millisecond)
+			manager.Cleanup("shutdown requested")
+			close(released)
+		}()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := RequestShutdown(ctx, StopOptions{URL: server.URL, DataDir: dataDir, Timeout: time.Second}); err != nil {
+		t.Fatalf("lost response with confirmed owner release = %v, want success", err)
+	}
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("runtime owner was not released")
+	}
+}
+
+func TestRequestShutdownRejectsLostResponseWhileOwnerRemains(t *testing.T) {
+	dataDir := t.TempDir()
+	manager := NewManager(dataDir, "")
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.WriteStatus("running", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { manager.Cleanup("test cleanup") })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking unavailable", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	err := RequestShutdown(ctx, StopOptions{URL: server.URL, DataDir: dataDir, Timeout: 80 * time.Millisecond})
+	if err == nil {
+		t.Fatal("lost response was accepted while the original runtime owner remained")
+	}
+	if _, ok := manager.RunningRecord(); !ok {
+		t.Fatal("test runtime owner unexpectedly disappeared")
+	}
+}
+
 func TestServiceReconcileReportsDeferredWhenGatewayResumesAfterBoundedDrain(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

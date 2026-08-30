@@ -72,6 +72,7 @@ type ChatMessage struct {
 	IsError        bool    // Fix: add IsError flag
 	IsRunning      bool
 	RunningDetail  string
+	ProcessGroupID uint64     // action narration group; grouped tools render one level below it
 	NoticeKind     noticeKind // structured semantics for notice-role cells; never inferred from prose
 	// Committed is set in terminal-first hybrid mode once this message has been
 	// printed into native scrollback. Committed messages are immutable and are
@@ -95,6 +96,7 @@ type uiModel struct {
 	modelManagerStatus    components.ModelManagerStatus
 	modelManagerRoutes    []components.ModelManagerProvider
 	messages              []ChatMessage
+	process               *processSurface
 	thinking              bool
 	toolExecuting         string
 	runTokens             int
@@ -145,9 +147,9 @@ type uiModel struct {
 	statusNoticeKind      noticeKind
 	statusNoticeID        uint64
 	nextStatusNoticeID    uint64
-	thinkingDots          int       // Counter for "..." animation
 	thinkingStart         time.Time // When current thinking started
 	activityText          string    // Current model/tool phase shown in transcript
+	waitingForModel       bool      // exactly one spinner tick chain owns this structured model_wait phase
 	activePlanJSON        string    // Latest complete plan snapshot, rendered above the composer
 	runStatus             string    // ready | queued | working | done | error | cancelled
 	queuedCount           int       // requests submitted by this TUI and accepted into the daemon queue
@@ -169,10 +171,6 @@ type uiModel struct {
 	backgroundOrigin        string
 	backgroundResultPending bool
 	migrationHint           string // Hint for migrating Hermes skills
-	streamController        markdownStreamController
-	liveStreamContent       string
-	liveStreamPhase         llm.AssistantPhase
-	streamFlushPending      bool
 	cursorVisible           bool
 	clientMode              bool // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
 	// workspaceOverride* pin this session's execution workspace after a
@@ -252,10 +250,14 @@ type uiModel struct {
 type MsgClearStatus struct{ NoticeID uint64 }
 type MsgWorkingTick time.Time
 type MsgCursorBlinkTick time.Time
-type MsgStreamFlush time.Time
 type MsgAgentActivity struct {
 	Content string
+	Phase   string
 	Event   uiEventRef
+}
+type MsgBackgroundNotice struct {
+	Content string
+	Success bool
 }
 
 // MsgApprovalRequest is emitted (client mode) when the daemon blocks a run
@@ -325,7 +327,7 @@ type MsgClarifyAnswerResult struct {
 }
 
 func workingTick() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return MsgWorkingTick(t)
 	})
 }
@@ -336,11 +338,6 @@ func cursorBlinkTick() tea.Cmd {
 	})
 }
 
-func streamFlushTick() tea.Cmd {
-	return tea.Tick(90*time.Millisecond, func(t time.Time) tea.Msg {
-		return MsgStreamFlush(t)
-	})
-}
 func (c *Controller) SetMessageProcessor(processor MessageProcessor) {
 	if c == nil || c.model == nil {
 		return
@@ -602,23 +599,66 @@ func cliSessionChannel() string {
 
 func (m *uiModel) Init() tea.Cmd {
 	if m.modelManagerOnly {
-		return tea.Batch(m.spinner.Tick, cursorBlinkTick(), m.openModelManager())
+		return tea.Batch(cursorBlinkTick(), m.openModelManager())
 	}
 	var observe tea.Cmd
 	if m.modelChangeObserver != nil {
 		observe = m.observeModelChange(false, 0)
 	}
 	m.editor.SetSkillFilter(m.skillCompletionHints)
-	return tea.Batch(m.spinner.Tick, cursorBlinkTick(), observe, m.loadSkillCompletion())
+	return tea.Batch(cursorBlinkTick(), observe, m.loadSkillCompletion())
+}
+
+const modelWaitPhase = "model_wait"
+
+// startModelWait is the only entrypoint that starts the animation. Repeated
+// model_wait events refresh the label without creating parallel tick chains.
+func (m *uiModel) startModelWait(content string) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	wasWaiting := m.waitingForModel
+	m.waitingForModel = true
+	m.thinking = true
+	m.activityText = trimActivityElapsed(content)
+	if m.activityText == "" {
+		m.activityText = "Waiting for the model"
+	}
+	if !wasWaiting || m.thinkingStart.IsZero() {
+		m.thinkingStart = time.Now()
+	}
+	if wasWaiting {
+		return nil
+	}
+	return m.spinner.Tick
+}
+
+func (m *uiModel) stopModelWait() {
+	if m != nil {
+		m.waitingForModel = false
+	}
+}
+
+func trimActivityElapsed(content string) string {
+	content = strings.TrimSpace(content)
+	open := strings.LastIndex(content, " (")
+	if open < 0 || !strings.HasSuffix(content, "s)") {
+		return content
+	}
+	digits := content[open+2 : len(content)-2]
+	if digits == "" {
+		return content
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return content
+		}
+	}
+	return strings.TrimSpace(content[:open])
 }
 
 func (m *uiModel) anyToolRunning() bool {
-	for i := range m.messages {
-		if m.messages[i].Role == "tool" && m.messages[i].IsRunning {
-			return true
-		}
-	}
-	return false
+	return m.processState().HasRunningTools()
 }
 
 func isGenericToolHeartbeat(toolName, content string) bool {
@@ -635,14 +675,6 @@ func isGenericToolHeartbeat(toolName, content string) bool {
 	}
 	return false
 }
-func (m *uiModel) scheduleStreamFlush() tea.Cmd {
-	if m.streamFlushPending || !m.streamController.Pending() {
-		return nil
-	}
-	m.streamFlushPending = true
-	return streamFlushTick()
-}
-
 func (m *uiModel) openHelp() {
 	width := m.width
 	if width <= 0 {
@@ -667,12 +699,9 @@ func (m *uiModel) openModelManager() tea.Cmd {
 	if m == nil {
 		return nil
 	}
-	if m.modelChangeObserver != nil {
-		return m.observeModelChange(true, 0)
-	}
 	processor := m.modelChangeProcessor
 	if processor == nil {
-		m.modelManager = components.NewModelManager(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height)
+		m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
 		return nil
 	}
 	m.thinking = true
@@ -741,12 +770,27 @@ func modelManagerPatches(draft []components.ModelManagerSubmission) []api.ModelS
 		patches = append(patches, api.ModelSelectionPatch{
 			Route: submission.Route, Provider: submission.Provider, Model: submission.Model,
 			Reasoning: &reasoning, ServiceTier: &serviceTier, Reset: submission.Reset, APIKey: submission.APIKey,
+			Enabled: submission.Enabled,
 		})
 	}
 	return patches
 }
 
-func (m *uiModel) validateModelManager(route string, draft []components.ModelManagerSubmission) tea.Cmd {
+func modelManagerProviderPatches(draft []components.ModelManagerProviderSubmission) []modelchange.ProviderPatch {
+	patches := make([]modelchange.ProviderPatch, 0, len(draft))
+	for _, submission := range draft {
+		patches = append(patches, modelchange.ProviderPatch{
+			Connection: modelchange.ProviderConnection{
+				ID: submission.ID, Custom: submission.Custom, BaseURL: submission.BaseURL,
+				Protocol: submission.Protocol, Auth: submission.Auth,
+			},
+			Delete: submission.Delete, PreserveAdvanced: true,
+		})
+	}
+	return patches
+}
+
+func (m *uiModel) validateModelManager(route string, draft []components.ModelManagerSubmission, providers []components.ModelManagerProviderSubmission, credentialStage string) tea.Cmd {
 	processor := m.modelChangeProcessor
 	return func() tea.Msg {
 		if processor == nil {
@@ -754,19 +798,21 @@ func (m *uiModel) validateModelManager(route string, draft []components.ModelMan
 		}
 		response, err := processor(context.Background(), api.ModelChangeRequest{
 			Action: "validate", Patches: modelManagerPatches(draft), ValidateRoutes: []string{route},
+			CredentialStage: credentialStage, ProviderPatches: modelManagerProviderPatches(providers),
 		})
 		return MsgModelValidationDone{Route: route, Response: response, Err: err}
 	}
 }
 
-func (m *uiModel) submitModelManager(draft []components.ModelManagerSubmission) tea.Cmd {
+func (m *uiModel) submitModelManager(draft []components.ModelManagerSubmission, providers []components.ModelManagerProviderSubmission, credentialStage string) tea.Cmd {
 	processor := m.modelChangeProcessor
 	return func() tea.Msg {
 		if processor == nil {
 			return MsgModelChangeDone{Err: fmt.Errorf("model management is unavailable in this client")}
 		}
 		response, err := processor(context.Background(), api.ModelChangeRequest{
-			Action: "apply", Patches: modelManagerPatches(draft),
+			Action: "apply", Patches: modelManagerPatches(draft), CredentialStage: credentialStage,
+			ProviderPatches: modelManagerProviderPatches(providers),
 		})
 		return MsgModelChangeDone{Response: response, Err: err}
 	}
@@ -857,6 +903,7 @@ func (m *uiModel) injectMidRunGuidance(input string) tea.Cmd {
 }
 
 func (m *uiModel) armClarifyPrompt(req tools.ClarifyRequest, viaGateway bool) {
+	m.stopModelWait()
 	m.thinking = false
 	m.toolExecuting = ""
 	m.clarifyMode = true
@@ -1068,8 +1115,8 @@ type helpRow struct {
 
 var shortcutHelpRows = []helpRow{
 	{Left: "Enter", Right: "Submit the current message"},
-	{Left: "Shift+Enter", Right: "Insert a newline"},
 	{Left: "Ctrl+J", Right: "Insert a newline"},
+	{Left: "Ctrl+V", Right: "Attach an image from the local clipboard (/paste-image is the fallback)"},
 	{Left: "PageUp/PageDown", Right: "Scroll the transcript by one page"},
 	{Left: "Ctrl+Up/Ctrl+Down", Right: "Scroll the transcript by a few lines"},
 	{Left: "Ctrl+Home/Ctrl+End", Right: "Jump to the top or bottom of the transcript"},
@@ -1124,6 +1171,7 @@ func (m *uiModel) cancelActiveRunLocally() tea.Cmd {
 	}
 	m.cancelFn()
 	m.finalizeLiveStream("", llm.AssistantPhaseCommentary)
+	m.stopModelWait()
 	m.thinking = false
 	m.activityText = ""
 	m.toolExecuting = ""

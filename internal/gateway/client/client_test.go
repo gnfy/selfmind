@@ -65,10 +65,10 @@ func TestEventToStreamMapping(t *testing.T) {
 		},
 		{
 			name:    "thinking",
-			ev:      control.Event{ID: "3", Type: "agent.thinking", Payload: mustJSON(map[string]any{"message": "considering"})},
+			ev:      control.Event{ID: "3", Type: "agent.thinking", Payload: mustJSON(map[string]any{"message": "considering", "phase": "model_wait", "iteration": 2})},
 			wantTyp: "agent.thinking",
 			check: func(t *testing.T, se llm.StreamEvent) {
-				if se.Content != "considering" {
+				if se.Content != "considering" || se.Payload["phase"] != "model_wait" || se.Payload["iteration"] != float64(2) {
 					t.Fatalf("bad thinking mapping: %+v", se)
 				}
 			},

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -404,6 +405,71 @@ func TestGatewayShutdownEndpoint(t *testing.T) {
 	}
 	if !daemon.IsDraining() {
 		t.Fatal("daemon should be draining after shutdown request")
+	}
+}
+
+type delayedShutdownResponseWriter struct {
+	http.ResponseWriter
+	delay time.Duration
+}
+
+func (w delayedShutdownResponseWriter) Write(p []byte) (int, error) {
+	time.Sleep(w.delay)
+	return w.ResponseWriter.Write(p)
+}
+
+func (w delayedShutdownResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w delayedShutdownResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func TestGatewayShutdownResponseSurvivesImmediateServerClose(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	stop := make(chan struct{})
+	daemon := &Server{
+		DrainTimeout: 100 * time.Millisecond,
+		ShutdownFunc: func() {
+			close(stop)
+		},
+	}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		daemon.Handler().ServeHTTP(delayedShutdownResponseWriter{
+			ResponseWriter: w,
+			delay:          25 * time.Millisecond,
+		}, r)
+	})
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: handler}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	go func() {
+		<-stop
+		_ = server.Close()
+	}()
+	t.Cleanup(func() {
+		_ = server.Close()
+		select {
+		case <-serveDone:
+		case <-time.After(time.Second):
+			t.Error("HTTP server did not stop")
+		}
+	})
+
+	resp, err := http.Post("http://"+listener.Addr().String()+"/v1/gateway/shutdown", "application/json", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		t.Fatalf("shutdown request lost its response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("shutdown status = %d, want %d", resp.StatusCode, http.StatusAccepted)
 	}
 }
 
@@ -1080,7 +1146,7 @@ func TestUnresolvedPastePlaceholderIsRejectedBeforeDispatch(t *testing.T) {
 		Platform:       "cli",
 		PlatformUserID: "local",
 		Channel:        "cli",
-		Content:        "inspect this\n[[ paste:0 main.go.. [80 lines] .. end ]]",
+		Content:        "inspect this\n[Paste #1 · 80 lines]",
 	})
 	if status != http.StatusBadRequest || !strings.Contains(resp.Error, "not expanded") {
 		t.Fatalf("status=%d response=%+v; want unresolved-paste rejection", status, resp)

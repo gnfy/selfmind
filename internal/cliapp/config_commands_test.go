@@ -8,8 +8,70 @@ import (
 	"strings"
 	"testing"
 
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 )
+
+func TestConfigUpgradeMigratesProviderProfilesAndSecrets(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	authPath := filepath.Join(dir, "auth.json")
+	original := []byte(`auth:
+  credentials_file: "` + authPath + `"
+providers:
+  custom:
+    - name: legacy-local
+      base_url: http://127.0.0.1:11434/v1
+      protocol: openai_compatible
+      auth: none
+provider_profiles:
+  deepseek:
+    base_url: https://api.deepseek.com
+    protocol: openai_compatible
+    api_key: sk-legacy
+  company-gateway:
+    base_url: https://ai.example.com/v1
+    protocol: responses-compatible
+    api_key: sk-company
+models:
+  primary:
+    provider: deepseek
+    model: deepseek-chat
+`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	app := &App{ctx: context.Background(), args: []string{"selfmind", "config", "upgrade"}, stdout: stdout, stderr: stderr, configPath: path}
+	if handled, code := app.runConfigCommandIfRequested(); !handled || code != 0 {
+		t.Fatalf("handled=%v code=%d stderr=%s", handled, code, stderr.String())
+	}
+	upgraded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(upgraded)
+	if strings.Contains(text, "provider_profiles:") || strings.Contains(text, "sk-legacy") || strings.Contains(text, "sk-company") ||
+		!strings.Contains(text, "deepseek:") || !strings.Contains(text, "company-gateway:") || !strings.Contains(text, "legacy-local:") {
+		t.Fatalf("upgraded config =\n%s", text)
+	}
+	if got := modelruntime.NewCredentialStore(authPath).Resolve("deepseek").Token; got != "sk-legacy" {
+		t.Fatalf("migrated credential = %q", got)
+	}
+	if got := modelruntime.NewCredentialStore(authPath).Resolve("company-gateway").Token; got != "sk-company" {
+		t.Fatalf("migrated custom credential = %q", got)
+	}
+	cfg, err := config.LoadConfig(config.Options{Path: path})
+	if err != nil {
+		t.Fatalf("upgraded config is not loadable: %v\n%s", err, text)
+	}
+	if _, ok := cfg.Providers.CustomProvider("company-gateway"); !ok {
+		t.Fatalf("unknown provider profile was not migrated under providers.custom: %+v", cfg.Providers.Custom)
+	}
+	if _, ok := cfg.Providers.CustomProvider("legacy-local"); !ok {
+		t.Fatalf("legacy custom list was not migrated to a map: %+v", cfg.Providers.Custom)
+	}
+}
 
 func TestConfigDoctorReportsMissingDefaultsAndMigration(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -276,6 +338,9 @@ models:
 		t.Fatal(err)
 	}
 	text := string(upgraded)
+	if strings.Contains(text, "provider_profiles:") || !strings.Contains(text, "kimi-coding:") {
+		t.Fatalf("legacy provider_profiles was not migrated to providers:\n%s", text)
+	}
 	if !strings.Contains(text, "auxiliary:") {
 		t.Fatalf("upgraded config missing auxiliary model:\n%s", text)
 	}
@@ -291,8 +356,12 @@ models:
 }
 
 func TestConfigDiagnosticsSectionReportsModelAndLegacyState(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte(`providers:
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	t.Setenv("OPENAI_API_KEY", "")
+	if err := os.WriteFile(path, []byte(`auth:
+  credentials_file: "`+filepath.Join(dir, "auth.json")+`"
+providers:
   openai_api_key: "${OPENAI_API_KEY}"
 agent:
   provider: "openai"

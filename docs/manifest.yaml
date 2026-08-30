@@ -61,7 +61,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/architecture-constraints.md
-    source_hash: 1b2ae0a59572960a
+    source_hash: 47cd7a6957cf2103
   - path: docs/coding-agent-foundations.md
     title: Coding Agent Foundations
     class: reference
@@ -89,7 +89,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 4cccc8f750d1fab9
+    source_hash: 8e0e717f6c6dda80
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -129,7 +129,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/development-guide.md
-    source_hash: b27b5de376e2e5e7
+    source_hash: d3686bf04634860d
   - path: docs/eval-loop.md
     title: Evaluation Loop
     class: reference
@@ -225,7 +225,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: 6c606b5175f8427f
+    source_hash: 0036d2ee7a5198ef
   - path: docs/skill-learning-and-repair.md
     title: Skill Learning, Automatic Promotion, and Repair
     class: decision

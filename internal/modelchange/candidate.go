@@ -21,6 +21,7 @@ type SelectionPatch struct {
 	Model       string
 	Reasoning   OptionalValue
 	ServiceTier OptionalValue
+	Enabled     *bool
 }
 
 type CandidateResult struct {
@@ -35,6 +36,14 @@ func BuildCandidate(current Snapshot, patch SelectionPatch) (CandidateResult, er
 	if patch.Route != RoutePrimary && patch.Route != RouteAuxiliary && !IsManagedRoleRoute(patch.Route) {
 		return CandidateResult{}, fmt.Errorf("unsupported model route %q", patch.Route)
 	}
+	selection := selectionForRoute(current, patch.Route)
+	if patch.Route == RouteAuxiliary && patch.Enabled != nil {
+		selection.Enabled = patch.Enabled
+		if !*patch.Enabled {
+			setSelectionForRoute(&current, patch.Route, selection)
+			return CandidateResult{Snapshot: normalizeSnapshot(current)}, nil
+		}
+	}
 	if patch.Provider == "" || patch.Model == "" {
 		return CandidateResult{}, fmt.Errorf("provider and model are required")
 	}
@@ -46,7 +55,6 @@ func BuildCandidate(current Snapshot, patch SelectionPatch) (CandidateResult, er
 			return CandidateResult{}, err
 		}
 	}
-	selection := selectionForRoute(current, patch.Route)
 	modelChanged := !strings.EqualFold(selection.Provider, patch.Provider) || selection.Model != patch.Model
 	selection.Provider = patch.Provider
 	selection.Model = patch.Model
@@ -61,7 +69,7 @@ func BuildCandidate(current Snapshot, patch SelectionPatch) (CandidateResult, er
 	)
 	setSelectionForRoute(&current, patch.Route, selection)
 	if patch.Route == RoutePrimary {
-		if strings.TrimSpace(current.Auxiliary.Provider) == "" && strings.TrimSpace(current.Auxiliary.Model) == "" {
+		if auxiliaryEnabled(current) && strings.TrimSpace(current.Auxiliary.Provider) == "" && strings.TrimSpace(current.Auxiliary.Model) == "" {
 			current.Auxiliary.Provider = selection.Provider
 			current.Auxiliary.Model = selection.Model
 		}

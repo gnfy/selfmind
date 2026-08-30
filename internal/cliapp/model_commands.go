@@ -85,7 +85,7 @@ func (a *App) modelChoices(cfg *config.Config) []modelChoice {
 			continue
 		}
 		choices = append(choices, modelChoice{
-			ID:          "custom:" + name,
+			ID:          name,
 			Label:       fmt.Sprintf("%s (custom)", name),
 			Kind:        "custom_saved",
 			CustomIndex: i,
@@ -192,6 +192,12 @@ func (a *App) configureBuiltinProviderFor(cfg *config.Config, provider, target s
 	if profile.AuthType == modelruntime.AuthExternalOAuth || profile.AuthType == modelruntime.AuthMiniMaxOAuth {
 		endpoint.APIKey = ""
 	}
+	if strings.EqualFold(strings.TrimRight(endpoint.BaseURL, "/"), strings.TrimRight(profile.BaseURL, "/")) {
+		endpoint.BaseURL = ""
+	}
+	if modelruntime.NormalizeProtocol(endpoint.Protocol) == modelruntime.NormalizeProtocol(profile.Protocol) {
+		endpoint.Protocol = ""
+	}
 
 	setProviderEndpointForModelCommand(cfg, profile.ID, endpoint)
 	if profile.AuthType != modelruntime.AuthExternalOAuth && profile.AuthType != modelruntime.AuthMiniMaxOAuth {
@@ -213,7 +219,7 @@ func (a *App) configureSavedCustomProviderFor(cfg *config.Config, index int, tar
 	currentKey := cp.APIKey
 	if strings.TrimSpace(currentKey) == "" {
 		if resolved, resolveErr := modelruntime.NewResolver(cfg).Resolve(a.ctx, modelruntime.Selection{
-			Provider: "custom:" + cp.Name, Model: cp.Model,
+			Provider: cp.Name, Model: cp.Model,
 		}); resolveErr == nil {
 			currentKey = resolved.APIKey
 		}
@@ -223,7 +229,7 @@ func (a *App) configureSavedCustomProviderFor(cfg *config.Config, index int, tar
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	if err := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).SaveAPIKey("custom:"+cp.Name, key); err != nil {
+	if err := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).SaveAPIKey(cp.Name, key); err != nil {
 		fmt.Fprintf(a.stderr, "Save model credential: %v\n", err)
 		return 1
 	}
@@ -238,12 +244,12 @@ func (a *App) configureSavedCustomProviderFor(cfg *config.Config, index int, tar
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	cp.Model = model
+	cp.Model = ""
 	if cp.Protocol == "" {
-		cp.Protocol = "openai_compatible"
+		cp.Protocol = "openai-compatible"
 	}
 	cfg.Providers.Custom[index] = cp
-	return a.finalizeInteractiveModel(cfg, target, "custom:"+cp.Name, model)
+	return a.finalizeInteractiveModel(cfg, target, cp.Name, model)
 }
 
 func (a *App) configureCustomEndpoint(cfg *config.Config) int {
@@ -298,15 +304,15 @@ func (a *App) configureCustomEndpointFor(cfg *config.Config, target string) int 
 	cp := config.CustomProvider{
 		Name:     name,
 		BaseURL:  normalizeOpenAIRoot(baseURL),
-		Protocol: "openai_compatible",
-		Model:    model,
+		Protocol: "openai-compatible",
+		Auth:     "bearer",
 	}
-	if err := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).SaveAPIKey("custom:"+name, key); err != nil {
+	if err := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).SaveAPIKey(name, key); err != nil {
 		fmt.Fprintf(a.stderr, "Save model credential: %v\n", err)
 		return 1
 	}
 	upsertCustomProvider(cfg, cp)
-	return a.finalizeInteractiveModel(cfg, target, "custom:"+name, model)
+	return a.finalizeInteractiveModel(cfg, target, name, model)
 }
 
 func (a *App) finalizeInteractiveModel(cfg *config.Config, target, provider, model string) int {
@@ -380,7 +386,7 @@ func (a *App) removeCustomProvider(cfg *config.Config) int {
 	removeIndex := indexes[selected]
 	removed := cfg.Providers.Custom[removeIndex]
 	cfg.Providers.Custom = append(cfg.Providers.Custom[:removeIndex], cfg.Providers.Custom[removeIndex+1:]...)
-	if strings.EqualFold(cfg.EffectiveProvider(), "custom:"+removed.Name) {
+	if strings.EqualFold(strings.TrimPrefix(cfg.EffectiveProvider(), "custom:"), removed.Name) {
 		cfg.SetDefaultModel("", "")
 	}
 	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
@@ -924,9 +930,13 @@ func normalizeOpenAIRoot(baseURL string) string {
 }
 
 func providerEndpointForModelCommand(cfg *config.Config, provider string) config.ProviderEndpoint {
-	// The model command reads old flat keys and new provider_profiles through
+	// The model command reads current providers.<id> and legacy provider_profiles through
 	// the same view so users can upgrade config.yaml gradually.
-	switch modelruntime.NormalizeProviderID(provider) {
+	id := modelruntime.NormalizeProviderID(provider)
+	if endpoint, ok := cfg.Providers.BuiltinEndpoint(id); ok {
+		return endpoint
+	}
+	switch id {
 	case "openai":
 		return cfg.Providers.OpenAI
 	case "anthropic", "claude-code":
@@ -958,27 +968,7 @@ func providerEndpointForModelCommand(cfg *config.Config, provider string) config
 
 func setProviderEndpointForModelCommand(cfg *config.Config, provider string, endpoint config.ProviderEndpoint) {
 	id := modelruntime.NormalizeProviderID(provider)
-	switch id {
-	case "openai":
-		cfg.Providers.OpenAI = endpoint
-		return
-	case "anthropic":
-		cfg.Providers.Anthropic = endpoint
-		return
-	case "google", "gemini":
-		cfg.Providers.Google = endpoint
-		return
-	case "openrouter":
-		cfg.Providers.OpenRouterAPIKey = endpoint.APIKey
-	case "minimax":
-		cfg.Providers.MiniMaxAPIKey = endpoint.APIKey
-	}
-	// Non-core providers are persisted as profiles, which lets new model vendors
-	// be added locally without another binary release.
-	if cfg.ProviderProfiles == nil {
-		cfg.ProviderProfiles = make(map[string]config.ProviderEndpoint)
-	}
-	cfg.ProviderProfiles[id] = endpoint
+	cfg.Providers.SetBuiltinEndpoint(id, endpoint)
 }
 
 func clearProviderCredentialForModelCommand(cfg *config.Config, provider string) {
@@ -986,6 +976,10 @@ func clearProviderCredentialForModelCommand(cfg *config.Config, provider string)
 		return
 	}
 	id := modelruntime.NormalizeProviderID(provider)
+	if endpoint, ok := cfg.Providers.BuiltinEndpoint(id); ok {
+		endpoint.APIKey = ""
+		cfg.Providers.SetBuiltinEndpoint(id, endpoint)
+	}
 	switch id {
 	case "openai":
 		cfg.Providers.OpenAI.APIKey = ""

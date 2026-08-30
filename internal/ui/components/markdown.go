@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	uicommon "selfmind/internal/ui/common"
+	uitheme "selfmind/internal/ui/theme"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -19,26 +19,41 @@ import (
 
 var terminalMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
-var (
-	markdownHeading1Style = lipgloss.NewStyle().Bold(true).Underline(true)
-	markdownHeading2Style = lipgloss.NewStyle().Bold(true)
-	markdownHeading3Style = lipgloss.NewStyle().Bold(true).Italic(true)
-	markdownHeadingStyle  = lipgloss.NewStyle().Italic(true)
-	markdownCodeStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteMuted))
-	markdownInlineStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteBlue))
-	markdownLinkStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteBlue)).Underline(true)
-	markdownMutedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteSubtle))
-	markdownQuoteStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteGreen))
-	markdownMarkerStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteBlue))
-	markdownTableHead     = lipgloss.NewStyle().Bold(true)
-	markdownStrikeStyle   = lipgloss.NewStyle().Strikethrough(true)
-)
+type markdownStyles struct {
+	heading1, heading2, heading3, heading lipgloss.Style
+	code, inline, link, muted, quote      lipgloss.Style
+	marker, tableHead, strike             lipgloss.Style
+}
+
+// MarkdownRenderer renders Markdown with an immutable semantic theme.
+type MarkdownRenderer struct{ styles markdownStyles }
+
+func NewMarkdownRenderer(t uitheme.Theme) MarkdownRenderer {
+	return MarkdownRenderer{styles: markdownStyles{
+		heading1:  lipgloss.NewStyle().Bold(true).Underline(true),
+		heading2:  lipgloss.NewStyle().Bold(true),
+		heading3:  lipgloss.NewStyle().Bold(true).Italic(true),
+		heading:   lipgloss.NewStyle().Italic(true),
+		code:      lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		inline:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
+		link:      lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Underline(true),
+		muted:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+		quote:     lipgloss.NewStyle().Foreground(t.Color(uitheme.Success)),
+		marker:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
+		tableHead: lipgloss.NewStyle().Bold(true),
+		strike:    lipgloss.NewStyle().Strikethrough(true),
+	}}
+}
 
 // RenderMarkdown turns CommonMark/GFM source into terminal-safe semantic
 // lines. It deliberately owns layout rather than HTML generation so callers
 // retain correct terminal-cell wrapping, hanging indents, and narrow-table
 // fallbacks. ANSI/control sanitization remains the caller's trust boundary.
 func RenderMarkdown(source string, width int) string {
+	return NewMarkdownRenderer(uitheme.Default()).Render(source, width)
+}
+
+func (m MarkdownRenderer) Render(source string, width int) string {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return ""
@@ -48,6 +63,7 @@ func RenderMarkdown(source string, width int) string {
 	}
 	r := terminalMarkdownRenderer{
 		source: []byte(source),
+		styles: m.styles,
 	}
 	doc := terminalMarkdown.Parser().Parse(gmtext.NewReader(r.source))
 	return strings.TrimSpace(strings.Join(r.renderBlockChildren(doc, width), "\n\n"))
@@ -55,6 +71,7 @@ func RenderMarkdown(source string, width int) string {
 
 type terminalMarkdownRenderer struct {
 	source []byte
+	styles markdownStyles
 }
 
 func (r terminalMarkdownRenderer) renderBlockChildren(parent ast.Node, width int) []string {
@@ -80,17 +97,17 @@ func (r terminalMarkdownRenderer) renderBlock(node ast.Node, width int) string {
 		content := wrapMarkdownText(r.renderInlines(typed), width)
 		switch typed.Level {
 		case 1:
-			return markdownHeading1Style.Render(content)
+			return r.styles.heading1.Render(content)
 		case 2:
-			return markdownHeading2Style.Render(content)
+			return r.styles.heading2.Render(content)
 		case 3:
-			return markdownHeading3Style.Render(content)
+			return r.styles.heading3.Render(content)
 		default:
-			return markdownHeadingStyle.Render(content)
+			return r.styles.heading.Render(content)
 		}
 	case *ast.Blockquote:
 		inner := strings.Join(r.renderBlockChildren(typed, max(4, width-2)), "\n\n")
-		return prefixMarkdownLines(inner, markdownQuoteStyle.Render("│ "), markdownQuoteStyle.Render("│"))
+		return prefixMarkdownLines(inner, r.styles.quote.Render("│ "), r.styles.quote.Render("│"))
 	case *ast.List:
 		return r.renderList(typed, width, "")
 	case *ast.FencedCodeBlock:
@@ -102,7 +119,7 @@ func (r terminalMarkdownRenderer) renderBlock(node ast.Node, width int) string {
 	case *ast.CodeBlock:
 		return r.renderCodeLines(typed.Lines(), width)
 	case *ast.ThematicBreak:
-		return markdownMutedStyle.Render(strings.Repeat("─", min(width, 24)))
+		return r.styles.muted.Render(strings.Repeat("─", min(width, 24)))
 	case *extast.Table:
 		return r.renderTable(typed, width)
 	case *ast.HTMLBlock:
@@ -133,7 +150,7 @@ func (r terminalMarkdownRenderer) renderList(list *ast.List, width int, indent s
 			itemNumber++
 		}
 		markerWidth := runewidth.StringWidth(marker) + 1
-		firstPrefix := indent + markdownMarkerStyle.Render(marker) + " "
+		firstPrefix := indent + r.styles.marker.Render(marker) + " "
 		continuation := indent + strings.Repeat(" ", markerWidth)
 		firstBlock := true
 		for child := listItem.FirstChild(); child != nil; child = child.NextSibling() {
@@ -189,7 +206,7 @@ func (r terminalMarkdownRenderer) renderCodeLines(segments *gmtext.Segments, wid
 		line := strings.TrimSuffix(string(segment.Value(r.source)), "\n")
 		wrapped := ansi.Hardwrap(line, max(1, width-2), false)
 		for _, physical := range strings.Split(wrapped, "\n") {
-			lines = append(lines, "  "+markdownCodeStyle.Render(physical))
+			lines = append(lines, "  "+r.styles.code.Render(physical))
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -217,30 +234,30 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 			}
 		case *ast.CodeSpan:
 			content := strings.ReplaceAll(r.renderInlines(typed), "\n", " ")
-			out.WriteString(markdownInlineStyle.Render(content))
+			out.WriteString(r.styles.inline.Render(content))
 		case *ast.Link:
 			label := r.renderInlines(typed)
 			destination := string(typed.Destination)
 			if strings.TrimSpace(label) == "" {
 				label = destination
 			}
-			out.WriteString(markdownLinkStyle.Render(label))
+			out.WriteString(r.styles.link.Render(label))
 			if destination != "" && strings.TrimSpace(ansi.Strip(label)) != destination {
-				out.WriteString(markdownMutedStyle.Render(" (" + destination + ")"))
+				out.WriteString(r.styles.muted.Render(" (" + destination + ")"))
 			}
 		case *ast.AutoLink:
-			out.WriteString(markdownLinkStyle.Render(string(typed.URL(r.source))))
+			out.WriteString(r.styles.link.Render(string(typed.URL(r.source))))
 		case *ast.Image:
 			label := strings.TrimSpace(ansi.Strip(r.renderInlines(typed)))
 			if label == "" {
 				label = "image"
 			}
-			out.WriteString(markdownMutedStyle.Render("[" + label + "]"))
+			out.WriteString(r.styles.muted.Render("[" + label + "]"))
 			if destination := string(typed.Destination); destination != "" {
-				out.WriteString(markdownMutedStyle.Render(" (" + destination + ")"))
+				out.WriteString(r.styles.muted.Render(" (" + destination + ")"))
 			}
 		case *extast.Strikethrough:
-			out.WriteString(markdownStrikeStyle.Render(r.renderInlines(typed)))
+			out.WriteString(r.styles.strike.Render(r.renderInlines(typed)))
 		case *extast.TaskCheckBox:
 			if typed.IsChecked {
 				out.WriteString("[x] ")
@@ -296,14 +313,14 @@ func (r terminalMarkdownRenderer) renderTable(table *extast.Table, width int) st
 		return renderMarkdownTableRecords(headers, rows, width)
 	}
 
-	lines := []string{renderMarkdownTableRow(headers, widths, true)}
+	lines := []string{r.renderMarkdownTableRow(headers, widths, true)}
 	rules := make([]string, columns)
 	for column, columnWidth := range widths {
 		rules[column] = strings.Repeat("─", columnWidth)
 	}
-	lines = append(lines, markdownMutedStyle.Render(strings.Join(rules, "─┼─")))
+	lines = append(lines, r.styles.muted.Render(strings.Join(rules, "─┼─")))
 	for _, row := range rows {
-		lines = append(lines, renderMarkdownTableRow(row, widths, false))
+		lines = append(lines, r.renderMarkdownTableRow(row, widths, false))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -317,7 +334,7 @@ func (r terminalMarkdownRenderer) tableCells(parent ast.Node) []string {
 	return cells
 }
 
-func renderMarkdownTableRow(cells []string, widths []int, header bool) string {
+func (r terminalMarkdownRenderer) renderMarkdownTableRow(cells []string, widths []int, header bool) string {
 	parts := make([]string, len(widths))
 	for column, width := range widths {
 		value := ""
@@ -328,11 +345,11 @@ func renderMarkdownTableRow(cells []string, widths []int, header bool) string {
 			value = padMarkdownCell(value, width)
 		}
 		if header {
-			value = markdownTableHead.Render(value)
+			value = r.styles.tableHead.Render(value)
 		}
 		parts[column] = value
 	}
-	return strings.Join(parts, markdownMutedStyle.Render(" │ "))
+	return strings.Join(parts, r.styles.muted.Render(" │ "))
 }
 
 func renderMarkdownTableRecords(headers []string, rows [][]string, width int) string {
@@ -348,7 +365,7 @@ func renderMarkdownTableRecords(headers []string, rows [][]string, width int) st
 			if label == "" {
 				label = fmt.Sprintf("Column %d", column+1)
 			}
-			prefix := markdownTableHead.Render(label + ":")
+			prefix := lipgloss.NewStyle().Bold(true).Render(label + ":")
 			oneLine := prefix + " " + value
 			if markdownCellWidth(oneLine) <= width {
 				fields = append(fields, oneLine)

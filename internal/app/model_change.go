@@ -19,8 +19,12 @@ import (
 func ValidateModelChange(ctx context.Context, cfg *config.Config, routes []modelchange.Route) []modelchange.ProbeResult {
 	routes = expandedModelValidationRoutes(cfg, routes)
 	results := make([]modelchange.ProbeResult, 0, len(routes))
-	seen := make(map[string]struct{})
+	seen := make(map[string]modelchange.ProbeResult)
 	for _, route := range routes {
+		if route != modelchange.RoutePrimary && cfg != nil && !cfg.AuxiliaryEnabled() {
+			results = append(results, modelchange.ProbeResult{Route: route, OK: true, Model: "disabled"})
+			continue
+		}
 		runtime, err := ResolveModelRuntime(ctx, cfg, string(route))
 		if err != nil {
 			results = append(results, modelchange.ProbeResult{
@@ -37,10 +41,11 @@ func ValidateModelChange(ctx context.Context, cfg *config.Config, routes []model
 			contract = "maintenance_json"
 		}
 		key := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s", runtime.Provider, runtime.Model, runtime.Protocol, runtime.BaseURL, runtime.ReasoningEffort, runtime.ServiceTier, contract)
-		if _, ok := seen[key]; ok {
+		if prior, ok := seen[key]; ok {
+			prior.Route = route
+			results = append(results, prior)
 			continue
 		}
-		seen[key] = struct{}{}
 		probe := ProbeResolvedModelForRole(ctx, runtime, string(route))
 		result := modelchange.ProbeResult{
 			Route: route, OK: probe.Err == nil, Provider: runtime.Provider,
@@ -50,6 +55,7 @@ func ValidateModelChange(ctx context.Context, cfg *config.Config, routes []model
 			result.Error = tools.RedactSensitive(probe.Err.Error())
 			result.FailureClass = classifyModelProbeFailure(probe.Err)
 		}
+		seen[key] = result
 		results = append(results, result)
 	}
 	return results
@@ -67,7 +73,7 @@ func expandedModelValidationRoutes(cfg *config.Config, routes []modelchange.Rout
 	}
 	for _, route := range routes {
 		appendRoute(route)
-		if route != modelchange.RouteAuxiliary {
+		if route != modelchange.RouteAuxiliary || (cfg != nil && !cfg.AuxiliaryEnabled()) {
 			continue
 		}
 		for _, role := range modelchange.ManagedRoleRoutes() {

@@ -18,22 +18,22 @@ import (
 	"selfmind/internal/ui/components"
 	"selfmind/internal/ui/components/sidebar"
 	"selfmind/internal/ui/components/status"
+	uitheme "selfmind/internal/ui/theme"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, tenantID string) *Controller {
 	if a != nil {
 		a.SetEvolutionNotifyChannel(a.EventChannel)
 	}
-	c := &common.Common{
-		Styles: common.DefaultStyles(),
-	}
+	c := common.New(resolveTUITheme(cfg))
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	sp.Style = lipgloss.NewStyle().Foreground(c.Theme.Color(uitheme.TextDecorative))
 
 	var editorCfg *config.EditorConfig
 	if cfg != nil {
@@ -76,6 +76,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			modelManagerStatus: modelManagerStatus,
 			modelManagerRoutes: modelManagerRoutes,
 			clarifyBridge:      tools.NewClarifyBridge(),
+			process:            newProcessSurface(),
 		},
 	}
 }
@@ -84,12 +85,10 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 	if agent != nil {
 		agent.SetEvolutionNotifyChannel(agent.EventChannel)
 	}
-	c := &common.Common{
-		Styles: common.DefaultStyles(),
-	}
+	c := common.New(resolveTUITheme(cfg))
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	sp.Style = lipgloss.NewStyle().Foreground(c.Theme.Color(uitheme.TextDecorative))
 
 	var editorCfg *config.EditorConfig
 	if cfg != nil {
@@ -135,8 +134,34 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			modelManagerStatus: modelManagerStatus,
 			modelManagerRoutes: modelManagerRoutes,
 			clarifyBridge:      tools.NewClarifyBridge(),
+			process:            newProcessSurface(),
 		},
 	}
+}
+
+func resolveTUITheme(cfg *config.Config) uitheme.Theme {
+	configured := "auto"
+	if cfg != nil {
+		configured = cfg.TUI.Theme
+	}
+	mode, err := uitheme.ParseMode(configured)
+	if err != nil {
+		mode = uitheme.ModeAuto
+	}
+	profile := lipgloss.ColorProfile()
+	dark := true
+	if mode == uitheme.ModeAuto && profile != termenv.Ascii {
+		dark = lipgloss.HasDarkBackground()
+	} else if mode == uitheme.ModeLight {
+		dark = false
+	}
+	resolved, err := uitheme.Resolve(uitheme.Options{
+		Mode: mode, Profile: profile, DarkBackground: dark,
+	})
+	if err != nil {
+		return uitheme.Default()
+	}
+	return resolved
 }
 
 func buildModelManagerData(cfg *config.Config) (components.ModelManagerStatus, []components.ModelManagerProvider) {
@@ -195,11 +220,17 @@ func buildModelManagerData(cfg *config.Config) (components.ModelManagerStatus, [
 				models = prependUniqueModel(models, selection.Model)
 			}
 		}
+		endpoint, hasEndpoint := cfg.Providers.BuiltinEndpoint(profile.ID)
+		if !hasEndpoint {
+			endpoint = cfg.ProviderProfiles[profile.ID]
+		}
 		providers = append(providers, components.ModelManagerProvider{
 			ID: profile.ID, Label: profile.DisplayName, Source: source,
 			CredentialRequired: profile.AuthType == modelruntime.AuthAPIKey,
 			CredentialReady:    modelManagerCredentialReady(resolver, profile.ID, models),
 			Models:             modelManagerModels(profile.ID, models),
+			BaseURL:            endpoint.BaseURL,
+			Protocol:           firstNonEmptyText(endpoint.Protocol, profile.Protocol),
 		})
 	}
 	for _, custom := range cfg.Providers.Custom {
@@ -209,10 +240,11 @@ func buildModelManagerData(cfg *config.Config) (components.ModelManagerStatus, [
 		}
 		models := []string{strings.TrimSpace(custom.Model)}
 		providers = append(providers, components.ModelManagerProvider{
-			ID: "custom:" + name, Label: name,
-			CredentialRequired: true,
-			CredentialReady:    modelManagerCredentialReady(resolver, "custom:"+name, models),
-			Models:             modelManagerModels("custom:"+name, models),
+			ID: name, Label: name,
+			Custom: true, BaseURL: custom.BaseURL, Protocol: custom.Protocol, Auth: custom.Auth,
+			CredentialRequired: !strings.EqualFold(strings.TrimSpace(custom.Auth), "none"),
+			CredentialReady:    strings.EqualFold(strings.TrimSpace(custom.Auth), "none") || modelManagerCredentialReady(resolver, name, models),
+			Models:             modelManagerModels(name, models),
 		})
 	}
 	return view, providers
@@ -246,6 +278,12 @@ func modelManagerStatusFrom(status modelchange.Status) components.ModelManagerSt
 		BackgroundModel:       status.Configured.Auxiliary.Model,
 		BackgroundReasoning:   status.Configured.Auxiliary.Reasoning,
 		BackgroundServiceTier: status.Configured.Auxiliary.ServiceTier,
+		BackgroundEnabled:     status.Configured.Auxiliary.Enabled == nil || *status.Configured.Auxiliary.Enabled,
+		ForegroundReady:       status.ForegroundReady(),
+		BackgroundReady:       status.BackgroundReady(),
+		ReadinessDegraded:     status.Readiness.Degraded,
+		ForegroundReason:      status.Readiness.ForegroundReason,
+		BackgroundReason:      status.Readiness.BackgroundReason,
 		Generation:            status.Generation,
 		RoleOverrides:         make(map[string]components.ModelManagerSubmission),
 	}
@@ -313,6 +351,9 @@ func prependUniqueModel(models []string, model string) []string {
 }
 
 func selectionDisplay(selection config.ModelSelectionConfig) string {
+	if selection.Enabled != nil && !*selection.Enabled {
+		return "disabled"
+	}
 	provider := strings.TrimSpace(selection.Provider)
 	model := strings.TrimSpace(selection.Model)
 	if provider == "" {

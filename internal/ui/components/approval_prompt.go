@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	uitheme "selfmind/internal/ui/theme"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -62,6 +63,7 @@ type ApprovalPrompt struct {
 	details ApprovalDetails
 	options []ApprovalOption
 	cursor  int
+	styles  approvalStyles
 }
 
 // ApprovalDetails is the decision context the daemon publishes with an approval:
@@ -124,6 +126,12 @@ func NewApprovalPrompt(tool, target, reason string) *ApprovalPrompt {
 // The option set is unchanged: what a decision authorizes is the gateway's and
 // the grant floor's contract, and the panel must not narrow it locally.
 func NewApprovalPromptDetailed(d ApprovalDetails) *ApprovalPrompt {
+	return NewApprovalPromptDetailedWithTheme(d, uitheme.Default())
+}
+
+// NewApprovalPromptDetailedWithTheme builds an approval panel using semantic
+// foreground roles only. Approval deliberately has no background fill.
+func NewApprovalPromptDetailedWithTheme(d ApprovalDetails, t uitheme.Theme) *ApprovalPrompt {
 	d.Tool = strings.TrimSpace(d.Tool)
 	d.Target = strings.TrimSpace(d.Target)
 	d.Reason = strings.TrimSpace(d.Reason)
@@ -144,6 +152,7 @@ func NewApprovalPromptDetailed(d ApprovalDetails) *ApprovalPrompt {
 		reason:  d.Reason,
 		details: d,
 		options: options,
+		styles:  newApprovalStyles(t),
 	}
 }
 
@@ -201,27 +210,30 @@ func (p *ApprovalPrompt) HandleKey(key string) *ApprovalOption {
 	return nil
 }
 
-// approvalTargetMaxLines and approvalContextMaxLines bound the wrapped blocks so
-// a long command or reason can never push the answer options off screen — the
-// panel must always end with a visible decision.
-const (
-	approvalTargetMaxLines  = 3
-	approvalContextMaxLines = 2
-)
+// Descriptive context stays compact. The action target is deliberately exempt:
+// it is the exact redacted command/path being authorized and may wrap to as many
+// lines as necessary, but must never be replaced by an ellipsis.
+const approvalContextMaxLines = 2
 
 // approvalTriageUnavailableNotice is shown when smart-mode triage could not rule
 // on the call. Without it, a person in smart mode reads a flood of prompts as
 // "the policy is strict" when the real cause is a missing or failing judge.
 const approvalTriageUnavailableNotice = "automatic triage unavailable — asking you instead of auto-approving"
 
-var (
-	approvalTitleStyle  = lipgloss.NewStyle().Bold(true)
-	approvalToolStyle   = lipgloss.NewStyle().Bold(true)
-	approvalDimStyle    = lipgloss.NewStyle().Faint(true)
-	approvalSelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
-	approvalNoticeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	approvalTargetStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
-)
+type approvalStyles struct {
+	title, tool, secondary, selected, notice, target lipgloss.Style
+}
+
+func newApprovalStyles(t uitheme.Theme) approvalStyles {
+	return approvalStyles{
+		title:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextPrimary)).Bold(true),
+		tool:      lipgloss.NewStyle().Foreground(t.Color(uitheme.TextPrimary)).Bold(true),
+		secondary: lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		selected:  lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		notice:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Warning)),
+		target:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
+	}
+}
 
 // locationLine renders WHERE the operation would run: the working root, plus the
 // bound environment snapshot when the daemon published one.
@@ -245,14 +257,16 @@ func (p *ApprovalPrompt) addLabeledRows(addRow func(string), label, value string
 	if len(lines) == 0 {
 		return
 	}
-	addRow(approvalDimStyle.Render(label) + lines[0])
+	addRow(p.styles.secondary.Render(label) + lines[0])
 	indent := strings.Repeat(" ", labelW)
 	for _, line := range lines[1:] {
 		addRow(indent + line)
 	}
 }
 
-// approvalPanelMaxWidth caps the list so it stays readable in a wide terminal.
+// approvalPanelMaxWidth caps prose, context, and decisions so they remain
+// readable in a wide terminal. The action target itself uses the full available
+// width because a command is inspectable authorization data, not prose.
 const approvalPanelMaxWidth = 76
 
 func (p *ApprovalPrompt) question() string {
@@ -283,13 +297,10 @@ func (p *ApprovalPrompt) targetPrefix() string {
 // middle-truncated because that text is the authority the person is approving.
 func (p *ApprovalPrompt) View(width int) string {
 	panelW := width
-	if panelW > approvalPanelMaxWidth {
-		panelW = approvalPanelMaxWidth
-	}
 	if panelW < 12 {
 		panelW = 12
 	}
-	inner := panelW
+	inner := min(panelW, approvalPanelMaxWidth)
 
 	type row struct {
 		text string // styled content
@@ -300,11 +311,11 @@ func (p *ApprovalPrompt) View(width int) string {
 	}
 
 	for _, line := range WrapDisplay(p.question(), inner, 2) {
-		addRow(approvalTitleStyle.Render(line))
+		addRow(p.styles.title.Render(line))
 	}
 	if p.details.Parked {
 		for _, line := range WrapDisplay("The task is parked; your answer will resume it.", inner, 2) {
-			addRow(approvalNoticeStyle.Render(line))
+			addRow(p.styles.notice.Render(line))
 		}
 	}
 	addRow("")
@@ -313,16 +324,16 @@ func (p *ApprovalPrompt) View(width int) string {
 	// part the person is being asked to authorize.
 	if p.target != "" {
 		prefix := p.targetPrefix()
-		lines := WrapDisplay(p.target, maxInt(8, inner-runewidth.StringWidth(prefix)), approvalTargetMaxLines)
+		lines := wrapDisplayLosslessly(p.target, maxInt(8, panelW-runewidth.StringWidth(prefix)))
 		for i, line := range lines {
-			styled := approvalTargetStyle.Render(line)
+			styled := p.styles.target.Render(line)
 			if i == 0 {
-				styled = approvalDimStyle.Render(prefix) + styled
+				styled = p.styles.secondary.Render(prefix) + styled
 			}
 			addRow(styled)
 		}
 	} else if p.tool != "" {
-		addRow(approvalToolStyle.Render(p.tool))
+		addRow(p.styles.tool.Render(p.tool))
 	}
 	// Execution context: where it runs, and how big the write is. Order matters —
 	// location before size before rationale, because "wrong directory" is the
@@ -383,7 +394,7 @@ func (p *ApprovalPrompt) View(width int) string {
 	}
 	if p.details.TriageUnavailable {
 		for _, line := range WrapDisplay(approvalTriageUnavailableNotice, inner, approvalContextMaxLines) {
-			addRow(approvalNoticeStyle.Render(line))
+			addRow(p.styles.notice.Render(line))
 		}
 	}
 	addRow("")
@@ -393,7 +404,7 @@ func (p *ApprovalPrompt) View(width int) string {
 		style := lipgloss.NewStyle()
 		if i == p.cursor {
 			marker = "❯ "
-			style = approvalSelStyle
+			style = p.styles.selected
 		}
 		hint := ""
 		if opt.Key != "" {
@@ -402,14 +413,13 @@ func (p *ApprovalPrompt) View(width int) string {
 		lineWidth := maxInt(8, inner-runewidth.StringWidth(marker)-runewidth.StringWidth(hint))
 		// Unlike descriptive context, a proposed rule must never be abbreviated:
 		// this is the exact authority the person is confirming.
-		maxRuleLines := maxInt(1, runewidth.StringWidth(strings.Join(strings.Fields(opt.Label), " "))/lineWidth+2)
-		lines := WrapDisplay(opt.Label, lineWidth, maxRuleLines)
+		lines := wrapDisplayLosslessly(opt.Label, lineWidth)
 		if len(lines) == 0 {
 			lines = []string{"decision"}
 		}
 		for lineIndex, line := range lines {
 			if lineIndex == 0 {
-				styled := style.Render(marker) + approvalDimStyle.Render(hint) + style.Render(line)
+				styled := style.Render(marker) + p.styles.secondary.Render(hint) + style.Render(line)
 				addRow(styled)
 				continue
 			}
@@ -420,7 +430,7 @@ func (p *ApprovalPrompt) View(width int) string {
 	footer := "↑/↓ to move · enter to confirm · esc to cancel"
 	footer = TruncateMiddle(footer, inner)
 	addRow("")
-	addRow(approvalDimStyle.Render(footer))
+	addRow(p.styles.secondary.Render(footer))
 
 	var sb strings.Builder
 	for i, r := range rows {
@@ -447,10 +457,73 @@ func WrapDisplay(s string, width, maxLines int) []string {
 	if normalized == "" {
 		return nil
 	}
+	return wrapNormalizedDisplay(normalized, width, maxLines)
+}
+
+// wrapDisplayLosslessly wraps authorization-bearing text without discarding
+// any redacted content. A zero line limit tells the shared wrapper to keep
+// emitting rows until the whole value is visible.
+func wrapDisplayLosslessly(s string, width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "\r\n", "\n"), "\r", "\n")
+	physicalLines := strings.Split(s, "\n")
+	lines := make([]string, 0, len(physicalLines))
+	for _, physical := range physicalLines {
+		lines = append(lines, wrapDisplayLineLosslessly(physical, width)...)
+	}
+	return lines
+}
+
+// wrapDisplayLineLosslessly prefers a space boundary in the latter half of a
+// row, but keeps that space in the emitted text. Concatenating its rows therefore
+// reconstructs the exact physical line instead of silently changing a command.
+func wrapDisplayLineLosslessly(line string, width int) []string {
+	if line == "" {
+		return []string{""}
+	}
+	runes := []rune(line)
+	var lines []string
+	for len(runes) > 0 {
+		taken, used := 0, 0
+		for taken < len(runes) {
+			w := runewidth.RuneWidth(runes[taken])
+			if used+w > width {
+				break
+			}
+			used += w
+			taken++
+		}
+		if taken == len(runes) {
+			return append(lines, string(runes))
+		}
+		if taken == 0 {
+			// The callers enforce a practical minimum width, but retain the rune
+			// rather than substituting an ellipsis if a narrower caller appears.
+			taken = 1
+		}
+		breakAt := taken
+		for i := taken; i > taken/2; i-- {
+			if runes[i-1] == ' ' {
+				breakAt = i
+				break
+			}
+		}
+		lines = append(lines, string(runes[:breakAt]))
+		runes = runes[breakAt:]
+	}
+	return lines
+}
+
+func wrapNormalizedDisplay(normalized string, width, maxLines int) []string {
 	runes := []rune(normalized)
 	var lines []string
 	for len(runes) > 0 {
-		if len(lines) == maxLines-1 {
+		if maxLines > 0 && len(lines) == maxLines-1 {
 			return append(lines, TruncateMiddle(string(runes), width))
 		}
 		taken, used := 0, 0

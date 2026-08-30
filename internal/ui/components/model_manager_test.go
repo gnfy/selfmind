@@ -59,6 +59,7 @@ func TestModelManagerBuildsOneDraftAcrossMainBackgroundAndRole(t *testing.T) {
 	// Review and apply returns the entire draft once.
 	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
 	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
 	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	apply := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !apply.Closed || len(apply.Draft) != 3 {
@@ -132,16 +133,19 @@ func TestModelManagerCollectsMissingProviderCredentialBeforeValidation(t *testin
 	if strings.Contains(manager.View(), "sk-secret") {
 		t.Fatal("credential leaked into the rendered view")
 	}
-	manager.SetRouteValidation("primary", false, "authentication failed")
+	manager.SetRouteValidation("primary", false, "authentication failed", "")
 	if got := manager.Draft()[0].APIKey; got != "sk-secret" {
 		t.Fatalf("failed validation discarded retry credential: %q", got)
 	}
-	manager.SetRouteValidation("primary", true, "")
+	manager.SetRouteValidation("primary", true, "", "stage-one")
 	if got := manager.Draft()[0].APIKey; got != "" {
 		t.Fatalf("validated draft retained credential: %q", got)
 	}
 	if !manager.providers[0].CredentialReady {
 		t.Fatal("validated provider was not marked credential-ready")
+	}
+	if manager.CredentialStage() != "stage-one" {
+		t.Fatalf("credential stage = %q", manager.CredentialStage())
 	}
 }
 
@@ -150,5 +154,46 @@ func TestModelManagerEscapeClosesWithoutSubmission(t *testing.T) {
 	action := manager.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if !action.Closed || action.Submission != nil {
 		t.Fatalf("action = %+v", action)
+	}
+}
+
+func TestModelManagerCanDisableBackgroundWork(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{
+		BackgroundEnabled: true, BackgroundProvider: "openai", BackgroundModel: "gpt-test",
+	}, []ModelManagerProvider{{ID: "openai", Models: []ModelManagerModel{{ID: "gpt-test"}}}}, 80, 24)
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})  // background menu
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // provider screen
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})  // disable option
+	action := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if action.ValidationRoute != "background" || len(action.Draft) != 1 || action.Draft[0].Enabled == nil || *action.Draft[0].Enabled {
+		t.Fatalf("disable action = %+v", action)
+	}
+	if summary := manager.routeSummary("background"); !strings.Contains(summary, "disabled") {
+		t.Fatalf("background summary = %q", summary)
+	}
+}
+
+func TestModelManagerAddsCustomProviderConnectionDraft(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{}, []ModelManagerProvider{{ID: "openai"}}, 100, 30)
+	for range 3 {
+		manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // provider connections
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})  // add custom
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	manager.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Company_Gateway")})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	manager.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://llm.company.example/v1/")})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // openai-compatible
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // auth none
+	draft := manager.ProviderDraft()
+	if len(draft) != 1 || draft[0].ID != "company-gateway" || draft[0].BaseURL != "https://llm.company.example/v1" || draft[0].Protocol != "openai-compatible" || draft[0].Auth != "none" {
+		t.Fatalf("provider draft = %+v", draft)
+	}
+	if !manager.providerIDExists("company-gateway") {
+		t.Fatal("new connection was not available to route selection")
 	}
 }

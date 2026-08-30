@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	stateSchemaVersion = 3
+	stateSchemaVersion = 5
 	defaultHistorySize = 10
 	defaultConfirmTTL  = 10 * time.Minute
 )
@@ -85,13 +85,16 @@ type Transition struct {
 	At     time.Time    `json:"at"`
 }
 
-// Snapshot intentionally contains only non-secret model route selection. Auth,
-// headers, provider endpoints, and raw credentials never enter model history.
+// Snapshot intentionally contains only model route selection. Non-secret
+// provider connection changes have their own typed snapshots; raw credentials
+// never enter model state or history.
 type Snapshot struct {
 	Primary   config.ModelSelectionConfig `json:"primary"`
 	Auxiliary config.ModelSelectionConfig `json:"auxiliary"`
 	Roles     RoleSelections              `json:"roles"`
 }
+
+var disabledAuxiliary = false
 
 // Fingerprint identifies effective non-secret model routing. It is safe to
 // expose through Gateway status so a CLI can reject a stale live runtime
@@ -105,6 +108,44 @@ func (s Snapshot) Fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
+func providerConfigFingerprint(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	withoutSecret := func(endpoint config.ProviderEndpoint) config.ProviderEndpoint {
+		endpoint.APIKey = ""
+		return endpoint
+	}
+	builtins := make(map[string]config.ProviderEndpoint, len(cfg.Providers.Builtins))
+	for id, endpoint := range cfg.Providers.Builtins {
+		builtins[normalizeProviderConnectionID(id)] = withoutSecret(endpoint)
+	}
+	custom := append([]config.CustomProvider(nil), cfg.Providers.Custom...)
+	for index := range custom {
+		custom[index].APIKey = ""
+		custom[index].Name = normalizeProviderConnectionID(custom[index].Name)
+	}
+	sort.Slice(custom, func(i, j int) bool { return custom[i].Name < custom[j].Name })
+	legacy := make(map[string]config.ProviderEndpoint, len(cfg.ProviderProfiles))
+	for id, endpoint := range cfg.ProviderProfiles {
+		legacy[normalizeProviderConnectionID(id)] = withoutSecret(endpoint)
+	}
+	payload := struct {
+		OpenAI    config.ProviderEndpoint            `json:"openai,omitempty"`
+		Anthropic config.ProviderEndpoint            `json:"anthropic,omitempty"`
+		Google    config.ProviderEndpoint            `json:"google,omitempty"`
+		Builtins  map[string]config.ProviderEndpoint `json:"builtins,omitempty"`
+		Custom    []config.CustomProvider            `json:"custom,omitempty"`
+		Legacy    map[string]config.ProviderEndpoint `json:"legacy,omitempty"`
+	}{
+		OpenAI: withoutSecret(cfg.Providers.OpenAI), Anthropic: withoutSecret(cfg.Providers.Anthropic),
+		Google: withoutSecret(cfg.Providers.Google), Builtins: builtins, Custom: custom, Legacy: legacy,
+	}
+	data, _ := json.Marshal(payload)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:8])
+}
+
 type ProbeResult struct {
 	Route        Route        `json:"route"`
 	OK           bool         `json:"ok"`
@@ -116,36 +157,42 @@ type ProbeResult struct {
 }
 
 type Change struct {
-	ID                 string        `json:"id"`
-	Source             string        `json:"source"`
-	Status             ChangeStatus  `json:"status"`
-	ExpectedGeneration int64         `json:"expected_generation"`
-	Previous           Snapshot      `json:"previous"`
-	Candidate          Snapshot      `json:"candidate"`
-	ChangedRoutes      []Route       `json:"changed_routes"`
-	CreatedAt          time.Time     `json:"created_at"`
-	ConfirmBy          time.Time     `json:"confirm_by,omitempty"`
-	ConfirmedAt        time.Time     `json:"confirmed_at,omitempty"`
-	FinishedAt         time.Time     `json:"finished_at,omitempty"`
-	Failure            string        `json:"failure,omitempty"`
-	FailureClass       FailureClass  `json:"failure_class,omitempty"`
-	PhaseStartedAt     time.Time     `json:"phase_started_at,omitempty"`
-	RestartAttempts    int           `json:"restart_attempts,omitempty"`
-	LastAttemptAt      time.Time     `json:"last_attempt_at,omitempty"`
-	RestartScheduledAt time.Time     `json:"restart_scheduled_at,omitempty"`
-	ServiceManager     string        `json:"service_manager,omitempty"`
-	Probes             []ProbeResult `json:"probes,omitempty"`
-	Transitions        []Transition  `json:"transitions,omitempty"`
+	ID                 string           `json:"id"`
+	Source             string           `json:"source"`
+	Status             ChangeStatus     `json:"status"`
+	ExpectedGeneration int64            `json:"expected_generation"`
+	Previous           Snapshot         `json:"previous"`
+	Candidate          Snapshot         `json:"candidate"`
+	ChangedRoutes      []Route          `json:"changed_routes"`
+	CreatedAt          time.Time        `json:"created_at"`
+	ConfirmBy          time.Time        `json:"confirm_by,omitempty"`
+	ConfirmedAt        time.Time        `json:"confirmed_at,omitempty"`
+	FinishedAt         time.Time        `json:"finished_at,omitempty"`
+	Failure            string           `json:"failure,omitempty"`
+	FailureClass       FailureClass     `json:"failure_class,omitempty"`
+	PhaseStartedAt     time.Time        `json:"phase_started_at,omitempty"`
+	RestartAttempts    int              `json:"restart_attempts,omitempty"`
+	LastAttemptAt      time.Time        `json:"last_attempt_at,omitempty"`
+	RestartScheduledAt time.Time        `json:"restart_scheduled_at,omitempty"`
+	ServiceManager     string           `json:"service_manager,omitempty"`
+	CredentialStage    string           `json:"credential_stage,omitempty"`
+	ProviderChanges    []ProviderChange `json:"provider_changes,omitempty"`
+	Probes             []ProbeResult    `json:"probes,omitempty"`
+	Transitions        []Transition     `json:"transitions,omitempty"`
 }
 
 type State struct {
-	SchemaVersion     int       `json:"schema_version"`
-	Generation        int64     `json:"generation"`
-	Running           Snapshot  `json:"running"`
-	RunningVerifiedAt time.Time `json:"running_verified_at,omitempty"`
-	Pending           *Change   `json:"pending,omitempty"`
-	History           []Change  `json:"history,omitempty"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	SchemaVersion              int                      `json:"schema_version"`
+	Generation                 int64                    `json:"generation"`
+	Running                    Snapshot                 `json:"running"`
+	RunningProviderFingerprint string                   `json:"running_provider_fingerprint,omitempty"`
+	RunningVerifiedAt          time.Time                `json:"running_verified_at,omitempty"`
+	ForegroundVerifiedAt       time.Time                `json:"foreground_verified_at,omitempty"`
+	BackgroundVerifiedAt       time.Time                `json:"background_verified_at,omitempty"`
+	RouteReadiness             map[Route]RouteReadiness `json:"route_readiness,omitempty"`
+	Pending                    *Change                  `json:"pending,omitempty"`
+	History                    []Change                 `json:"history,omitempty"`
+	UpdatedAt                  time.Time                `json:"updated_at"`
 }
 
 type Status struct {
@@ -155,12 +202,56 @@ type Status struct {
 	Configured        Snapshot  `json:"configured"`
 	Pending           *Change   `json:"pending,omitempty"`
 	History           []Change  `json:"history,omitempty"`
+	Readiness         Readiness `json:"readiness"`
+}
+
+type Readiness struct {
+	Foreground        bool                     `json:"foreground"`
+	Background        bool                     `json:"background"`
+	BackgroundEnabled bool                     `json:"background_enabled"`
+	Degraded          bool                     `json:"degraded"`
+	ForegroundReason  string                   `json:"foreground_reason,omitempty"`
+	BackgroundReason  string                   `json:"background_reason,omitempty"`
+	Routes            map[Route]RouteReadiness `json:"routes,omitempty"`
+}
+
+// RouteReadiness is the durable health boundary for one background role. A
+// failed semantic_recall route therefore cannot erase proof for auxiliary or
+// unrelated maintenance roles.
+type RouteReadiness struct {
+	Ready        bool         `json:"ready"`
+	VerifiedAt   time.Time    `json:"verified_at,omitempty"`
+	FailureClass FailureClass `json:"failure_class,omitempty"`
+	Reason       string       `json:"reason,omitempty"`
 }
 
 // ModelReady reports whether the effective routes are the same routes that
 // reached a verified running boundary and no model transaction remains open.
 func (s Status) ModelReady() bool {
-	return s.Pending == nil && s.Configured == s.Running && !s.RunningVerifiedAt.IsZero()
+	return s.ForegroundReady()
+}
+
+func (s Status) ForegroundReady() bool {
+	return s.Readiness.Foreground
+}
+
+func (s Status) BackgroundReady() bool {
+	return s.Readiness.Background
+}
+
+// RouteReady reports role-scoped readiness. Foreground callers continue to use
+// ForegroundReady; background workers use their own role or the auxiliary
+// fallback floor instead of the all-background aggregate.
+func (s Status) RouteReady(route Route) bool {
+	if route == RoutePrimary {
+		return s.ForegroundReady()
+	}
+	state, ok := s.Readiness.Routes[route]
+	return ok && state.Ready
+}
+
+func (s Status) RouteReadiness(route Route) RouteReadiness {
+	return s.Readiness.Routes[route]
 }
 
 type PrepareRequest struct {
@@ -170,6 +261,9 @@ type PrepareRequest struct {
 	RequireConfirmation bool
 	ReplacePending      bool
 	ForceRevalidate     bool
+	CredentialStage     string
+	ProviderChanges     []ProviderChange
+	ValidateRoutes      []Route
 }
 
 type PrepareResult struct {
@@ -183,13 +277,25 @@ type PrepareResult struct {
 // The service never fabricates success when no validator is installed.
 type Validator func(context.Context, *config.Config, []Route) []ProbeResult
 
+// CredentialTransaction keeps secrets out of model state while allowing their
+// activation to share the route transaction's validation, commit, rollback,
+// and healthy-finalization boundaries.
+type CredentialTransaction interface {
+	OverlayStage(string, *config.Config) error
+	CommitStage(string) error
+	RollbackStage(string) error
+	FinalizeStage(string) error
+	DiscardStage(string) error
+}
+
 type Service struct {
-	ConfigPath string
-	Validate   Validator
-	Now        func() time.Time
-	ConfirmTTL time.Duration
-	HistoryMax int
-	mu         sync.Mutex
+	ConfigPath  string
+	Validate    Validator
+	Credentials CredentialTransaction
+	Now         func() time.Time
+	ConfirmTTL  time.Duration
+	HistoryMax  int
+	mu          sync.Mutex
 }
 
 var ErrGenerationConflict = errors.New("model configuration generation changed")
@@ -342,7 +448,8 @@ func (s *Service) inspectLocked() (Status, error) {
 	return Status{
 		Generation: state.Generation, Running: state.Running, RunningVerifiedAt: state.RunningVerifiedAt,
 		Configured: logicalConfigured(cfg, state.Pending), Pending: cloneChange(state.Pending),
-		History: append([]Change(nil), state.History...),
+		History:   append([]Change(nil), state.History...),
+		Readiness: readinessFor(cfg, state),
 	}, nil
 }
 
@@ -388,14 +495,20 @@ func (s *Service) prepareLocked(ctx context.Context, req PrepareRequest) (Prepar
 	}
 	candidate := normalizeSnapshot(req.Candidate)
 	changed := ChangedRoutes(configured, candidate)
+	if len(req.ProviderChanges) > 0 {
+		changed = mergeRoutes(changed, req.ValidateRoutes)
+		for _, providerChange := range req.ProviderChanges {
+			changed = mergeRoutes(changed, routesUsingProvider(candidate, providerChange.ID))
+		}
+	}
 	if len(changed) == 0 {
-		if !req.ForceRevalidate || !state.RunningVerifiedAt.IsZero() {
+		if !req.ForceRevalidate {
 			return PrepareResult{}, fmt.Errorf("model selection is unchanged")
 		}
 		// Credentials are deliberately absent from Snapshot. After a
 		// credential-only repair, revalidate every route and restart the same
 		// selection so the verified running boundary can be established.
-		changed = append([]Route{RoutePrimary, RouteAuxiliary}, ManagedRoleRoutes()...)
+		changed = mergeRoutes([]Route{RoutePrimary, RouteAuxiliary}, ManagedRoleRoutes())
 	}
 	if err := validateSnapshot(candidate, changed); err != nil {
 		return PrepareResult{}, err
@@ -405,7 +518,9 @@ func (s *Service) prepareLocked(ctx context.Context, req PrepareRequest) (Prepar
 		ID: newChangeID(), Source: normalizeSource(req.Source), Status: StatusAwaitingConfirmation,
 		ExpectedGeneration: state.Generation, Previous: configured, Candidate: candidate,
 		ChangedRoutes: changed, CreatedAt: now, ConfirmBy: now.Add(s.confirmTTL()), PhaseStartedAt: now,
-		Transitions: []Transition{{Status: StatusAwaitingConfirmation, At: now}},
+		CredentialStage: strings.TrimSpace(req.CredentialStage),
+		ProviderChanges: append([]ProviderChange(nil), req.ProviderChanges...),
+		Transitions:     []Transition{{Status: StatusAwaitingConfirmation, At: now}},
 	}
 	state.Pending = &change
 	state.Generation++
@@ -465,7 +580,7 @@ func (s *Service) confirmLocked(ctx context.Context, id string) (PrepareResult, 
 		}
 		return PrepareResult{}, fmt.Errorf("model change %s expired; create a new request", pending.ID)
 	}
-	if SnapshotFromConfig(cfg) != pending.Previous {
+	if SnapshotFromConfig(cfg) != pending.Previous || !ProviderChangesMatch(cfg, pending.ProviderChanges, false) {
 		return PrepareResult{}, fmt.Errorf("%w: config.yaml changed after the preview was created", ErrGenerationConflict)
 	}
 	if pending.ConfirmedAt.IsZero() {
@@ -476,12 +591,21 @@ func (s *Service) confirmLocked(ctx context.Context, id string) (PrepareResult, 
 	if err := s.save(state); err != nil {
 		return PrepareResult{}, err
 	}
-	candidateCfg, err := configWithSnapshot(s.ConfigPath, pending.Candidate)
+	candidateCfg, err := configWithChange(s.ConfigPath, pending.Candidate, pending.ProviderChanges, true)
 	if err != nil {
+		return PrepareResult{}, err
+	}
+	if err := s.overlayCredentialStage(pending.CredentialStage, candidateCfg); err != nil {
+		s.finishPendingClass(&state, StatusFailed, FailureInfrastructure, err.Error(), nil)
+		_ = s.discardCredentialStage(pending.CredentialStage)
+		if saveErr := s.save(state); saveErr != nil {
+			return PrepareResult{}, saveErr
+		}
 		return PrepareResult{}, err
 	}
 	probes := s.validate(ctx, candidateCfg, pending.ChangedRoutes)
 	if failureClass, probeErr := failedProbes(probes); probeErr != nil {
+		_ = s.discardCredentialStage(pending.CredentialStage)
 		s.finishPendingClass(&state, StatusFailed, failureClass, probeErr.Error(), probes)
 		if saveErr := s.save(state); saveErr != nil {
 			return PrepareResult{}, saveErr
@@ -589,20 +713,23 @@ func (s *Service) BeginDraining(id string) (Status, error) {
 		return Status{}, fmt.Errorf("model change %s is %s and cannot begin draining", change.ID, change.Status)
 	}
 	configured := SnapshotFromConfig(cfg)
-	if configured != change.Previous && configured != change.Candidate {
+	isPrevious := configured == change.Previous && ProviderChangesMatch(cfg, change.ProviderChanges, false)
+	isCandidate := configured == change.Candidate && ProviderChangesMatch(cfg, change.ProviderChanges, true)
+	if !isPrevious && !isCandidate {
 		s.finishPendingClass(&state, StatusConflict, FailureConflict, "config.yaml changed before the safe restart boundary", change.Probes)
 		if saveErr := s.save(state); saveErr != nil {
 			return Status{}, saveErr
 		}
 		return s.InspectWithState(cfg, state), fmt.Errorf("%w: config.yaml changed before model change %s could start", ErrGenerationConflict, change.ID)
 	}
-	if configured == change.Previous {
+	if isPrevious {
 		s.transition(change, StatusCommitting, s.now())
 		state.Generation++
 		if err := s.save(state); err != nil {
 			return Status{}, err
 		}
 		ApplySnapshot(cfg, change.Candidate)
+		ApplyProviderChanges(cfg, change.ProviderChanges, true)
 		if err := config.SaveConfig(s.ConfigPath, cfg); err != nil {
 			change.Failure = "write config at safe boundary: " + err.Error()
 			change.FailureClass = FailureInfrastructure
@@ -648,8 +775,16 @@ func (s *Service) MarkRestarting(id, serviceManager string) (Status, error) {
 	if change.Status != StatusDraining && change.Status != StatusCommitting {
 		return Status{}, fmt.Errorf("model change %s is %s and cannot restart", change.ID, change.Status)
 	}
-	if SnapshotFromConfig(cfg) != change.Candidate {
+	if SnapshotFromConfig(cfg) != change.Candidate || !ProviderChangesMatch(cfg, change.ProviderChanges, true) {
 		return Status{}, fmt.Errorf("%w: candidate config is not committed for %s", ErrGenerationConflict, change.ID)
+	}
+	if err := s.commitCredentialStage(change.CredentialStage); err != nil {
+		change.Failure = "commit staged provider credentials: " + err.Error()
+		change.FailureClass = FailureInfrastructure
+		s.transition(change, StatusRecoveryRequired, s.now())
+		state.Generation++
+		_ = s.save(state)
+		return s.InspectWithState(cfg, state), fmt.Errorf("%w: %v", ErrRecoveryRequired, err)
 	}
 	change.ServiceManager = strings.TrimSpace(serviceManager)
 	s.transition(change, StatusRestarting, s.now())
@@ -794,7 +929,7 @@ func (s *Service) RetryRecovery(id string) (Status, error) {
 	if change.Status != StatusRecoveryRequired {
 		return Status{}, fmt.Errorf("model change %s is %s, not recovery_required", change.ID, change.Status)
 	}
-	if SnapshotFromConfig(cfg) != change.Candidate {
+	if SnapshotFromConfig(cfg) != change.Candidate || !ProviderChangesMatch(cfg, change.ProviderChanges, true) {
 		return Status{}, fmt.Errorf("%w: candidate config changed before retry", ErrGenerationConflict)
 	}
 	change.Failure = ""
@@ -836,14 +971,20 @@ func (s *Service) RestorePrevious(id string) (Status, error) {
 		return Status{}, fmt.Errorf("model change %s is %s, not recovery_required", change.ID, change.Status)
 	}
 	configured := SnapshotFromConfig(cfg)
-	if configured != change.Candidate && configured != change.Previous {
+	isCandidate := configured == change.Candidate && ProviderChangesMatch(cfg, change.ProviderChanges, true)
+	isPrevious := configured == change.Previous && ProviderChangesMatch(cfg, change.ProviderChanges, false)
+	if !isCandidate && !isPrevious {
 		return Status{}, fmt.Errorf("%w: config.yaml changed before recovery", ErrGenerationConflict)
 	}
-	if configured == change.Candidate {
+	if isCandidate {
 		ApplySnapshot(cfg, change.Previous)
+		ApplyProviderChanges(cfg, change.ProviderChanges, false)
 		if err := config.SaveConfig(s.ConfigPath, cfg); err != nil {
 			return Status{}, err
 		}
+	}
+	if err := s.rollbackCredentialStage(change.CredentialStage); err != nil {
+		return Status{}, fmt.Errorf("restore provider credentials: %w", err)
 	}
 	finished := *change
 	s.transition(&finished, StatusRolledBack, s.now())
@@ -858,6 +999,9 @@ func (s *Service) RestorePrevious(id string) (Status, error) {
 	// the running proof so no request can use the restored config until a new
 	// process probes it and crosses MarkStartupHealthy.
 	state.RunningVerifiedAt = time.Time{}
+	state.ForegroundVerifiedAt = time.Time{}
+	state.BackgroundVerifiedAt = time.Time{}
+	state.RouteReadiness = nil
 	state.Generation++
 	if err := s.save(state); err != nil {
 		return Status{}, err
@@ -893,7 +1037,7 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 	configured := SnapshotFromConfig(cfg)
 	change := state.Pending
 	if change != nil && change.Status == StatusAwaitingConfirmation {
-		if configured == change.Previous {
+		if configured == change.Previous && ProviderChangesMatch(cfg, change.ProviderChanges, false) {
 			return s.InspectWithState(cfg, state), false, nil
 		}
 		s.finishPendingClass(&state, StatusConflict, FailureConflict, "config.yaml changed while confirmation was pending", change.Probes)
@@ -904,17 +1048,21 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 		// parked because ModelReady is false until the user retries or restores.
 		return s.InspectWithState(cfg, state), false, nil
 	}
-	if change != nil && (change.Status == StatusAwaitingSafeBoundary || change.Status == StatusValidating) && configured == change.Previous {
+	if change != nil && (change.Status == StatusAwaitingSafeBoundary || change.Status == StatusValidating) && configured == change.Previous && ProviderChangesMatch(cfg, change.ProviderChanges, false) {
 		// The old daemon may have crashed before the detached helper reached the
 		// safe boundary. Boot the last healthy route; the helper (or a later
 		// explicit retry) will commit the candidate before another restart.
 		return s.InspectWithState(cfg, state), false, nil
 	}
 	if change != nil {
-		switch configured {
-		case change.Candidate:
+		matchesCandidateProviders := ProviderChangesMatch(cfg, change.ProviderChanges, true)
+		matchesPreviousProviders := ProviderChangesMatch(cfg, change.ProviderChanges, false)
+		isCandidate := configured == change.Candidate && matchesCandidateProviders
+		isPrevious := configured == change.Previous && matchesPreviousProviders
+		switch {
+		case isCandidate:
 			// The candidate was atomically committed at the drain boundary.
-		case change.Previous:
+		case isPrevious:
 			if change.Status != StatusCommitting && change.Status != StatusDraining && change.Status != StatusRestarting {
 				return s.InspectWithState(cfg, state), false, nil
 			}
@@ -922,6 +1070,7 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 			// and replacing config.yaml. This process owns the gateway lock before
 			// ReconcileStartup is called, so completing the transaction is safe.
 			ApplySnapshot(cfg, change.Candidate)
+			ApplyProviderChanges(cfg, change.ProviderChanges, true)
 			if err := config.SaveConfig(s.ConfigPath, cfg); err != nil {
 				change.Failure = "complete candidate config after restart: " + err.Error()
 				change.FailureClass = FailureInfrastructure
@@ -938,8 +1087,20 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 			}
 			change = nil
 		}
+		if change != nil && (change.Status == StatusCommitting || change.Status == StatusDraining || change.Status == StatusRestarting || change.Status == StatusStarting) {
+			if err := s.commitCredentialStage(change.CredentialStage); err != nil {
+				change.Failure = "commit staged provider credentials during startup recovery: " + err.Error()
+				change.FailureClass = FailureInfrastructure
+				s.transition(change, StatusRecoveryRequired, s.now())
+				state.Generation++
+				_ = s.save(state)
+				return s.InspectWithState(cfg, state), false, fmt.Errorf("%w: %v", ErrRecoveryRequired, err)
+			}
+		}
 	}
-	if change == nil && configured == state.Running && !state.RunningVerifiedAt.IsZero() {
+	providerFingerprint := providerConfigFingerprint(cfg)
+	providerConfigMatches := providerFingerprint == state.RunningProviderFingerprint
+	if change == nil && configured == state.Running && providerConfigMatches && !state.RunningVerifiedAt.IsZero() {
 		return s.InspectWithState(cfg, state), false, nil
 	}
 	if change == nil {
@@ -952,6 +1113,9 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 			// must validate every effective route before /health may establish
 			// Model Readiness.
 			source = "initial-startup"
+			changedRoutes = append([]Route{RoutePrimary, RouteAuxiliary}, ManagedRoleRoutes()...)
+		} else if !providerConfigMatches {
+			source = "manual-provider-config"
 			changedRoutes = append([]Route{RoutePrimary, RouteAuxiliary}, ManagedRoleRoutes()...)
 		}
 		manual := Change{
@@ -987,16 +1151,27 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 	if err := s.save(state); err != nil {
 		return Status{}, false, err
 	}
-	candidateCfg, err := configWithSnapshot(s.ConfigPath, change.Candidate)
+	candidateCfg, err := configWithChange(s.ConfigPath, change.Candidate, change.ProviderChanges, true)
 	if err != nil {
+		return Status{}, false, err
+	}
+	if err := s.overlayCredentialStage(change.CredentialStage, candidateCfg); err != nil {
 		return Status{}, false, err
 	}
 	probes := s.validate(ctx, candidateCfg, change.ChangedRoutes)
 	if failureClass, probeErr := failedProbes(probes); probeErr != nil {
-		if state.RunningVerifiedAt.IsZero() && change.Source == "initial-startup" {
+		if (state.RunningVerifiedAt.IsZero() && change.Source == "initial-startup") || change.Source == "manual-provider-config" {
 			// With no known-good baseline there is nothing safe to roll back to.
 			// Preserve the failed evidence, keep readiness false, and allow the
 			// daemon's mock provider to serve the sole Model Manager repair UI.
+			if routeProbePassed(probes, RoutePrimary) {
+				state.Running.Primary = change.Candidate.Primary
+				state.ForegroundVerifiedAt = s.now()
+				state.RunningVerifiedAt = state.ForegroundVerifiedAt
+				state.RunningProviderFingerprint = providerConfigFingerprint(candidateCfg)
+				state.BackgroundVerifiedAt = time.Time{}
+			}
+			recordRouteProbeEvidence(&state, probes, s.now())
 			s.finishPendingClass(&state, StatusFailed, failureClass, probeErr.Error(), probes)
 			if err := s.save(state); err != nil {
 				return Status{}, false, err
@@ -1048,14 +1223,26 @@ func (s *Service) MarkStartupHealthy() (Status, error) {
 		}
 		return s.InspectWithState(cfg, state), nil
 	}
-	if SnapshotFromConfig(cfg) != state.Pending.Candidate {
+	if SnapshotFromConfig(cfg) != state.Pending.Candidate || !ProviderChangesMatch(cfg, state.Pending.ProviderChanges, true) {
 		return Status{}, fmt.Errorf("%w: startup config no longer matches candidate %s", ErrGenerationConflict, state.Pending.ID)
+	}
+	if err := s.finalizeCredentialStage(state.Pending.CredentialStage); err != nil {
+		return Status{}, fmt.Errorf("finalize provider credentials: %w", err)
 	}
 	finished := *state.Pending
 	s.transition(&finished, StatusApplied, s.now())
 	finished.FinishedAt = s.now()
 	state.Running = finished.Candidate
-	state.RunningVerifiedAt = s.now()
+	state.RunningProviderFingerprint = providerConfigFingerprint(cfg)
+	state.ForegroundVerifiedAt = s.now()
+	if auxiliaryEnabled(finished.Candidate) {
+		state.BackgroundVerifiedAt = s.now()
+		markBackgroundRoutesReady(&state, state.BackgroundVerifiedAt)
+	} else {
+		state.BackgroundVerifiedAt = time.Time{}
+		state.RouteReadiness = nil
+	}
+	state.RunningVerifiedAt = state.ForegroundVerifiedAt
 	state.Pending = nil
 	state.History = appendBounded(state.History, finished, s.historyMax())
 	state.Generation++
@@ -1063,6 +1250,89 @@ func (s *Service) MarkStartupHealthy() (Status, error) {
 		return Status{}, err
 	}
 	return s.InspectWithState(cfg, state), nil
+}
+
+// RecordRouteProbe persists one runtime health transition without opening a
+// model-change transaction. It is used by bounded role recovery monitors; it
+// never rewrites routing or credentials.
+func (s *Service) RecordRouteProbe(result ProbeResult) (Status, error) {
+	if result.Route == RoutePrimary || (result.Route != RouteAuxiliary && !IsManagedRoleRoute(result.Route)) {
+		return Status{}, fmt.Errorf("unsupported background route %q", result.Route)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockState()
+	if err != nil {
+		return Status{}, err
+	}
+	defer unlock()
+	cfg, err := config.LoadConfig(config.Options{Path: s.ConfigPath})
+	if err != nil {
+		return Status{}, err
+	}
+	state, err := s.loadOrInitialize(cfg)
+	if err != nil {
+		return Status{}, err
+	}
+	if SnapshotFromConfig(cfg) != state.Running || providerConfigFingerprint(cfg) != state.RunningProviderFingerprint {
+		return s.InspectWithState(cfg, state), fmt.Errorf("model route changed before runtime probe evidence could be recorded")
+	}
+	recordRouteProbeEvidence(&state, []ProbeResult{result}, s.now())
+	if allBackgroundEvidenceReady(state) {
+		state.BackgroundVerifiedAt = s.now()
+	} else {
+		state.BackgroundVerifiedAt = time.Time{}
+	}
+	state.Generation++
+	if err := s.save(state); err != nil {
+		return Status{}, err
+	}
+	return s.InspectWithState(cfg, state), nil
+}
+
+func recordRouteProbeEvidence(state *State, probes []ProbeResult, now time.Time) {
+	if state == nil {
+		return
+	}
+	if state.RouteReadiness == nil {
+		state.RouteReadiness = make(map[Route]RouteReadiness)
+	}
+	for _, probe := range probes {
+		if probe.Route == RoutePrimary || (probe.Route != RouteAuxiliary && !IsManagedRoleRoute(probe.Route)) {
+			continue
+		}
+		evidence := RouteReadiness{Ready: probe.OK, FailureClass: probe.FailureClass}
+		if probe.OK {
+			evidence.VerifiedAt = now.UTC()
+		} else {
+			evidence.Reason = strings.TrimSpace(probe.Error)
+			if evidence.Reason == "" {
+				evidence.Reason = "route probe failed"
+			}
+		}
+		state.RouteReadiness[probe.Route] = evidence
+	}
+}
+
+func markBackgroundRoutesReady(state *State, verifiedAt time.Time) {
+	if state == nil {
+		return
+	}
+	if state.RouteReadiness == nil {
+		state.RouteReadiness = make(map[Route]RouteReadiness)
+	}
+	for _, route := range backgroundRoutes() {
+		state.RouteReadiness[route] = RouteReadiness{Ready: true, VerifiedAt: verifiedAt.UTC()}
+	}
+}
+
+func allBackgroundEvidenceReady(state State) bool {
+	for _, route := range backgroundRoutes() {
+		if evidence, ok := state.RouteReadiness[route]; !ok || !evidence.Ready {
+			return false
+		}
+	}
+	return true
 }
 
 // AcceptMigrationReadiness records narrowly scoped migration evidence from a
@@ -1089,6 +1359,12 @@ func (s *Service) AcceptMigrationReadiness() (Status, error) {
 	}
 	if state.RunningVerifiedAt.IsZero() {
 		state.RunningVerifiedAt = s.now()
+		state.RunningProviderFingerprint = providerConfigFingerprint(cfg)
+		state.ForegroundVerifiedAt = state.RunningVerifiedAt
+		if auxiliaryEnabled(state.Running) {
+			state.BackgroundVerifiedAt = state.RunningVerifiedAt
+			markBackgroundRoutesReady(&state, state.BackgroundVerifiedAt)
+		}
 		state.Generation++
 		if err := s.save(state); err != nil {
 			return Status{}, err
@@ -1133,8 +1409,20 @@ func (s *Service) FailStarting(cause error) (Status, bool, error) {
 
 func (s *Service) rollbackStartup(cfg *config.Config, state State, change Change, probes []ProbeResult, cause error) (Status, bool, error) {
 	ApplySnapshot(cfg, change.Previous)
+	ApplyProviderChanges(cfg, change.ProviderChanges, false)
 	if err := config.SaveConfig(s.ConfigPath, cfg); err != nil {
 		return Status{}, false, fmt.Errorf("model startup validation failed (%v), then rollback write failed: %w", cause, err)
+	}
+	if err := s.rollbackCredentialStage(change.CredentialStage); err != nil {
+		change.Failure = fmt.Sprintf("model startup validation failed (%v), then credential rollback failed: %v", cause, err)
+		change.FailureClass = FailureInfrastructure
+		s.transition(&change, StatusRecoveryRequired, s.now())
+		state.Pending = &change
+		state.Generation++
+		if saveErr := s.save(state); saveErr != nil {
+			return Status{}, false, saveErr
+		}
+		return s.InspectWithState(cfg, state), false, fmt.Errorf("%w: %s", ErrRecoveryRequired, change.Failure)
 	}
 	s.transition(&change, StatusRolledBack, s.now())
 	change.Failure = cause.Error()
@@ -1154,7 +1442,8 @@ func (s *Service) InspectWithState(cfg *config.Config, state State) Status {
 	return Status{
 		Generation: state.Generation, Running: state.Running, RunningVerifiedAt: state.RunningVerifiedAt,
 		Configured: logicalConfigured(cfg, state.Pending), Pending: cloneChange(state.Pending),
-		History: append([]Change(nil), state.History...),
+		History:   append([]Change(nil), state.History...),
+		Readiness: readinessFor(cfg, state),
 	}
 }
 
@@ -1171,6 +1460,61 @@ func (s *Service) validate(ctx context.Context, cfg *config.Config, routes []Rou
 	return s.Validate(ctx, cfg, append([]Route(nil), routes...))
 }
 
+func (s *Service) overlayCredentialStage(stageID string, cfg *config.Config) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	if s.Credentials == nil {
+		return fmt.Errorf("provider credential transaction support is unavailable")
+	}
+	return s.Credentials.OverlayStage(stageID, cfg)
+}
+
+func (s *Service) commitCredentialStage(stageID string) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	if s.Credentials == nil {
+		return fmt.Errorf("provider credential transaction support is unavailable")
+	}
+	return s.Credentials.CommitStage(stageID)
+}
+
+func (s *Service) rollbackCredentialStage(stageID string) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	if s.Credentials == nil {
+		return fmt.Errorf("provider credential transaction support is unavailable")
+	}
+	return s.Credentials.RollbackStage(stageID)
+}
+
+func (s *Service) discardCredentialStage(stageID string) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	if s.Credentials == nil {
+		return fmt.Errorf("provider credential transaction support is unavailable")
+	}
+	return s.Credentials.DiscardStage(stageID)
+}
+
+func (s *Service) finalizeCredentialStage(stageID string) error {
+	stageID = strings.TrimSpace(stageID)
+	if stageID == "" {
+		return nil
+	}
+	if s.Credentials == nil {
+		return fmt.Errorf("provider credential transaction support is unavailable")
+	}
+	return s.Credentials.FinalizeStage(stageID)
+}
+
 func (s *Service) cancelPending(cfg *config.Config, state *State, status ChangeStatus, reason string) error {
 	if state == nil || state.Pending == nil {
 		return fmt.Errorf("there is no pending model change")
@@ -1179,11 +1523,15 @@ func (s *Service) cancelPending(cfg *config.Config, state *State, status ChangeS
 	if pending.Status != StatusAwaitingConfirmation && pending.Status != StatusValidating && pending.Status != StatusAwaitingSafeBoundary {
 		return fmt.Errorf("model change %s is %s and can no longer be cancelled or replaced", pending.ID, pending.Status)
 	}
-	if SnapshotFromConfig(cfg) == pending.Candidate {
+	if SnapshotFromConfig(cfg) == pending.Candidate && ProviderChangesMatch(cfg, pending.ProviderChanges, true) {
 		ApplySnapshot(cfg, pending.Previous)
+		ApplyProviderChanges(cfg, pending.ProviderChanges, false)
 		if err := config.SaveConfig(s.ConfigPath, cfg); err != nil {
 			return err
 		}
+	}
+	if err := s.rollbackCredentialStage(pending.CredentialStage); err != nil {
+		return fmt.Errorf("cancel provider credential stage: %w", err)
 	}
 	s.transition(&pending, status, s.now())
 	pending.Failure = strings.TrimSpace(reason)
@@ -1200,6 +1548,13 @@ func (s *Service) finishPending(state *State, status ChangeStatus, failure strin
 
 func (s *Service) finishPendingClass(state *State, status ChangeStatus, class FailureClass, failure string, probes []ProbeResult) {
 	if state == nil || state.Pending == nil {
+		return
+	}
+	if err := s.rollbackCredentialStage(state.Pending.CredentialStage); err != nil {
+		state.Pending.Failure = "restore provider credentials: " + err.Error()
+		state.Pending.FailureClass = FailureInfrastructure
+		s.transition(state.Pending, StatusRecoveryRequired, s.now())
+		state.Generation++
 		return
 	}
 	finished := *state.Pending
@@ -1224,9 +1579,12 @@ func (s *Service) expireConfirmation(state *State) bool {
 func (s *Service) loadOrInitialize(cfg *config.Config) (State, error) {
 	state, err := s.load()
 	if err == nil {
-		if state.SchemaVersion == 1 || state.SchemaVersion == 2 {
+		if state.SchemaVersion >= 1 && state.SchemaVersion < stateSchemaVersion {
 			originalVersion := state.SchemaVersion
 			migrated := migrateState(state)
+			if migrated.RunningProviderFingerprint == "" && (!migrated.RunningVerifiedAt.IsZero() || !migrated.ForegroundVerifiedAt.IsZero()) {
+				migrated.RunningProviderFingerprint = providerConfigFingerprint(cfg)
+			}
 			if backupErr := s.backupSchema(originalVersion); backupErr != nil {
 				return State{}, backupErr
 			}
@@ -1237,6 +1595,12 @@ func (s *Service) loadOrInitialize(cfg *config.Config) (State, error) {
 		}
 		if state.SchemaVersion != stateSchemaVersion {
 			return State{}, fmt.Errorf("unsupported model state schema %d", state.SchemaVersion)
+		}
+		if state.RunningProviderFingerprint == "" && (!state.RunningVerifiedAt.IsZero() || !state.ForegroundVerifiedAt.IsZero()) {
+			state.RunningProviderFingerprint = providerConfigFingerprint(cfg)
+			if saveErr := s.save(state); saveErr != nil {
+				return State{}, saveErr
+			}
 		}
 		return state, nil
 	}
@@ -1259,6 +1623,15 @@ func (s *Service) load() (State, error) {
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
 		return State{}, fmt.Errorf("decode model state: %w", err)
+	}
+	state.Running = normalizeSnapshot(state.Running)
+	if state.Pending != nil {
+		state.Pending.Previous = normalizeSnapshot(state.Pending.Previous)
+		state.Pending.Candidate = normalizeSnapshot(state.Pending.Candidate)
+	}
+	for index := range state.History {
+		state.History[index].Previous = normalizeSnapshot(state.History[index].Previous)
+		state.History[index].Candidate = normalizeSnapshot(state.History[index].Candidate)
 	}
 	return state, nil
 }
@@ -1337,16 +1710,60 @@ func (s *Service) historyMax() int {
 }
 
 func configWithSnapshot(path string, snapshot Snapshot) (*config.Config, error) {
+	return configWithChange(path, snapshot, nil, true)
+}
+
+func configWithChange(path string, snapshot Snapshot, providers []ProviderChange, candidate bool) (*config.Config, error) {
 	cfg, err := config.LoadConfig(config.Options{Path: path})
 	if err != nil {
 		return nil, err
 	}
 	ApplySnapshot(cfg, snapshot)
+	ApplyProviderChanges(cfg, providers, candidate)
 	return cfg, nil
+}
+
+func mergeRoutes(existing []Route, additions []Route) []Route {
+	seen := make(map[Route]struct{}, len(existing)+len(additions))
+	result := make([]Route, 0, len(existing)+len(additions))
+	for _, route := range append(append([]Route(nil), existing...), additions...) {
+		if _, ok := seen[route]; ok {
+			continue
+		}
+		seen[route] = struct{}{}
+		result = append(result, route)
+	}
+	return result
+}
+
+func routesUsingProvider(snapshot Snapshot, provider string) []Route {
+	provider = normalizeProviderConnectionID(provider)
+	if provider == "" {
+		return nil
+	}
+	routes := []Route{RoutePrimary, RouteAuxiliary}
+	routes = append(routes, ManagedRoleRoutes()...)
+	result := make([]Route, 0, len(routes))
+	for _, route := range routes {
+		if route != RoutePrimary && !auxiliaryEnabled(snapshot) {
+			continue
+		}
+		selection := selectionForRoute(snapshot, route)
+		if IsManagedRoleRoute(route) && strings.TrimSpace(selection.Provider) == "" {
+			selection = snapshot.Auxiliary
+		}
+		if normalizeProviderConnectionID(selection.Provider) == provider {
+			result = append(result, route)
+		}
+	}
+	return result
 }
 
 func validateSnapshot(snapshot Snapshot, changed []Route) error {
 	for _, route := range changed {
+		if route != RoutePrimary && !auxiliaryEnabled(snapshot) {
+			continue
+		}
 		selection := selectionForRoute(snapshot, route)
 		if strings.TrimSpace(selection.Provider) == "" || strings.TrimSpace(selection.Model) == "" {
 			if IsManagedRoleRoute(route) && selection == (config.ModelSelectionConfig{}) {
@@ -1386,6 +1803,142 @@ func failedProbes(results []ProbeResult) (FailureClass, error) {
 	return "", nil
 }
 
+func routeProbePassed(results []ProbeResult, route Route) bool {
+	for _, result := range results {
+		if result.Route == route {
+			return result.OK
+		}
+	}
+	return false
+}
+
+func readinessFor(cfg *config.Config, state State) Readiness {
+	configured := normalizeSnapshot(logicalConfigured(cfg, state.Pending))
+	running := normalizeSnapshot(state.Running)
+	providerConfigMatches := providerConfigFingerprint(cfg) == state.RunningProviderFingerprint
+	foregroundVerifiedAt := state.ForegroundVerifiedAt
+	if foregroundVerifiedAt.IsZero() {
+		foregroundVerifiedAt = state.RunningVerifiedAt
+	}
+	readiness := Readiness{BackgroundEnabled: auxiliaryEnabled(configured), Routes: make(map[Route]RouteReadiness)}
+	readiness.Foreground = !foregroundVerifiedAt.IsZero() && configured.Primary == running.Primary && providerConfigMatches
+	if pendingChangesRoute(state.Pending, RoutePrimary) {
+		readiness.Foreground = false
+		readiness.ForegroundReason = "a main model change is pending"
+	}
+	if !readiness.Foreground {
+		if readiness.ForegroundReason != "" {
+			// Preserve the more actionable pending-transaction reason.
+		} else if foregroundVerifiedAt.IsZero() {
+			readiness.ForegroundReason = "main model has not crossed a verified startup boundary"
+		} else if !providerConfigMatches {
+			readiness.ForegroundReason = "provider connections differ from the verified running configuration"
+		} else {
+			readiness.ForegroundReason = "configured main model differs from the verified running model"
+		}
+	}
+	if !readiness.BackgroundEnabled {
+		readiness.Background = false
+		if pendingChangesBackground(state.Pending) {
+			readiness.BackgroundReason = "a background model change is pending"
+		}
+		return readiness
+	}
+	readiness.Background = true
+	for _, route := range backgroundRoutes() {
+		routeState := routeReadinessFor(configured, running, state, route, providerConfigMatches)
+		readiness.Routes[route] = routeState
+		if routeState.Ready {
+			continue
+		}
+		readiness.Background = false
+		if readiness.BackgroundReason == "" {
+			reason := strings.TrimSpace(routeState.Reason)
+			if reason == "" {
+				reason = "not ready"
+			}
+			readiness.BackgroundReason = string(route) + ": " + reason
+		}
+	}
+	readiness.Degraded = readiness.Foreground && !readiness.Background
+	return readiness
+}
+
+func backgroundRoutes() []Route {
+	return append([]Route{RouteAuxiliary}, ManagedRoleRoutes()...)
+}
+
+func routeReadinessFor(configured, running Snapshot, state State, route Route, providerConfigMatches bool) RouteReadiness {
+	evidence, ok := state.RouteReadiness[route]
+	if !ok {
+		verifiedAt := state.BackgroundVerifiedAt
+		if verifiedAt.IsZero() && state.ForegroundVerifiedAt.IsZero() {
+			verifiedAt = state.RunningVerifiedAt
+		}
+		if !verifiedAt.IsZero() {
+			evidence = RouteReadiness{Ready: true, VerifiedAt: verifiedAt}
+		}
+	}
+	if pendingChangesRoute(state.Pending, route) ||
+		(route != RouteAuxiliary && pendingChangesRoute(state.Pending, RouteAuxiliary)) {
+		evidence.Ready = false
+		evidence.Reason = "a background model change is pending"
+		return evidence
+	}
+	if !providerConfigMatches {
+		evidence.Ready = false
+		evidence.Reason = "provider connections differ from the verified running configuration"
+		return evidence
+	}
+	if selectionForRoute(configured, route) != selectionForRoute(running, route) {
+		evidence.Ready = false
+		evidence.Reason = "configured route differs from the verified running route"
+		return evidence
+	}
+	if !evidence.Ready && strings.TrimSpace(evidence.Reason) == "" {
+		evidence.Reason = "route has not crossed a verified startup boundary"
+	}
+	return evidence
+}
+
+func pendingChangesRoute(change *Change, route Route) bool {
+	if change == nil {
+		return false
+	}
+	for _, changed := range change.ChangedRoutes {
+		if changed == route {
+			return true
+		}
+	}
+	return false
+}
+
+func pendingChangesBackground(change *Change) bool {
+	if change == nil {
+		return false
+	}
+	for _, route := range change.ChangedRoutes {
+		if route != RoutePrimary {
+			return true
+		}
+	}
+	return false
+}
+
+func backgroundSelectionsEqual(left, right Snapshot) bool {
+	left = normalizeSnapshot(left)
+	right = normalizeSnapshot(right)
+	if left.Auxiliary != right.Auxiliary {
+		return false
+	}
+	for _, route := range ManagedRoleRoutes() {
+		if selectionForRoute(left, route) != selectionForRoute(right, route) {
+			return false
+		}
+	}
+	return true
+}
+
 func normalizeSnapshot(snapshot Snapshot) Snapshot {
 	normalize := func(selection config.ModelSelectionConfig) config.ModelSelectionConfig {
 		selection.Provider = strings.TrimSpace(selection.Provider)
@@ -1395,11 +1948,26 @@ func normalizeSnapshot(snapshot Snapshot) Snapshot {
 		return selection
 	}
 	snapshot.Primary = normalize(snapshot.Primary)
+	snapshot.Primary.Enabled = nil
 	snapshot.Auxiliary = normalize(snapshot.Auxiliary)
+	if snapshot.Auxiliary.Enabled != nil {
+		if *snapshot.Auxiliary.Enabled {
+			snapshot.Auxiliary.Enabled = nil
+		} else {
+			snapshot.Auxiliary.Enabled = &disabledAuxiliary
+		}
+	}
 	for _, route := range ManagedRoleRoutes() {
-		setSelectionForRoute(&snapshot, route, normalize(selectionForRoute(snapshot, route)))
+		selection := normalize(selectionForRoute(snapshot, route))
+		selection.Enabled = nil
+		setSelectionForRoute(&snapshot, route, selection)
 	}
 	return snapshot
+}
+
+func auxiliaryEnabled(snapshot Snapshot) bool {
+	snapshot = normalizeSnapshot(snapshot)
+	return snapshot.Auxiliary.Enabled == nil || *snapshot.Auxiliary.Enabled
 }
 
 // ManagedRoleRoutes returns the stable background roles exposed by the model
@@ -1610,6 +2178,17 @@ func migrateState(state State) State {
 			}
 		}
 	}
+	if !state.RunningVerifiedAt.IsZero() {
+		if state.ForegroundVerifiedAt.IsZero() {
+			state.ForegroundVerifiedAt = state.RunningVerifiedAt
+		}
+		if state.BackgroundVerifiedAt.IsZero() && auxiliaryEnabled(state.Running) {
+			state.BackgroundVerifiedAt = state.RunningVerifiedAt
+		}
+		if auxiliaryEnabled(state.Running) && len(state.RouteReadiness) == 0 {
+			markBackgroundRoutesReady(&state, state.BackgroundVerifiedAt)
+		}
+	}
 	return state
 }
 
@@ -1674,7 +2253,21 @@ func cloneChange(change *Change) *Change {
 	copy.ChangedRoutes = append([]Route(nil), change.ChangedRoutes...)
 	copy.Probes = append([]ProbeResult(nil), change.Probes...)
 	copy.Transitions = append([]Transition(nil), change.Transitions...)
+	copy.ProviderChanges = make([]ProviderChange, len(change.ProviderChanges))
+	for i, providerChange := range change.ProviderChanges {
+		providerChange.Previous = cloneProviderConnection(providerChange.Previous)
+		providerChange.Candidate = cloneProviderConnection(providerChange.Candidate)
+		copy.ProviderChanges[i] = providerChange
+	}
 	return &copy
+}
+
+func cloneProviderConnection(connection ProviderConnection) ProviderConnection {
+	connection.ExtraHeaders = cloneStringMap(connection.ExtraHeaders)
+	connection.ExtraBody = cloneAnyMap(connection.ExtraBody)
+	connection.ExtraQuery = cloneAnyMap(connection.ExtraQuery)
+	connection.Thinking = cloneAnyMap(connection.Thinking)
+	return connection
 }
 
 func newChangeID() string {

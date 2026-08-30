@@ -29,6 +29,7 @@ type ResponsesAdapter struct {
 	Headers         map[string]string // extra request headers (e.g. chatgpt-account-id)
 	ExtraBody       map[string]interface{}
 	ExtraQuery      map[string]interface{}
+	Quirks          ProviderQuirks
 	mu              sync.RWMutex
 	toolNameAlias   map[string]string
 }
@@ -586,7 +587,7 @@ func (a *ResponsesAdapter) apiKey() string {
 }
 
 func (a *ResponsesAdapter) setHeaders(req *http.Request, key string) {
-	req.Header.Set("Authorization", "Bearer "+key)
+	setConfiguredAPIKeyHeader(req, key, a.Quirks.AuthHeader)
 	req.Header.Set("Content-Type", "application/json")
 	// Provider-profile headers (including Codex compatibility headers and
 	// chatgpt-account-id) are resolved before transport construction. The

@@ -293,6 +293,10 @@ gateway:
 | `GET` | `/v1/tasks/events` | 查看当前任务或指定 task 的最近事件 |
 
 停机时 gateway 会进入 draining 状态，拒绝新 run，等待 active run 完成；CLI 可在需要时 force stop。
+shutdown endpoint 会先完整写出并 flush 接受响应，再允许 runtime owner 关闭
+HTTP server。为了兼容升级前的旧 Gateway，CLI 只有在请求已完整发出，并且本地
+runtime receipt 能证明原 owner 已消失或被替换时，才会把丢失响应视为成功；如果
+原 owner 仍存在，EOF 依然是错误。
 
 ## 身份、任务、Workspace
 

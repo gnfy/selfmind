@@ -32,7 +32,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/clear", Usage: "/clear", Description: "Clear conversation history", Hint: "clear this conversation view"},
 	{Name: "/exit", Usage: "/exit", Description: "Exit SelfMind", Hint: "leave SelfMind"},
 	{Name: "/compact", Usage: "/compact", Description: "Compact older conversation history to free context", Hint: "summarize and shrink the transcript"},
-	{Name: "/paste-image", Usage: "/paste-image", Description: "Attach a screenshot from the clipboard (local GUI only, not over SSH)", Hint: "attach a clipboard screenshot"},
+	{Name: "/paste-image", Usage: "/paste-image", Description: "Attach a local clipboard image; Ctrl+V is the shortcut (not available over SSH)", Hint: "attach a clipboard image (Ctrl+V shortcut)"},
 	{Name: "/mode", Usage: "/mode [on-request|read-only|auto-edit|full-auto|smart]", Description: "Show or set the approval mode", Hint: "choose what runs without asking"},
 	{Name: "/capture", Usage: "/capture [title]", Description: "Save the last turn as a replayable eval case", Hint: "turn this turn into a regression test"},
 	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},

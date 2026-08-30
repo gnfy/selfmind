@@ -645,6 +645,7 @@ func TestMaintenanceRouteKeyIgnoresRequestTuningButSeparatesCredentials(t *testi
 
 func TestConfiguredMaintenanceRouteIDsUseStableSemanticRoles(t *testing.T) {
 	cfg := &config.Config{
+		Auth:  config.AuthConfig{CredentialsFile: filepath.Join(t.TempDir(), "auth.json")},
 		Model: config.ModelConfig{Provider: "openai", Default: "gpt-main"},
 		ProviderProfiles: map[string]config.ProviderEndpoint{
 			"memory-provider": {APIKey: "memory-key", BaseURL: "https://memory.example/v1", Protocol: "openai_compatible"},

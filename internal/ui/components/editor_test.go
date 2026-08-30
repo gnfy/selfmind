@@ -6,7 +6,9 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 	"selfmind/internal/ui/common"
+	"selfmind/internal/ui/layout"
 )
 
 func TestEditorCursorPartsUseCursorOffset(t *testing.T) {
@@ -56,6 +58,118 @@ func TestEditorVisibleInputLineCountUsesLayoutWidth(t *testing.T) {
 	e.textarea.SetValue(strings.Repeat("word ", 200))
 	if got := e.visibleInputLineCount(); got != maxComposerInputLines {
 		t.Fatalf("capped count = %d, want %d", got, maxComposerInputLines)
+	}
+}
+
+func TestEditorInputRowsFollowTerminalHeight(t *testing.T) {
+	e := &Editor{textarea: textarea.New()}
+	e.textarea.SetValue(strings.Join([]string{"1", "2", "3", "4", "5", "6", "7", "8"}, "\n"))
+
+	e.SetLayout(80, 9)
+	if got := e.visibleInputLineCount(); got != 3 {
+		t.Fatalf("height 9 rows = %d, want 3", got)
+	}
+	e.SetLayout(80, 3)
+	if got := e.visibleInputLineCount(); got != 2 {
+		t.Fatalf("height 3 rows = %d, want minimum 2", got)
+	}
+	e.SetLayout(80, 60)
+	if got := e.visibleInputLineCount(); got != 6 {
+		t.Fatalf("height 60 rows = %d, want cap 6", got)
+	}
+}
+
+func TestEditorDrawUsesOpenBoundariesAndOverflowMetadata(t *testing.T) {
+	c := &common.Common{Styles: common.DefaultStyles()}
+	e := NewEditor(c, nil)
+	e.SetCursorVisible(false)
+	e.SetLayout(32, 12) // four visible input rows
+	e.SetValue(strings.Join([]string{"one", "two", "three", "four", "five", "six"}, "\n"))
+
+	rendered := e.Draw(layout.Rect{W: 32, H: e.PreferredHeight()})
+	plain := stripANSIForTest(rendered)
+	lines := strings.Split(plain, "\n")
+	if !strings.Contains(lines[0], "Lines 3–6/6") {
+		t.Fatalf("top boundary = %q, want visible row range", lines[0])
+	}
+	if lines[len(lines)-1] != strings.Repeat("─", 32) {
+		t.Fatalf("bottom boundary = %q", lines[len(lines)-1])
+	}
+	if strings.Contains(rendered, "\x1b[48;") {
+		t.Fatalf("composer painted a background: %q", rendered)
+	}
+}
+
+func TestEditorDrawShowsAdaptiveInputAndImageHints(t *testing.T) {
+	c := &common.Common{Styles: common.DefaultStyles()}
+	e := NewEditor(c, nil)
+	e.SetCursorVisible(false)
+	e.SetLayout(100, 24)
+
+	empty := stripANSIForTest(e.Draw(layout.Rect{W: 100, H: e.PreferredHeight()}))
+	if !strings.Contains(strings.Split(empty, "\n")[0], "Ctrl+J newline · Ctrl+V image") {
+		t.Fatalf("empty composer boundary missing input hints: %q", strings.Split(empty, "\n")[0])
+	}
+
+	token := e.AttachImage("/tmp/reference.png")
+	attached := stripANSIForTest(e.Draw(layout.Rect{W: 100, H: e.PreferredHeight()}))
+	if !strings.Contains(strings.Split(attached, "\n")[0], "1 image · Ctrl+J newline · Ctrl+V more") {
+		t.Fatalf("attached composer boundary missing live image state: %q", strings.Split(attached, "\n")[0])
+	}
+
+	e.SetValue(strings.Replace(e.Value(), token, "", 1))
+	removed := stripANSIForTest(e.Draw(layout.Rect{W: 100, H: e.PreferredHeight()}))
+	if strings.Contains(strings.Split(removed, "\n")[0], "1 image") || !strings.Contains(strings.Split(removed, "\n")[0], "Ctrl+V image") {
+		t.Fatalf("deleted image token left stale composer state: %q", strings.Split(removed, "\n")[0])
+	}
+}
+
+func TestEditorCtrlJInsertsNewlineWhileEnterSubmits(t *testing.T) {
+	c := &common.Common{Styles: common.DefaultStyles()}
+	e := NewEditor(c, nil)
+	e.SetValue("first line")
+
+	if result := e.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlJ}); result.Action != ComposerActionHandled {
+		t.Fatalf("Ctrl+J action = %v, want handled", result.Action)
+	}
+	if got := e.Value(); got != "first line\n" {
+		t.Fatalf("Ctrl+J value = %q, want trailing newline", got)
+	}
+	if result := e.HandleKey(tea.KeyMsg{Type: tea.KeyEnter}); result.Action != ComposerActionSubmit {
+		t.Fatalf("Enter action = %v, want submit", result.Action)
+	}
+}
+
+func TestEditorHintNeverWidensNarrowComposer(t *testing.T) {
+	c := &common.Common{Styles: common.DefaultStyles()}
+	e := NewEditor(c, nil)
+	e.SetCursorVisible(false)
+	e.AttachImage("/tmp/reference.png")
+
+	const width = 24
+	rendered := stripANSIForTest(e.Draw(layout.Rect{W: width, H: e.PreferredHeight()}))
+	for _, line := range strings.Split(rendered, "\n") {
+		if got := runewidth.StringWidth(line); got > width {
+			t.Fatalf("narrow composer line width = %d, want <= %d: %q", got, width, line)
+		}
+	}
+}
+
+func TestEditorDrawLabelsRecalledHistoryWithoutSideRails(t *testing.T) {
+	c := &common.Common{Styles: common.DefaultStyles()}
+	e := NewEditor(c, nil)
+	e.SetCursorVisible(false)
+	e.SetLayout(40, 24)
+	e.SeedHistory([]string{"first", "second"}, 1024)
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+
+	plain := stripANSIForTest(e.Draw(layout.Rect{W: 40, H: e.PreferredHeight()}))
+	lines := strings.Split(plain, "\n")
+	if !strings.Contains(lines[0], "History 2/2") {
+		t.Fatalf("history boundary = %q", lines[0])
+	}
+	if strings.HasPrefix(lines[1], "│") || strings.HasSuffix(lines[1], "│") {
+		t.Fatalf("composer body has side rails: %q", lines[1])
 	}
 }
 

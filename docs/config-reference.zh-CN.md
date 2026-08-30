@@ -11,8 +11,9 @@
 - **改完必须重启才生效。** daemon 只在启动时读一次配置。改完执行
   `selfmind gateway restart`。（常见坑：改了字段忘了重启，运行中的
   daemon 还在用旧值。）
-- **密钥**：API key 可直接写文件里，也可用 `${环境变量名}` 引用（加载时展开）。
-  多用户主机上把文件设为 `chmod 600`。
+- **密钥**：通过 Model Manager 输入 provider API key。SelfMind 会把它保存到
+  私有 auth store，而不是生成的 YAML。环境变量引用和明文 key 只为兼容旧配置
+  继续读取；运行 `selfmind config upgrade` 可迁移旧文件。
 - **时间**用 Go 时长字符串：`"300ms"`、`"30s"`、`"5m"`、`"24h"`。
 
 ---
@@ -24,59 +25,54 @@
 ```yaml
 models:
   primary:
-    provider: "codex-cli"    # provider id、custom:<名字> 或 profile id
+    provider: "codex-cli"    # 内置 provider 或 providers.custom 的 map key
     model: "gpt-5.6-sol"
     reasoning: "xhigh"       # 可选；省略或 auto 表示模型默认值
+  auxiliary:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
 
-providers:                   # 一等公民供应商
-  openai:
-    api_key: "${OPENAI_API_KEY}"
-    base_url: "https://api.openai.com/v1"
-    protocol: "openai_chat"
-  anthropic:
-    api_key: ""
-    base_url: "https://api.anthropic.com"
-    protocol: "anthropic_messages"
-  google:
-    api_key: ""
-    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    protocol: "openai_compatible"
-  custom: []                 # 一次性/本地 endpoint（Ollama、网关）
-
-provider_profiles:           # 可扩展注册表（Kimi、MiniMax、DeepSeek、OpenRouter…）
-  kimi-coding:
-    api_key: "${KIMI_API_KEY}"
-    base_url: "https://api.kimi.com/coding"
-    protocol: "anthropic_messages"
-  codex-cli:
-    base_url: "https://chatgpt.com/backend-api/codex"
-    protocol: "codex_responses"
+providers:
+  deepseek:                  # 可选：覆盖内置 provider 的 endpoint
+    base_url: "https://gateway.example.com/v1"
+  custom:
+    company-gateway:         # 此 map key 就是 provider id
+      base_url: "https://ai.example.com/v1"
+      protocol: "openai-compatible"
+      auth: "bearer"
 ```
 
-- `protocol` 取值：`openai_chat`、`openai_compatible`、`anthropic_messages`、
-  `codex_responses`，按你的 endpoint 协议选。
+- 自定义连接的 `protocol` 可用 `openai-compatible`、
+  `anthropic-compatible`、`responses-compatible`；`auth` 可用 `bearer`、
+  `x-api-key`、`none`。
 - **复用外部 CLI 登录**：Codex CLI、Claude Code、Gemini CLI、Qwen CLI 的凭据
-  可直接复用，无需 API key（这些 profile 可以不写 `api_key`）。
-- 三个一等公民之外的供应商可走 `provider_profiles`，再由
-  `models.primary.provider` 引用该 profile。
+  可直接复用，无需 API key。
+- 内置 provider 只有覆盖 endpoint 或非密钥 wire 参数时才需要 YAML 块。用户
+  自定义连接只放在 `providers.custom.<id>`，模型路由直接引用 `<id>`。
 - provider 配置只管理连接和认证；模型选择统一写在 `models.primary`。
   endpoint 中旧的 `model` 字段仅为兼容历史配置继续读取。
+- Model Manager 输入的凭据存放在 `auth.credentials_file`。包含凭据的
+  `extra_headers`、`extra_body`、`extra_query` 会被拒绝。
+- `provider_profiles` 和带 `custom:` 前缀的 provider id 只作为兼容读入。
+  `selfmind config upgrade` 会先备份再重写。
 
 ### 通用 Provider 请求扩展
 
 SelfMind 采用与 OpenAI Python SDK 一致的三个名称：`extra_headers`、
-`extra_body`、`extra_query`。Provider 通用参数放在
-`provider_profiles.<id>`；只有某个后台角色需要不同参数时，才放在
+`extra_body`、`extra_query`。内置 provider 的通用参数放在
+`providers.<id>`，自定义连接放在 `providers.custom.<id>`；只有某个后台角色
+需要不同参数时，才放在
 `models.roles.<role>`。它们统一适用于 OpenAI Chat/Compatible、Anthropic
 Messages 和 Responses 协议。可对照
 [OpenAI Python 请求扩展说明](https://github.com/openai/openai-python#undocumented-request-params)
 与 [DeepSeek 用户隔离说明](https://api-docs.deepseek.com/zh-cn/quick_start/rate_limit)。
 
 ```yaml
-provider_profiles:
+providers:
   deepseek:
     extra_headers:
-      X-Org-Proxy-Token: "${ORG_PROXY_TOKEN}"
+      X-Client-Name: "SelfMind"
     extra_body:
       user_id: "selfmind-workstation-01"
     extra_query:
@@ -88,7 +84,8 @@ provider_profiles:
   DeepSeek 匿名 `user_id`；不配置则继续使用匿名派生值。
 - `extra_query` 保留 URL 原有查询参数，只覆盖自己声明的键；列表会编码为同名
   多值参数。
-- 三个映射中的字符串都支持 `${ENV_VAR}` 展开。
+- 三个映射中的字符串都支持 `${ENV_VAR}` 展开，但密钥和凭据形态的 key 必须走
+  私有 auth store。
 - DeepSeek 将 `user_id` 定义为同一账号下用于调度与隔离的标识，并非凭证；但仍
   建议使用稳定、无业务含义的值，不要写姓名、邮箱、手机号、提示词等隐私信息。
 - `selfmind model` 会显示有效路由；每完成一个选择都会自动执行有界探测，且不会
@@ -99,15 +96,19 @@ provider_profiles:
 有类型的传输兼容规则放在 `quirks`，任意厂商请求参数放在 `extra_*`：
 
 ```yaml
-provider_profiles:
-  example-anthropic:
-    quirks:
-      auth_header: bearer
-      tool_schema: anthropic
-      thinking_mode: anthropic
-      user_identity_field: auto
-      http_version: auto
-      prompt_cache: false       # 显式 false 可以覆盖内置 true
+providers:
+  custom:
+    example-anthropic:
+      base_url: "https://anthropic.example.com"
+      protocol: "anthropic-compatible"
+      auth: "x-api-key"
+      quirks:
+        auth_header: x-api-key
+        tool_schema: anthropic
+        thinking_mode: anthropic
+        user_identity_field: auto
+        http_version: auto
+        prompt_cache: false       # 显式 false 可以覆盖内置 true
 ```
 
 布尔 quirk 省略时继承内置 profile；只有 endpoint 契约不同时才显式写 `true` 或
@@ -117,7 +118,8 @@ Model Manager 会自动校验最终契约，并把警告保留在草稿中。
 
 ## 2. 模型路由
 
-后台任务用比主对话更便宜/更快的模型，让重的记忆/技能工作不占用你的主配额。
+后台任务使用一个明确的共享路由；它可以与 Main 指向同一物理模型，也可以选择
+更便宜/更快的模型处理有界维护工作。
 
 ```yaml
 models:
@@ -450,6 +452,12 @@ agent:
 editor:
   large_paste_chars: 1000       # TUI 大段粘贴识别
   large_paste_lines: 10
+tui:
+  theme: "auto"                 # auto | dark | light | mono
+history:
+  persistence: "save-all"      # save-all | none
+  max_bytes: 524288
+  load_entries: 200
 evolution:
   enabled: true                 # 技能审查 + 确定性工作流画像
   mode: "observe"               # observe | shadow | auto-readonly（旧模式也只观测）
@@ -464,6 +472,12 @@ evolution:
 工具预算对所有语言和任务类型统一生效，不使用关键词分类；只有持续产生
 新证据才会扩展，简单回答也不会因此被强制调用工具。默认值已按常规使用
 调好；只在排查传输抖动或调工具循环时才动。
+
+TUI 不会绘制全屏背景。`auto` 跟随终端能力，`dark` / `light` 选择固定对比度，
+`mono` 去掉颜色但保留结构和强调。`Enter` 提交，`Ctrl+J` 插入可靠换行，
+`Ctrl+V` 从 GUI 剪贴板附加图片；删除完整 `[Image #N · name]` token 就会移除
+附件。输入历史按用户隔离；`history.persistence: none` 只关闭磁盘写入，不影响
+当前会话内回调。
 
 `approval_triage_timeout` 与主模型的传输超时相互独立。辅助或显式配置的
 `fast_classifier` 如果未在该预算内返回，smart 模式会安全降级为人工审批。
@@ -522,10 +536,6 @@ models:
   auxiliary:
     provider: "deepseek"
     model: "deepseek-v4-flash"
-provider_profiles:
-  codex-cli:
-    base_url: "https://chatgpt.com/backend-api/codex"
-    protocol: "codex_responses"
 web:
   search_backend: "tavily"
   api_key: "tvly-xxxx"

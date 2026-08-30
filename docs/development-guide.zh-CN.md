@@ -89,49 +89,31 @@ selfmind --config ./config/config.yaml gateway start
 SELF_CONFIG=/etc/selfmind/config.yaml selfmind gateway run
 ```
 
-SelfMind 不引入 `.env`。YAML 字段支持 `${OPENAI_API_KEY}` 这类环境变量展开。
+SelfMind 不引入 `.env`。旧 YAML 中的环境变量引用仍可读取，但通过 Model Manager
+输入的 provider 凭据会保存到私有 auth store。
 
 ### 当前 YAML Schema
 
 ```yaml
-model:
-  provider: "openai"
-  default: "gpt-4o"
-
+models:
+  primary:
+    provider: "codex-cli"
+    model: "gpt-5.6-sol"
+    reasoning: "high"
+  auxiliary:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
 providers:
-  openai:
-    api_key: "${OPENAI_API_KEY}"
-    base_url: "https://api.openai.com/v1"
-    protocol: "openai_chat"
-  anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
-    base_url: "https://api.anthropic.com"
-    protocol: "anthropic_messages"
-  google:
-    api_key: "${GOOGLE_API_KEY}"
-    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    protocol: "openai_compatible"
+  openrouter:
+    extra_headers:
+      X-Title: "SelfMind Development"
   custom:
-    - name: "ollama"
+    local-ollama:
       base_url: "http://localhost:11434/v1"
-      api_key: ""
-      protocol: "openai_compatible"
-      model: "llama3"
-      models:
-        llama3:
-          context_length: 8192
-
-provider_profiles:
-  minimax:
-    api_key: "${MINIMAX_API_KEY}"
-    base_url: "https://api.minimax.io/anthropic"
-    protocol: "anthropic_messages"
-    model: "MiniMax-M3"
-  kimi-coding:
-    api_key: "${KIMI_CODING_API_KEY}"
-    base_url: "https://api.kimi.com/coding"
-    protocol: "anthropic_messages"
-    model: "kimi-for-coding"
+      protocol: "openai-compatible"
+      auth: "none"
+      context_length: 8192
 
 auth:
   credentials_file: "~/.selfmind/auth.json"
@@ -150,31 +132,16 @@ gateway:
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 
-models:
-  source: "local"
-  roles:
-    coding_agent:
-      provider: "openai"
-      model: "gpt-4o"
-    memory_extract:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    background_review:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    skill_curator:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    semantic_recall:
-      provider: "google"
-      model: "gemini-1.5-flash"
 ```
 
 `internal/platform/config/loader.go` 的兼容规则：
 
 - 旧的 `agent.provider` / `agent.model` 会被读取并规范化到 `model.provider` / `model.default`。
 - 旧的 `providers.openai_api_key`、`providers.anthropic_api_key`、`providers.gemini_api_key` 会被读取到嵌套 provider。
-- 新保存格式不会再写旧的 flat key。
+- 旧的 `provider_profiles` 块和 `custom:<id>` 路由引用继续兼容读取；
+  `selfmind config upgrade` 会先备份再迁移。
+- 新保存格式把内置覆盖写到 `providers.<id>`，把自定义连接写到 map 形态的
+  `providers.custom.<id>`，且不会把 provider 凭据写进 YAML。
 - `LoadConfig(config.Options{Path: ...})` 支持显式路径。
 - `LoadConfig(config.Options{Path: ..., CreateIfMissing: true})` 用于可初始化配置的命令，例如 `selfmind model`。
 
@@ -194,8 +161,6 @@ selfmind model
 2. 选择供应商和模型；缺少必需 API key 时再输入。
 3. 每完成一项选择就自动验证；模型列表优先实时发现，再使用缓存或静态 fallback。
 4. 统一检查所有修改，并作为一笔 daemon 事务应用。
-4. 用户选择模型；如果列表不可用，手动输入。
-5. 写入 `config.yaml`。
 
 当前协议族：
 
@@ -209,9 +174,11 @@ selfmind model
 | Gemini CLI | OpenAI-compatible Gemini endpoint + external OAuth | `llm.GeminiAdapter` |
 | Qwen CLI | OpenAI-compatible endpoint + external OAuth | `llm.GenericOpenAIAdapter` |
 | Provider profile | OpenAI-compatible / Anthropic Messages / Responses | 由 `modelruntime.Runtime.Protocol` 选择 |
-| Custom | OpenAI-compatible endpoint | `llm.GenericOpenAIAdapter` |
+| Custom | OpenAI-compatible / Anthropic-compatible / Responses-compatible | 由 `modelruntime.Runtime.Protocol` 选择 |
 
-大多数新厂商如果提供 OpenAI-compatible 或 Anthropic-compatible API，都应该优先通过 `provider_profiles` 或新增 `ProviderProfile` 接入，不要直接在 app、CLI、IM adapter 中硬编码厂商逻辑。只有遇到真正不同的协议族时，才新增 Go adapter。
+大多数用户自定义连接都应使用 `providers.custom.<id>` 和现有协议族。需要进入
+内置目录的 provider 使用声明式 `ProviderProfile`。不要在 app、CLI、IM adapter
+中硬编码厂商逻辑；只有真正不同的协议族才新增 Go adapter。
 
 模型 runtime 边界：
 
@@ -219,9 +186,10 @@ selfmind model
 - `internal/modelruntime/resolver.go` 把 YAML、环境变量、SelfMind auth JSON、外部 CLI 登录解析成 `Runtime`。
 - `internal/modelruntime/catalog.go` 拉取并缓存模型列表，不负责创建 LLM adapter。
 - `internal/app/agent.go` 只把 `Runtime` 转成 adapter 并组装 role routing，不再写厂商级认证探测逻辑。
-- `ProviderQuirks` 负责认证头、tool schema、thinking、system message、User-Agent 等厂商差异。
+- `ProviderQuirks` 负责认证头、tool schema、thinking、prompt cache、Responses
+  flags、User-Agent 等厂商差异。
 - `internal/cliapp/model_commands.go` 管用户交互式 provider/model picker；`Custom endpoint (enter URL manually)` 保持第 4 项，兼容脚本输入。
-- P2 外部认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI，以及 SelfMind 自己管理的 OAuth provider（例如 MiniMax OAuth）。`Runtime.TokenGetter` 是每次请求前的 token 来源；`Runtime.TokenRefresher` 是 provider 返回认证失败后，协议 adapter 可以调用一次的强制刷新 hook。其它厂商走 API key、自定义 endpoint 或 `provider_profiles`，不要随意探测随机客户端的本地登录态。
+- P2 外部认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI，以及 SelfMind 自己管理的 OAuth provider（例如 MiniMax OAuth）。`Runtime.TokenGetter` 是每次请求前的 token 来源；`Runtime.TokenRefresher` 是 provider 返回认证失败后，协议 adapter 可以调用一次的强制刷新 hook。其它厂商走 API key 或 `providers.custom.<id>`，不要随意探测随机客户端的本地登录态。
 
 ### Role-Based Model Routing
 
@@ -449,7 +417,8 @@ skill_manage    -> skill mutation and hot reload
 先判断是否真的需要改代码：
 
 - 一次性 OpenAI-compatible 厂商：使用 `selfmind model` 自定义 endpoint。
-- 可复用且只有 base URL、协议、模型名变化的厂商：优先新增或文档化 `provider_profiles.<id>` YAML 配置。
+- 可复用且只有 base URL、协议、模型名变化的用户自定义连接：优先新增或文档化
+  `providers.custom.<id>` YAML 配置。
 - 内置厂商元数据、认证环境变量、实时模型列表：更新 `internal/modelruntime/profile.go` 和 `catalog.go`。
 - 新协议族：新增 Go adapter。
 
@@ -460,7 +429,7 @@ skill_manage    -> skill mutation and hot reload
 3. provider 支持工具调用时，保留 native tool-call 行为。
 4. 在 `internal/modelruntime` 增加 runtime/profile 元数据和认证解析测试。
 5. 在 `internal/app/agent.go` 只接入协议到 adapter 的构造逻辑。
-6. 只有 `ProviderEndpoint` / `provider_profiles` 不够时，才扩展 config schema。
+6. 只有 `ProviderEndpoint` / `providers.custom.<id>` 不够时，才扩展 config schema。
 7. 添加 streaming、错误处理、native tools、认证解析、model catalog、role routing 测试。
 
 ## 新增 IM 平台

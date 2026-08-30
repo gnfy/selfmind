@@ -20,9 +20,9 @@ expect:
   status: completed
   max_tool_calls: 0
   max_duration_seconds: 300
+  require_same_task: true
 
 checks:
   no_mojibake: true
   no_empty_response: true
   no_raw_json_leak: true
-  require_same_task: true

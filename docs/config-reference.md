@@ -12,9 +12,10 @@ mirror is `docs/config-reference.zh-CN.md`.
 - **Reload requires a restart.** The daemon reads config at startup only.
   After editing, run `selfmind gateway restart`. (A common trap: editing
   a key but forgetting to restart — the running daemon keeps the old value.)
-- **Secrets**: API keys can go directly in the file, or be referenced from the
-  environment as `${ENV_VAR}` (expanded at load). Keep the file `chmod 600` on
-  shared hosts.
+- **Secrets**: enter provider API keys through the Model Manager. SelfMind keeps
+  them in its private auth store, not in generated YAML. Environment references
+  and literal keys remain readable only for compatibility; run
+  `selfmind config upgrade` to migrate an old file.
 - **Durations** are Go duration strings: `"300ms"`, `"30s"`, `"5m"`, `"24h"`.
 
 ---
@@ -26,58 +27,47 @@ The one thing you must configure: which model answers you.
 ```yaml
 models:
   primary:
-    provider: "codex-cli"    # provider id, custom:<name>, or profile id
+    provider: "codex-cli"    # built-in or providers.custom map key
     model: "gpt-5.6-sol"
     reasoning: "xhigh"       # optional; omit or use auto for the model default
+  auxiliary:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
 
-providers:                   # first-class vendors
-  openai:
-    api_key: "${OPENAI_API_KEY}"
-    base_url: "https://api.openai.com/v1"
-    protocol: "openai_chat"
-  anthropic:
-    api_key: ""
-    base_url: "https://api.anthropic.com"
-    protocol: "anthropic_messages"
-  google:
-    api_key: ""
-    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    protocol: "openai_compatible"
-  custom: []                 # one-off/local endpoints (Ollama, gateways)
-
-provider_profiles:           # extensible registry (Kimi, MiniMax, DeepSeek, OpenRouter, …)
-  kimi-coding:
-    api_key: "${KIMI_API_KEY}"
-    base_url: "https://api.kimi.com/coding"
-    protocol: "anthropic_messages"
-  codex-cli:
-    base_url: "https://chatgpt.com/backend-api/codex"
-    protocol: "codex_responses"
+providers:
+  deepseek:                  # optional override of a built-in provider
+    base_url: "https://gateway.example.com/v1"
+  custom:
+    company-gateway:         # this map key is the provider id
+      base_url: "https://ai.example.com/v1"
+      protocol: "openai-compatible"
+      auth: "bearer"
 ```
 
-- `protocol` is one of `openai_chat`, `openai_compatible`, `anthropic_messages`,
-  `codex_responses`. Pick the one your endpoint speaks.
+- A custom `protocol` is `openai-compatible`, `anthropic-compatible`, or
+  `responses-compatible`; `auth` is `bearer`, `x-api-key`, or `none`.
 - **External CLI auth reuse**: Codex CLI, Claude Code, Gemini CLI, Qwen CLI
-  credentials can be reused instead of an API key — no `api_key` needed for
-  those profiles.
-- Use `provider_profiles` for any vendor beyond the three first-class ones;
-  reference it with `models.primary.provider`.
+  credentials can be reused instead of an API key.
+- Built-in providers need no YAML block unless an endpoint or non-secret wire
+  option is being overridden. User-defined connections live only under
+  `providers.custom.<id>` and routes refer directly to `<id>`.
 - Provider blocks own connection/authentication. Model choice belongs in
   `models.primary`; endpoint-level `model` remains readable only for backward
   compatibility.
-- **`providers` vs `provider_profiles`**: `providers` holds the three
-  first-class vendor slots plus `custom` (which *creates* a new provider with
-  its own protocol/URL); `provider_profiles` *overrides* any built-in provider
-  by id (Kimi, MiniMax, OpenRouter, codex-cli, …). For `openai`, `anthropic`,
-  and `google` the `providers` slot is authoritative — a `provider_profiles`
-  entry under those three ids is ignored.
+- Credentials entered in Model Manager are stored at
+  `auth.credentials_file`. Credential-bearing `extra_headers`, `extra_body`,
+  and `extra_query` values are rejected.
+- `provider_profiles` and provider IDs prefixed with `custom:` are compatibility
+  reads only. `selfmind config upgrade` backs up and rewrites them.
 
 ### Generic provider request options
 
 SelfMind supports the same escape-hatch names used by the OpenAI Python SDK:
 `extra_headers`, `extra_body`, and `extra_query`. Put vendor-wide values under
-`provider_profiles.<id>`; use `models.roles.<role>` only when one bounded role
-needs a different value. These options work across OpenAI Chat/Compatible,
+`providers.<id>` for built-ins or `providers.custom.<id>` for custom
+connections; use `models.roles.<role>` only when one bounded role needs a
+different value. These options work across OpenAI Chat/Compatible,
 Anthropic Messages, and Responses transports. See the
 [OpenAI Python request-options documentation](https://github.com/openai/openai-python#undocumented-request-params)
 and [DeepSeek user isolation documentation](https://api-docs.deepseek.com/quick_start/rate_limit).
@@ -87,20 +77,16 @@ Headers merge in layers; each higher layer overrides lower ones key by key:
 | Layer (low → high) | Where | Typical use |
 |---|---|---|
 | protocol defaults | code (adapters) | `content-type`, auth header, `anthropic-version` |
-| `model.extra_headers` | yaml, global | org-wide custom headers on every request |
+| legacy `model.extra_headers` | yaml, global | compatibility read only |
 | built-in profile | code | vendor compatibility (e.g. kimi-coding `User-Agent`), OpenRouter app attribution |
-| `provider_profiles.<id>.extra_headers` | yaml, per provider | vendor-specific overrides |
+| `providers.<id>.extra_headers` or `providers.custom.<id>.extra_headers` | yaml, per provider | vendor-specific overrides |
 | `models.roles.<role>.extra_headers` | yaml, per role | one role diverges |
 
 ```yaml
-model:
-  extra_headers:                  # global: lowest yaml layer
-    X-Org-Proxy-Token: "..."
-
-provider_profiles:
+providers:
   deepseek:
     extra_headers:
-      X-Org-Proxy-Token: "${ORG_PROXY_TOKEN}"
+      X-Client-Name: "SelfMind"
     extra_body:
       user_id: "selfmind-workstation-01"
     extra_query:
@@ -113,7 +99,8 @@ provider_profiles:
   `user_id`. When omitted, the derived non-personal value remains the default.
 - `extra_query` preserves existing URL query values and replaces only keys it
   declares. Lists are encoded as repeated query parameters.
-- String values inside all three maps support `${ENV_VAR}` expansion.
+- String values inside all three maps support `${ENV_VAR}` expansion, but
+  secrets and credential-shaped keys must use the private auth store.
 - DeepSeek documents `user_id` as an account-scoped scheduling/isolation key,
   not a credential. Still use an opaque stable identifier and do not put a
   name, email, phone number, prompt, or other personal data in it.
@@ -134,15 +121,19 @@ Typed wire compatibility belongs under `quirks`; arbitrary vendor request
 parameters belong under `extra_*`:
 
 ```yaml
-provider_profiles:
-  example-anthropic:
-    quirks:
-      auth_header: bearer
-      tool_schema: anthropic
-      thinking_mode: anthropic
-      user_identity_field: auto
-      http_version: auto
-      prompt_cache: false       # explicit false overrides a built-in true
+providers:
+  custom:
+    example-anthropic:
+      base_url: "https://anthropic.example.com"
+      protocol: "anthropic-compatible"
+      auth: "x-api-key"
+      quirks:
+        auth_header: x-api-key
+        tool_schema: anthropic
+        thinking_mode: anthropic
+        user_identity_field: auto
+        http_version: auto
+        prompt_cache: false       # explicit false overrides a built-in true
 ```
 
 Omit a boolean quirk to inherit the built-in profile. Set it explicitly to
@@ -154,8 +145,8 @@ warnings with the draft.
 
 ## 2. Model routing
 
-Background jobs run on cheaper/faster models than your main chat, so heavy
-memory/skill work never spends your primary quota.
+Background jobs use one explicit shared route, which may be the same physical
+model as Main or a cheaper/faster model selected for bounded maintenance.
 
 ```yaml
 models:
@@ -525,6 +516,12 @@ agent:
 editor:
   large_paste_chars: 1000       # TUI large-paste detection
   large_paste_lines: 10
+tui:
+  theme: "auto"                 # auto | dark | light | mono
+history:
+  persistence: "save-all"      # save-all | none
+  max_bytes: 524288
+  load_entries: 200
 evolution:
   enabled: true                 # skill review plus deterministic workflow profiling
   mode: "observe"               # observe | shadow | auto-readonly (legacy modes observe only)
@@ -540,6 +537,14 @@ Tool budgets apply uniformly across languages and task types. Extensions still
 require new evidence; these knobs do not classify prompts or force simple
 answers to use tools. Defaults are tuned for normal use; only touch these when
 diagnosing transport flakiness or tuning the tool loop.
+
+The TUI does not paint a full-screen background. `auto` follows terminal
+capabilities; `dark` and `light` choose a contrast palette; `mono` removes
+color while retaining structure and emphasis. `Enter` submits, `Ctrl+J`
+inserts a portable newline, and `Ctrl+V` attaches a GUI-clipboard image.
+Deleting its complete `[Image #N · name]` token detaches it. Input history is
+person-local; `history.persistence: none` disables disk writes but keeps
+in-session recall.
 
 `approval_triage_timeout` is independent from the primary model transport
 timeout. If the auxiliary/explicit `fast_classifier` does not return within
@@ -579,10 +584,6 @@ models:
   auxiliary:
     provider: "deepseek"
     model: "deepseek-v4-flash"
-provider_profiles:
-  codex-cli:
-    base_url: "https://chatgpt.com/backend-api/codex"
-    protocol: "codex_responses"
 web:
   search_backend: "tavily"
   api_key: "tvly-xxxx"

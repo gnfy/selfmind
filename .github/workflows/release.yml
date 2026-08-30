@@ -28,8 +28,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref_name || inputs.tag || github.sha }}
@@ -39,6 +38,7 @@ env:
   BINARY_NAME: selfmind
   CGO_ENABLED: "0"
   GOWORK: "off"
+  SELFMIND_EVAL_OFFLINE: "1"
 
 jobs:
   metadata:
@@ -102,39 +102,52 @@ jobs:
             echo "built_at=${built_at}"
           } >> "${GITHUB_OUTPUT}"
 
-  tag:
-    name: Ensure release tag exists
+  source:
+    name: Verify publish source
     needs: metadata
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' &&
-          (inputs.publish_npm || inputs.publish_github) }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create tag when missing
+      - name: Require a verified main commit and exact existing tag
         env:
           TAG: ${{ needs.metadata.outputs.tag }}
+          PUBLISH_GITHUB: ${{ needs.metadata.outputs.publish_github }}
+          PUBLISH_NPM: ${{ needs.metadata.outputs.publish_npm }}
         shell: bash
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            existing="$(git ls-remote --tags origin "refs/tags/${TAG}" | cut -f1)"
-            echo "tag ${TAG} already exists at ${existing}"
-            if [[ "${existing}" != "${GITHUB_SHA}" ]]; then
-              echo "::warning::existing tag ${TAG} points at ${existing}, not this commit ${GITHUB_SHA}; leaving it untouched"
-            fi
+          if [[ "${PUBLISH_GITHUB}" != "true" && "${PUBLISH_NPM}" != "true" ]]; then
+            echo "publication disabled; source guard is not required for this build"
             exit 0
           fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${TAG}" "${GITHUB_SHA}"
-          git push origin "refs/tags/${TAG}"
-          echo "created tag ${TAG} at ${GITHUB_SHA}"
+
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "publish commit ${GITHUB_SHA} is not reachable from origin/main" >&2
+            exit 1
+          fi
+
+          remote_tag="$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)"
+          if [[ -z "${remote_tag}" ]]; then
+            remote_tag="$(git ls-remote --refs --tags origin "refs/tags/${TAG}" | cut -f1)"
+          fi
+          if [[ -z "${remote_tag}" ]]; then
+            echo "publish tag ${TAG} must already exist and point at ${GITHUB_SHA}" >&2
+            echo "push the tag after main CI passes, then rerun this workflow" >&2
+            exit 1
+          fi
+          if [[ "${remote_tag}" != "${GITHUB_SHA}" ]]; then
+            echo "publish tag ${TAG} points at ${remote_tag}, not workflow commit ${GITHUB_SHA}" >&2
+            exit 1
+          fi
+          echo "verified ${TAG} -> ${GITHUB_SHA} on origin/main"
 
   test:
-    name: Test
+    name: Complete release gate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -146,13 +159,31 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run tests
+      - name: Documentation contract
+        run: go run ./cmd/selfmind docs check
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
         run: go test ./...
+
+      - name: Race-sensitive runtime tests
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./internal/runpool ./internal/control ./internal/gateway/httpapi
+
+      - name: Complete provider-offline release corpus
+        run: go run ./cmd/selfmind selfcheck --profile local-full --skip-go
 
   build:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
     needs:
       - metadata
+      - source
       - test
     runs-on: ubuntu-latest
     strategy:
@@ -214,13 +245,6 @@ jobs:
           chmod +x \
             "${artifact_dir}/native/${BINARY_NAME}" \
             "${package_dir}/${BINARY_NAME}"
-          if [[ "${GOOS}" == "linux" ]]; then
-            cp packaging/linux/install.sh "${package_dir}/install.sh"
-            cp packaging/linux/uninstall.sh "${package_dir}/uninstall.sh"
-            cp packaging/linux/selfmind.service "${package_dir}/selfmind.service"
-            chmod +x "${package_dir}/install.sh" "${package_dir}/uninstall.sh"
-          fi
-
           tar -C dist -czf \
             "${artifact_dir}/release-assets/${package_name}.tar.gz" \
             "${package_name}"
@@ -240,7 +264,7 @@ jobs:
           retention-days: 14
 
   npm:
-    name: Package and publish npm
+    name: Package npm artifacts and smoke Linux x64
     needs:
       - metadata
       - build
@@ -307,51 +331,16 @@ jobs:
             exit 1
           fi
 
-          npm install --ignore-scripts "${platform_package}" "${main_package}"
+          npm install --ignore-scripts --omit=optional --no-audit --no-fund \
+            "${platform_package}" "${main_package}"
           installed_version="$(./node_modules/.bin/selfmind --version)"
           echo "${installed_version}"
           grep -F "${EXPECTED_VERSION}" <<<"${installed_version}"
 
-      - name: Publish platform packages
-        if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
+      - name: Smoke installed gateway lifecycle on Linux x64
         env:
-          DIST_TAG: ${{ needs.metadata.outputs.npm_dist_tag }}
-          NPM_VERSION: ${{ needs.metadata.outputs.npm_version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          publish_once() {
-            local dir="$1" name
-            name="$(node -p "require('./${dir}/package.json').name")"
-            if npm view "${name}@${NPM_VERSION}" version >/dev/null 2>&1; then
-              echo "skip ${name}@${NPM_VERSION}: already published"
-              npm dist-tag add "${name}@${NPM_VERSION}" "${DIST_TAG}" \
-                || echo "dist-tag add skipped (already set by the original publish)"
-              return 0
-            fi
-            npm publish "${dir}" --access public --provenance --tag "${DIST_TAG}"
-          }
-          publish_once .npm-stage/selfmind-linux-x64
-          publish_once .npm-stage/selfmind-linux-arm64
-          publish_once .npm-stage/selfmind-darwin-x64
-          publish_once .npm-stage/selfmind-darwin-arm64
-
-      - name: Publish launcher package
-        if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
-        env:
-          DIST_TAG: ${{ needs.metadata.outputs.npm_dist_tag }}
-          NPM_VERSION: ${{ needs.metadata.outputs.npm_version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if npm view "@selfmind/cli@${NPM_VERSION}" version >/dev/null 2>&1; then
-            echo "skip @selfmind/cli@${NPM_VERSION}: already published"
-            npm dist-tag add "@selfmind/cli@${NPM_VERSION}" "${DIST_TAG}" \
-              || echo "dist-tag add skipped (already set by the original publish)"
-          else
-            npm publish .npm-stage/selfmind \
-              --access public --provenance --tag "${DIST_TAG}"
-          fi
+          EXPECTED_VERSION: ${{ needs.metadata.outputs.tag }}
+        run: bash scripts/smoke-installed-gateway.sh npm-smoke/node_modules/.bin/selfmind "${EXPECTED_VERSION}"
 
       - name: Upload npm package artifact
         uses: actions/upload-artifact@v4
@@ -361,6 +350,92 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  publish-npm:
+    name: Publish verified npm artifacts
+    needs:
+      - metadata
+      - source
+      - npm
+      - npm-smoke-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install trusted-publishing npm CLI
+        if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
+        run: npm install --global npm@11.5.1
+
+      - name: Download verified npm package archives
+        if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: selfmind-npm-packages
+          path: npm-packs
+
+      - name: Publish platform packages, then launcher
+        if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
+        env:
+          DIST_TAG: ${{ needs.metadata.outputs.npm_dist_tag }}
+          NPM_VERSION: ${{ needs.metadata.outputs.npm_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          packages=(
+            "@selfmind/cli-linux-x64:selfmind-cli-linux-x64-${NPM_VERSION}.tgz"
+            "@selfmind/cli-linux-arm64:selfmind-cli-linux-arm64-${NPM_VERSION}.tgz"
+            "@selfmind/cli-darwin-x64:selfmind-cli-darwin-x64-${NPM_VERSION}.tgz"
+            "@selfmind/cli-darwin-arm64:selfmind-cli-darwin-arm64-${NPM_VERSION}.tgz"
+            "@selfmind/cli:selfmind-cli-${NPM_VERSION}.tgz"
+          )
+
+          existing=0
+          for entry in "${packages[@]}"; do
+            package="${entry%%:*}"
+            if npm view "${package}@${NPM_VERSION}" dist.integrity >/dev/null 2>&1; then
+              existing=$((existing + 1))
+            fi
+          done
+          if [[ "${existing}" -ne 0 && "${existing}" -ne "${#packages[@]}" ]]; then
+            echo "npm version ${NPM_VERSION} is only partially published (${existing}/${#packages[@]} packages)" >&2
+            echo "this version is terminal; bump the version instead of assembling it across workflow runs" >&2
+            exit 1
+          fi
+
+          verify_existing() {
+            local package="$1" archive="$2" local_integrity remote_integrity
+            local_integrity="sha512-$(openssl dgst -sha512 -binary "npm-packs/${archive}" | openssl base64 -A)"
+            remote_integrity="$(npm view "${package}@${NPM_VERSION}" dist.integrity)"
+            if [[ "${remote_integrity}" != "${local_integrity}" ]]; then
+              echo "published ${package}@${NPM_VERSION} does not match the verified artifact" >&2
+              exit 1
+            fi
+            echo "verified existing ${package}@${NPM_VERSION} integrity"
+          }
+
+          if [[ "${existing}" -eq "${#packages[@]}" ]]; then
+            for entry in "${packages[@]}"; do
+              verify_existing "${entry%%:*}" "${entry#*:}"
+            done
+            exit 0
+          fi
+
+          for entry in "${packages[@]:0:4}"; do
+            npm publish "npm-packs/${entry#*:}" --access public --provenance --tag "${DIST_TAG}"
+          done
+          npm publish "npm-packs/${packages[4]#*:}" --access public --provenance --tag "${DIST_TAG}"
+
+      - name: Publication disabled
+        if: ${{ needs.metadata.outputs.publish_npm != 'true' }}
+        run: echo "npm publication disabled; verified package artifacts remain attached to this run"
+
   publish:
     name: Publish GitHub Release
     needs:
@@ -368,8 +443,11 @@ jobs:
       - build
       - npm
       - npm-smoke-macos
+      - publish-npm
     if: ${{ needs.metadata.outputs.publish_github == 'true' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -439,6 +517,9 @@ jobs:
       - npm
     runs-on: macos-14
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -465,7 +546,13 @@ jobs:
           test -n "${main_package}"
           test -n "${platform_package}"
 
-          npm install --ignore-scripts "${platform_package}" "${main_package}"
+          npm install --ignore-scripts --omit=optional --no-audit --no-fund \
+            "${platform_package}" "${main_package}"
           installed_version="$(./node_modules/.bin/selfmind --version)"
           echo "${installed_version}"
           grep -F "${EXPECTED_VERSION}" <<<"${installed_version}"
+
+      - name: Smoke installed gateway lifecycle on macOS arm64
+        env:
+          EXPECTED_VERSION: ${{ needs.metadata.outputs.tag }}
+        run: bash scripts/smoke-installed-gateway.sh npm-smoke/node_modules/.bin/selfmind "${EXPECTED_VERSION}"

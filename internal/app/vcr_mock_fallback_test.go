@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,18 +71,10 @@ func TestBuildLLMProviderMockFallbackReplaysCassettes(t *testing.T) {
 		t.Fatalf("replay content = %q, want the cassette content (mock bypassed the VCR wrapper?)", got)
 	}
 
-	// Without a VCR session on the context, strict offline replay must reach
-	// the inner mock (background calls fall through by design) — proving the
-	// wrapper is in the path rather than the provider being the raw mock.
-	plain, err := provider.StreamChat(context.Background(), llm.ChatRequest{})
-	if err != nil {
-		t.Fatalf("sessionless StreamChat: %v", err)
-	}
-	var fallback strings.Builder
-	for ev := range plain {
-		fallback.WriteString(ev.Content)
-	}
-	if fallback.String() == "FROM CASSETTE" {
-		t.Fatal("sessionless call must not replay the cassette")
+	// A background or auxiliary call that loses its VCR session must fail
+	// closed. Falling through even to this harmless mock would let the same
+	// path reach a real provider on a configured workstation.
+	if _, err := provider.StreamChat(context.Background(), llm.ChatRequest{}); !errors.Is(err, llm.ErrCassetteMiss) {
+		t.Fatalf("sessionless StreamChat: want ErrCassetteMiss, got %v", err)
 	}
 }

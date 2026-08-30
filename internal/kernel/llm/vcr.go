@@ -123,6 +123,11 @@ func EvalVCRActive() bool {
 	return mode == "record" || mode == "replay"
 }
 
+// EvalVCRReplayMode reports the one VCR mode that is a complete provider
+// boundary. Record mode still calls a live provider and must retain normal
+// readiness requirements; replay may establish isolated eval-only readiness.
+func EvalVCRReplayMode() bool { return vcrMode() == "replay" }
+
 func vcrMode() string { return strings.ToLower(strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR"))) }
 func vcrDir() string {
 	if d := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR_DIR")); d != "" {
@@ -314,6 +319,9 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 	if v.mode == "replay" {
 		key, ok := v.nextKey(ctx)
 		if !ok {
+			if v.offline {
+				return nil, cassetteSessionMiss("stream")
+			}
 			return v.inner.StreamChat(ctx, req)
 		}
 		c, loadErr := v.load(ctx, key, req.Messages)
@@ -356,6 +364,9 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	if v.mode == "replay" {
 		key, ok := v.nextKey(ctx)
 		if !ok {
+			if v.offline {
+				return nil, cassetteSessionMiss("chat")
+			}
 			return v.inner.Chat(ctx, req)
 		}
 		c, loadErr := v.load(ctx, key, req.Messages)
@@ -393,6 +404,9 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 	if v.mode == "replay" {
 		key, ok := v.nextKey(ctx)
 		if !ok {
+			if v.offline {
+				return "", cassetteSessionMiss("completion")
+			}
 			return v.inner.ChatCompletion(ctx, messages)
 		}
 		c, loadErr := v.load(ctx, key, messages)
@@ -419,6 +433,10 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 		v.save(ctx, key, cassette{Method: "completion", Completion: text}, messages)
 	}
 	return text, err
+}
+
+func cassetteSessionMiss(method string) error {
+	return fmt.Errorf("%w: %s call has no VCR session", ErrCassetteMiss, method)
 }
 
 func replayStream(events []recordedEvent) <-chan StreamEvent {

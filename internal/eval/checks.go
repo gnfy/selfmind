@@ -3,6 +3,7 @@ package eval
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -83,10 +84,9 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	if c.Expect.MaxDurationSeconds > 0 {
 		add("max_duration_seconds", snap.DurationSeconds <= float64(c.Expect.MaxDurationSeconds), "case exceeded duration budget")
 	}
-	if c.Expect.RequireSameTask && len(uniqueStrings(snap.TaskIDs)) > 1 {
-		add("require_same_task", false, "multi-turn case switched task IDs")
-	} else if c.Expect.RequireSameTask {
-		add("require_same_task", true, "")
+	if c.Expect.RequireSameTask {
+		taskCount := len(uniqueStrings(snap.TaskIDs))
+		add("require_same_task", taskCount == 1, "case should produce exactly one task ID; got "+fmt.Sprint(taskCount))
 	}
 	if c.Expect.RequireContinuation {
 		add("require_continuation", len(c.Turns) > 1 && len(uniqueStrings(snap.TaskIDs)) == 1, "continuation should reuse the active task context")
@@ -103,11 +103,7 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	if strings.TrimSpace(c.Expect.Status) != "" {
 		want := normalizeStatus(c.Expect.Status)
 		got := normalizeStatus(snap.OutcomeStatus)
-		ok := got == want
-		if want == "completed" && got == "" && strings.TrimSpace(output) != "" {
-			ok = true
-		}
-		add("status:"+want, ok, "outcome status should match expectation; got "+firstNonEmpty(got, "<empty>"))
+		add("status:"+want, got == want, "outcome status should match expectation; got "+firstNonEmpty(got, "<empty>"))
 	}
 	if c.Expect.HTTPStatus > 0 {
 		add("http_status", snap.HTTPStatus == c.Expect.HTTPStatus, "HTTP status should match expectation")
@@ -126,7 +122,7 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	if c.Expect.RequireWorkspaceMatch || c.Checks.WorkspaceShouldMatch {
 		want := strings.TrimSpace(snap.ExpectedWorkspace)
 		got := strings.TrimSpace(snap.Workspace)
-		add("workspace_should_match", want == "" || got == "" || samePathish(want, got), "workspace should match the case setting")
+		add("workspace_should_match", want != "" && got != "" && samePathish(want, got), "workspace should match the case setting; expected and actual must both be present")
 	}
 	for _, needle := range c.Expect.Contains {
 		needle = strings.TrimSpace(needle)

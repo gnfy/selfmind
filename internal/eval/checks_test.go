@@ -158,6 +158,44 @@ func TestCompletedStatusAcceptsSuccessfulTurnEvenWhenTaskStillRunning(t *testing
 	}
 }
 
+func TestEvaluateCaseDoesNotInferCompletedFromOutput(t *testing.T) {
+	c := &Case{
+		ID:    "missing_status",
+		Turns: []Turn{{Input: "inspect"}},
+		Expect: Expectations{
+			Status: "completed",
+		},
+	}
+	checks := EvaluateCase(c, RunSnapshot{Output: "done"})
+	if ChecksPassed(checks) {
+		t.Fatalf("non-empty output without a status must not satisfy completed: %+v", checks)
+	}
+}
+
+func TestEvaluateCaseRequiresConcreteTaskAndWorkspaceEvidence(t *testing.T) {
+	c := &Case{
+		ID:    "missing_evidence",
+		Turns: []Turn{{Input: "continue"}, {Input: "continue again"}},
+		Expect: Expectations{
+			RequireSameTask:       true,
+			RequireWorkspaceMatch: true,
+		},
+	}
+	checks := EvaluateCase(c, RunSnapshot{ExpectedWorkspace: "/workspace"})
+	if ChecksPassed(checks) {
+		t.Fatalf("missing task and actual workspace evidence must fail: %+v", checks)
+	}
+
+	checks = EvaluateCase(c, RunSnapshot{
+		TaskIDs:           []string{"task-1", "task-1"},
+		ExpectedWorkspace: "/workspace",
+		Workspace:         "/workspace",
+	})
+	if !ChecksPassed(checks) {
+		t.Fatalf("concrete matching evidence should pass: %+v", checks)
+	}
+}
+
 func TestEvaluateCaseChecksStructuredCompletionAndVerification(t *testing.T) {
 	resumable := false
 	c := &Case{

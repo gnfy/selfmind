@@ -155,7 +155,7 @@ binary without requiring the person to know which package manager owns the
 launcher. A running build newer than the selected dist-tag is not downgraded
 unless `--force` is explicit.
 
-Before promoting a stable release, run this smoke test on real Apple Silicon
+Before cutting a stable release, run this smoke test on real Apple Silicon
 and representative systemd-user Linux hosts:
 
 ```sh
@@ -222,25 +222,35 @@ Release channels use npm dist-tags:
 
 - stable tags publish to `latest`;
 - prerelease tags publish to `next`;
-- `next` must soak before promotion.
+- prereleases support fast feedback, but no calendar-duration soak is required;
+  every stable version must independently pass the full release gate and core
+  installed-package smoke before it reaches `latest`.
 
 ## Release Workflow
 
 Tags and manual dispatches use `.github/workflows/release.yml`:
 
-1. run Go tests;
-2. build Linux and macOS binaries for x64 and arm64;
-3. package Linux systemd artifacts where applicable;
-4. stage all five npm packages;
-5. pack the launcher and native packages;
-6. smoke-test the Linux launcher in CI;
-7. smoke-test the macOS x64 launcher on a macOS runner;
-8. upgrade every supported released control.db fixture, restart twice, and
-   prove migration idempotency plus zero undeclared queue/run/authorization
-   changes;
-9. publish all native packages first;
-10. publish the launcher last;
-11. attach archives, npm tarballs, and checksums to the GitHub release.
+1. require an existing tag that points at the workflow SHA and is reachable
+   from `main`;
+2. run docs, vet, build, tests, focused race tests, and the complete offline
+   release corpus;
+3. build Linux and macOS binaries for x64 and arm64;
+4. stage and pack all five npm packages without publishing them;
+5. install the packed Linux x64 launcher and native package, then start,
+   health-check, exercise authenticated `status` and `tasks` against its
+   isolated `control.db`, drain-restart, recheck durable access, and stop its
+   daemon in an isolated home/data directory;
+6. run the same packed-package lifecycle on a native macOS arm64 runner;
+7. publish all native packages first, then publish the launcher, using the
+   already-smoked tarballs;
+8. fail closed when only part of a version already exists; a fully existing
+   version may resume only when every registry integrity matches the verified
+   tarball;
+9. attach archives, npm tarballs, and checksums to the GitHub release.
+
+Release tarballs contain the binary and documentation. They do not bundle the
+obsolete root/system-wide Linux installer; supported service setup is the
+per-user `selfmind setup` / `selfmind gateway service install` path.
 
 The following npm package names require trusted-publisher/OIDC configuration:
 

@@ -97,6 +97,8 @@ fi
   # the release smoke deterministic before those sibling packages are public.
   npm install --ignore-scripts --omit=optional --no-audit --no-fund "$platform_tgz" "$launcher_tgz"
   ./node_modules/.bin/selfmind --version
+  bash "$repo_root/scripts/smoke-installed-gateway.sh" \
+    "./node_modules/.bin/selfmind" "v${version}"
 )
 
 printf 'npm smoke passed for selfmind@%s\n' "$version"

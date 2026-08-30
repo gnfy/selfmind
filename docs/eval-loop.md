@@ -35,7 +35,10 @@ Every eval run — record and replay alike — uses a **throwaway temp data dir*
 (fresh `control.db` + memory) by default. Eval identities (`eval-<case-id>`
 persons/accounts), tasks, runs, events, and current-task pointers are created
 in that temp dir and deleted when the case finishes, so recording sessions can
-never pollute the user's real `~/.selfmind` data. Two related knobs:
+never pollute the user's real `~/.selfmind` data. The isolated root also owns a
+minimal, credential-free model configuration and its readiness receipt; replay
+therefore neither reads nor writes the operator's adjacent `model-state.json`.
+Two related knobs:
 
 - **Workspace isolation stays scenario-driven.** Cases with `setup`,
   `assert_state`, or `workspace: isolated` also get a scratch workspace seeded
@@ -48,6 +51,12 @@ never pollute the user's real `~/.selfmind` data. Two related knobs:
 
 VCR cassettes are unaffected: they live under `.vcr/<case-id>/` (or
 `SELFMIND_EVAL_VCR_DIR`) keyed by case ID, independent of the data dir.
+Offline replay establishes readiness only for that throwaway model state so the
+production gateway can reach the cassette provider boundary. A missing or
+misordered cassette still fails closed and never falls through to a live
+provider. Existing workspace paths are canonicalized before registration and
+VCR placeholder expansion, so filesystem aliases such as macOS `/var` and
+`/private/var` cannot make an in-scope replayed tool call appear out of scope.
 
 The runner also guarantees **run finalization**: eval turns are synchronous,
 and after each case the harness sweeps the runs it created (scoped to its
@@ -284,10 +293,12 @@ Valid reasons are `clean_checkout`, `cross_platform`, `credentialless`,
 fails by identity, so CI does not rely on a numeric case-count proxy.
 
 A release requires both `selfmind selfcheck` and the Linux/macOS Actions jobs.
-CI also runs race-sensitive runtime tests and packages, installs, and launches
-the npm distribution on both platforms. Local success cannot substitute for
-those checks, and CI does not repeat ordinary workstation behavior without one
-of the ownership reasons above.
+Linux CI replays the complete `local-full` corpus from a clean, credentialless
+checkout; macOS additionally runs the cases explicitly owned by its native
+platform. Release tags repeat the complete Linux gate for the exact publish
+SHA. CI also runs race-sensitive runtime tests and packages, installs, and
+launches the npm distribution on both platforms before publication. Local
+success cannot substitute for those checks.
 
 Before replay begins, selfcheck prints one bounded coverage line per suite:
 valid cases, recorded cassettes, providerless cases, selected/runnable cases,
@@ -324,6 +335,12 @@ regression shows up in `go test ./...` rather than as a CI-only mystery:
 - **Valid, contiguous recordings.** Every numbered file is valid JSON; each
   case starts at `0000.json` with no ordinal gaps; a directory with no numbered
   cassette is rejected.
+
+Strict replay also fails when a provider call has no VCR session. Eval YAML is
+decoded with known-field validation, so a misspelled assertion cannot be
+silently ignored. The harness may clean up a leaked running run to keep its
+isolated database reusable, but that cleanup is a failing case result rather
+than evidence of successful finalization.
 
 ### Tiers: `--fast` and the full gate
 

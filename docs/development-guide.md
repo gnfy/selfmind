@@ -89,49 +89,32 @@ Environment config path:
 SELF_CONFIG=/etc/selfmind/config.yaml selfmind gateway run
 ```
 
-SelfMind does not require `.env`. Environment variable expansion is supported inside YAML values, for example `${OPENAI_API_KEY}`.
+SelfMind does not require `.env`. Environment references remain readable in
+legacy YAML, but provider credentials entered through Model Manager are stored
+in the private auth store.
 
 ### Current YAML Schema
 
 ```yaml
-model:
-  provider: "openai"
-  default: "gpt-4o"
-
+models:
+  primary:
+    provider: "codex-cli"
+    model: "gpt-5.6-sol"
+    reasoning: "high"
+  auxiliary:
+    enabled: true
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
 providers:
-  openai:
-    api_key: "${OPENAI_API_KEY}"
-    base_url: "https://api.openai.com/v1"
-    protocol: "openai_chat"
-  anthropic:
-    api_key: "${ANTHROPIC_API_KEY}"
-    base_url: "https://api.anthropic.com"
-    protocol: "anthropic_messages"
-  google:
-    api_key: "${GOOGLE_API_KEY}"
-    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-    protocol: "openai_compatible"
+  openrouter:
+    extra_headers:
+      X-Title: "SelfMind Development"
   custom:
-    - name: "ollama"
+    local-ollama:
       base_url: "http://localhost:11434/v1"
-      api_key: ""
-      protocol: "openai_compatible"
-      model: "llama3"
-      models:
-        llama3:
-          context_length: 8192
-
-provider_profiles:
-  minimax:
-    api_key: "${MINIMAX_API_KEY}"
-    base_url: "https://api.minimax.io/anthropic"
-    protocol: "anthropic_messages"
-    model: "MiniMax-M3"
-  kimi-coding:
-    api_key: "${KIMI_CODING_API_KEY}"
-    base_url: "https://api.kimi.com/coding"
-    protocol: "anthropic_messages"
-    model: "kimi-for-coding"
+      protocol: "openai-compatible"
+      auth: "none"
+      context_length: 8192
 
 auth:
   credentials_file: "~/.selfmind/auth.json"
@@ -150,31 +133,17 @@ gateway:
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 
-models:
-  source: "local"
-  roles:
-    coding_agent:
-      provider: "openai"
-      model: "gpt-4o"
-    memory_extract:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    background_review:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    skill_curator:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    semantic_recall:
-      provider: "google"
-      model: "gemini-1.5-flash"
 ```
 
 Compatibility rules in `internal/platform/config/loader.go`:
 
 - Legacy `agent.provider` and `agent.model` are read and normalized into `model.provider` and `model.default`.
 - Legacy flat provider keys such as `providers.openai_api_key`, `providers.openrouter_api_key`, and `providers.minimax_api_key` are still read.
-- New saves write the nested provider schema or `provider_profiles`, and do not write the legacy flat keys.
+- Legacy `provider_profiles` blocks and `custom:<id>` route references remain
+  readable. `selfmind config upgrade` backs up the file and migrates them.
+- New saves write built-in overrides under `providers.<id>`, custom connections
+  under the map-shaped `providers.custom.<id>`, and no provider credentials in
+  YAML.
 - `LoadConfig(config.Options{Path: ...})` accepts explicit paths.
 - `LoadConfig(config.Options{Path: ..., CreateIfMissing: true})` is used by commands that can initialize a new file, such as `selfmind model`.
 
@@ -194,8 +163,6 @@ Interactive flow:
 2. Choose a provider and model; prompt for a missing API key when required.
 3. Validate the completed selection automatically, using live discovery with cache and static fallbacks for model choices.
 4. Review all edits and apply them as one daemon-owned transaction.
-4. Let the user choose a model or enter one manually.
-5. Save to `config.yaml`.
 
 Implemented provider protocol families:
 
@@ -209,9 +176,13 @@ Implemented provider protocol families:
 | Gemini CLI | OpenAI-compatible Gemini endpoint with external OAuth | `llm.GeminiAdapter` |
 | Qwen CLI | OpenAI-compatible endpoint with external OAuth | `llm.GenericOpenAIAdapter` |
 | Provider profile | OpenAI-compatible, Anthropic Messages, or Responses | selected by `modelruntime.Runtime.Protocol` |
-| Custom | OpenAI-compatible endpoint | `llm.GenericOpenAIAdapter` |
+| Custom | OpenAI-compatible, Anthropic-compatible, or Responses-compatible | selected by `modelruntime.Runtime.Protocol` |
 
-Most new vendors should use either `provider_profiles` or a built-in `ProviderProfile` on an existing OpenAI-compatible or Anthropic-compatible protocol family. Do not hardcode vendor logic in app, CLI, or IM adapters. Add a new Go adapter only for a genuinely different protocol family.
+Most user-defined connections should use `providers.custom.<id>` with an
+existing protocol family. A provider that belongs in the built-in catalogue
+uses a declarative `ProviderProfile`. Do not hardcode vendor logic in app, CLI,
+or IM adapters. Add a new Go adapter only for a genuinely different protocol
+family.
 
 Implementation boundary:
 
@@ -219,7 +190,8 @@ Implementation boundary:
 - `internal/modelruntime/resolver.go` converts YAML, env vars, SelfMind auth JSON, and selected external CLI auth into a resolved `Runtime`.
 - `internal/modelruntime/catalog.go` fetches/caches model lists. It must not construct LLM adapters.
 - `internal/app/agent.go` only converts a resolved `Runtime` into an adapter and wires role routing. Do not add provider-specific credential discovery there.
-- `ProviderQuirks` carries provider-specific wire behavior such as auth header, tool schema, thinking mode, system message mode, and User-Agent.
+- `ProviderQuirks` carries provider-specific wire behavior such as auth header,
+  tool schema, thinking mode, prompt cache, Responses flags, and User-Agent.
 - `internal/cliapp/model_commands.go` owns the user-facing provider/model picker. Keep `Custom endpoint (enter URL manually)` as the fourth option for backwards-compatible scripted input.
 
 External auth reuse is P2 and intentionally limited to Codex CLI, Claude Code, Gemini CLI, Qwen CLI, and SelfMind-owned OAuth providers such as MiniMax OAuth. `Runtime.TokenGetter` is the per-request token source; `Runtime.TokenRefresher` is the force-refresh hook that protocol adapters may call once after a provider returns an auth failure. Do not add best-effort reuse for random vendor apps unless there is a stable local auth format and a product decision to support it.
@@ -454,7 +426,8 @@ Tool schemas should be structured JSON-friendly objects. Avoid ad hoc string par
 First decide whether code is actually needed:
 
 - One-off OpenAI-compatible vendor: use `selfmind model` and custom endpoint.
-- Reusable vendor with known base URL/protocol: add or document a `provider_profiles.<id>` YAML entry.
+- Reusable user-defined connection with a known base URL/protocol: add or
+  document a `providers.custom.<id>` YAML entry.
 - Built-in vendor metadata, auth env vars, and live model-list behavior: update `internal/modelruntime/profile.go` and `catalog.go`.
 - New protocol family: add a Go adapter.
 
@@ -465,7 +438,7 @@ For a new adapter:
 3. Preserve tool-call behavior if the provider supports tools.
 4. Add runtime/profile metadata and credential resolution tests in `internal/modelruntime`.
 5. Add only protocol-to-adapter construction in `internal/app/agent.go`.
-6. Extend config only if `ProviderEndpoint` / `provider_profiles` is not enough.
+6. Extend config only if `ProviderEndpoint` / `providers.custom.<id>` is not enough.
 7. Add tests for streaming, errors, native tools, auth resolution, model catalog, and role routing.
 
 ## Add An IM Platform

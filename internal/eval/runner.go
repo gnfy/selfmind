@@ -170,6 +170,13 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			}
 		}
 	}
+	// Keep every consumer on one spelling of the same directory. On macOS,
+	// /var is a symlink to /private/var; execution-root admission canonicalizes
+	// that alias, while VCR otherwise expands its workspace placeholder with the
+	// original spelling. The mismatch makes legitimate replayed file calls look
+	// out of scope. Best-effort canonicalization preserves the prior behavior for
+	// a deliberately unavailable workspace while aligning all existing roots.
+	workspace = canonicalEvalWorkspace(workspace)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -328,7 +335,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	snap.TaskIDs = taskIDs
 	snap.RunIDs = runIDs
 	snap.HTTPStatus = lastHTTPStatus
-	snap.Workspace = workspace
+	snap.Workspace = observedRunWorkspace(ctx, h.controlStore, h.tenantID, runIDs)
 	snap.ExpectedWorkspace = workspace
 	snap.DurationSeconds = time.Since(start).Seconds()
 	// For eval status checks, prefer the request-level result. Long-lived tasks
@@ -339,15 +346,10 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	snap.Resumable = lastResumable
 	snap.VerificationState = lastVerificationState
 	checks := EvaluateCase(c, snap)
-	if forceFinalized > 0 {
-		// Surface (without failing the case) that the harness had to force
-		// leftover runs to a terminal state — a signal the gateway's own run
-		// finalization regressed.
-		checks = append(checks, CheckResult{
-			Name:    "run_finalization",
-			OK:      true,
-			Message: fmt.Sprintf("forced %d leftover running run(s) to interrupted after the case", forceFinalized),
-		})
+	if finalizationCheck, ok := forcedRunFinalizationCheck(forceFinalized); ok {
+		// Cleanup keeps the eval database reusable, but the case must fail: a
+		// synchronous turn returning with a running run is a product regression.
+		checks = append(checks, finalizationCheck)
 	}
 
 	// World-state predicates: assert on control.db / files / memory — an oracle
@@ -382,6 +384,38 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		OutputTokens:    outputTokens,
 		Checks:          checks,
 	}, nil
+}
+
+func forcedRunFinalizationCheck(count int) (CheckResult, bool) {
+	if count <= 0 {
+		return CheckResult{}, false
+	}
+	return CheckResult{
+		Name:    "run_finalization",
+		OK:      false,
+		Message: fmt.Sprintf("forced %d leftover running run(s) to interrupted after the case", count),
+	}, true
+}
+
+func observedRunWorkspace(ctx context.Context, store *control.Store, tenantID string, runIDs []string) string {
+	if store == nil {
+		return ""
+	}
+	for i := len(runIDs) - 1; i >= 0; i-- {
+		runID := strings.TrimSpace(runIDs[i])
+		if runID == "" {
+			continue
+		}
+		run, err := store.GetRun(ctx, tenantID, runID)
+		if err != nil || run == nil || strings.TrimSpace(run.WorkspaceID) == "" {
+			continue
+		}
+		workspace, err := store.GetWorkspace(ctx, tenantID, run.WorkspaceID)
+		if err == nil && workspace != nil {
+			return strings.TrimSpace(workspace.LocalPath)
+		}
+	}
+	return ""
 }
 
 // evalTurnVCRContext tags a turn only when the explicit eval recorder/replayer
@@ -525,6 +559,13 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	if err != nil {
 		return nil, err
 	}
+	modelChanges, err := newEvalModelChangeService(cfg, dataDir, dataDirOverride != "")
+	if err != nil {
+		if mem != nil {
+			_ = mem.Close()
+		}
+		return nil, err
+	}
 	if dataDirOverride != "" {
 		// The real gateway installs this before constructing tools. Eval must do
 		// the same or $SELFMIND_RUN_TMP is absent and a command such as
@@ -614,7 +655,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: tenantID,
 		SkillStorage:    skillStorage,
-		ModelChanges:    &modelchange.Service{ConfigPath: cfg.Path},
+		ModelChanges:    modelChanges,
 		// Automatic semantic recall (Work Timeline P2): eval runs the same
 		// selector path as real input — no eval-only shortcut around recall.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID, evalPrompts), recallOptions...),
@@ -646,6 +687,59 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// surface and change which notification paths its runs take.
 	server.Delivery = newEvalDeliveryService(c, harness)
 	return harness, nil
+}
+
+// newEvalModelChangeService keeps model readiness under the same throwaway
+// root as control.db. The agent still uses cfg in memory, but ModelChanges
+// reloads from a file and otherwise reads the operator's model-state.json next
+// to cfg.Path. That made local replay inherit a verified receipt while a clean
+// CI runner parked every model-backed turn before its first cassette call.
+func newEvalModelChangeService(cfg *config.Config, dataDir string, isolated bool) (*modelchange.Service, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("configure eval model readiness: config is nil")
+	}
+	if !isolated {
+		return &modelchange.Service{ConfigPath: cfg.Path}, nil
+	}
+
+	// Persist only the non-secret route snapshot needed by ModelChanges. Do not
+	// copy provider credentials or the operator's full configuration into eval
+	// artifacts, even though the throwaway root is mode 0700 and is deleted.
+	stateCfg := &config.Config{}
+	modelchange.ApplySnapshot(stateCfg, modelchange.SnapshotFromConfig(cfg))
+	stateCfg.Agent.Soul = ""
+	stateCfg.Storage.DataDir = dataDir
+	stateCfg.Auth.CredentialsFile = filepath.Join(dataDir, "auth.json")
+	stateCfg.Models.Source = "eval"
+	configPath := filepath.Join(dataDir, "model-runtime", "config.yaml")
+	if err := config.SaveConfig(configPath, stateCfg); err != nil {
+		return nil, fmt.Errorf("write isolated eval model config: %w", err)
+	}
+	service := &modelchange.Service{ConfigPath: configPath}
+	ready := llm.EvalVCRReplayMode()
+	if !ready && strings.TrimSpace(cfg.Path) != "" {
+		// Live/record eval still needs real operator readiness. Mirror only the
+		// ready verdict into the throwaway state; do not let eval model commands
+		// read or mutate the operator's durable transaction file.
+		if sourceStatus, inspectErr := (&modelchange.Service{ConfigPath: cfg.Path}).Inspect(); inspectErr == nil {
+			ready = sourceStatus.ModelReady()
+		}
+	}
+	if ready {
+		// A replay cassette is the harness's provider boundary. Establish the
+		// matching isolated startup receipt so the production readiness gate lets
+		// the turn reach that boundary. Live/record mode reaches here only when
+		// the source configuration was already ready. Misses still fail closed in
+		// the VCR layer.
+		status, err := service.AcceptMigrationReadiness()
+		if err != nil {
+			return nil, fmt.Errorf("establish isolated eval model readiness: %w", err)
+		}
+		if !status.ModelReady() {
+			return nil, fmt.Errorf("establish isolated eval model readiness: main route is not ready")
+		}
+	}
+	return service, nil
 }
 
 // makeEvalTempRoot keeps isolated workspaces away from the system temp tree.
@@ -847,6 +941,21 @@ func resolveWorkspace(c *Case, override string) (string, error) {
 		raw = abs
 	}
 	return filepath.Clean(raw), nil
+}
+
+func canonicalEvalWorkspace(raw string) string {
+	raw = filepath.Clean(strings.TrimSpace(raw))
+	if raw == "" || raw == "." {
+		return raw
+	}
+	absolute, err := filepath.Abs(raw)
+	if err != nil {
+		return raw
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil {
+		return filepath.Clean(resolved)
+	}
+	return filepath.Clean(absolute)
 }
 
 func DefaultRunPath(c *Case, provider string) string {

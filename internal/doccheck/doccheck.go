@@ -66,6 +66,7 @@ func Check(root string, now time.Time) Report {
 	report.Documents = len(manifest.Documents)
 
 	checkSizeLimits(root, &report)
+	checkPublicEntrypoints(root, &report)
 	checkManifest(root, manifest, now, &report)
 	checkMarkdown(root, manifest, &report)
 
@@ -79,6 +80,74 @@ func Check(root string, now time.Time) Report {
 
 	sort.Strings(report.Errors)
 	return report
+}
+
+func checkPublicEntrypoints(root string, report *Report) {
+	contracts := []struct {
+		path      string
+		maxLines  int
+		required  []string
+		forbidden []string
+	}{
+		{
+			path:     "README.md",
+			maxLines: 300,
+			required: []string{"Model Manager", "Main", "Background", "providers.custom", "private auth", "Ctrl+J", "Ctrl+V"},
+			forbidden: []string{
+				"provider_profiles:",
+				"provider_profiles.<id>",
+				"custom:ollama",
+				"| `Shift+Enter` |",
+			},
+		},
+		{
+			path:     "README.zh-CN.md",
+			maxLines: 300,
+			required: []string{"Model Manager", "Main", "Background", "providers.custom", "私有 auth store", "Ctrl+J", "Ctrl+V"},
+			forbidden: []string{
+				"provider_profiles:",
+				"provider_profiles.<id>",
+				"custom:ollama",
+				"| `Shift+Enter` |",
+			},
+		},
+		{
+			path:     "npm/selfmind/README.md",
+			maxLines: 120,
+			required: []string{"Manager to configure", "Main", "Background", "Ctrl+J", "Ctrl+V", "@selfmind/cli@next"},
+			forbidden: []string{
+				"primary model and background model",
+				"Use `selfmind@next`",
+				"| `Shift+Enter` |",
+			},
+		},
+	}
+
+	for _, contract := range contracts {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(contract.path)))
+		if err != nil {
+			report.Errors = append(report.Errors, contract.path+": "+err.Error())
+			continue
+		}
+		if !utf8.Valid(data) {
+			report.Errors = append(report.Errors, contract.path+" is not valid UTF-8")
+			continue
+		}
+		if lines := lineCount(data); lines > contract.maxLines {
+			report.Errors = append(report.Errors, fmt.Sprintf("%s is %d lines; public entrypoint limit is %d", contract.path, lines, contract.maxLines))
+		}
+		text := string(data)
+		for _, phrase := range contract.required {
+			if !strings.Contains(text, phrase) {
+				report.Errors = append(report.Errors, fmt.Sprintf("%s is missing current public contract %q", contract.path, phrase))
+			}
+		}
+		for _, phrase := range contract.forbidden {
+			if strings.Contains(text, phrase) {
+				report.Errors = append(report.Errors, fmt.Sprintf("%s contains stale public contract %q", contract.path, phrase))
+			}
+		}
+	}
 }
 
 func LoadManifest(root string) (Manifest, error) {

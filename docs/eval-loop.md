@@ -284,10 +284,12 @@ Valid reasons are `clean_checkout`, `cross_platform`, `credentialless`,
 fails by identity, so CI does not rely on a numeric case-count proxy.
 
 A release requires both `selfmind selfcheck` and the Linux/macOS Actions jobs.
-CI also runs race-sensitive runtime tests and packages, installs, and launches
-the npm distribution on both platforms. Local success cannot substitute for
-those checks, and CI does not repeat ordinary workstation behavior without one
-of the ownership reasons above.
+Linux CI replays the complete `local-full` corpus from a clean, credentialless
+checkout; macOS additionally runs the cases explicitly owned by its native
+platform. Release tags repeat the complete Linux gate for the exact publish
+SHA. CI also runs race-sensitive runtime tests and packages, installs, and
+launches the npm distribution on both platforms before publication. Local
+success cannot substitute for those checks.
 
 Before replay begins, selfcheck prints one bounded coverage line per suite:
 valid cases, recorded cassettes, providerless cases, selected/runnable cases,
@@ -324,6 +326,12 @@ regression shows up in `go test ./...` rather than as a CI-only mystery:
 - **Valid, contiguous recordings.** Every numbered file is valid JSON; each
   case starts at `0000.json` with no ordinal gaps; a directory with no numbered
   cassette is rejected.
+
+Strict replay also fails when a provider call has no VCR session. Eval YAML is
+decoded with known-field validation, so a misspelled assertion cannot be
+silently ignored. The harness may clean up a leaked running run to keep its
+isolated database reusable, but that cleanup is a failing case result rather
+than evidence of successful finalization.
 
 ### Tiers: `--fast` and the full gate
 

@@ -105,11 +105,12 @@ func TestReadyModelsProceedToManagedRuntimeRepairWithoutModelPromptOrProbe(t *te
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
+	serviceManager := gatewayServiceKind()
 	app := &App{
 		ctx: context.Background(), stdout: &stdout, stderr: &stderr, configPath: configPath,
 		managedGatewayReconcile: func() (gatewayServiceInstallReceipt, error) {
 			actions = append(actions, "reconcile managed service")
-			return gatewayServiceInstallReceipt{Manager: "launchd", Generation: "service-test"}, nil
+			return gatewayServiceInstallReceipt{Manager: serviceManager, Generation: "service-test"}, nil
 		},
 		managedServiceHealthy: func() bool { return true },
 		onboardingGatewayStatus: func(context.Context) (api.GatewayStatusResponse, error) {
@@ -117,7 +118,7 @@ func TestReadyModelsProceedToManagedRuntimeRepairWithoutModelPromptOrProbe(t *te
 			return api.GatewayStatusResponse{
 				Runtime: api.GatewayRuntimeInfo{
 					Version: buildinfo.Version, ConfigPath: resolvedConfig,
-					ServiceManager: "launchd", ServiceGeneration: "service-test",
+					ServiceManager: serviceManager, ServiceGeneration: "service-test",
 					ModelRouteFingerprint: modelchange.SnapshotFromConfig(cfg).Fingerprint(),
 				},
 				State: "running", StoreSchema: api.StoreSchemaHealth{Version: 1, CurrentVersion: 1},

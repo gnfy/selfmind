@@ -328,7 +328,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	snap.TaskIDs = taskIDs
 	snap.RunIDs = runIDs
 	snap.HTTPStatus = lastHTTPStatus
-	snap.Workspace = workspace
+	snap.Workspace = observedRunWorkspace(ctx, h.controlStore, h.tenantID, runIDs)
 	snap.ExpectedWorkspace = workspace
 	snap.DurationSeconds = time.Since(start).Seconds()
 	// For eval status checks, prefer the request-level result. Long-lived tasks
@@ -339,15 +339,10 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	snap.Resumable = lastResumable
 	snap.VerificationState = lastVerificationState
 	checks := EvaluateCase(c, snap)
-	if forceFinalized > 0 {
-		// Surface (without failing the case) that the harness had to force
-		// leftover runs to a terminal state — a signal the gateway's own run
-		// finalization regressed.
-		checks = append(checks, CheckResult{
-			Name:    "run_finalization",
-			OK:      true,
-			Message: fmt.Sprintf("forced %d leftover running run(s) to interrupted after the case", forceFinalized),
-		})
+	if finalizationCheck, ok := forcedRunFinalizationCheck(forceFinalized); ok {
+		// Cleanup keeps the eval database reusable, but the case must fail: a
+		// synchronous turn returning with a running run is a product regression.
+		checks = append(checks, finalizationCheck)
 	}
 
 	// World-state predicates: assert on control.db / files / memory — an oracle
@@ -382,6 +377,38 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		OutputTokens:    outputTokens,
 		Checks:          checks,
 	}, nil
+}
+
+func forcedRunFinalizationCheck(count int) (CheckResult, bool) {
+	if count <= 0 {
+		return CheckResult{}, false
+	}
+	return CheckResult{
+		Name:    "run_finalization",
+		OK:      false,
+		Message: fmt.Sprintf("forced %d leftover running run(s) to interrupted after the case", count),
+	}, true
+}
+
+func observedRunWorkspace(ctx context.Context, store *control.Store, tenantID string, runIDs []string) string {
+	if store == nil {
+		return ""
+	}
+	for i := len(runIDs) - 1; i >= 0; i-- {
+		runID := strings.TrimSpace(runIDs[i])
+		if runID == "" {
+			continue
+		}
+		run, err := store.GetRun(ctx, tenantID, runID)
+		if err != nil || run == nil || strings.TrimSpace(run.WorkspaceID) == "" {
+			continue
+		}
+		workspace, err := store.GetWorkspace(ctx, tenantID, run.WorkspaceID)
+		if err == nil && workspace != nil {
+			return strings.TrimSpace(workspace.LocalPath)
+		}
+	}
+	return ""
 }
 
 // evalTurnVCRContext tags a turn only when the explicit eval recorder/replayer

@@ -45,6 +45,25 @@ func TestVCROfflineMissReturnsErrorNotLive(t *testing.T) {
 	}
 }
 
+func TestVCROfflineWithoutSessionReturnsErrorNotLive(t *testing.T) {
+	t.Setenv("SELFMIND_EVAL_VCR", "replay")
+	t.Setenv("SELFMIND_EVAL_VCR_DIR", t.TempDir())
+	t.Setenv("SELFMIND_EVAL_OFFLINE", "1")
+
+	p := MaybeWrapVCR(liveSentinelProvider{t: t})
+	ctx := context.Background()
+
+	if _, err := p.StreamChat(ctx, ChatRequest{}); !errors.Is(err, ErrCassetteMiss) {
+		t.Fatalf("StreamChat: want ErrCassetteMiss, got %v", err)
+	}
+	if _, err := p.Chat(ctx, ChatRequest{}); !errors.Is(err, ErrCassetteMiss) {
+		t.Fatalf("Chat: want ErrCassetteMiss, got %v", err)
+	}
+	if _, err := p.ChatCompletion(ctx, nil); !errors.Is(err, ErrCassetteMiss) {
+		t.Fatalf("ChatCompletion: want ErrCassetteMiss, got %v", err)
+	}
+}
+
 func TestHasCassetteSession(t *testing.T) {
 	dir := t.TempDir()
 	if HasCassetteSession(dir, "my-case") {

@@ -29,6 +29,28 @@ turns:
 	}
 }
 
+func TestLoadCaseRejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: misspelled_contract
+turns:
+  - input: "continue"
+checks:
+  require_same_task: true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadCase(path)
+	if err == nil {
+		t.Fatal("LoadCase should reject an unknown checks field")
+	}
+	if !strings.Contains(err.Error(), "require_same_task") || !strings.Contains(err.Error(), "field") {
+		t.Fatalf("error should identify the unknown field, got %v", err)
+	}
+}
+
 func TestLoadCaseAllowsPerTurnChannel(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "case.yaml")

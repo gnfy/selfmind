@@ -395,3 +395,56 @@ func TestFinalizeLeftoverRuns(t *testing.T) {
 		t.Fatalf("task should be interrupted, got %q", got.Status)
 	}
 }
+
+func TestForcedRunFinalizationFailsTheCase(t *testing.T) {
+	if _, ok := forcedRunFinalizationCheck(0); ok {
+		t.Fatal("zero forced runs should not add a check")
+	}
+	check, ok := forcedRunFinalizationCheck(2)
+	if !ok || check.Name != "run_finalization" || check.OK {
+		t.Fatalf("forced finalization must be a failing check: %+v ok=%v", check, ok)
+	}
+}
+
+func TestObservedRunWorkspaceComesFromDurableRun(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "eval-tenant", "eval", "eval-workspace", "SelfMind Eval")
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	want := filepath.Join(t.TempDir(), "workspace")
+	workspace, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID:      identity.TenantID,
+		OwnerPersonID: identity.PersonID,
+		LocalPath:     want,
+	})
+	if err != nil {
+		t.Fatalf("register workspace: %v", err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID:    identity.TenantID,
+		PersonID:    identity.PersonID,
+		WorkspaceID: workspace.ID,
+		Title:       "workspace evidence",
+		Channel:     "cli",
+	})
+	if err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "inspect")
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	if got := observedRunWorkspace(ctx, store, identity.TenantID, []string{"missing", run.ID}); got != want {
+		t.Fatalf("observed workspace = %q, want %q", got, want)
+	}
+	if got := observedRunWorkspace(ctx, store, identity.TenantID, nil); got != "" {
+		t.Fatalf("missing run evidence should return empty, got %q", got)
+	}
+}

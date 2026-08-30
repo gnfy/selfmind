@@ -16,6 +16,11 @@
   declare `model_required: false`.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
+- Linux CI and tag releases replay the complete offline corpus for the exact
+  source SHA. npm publication waits for packed-artifact install plus isolated
+  daemon start/health, authenticated status/tasks, restart persistence, and
+  stop smoke on Linux x64 and macOS arm64; native coverage for the other
+  packaged architectures remains release evidence to add.
 - Linux and macOS x64/arm64 are packaged targets. Native Windows remains
   unsupported; WSL is the supported Windows route.
 

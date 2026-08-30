@@ -103,7 +103,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: f40ba686e3dd0062
+    source_hash: 410e2ff0b8e8f6d8
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -129,7 +129,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/development-guide.md
-    source_hash: d3686bf04634860d
+    source_hash: 381184249e3fd7b5
   - path: docs/eval-loop.md
     title: Evaluation Loop
     class: reference

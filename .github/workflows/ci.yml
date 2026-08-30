@@ -6,7 +6,7 @@ name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "develop"]
   pull_request:
     branches: ["main"]
   workflow_dispatch: {}
@@ -61,10 +61,10 @@ jobs:
           CGO_ENABLED: "1"
         run: go test -race ./internal/runpool ./internal/control ./internal/gateway/httpapi
 
-      - name: Release docs and CI-owned eval
-        # Case ownership is explicit in eval YAML (`ci.required/reason/platforms`).
-        # A selected case without a cassette fails; no numeric count can hide it.
-        run: go run ./cmd/selfmind selfcheck --profile ci --skip-go
+      - name: Complete provider-offline release corpus
+        # Linux owns the deterministic release corpus. Platform-specific cases
+        # still run on their native runner below.
+        run: go run ./cmd/selfmind selfcheck --profile local-full --skip-go
 
       - name: Package and install npm distribution
         run: bash scripts/smoke-npm-packages.sh 0.0.0-ci

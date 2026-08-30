@@ -11,10 +11,15 @@ npm install --global @selfmind/cli@latest
 selfmind
 ```
 
-The first launch uses the same concise guide on Linux and macOS to verify a
-primary model and background model, select a project workspace and safety mode,
-and enable reliable background operation. Run `selfmind setup` later to repair
-or change those choices.
+If Model Readiness is missing, the first interactive launch opens the sole Model
+Manager to configure and validate the visible Main and Background routes. After
+Model Readiness is established, the next applicable launch resumes project
+workspace, approval mode, and managed background operation setup. Run
+`selfmind model`, `selfmind setup`, or `selfmind doctor` to inspect or repair
+those boundaries later.
+
+In the TUI, `Ctrl+J` inserts a newline and `Ctrl+V` attaches an image from the
+GUI clipboard. Delete the complete `[Image #N · name]` token to detach it.
 
 Supported release targets:
 
@@ -33,7 +38,7 @@ selfmind update check
 selfmind update
 ```
 
-Use `selfmind@next` for prerelease builds.
+Use `npm install --global @selfmind/cli@next` for prerelease builds.
 
 ## Uninstall
 

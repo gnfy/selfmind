@@ -1,6 +1,8 @@
 package modelchange
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,6 +10,7 @@ import (
 )
 
 func TestBuildCandidatePreservesNonModelTuningAndCompatibleReasoning(t *testing.T) {
+	installCodexCandidateCapabilities(t)
 	current := Snapshot{
 		Primary: config.ModelSelectionConfig{
 			Provider: "codex-cli", Model: "gpt-5.5", Reasoning: "high",
@@ -29,6 +32,45 @@ func TestBuildCandidatePreservesNonModelTuningAndCompatibleReasoning(t *testing.
 	}
 	if result.Snapshot.Auxiliary != current.Auxiliary {
 		t.Fatalf("auxiliary changed: %+v", result.Snapshot.Auxiliary)
+	}
+}
+
+func TestBuildCandidateUnknownCapabilitiesResetModelSpecificTuning(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	current := Snapshot{Primary: config.ModelSelectionConfig{
+		Provider: "codex-cli", Model: "gpt-old", Reasoning: "high",
+		ServiceTier: "priority", ContextLength: 424242,
+	}}
+	result, err := BuildCandidate(current, SelectionPatch{
+		Route: RoutePrimary, Provider: "codex-cli", Model: "future-model-without-metadata",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Snapshot.Primary.Reasoning != "" || result.Snapshot.Primary.ServiceTier != "" {
+		t.Fatalf("unknown model kept model-specific tuning: %+v", result.Snapshot.Primary)
+	}
+	if result.Snapshot.Primary.ContextLength != 424242 {
+		t.Fatalf("non-model tuning was cleared: %+v", result.Snapshot.Primary)
+	}
+	if len(result.Notices) != 2 {
+		t.Fatalf("notices = %v, want reasoning and service-tier fallbacks", result.Notices)
+	}
+}
+
+func installCodexCandidateCapabilities(t *testing.T) {
+	t.Helper()
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	data := []byte(`{
+  "models": [{
+    "slug": "gpt-5.6-sol",
+    "supported_reasoning_levels": [{"effort": "low"}, {"effort": "high"}],
+    "service_tiers": [{"id": "priority"}]
+  }]
+}`)
+	if err := os.WriteFile(filepath.Join(codexHome, "models_cache.json"), data, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 

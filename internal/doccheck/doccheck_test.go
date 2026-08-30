@@ -60,6 +60,29 @@ func TestCheckRejectsUnregisteredDocAndBrokenLink(t *testing.T) {
 	}
 }
 
+func TestCheckRejectsStalePublicEntrypoint(t *testing.T) {
+	root := testRepo(t)
+	path := filepath.Join(root, "README.md")
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = file.WriteString("\nprovider_profiles:\n")
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteIndex(root); err != nil {
+		t.Fatal(err)
+	}
+	report := Check(root, time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))
+	if joined := strings.Join(report.Errors, "\n"); !strings.Contains(joined, `README.md contains stale public contract "provider_profiles:"`) {
+		t.Fatalf("Check() did not reject stale public entrypoint:\n%s", joined)
+	}
+}
+
 func TestCheckRejectsMultipleActivePlansAndInvalidUTF8(t *testing.T) {
 	root := testRepo(t)
 	mustWrite(t, filepath.Join(root, "docs/plan-two.md"), "# Plan Two\n")
@@ -149,6 +172,9 @@ func testRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	mustWrite(t, filepath.Join(root, "AGENTS.md"), "# Rules\n")
+	mustWrite(t, filepath.Join(root, "README.md"), "# Readme\n\nModel Manager Main Background providers.custom private auth Ctrl+J Ctrl+V\n")
+	mustWrite(t, filepath.Join(root, "README.zh-CN.md"), "# 说明\n\nModel Manager Main Background providers.custom 私有 auth store Ctrl+J Ctrl+V\n")
+	mustWrite(t, filepath.Join(root, "npm/selfmind/README.md"), "# Package\n\nManager to configure Main Background Ctrl+J Ctrl+V @selfmind/cli@next\n")
 	mustWrite(t, filepath.Join(root, "docs/STATUS.md"), "# Status\n")
 	mustWrite(t, filepath.Join(root, "docs/source.md"), "# Source\n")
 	mustWrite(t, filepath.Join(root, "docs/translation.md"), "# Translation\n")

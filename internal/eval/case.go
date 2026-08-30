@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -147,7 +148,9 @@ func LoadCase(path string) (*Case, error) {
 		return nil, err
 	}
 	var c Case
-	if err := yaml.Unmarshal(data, &c); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&c); err != nil {
 		return nil, fmt.Errorf("parse case %s: %w", path, err)
 	}
 	c.path = path

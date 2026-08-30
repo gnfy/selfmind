@@ -462,6 +462,15 @@ jobs:
             "@selfmind/cli:selfmind-cli-${NPM_VERSION}.tgz"
           )
 
+          for entry in "${packages[@]}"; do
+            archive="${entry#*:}"
+            archive_path="./npm-packs/${archive}"
+            if ! test -f "${archive_path}"; then
+              echo "verified npm package archive is missing: ${archive_path}" >&2
+              exit 1
+            fi
+          done
+
           existing=0
           for entry in "${packages[@]}"; do
             package="${entry%%:*}"
@@ -477,7 +486,7 @@ jobs:
 
           verify_existing() {
             local package="$1" archive="$2" local_integrity remote_integrity
-            local_integrity="sha512-$(openssl dgst -sha512 -binary "npm-packs/${archive}" | openssl base64 -A)"
+            local_integrity="sha512-$(openssl dgst -sha512 -binary "./npm-packs/${archive}" | openssl base64 -A)"
             remote_integrity="$(npm view "${package}@${NPM_VERSION}" dist.integrity)"
             if [[ "${remote_integrity}" != "${local_integrity}" ]]; then
               echo "published ${package}@${NPM_VERSION} does not match the verified artifact" >&2
@@ -494,9 +503,11 @@ jobs:
           fi
 
           for entry in "${packages[@]:0:4}"; do
-            npm publish "npm-packs/${entry#*:}" --access public --provenance --tag "${DIST_TAG}"
+            archive="${entry#*:}"
+            npm publish "./npm-packs/${archive}" --access public --provenance --tag "${DIST_TAG}"
           done
-          npm publish "npm-packs/${packages[4]#*:}" --access public --provenance --tag "${DIST_TAG}"
+          launcher_archive="${packages[4]#*:}"
+          npm publish "./npm-packs/${launcher_archive}" --access public --provenance --tag "${DIST_TAG}"
 
       - name: Publication disabled
         if: ${{ needs.metadata.outputs.publish_npm != 'true' }}

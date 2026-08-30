@@ -10,8 +10,18 @@ import (
 )
 
 type workflowContract struct {
+	On          workflowTriggers          `yaml:"on"`
 	Permissions map[string]string         `yaml:"permissions"`
 	Jobs        map[string]workflowJobDef `yaml:"jobs"`
+}
+
+type workflowTriggers struct {
+	Push struct {
+		Branches []string `yaml:"branches"`
+	} `yaml:"push"`
+	PullRequest struct {
+		Branches []string `yaml:"branches"`
+	} `yaml:"pull_request"`
 }
 
 type workflowJobDef struct {
@@ -61,6 +71,12 @@ func containsNeed(needs any, want string) bool {
 
 func TestCIWorkflowRunsCompleteOfflineCorpus(t *testing.T) {
 	workflow := loadWorkflowContract(t, "ci.yml")
+	if got := strings.Join(workflow.On.Push.Branches, ","); got != "main" {
+		t.Fatalf("CI push branches = %q, want main only; develop pushes duplicate an open PR run", got)
+	}
+	if got := strings.Join(workflow.On.PullRequest.Branches, ","); got != "main" {
+		t.Fatalf("CI pull-request branches = %q, want main", got)
+	}
 	linux, ok := workflow.Jobs["gate"]
 	if !ok {
 		t.Fatal("CI workflow has no Linux gate job")

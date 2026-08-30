@@ -35,7 +35,10 @@ Every eval run — record and replay alike — uses a **throwaway temp data dir*
 (fresh `control.db` + memory) by default. Eval identities (`eval-<case-id>`
 persons/accounts), tasks, runs, events, and current-task pointers are created
 in that temp dir and deleted when the case finishes, so recording sessions can
-never pollute the user's real `~/.selfmind` data. Two related knobs:
+never pollute the user's real `~/.selfmind` data. The isolated root also owns a
+minimal, credential-free model configuration and its readiness receipt; replay
+therefore neither reads nor writes the operator's adjacent `model-state.json`.
+Two related knobs:
 
 - **Workspace isolation stays scenario-driven.** Cases with `setup`,
   `assert_state`, or `workspace: isolated` also get a scratch workspace seeded
@@ -48,6 +51,12 @@ never pollute the user's real `~/.selfmind` data. Two related knobs:
 
 VCR cassettes are unaffected: they live under `.vcr/<case-id>/` (or
 `SELFMIND_EVAL_VCR_DIR`) keyed by case ID, independent of the data dir.
+Offline replay establishes readiness only for that throwaway model state so the
+production gateway can reach the cassette provider boundary. A missing or
+misordered cassette still fails closed and never falls through to a live
+provider. Existing workspace paths are canonicalized before registration and
+VCR placeholder expansion, so filesystem aliases such as macOS `/var` and
+`/private/var` cannot make an in-scope replayed tool call appear out of scope.
 
 The runner also guarantees **run finalization**: eval turns are synchronous,
 and after each case the harness sweeps the runs it created (scoped to its

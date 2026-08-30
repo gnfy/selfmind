@@ -123,6 +123,11 @@ func EvalVCRActive() bool {
 	return mode == "record" || mode == "replay"
 }
 
+// EvalVCRReplayMode reports the one VCR mode that is a complete provider
+// boundary. Record mode still calls a live provider and must retain normal
+// readiness requirements; replay may establish isolated eval-only readiness.
+func EvalVCRReplayMode() bool { return vcrMode() == "replay" }
+
 func vcrMode() string { return strings.ToLower(strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR"))) }
 func vcrDir() string {
 	if d := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR_DIR")); d != "" {

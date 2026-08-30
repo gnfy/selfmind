@@ -2,6 +2,8 @@ package eval
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
 )
@@ -54,6 +57,56 @@ func writeRunnerCase(t *testing.T, id string, extra string) *Case {
 		t.Fatalf("load case: %v", err)
 	}
 	return c
+}
+
+func writeCredentiallessReplayCassettes(t *testing.T, session string) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("SELFMIND_EVAL_VCR_DIR"), session)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create cassette session: %v", err)
+	}
+	records := []map[string]interface{}{
+		{"method": "completion", "completion": "hello ready"},
+		{"method": "stream", "events": []map[string]interface{}{{"content": "READY"}}},
+	}
+	for i, record := range records {
+		data, err := json.Marshal(record)
+		if err != nil {
+			t.Fatalf("marshal cassette %d: %v", i, err)
+		}
+		path := filepath.Join(dir, fmt.Sprintf("%04d.json", i))
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write cassette %d: %v", i, err)
+		}
+	}
+}
+
+func writeWorkspaceReadReplayCassettes(t *testing.T, session string) {
+	t.Helper()
+	dir := filepath.Join(os.Getenv("SELFMIND_EVAL_VCR_DIR"), session)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("create cassette session: %v", err)
+	}
+	records := []map[string]interface{}{
+		{"method": "completion", "completion": "inspect seeded workspace file"},
+		{"method": "stream", "events": []map[string]interface{}{{
+			"tool_calls": []map[string]interface{}{{
+				"ID": "call_read_seeded_file", "Function": "read_file",
+				"Args": `{"path":"{{SELFMIND_VCR_WORKSPACE}}/input.txt"}`,
+			}},
+		}}},
+		{"method": "stream", "events": []map[string]interface{}{{"content": "READY"}}},
+	}
+	for i, record := range records {
+		data, err := json.Marshal(record)
+		if err != nil {
+			t.Fatalf("marshal cassette %d: %v", i, err)
+		}
+		path := filepath.Join(dir, fmt.Sprintf("%04d.json", i))
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write cassette %d: %v", i, err)
+		}
+	}
 }
 
 func TestApplyEvalModelOverrideUsesCanonicalPrimarySelection(t *testing.T) {
@@ -118,6 +171,36 @@ func TestEvalTurnVCRContextDoesNotLeakIntoFlightRecording(t *testing.T) {
 	if got := llm.VCRSessionForTest(ctx); got != "skill_case" {
 		t.Fatalf("explicit eval replay session = %q, want skill_case", got)
 	}
+
+	t.Setenv("SELFMIND_EVAL_VCR", "record")
+	ctx = evalTurnVCRContext(context.Background(), "skill_case", "/workspace")
+	if got := llm.VCRSessionForTest(ctx); got != "skill_case" {
+		t.Fatalf("explicit eval record session = %q, want skill_case", got)
+	}
+}
+
+func TestEvalRecordModeMirrorsReadyVerdictIntoIsolatedState(t *testing.T) {
+	t.Setenv("SELFMIND_EVAL_VCR", "record")
+	sourcePath := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &config.Config{Path: sourcePath}
+	if err := config.SaveConfig(sourcePath, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := (&modelchange.Service{ConfigPath: sourcePath}).AcceptMigrationReadiness(); err != nil || !status.ModelReady() {
+		t.Fatalf("establish source readiness: status=%+v err=%v", status, err)
+	}
+
+	isolated, err := newEvalModelChangeService(cfg, t.TempDir(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := isolated.Inspect()
+	if err != nil || !status.ModelReady() {
+		t.Fatalf("isolated record readiness: status=%+v err=%v", status, err)
+	}
+	if filepath.Dir(isolated.ConfigPath) == filepath.Dir(sourcePath) {
+		t.Fatalf("record eval reused operator model state beside %s", sourcePath)
+	}
 }
 
 // TestRunCaseDefaultsToIsolatedDataDir is the regression test for the eval
@@ -146,6 +229,9 @@ func TestRunCaseDefaultsToIsolatedDataDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(realDataDir, "control.db")); !os.IsNotExist(err) {
 		t.Fatalf("default eval run must not create the configured control.db (stat err=%v)", err)
 	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(cfgPath), "model-state.json")); !os.IsNotExist(err) {
+		t.Fatalf("default eval run must not create model state beside the configured file (stat err=%v)", err)
+	}
 	// Storage isolation must cover both the stable eval tenant and the random
 	// person id minted by the temporary control database. The old regression
 	// assertion checked only eval-* and therefore missed person_* leaks.
@@ -158,6 +244,82 @@ func TestRunCaseDefaultsToIsolatedDataDir(t *testing.T) {
 		if _, existed := beforeScratchDirs[name]; !existed {
 			t.Fatalf("eval run leaked temporary root %q into the package directory", name)
 		}
+	}
+}
+
+// TestRunCaseCredentiallessReplayCrossesModelReadiness is the end-to-end
+// regression for clean CI runners: an offline cassette-backed turn must reach
+// the agent even when HOME has no provider credentials or prior model-state
+// receipt. A shallow provider test cannot catch the gateway readiness gate,
+// which runs before the first model call.
+func TestRunCaseCredentiallessReplayCrossesModelReadiness(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boots the full gateway harness")
+	}
+	_, cfgPath := writeRunnerFixtures(t)
+	const caseID = "credentialless_replay_readiness"
+	writeCredentiallessReplayCassettes(t, caseID)
+	maxTools := 0
+	c := &Case{
+		ID: caseID, Title: "credentialless replay crosses readiness", Channel: "cli",
+		Turns: []Turn{{Input: "Reply with READY."}},
+		Expect: Expectations{
+			Status: "completed", Contains: []string{"READY"},
+			MaxToolCalls: &maxTools, MaxDurationSeconds: 30,
+		},
+		Checks: CheckSettings{NoEmptyResponse: true, NoProviderStackDump: true},
+	}
+
+	output := filepath.Join(t.TempDir(), "out.jsonl")
+	result, err := RunCase(context.Background(), c, RunOptions{ConfigPath: cfgPath, OutputPath: output})
+	if err != nil {
+		t.Fatalf("RunCase: %v", err)
+	}
+	if result.Status != "passed" || !ChecksPassed(result.Checks) {
+		data, _ := os.ReadFile(output)
+		t.Fatalf("credentialless replay did not cross model readiness: result=%+v\n%s", result, data)
+	}
+}
+
+// TestRunCaseReplayCanReadCanonicalWorkspace is the end-to-end regression for
+// path aliases such as macOS' /var -> /private/var. The workspace root stored
+// in the execution scope and the path expanded from
+// {{SELFMIND_VCR_WORKSPACE}} must name the same canonical directory, otherwise
+// replay reaches the agent but every file tool is rejected as out-of-workspace.
+func TestRunCaseReplayCanReadCanonicalWorkspace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boots the full gateway harness")
+	}
+	_, cfgPath := writeRunnerFixtures(t)
+	physicalWorkspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(physicalWorkspace, "input.txt"), []byte("seeded content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workspaceAlias := filepath.Join(t.TempDir(), "workspace-alias")
+	if err := os.Symlink(physicalWorkspace, workspaceAlias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	const caseID = "replay_canonical_workspace_scope"
+	writeWorkspaceReadReplayCassettes(t, caseID)
+	zero := 0
+	c := &Case{
+		ID: caseID, Title: "replay reads canonical workspace", Channel: "cli", Workspace: workspaceAlias,
+		Turns: []Turn{{Input: "Read input.txt, then reply READY."}},
+		Expect: Expectations{
+			Status: "completed", Contains: []string{"READY"},
+			MaxToolErrors: &zero, MaxDurationSeconds: 30,
+		},
+		Checks: CheckSettings{NoEmptyResponse: true, NoProviderStackDump: true},
+	}
+
+	output := filepath.Join(t.TempDir(), "out.jsonl")
+	result, err := RunCase(context.Background(), c, RunOptions{ConfigPath: cfgPath, OutputPath: output})
+	if err != nil {
+		t.Fatalf("RunCase: %v", err)
+	}
+	if result.ToolCalls == 0 || result.ToolErrors != 0 || result.Status != "passed" || !ChecksPassed(result.Checks) {
+		data, _ := os.ReadFile(output)
+		t.Fatalf("canonical replay workspace was not tool-accessible: result=%+v\n%s", result, data)
 	}
 }
 

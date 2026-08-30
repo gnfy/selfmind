@@ -31,8 +31,8 @@ three-state in YAML: omission inherits the built-in profile, while explicit
 disable a built-in cache or Responses behavior. Capability flags such as
 tools, streaming, and vision are built-in profile metadata maintained in Go.
 
-Quirk values are validated during resolution and `selfmind model check` prints
-their effective values plus protocol-mismatch warnings. Adapters never infer a
+Quirk values are validated during resolution; invalid values and protocol
+mismatches surface as actionable configuration errors. Adapters never infer a
 vendor contract from the endpoint hostname. Built-in providers declare their
 headers, HTTP version, schema repair, identity field, and thinking shape in the
 profile; custom proxies receive the same behavior when they resolve the same
@@ -40,18 +40,77 @@ profile.
 
 HTTP headers merge low-to-high as legacy `model.headers`,
 `model.extra_headers`, built-in profile headers, legacy provider `headers`,
-`provider_profiles.<id>.extra_headers`, and role/selection extra headers;
+`providers.<id>.extra_headers` (or `providers.custom.<id>.extra_headers`), and
+role/selection extra headers;
 adapters set protocol defaults (`content-type`, auth, `anthropic-version`)
 first and then apply the merged map, so yaml can
 override any of them as an emergency compatibility escape hatch until a
 release ships the fix. Compatibility defaults stay in Go (profile/adapters),
 never materialized into generated yaml — a config file is a snapshot and
-would pin stale values across upgrades. `selfmind model check` prints the
-merged headers with per-key origin (`Resolver.HeaderOrigins`). `extra_body`
+would pin stale values across upgrades. The resolver retains each merged
+header's origin in `Resolver.HeaderOrigins` for diagnostics. `extra_body`
 and `extra_query` merge provider-to-role, with the higher layer winning;
 request-body objects merge recursively. The transport applies those options
 only at the final HTTP boundary, so CLI, IM, cron, and future remote clients
 share one wire contract.
+
+## User configuration
+
+Provider connections own endpoints, authentication shape, and wire options;
+model routes own model IDs and interactive tuning. Built-in defaults stay in
+Go and are omitted from generated YAML. A built-in override is written directly
+under its stable provider ID:
+
+```yaml
+providers:
+  deepseek:
+    base_url: "https://gateway.example.com/v1"
+    extra_headers:
+      X-Client-Name: "SelfMind"
+
+models:
+  primary:
+    provider: "deepseek"
+    model: "deepseek-chat"
+  auxiliary:
+    enabled: false
+```
+
+User-defined connections live in the single `providers.custom` namespace. The
+map key is the stable provider ID referenced by model routes; it is not a vendor
+type and must not collide with a built-in ID. Custom connections intentionally
+expose only three protocol families and three authentication shapes:
+
+```yaml
+providers:
+  custom:
+    company-gateway:
+      base_url: "https://ai.example.com/v1"
+      protocol: "openai-compatible" # or anthropic-compatible / responses-compatible
+      auth: "bearer"                # or x-api-key / none
+
+models:
+  primary:
+    provider: "company-gateway"
+    model: "company-coder"
+```
+
+Credentials are stored in SelfMind's private auth store rather than YAML.
+`extra_headers` is for non-secret metadata: duplicate names are rejected
+case-insensitively, transport-owned headers are rejected, and credential-bearing
+headers such as `Authorization` and `x-api-key` must use the credential store.
+Credential-shaped keys are likewise rejected recursively in `extra_body` and
+`extra_query`, so non-secret connection snapshots remain safe to persist.
+`quirks` is a typed protocol-encoding surface, not an arbitrary header bag.
+OpenRouter's built-in `HTTP-Referer` and `X-Title` defaults therefore remain
+ordinary profile headers and can be overridden with
+`providers.openrouter.extra_headers`.
+
+`provider_profiles` and `custom:<id>` remain compatibility reads only. Run
+`selfmind config upgrade` to back up and rewrite old provider blocks into the
+new shape. Environment references such as `${OPENAI_API_KEY}` remain references;
+literal embedded provider API keys are moved to the private auth store during
+that explicit upgrade.
 
 `ProviderQuirks.PromptCache` opts an Anthropic-protocol provider into explicit prompt-cache breakpoints: the adapter attaches `cache_control: {"type":"ephemeral"}` to the last system content block and a rolling breakpoint on the last content block of the most recent message before the final user message (never more than 4 breakpoints). Built-in native Anthropic and MiniMax profiles enable it because those endpoints document the contract. Custom endpoints default off, and direct Kimi Coding remains off because its native coding endpoint has not established the same contract. With the quirk off, request bytes are unchanged. Usage accounting normalizes Anthropic cache reads/creation and OpenAI-compatible `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, plus reported reasoning tokens, into `llm.UsageStats`. The kernel `token.updated` event records hit, miss, creation, output, and reasoning totals. `/diag context` renders the latest run totals and hit rate; `selfmind usage` renders the person-scoped 24-hour execution and token report. Neither command embeds provider prices.
 
@@ -107,7 +166,8 @@ SelfMind distinguishes two commonly confused fields:
 Resolution priority:
 
 1. explicit role/primary `context_length` override
-2. `provider_profiles.<id>.context_length`
+2. `providers.<id>.context_length` or
+   `providers.custom.<id>.context_length`
 3. built-in provider profile metadata
 4. provider/local model metadata (for example Codex `models_cache.json`)
 5. custom provider `models.<model>.context_length`
@@ -123,15 +183,122 @@ private/local models whose provider publishes no capability metadata.
 The primary selection lives only under `models.primary`. `reasoning` and
 `service_tier` are optional. Omission or `auto` means provider/model default;
 the resolver deliberately does not send a forced value. Supported values are
-model capabilities, not a global hardcoded enum. `selfmind model set`
-validates them when metadata is discoverable and otherwise preserves the
-explicit value for compatible private endpoints.
+model capabilities, not a global hardcoded enum. The Model Manager validates
+them when metadata is discoverable and otherwise preserves the explicit value
+for compatible private endpoints.
 
-For local onboarding, an auxiliary selection with no provider/model defaults
-to the primary provider/model. Initial model writes materialize both slots.
-After that point auxiliary is independent: changing primary never overwrites
-an existing auxiliary selection. Logical background roles remain available as
-advanced `models.roles.<role>` overrides and inherit auxiliary when omitted.
+For local onboarding, an enabled auxiliary selection with no provider/model
+defaults to the primary provider/model. It can instead be explicitly disabled
+with `models.auxiliary.enabled: false`. When foreground readiness is absent, a bare
+interactive launch opens the same Model Manager as `selfmind model`; explicit
+`selfmind setup` points to that entry rather than implementing another picker.
+The Manager first exposes Provider connections, then shows and validates Main
+and Background routes. Its initial transaction materializes enabled slots. The
+applied transaction in `model-state.json` is the sole authority for foreground
+and background readiness.
+Onboarding does not copy route or verification facts, so a
+later applied route change cannot reopen an unrelated workspace or background
+service stage. A valid legacy setup receipt is accepted once as migration
+evidence and backed up before its model fields are retired.
+After auxiliary is explicit, changing primary never overwrites it. Logical
+background roles remain available as advanced `models.roles.<role>` overrides
+and inherit auxiliary when omitted.
+
+## Transactional provider and route changes
+
+All user-facing provider, credential, and model-route changes converge on one
+daemon-owned transaction service.
+`selfmind model` and bare `/model` in the TUI open the same Model Manager; the
+IM surface exposes a read-only summary rather than a second mutation grammar.
+An online change follows this state machine:
+
+```text
+awaiting_confirmation -> validating -> awaiting_safe_boundary -> draining
+  -> restarting -> starting -> applied
+                         |-> model-attributable probe failure -> rolled_back
+                         \-> infrastructure/unknown failure -> recovery_required
+```
+
+The current run freezes its resolved route. A model-change restart waits for
+that run, including a pending approval or clarification, instead of applying
+the ordinary short restart timeout. Before `draining`, the person may cancel or
+explicitly replace the candidate; afterward the transaction is frozen. New
+work received while draining is stored in the durable queue and starts only in
+the new daemon. The local TUI keeps its draft and reads the durable transaction
+while HTTP is briefly unavailable. A slow notice appears after 30 seconds;
+after the replacement process is started, failure to become healthy within 120
+seconds enters explicit recovery. Three startup failures within five minutes
+open the recovery circuit instead of allowing a service-manager restart loop.
+There is one pending change and a monotonic generation; stale confirmations and
+concurrent writers fail instead of overwriting newer intent. A pending preview
+expires after ten minutes. History is bounded to ten terminal non-secret
+snapshots, and rollback creates a fresh validated transaction from a previous
+applied snapshot.
+
+The state file is `model-state.json` beside the selected `config.yaml`. It
+contains route selections, non-secret provider connection snapshots, separate
+foreground/background and per-role verification evidence, phase transitions, probe
+summaries, generations, restart attempts, and history, but no credentials or
+raw authentication data. A newly entered key is first represented by an opaque
+credential-stage ID. Validation overlays the stage without changing the active
+credential. Provider and route configuration is committed at the safe boundary;
+the staged credential is committed only after the old daemon releases ownership,
+and the exact previous credential image is retained until the replacement daemon
+passes startup probes and real `/health`. Cancellation discards an uncommitted
+stage, and automatic rollback restores provider, route, and credential state as
+one unit. The validated
+candidate is written to YAML only at the
+safe boundary, after the current run is idle. Startup probes it again, then
+records it as running only after runtime construction and the real `/health`
+endpoint succeed. Only a deterministic, model-attributable startup probe
+failure automatically restores the last running snapshot. Network, quota,
+listener, service-manager, and unknown failures preserve the evidence in
+`recovery_required`; the Model Manager's Change status screen offers retry or
+restore against the last healthy routes.
+Schema-v1 through schema-v4 state is backed up before migrating to the current
+readiness-aware state machine.
+Direct YAML edits are shown as configured but unverified until the next daemon
+startup; another model transaction is refused while such drift exists.
+Gateway status exposes a non-secret hash of the effective route snapshot and
+separate readiness details. Foreground readiness is the gate for user agent
+work; each background role retains independent readiness. Maintenance roles may
+continue through their verified auxiliary fallback floor when an unrelated
+override is unavailable. In particular, an explicit `semantic_recall` failure
+degrades turn-start expansion to deterministic lexical recall without falling
+back to auxiliary or parking other maintenance. Transient timeout, rate, and
+network failures retry with bounded backoff; authentication, missing-model, and
+configuration failures wait for human repair. A successful bounded probe
+persists recovery and resumes normal role work without draining a backlog.
+Aggregate background readiness remains a summary of all enabled roles. A failed or disabled Background route does
+not take a verified Main route offline: status reports degraded or disabled
+background work and the foreground queue continues. If foreground readiness is
+missing, model-free controls remain available but new agent-backed messages are
+durably queued. Cancelling a preview that restores foreground readiness
+immediately wakes the parked queue in order. An explicit restore first waits for the
+process holding the failed candidate to release Gateway ownership, clears the
+prior running proof, restores the last healthy selection, and starts a
+replacement process. Managed restore waits only for the process started by the
+existing service manager and never races it with a detached fallback. Startup
+probes and `/health` must establish a new verified-running boundary before the
+queue resumes.
+
+Model discovery prefers a live provider catalogue, then a timestamped fresh
+cache, then a visibly stale cache or built-in fallback. A model ID may always
+be entered manually; that does not bypass the same contract probes. Existing
+reasoning and service-tier settings survive a model selection only when known
+compatible. Unknown compatibility resets the affected setting to provider
+`auto` with a notice. Explicit values are authoritative.
+
+Validation has two boundaries. The Model Manager automatically sends the
+appropriate bounded contract probe after each completed selection: a foreground
+probe for Main and a background or maintenance-JSON probe for Background and
+its six managed roles. The final daemon transaction resolves and probes the
+whole draft again inside the daemon environment before changing service state.
+This prevents a shell credential from appearing healthy while the background
+runtime cannot use it. A newly entered API key stays in an opaque staged auth
+record during validation and is never written to YAML; service definitions
+contain paths and non-credential environment only. A failed probe keeps the
+draft editable and never masquerades as verified.
 
 For Anthropic Messages, `thinking_mode: anthropic` maps an explicit reasoning
 effort to an enabled thinking budget (`low=4096`, `medium/default=8192`,
@@ -197,7 +364,7 @@ The built-in `openrouter` profile declares `HTTP-Referer` (app link), `X-Title`
 profile headers rather than adapter defaults on purpose: a profile configured
 with any other protocol, and every streaming call, bypasses the OpenRouter
 adapter's own request builder, so adapter-set attribution reached almost no
-real request. `provider_profiles.openrouter.extra_headers` still overrides
+real request. `providers.openrouter.extra_headers` still overrides
 each of them for forks and proxies.
 
 ## DeepSeek V4
@@ -216,9 +383,9 @@ it remains stable across channels and runs but changes across people. The
 field is sent only when a provider profile declares
 `user_identity_field: user_id`.
 
-`selfmind model check --role <role> --live` validates both the ordinary native
-tool schema and the complete thinking tool loop: reasoning + tool call, tool
-result replay, then a final assistant answer.
+The Model Manager's automatic route validation and `doctor --probe-models`
+validate both the ordinary native tool schema and the complete thinking tool
+loop: reasoning + tool call, tool result replay, then a final assistant answer.
 
 ## Kimi Coding Plan
 
@@ -230,10 +397,10 @@ models:
     provider: "kimi-coding"
     model: "kimi-for-coding"
 
-provider_profiles:
-  kimi-coding:
-    api_key: "${KIMI_CODING_API_KEY}"
 ```
+
+Store the API key through Model Manager or `selfmind model`; it is not written
+to this YAML.
 
 Default behavior:
 
@@ -255,16 +422,16 @@ models:
     provider: "minimax"
     model: "MiniMax-M3"
 
-provider_profiles:
-  minimax:
-    api_key: "${MINIMAX_API_KEY}"
 ```
+
+Store the API key through Model Manager or `selfmind model`; it is not written
+to this YAML.
 
 OAuth config:
 
 ```sh
 selfmind auth login minimax-oauth
-selfmind model set minimax-oauth MiniMax-M3
+selfmind model
 ```
 
 Default behavior:
@@ -299,8 +466,8 @@ parsing, OAuth refresh payloads, or provider login state inside an LLM adapter.
   Messages, so optional-only tools never serialize `required: null`.
   Responses-compatible adapters apply their stricter protocol rule afterwards
   and serialize an empty required set as `[]`.
-- `selfmind model check --live [--role <name>]` sends one bounded request with
-  an optional-only probe tool when the resolved transport advertises native
+- The Model Manager automatically sends one bounded request with an
+  optional-only probe tool when a completed route's transport advertises native
   tools. This verifies the real protocol adapter and endpoint rather than only
   resolving configuration. `doctor --probe-models` uses the same schema probe
   while grouping roles that share one provider route.
@@ -347,6 +514,29 @@ absorbs these without touching the wire contract:
 - Provider HTTP calls use the shared `llm.ProviderHTTPClient()` with TCP
   keepalive (`httpclient.go`) so dead sockets surface fast. The Kimi
   HTTP/1.1-only path clones the same keepalive transport.
+- Provider requests use one route-aware shared transport. On macOS it reads the
+  current manual system proxy with a 30-second cache and refreshes immediately
+  after connection-level failures. A launchd-managed Gateway treats that live
+  system route as authoritative, so moving from direct office access to a
+  Clash-backed home network—or back again—does not require a CLI restart. Local
+  provider endpoints and system exclusions stay direct. PAC/WPAD is rejected
+  with an actionable error until supported; SelfMind never silently bypasses a
+  system route that still requires a proxy.
+- Linux and non-managed processes use standard proxy environment variables or
+  host TUN/routing. Managed Gateway installation preserves only
+  credential-free exact `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`
+  names (including lowercase forms); proxy-shaped lookalikes and URLs with
+  inline credentials are rejected. Because Go does not read `ALL_PROXY`, a safe
+  value fills missing `HTTP_PROXY` and `HTTPS_PROXY`. `selfmind env refresh
+  --restart` rewrites and verifies the launchd/systemd service definition from
+  the newly sampled login environment, then commits the verified service
+  generation so ownership status cannot remain stale. Active runs keep their
+  frozen execution environment.
+- `/diag` shows the selected provider route and local-proxy reachability without
+  credentials, then names the concrete recovery action. Retryable background
+  learning failures retain a network-route fingerprint. A direct/proxy or local
+  listener state change releases those jobs on the next maintenance sweep; an
+  explicit managed restart also grants one fresh attempt.
 - **No cursor resume.** With `store=false` the server never persisted the
   response, so `previous_response_id` resume is impossible — a retry is always
   a full re-send. Do not attempt partial-resume.

@@ -186,16 +186,14 @@ User-facing command:
 
 ```sh
 selfmind model
-selfmind model current
-selfmind model list
-selfmind model set openai gpt-4o
 ```
 
 Interactive flow:
 
-1. Show provider list: OpenAI, Anthropic, Google, `Custom endpoint (enter URL manually)`, coding-CLI auth reuse entries, saved custom endpoints, and built-in provider profiles.
-2. Prompt for API key, except for external auth reuse providers.
-3. Fetch remote model list when the provider exposes one, using a local cache and static fallback list.
+1. Choose Main, Background, or an optional background-role override.
+2. Choose a provider and model; prompt for a missing API key when required.
+3. Validate the completed selection automatically, using live discovery with cache and static fallbacks for model choices.
+4. Review all edits and apply them as one daemon-owned transaction.
 4. Let the user choose a model or enter one manually.
 5. Save to `config.yaml`.
 
@@ -294,6 +292,11 @@ Gateway HTTP control endpoints:
 | `GET` | `/v1/tasks/events` | recent events for the current or specified task |
 
 Shutdown enters draining state, rejects new runs, waits for active runs, and can be force-stopped by CLI when requested.
+The shutdown endpoint flushes its complete acceptance response before allowing
+the runtime owner to close the HTTP server. For upgrade compatibility, the CLI
+also reconciles a lost response only when the request was fully written and the
+local runtime receipt proves that the original owner disappeared or was
+replaced; an EOF while that owner remains is still an error.
 
 ## Identity, Tasks, Workspaces
 
@@ -551,8 +554,7 @@ git diff --check
 Manual smoke checks:
 
 ```sh
-selfmind -f ./tmp/config.yaml model set openai gpt-test
-selfmind -f ./tmp/config.yaml model current
+selfmind -f ./tmp/config.yaml model
 selfmind -f ./tmp/config.yaml gateway run
 selfmind -f ./tmp/config.yaml gateway status
 selfmind -f ./tmp/config.yaml gateway stop

@@ -303,6 +303,29 @@ warning: unusually many cron jobs — check for runaway system registration.
 	}
 }
 
+func TestDoctorNetworkBlockedLearningNamesRouteRecoveryWithoutReplay(t *testing.T) {
+	full := `SelfMind doctor — diagnostic bundle
+
+== Background learning ==
+queued: 0  retrying: 0  running: 0  provider-blocked: 0  network-blocked: 2  prompt-revision-blocked: 0
+last error: proxyconnect tcp: connection refused
+status: foreground work can continue; background learning is degraded`
+
+	issues := collectDoctorIssues(full, configDiagnostics{})
+	if len(issues) != 1 {
+		t.Fatalf("issues=%+v", issues)
+	}
+	summary := formatDoctorSummary(issues, nil, false)
+	for _, want := range []string{"start Clash", "disable a stale System Proxy", "selfmind env refresh --restart", "retries automatically"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+	if strings.Contains(summary, "selfmind maintenance replay") {
+		t.Fatalf("network recovery must not be reduced to manual replay:\n%s", summary)
+	}
+}
+
 func TestDoctorSummaryReportsGatewayAndDiagnosticReadFailures(t *testing.T) {
 	full := `SelfMind doctor — diagnostic bundle
 

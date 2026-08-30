@@ -8,8 +8,8 @@ import "testing"
 // including "/"-leading file paths — passes.
 func TestContainsUnresolvedPasteToken(t *testing.T) {
 	rejected := []string{
-		"Inspect this: [[ paste:0 main.go.. [80 lines] .. end ]]",
-		"看一下 [[ image:0 selfmind-paste-1.png ]] 这张图",
+		"Inspect this: [Paste #1 · 80 lines]",
+		"看一下 [Image #1 · selfmind-paste-1.png] 这张图",
 	}
 	for _, in := range rejected {
 		if !containsUnresolvedPasteToken(in) {
@@ -20,6 +20,7 @@ func TestContainsUnresolvedPasteToken(t *testing.T) {
 		"/tmp/selfmind-paste-1.png 帮我看一下这张图",
 		"plain text",
 		"[[ paste:x no-digit ]]",
+		"[[ paste:0 legacy token is ordinary text ]]",
 	}
 	for _, in := range accepted {
 		if containsUnresolvedPasteToken(in) {

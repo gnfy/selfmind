@@ -121,8 +121,9 @@ provider_profiles:
   and no SelfMind release has shipped the fix yet, add the matching `extra_*`
   option under its provider profile, then remove it after the built-in profile
   catches up.
-- **Verify it took effect**: `selfmind model check` prints the merged headers
-  with their origins and lists extra body/query keys without printing values.
+- **Inspect and validate it**: `selfmind model` shows the effective routes, and
+  every completed selection runs an automatic bounded probe without printing
+  header/body/query values.
 - Legacy `headers` remains readable for compatibility, but new and generated
   configuration should use `extra_headers`; the latter wins on duplicate keys.
 - Defaults deliberately live in code, not in generated yaml: a config file is
@@ -148,7 +149,8 @@ Omit a boolean quirk to inherit the built-in profile. Set it explicitly to
 `true` or `false` only when the endpoint contract differs. Valid identity
 values are `auto`, `user_id`, `metadata.user_id`, and `off`; valid HTTP values
 are `auto`, `http1`, and `http2`. `system_message_mode` is deprecated and
-ignored. `selfmind model check` shows the resolved contract and warnings.
+ignored. Model Manager validates the resolved contract automatically and keeps
+warnings with the draft.
 
 ## 2. Model routing
 
@@ -177,16 +179,24 @@ optional and has the highest priority; a partial override inherits missing
 provider/model behavior from `models.auxiliary`.
 
 On a local installation, omitting the auxiliary provider/model intentionally
-defaults them to the primary selection. Initial setup and the first
-`selfmind model set` materialize that choice in YAML. Once auxiliary has been
+defaults them to the primary selection. Initial setup and the first accepted
+Model Manager change materialize that choice in YAML. Once auxiliary has been
 materialized or customized, changing primary does not overwrite it. This keeps
 onboarding to two visible slots without exposing the internal role catalogue.
 
 `reasoning` and
 `service_tier` are optional; `auto` or omission means the provider/model
 default and sends no forced value. When capability metadata is available,
-`selfmind model set` validates requested values and `selfmind model current`
-shows the discovered defaults.
+Model Manager validates each completed selection and shows the discovered
+defaults.
+
+Model switching has no additional YAML keys. SelfMind stores the non-secret
+transaction generation, pending change, last running snapshot, probe summaries,
+verified-running timestamp, and bounded history in `model-state.json` beside
+this file. That file is the sole authority for Model Readiness; onboarding does
+not duplicate its routes. Do not edit it. A direct edit to `models.primary` or
+`models.auxiliary` is treated as configured but unverified until daemon startup
+probes it; use `selfmind model` for the normal validated path.
 
 For `kimi-coding`, every role uses the provider default Anthropic Messages
 transport (`https://api.kimi.com/coding/v1/messages`). This matches Hermes and
@@ -391,7 +401,7 @@ models:
       model: "kimi-for-coding"
 ```
 
-`selfmind model check --role memory_extract` prints the resolved fallback, or
+The `memory_extract` row in `selfmind model` shows the resolved fallback, or
 says none is available when both positions share one endpoint and credential.
 
 `memory.governance.model_role`, `tasks.maintenance_model_role`, and
@@ -517,7 +527,7 @@ editor:
   large_paste_lines: 10
 evolution:
   enabled: true                 # skill review plus deterministic workflow profiling
-  mode: "auto-readonly"         # observe | shadow | auto-readonly
+  mode: "observe"               # observe | shadow | auto-readonly (legacy modes observe only)
   min_complexity_threshold: 5
   nudge_interval: 10
   shadow_after_observations: 3
@@ -547,12 +557,14 @@ default. This is expected recovery behavior, not a rejected approval. The
 caller's own remaining deadline may shorten either configured value.
 
 Evolution profiles are deterministic projections of completed run events; they
-do not add a foreground model call. `observe` only records profiles,
-`shadow` also evaluates bounded read-only batching candidates without using
-them, and `auto-readonly` enables a candidate only after the configured
-observation and zero/low-failure gates. Automatic evolution never batches
-writes, shell commands, credentials, or network actions. `mode: auto` remains
-accepted as a compatibility alias for `auto-readonly`.
+do not add a foreground model call. The default `observe` mode records profiles
+without enabling batching advice. `shadow`, `auto-readonly`, and the `auto`
+alias remain accepted for configuration compatibility, but ordinary completed
+runs now advance observation counts only. They never increment shadow matches,
+revive degraded candidates, or authorize runtime advice. `batch_read` advice
+requires a separately verified candidate-versus-baseline comparison contract;
+the current profiler does not create one. Automatic evolution never batches
+writes, shell commands, credentials, or network actions.
 
 ---
 

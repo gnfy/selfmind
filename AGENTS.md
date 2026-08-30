@@ -1,24 +1,24 @@
-# SelfMind Agent Notes
+# SelfMind Agent Guide
 
 This file is injected into coding-agent sessions. Keep it limited to rules that
-apply across most tasks. Domain mechanics belong in the referenced documents;
-current priorities belong only in `docs/STATUS.md`.
+apply across most tasks. Domain documents own mechanisms; `docs/STATUS.md` owns
+current capability and priority.
 
-## Product Direction
+## Mission and Source of Truth
 
 SelfMind Phase 1 is an always-on personal AI gateway. One person may work from
 CLI, IM, cron, and HTTP while tasks, runs, approvals, memory, and handoffs follow
-that person. Chat transcripts remain channel-local. Execution quality - sound
-planning, reliable tools, recovery, bounded context, and evidence-backed
-verification - is the competence floor.
+that person. Chat transcripts remain channel-local. Sound planning, reliable
+tools, recovery, bounded context, and evidence-backed verification are the
+competence floor.
 
 Preserve tenant boundaries for future SaaS work, but do not add SaaS or Runner
-complexity without an explicit active plan. Judge progress by the Phase-1
-scenarios and daily-driver evidence, not feature-count parity.
+complexity without an explicit active plan. Judge progress by Phase-1 scenarios
+and daily-driver evidence, not feature-count parity.
 
 Read before making assumptions:
 
-- `docs/STATUS.md`: current implementation snapshot and only priority list.
+- `docs/STATUS.md`: implementation snapshot and only priority list.
 - `docs/identity-continuity.md`: product north star and acceptance scenarios.
 - `docs/architecture-constraints.md`: package and size constraints.
 - `docs/README.md`: generated documentation index and lifecycle state.
@@ -45,49 +45,61 @@ Development-only Agent Skills live under `.agents/skills`. Codex, Gemini, Qwen,
 and other Agent Skills-compatible coding agents discover them there. A thin
 `.claude/skills` entrypoint may redirect Claude Code to the same canonical body;
 compatibility entries must not duplicate the workflow. Agents that scan neither
-directory must use this table as the discovery fallback and read the matching
-`SKILL.md` completely before acting. A `.selfmind-developer-only` marker means
-the SelfMind daemon must not expose that directory as a product runtime Skill.
+directory must use this table as the fallback and read the matching `SKILL.md`
+completely before acting. A `.selfmind-developer-only` marker means the SelfMind
+daemon must not expose that directory as a product runtime Skill.
 
 | Skill | Use |
 | --- | --- |
-| `.agents/skills/selfmind-daily-driver-audit/SKILL.md` | Multi-window audits of real SelfMind runtime evidence, daily reports, diagnostics, delivery, memory governance, approvals, tool economics, and evidence liveness. |
+| `.agents/skills/selfmind-daily-driver-audit/SKILL.md` | Multi-window audits of real runtime evidence, reports, diagnostics, delivery, memory governance, approvals, tool economics, and evidence liveness. |
 
-## Working Protocol
+## Work Standard
 
-1. Read this file, `docs/STATUS.md`, and the relevant domain document.
-2. Run `git status --short`. The tree is often dirty; never revert unrelated
+1. **Inspect before acting.** Read this file, `docs/STATUS.md`, and the relevant
+   domain document. Run `git status --short`, then locate the current boundary
+   with `rg` and focused reads. The tree is often dirty; never revert unrelated
    user or agent work.
-3. Locate the current boundary with `rg` and focused reads before editing.
-4. Respect analysis-only requests. For implementation requests, carry the
-   change through focused tests, the release gate when appropriate, and the
-   installed WSL binary when the user is testing it.
-5. Keep edits scoped. Record a larger follow-up instead of hiding a risky
-   refactor in a narrow fix.
-6. Test at the behavioral boundary. A user-visible message-path change also
-   updates or adds its eval case.
-7. Update `docs/STATUS.md` only when current capability or priority changes.
-   Update `AGENTS.md` only when a cross-cutting invariant changes.
+2. **Manage ambiguity deliberately.** State a material assumption when it helps
+   review. Ask one concise question only when different answers would materially
+   change the implementation, risk, or user-visible result; otherwise choose a
+   reasonable interpretation and proceed.
+3. **Prefer the smallest complete change.** Implement only requested behavior.
+   Do not add speculative features, configurability, abstractions, or error
+   handling for impossible states. Match existing patterns. Do not refactor,
+   reformat, or remove adjacent code you do not need to change. Remove only
+   artifacts made obsolete by your own change.
+4. **Respect the request type.** Analysis-only requests do not authorize edits.
+   For implementation requests, carry the change through focused tests, the
+   release gate when appropriate, and the installed WSL binary when the user is
+   testing it. Record a larger follow-up instead of hiding a risky refactor in a
+   narrow fix.
+5. **Define and verify success.** For multi-step work, make each step lead to an
+   observable check. Test at the behavioral boundary. A user-visible
+   message-path change also updates or adds its eval case. Treat failures as
+   evidence, diagnose them, and never claim unperformed verification.
+6. **Update the right source.** Change `docs/STATUS.md` only when current
+   capability or priority changes. Change this file only when a cross-cutting
+   invariant changes.
 
 ## Architecture and Runtime
 
-- `selfmind` is the only binary. `cmd/selfmind/main.go` stays thin; command
+- `selfmind` is the only binary. Keep `cmd/selfmind/main.go` thin; command
   behavior belongs in `internal/cliapp`.
 - CLI, IM, cron, and HTTP agent work executes in the daemon. The TUI is a daemon
   client with no in-process fallback. A daemon failure must be actionable and
   must never start a divergent second runtime.
 - The daemon owns the worker pool, auth manager, scheduling, and `control.db`.
   Do not add business-level cross-process locks.
-- Preserve package ownership: `cliapp` owns entrypoints; `gateway/httpapi`
-  owns orchestration; `gateway/cli` owns TUI orchestration; `ui/components`
-  owns reusable UI; `app` owns wiring; `kernel` owns the loop;
-  `modelruntime` owns provider resolution; `tools` owns tool behavior.
+- Preserve package ownership: `cliapp` owns entrypoints; `gateway/httpapi` owns
+  orchestration; `gateway/cli` owns TUI orchestration; `ui/components` owns
+  reusable UI; `app` owns wiring; `kernel` owns the loop; `modelruntime` owns
+  provider resolution; `tools` owns tool behavior.
 - `kernel` must not depend on gateway packages or concrete tools. Inject
   process-wide state through `app` or the gateway runner; avoid mutable globals.
 - Filesystem and process tools run under the request's `ExecutionScope` and
-  workspace roots, never the daemon cwd. Every child process environment is
-  built through `BuildProcessEnv`; execution state persists references and
-  policy, not raw credentials.
+  workspace roots, never the daemon cwd. Build every child-process environment
+  through `BuildProcessEnv`; persist execution references and policy, not raw
+  credentials.
 - Derive sandbox views and compatibility from typed scope, `ToolProfile`, and
   platform conventions. Do not add project- or vendor-specific branches to
   generic execution code.
@@ -102,23 +114,23 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
   identity, workspace, task, run, queue, approval, and delivery state.
 - Raw transcripts stay channel-local. Shared state is limited to structured
   tasks, runs, events, handoffs, approvals, artifacts, memory, and skills.
-- Explicit control commands such as `/status`, `/tasks`, `/workspace`,
-  `/resume`, `/approve`, and `/stop` remain model-free. Other natural language
-  is agent-first; do not add greeting or keyword bypasses.
+- Explicit controls such as `/status`, `/tasks`, `/workspace`, `/resume`,
+  `/approve`, and `/stop` remain model-free. Other natural language is
+  agent-first; do not add greeting or keyword bypasses.
 - Keep one active run per person until an active plan explicitly changes the
   concurrency contract. New work queues durably; a continuation steers the
   active run and is never queued.
 - Run events use the per-run channel installed with `kernel.WithEventChannel`.
   Never swap a shared Agent event channel.
-- User-visible state comes from structured outcomes, handoffs, and events, not
-  prose parsing. A task is `running` only while a run is executing. Recovery
-  produces one durable, deduplicated, actionable notification.
+- Derive user-visible state from structured outcomes, handoffs, and events, not
+  prose parsing. A task is `running` only while a run executes. Recovery emits
+  one durable, deduplicated, actionable notification.
 - Long external operations use `watch_external`; do not occupy an agent turn
   with repeated model-driven polling or an unsupervised goroutine.
-- Daemon-originated runs carry an origin. Clients render them as concise
-  results, not replayed transcript progress. Approvals and clarifications stay
-  visible. CLI streams user-originated progress; IM sends bounded milestones
-  and a final result, never token deltas.
+- Daemon-originated runs carry an origin. Clients render concise results rather
+  than replayed transcript progress. Approvals and clarifications stay visible.
+  CLI streams user-originated progress; IM sends bounded milestones and a final
+  result, never token deltas.
 - `sent_unconfirmed` is terminal for blind retry. Only the bounded,
   inbound-triggered catch-up path may claim and resend it.
 
@@ -130,7 +142,7 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
 - Continuity comes from the person-level work spine: one slim user/final-answer
   entry per agent turn plus touched paths and source. Tool intermediates and
   system prompts remain in run events.
-- Durable context follows one path:
+- Durable context has one path:
   `control.db -> selector -> TaskRuntimeContext -> RuntimeContextBundle -> prompt`.
   Extend typed selectors or slices; do not append raw rows or event JSON in
   handlers.
@@ -141,8 +153,8 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
   Compaction preserves the original goal, recent tail, decisions, unresolved
   work, and relevant paths; deterministic trimming is its safe fallback.
 - Memory facts, task cards, handoffs, sessions, artifacts, and the work spine
-  remain distinct sources. Recall sources are bounded and degrade without
-  blocking a foreground turn.
+  remain distinct sources. Recall is bounded and degrades without blocking a
+  foreground turn.
 - Person data is person-partitioned; skills are control-tenant assets. Durable
   ownership and execution authority are separate typed scope fields.
 - User preferences are global; project/environment memory uses logical
@@ -160,7 +172,7 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
   pending human input. It never deletes run/artifact history, touches open work,
   or overrides a pin.
 
-## Models and Loop
+## Models and Agent Loop
 
 - Provider integration follows
   `ProviderProfile -> Resolver -> Runtime -> llm.TransportConfig -> transport`.
@@ -174,22 +186,22 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
   at registration and adapter boundaries; quarantine invalid external tools,
   but fail startup for an invalid active built-in.
 - Keep role names stable: `coding_agent`, `auxiliary`, `fast_classifier`,
-  `memory_extract`, `background_review`, `skill_curator`, `semantic_recall`,
-  and `summarizer`. Explicit role overrides win; otherwise bounded background
-  work inherits `models.auxiliary`, never the primary model silently.
+  `memory_extract`, `background_review`, `skill_curator`, `semantic_recall`, and
+  `summarizer`. Explicit role overrides win; otherwise bounded background work
+  inherits `models.auxiliary`, never the primary model silently.
 - `context_length` is total context; `max_tokens` is output capacity. Never
   substitute one or fabricate model metadata.
 - Strategy is coarse policy, not keyword taxonomy. `update_plan` is
   model-decided for genuinely multi-step work; every update is a complete
   snapshot, and all steps resolve before a done outcome.
 - Tool budgets are bounded and may extend only after real new evidence.
-  Repeating an identical call without changed input/state is not progress.
-  Completion requires structured outcome plus execution evidence.
+  Repeating an identical call without changed input or state is not progress.
+  Completion requires a structured outcome plus execution evidence.
 - Project discovery is deterministic, bounded, read-only, and language
   agnostic. Verification suggestions come only from detected manifests,
   lockfiles, and declared scripts.
 
-## Tools, Safety, and Skills
+## Tools, Approvals, and Skills
 
 - Every invocation has typed `ToolInvocationScope`. Asset ownership
   (`ControlTenantID`, `PersonID`) and execution authority (`WorkspaceID`,
@@ -209,7 +221,7 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
   parks work. Smart triage is cheap-role-only, structured, and fail-closed;
   missing judge, timeout, parse error, or provider failure asks the human.
 - Arbitrary code runs unprompted in smart mode only when enforced isolation
-  proves writes confined to scope and no network/credential escape. Host,
+  proves writes confined to scope and no network or credential escape. Host,
   uncontained, networked, privileged, or unknown execution asks.
 - The daemon defines approval choices. Clients render them and never invent
   authority. Stored grants must be narrower than the action and cover every
@@ -218,12 +230,17 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
   runtime, and package-manager state before changing the next command.
 - Skills are instruction assets, not auto-executed scripts. Their scripts still
   pass through normal tools and safety. Catalog replacement preserves
-  provenance; automatic curation governs writable, unpinned agent-created assets
-  only. Three explicitly passed built-in procedures may publish without granting
-  execution authority; network/delete/external/delegated effects still require
-  management. A repair includes the failed section and changes at most three
-  declared sections only after attributable failure and verified same-work-unit
-  recovery.
+  provenance; automatic curation governs writable, unpinned agent-created
+  assets only. Three independent, comparable, verified work units using
+  eligible built-in tools may publish to the control-managed logical-workspace
+  root without granting execution authority;
+  network/delete/external/delegated effects and user-global widening still
+  require management. Ordinary success is observation, never shadow evidence.
+  A repair includes the failed section, changes at most three declared sections,
+  and uses daemon-derived class thresholds: deterministic interface drift may
+  publish after one attributable verified recovery, semantic drift requires
+  three independent recoveries, and transient/not-applicable evidence cannot
+  auto-publish.
 
 ## UI and Commands
 
@@ -242,11 +259,11 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
   production path. Pure algorithms, migrations, and mechanics belong in Go
   tests.
 - `evalcases/` is release evidence. Every model-backed case has a committed
-  replay cassette; deterministic cases declare `model_required: false`.
-  Drafts stay under ignored draft directories. Mock success is never evidence.
+  replay cassette; deterministic cases declare `model_required: false`. Drafts
+  stay under ignored draft directories. Mock success is never evidence.
 - Provider replay is offline, but tools use the host. Cases declare required
-  commands. Only evidence a workstation cannot prove may be explicitly owned
-  by CI; local output then says `CI-DEFERRED` and release still requires Action.
+  commands. Only evidence a workstation cannot prove may be explicitly owned by
+  CI; local output then says `CI-DEFERRED` and release still requires Action.
 - Delete superseded cases and cassette directories together. Missing, orphaned,
   or invalid evidence fails corpus tests.
 - Run `selfmind selfcheck --fast` during edits and full `selfmind selfcheck`
@@ -254,7 +271,7 @@ the SelfMind daemon must not expose that directory as a product runtime Skill.
   `internal/kernel/llm`, and `internal/app`.
 - `AGENTS.md` is cross-cutting policy and stays below 20 KiB.
   `docs/STATUS.md` is current state and stays below 300 lines. Domain documents
-  own mechanisms; `docs/manifest.yaml` owns document lifecycle metadata;
+  own mechanisms; `docs/manifest.yaml` owns lifecycle metadata;
   `docs/README.md` is generated.
 - At most one plan is active. Active or paused plans declare an approver and a
   review date; an expired plan needs a verdict. Historical plans are archived

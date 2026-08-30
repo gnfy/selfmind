@@ -100,6 +100,10 @@ Workspace trust is enforced as a durable owner-controlled boundary:
 - only an authenticated local CLI may grant or revoke workspace trust; IM,
   cron, and remote HTTP cannot. Use `selfmind ws trust [id]` and
   `selfmind ws untrust [id]`;
+- first-use setup is one such explicit local trust act: it shows the canonical
+  project path and trust consequence before calling the local-control-only
+  registration endpoint. The filesystem root and user home directory are never
+  accepted as implicit defaults. Declining or cancelling setup grants nothing;
 - workspaces created by older versions are migrated to untrusted with
   `migration_review_required`; newly discovered or remote workspaces also
   start untrusted. `selfmind doctor` lists migrated paths that need review;

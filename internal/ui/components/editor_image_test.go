@@ -8,7 +8,7 @@ import (
 )
 
 // TestEditorAttachImageTokenAndExpand pins the image-placeholder contract
-// (mirroring [[ paste:N ]]): the composer shows a compact token — never the
+// (mirroring [Paste #N · size]): the composer shows a compact token — never the
 // raw path, which starts with "/" and used to be routed as a slash command —
 // and ExpandValue substitutes the real path back for the submit pipeline.
 func TestEditorAttachImageTokenAndExpand(t *testing.T) {
@@ -16,8 +16,8 @@ func TestEditorAttachImageTokenAndExpand(t *testing.T) {
 	e.textarea.SetValue("看一下这张图")
 
 	token := e.AttachImage("/mnt/c/Users/u/AppData/Local/Temp/selfmind-paste-1.png")
-	if !strings.Contains(token, "image:0") || !strings.Contains(token, "selfmind-paste-1.png") {
-		t.Fatalf("token = %q, want an [[ image:0 …name… ]] placeholder", token)
+	if token != "[Image #1 · selfmind-paste-1.png]" {
+		t.Fatalf("token = %q, want canonical image placeholder", token)
 	}
 	if display := e.Value(); strings.Contains(display, "/mnt/c/") {
 		t.Fatalf("display value leaks the raw path: %q", display)
@@ -30,7 +30,7 @@ func TestEditorAttachImageTokenAndExpand(t *testing.T) {
 	if !strings.Contains(expanded, "/mnt/c/Users/u/AppData/Local/Temp/selfmind-paste-1.png") {
 		t.Fatalf("expanded = %q, want the real path substituted back", expanded)
 	}
-	if strings.Contains(expanded, "[[ image:") {
+	if strings.Contains(expanded, "[Image #") {
 		t.Fatalf("expanded = %q, token must not survive expansion", expanded)
 	}
 

@@ -35,10 +35,14 @@ func WithSearchFn(fn func(query string, limit int) (interface{}, error)) Session
 
 // NewSessionBrowser creates a new session browser modal.
 func NewSessionBrowser(c *common.Common, width, height int, opts ...SessionBrowserOption) *SessionBrowser {
+	border := common.DefaultStyles().Border
+	if c != nil && c.Styles != nil {
+		border = c.Styles.Border
+	}
 	vp := viewport.New(width, height-3)
 	vp.Style = lipgloss.NewStyle().
 		BorderStyle(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(border).
 		Padding(0, 1)
 
 	sb := &SessionBrowser{
@@ -146,7 +150,7 @@ func (sb *SessionBrowser) View() string {
 
 	// Header
 	header := s.Sidebar.Panel.Copy().
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(s.Border).
 		BorderBottom(true).
 		Padding(0, 1).
 		Width(sb.width).
@@ -158,7 +162,7 @@ func (sb *SessionBrowser) View() string {
 		searchBar = "  Search: (type to filter sessions, Enter to browse)"
 	}
 	searchLine := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("250")).
+		Foreground(s.FgMuted).
 		Render(searchBar)
 
 	// Session list
@@ -179,7 +183,7 @@ func (sb *SessionBrowser) View() string {
 		var prefixStr string
 		if i == sb.selected {
 			prefixStr = s.Sidebar.Item.Copy().
-				Foreground(lipgloss.Color("202")).
+				Foreground(s.Primary).
 				Render("▶")
 		} else {
 			prefixStr = "  "
@@ -196,7 +200,7 @@ func (sb *SessionBrowser) View() string {
 
 	// Footer hint
 	footer := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("240")).
+		Foreground(s.FgSubtle).
 		Render("  ↑↓ navigate  ·  Enter select  ·  Esc close")
 
 	return fmt.Sprintf("%s\n%s\n%s\n%s",

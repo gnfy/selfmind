@@ -212,6 +212,7 @@ type vcrProvider struct {
 type recordedEvent struct {
 	Content          string                 `json:"content,omitempty"`
 	ReasoningContent string                 `json:"reasoning_content,omitempty"`
+	Phase            AssistantPhase         `json:"phase,omitempty"`
 	ToolCalls        []ToolCall             `json:"tool_calls,omitempty"`
 	Usage            *UsageStats            `json:"usage,omitempty"`
 	FinishReason     string                 `json:"finish_reason,omitempty"`
@@ -431,7 +432,7 @@ func replayStream(events []recordedEvent) <-chan StreamEvent {
 
 func toRecorded(e StreamEvent) recordedEvent {
 	r := recordedEvent{
-		Content: e.Content, ReasoningContent: e.ReasoningContent, ToolCalls: e.ToolCalls, Usage: e.Usage, FinishReason: e.FinishReason,
+		Content: e.Content, ReasoningContent: e.ReasoningContent, Phase: e.Phase, ToolCalls: e.ToolCalls, Usage: e.Usage, FinishReason: e.FinishReason,
 		EventType: e.EventType, ToolName: e.ToolName, ToolCallID: e.ToolCallID, ToolArgs: e.ToolArgs,
 		ToolResult: e.ToolResult, DurationSeconds: e.DurationSeconds, Payload: e.Payload,
 	}
@@ -443,7 +444,7 @@ func toRecorded(e StreamEvent) recordedEvent {
 
 func fromRecorded(r recordedEvent) StreamEvent {
 	e := StreamEvent{
-		Content: r.Content, ReasoningContent: r.ReasoningContent, ToolCalls: r.ToolCalls, Usage: r.Usage, FinishReason: r.FinishReason,
+		Content: r.Content, ReasoningContent: r.ReasoningContent, Phase: r.Phase, ToolCalls: r.ToolCalls, Usage: r.Usage, FinishReason: r.FinishReason,
 		EventType: r.EventType, ToolName: r.ToolName, ToolCallID: r.ToolCallID, ToolArgs: r.ToolArgs,
 		ToolResult: r.ToolResult, DurationSeconds: r.DurationSeconds, Payload: r.Payload,
 	}

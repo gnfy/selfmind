@@ -35,7 +35,7 @@ type EvolutionPolicy struct {
 
 func (p EvolutionPolicy) normalized() EvolutionPolicy {
 	if strings.TrimSpace(p.Mode) == "" {
-		p.Mode = "auto-readonly"
+		p.Mode = "observe"
 	}
 	if strings.EqualFold(strings.TrimSpace(p.Mode), "auto") {
 		p.Mode = "auto-readonly"
@@ -110,6 +110,7 @@ type EvolutionAdvice struct {
 type EvolutionHealth struct {
 	Profiles24h int            `json:"profiles_24h"`
 	Statuses    map[string]int `json:"statuses"`
+	AdviceReady int            `json:"advice_ready"`
 	Fallbacks   int            `json:"fallbacks"`
 }
 
@@ -128,7 +129,6 @@ func (s *Store) EvolutionHealthForPerson(ctx context.Context, tenantID, personID
 	if err != nil {
 		return health, err
 	}
-	defer rows.Close()
 	for rows.Next() {
 		var status string
 		var count, fallbacks int
@@ -138,7 +138,27 @@ func (s *Store) EvolutionHealthForPerson(ctx context.Context, tenantID, personID
 		health.Statuses[status] = count
 		health.Fallbacks += fallbacks
 	}
-	return health, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return health, err
+	}
+	rows.Close()
+	enabledRows, err := s.db.QueryContext(ctx, `SELECT kind, contract_json FROM evolution_candidates
+		WHERE tenant_id=? AND person_id=? AND status='enabled'`, tenantID, personID)
+	if err != nil {
+		return health, err
+	}
+	defer enabledRows.Close()
+	for enabledRows.Next() {
+		var kind, contract string
+		if err := enabledRows.Scan(&kind, &contract); err != nil {
+			return health, err
+		}
+		if evolutionContractHasVerifiedComparison(kind, contract) {
+			health.AdviceReady++
+		}
+	}
+	return health, enabledRows.Err()
 }
 
 type evolutionEvent struct {
@@ -319,12 +339,13 @@ func buildWorkflowProfile(run *Run, task *Task, events []evolutionEvent) *Workfl
 	return profile
 }
 
-func upsertEvolutionCandidate(ctx context.Context, tx *sql.Tx, profile *WorkflowProfile, policy EvolutionPolicy) (*EvolutionCandidate, error) {
+func upsertEvolutionCandidate(ctx context.Context, tx *sql.Tx, profile *WorkflowProfile, _ EvolutionPolicy) (*EvolutionCandidate, error) {
 	now := time.Now().Unix()
 	contract, _ := json.Marshal(map[string]interface{}{
-		"version": 1, "kind": "batch_read", "read_only": true, "max_operations": 8,
+		"version": 2, "kind": "batch_read", "read_only": true, "max_operations": 8,
 		"allowed_tools":     []string{"read_file", "search_files", "ls_r"},
 		"evidence_required": true, "fallback": "ordinary_tools",
+		"evidence_model":    "observation_only",
 		"observed_sequence": profile.ToolSequence,
 	})
 	_, err := tx.ExecContext(ctx, `INSERT INTO evolution_candidates(
@@ -343,64 +364,11 @@ func upsertEvolutionCandidate(ctx context.Context, tx *sql.Tx, profile *Workflow
 	if err != nil {
 		return nil, err
 	}
-	success := profile.ToolFailures == 0 && classifyEvolutionOutcome(profile.OutcomeStatus) == evolutionOutcomeSuccess
-	status := candidate.Status
-	recovered := false
-	if status == "candidate" && candidate.ObservationCount >= policy.ShadowAfterObservations && policy.Mode != "observe" {
-		status = "shadow"
-	}
-	if status == "degraded" {
-		candidate.ShadowRuns++
-		if success {
-			candidate.ShadowMatches++
-		}
-		failureRate := 1.0
-		if candidate.ShadowRuns > 0 {
-			failureRate = 1 - float64(candidate.ShadowMatches)/float64(candidate.ShadowRuns)
-		}
-		if candidate.ShadowRuns >= policy.MinShadowRuns && failureRate <= policy.MaxShadowFailureRate {
-			status = "shadow"
-			recovered = true
-			candidate.ShadowRuns = 0
-			candidate.ShadowMatches = 0
-			candidate.ConsecutiveFailures = 0
-			candidate.LastFailure = ""
-			candidate.Repair = json.RawMessage(`{}`)
-		}
-	}
-	if status == "shadow" && !recovered {
-		candidate.ShadowRuns++
-		if success {
-			candidate.ShadowMatches++
-		}
-		failureRate := 1.0
-		if candidate.ShadowRuns > 0 {
-			failureRate = 1 - float64(candidate.ShadowMatches)/float64(candidate.ShadowRuns)
-		}
-		if candidate.ObservationCount >= policy.PromoteAfterObservations && candidate.ShadowRuns >= policy.MinShadowRuns && failureRate <= policy.MaxShadowFailureRate {
-			status = "eligible"
-			if policy.Mode == "auto-readonly" {
-				status = "enabled"
-			}
-		}
-	}
-	candidate.Status = status
-	enabledAt := interface{}(nil)
-	if status == "enabled" {
-		enabledAt = now
-	}
-	repairJSON := string(candidate.Repair)
-	if repairJSON == "" {
-		repairJSON = "{}"
-	}
-	_, err = tx.ExecContext(ctx, `UPDATE evolution_candidates SET status=?, shadow_runs=?, shadow_matches=?,
-		repair_json=?, consecutive_failures=?, last_failure=?, enabled_at=COALESCE(enabled_at, ?), updated_at=? WHERE id=?`,
-		status, candidate.ShadowRuns, candidate.ShadowMatches, repairJSON,
-		candidate.ConsecutiveFailures, candidate.LastFailure, enabledAt, now, candidate.ID)
-	if err != nil {
-		return nil, err
-	}
-	candidate.UpdatedAt = time.Unix(now, 0)
+	// An ordinary successful run is only an observation. Until a candidate is
+	// actually executed and compared against a baseline, it supplies no shadow
+	// match, promotion, or degraded-version recovery evidence. Keep the legacy
+	// counters and statuses readable for schema compatibility, but never advance
+	// them here.
 	return candidate, nil
 }
 
@@ -449,19 +417,36 @@ func (s *Store) EnabledEvolutionAdvice(ctx context.Context, tenantID, personID, 
 	if s == nil || s.db == nil || strings.TrimSpace(taskID) == "" {
 		return nil, nil
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id, kind, contract_json FROM evolution_candidates
+	rows, err := s.db.QueryContext(ctx, `SELECT id, kind, contract_json FROM evolution_candidates
 		WHERE tenant_id=? AND person_id=? AND last_task_id=? AND status='enabled'
-		ORDER BY updated_at DESC LIMIT 1`, tenantID, personID, taskID)
-	var advice EvolutionAdvice
-	var contract string
-	if err := row.Scan(&advice.CandidateID, &advice.Kind, &contract); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
+		ORDER BY updated_at DESC`, tenantID, personID, taskID)
+	if err != nil {
 		return nil, err
 	}
-	advice.Contract = json.RawMessage(contract)
-	return &advice, nil
+	defer rows.Close()
+	for rows.Next() {
+		var advice EvolutionAdvice
+		var contract string
+		if err := rows.Scan(&advice.CandidateID, &advice.Kind, &contract); err != nil {
+			return nil, err
+		}
+		if !evolutionContractHasVerifiedComparison(advice.Kind, contract) {
+			continue
+		}
+		advice.Contract = json.RawMessage(contract)
+		return &advice, nil
+	}
+	return nil, rows.Err()
+}
+
+func evolutionContractHasVerifiedComparison(kind, contract string) bool {
+	var evidence struct {
+		Version       int    `json:"version"`
+		Kind          string `json:"kind"`
+		EvidenceModel string `json:"evidence_model"`
+	}
+	return json.Unmarshal([]byte(contract), &evidence) == nil && evidence.Version >= 2 &&
+		evidence.Kind == kind && evidence.EvidenceModel == "verified_comparison"
 }
 
 type evolutionRowScanner interface{ Scan(...interface{}) error }

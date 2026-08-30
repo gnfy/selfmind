@@ -702,6 +702,17 @@ macOS：本轮统一 `SandboxPlan` 语义即可。Linux 由 bubblewrap 实现；
 - 新 run 使用新 generation；**已运行的 run 不静默更换 PATH、HOME 或账号**；
 - 检测到 PATH 目录失效等可判定信号时自动重采一次；**不做定时重采**；
 - 远程 CLI 与 IM **不允许**上传或改变 Gateway 环境。
+- 操作系统托管的 Gateway 把稳定的非凭据配置位置、locale，以及安装 shell
+  中精确匹配的标准代理变量写入 launchd/systemd 定义。代理只接受
+  `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 及其小写形式；名称
+  类似但非标准的变量与带内联凭据的 URL 一律拒绝。由于 Go 的
+  `http.ProxyFromEnvironment` 不读取 `ALL_PROXY`，安全的 `ALL_PROXY` 会补足
+  缺失的 `HTTP_PROXY`/`HTTPS_PROXY`。Provider HTTP transport 仍保留标准进程
+  环境语义；VPN、TUN 与透明路由仍由宿主网络接管。
+- detached restart 可合并旧 Gateway 的 PATH 以保留工具发现，但不得复活当前
+  环境已经不存在的代理变量。再次执行 `selfmind gateway service install` 或 setup
+  会用当前 shell 的安全代理值刷新服务定义；普通重启只使用当前进程或既有服务
+  定义，不从旧进程恢复已消失的代理。
 
 ### P1：可观测性（第 9 步）
 

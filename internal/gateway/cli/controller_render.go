@@ -3,14 +3,12 @@ package cli
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/ui/components"
 )
 
 // Pure formatting and rendering helpers for the CLI transcript and status line.
@@ -139,42 +137,6 @@ func renderProgressBar(progress float64, width int) string {
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
 }
 
-var (
-	inlineCodeRegex   = regexp.MustCompile("`.*?`")
-	inlineBoldRegex   = regexp.MustCompile(`\*\*.*?\*\*`)
-	inlineItalicRegex = regexp.MustCompile(`\*[^* ][^* \n]*\*`)
-	inlineLinkRegex   = regexp.MustCompile(`\[([^\]]+)\]\(([^)]+)\)`)
-)
-
 func renderMarkdown(s string, width int) string {
-	if width < 8 {
-		width = 8
-	}
-	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	var result strings.Builder
-	lines := strings.Split(s, "\n")
-	inCodeBlock := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "```") {
-			inCodeBlock = !inCodeBlock
-			continue
-		}
-		if inCodeBlock {
-			result.WriteString(codeStyle.Render(line) + "\n")
-			continue
-		}
-		line = inlineCodeRegex.ReplaceAllStringFunc(line, func(match string) string {
-			return lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Render(match[1 : len(match)-1])
-		})
-		line = inlineBoldRegex.ReplaceAllStringFunc(line, func(match string) string {
-			return lipgloss.NewStyle().Bold(true).Render(match[2 : len(match)-2])
-		})
-		line = inlineItalicRegex.ReplaceAllStringFunc(line, func(match string) string {
-			return lipgloss.NewStyle().Italic(true).Render(match[1 : len(match)-1])
-		})
-		line = inlineLinkRegex.ReplaceAllString(line, "$1 ($2)")
-		result.WriteString(wrapText(line, width) + "\n")
-	}
-	return result.String()
+	return components.RenderMarkdown(s, width)
 }

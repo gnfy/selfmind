@@ -19,6 +19,7 @@ import (
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/tools"
 	"selfmind/internal/tools/envprofiles"
 )
@@ -184,6 +185,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	// Queued count.
 	queued, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	fmt.Fprintf(&sb, "Queued: %d\n", queued)
+	writeProviderNetworkDiag(&sb, llm.CurrentProviderNetworkStatus())
 	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
 		fmt.Fprintf(&sb, "Tasks: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
 			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
@@ -191,10 +193,18 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	if health, err := d.Control.EvolutionHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil {
 		candidateTotal := health.Statuses["candidate"] + health.Statuses["shadow"] + health.Statuses["eligible"] + health.Statuses["enabled"] + health.Statuses["degraded"]
 		if d.SelfEvolution.Enabled || health.Profiles24h > 0 || candidateTotal > 0 {
-			fmt.Fprintf(&sb, "Self-evolution: profiles %d (24h), candidate %d, shadow %d, eligible %d, enabled %d, degraded %d, fallbacks %d\n",
+			fmt.Fprintf(&sb, "Self-evolution: profiles %d (24h), observed candidates %d, legacy shadow %d, legacy eligible %d, legacy enabled %d, advice-ready %d, degraded %d, fallbacks %d\n",
 				health.Profiles24h, health.Statuses["candidate"], health.Statuses["shadow"], health.Statuses["eligible"],
-				health.Statuses["enabled"], health.Statuses["degraded"], health.Fallbacks)
+				health.Statuses["enabled"], health.AdviceReady, health.Statuses["degraded"], health.Fallbacks)
 		}
+	}
+	if nominations, err := d.Control.ListSkillStalenessNominations(ctx, identity.TenantID, "", time.Now(), control.DefaultSkillVerificationMaxAge, 20); err == nil && len(nominations) > 0 {
+		qualifier := ""
+		if len(nominations) == 20 {
+			qualifier = "at least "
+		}
+		fmt.Fprintf(&sb, "Skill review due: %s%d active curator versions are unverified or older than %s (nomination only; no automatic patch).\n",
+			qualifier, len(nominations), control.DefaultSkillVerificationMaxAge)
 	}
 	if watches, err := d.Control.CountExternalWatchesByStatus(ctx, identity.TenantID, identity.PersonID); err == nil {
 		activeWatches := watches[control.ExternalWatchPending] + watches[control.ExternalWatchRunning]
@@ -243,6 +253,9 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 		if health.Blocked > 0 {
 			fmt.Fprintf(&sb, "Background learning: paused (%d job(s))\n", health.Blocked)
+			if health.NetworkBlocked > 0 {
+				fmt.Fprintf(&sb, "- network route: %d job(s) will retry after the selected direct/proxy route changes\n", health.NetworkBlocked)
+			}
 			if health.BlockedPrompt > 0 {
 				fmt.Fprintf(&sb, "- prompt revision: %d job(s) need the pinned file restored; provider retries cannot repair them\n", health.BlockedPrompt)
 			}
@@ -277,8 +290,8 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		for _, a := range attempts {
 			byOutcome[a.Outcome]++
 		}
-		fmt.Fprintf(&sb, "Learning failures (24h): failed %d, skipped %d, provider-blocked %d, prompt-revision-blocked %d\n",
-			byOutcome["failed"], byOutcome["skipped"], byOutcome["blocked_provider"], byOutcome["blocked_prompt_revision"])
+		fmt.Fprintf(&sb, "Learning failures (24h): failed %d, skipped %d, provider-blocked %d, network-blocked %d, prompt-revision-blocked %d\n",
+			byOutcome["failed"], byOutcome["skipped"], byOutcome["blocked_provider"], byOutcome["blocked_network"], byOutcome["blocked_prompt_revision"])
 		shown := 0
 		for _, a := range attempts {
 			if strings.TrimSpace(a.Error) == "" || shown >= 3 {
@@ -379,6 +392,34 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func writeProviderNetworkDiag(sb *strings.Builder, status llm.ProviderNetworkStatus) {
+	if sb == nil {
+		return
+	}
+	if status.Mode == "" {
+		sb.WriteString("Provider network: not observed yet\n")
+		return
+	}
+	source := fallback(status.Source, "host")
+	if status.Mode != "proxy" || status.Endpoint == "" {
+		fmt.Fprintf(sb, "Provider network: %s via %s\n", status.Mode, source)
+		return
+	}
+	reachability := ""
+	if status.Reachability != "" {
+		reachability = ", " + status.Reachability
+	}
+	fmt.Fprintf(sb, "Provider network: proxy via %s (%s%s)\n", source, status.Endpoint, reachability)
+	if status.Reachability != "unreachable" {
+		return
+	}
+	if status.Source == "system" {
+		sb.WriteString("- network recovery: start Clash, or disable its macOS System Proxy setting; route changes are detected automatically\n")
+		return
+	}
+	sb.WriteString("- network recovery: start the configured proxy, or run `selfmind env refresh --restart` from the current network\n")
 }
 
 // deliveryDiagReply lists durable platform-session failures without exposing

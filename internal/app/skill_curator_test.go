@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -50,6 +52,18 @@ func TestSkillCuratorFreezesCandidateAndAutoPromotesVerifiedBuiltinProcedures(t 
 	version, err := store.SkillCandidateByEvidence(ctx, "default", digest.EvidenceSetHash)
 	if err != nil || version == nil || version.State != "active" {
 		t.Fatalf("materialized version=%+v err=%v", version, err)
+	}
+	wantRoot := tools.ManagedWorkspaceSkillsDir(storage.BaseDir(), "default", digest.WorkspaceID)
+	wantKey := control.SkillKey("default", "curated-release-inspection", tools.SkillScopeWorkspace,
+		tools.SkillSourceAgentCreated, wantRoot, "curated-release-inspection/SKILL.md")
+	if version.SkillKey != wantKey {
+		t.Fatalf("learned Skill key=%q want managed workspace key %q", version.SkillKey, wantKey)
+	}
+	if _, err := os.Stat(filepath.Join(wantRoot, "curated-release-inspection", "SKILL.md")); err != nil {
+		t.Fatalf("managed workspace Skill missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(tools.SkillsDirForTenant(storage.BaseDir(), "default"), "curated-release-inspection")); !os.IsNotExist(err) {
+		t.Fatalf("automatic publication wrote the user-global root: %v", err)
 	}
 	second, err := curator.ApplySkillCuration(ctx, "default", string(payload), proposal)
 	if err != nil || !strings.Contains(second, "already materialized") {
@@ -219,8 +233,8 @@ func TestSkillCuratorRepairsOnlyDeclaredSectionAfterVerifiedRecovery(t *testing.
 			OutcomeStatus: "completed", VerificationState: "passed", ToolSequence: []string{"terminal"},
 			ToolEvidence: []control.WorkflowToolEvidence{{Name: "terminal", Origin: "builtin", Category: "general", RiskLevel: "high", OperationClasses: []string{"exec.in_turn"}}},
 			Incident: &control.SkillIncidentEvidence{
-				FailureSignature: "stale-layout", FailedStepID: "Procedure", ErrorCategory: "stale_precondition",
-				FailedToolCallID: "failed-write", ObservedErrorCategory: "command_failed", FailureObserved: true,
+				FailureSignature: "stale-layout", FailedStepID: "Procedure", ErrorCategory: "schema_changed",
+				FailedToolCallID: "failed-write", ObservedErrorCategory: "interface_drift", FailureObserved: true,
 				Reason: "legacy layout failed", RecoveryToolSequence: []string{"terminal"}, RecoveryVerified: true,
 			},
 		}},
@@ -240,6 +254,12 @@ func TestSkillCuratorRepairsOnlyDeclaredSectionAfterVerifiedRecovery(t *testing.
 	previous, _ := store.GetSkillVersion(ctx, "default", key, activeHash)
 	if previous == nil || previous.State != "previous" {
 		t.Fatalf("repaired version did not preserve rollback: %+v", previous)
+	}
+	repaired, _ := store.ActiveSkillVersion(ctx, "default", key)
+	var frozen control.SkillEvidenceDigest
+	if repaired == nil || json.Unmarshal(repaired.Evidence, &frozen) != nil || len(frozen.NegativeObservations) != 1 ||
+		frozen.NegativeObservations[0].Incident == nil || frozen.NegativeObservations[0].Incident.RepairClass != control.SkillRepairClassDeterministicInterface {
+		t.Fatalf("repair class was not frozen with candidate evidence: %+v", repaired)
 	}
 	events, err := store.ListTaskEvents(ctx, task.ID, 20)
 	if err != nil {
@@ -392,7 +412,10 @@ func TestSkillCuratorPublishesShortMainAndLazyLinkedResourcesAsOnePackage(t *tes
 		t.Fatalf("package promotion=%q err=%v", summary, err)
 	}
 	pack, err := tools.ReadSkillPackageForTenant("default", name,
-		tools.WithSkillStorage(map[string]interface{}{"_tenant_id": "default", "_context": ctx}, storage))
+		tools.WithSkillStorage(map[string]interface{}{
+			"_tenant_id": "default", "_context": ctx,
+			"_invocation_scope": kernel.ToolInvocationScope{ControlTenantID: "default", WorkspaceID: digest.WorkspaceID},
+		}, storage))
 	if err != nil {
 		t.Fatal(err)
 	}

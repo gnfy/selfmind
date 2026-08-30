@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -18,14 +19,28 @@ var allowedSkillSubdirs = map[string]bool{
 
 // SkillInfo is the filesystem + usage view used by skill_manage and the CLI.
 type SkillInfo struct {
-	Name                string
-	Description         string
-	Path                string
-	Format              string
-	State               string
-	Source              string
-	Scope               string
-	Root                string
+	Name        string
+	Description string
+	// PackageName is the manifest-declared source name when a package manifest
+	// governs the owning root. It is empty otherwise, and qualified names then
+	// fall back to the root scope.
+	PackageName string
+	Path        string
+	Format      string
+	State       string
+	Source      string
+	Scope       string
+	Root        string
+	// Provenance is the authorship tier of the owning root, independent of
+	// scope. See SkillProvenanceFirstParty and SkillProvenanceExternal.
+	Provenance string
+	// ModelInvocable reports whether the model may select this Skill on its
+	// own. An author may switch it off to keep a Skill user-invocable only.
+	ModelInvocable bool
+	// Precedence is the owning root's lookup priority, lower winning. It is
+	// carried on the entry because listing sorts for presentation and would
+	// otherwise lose the root order.
+	Precedence          int
 	Writable            bool
 	LastUsed            string
 	Pinned              bool
@@ -54,7 +69,7 @@ func NewSkillManageTool(stores ...*control.Store) *SkillManageTool {
 					"action": {
 						Type:        "string",
 						Description: "Action: list, search, read, stats, history, undo, create, update, edit, patch, delete, archive, restore, write_file, remove_file, pin, unpin, enable, disable, curator_status, curator_run, or reload.",
-						Enum:        []string{"list", "search", "read", "stats", "history", "undo", "create", "update", "edit", "patch", "delete", "archive", "restore", "write_file", "remove_file", "pin", "unpin", "enable", "disable", "curator_status", "curator_run", "reload"},
+						Enum:        []string{"list", "search", "read", "stats", "history", "undo", "create", "update", "edit", "patch", "delete", "archive", "restore", "write_file", "remove_file", "pin", "unpin", "enable", "disable", "curator_status", "curator_run", "reload", "completion"},
 					},
 					"name": {
 						Type:        "string",
@@ -139,7 +154,20 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return formatSkillsList(skills), nil
+		return formatSkillsList(t.overlayAttributionRecency(tenantID, skills, args)), nil
+	case "completion":
+		// Read-only projection for the local `$` completion. It runs here rather
+		// than in the client because usage recency for a read-only root lives in
+		// the control store, and the client has none.
+		skills, err := ListSkillsForTenant(tenantID, false, args)
+		if err != nil {
+			return "", err
+		}
+		payload, err := json.Marshal(BuildSkillCompletionCandidates(t.overlayAttributionRecency(tenantID, skills, args)))
+		if err != nil {
+			return "", err
+		}
+		return string(payload), nil
 	case "search":
 		if strings.TrimSpace(query) == "" {
 			return "", fmt.Errorf("query is required for search")
@@ -284,23 +312,62 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 	}
 }
 
+// overlayAttributionRecency fills the last-used value from the control store.
+// A sidecar usage file cannot be written on a read-only root, which is where
+// most implicit use happens, so recency for those Skills lives in the control
+// store instead. Catalog ranking is untouched: it is metadata-only and must stay
+// reproducible, and usage heat must not become a way for an external package to
+// rank itself up.
+func (t *SkillManageTool) overlayAttributionRecency(tenantID string, skills []SkillInfo, args map[string]interface{}) []SkillInfo {
+	if t.store == nil || len(skills) == 0 {
+		return skills
+	}
+	summaries, err := t.store.SkillAttributionSummaries(ContextFromArgs(args), tenantID)
+	if err != nil || len(summaries) == 0 {
+		return skills
+	}
+	observed := make(map[string]time.Time, len(summaries))
+	for _, summary := range summaries {
+		observed[summary.SkillKey] = summary.LastObservedAt
+	}
+	for i := range skills {
+		key, keyErr := resolvedSkillKey(tenantID, skills[i])
+		if keyErr != nil {
+			continue
+		}
+		at, ok := observed[key]
+		if !ok || at.IsZero() {
+			continue
+		}
+		candidate := at.Format(time.RFC3339)
+		if existing, parseErr := time.Parse(time.RFC3339, skills[i].LastUsed); parseErr == nil && !at.After(existing) {
+			continue
+		}
+		skills[i].LastUsed = candidate
+	}
+	return skills
+}
+
 func formatDurableSkillStats(stats []control.SkillUsageStat, now time.Time) string {
 	if len(stats) == 0 {
-		return "No durable Skill activations recorded. Legacy skill_metrics rows are historical and excluded."
+		return "No durable Skill activations or attributions recorded. Legacy skill_metrics rows are historical and excluded."
 	}
 	var lines []string
-	lines = append(lines, "## Skill usage (durable activations)")
-	lines = append(lines, fmt.Sprintf("%-30s %7s %9s %9s %8s %7s %9s", "Skill", "Calls", "Complete", "Fallback", "Failed", "Parked", "Cancelled"))
+	lines = append(lines, "## Skill usage (durable activations and attributions)")
+	lines = append(lines, fmt.Sprintf("%-30s %7s %9s %9s %8s %7s %9s %9s", "Skill", "Calls", "Complete", "Fallback", "Failed", "Parked", "Cancelled", "Implicit"))
 	lines = append(lines, "---")
 	for _, stat := range stats {
 		ago := now.Sub(stat.LastUsedAt).Truncate(time.Minute)
 		if ago < 0 {
 			ago = 0
 		}
-		lines = append(lines, fmt.Sprintf("%-30s %7d %9d %9d %8d %7d %9d  last used %s ago",
-			stat.SkillName, stat.Calls, stat.Completed, stat.Fallbacks, stat.Failures, stat.Parked, stat.Cancelled, ago))
+		lines = append(lines, fmt.Sprintf("%-30s %7d %9d %9d %8d %7d %9d %9d  last used %s ago",
+			stat.SkillName, stat.Calls, stat.Completed, stat.Fallbacks, stat.Failures, stat.Parked, stat.Cancelled, stat.Attributions, ago))
 	}
-	lines = append(lines, "", "Legacy skill_metrics counters are historical and do not drive ranking, curation, degradation, or retention.")
+	lines = append(lines, "",
+		"Calls counts explicit activations; Implicit counts work units that read a Skill's content without activating it.",
+		"Only activation evidence is admissible for curator cohorts and repair thresholds.",
+		"Legacy skill_metrics counters are historical and do not drive ranking, curation, degradation, or retention.")
 	return strings.Join(lines, "\n")
 }
 

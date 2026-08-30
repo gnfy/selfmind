@@ -50,19 +50,27 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 	// replies with no visible questions (observed live). addMessage covers
 	// both surfaces: hybrid scrollback (commit) and the legacy viewport.
 	m.addMessage("user", input)
-	if cmd, ok := slashCommandIndex[parts[0]]; ok {
+	var cmd tea.Cmd
+	switch entry, known := slashCommandIndex[parts[0]]; {
+	case known:
 		// In daemon-client mode agent-backed commands route through the tool
 		// dispatch seam (m.dispatch → daemon) or through the message processor
 		// (/status, /tasks). The few remaining local-only controls (such as model
 		// switching) detect client mode themselves and return a clear notice. So
 		// no top-level gate is needed for safety.
-		return cmd.Run(m, parts[1:])
-	}
-	if strings.HasPrefix(parts[0], "/") {
+		cmd = entry.Run(m, parts[1:])
+	case strings.HasPrefix(parts[0], "/"):
 		instruction := strings.TrimSpace(strings.TrimPrefix(input, parts[0]))
-		return m.handleSkillSlash(parts[0], instruction)
+		cmd = m.handleSkillSlash(parts[0], instruction)
+	default:
+		return nil
 	}
-	return nil
+	if skillCommandMayChangeInventory(parts[0]) {
+		// Sequence, not batch: installing or deleting a Skill completes
+		// asynchronously, and reading the inventory concurrently would race it.
+		return tea.Sequence(cmd, m.loadSkillCompletion())
+	}
+	return cmd
 }
 
 func (m *uiModel) handleSkillSlash(slashName, instruction string) tea.Cmd {
@@ -126,13 +134,11 @@ func (m *uiModel) finishSkillInvocationResolution(msg MsgSkillInvocationResolved
 	// The typed command was already echoed by handleCommand; only the loaded
 	// skill notice is added here.
 	m.setStatusNotice(noticeInfo, fmt.Sprintf("Loaded skill context: %s", msg.DisplayName))
-	m.thinking = true
 	m.runStatus = "working"
-	m.thinkingStart = time.Now()
 	m.runTokens = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
-	return tea.Batch(m.runAgent(ctx, msg.Prompt), m.spinner.Tick)
+	return tea.Batch(m.runAgent(ctx, msg.Prompt), m.startModelWait("Waiting for the model to choose the first step"), workingTick())
 }
 
 func (m *uiModel) handleMigration() tea.Cmd {
@@ -855,6 +861,7 @@ func (m *uiModel) handleCompact() tea.Cmd {
 	}
 	tail := append([]ChatMessage{}, m.messages[len(m.messages)-keep:]...)
 	m.messages = append([]ChatMessage{marker}, tail...)
+	m.commit(&m.messages[0])
 	return nil
 }
 
@@ -889,7 +896,7 @@ func (m *uiModel) tryClipboardImagePaste() (tea.Cmd, bool) {
 }
 
 // attachClipboardImage registers a saved clipboard-image path as an editor
-// image attachment shown as a compact [[ image:N name ]] token (mirroring
+// image attachment shown as a compact [Image #N · name] token (mirroring
 // large-paste placeholders), stripping any leading command token first. The
 // raw path never enters the composer text — ExpandValue substitutes it back at
 // submit time, where the existing path→attachment pipeline picks it up. This
@@ -900,8 +907,7 @@ func (m *uiModel) attachClipboardImage(path, stripPrefix string) {
 		cur := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m.editor.Value()), stripPrefix))
 		m.editor.SetValue(cur)
 	}
-	token := m.editor.AttachImage(path)
-	m.addMessage("assistant", "📎 Image attached from the clipboard as "+token+". Add your question and press Enter to send (delete the token to detach).")
+	m.editor.AttachImage(path)
 }
 
 // handleCapture saves the last recorded turn as a replayable eval case (the
@@ -986,24 +992,6 @@ func (m *uiModel) handleCurator(args []string) tea.Cmd {
 		default:
 			return MsgAgentDone{Response: "Usage: /curator [status|run [--dry-run] [--report]|restore <skill-name>]"}
 		}
-	}
-}
-
-func (m *uiModel) handleModelSwitch(modelName string) tea.Cmd {
-	return func() tea.Msg {
-		if m.agent == nil {
-			if m.clientMode {
-				return MsgAgentDone{Response: "Runtime model switching isn't available in daemon-client mode yet (it mutates the daemon's agent). Set the model via config / `selfmind model set` and restart the daemon."}
-			}
-			return MsgAgentDone{Response: "Agent not initialized."}
-		}
-		oldModel := m.agent.CurrentModel()
-		if ok := m.agent.SwitchModel(modelName); !ok {
-			return MsgAgentDone{Response: fmt.Sprintf("Provider does not support runtime model switching. Current model: %s", oldModel)}
-		}
-		m.modelName = modelName
-		m.providerName = modelName
-		return MsgAgentDone{Response: fmt.Sprintf("Model switched: %s → %s", oldModel, modelName)}
 	}
 }
 

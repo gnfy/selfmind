@@ -136,6 +136,7 @@ func buildResponsesTransport(cfg TransportConfig) Provider {
 	ad.ExtraBody = cfg.ExtraBody
 	ad.ExtraQuery = cfg.ExtraQuery
 	ad.ReasoningEffort = cfg.ReasoningEffort
+	ad.Quirks = cfg.Quirks
 	if cfg.ResponsesStoreFalse {
 		store := false
 		ad.Store = &store

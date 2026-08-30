@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"selfmind/internal/buildinfo"
-	uicommon "selfmind/internal/ui/common"
+	"selfmind/internal/kernel/llm"
+	"selfmind/internal/ui/components"
+	uitheme "selfmind/internal/ui/theme"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
@@ -18,22 +20,84 @@ import (
 // extensibility hook for later phases.
 type cellRenderer func(msg ChatMessage, width int) string
 
-var cellRenderers = map[string]cellRenderer{
-	"user":      func(m ChatMessage, w int) string { return renderUserMessage(stripANSI(m.Content), w) },
-	"assistant": func(m ChatMessage, w int) string { return renderAssistantMessage(stripANSI(m.Content), w) },
-	"tool":      func(m ChatMessage, w int) string { return renderToolMessage(m, w) },
-	"system":    func(m ChatMessage, w int) string { return renderSystemMessage(stripANSI(m.Content), w) },
-	"digest":    func(m ChatMessage, w int) string { return renderDigestMessage(stripANSI(m.Content), w) },
-	"notice":    func(m ChatMessage, w int) string { return renderNoticeMessage(stripANSI(m.Content), m.NoticeKind, w) },
+type transcriptStyles struct {
+	markdown                                       components.MarkdownRenderer
+	startupBorder, startupBrand, startupLabel      lipgloss.Style
+	startupValue                                   lipgloss.Style
+	startupSubtle, startupCommand                  lipgloss.Style
+	userBoundary, userLabel, userText              lipgloss.Style
+	currentMarker, finalBullet, narrationMarker    lipgloss.Style
+	toolEvidence, toolBulletRun                    lipgloss.Style
+	toolBulletOK, toolBulletErr, toolBulletDim     lipgloss.Style
+	toolAction, diffAdd, diffDel, diffContext      lipgloss.Style
+	planDone, planActive, planPending, planExplain lipgloss.Style
+	planHeader, planSecondary                      lipgloss.Style
+}
+
+func newTranscriptStyles(t uitheme.Theme) transcriptStyles {
+	return transcriptStyles{
+		markdown:        components.NewMarkdownRenderer(t),
+		startupBorder:   lipgloss.NewStyle().Foreground(t.Color(uitheme.BorderMuted)),
+		startupBrand:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Brand)).Bold(true),
+		startupLabel:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		startupValue:    lipgloss.NewStyle().Foreground(t.Color(uitheme.TextPrimary)),
+		startupSubtle:   lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+		startupCommand:  lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
+		userBoundary:    lipgloss.NewStyle().Foreground(t.Color(uitheme.BorderMuted)),
+		userLabel:       lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		userText:        lipgloss.NewStyle(),
+		currentMarker:   lipgloss.NewStyle().Bold(true).Foreground(t.Color(uitheme.Accent)),
+		finalBullet:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+		narrationMarker: lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
+		toolEvidence:    lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		toolBulletRun:   lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		toolBulletOK:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Success)),
+		toolBulletErr:   lipgloss.NewStyle().Foreground(t.Color(uitheme.Error)),
+		toolBulletDim:   lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+		toolAction:      lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		diffAdd:         lipgloss.NewStyle().Foreground(t.Color(uitheme.Success)),
+		diffDel:         lipgloss.NewStyle().Foreground(t.Color(uitheme.Error)),
+		diffContext:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		planDone:        lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)).Strikethrough(true),
+		planActive:      lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		planPending:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		planExplain:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)).Italic(true),
+		planHeader:      lipgloss.NewStyle().Bold(true),
+		planSecondary:   lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+	}
 }
 
 // renderCell dispatches a message to its registered renderer. Unknown roles
 // render to empty (matching the previous switch default).
 func renderCell(msg ChatMessage, width int) string {
-	if r, ok := cellRenderers[msg.Role]; ok {
-		return r(msg, width)
+	return renderCellWithTheme(msg, width, uitheme.Default())
+}
+
+func renderCellWithTheme(msg ChatMessage, width int, t uitheme.Theme) string {
+	styles := newTranscriptStyles(t)
+	switch msg.Role {
+	case "user":
+		return renderUserMessageWithStyles(stripANSI(msg.Content), width, styles)
+	case "assistant":
+		return renderAssistantMessagePhaseWithStyles(stripANSI(msg.Content), width, msg.AssistantPhase, styles)
+	case "tool":
+		return renderProcessToolMessageWithStyles(msg, width, styles)
+	case "system":
+		return renderSystemMessage(stripANSI(msg.Content), width)
+	case "digest":
+		return renderDigestMessageWithStyles(stripANSI(msg.Content), width, styles)
+	case "notice":
+		return renderNoticeMessageWithTheme(stripANSI(msg.Content), msg.NoticeKind, width, t)
+	default:
+		return ""
 	}
-	return ""
+}
+
+func (m *uiModel) renderCell(msg ChatMessage, width int) string {
+	if m != nil && m.common != nil {
+		return renderCellWithTheme(msg, width, m.common.Theme)
+	}
+	return renderCell(msg, width)
 }
 
 const (
@@ -49,20 +113,9 @@ const (
 	glyphDot       = " · "
 )
 
-var (
-	startupBorderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteBorder))
-	startupLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteMuted))
-	startupValueStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteText))
-	startupSubtleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteSubtle))
-	startupCommandStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteBlue))
-)
-
 func (m *uiModel) renderStartupCard(width int) []string {
-	maxCardW := width - 2
-	if maxCardW > 54 {
-		maxCardW = 54
-	}
-	if maxCardW < 24 {
+	styles := newTranscriptStyles(m.common.Theme)
+	if width < 24 {
 		return []string{m.common.Styles.Welcome}
 	}
 
@@ -78,150 +131,187 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	if version == "" {
 		version = "dev"
 	}
-	title := ">_ SelfMind (" + version + ")"
-	modelLine := "model:     " + modelName + "      /model for details"
-	providerLine := ""
+	mainValue := styles.startupValue.Render(modelName)
 	if providerName != "" && providerName != modelName && providerName != "active" {
-		providerLine = "provider:  " + providerName
-	}
-	dirLine := "directory: " + currentWorkingDir()
-
-	needed := runewidth.StringWidth(title)
-	for _, line := range []string{modelLine, providerLine, dirLine} {
-		if width := runewidth.StringWidth(line); width > needed {
-			needed = width
-		}
-	}
-	cardW := needed + 4
-	if cardW < 48 {
-		cardW = 48
-	}
-	if cardW > maxCardW {
-		cardW = maxCardW
+		mainValue += styles.startupSubtle.Render(" · " + providerName)
 	}
 
 	lines := []string{
-		startupBorderStyle.Render("+" + strings.Repeat("-", cardW-2) + "+"),
-		renderStartupBoxLine(startupValueStyle.Render(">_ SelfMind ")+startupSubtleStyle.Render("("+version+")"), cardW),
-		renderStartupBoxLine("", cardW),
-		renderStartupDataLine("model:", modelName, cardW, "      /model for details"),
+		styles.startupBrand.Render(">_ SelfMind") + styles.startupSubtle.Render("  "+version),
+		styles.startupBorder.Render(strings.Repeat("─", width)),
 	}
-	if providerLine != "" {
-		lines = append(lines, renderStartupDataLine("provider:", providerName, cardW, ""))
+	lines = append(lines, renderStartupDataLines("MAIN", mainValue, width, styles.startupCommand.Render("/model"), styles)...)
+	if background := strings.TrimSpace(m.backgroundModelName); background != "" {
+		lines = append(lines, renderStartupDataLines("BACKGROUND", styles.startupValue.Render(background), width, "", styles)...)
 	}
+	workspaceValue := currentWorkingDir()
+	if strings.TrimSpace(m.workspaceOverridePath) != "" {
+		workspaceValue = m.workspaceOverridePath
+	}
+	lines = append(lines, renderStartupDataLines("WORKSPACE", styles.startupValue.Render(workspaceValue), width, "", styles)...)
 	lines = append(lines,
-		renderStartupDataLine("directory:", currentWorkingDir(), cardW, ""),
-		startupBorderStyle.Render("+"+strings.Repeat("-", cardW-2)+"+"),
-		"",
-		startupValueStyle.Render("Tip: Tell SelfMind what to inspect, change, test, or remember."),
+		styles.startupBorder.Render(strings.Repeat("─", width)),
 		"",
 	)
+	if m.firstTaskPending {
+		lines = append(lines,
+			styles.startupValue.Render("Try: Inspect this workspace and explain how it is structured."),
+			styles.startupSubtle.Render("Do not modify files."),
+			"",
+		)
+	} else {
+		lines = append(lines,
+			styles.startupValue.Render("Tip: Tell SelfMind what to inspect, change, test, or remember."),
+			"",
+		)
+	}
 	return lines
 }
 
-func renderUserMessage(content string, width int) string {
+func renderUserMessageWithStyles(content string, width int, styles transcriptStyles) string {
 	content = strings.TrimRight(content, "\n")
 	if width < 8 {
 		width = 8
 	}
-	style := lipgloss.NewStyle().
-		Background(lipgloss.Color(uicommon.PaletteEditorBG)).
-		Foreground(lipgloss.Color(uicommon.PaletteEditorText)).
-		Padding(1, 1).
-		Width(width)
-	if content == "" {
-		return "\n" + style.Render(glyphChevron+" ")
-	}
-	wrapped := wrapText(content, width-4)
-	lines := strings.Split(wrapped, "\n")
-	for i, line := range lines {
-		if i == 0 {
-			lines[i] = glyphChevron + " " + line
-		} else {
-			lines[i] = "  " + line
-		}
-	}
-	return "\n" + style.Render(strings.Join(lines, "\n"))
+	const prefix = "── "
+	const label = "YOUR REQUEST"
+	used := runewidth.StringWidth(prefix) + runewidth.StringWidth(label) + 1
+	top := styles.userBoundary.Render(prefix) + styles.userLabel.Render(label) +
+		styles.userBoundary.Render(" "+strings.Repeat("─", max(0, width-used)))
+	bottom := styles.userBoundary.Render(strings.Repeat("─", width))
+	body := styles.userText.Render(wrapText(content, width))
+	return "\n" + strings.Join([]string{top, body, bottom}, "\n")
 }
 
 // currentMarkerStyle highlights the gateway's "← current" marker (e.g. in the
 // /workspaces list) so the active selection stands out — same cyan family as
 // the command hints. Applied at render time only; the gateway text stays plain
 // for IM surfaces.
-func renderStartupBoxLine(content string, width int) string {
-	inner := width - 4
-	if inner < 1 {
-		return content
+func renderStartupDataLines(label, value string, width int, suffix string, styles transcriptStyles) []string {
+	const labelWidth = 12
+	if width <= labelWidth {
+		return []string{styles.startupLabel.Render(label), value}
 	}
-	return startupBorderStyle.Render("| ") + padRightWidth(content, inner) + startupBorderStyle.Render(" |")
-}
 
-func renderStartupDataLine(label, value string, width int, suffix string) string {
-	const labelWidth = 11
-	inner := width - 4
-	if inner < 1 {
-		return ""
-	}
 	labelText := label + strings.Repeat(" ", max(0, labelWidth-runewidth.StringWidth(label)))
-	suffixWidth := runewidth.StringWidth(suffix)
-	valueWidth := inner - labelWidth - suffixWidth
-	if valueWidth < 1 {
-		valueWidth = inner - labelWidth
-		suffix = ""
-	}
-	if valueWidth < 1 {
-		return renderStartupBoxLine(startupLabelStyle.Render(truncateToWidth(labelText, inner)), width)
+	indent := strings.Repeat(" ", labelWidth)
+	valueWidth := width - labelWidth
+	valueDisplayWidth := runewidth.StringWidth(stripANSI(value))
+	suffixWidth := runewidth.StringWidth(stripANSI(suffix))
+	if suffix == "" || valueDisplayWidth+1+suffixWidth <= valueWidth {
+		line := styles.startupLabel.Render(labelText) + value
+		if suffix != "" {
+			line += strings.Repeat(" ", valueWidth-valueDisplayWidth-suffixWidth) + suffix
+		}
+		return []string{line}
 	}
 
-	valueText := truncateToWidth(value, valueWidth)
-	renderedSuffix := ""
-	if suffix != "" {
-		renderedSuffix = strings.Replace(suffix, "/model", startupCommandStyle.Render("/model"), 1)
-		renderedSuffix = strings.Replace(renderedSuffix, "to change", startupSubtleStyle.Render("to change"), 1)
+	wrapped := strings.Split(wrapText(value, valueWidth), "\n")
+	lines := make([]string, 0, len(wrapped)+1)
+	for i, part := range wrapped {
+		prefix := indent
+		if i == 0 {
+			prefix = styles.startupLabel.Render(labelText)
+		}
+		lines = append(lines, prefix+part)
 	}
-	content := startupLabelStyle.Render(labelText) + startupValueStyle.Render(valueText) + renderedSuffix
-	if runewidth.StringWidth(stripANSI(content)) > inner {
-		content = startupLabelStyle.Render(labelText) + startupValueStyle.Render(truncateToWidth(value, inner-labelWidth))
+
+	last := len(lines) - 1
+	lastWidth := runewidth.StringWidth(stripANSI(wrapped[len(wrapped)-1]))
+	if lastWidth+1+suffixWidth <= valueWidth {
+		lines[last] += strings.Repeat(" ", valueWidth-lastWidth-suffixWidth) + suffix
+	} else {
+		lines = append(lines, indent+strings.Repeat(" ", max(0, valueWidth-suffixWidth))+suffix)
 	}
-	return renderStartupBoxLine(content, width)
+	return lines
 }
 
-var currentMarkerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(uicommon.PaletteBlue))
-
-func renderAssistantMessage(content string, width int) string {
-	content = strings.TrimSpace(content)
-	if content == "" {
+func renderAssistantStreamPreviewWithStyles(content string, width int, phase llm.AssistantPhase, styles transcriptStyles) string {
+	if strings.TrimSpace(content) == "" {
 		return ""
 	}
-	body := strings.TrimRight(renderMarkdown(content, width-4), "\n")
+	stable, tail := splitStableMarkdownPrefix(content)
+	blocks := make([]string, 0, 2)
+	if strings.TrimSpace(stable) != "" {
+		if rendered := strings.TrimSpace(styles.markdown.Render(stable, max(8, width-2))); rendered != "" {
+			blocks = append(blocks, rendered)
+		}
+	}
+	if strings.TrimSpace(tail) != "" {
+		if rendered := renderPlainAssistantTail(tail, max(8, width-2)); rendered != "" {
+			blocks = append(blocks, rendered)
+		}
+	}
+	body := strings.Join(blocks, "\n\n")
 	if body == "" {
 		return ""
 	}
+	return renderAssistantBodyWithStyles(body, phase, styles)
+}
+
+func renderPlainAssistantTail(content string, width int) string {
+	content = strings.TrimSpace(sanitizeTerminalText(content))
+	if content == "" {
+		return ""
+	}
+	var lines []string
+	for _, line := range strings.Split(content, "\n") {
+		if line == "" {
+			lines = append(lines, "")
+			continue
+		}
+		lines = append(lines, strings.Split(wrapText(line, width), "\n")...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func renderAssistantBodyWithStyles(body string, phase llm.AssistantPhase, styles transcriptStyles) string {
 	lines := strings.Split(body, "\n")
+	firstContentLine := true
 	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			lines[i] = ""
 			continue
 		}
 		if strings.Contains(line, "← current") {
-			line = strings.ReplaceAll(line, "← current", currentMarkerStyle.Render("← current"))
+			line = strings.ReplaceAll(line, "← current", styles.currentMarker.Render("← current"))
 		}
-		lines[i] = "  " + line
+		switch phase {
+		case llm.AssistantPhaseCommentary:
+			if firstContentLine {
+				lines[i] = styles.narrationMarker.Render(glyphChevron+" ") + line
+				firstContentLine = false
+			} else {
+				lines[i] = "  " + line
+			}
+		case llm.AssistantPhaseFinalAnswer:
+			if firstContentLine {
+				lines[i] = styles.finalBullet.Render(glyphBullet+" ") + line
+				firstContentLine = false
+			} else {
+				lines[i] = "  " + line
+			}
+		default:
+			lines[i] = "  " + line
+		}
 	}
 	return "\n" + strings.Join(lines, "\n")
 }
 
-var (
-	toolHeaderStyle = lipgloss.NewStyle().Bold(true)                      // bold action title (codex: "Explored"/"Ran")
-	toolBulletRun   = lipgloss.NewStyle().Faint(true)                     // ◦ dim while running
-	toolBulletOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // • green: command succeeded
-	toolBulletErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // • red: failed
-	toolBulletDim   = lipgloss.NewStyle().Faint(true)                     // • dim: non-command done
-	toolActionRun   = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
-	toolActionRead  = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
-	toolActionWrite = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
-	toolActionState = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Bold(true)
-)
+func renderAssistantMessagePhaseWithStyles(content string, width int, phase llm.AssistantPhase, styles transcriptStyles) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if phase == llm.AssistantPhaseUnspecified {
+		phase = llm.AssistantPhaseFinalAnswer
+	}
+	body := strings.TrimRight(styles.markdown.Render(content, max(8, width-2)), "\n")
+	if body == "" {
+		return ""
+	}
+	return renderAssistantBodyWithStyles(body, phase, styles)
+}
 
 const glyphBulletHollow = "◦"
 
@@ -233,34 +323,23 @@ func isCommandTool(label string) bool {
 	return false
 }
 
-// toolSemanticActionStyle colors only the action verb. Arguments remain in the
-// ordinary header style, while the bullet independently retains runtime state:
+// toolSemanticActionStyle colors only the action verb. The target/evidence uses
+// a readable muted color, while the bullet independently retains runtime state:
 // green success, red failure, and dim running/non-command. This mirrors Codex's
 // cyan exploration verbs and makes run/write/lifecycle work equally scannable.
-func toolSemanticActionStyle(label string) lipgloss.Style {
-	switch label {
-	case "terminal", "execute_command", "shell", "execute_code", "verify", "watch_external":
-		return toolActionRun
-	case "cat", "read_file", "batch_read", "ls_r", "list_files", "search_files", "grep", "session_search", "web_search", "web_extract":
-		return toolActionRead
-	case "patch", "write_file", "memory", "skill_manage":
-		return toolActionWrite
-	case "update_plan", "finish_run", "request_permissions":
-		return toolActionState
-	default:
-		return toolHeaderStyle
-	}
+func toolSemanticActionStyleWithStyles(_ string, styles transcriptStyles) lipgloss.Style {
+	return styles.toolAction
 }
 
-func styleToolAction(label, action string) string {
+func styleToolActionWithStyles(label, action string, styles transcriptStyles) string {
 	action = strings.TrimSpace(action)
 	if action == "" {
 		return ""
 	}
 	verb, rest, found := strings.Cut(action, " ")
-	styled := toolSemanticActionStyle(label).Render(verb)
+	styled := toolSemanticActionStyleWithStyles(label, styles).Render(verb)
 	if found && rest != "" {
-		styled += " " + toolHeaderStyle.Render(rest)
+		styled += " " + styles.toolEvidence.Render(rest)
 	}
 	return styled
 }
@@ -268,17 +347,17 @@ func styleToolAction(label, action string) string {
 // toolHeaderLine renders the codex-style cell header: a status bullet (◦ dim
 // while running, • green on command success, • red on failure, • dim otherwise)
 // followed by the bold action title.
-func toolHeaderLine(label, action string, running, isErr, isCommand bool, duration float64, width int) string {
+func toolHeaderLineWithStyles(label, action string, running, isErr, isCommand bool, duration float64, width int, styles transcriptStyles) string {
 	var bullet string
 	switch {
 	case running:
-		bullet = toolBulletRun.Render(glyphBulletHollow)
+		bullet = styles.toolBulletRun.Render(glyphBulletHollow)
 	case isErr:
-		bullet = toolBulletErr.Render(glyphBullet)
+		bullet = styles.toolBulletErr.Render(glyphBullet)
 	case isCommand:
-		bullet = toolBulletOK.Render(glyphBullet)
+		bullet = styles.toolBulletOK.Render(glyphBullet)
 	default:
-		bullet = toolBulletDim.Render(glyphBullet)
+		bullet = styles.toolBulletDim.Render(glyphBullet)
 	}
 	action = strings.TrimSpace(sanitizeTerminalText(action))
 	suffix := ""
@@ -298,14 +377,29 @@ func toolHeaderLine(label, action string, running, isErr, isCommand bool, durati
 		rows[1] = truncateToWidth(rows[1], max(4, available-3)) + "..."
 	}
 	var sb strings.Builder
-	sb.WriteString(bullet + " " + styleToolAction(label, rows[0]) + toolBulletDim.Render(suffix))
+	sb.WriteString(bullet + " " + styleToolActionWithStyles(label, rows[0], styles) + styles.toolBulletDim.Render(suffix))
 	for _, row := range rows[1:] {
-		sb.WriteString("\n  " + toolBulletDim.Render(row))
+		sb.WriteString("\n  " + styles.toolEvidence.Render(row))
 	}
 	return sb.String()
 }
 
-func renderToolMessage(msg ChatMessage, width int) string {
+func renderProcessToolMessageWithStyles(msg ChatMessage, width int, styles transcriptStyles) string {
+	if msg.ProcessGroupID == 0 {
+		return renderToolMessageWithStyles(msg, width, styles)
+	}
+	inner := renderToolMessageWithStyles(msg, max(8, width-2), styles)
+	if inner == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(inner, "\n"), "\n")
+	for i := range lines {
+		lines[i] = "  " + lines[i]
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptStyles) string {
 	label := msg.ToolName
 	if label == "" {
 		label = "tool"
@@ -321,12 +415,12 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	isCmd := isCommandTool(label)
 	var sb strings.Builder
 	if !done {
-		sb.WriteString(toolHeaderLine(label, action, true, false, isCmd, 0, width) + "\n")
+		sb.WriteString(toolHeaderLineWithStyles(label, action, true, false, isCmd, 0, width, styles) + "\n")
 		if detail := strings.TrimSpace(msg.RunningDetail); detail != "" {
 			sb.WriteString("  " + glyphCorner + " " + truncateToWidth(detail, width-6) + "\n")
 		}
 		if isCmd {
-			sb.WriteString(renderCommandOutputBlock(label, msg.Content, width))
+			sb.WriteString(renderCommandOutputBlockWithStyles(label, msg.Content, width, styles))
 		} else if result := toolResultLine(label, msg.Content, width-6); result != "" {
 			sb.WriteString("  " + glyphCorner + " " + result + "\n")
 		}
@@ -339,7 +433,7 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	// (e.g. legacy/test messages without ToolArgs).
 	if label == "patch" && !msg.IsError {
 		if patch, _ := args["patch"].(string); strings.TrimSpace(patch) != "" {
-			if cell := renderPatchCell(patch, msg.Duration, width, maxPatchPreviewLines); cell != "" {
+			if cell := renderPatchCellWithStyles(patch, msg.Duration, width, maxPatchPreviewLines, styles); cell != "" {
 				return cell
 			}
 		}
@@ -347,20 +441,20 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	// write_file returns a "Created/Edited <path> (+A -B)" header plus a bounded
 	// unified diff (W2d); render it colored instead of an all-added dump.
 	if label == "write_file" && !msg.IsError {
-		if cell := renderWriteFileCell(msg.Content, msg.Duration, width); cell != "" {
+		if cell := renderWriteFileCellWithStyles(msg.Content, msg.Duration, width, styles); cell != "" {
 			return cell
 		}
 	}
 	// update_plan renders as a Codex-style checklist with progress, not a
 	// one-line summary.
 	if label == "update_plan" && !msg.IsError {
-		if cell := renderPlanCell(msg.Content, msg.Duration, width); cell != "" {
+		if cell := renderPlanCellWithStyles(msg.Content, msg.Duration, width, styles); cell != "" {
 			return cell
 		}
 	}
 
 	// The red bullet conveys failure; duration stays visually subordinate.
-	sb.WriteString(toolHeaderLine(label, action, false, msg.IsError, isCmd, msg.Duration, width))
+	sb.WriteString(toolHeaderLineWithStyles(label, action, false, msg.IsError, isCmd, msg.Duration, width, styles))
 	sb.WriteString("\n")
 	if !isCmd {
 		if result := toolResultLine(label, msg.Content, width-6); result != "" {
@@ -369,10 +463,10 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	}
 	// Command tools use a bounded physical-row head/tail preview. File-editing
 	// tools retain their compact colored diff.
-	if block := renderCommandOutputBlock(label, msg.Content, width); block != "" {
+	if block := renderCommandOutputBlockWithStyles(label, msg.Content, width, styles); block != "" {
 		sb.WriteString(block)
 	} else if !msg.IsError {
-		if diff := renderToolDiff(label, args, width-4); diff != "" {
+		if diff := renderToolDiffWithStyles(label, args, width-4, styles); diff != "" {
 			sb.WriteString(diff)
 		}
 	}
@@ -383,7 +477,7 @@ func renderToolMessage(msg ChatMessage, width int) string {
 // raw command output (stdout/stderr) as dim lines, Codex-style. Keeping the tail
 // preserves compiler and shell diagnostics without letting long output take
 // over the transcript. It only applies to command tools.
-func renderCommandOutputBlock(label, content string, width int) string {
+func renderCommandOutputBlockWithStyles(label, content string, width int, styles transcriptStyles) string {
 	switch label {
 	case "terminal", "execute_command", "shell":
 	default:
@@ -399,21 +493,15 @@ func renderCommandOutputBlock(label, content string, width int) string {
 		if i == 0 {
 			prefix = "  " + glyphCorner + " "
 		}
-		sb.WriteString(prefix + diffCtxStyle.Render(ln) + "\n")
+		sb.WriteString(prefix + styles.diffContext.Render(ln) + "\n")
 	}
 	return sb.String()
 }
 
-var (
-	diffAddStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	diffDelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	diffCtxStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-)
-
 // renderToolDiff shows a compact, colored diff for file-editing tools so the
 // user can see what actually changed (codex-style), instead of an opaque
 // "Edited with patch". It bounds the output to a handful of lines.
-func renderToolDiff(label string, args map[string]interface{}, width int) string {
+func renderToolDiffWithStyles(label string, args map[string]interface{}, width int, styles transcriptStyles) string {
 	const maxLines = 12
 	var lines []string
 	switch label {
@@ -442,12 +530,12 @@ func renderToolDiff(label string, args map[string]interface{}, width int) string
 		switch {
 		case strings.HasPrefix(ln, "+"):
 			added++
-			styled = diffAddStyle.Render(truncateToWidth(ln, width-4))
+			styled = styles.diffAdd.Render(truncateToWidth(ln, width-4))
 		case strings.HasPrefix(ln, "-"):
 			removed++
-			styled = diffDelStyle.Render(truncateToWidth(ln, width-4))
+			styled = styles.diffDel.Render(truncateToWidth(ln, width-4))
 		default:
-			styled = diffCtxStyle.Render(truncateToWidth(ln, width-4))
+			styled = styles.diffContext.Render(truncateToWidth(ln, width-4))
 		}
 		if shown < maxLines {
 			sb.WriteString("  " + glyphCorner + " " + styled + "\n")
@@ -455,10 +543,10 @@ func renderToolDiff(label string, args map[string]interface{}, width int) string
 		}
 	}
 	if len(lines) > maxLines {
-		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(fmt.Sprintf("… %d more line(s)", len(lines)-maxLines)) + "\n")
+		sb.WriteString("  " + glyphCorner + " " + styles.diffContext.Render(fmt.Sprintf("… %d more line(s)", len(lines)-maxLines)) + "\n")
 	}
 	if added > 0 || removed > 0 {
-		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(fmt.Sprintf("(+%d −%d)", added, removed)) + "\n")
+		sb.WriteString("  " + glyphCorner + " " + styles.diffContext.Render(fmt.Sprintf("(+%d −%d)", added, removed)) + "\n")
 	}
 	return sb.String()
 }
@@ -538,7 +626,7 @@ func parseV4APatch(patch string) []patchFileChange {
 // renderPatchCell renders a patch as Codex-style file-change cells: a header
 // "<verb> <path> (+N -M)" and a colored, bounded diff body. maxLines bounds the
 // total body lines (use a large value for the unbounded history view).
-func renderPatchCell(patch string, duration float64, width, maxLines int) string {
+func renderPatchCellWithStyles(patch string, duration float64, width, maxLines int, styles transcriptStyles) string {
 	files := parseV4APatch(patch)
 	if len(files) == 0 {
 		return ""
@@ -556,8 +644,8 @@ func renderPatchCell(patch string, duration float64, width, maxLines int) string
 				removed++
 			}
 		}
-		header := fmt.Sprintf("%s %s (%s %s)", toolBulletDim.Render(glyphBullet), styleToolAction("patch", f.verb+" "+f.path),
-			diffAddStyle.Render(fmt.Sprintf("+%d", added)), diffDelStyle.Render(fmt.Sprintf("-%d", removed)))
+		header := fmt.Sprintf("%s %s (%s %s)", styles.toolBulletDim.Render(glyphBullet), styleToolActionWithStyles("patch", f.verb+" "+f.path, styles),
+			styles.diffAdd.Render(fmt.Sprintf("+%d", added)), styles.diffDel.Render(fmt.Sprintf("-%d", removed)))
 		if fi == 0 && duration > 0 {
 			header += fmt.Sprintf(" %.1fs", duration)
 		}
@@ -576,23 +664,23 @@ func renderPatchCell(patch string, duration float64, width, maxLines int) string
 			}
 			switch l.kind {
 			case '@':
-				sb.WriteString("  " + diffCtxStyle.Render("@@ "+l.text) + "\n")
+				sb.WriteString("  " + styles.diffContext.Render("@@ "+l.text) + "\n")
 			case '+':
 				gutter := ""
 				if isAdd {
-					gutter = diffCtxStyle.Render(fmt.Sprintf("%*d ", gutterW, lineNo))
+					gutter = styles.diffContext.Render(fmt.Sprintf("%*d ", gutterW, lineNo))
 				}
-				sb.WriteString("  " + gutter + diffAddStyle.Render("+ "+truncateToWidth(l.text, width-10)) + "\n")
+				sb.WriteString("  " + gutter + styles.diffAdd.Render("+ "+truncateToWidth(l.text, width-10)) + "\n")
 			case '-':
-				sb.WriteString("  " + diffDelStyle.Render("- "+truncateToWidth(l.text, width-10)) + "\n")
+				sb.WriteString("  " + styles.diffDel.Render("- "+truncateToWidth(l.text, width-10)) + "\n")
 			default:
-				sb.WriteString("  " + diffCtxStyle.Render("  "+truncateToWidth(l.text, width-10)) + "\n")
+				sb.WriteString("  " + styles.diffContext.Render("  "+truncateToWidth(l.text, width-10)) + "\n")
 			}
 			budget--
 		}
 	}
 	if hidden > 0 {
-		sb.WriteString("  " + diffCtxStyle.Render(fmt.Sprintf("… +%d more line(s) — open history to see the full diff", hidden)) + "\n")
+		sb.WriteString("  " + styles.diffContext.Render(fmt.Sprintf("… +%d more line(s) — open history to see the full diff", hidden)) + "\n")
 	}
 	return sb.String()
 }
@@ -604,14 +692,14 @@ const maxWriteFileDiffPreview = 30
 // renderWriteFileCell renders write_file's "Created/Edited <path> (+A -B)"
 // header plus its colored diff body. Legacy results (e.g. "Written N bytes")
 // just render as the header line. Returns "" for empty content (fallback).
-func renderWriteFileCell(content string, duration float64, width int) string {
+func renderWriteFileCellWithStyles(content string, duration float64, width int, styles transcriptStyles) string {
 	content = strings.TrimRight(content, "\n")
 	if strings.TrimSpace(content) == "" {
 		return ""
 	}
 	lines := strings.Split(content, "\n")
 	var sb strings.Builder
-	sb.WriteString(toolBulletDim.Render(glyphBullet) + " " + styleToolAction("write_file", lines[0]))
+	sb.WriteString(styles.toolBulletDim.Render(glyphBullet) + " " + styleToolActionWithStyles("write_file", lines[0], styles))
 	if duration > 0 {
 		sb.WriteString(fmt.Sprintf(" %.1fs", duration))
 	}
@@ -624,29 +712,20 @@ func renderWriteFileCell(content string, duration float64, width int) string {
 		var styled string
 		switch {
 		case strings.HasPrefix(ln, "+"):
-			styled = diffAddStyle.Render(truncateToWidth(ln, width-6))
+			styled = styles.diffAdd.Render(truncateToWidth(ln, width-6))
 		case strings.HasPrefix(ln, "-"):
-			styled = diffDelStyle.Render(truncateToWidth(ln, width-6))
+			styled = styles.diffDel.Render(truncateToWidth(ln, width-6))
 		default:
-			styled = diffCtxStyle.Render(truncateToWidth(ln, width-6))
+			styled = styles.diffContext.Render(truncateToWidth(ln, width-6))
 		}
 		sb.WriteString("  " + styled + "\n")
 		shown++
 	}
 	if remaining := len(lines) - 1 - shown; remaining > 0 {
-		sb.WriteString("  " + diffCtxStyle.Render(fmt.Sprintf("… %d more line(s)", remaining)) + "\n")
+		sb.WriteString("  " + styles.diffContext.Render(fmt.Sprintf("… %d more line(s)", remaining)) + "\n")
 	}
 	return sb.String()
 }
-
-var (
-	planDoneTextStyle = lipgloss.NewStyle().Faint(true).Strikethrough(true)             // completed: struck-through + dim
-	planActiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true) // in-progress: cyan bold
-	planPendingStyle  = lipgloss.NewStyle().Faint(true)                                 // pending: dim
-	planExplStyle     = lipgloss.NewStyle().Faint(true).Italic(true)                    // explanation note
-	planHeaderStyle   = lipgloss.NewStyle().Bold(true)
-	planFaintStyle    = lipgloss.NewStyle().Faint(true)
-)
 
 const (
 	// maxPlanSteps is an extreme backstop only: a normal plan must render in full
@@ -666,7 +745,7 @@ const (
 // indent rather than being truncated. We keep the `· done/total` progress in the
 // header (codex puts it in a persistent status bar, which SelfMind lacks).
 // Returns "" only if content isn't parseable plan JSON (caller falls back).
-func renderPlanCell(content string, duration float64, width int) string {
+func renderPlanCellWithStyles(content string, duration float64, width int, styles transcriptStyles) string {
 	var payload struct {
 		Explanation string `json:"explanation"`
 		Plan        []struct {
@@ -692,31 +771,31 @@ func renderPlanCell(content string, duration float64, width int) string {
 	var block []string
 	if exp := strings.TrimSpace(payload.Explanation); exp != "" {
 		for _, ln := range strings.Split(wrapText(exp, width-4), "\n") {
-			block = append(block, planExplStyle.Render(ln))
+			block = append(block, styles.planExplain.Render(ln))
 		}
 	}
 	if len(payload.Plan) == 0 {
-		block = append(block, planExplStyle.Render("(no steps provided)"))
+		block = append(block, styles.planExplain.Render("(no steps provided)"))
 	}
 	shown := 0
 	for _, s := range payload.Plan {
 		if shown >= maxPlanSteps {
 			break
 		}
-		block = append(block, planStepLines(strings.TrimSpace(s.Step), s.Status, width-4)...)
+		block = append(block, planStepLinesWithStyles(strings.TrimSpace(s.Step), s.Status, width-4, styles)...)
 		shown++
 	}
 	if len(payload.Plan) > maxPlanSteps {
-		block = append(block, planPendingStyle.Render(fmt.Sprintf("… %d more steps", len(payload.Plan)-maxPlanSteps)))
+		block = append(block, styles.planPending.Render(fmt.Sprintf("… %d more steps", len(payload.Plan)-maxPlanSteps)))
 	}
 
 	var sb strings.Builder
-	sb.WriteString(planFaintStyle.Render(glyphBullet) + " " + planHeaderStyle.Render("Updated plan") +
-		planFaintStyle.Render(fmt.Sprintf(" · %d/%d", completed, len(payload.Plan))) + "\n")
+	sb.WriteString(styles.planSecondary.Render(glyphBullet) + " " + styles.planHeader.Render("Updated plan") +
+		styles.planSecondary.Render(fmt.Sprintf(" · %d/%d", completed, len(payload.Plan))) + "\n")
 	// Tree prefix: first block line gets "  └ ", the rest a flat 4-space indent.
 	for i, ln := range block {
 		if i == 0 {
-			sb.WriteString(planFaintStyle.Render("  └ ") + ln + "\n")
+			sb.WriteString(styles.planSecondary.Render("  └ ") + ln + "\n")
 		} else {
 			sb.WriteString("    " + ln + "\n")
 		}
@@ -728,18 +807,18 @@ func renderPlanCell(content string, duration float64, width int) string {
 // glyph + text on the first line, wrapped continuation lines hanging-indented
 // under the text. The glyph is dimmed/colored by status; only completed step
 // text is struck through (matching codex, which never strikes the glyph).
-func planStepLines(text, status string, contentWidth int) []string {
+func planStepLinesWithStyles(text, status string, contentWidth int, styles transcriptStyles) []string {
 	glyph := glyphPlanBox + " "
-	glyphStyle := planPendingStyle
-	textStyle := planPendingStyle
+	glyphStyle := styles.planPending
+	textStyle := styles.planPending
 	switch status {
 	case "completed":
 		glyph = glyphPlanDone + " "
-		glyphStyle = planFaintStyle
-		textStyle = planDoneTextStyle
+		glyphStyle = styles.planSecondary
+		textStyle = styles.planDone
 	case "in_progress":
-		glyphStyle = planActiveStyle
-		textStyle = planActiveStyle
+		glyphStyle = styles.planActive
+		textStyle = styles.planActive
 	}
 	stepWidth := contentWidth - 2 // account for the 2-col glyph / hanging indent
 	if stepWidth < 4 {
@@ -761,7 +840,7 @@ func planStepLines(text, status string, contentWidth int) []string {
 // content is truncated), used as the durable transcript record for transient
 // interactions such as approvals. The interactive detail lives in the active
 // region, not in history.
-func renderNoticeMessage(content string, kind noticeKind, width int) string {
+func renderNoticeMessageWithTheme(content string, kind noticeKind, width int, t uitheme.Theme) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
@@ -770,7 +849,7 @@ func renderNoticeMessage(content string, kind noticeKind, width int) string {
 		width = 12
 	}
 	content = strings.ReplaceAll(content, "\n", " ")
-	return noticeStyle(kind).Render(truncateToWidth(content, width-1))
+	return noticeStyleWithTheme(kind, t).Render(truncateToWidth(content, width-1))
 }
 
 func renderSystemMessage(content string, width int) string {
@@ -786,7 +865,7 @@ func renderSystemMessage(content string, width int) string {
 	return sb.String()
 }
 
-func renderDigestMessage(content string, width int) string {
+func renderDigestMessageWithStyles(content string, width int, styles transcriptStyles) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
@@ -807,7 +886,7 @@ func renderDigestMessage(content string, width int) string {
 		}
 		sb.WriteString("  " + glyphCorner + " " + line + "\n")
 	}
-	return lipgloss.NewStyle().Faint(true).Render(strings.TrimRight(sb.String(), "\n"))
+	return styles.toolEvidence.Render(strings.TrimRight(sb.String(), "\n"))
 }
 
 func toolAction(label string, args map[string]interface{}, done bool) string {
@@ -1183,12 +1262,4 @@ func firstResultLine(content string, width int) string {
 		}
 	}
 	return ""
-}
-
-func padRightWidth(s string, width int) string {
-	pad := width - runewidth.StringWidth(stripANSI(s))
-	if pad < 0 {
-		pad = 0
-	}
-	return s + strings.Repeat(" ", pad)
 }

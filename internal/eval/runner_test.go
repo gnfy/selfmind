@@ -281,7 +281,7 @@ func TestRunCaseExpectedGatewayRejectionPassesWithoutProvider(t *testing.T) {
 		Title:   "unresolved paste is rejected before dispatch",
 		Channel: "cli",
 		Turns: []Turn{{
-			Input: "inspect this\n[[ paste:0 main.go.. [80 lines] .. end ]]",
+			Input: "inspect this\n[Paste #1 · 80 lines]",
 		}},
 		Expect: Expectations{
 			HTTPStatus:         400,

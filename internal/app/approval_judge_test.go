@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,7 @@ func TestConfiguredApprovalJudgeProviderUsesAuxiliaryModel(t *testing.T) {
 
 func TestConfiguredApprovalJudgeProviderLegacyFallbackOnly(t *testing.T) {
 	cfg := &config.Config{}
+	cfg.Auth.CredentialsFile = filepath.Join(t.TempDir(), "auth.json")
 	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "openai", Model: "primary-model"}
 	cfg.Models.Roles = map[string]config.ModelRoleConfig{
 		string(llm.RoleBackgroundReview): {Provider: "openai", Model: "review-model", APIKey: "test-key"},

@@ -13,6 +13,7 @@ import (
 
 const (
 	memoryGovernanceStartupGrace = 30 * time.Second
+	memoryReadinessRetryDelay    = 5 * time.Second
 	memoryGovernanceRetryDelay   = 10 * time.Minute
 	// Backlog catch-up is intentionally slower than foreground/provider
 	// recovery. At the default batch of eight this bounds a continuously idle
@@ -73,6 +74,9 @@ func (d *Server) StartMemoryGovernance(ctx context.Context) func() {
 	if d == nil || d.MemoryConsolidator == nil || d.Control == nil {
 		return func() {}
 	}
+	if !d.backgroundReadyForWork() {
+		return func() {}
+	}
 	done := make(chan struct{})
 	var once sync.Once
 	// The daemon is single-instance, so a row still marked in flight belongs to
@@ -113,6 +117,9 @@ func (d *Server) runMemoryGovernancePass(ctx context.Context) time.Duration {
 }
 
 func (d *Server) runMemoryGovernancePassAt(ctx context.Context, now time.Time) time.Duration {
+	if !d.backgroundReadyForWork() {
+		return memoryReadinessRetryDelay
+	}
 	interval := d.MemoryConsolidator.Interval()
 	if interval <= 0 {
 		interval = 24 * time.Hour

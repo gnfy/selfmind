@@ -98,6 +98,9 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 	if d == nil || d.Control == nil || (d.PostRunAnalyzer == nil && d.SkillReviewer == nil && d.SkillCurator == nil) {
 		return func() {}
 	}
+	if !d.backgroundReadyForWork() {
+		return func() {}
+	}
 	// The gateway lock guarantees one daemon. Any job left running at boot lost
 	// its owner and can be reclaimed immediately.
 	if reset, err := d.Control.ResetStaleMaintenanceJobs(context.Background(), 0); err != nil {
@@ -109,6 +112,11 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 		log.Warn("gateway: reset provider-blocked maintenance jobs at boot failed", "error", err)
 	} else if reset > 0 {
 		log.Info("gateway: retrying legacy provider-blocked maintenance jobs after restart", "count", reset)
+	}
+	if reset, err := d.Control.ResetNetworkBlockedMaintenanceJobs(context.Background()); err != nil {
+		log.Warn("gateway: reset network-blocked maintenance jobs at boot failed", "error", err)
+	} else if reset > 0 {
+		log.Info("gateway: retrying network-blocked maintenance jobs after restart", "count", reset)
 	}
 	if migrated, err := d.Control.MigrateMaintenanceJobsToVersion(context.Background(), postRunAnalyzerVersion); err != nil {
 		log.Warn("gateway: maintenance analyzer generation migration failed", "error", err)
@@ -151,6 +159,9 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 }
 
 func (d *Server) runMaintenancePass(ctx context.Context) {
+	if !d.backgroundReadyForWork() {
+		return
+	}
 	d.runMaintenancePassAt(ctx, time.Now())
 }
 
@@ -167,6 +178,14 @@ type postRunMaintenanceGroup struct {
 }
 
 func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
+	if status, changed := llm.RefreshAndObserveProviderNetworkRoute(ctx); changed {
+		if requeued, err := d.Control.RequeueNetworkBlockedMaintenanceJobs(ctx, status.Fingerprint, now); err != nil {
+			log.Warn("gateway: network-route maintenance recovery failed", "error", err)
+		} else if requeued > 0 {
+			log.Info("gateway: retrying maintenance after network route changed",
+				"jobs", requeued, "mode", status.Mode, "source", status.Source, "proxy", status.Endpoint)
+		}
+	}
 	if requeued, err := d.Control.RequeueDueProviderRouteProbes(ctx, now); err != nil {
 		log.Warn("gateway: quota probe scheduling failed", "error", err)
 	} else if requeued > 0 {
@@ -263,6 +282,19 @@ func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
 	}
 	d.runSkillReviewPass(ctx)
 	d.runSkillCurationPass(ctx)
+}
+
+func (d *Server) failRetryableMaintenanceJob(ctx context.Context, tenantID, runID string, analyzerVersion int, err error, retryAfter time.Duration) {
+	if d == nil || d.Control == nil || err == nil {
+		return
+	}
+	routeID := ""
+	if llm.RefreshProviderNetworkRouteAfterError(err) {
+		status := llm.CurrentProviderNetworkStatus()
+		routeID = control.MaintenanceNetworkRouteID(status.Fingerprint)
+		err = llm.ActionableProviderNetworkError(err)
+	}
+	_ = d.Control.FailMaintenanceJobForRoute(ctx, tenantID, runID, analyzerVersion, routeID, err.Error(), retryAfter)
 }
 
 func (d *Server) runPostRunMaintenanceBatch(ctx context.Context, items []*queuedPostRunMaintenance) {
@@ -404,7 +436,7 @@ func (d *Server) runSkillReviewPass(ctx context.Context) {
 				continue
 			}
 			if llm.IsRetryableError(err) {
-				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
+				d.failRetryableMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err, skillReviewRetryDelay)
 			} else {
 				info, _ := llm.ProviderErrorInfo(err)
 				_, _ = d.Control.BlockMaintenanceJobForRoute(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, info.RouteID, err.Error())
@@ -447,7 +479,7 @@ func (d *Server) runSkillCurationPass(ctx context.Context) {
 				continue
 			}
 			if llm.IsRetryableError(err) {
-				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
+				d.failRetryableMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err, skillReviewRetryDelay)
 			} else {
 				info, _ := llm.ProviderErrorInfo(err)
 				_, _ = d.Control.BlockMaintenanceJobForRoute(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, info.RouteID, err.Error())
@@ -462,7 +494,7 @@ func (d *Server) runSkillCurationPass(ctx context.Context) {
 				continue
 			}
 			if llm.IsRetryableError(err) {
-				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
+				d.failRetryableMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err, skillReviewRetryDelay)
 			} else {
 				info, _ := llm.ProviderErrorInfo(err)
 				_, _ = d.Control.BlockMaintenanceJobForRoute(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, info.RouteID, err.Error())

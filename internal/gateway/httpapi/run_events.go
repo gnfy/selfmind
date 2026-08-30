@@ -211,6 +211,8 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 	var usage llm.UsageStats
 	sawStream := false
 	hasFinalContent := false
+	typedAssistantPhase := false
+	currentAssistantPhase := llm.AssistantPhaseUnspecified
 	var summary router.EventSummary
 	observer := streamObserverFromContext(ctx)
 	for event := range resp.Stream {
@@ -221,6 +223,8 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			if event.EventType == "tool.started" {
 				finalContent.Reset()
 				hasFinalContent = false
+				typedAssistantPhase = false
+				currentAssistantPhase = llm.AssistantPhaseUnspecified
 			}
 			if event.EventType == "stream" && task != nil {
 				c.srv.events().publishAssistant(task, run, event)
@@ -232,9 +236,20 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			c.recordStreamEvent(ctx, channel, task, run, event)
 			if event.EventType == "stream" {
 				sawStream = true
-				finalContent.WriteString(event.Content)
-				if strings.TrimSpace(event.Content) != "" {
-					hasFinalContent = true
+				if event.Phase != llm.AssistantPhaseUnspecified {
+					if event.Phase == llm.AssistantPhaseFinalAnswer && currentAssistantPhase != llm.AssistantPhaseFinalAnswer {
+						finalContent.Reset()
+						hasFinalContent = false
+					}
+					typedAssistantPhase = true
+					currentAssistantPhase = event.Phase
+				}
+				materialize := !typedAssistantPhase || currentAssistantPhase == llm.AssistantPhaseFinalAnswer
+				if materialize {
+					finalContent.WriteString(event.Content)
+					if strings.TrimSpace(event.Content) != "" {
+						hasFinalContent = true
+					}
 				}
 			}
 			if event.Usage != nil {

@@ -36,6 +36,59 @@ CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runti
     `/diag context` 展示最近一次 run 的 token 与缓存状态，`selfmind usage` 展示当前
     person 最近 24 小时的执行与 token 报告；两者都不估算货币成本。
 
+## 用户配置
+
+Provider connection 负责 endpoint、认证形态和 wire 选项；模型路由负责 model ID
+及交互调优。内置默认值保留在 Go 中，不写进生成的 YAML。内置 provider 的覆盖项
+直接写在稳定 ID 下：
+
+```yaml
+providers:
+  deepseek:
+    base_url: "https://gateway.example.com/v1"
+    extra_headers:
+      X-Client-Name: "SelfMind"
+
+models:
+  primary:
+    provider: "deepseek"
+    model: "deepseek-chat"
+  auxiliary:
+    enabled: false
+```
+
+用户自定义连接统一放在 `providers.custom`。map key 就是模型路由引用的稳定
+provider ID，而不是厂商 type，且不能与内置 ID 冲突。自定义连接刻意只开放三种
+通用协议和三种认证形态：
+
+```yaml
+providers:
+  custom:
+    company-gateway:
+      base_url: "https://ai.example.com/v1"
+      protocol: "openai-compatible" # 或 anthropic-compatible / responses-compatible
+      auth: "bearer"                # 或 x-api-key / none
+
+models:
+  primary:
+    provider: "company-gateway"
+    model: "company-coder"
+```
+
+凭据保存在 SelfMind 私有 auth store 中，不进入 YAML。`extra_headers` 只用于非敏感
+元数据：header 名按大小写不敏感检查重复；transport 自己管理的 header 会被拒绝；
+`Authorization`、`x-api-key` 等含凭据 header 必须走凭据存储。
+`extra_body` 与 `extra_query` 中也会递归拒绝含凭据形态的 key，从而保证可持久化
+connection 快照不含秘密。`quirks` 是有类型的协议编码差异，不是任意 header 容器。
+OpenRouter 内置的 `HTTP-Referer` 与
+`X-Title` 因此继续作为普通 profile header，并可由
+`providers.openrouter.extra_headers` 覆盖。
+
+`provider_profiles` 和 `custom:<id>` 只保留兼容读取。运行
+`selfmind config upgrade` 会先备份，再把旧 provider block 显式改成新结构。
+`${OPENAI_API_KEY}` 这类环境变量引用继续保留为引用；旧配置中直接写入的 API key
+会在这次显式升级时移入私有 auth store。
+
 ## 核心文件
 
 | 文件 | 职责 |
@@ -104,7 +157,8 @@ SelfMind 区分两个容易混淆的字段：
 解析优先级：
 
 1. role/primary 显式设置的 `context_length`
-2. `provider_profiles.<id>.context_length`
+2. `providers.<id>.context_length` 或
+   `providers.custom.<id>.context_length`
 3. 内置 provider profile 元数据
 4. provider/本地模型能力元数据（例如 Codex 的 `models_cache.json`）
 5. custom provider 的 `models.<model>.context_length`
@@ -120,13 +174,82 @@ SelfMind 区分两个容易混淆的字段：
 主模型只在 `models.primary` 选择。`reasoning` 和 `service_tier` 都是可选项；
 省略或写 `auto` 表示使用 provider/模型默认值，resolver 不会强制发送该字段。
 支持哪些取值由具体模型的能力元数据决定，不维护一份全局硬编码枚举。
-`selfmind model set` 在能发现元数据时动态校验；私有 endpoint 没有元数据时，
-仍会保留用户显式配置的兼容值。
+模型管理器在能发现元数据时动态校验；私有 endpoint 没有元数据时，仍会保留用户
+显式配置的兼容值。
 
-本地初始化时，未填写 provider/model 的 auxiliary 默认使用 primary 的
-provider/model。首次写入模型会把两个槽位都明确落盘。此后 auxiliary 独立存在：
-修改 primary 不会覆盖已有 auxiliary。逻辑后台角色继续作为高级
-`models.roles.<role>` 覆盖存在；未配置角色覆盖时继承 auxiliary。
+本地初始化时，已启用但未填写 provider/model 的 auxiliary 默认使用 primary 的
+provider/model；也可用 `models.auxiliary.enabled: false` 显式关闭后台模型工作。
+缺少前台就绪证据时，直接交互启动会打开与 `selfmind model` 相同的
+Model Manager；显式运行 `selfmind setup` 只会引导到该入口，不会实现另一套选择器。
+Model Manager 先提供 Provider connections，再展示并校验 Main 与 Background 路由；
+首次事务只把启用的槽位明确落盘。
+`model-state.json` 中已应用的事务是前台/后台就绪状态的唯一权威；onboarding 不再复制
+路由或验证事实，因此之后成功应用的路由变更不会重新打开无关的工作区或后台服务
+步骤。有效的旧设置回执只会作为一次性迁移证据，并在移除其中的模型字段前备份。
+auxiliary 一旦显式配置，
+修改 primary 就不会覆盖它。逻辑后台角色继续作为高级 `models.roles.<role>` 覆盖
+存在；未配置角色覆盖时继承 auxiliary。
+
+## Provider 与模型路由事务
+
+所有面向用户的 provider、凭据和模型路由修改都汇入 daemon 拥有的同一个事务服务。`selfmind model` 与
+TUI 中不带参数的 `/model` 打开同一个模型管理器；IM 只展示只读摘要，不再维护第二套
+修改语法。在线修改遵循以下状态机：
+
+```text
+等待确认 -> 校验中 -> 等待安全边界 -> 排空 -> 重启中 -> 启动中 -> 已应用
+                                      |-> 可归因于模型的探测失败 -> 已回滚
+                                      \-> 基础设施/未知失败 -> 需要恢复
+```
+
+当前 run 会冻结已经解析的路由。模型变更重启会等待该 run，包括等待中的审批或
+澄清，而不会使用普通重启的短超时强制中断。在进入“排空”前，用户可以取消或显式
+替换候选项；之后事务会冻结。drain 期间收到的新工作写入持久队列，只会由新 daemon
+启动。本地 TUI 在 HTTP 短暂不可用时会保留草稿，并直接读取持久事务。30 秒后会提示
+进度较慢；替换进程启动后 120 秒仍未健康则进入显式恢复。五分钟内连续三次启动失败
+会打开恢复熔断，而不是让服务管理器无限重启。系统只允许一个 pending 变更，并使用
+单调 generation；过期确认和并发旧写入会失败，不会覆盖更新的意图。预览十分钟后
+过期。历史最多保留十条不含密钥的终态快照；回滚会从上一条成功快照创建一笔新的、
+经过校验的事务。
+
+状态文件是所选 `config.yaml` 同目录下的 `model-state.json`。其中只有路由选择、
+非敏感 provider connection 快照、独立的前台/后台及逐角色验证证据、阶段转换、探测摘要、
+generation、重启次数和历史，不包含凭据或原始认证数据。新输入的 key 首先只形成
+一个不透明 credential-stage ID；校验时叠加该 stage，不改变当前生效凭据。Provider
+与路由配置在安全边界提交；旧 daemon 释放所有权后才提交暂存凭据，并保留提交前的
+精确凭据镜像，直到新 daemon 通过启动探测和真实 `/health`。取消会丢弃未提交 stage；
+自动回滚会把 provider、路由和凭据作为一个整体恢复。经过校验的候选项只有在当前 run 空闲、到达安全
+边界后才写入 YAML。
+启动时还会再次探测，并且只有运行时构建和真实 `/health` 端点成功后才记录为 running。
+只有确定且可归因于模型的启动探测失败才会自动恢复上一条运行快照。网络、额度、
+监听端口、服务管理器和未知失败会保留证据并进入 `recovery_required`；模型管理器的
+“变更状态”页面可以重试候选项，或显式恢复上一条健康路由。schema v1 至 v4 状态
+迁移到带就绪证据的新状态机前都会先创建备份。直接编辑 YAML 后只会显示为
+configured、尚未验证；在下一次 daemon 启动完成验证前，系统拒绝再创建另一笔模型事务。
+Gateway 状态公开有效路由快照的不含秘密哈希和分离的 readiness 详情。前台 readiness
+只负责用户 agent 工作；每个后台角色分别保留 readiness。某个无关覆盖不可用时，维护
+角色仍可通过已验证的 auxiliary fallback floor 继续。尤其是显式 `semantic_recall` 失败
+时，turn-start expansion 会降级为确定性的词法召回，不会回退到 auxiliary，也不会停放
+其它维护。超时、限流和网络类瞬时故障按有界退避重试；鉴权、模型不存在及配置错误等待
+人工修复。成功的有界探测会持久化恢复状态并恢复正常角色工作，不会一次性倾倒积压。
+聚合的后台 readiness 仍表示所有已启用角色的摘要。Background 失败或被关闭不会让已验证的 Main 下线：状态会显示后台 degraded/disabled，
+前台队列继续执行。缺少前台 readiness 时，无模型控制命令仍然可用，但所有新的 agent
+消息只会持久化入队。取消预览并恢复前台 readiness 后，停放队列会立即按原顺序唤醒。显式恢复会先等待持有失败候选项
+的进程释放 Gateway 所有权，再清除旧的运行证明、恢复上一条健康选择并启动替代进程；
+受管恢复只等待现有服务管理器启动的进程，绝不会再用 detached fallback 与其竞争。
+只有启动探测和 `/health` 重新建立 verified-running 边界后，队列才会继续运行。
+
+模型发现优先使用 provider 实时目录，其次是带时间戳的新鲜缓存，再降级到明确标注
+为 stale 的缓存或内置 fallback。用户始终可以手工输入模型 ID，但仍必须通过同样的
+契约探测。只有已知兼容时才会保留原 reasoning 和 service tier；兼容性未知时只把
+受影响选项恢复为 provider `auto` 并提示。显式输入始终优先。
+
+校验分为两个边界。模型管理器在每一项选择完成后自动发送相应的有界契约探测：主模型
+使用前台探测，后台模型及六个受管理角色使用后台或维护 JSON 探测。最终 daemon 事务
+会在修改服务状态前，在 daemon 自己的环境中再次解析并探测整份草稿。这样可以避免
+只在 shell 中存在的凭据被误判为后台运行也可用。新输入的 API key 在校验期间只保存在
+不透明的暂存 auth 记录中，绝不会写入 YAML；服务定义只包含路径和非凭据环境。探测失败
+会保留可编辑草稿，绝不会伪装成已验证。
 
 Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级映射为 thinking
 预算：`low=4096`、`medium/default=8192`、`high=16384`、
@@ -209,8 +332,8 @@ Responses-compatible endpoint 使用的 `responses_store_false` 和
 `system_message_mode` 只为兼容旧配置继续读取，现已忽略。`SupportsTools`、
 `SupportsStreaming`、`SupportsVision` 属于内置 profile 元数据。
 
-resolver 会校验 quirks 取值，`selfmind model check` 展示最终值并提示协议不匹配。
-协议 adapter 不再根据 endpoint hostname 猜测厂商；内置 profile 声明 header、HTTP
+resolver 会校验 quirks 取值；非法值和协议不匹配会形成可操作的配置错误。协议
+adapter 不再根据 endpoint hostname 猜测厂商；内置 profile 声明 header、HTTP
 版本、schema 修复、匿名身份和 thinking 形态，自定义代理解析到同一 profile 时得到
 相同契约。
 
@@ -243,10 +366,10 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
   Anthropic Messages 对空值或非法的 `required` 直接省略，确保纯可选参数工具不会
   序列化为 `required: null`；Responses-compatible adapter 再应用其更严格的协议
   规则，把空 required 集合序列化为 `[]`。
-- `selfmind model check --live [--role <name>]` 会在目标 transport 声明支持原生工具时，
-  发起一次携带纯可选参数探测工具的有界请求。这样验证的是实际协议 adapter 和端点，
-  而不只是配置解析。`doctor --probe-models` 复用同一 schema 探测，并继续合并共享同一
-  provider 路由的角色，避免重复消耗额度。
+- 模型管理器会在一项路由选择完成、且其 transport 声明支持原生工具时，自动发起一次
+  携带纯可选参数探测工具的有界请求。这样验证的是实际协议 adapter 和端点，而不只是
+  配置解析。`doctor --probe-models` 复用同一 schema 探测，并继续合并共享同一 provider
+  路由的角色，避免重复消耗额度。
 - Responses-compatible adapter 必须在线上规范化工具名：provider 侧名称必须匹配
   `^[a-zA-Z0-9_-]+$`；adapter 内部维护别名表，把返回的 tool call 映射回 SelfMind
   原始内部名称后再分发。
@@ -285,7 +408,7 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
 名称）和由 `buildinfo.Version` 派生的 `User-Agent`。它们刻意放在 profile 层
 而不是 adapter 默认头：profile 若配成其它协议、或走流式调用，都不会经过
 OpenRouter adapter 自己的请求构造，adapter 里设置的归因头因此几乎覆盖不到
-真实请求。`provider_profiles.openrouter.extra_headers` 仍可逐项覆盖，供 fork
+真实请求。`providers.openrouter.extra_headers` 仍可逐项覆盖，供 fork
 与自建代理使用。
 
 ## DeepSeek V4
@@ -301,8 +424,8 @@ DeepSeek 请求还可携带 `user_id`。SelfMind 不会发送原始 person、ten
 匿名 `sm_...` 值。它跨渠道和 run 稳定、不同用户不同，并且只在 provider profile
 声明 `user_identity_field: user_id` 时发送。
 
-`selfmind model check --role <role> --live` 除了验证普通原生工具 schema，还会验证
-完整思考工具循环：思考与工具调用、工具结果回放、最终 assistant 答复。
+模型管理器的自动路由校验与 `doctor --probe-models` 除了验证普通原生工具 schema，
+还会验证完整思考工具循环：思考与工具调用、工具结果回放、最终 assistant 答复。
 
 ## Kimi Coding Plan
 
@@ -313,11 +436,9 @@ models:
   primary:
     provider: "kimi-coding"
     model: "kimi-for-coding"
-
-provider_profiles:
-  kimi-coding:
-    api_key: "${KIMI_CODING_API_KEY}"
 ```
+
+API key 通过 Model Manager 或 `selfmind model` 保存，不写入这份 YAML。
 
 默认行为：
 
@@ -330,14 +451,15 @@ provider_profiles:
 - tool schema 使用 `moonshot` 修复规则
 - Anthropic-compatible 路径不发送 `thinking`
 
-如果用户显式选择 OpenAI-compatible：
+如果要接入 Kimi 的 OpenAI-compatible endpoint，应把它作为独立自定义连接：
 
 ```yaml
-provider_profiles:
-  kimi-coding:
-    api_key: "${KIMI_CODING_API_KEY}"
-    base_url: "https://api.kimi.com/coding/v1"
-    protocol: "openai_compatible"
+providers:
+  custom:
+    kimi-openai:
+      base_url: "https://api.kimi.com/coding/v1"
+      protocol: "openai-compatible"
+      auth: "bearer"
 ```
 
 resolver 会避免重复拼出 `/coding/v1/v1`，并对 OpenAI-compatible 请求发送 `reasoning_effort` 与 `thinking`。
@@ -351,11 +473,9 @@ models:
   primary:
     provider: "minimax"
     model: "MiniMax-M3"
-
-provider_profiles:
-  minimax:
-    api_key: "${MINIMAX_API_KEY}"
 ```
+
+API key 通过 Model Manager 或 `selfmind model` 保存，不写入这份 YAML。
 
 中国区 API key：
 
@@ -364,17 +484,15 @@ models:
   primary:
     provider: "minimax-cn"
     model: "MiniMax-M3"
-
-provider_profiles:
-  minimax-cn:
-    api_key: "${MINIMAX_CN_API_KEY}"
 ```
+
+API key 通过 Model Manager 或 `selfmind model` 保存，不写入这份 YAML。
 
 OAuth 方式：
 
 ```sh
 selfmind auth login minimax-oauth
-selfmind model set minimax-oauth MiniMax-M3
+selfmind model
 ```
 
 默认行为：
@@ -386,9 +504,10 @@ selfmind model set minimax-oauth MiniMax-M3
 - `MiniMax-M3` 在 `coding_agent` role 默认使用 adaptive thinking
 - `MiniMax-M2.x` 可按 `reasoning_effort` 映射 manual thinking budget
 
-## 用户自定义 profile
+## 用户自定义连接
 
-如果某个 provider 不值得内置，但需要稳定保存，可以用 `provider_profiles`：
+如果某个 provider 不值得内置，但需要稳定保存，可以在 `providers.custom` 下使用
+自定义的稳定 ID。Model ID 仍放在路由中，API key 仍放在私有 auth store：
 
 ```yaml
 models:
@@ -397,35 +516,32 @@ models:
     model: "example-coder"
     reasoning: "medium"
 
-provider_profiles:
-  example:
-    api_key: "${EXAMPLE_API_KEY}"
-    base_url: "https://api.example.com/v1"
-    protocol: "openai_compatible"
-    max_tokens: 32768
-    extra_headers:
-      X-Client-Name: "SelfMind"
-    quirks:
-      auth_header: "bearer"
-      tool_schema: "openai"
-      system_message_mode: "inline"
-      thinking_mode: "openai"
+providers:
+  custom:
+    example:
+      base_url: "https://api.example.com/v1"
+      protocol: "openai-compatible"
+      auth: "bearer"
+      max_tokens: 32768
+      extra_headers:
+        X-Client-Name: "SelfMind"
+      quirks:
+        tool_schema: "openai"
+        thinking_mode: "openai"
 ```
 
 如果 provider 使用 Anthropic-compatible，但认证头是 Bearer：
 
 ```yaml
-provider_profiles:
-  example-anthropic:
-    api_key: "${EXAMPLE_API_KEY}"
-    base_url: "https://api.example.com/anthropic"
-    protocol: "anthropic_messages"
-    model: "example-claude"
-    quirks:
-      auth_header: "bearer"
-      tool_schema: "anthropic"
-      system_message_mode: "top_level"
-      thinking_mode: "omit"
+providers:
+  custom:
+    example-anthropic:
+      base_url: "https://api.example.com/anthropic"
+      protocol: "anthropic-compatible"
+      auth: "bearer"
+      quirks:
+        tool_schema: "anthropic"
+        thinking_mode: "omit"
 ```
 
 ## 传输韧性（Transport Resilience）
@@ -450,6 +566,22 @@ provider_profiles:
 - Provider HTTP 调用统一走 `llm.ProviderHTTPClient()`，开启 TCP keepalive
   （`httpclient.go`），让死连接尽快暴露；Kimi 的 HTTP/1.1-only 路径复用同一带
   keepalive 的 transport。
+- Provider 请求统一走具备路由感知能力的共享 transport。macOS 会读取当前手动系统
+  代理，缓存 30 秒，并在连接类错误后立即刷新。由 launchd 管理的 Gateway 以实时
+  系统路由为准，因此从公司直连切换到家里的 Clash，或反向切换，都不需要重启 CLI。
+  本地 provider endpoint 和系统排除项继续直连。PAC/WPAD 在正式支持前会返回带解决
+  办法的错误；当系统仍要求代理时，SelfMind 绝不会静默绕过代理改为直连。
+- Linux 与非 managed 进程使用标准代理环境变量或宿主 TUN/路由。Managed Gateway
+  只保存不含凭据且名称精确匹配的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、
+  `NO_PROXY`（也接受小写形式）；名称相似的非标准变量和带内联凭据的 URL 会被拒绝。
+  Go 不读取 `ALL_PROXY`，因此安全的值会补足缺失的 `HTTP_PROXY` 与
+  `HTTPS_PROXY`。`selfmind env refresh --restart` 会用重新采样的 login shell 环境
+  改写 launchd/systemd 服务定义、验证新 daemon，并提交已验证的 service
+  generation，避免所有权状态仍指向旧进程；已开始的 run 保留其冻结环境。
+- `/diag` 会在不暴露凭据的前提下显示 provider 当前选择的路由与本地代理可达性，
+  并给出具体恢复操作。因网络失败的后台学习任务会保留网络路由指纹；直连/代理或
+  本地监听状态改变后，下一个 maintenance sweep 会自动释放任务，显式 managed
+  restart 也会给予一次新的尝试。
 - **不做游标续传。** `store=false` 时服务端从未持久化响应，无法用
   `previous_response_id` 续传——重试始终是整体重发，不要尝试部分续传。
 

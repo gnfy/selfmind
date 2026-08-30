@@ -11,8 +11,63 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/log"
 )
+
+func (d *Server) modelReadyForWork() bool {
+	if d == nil || d.ModelChanges == nil {
+		// Minimal/test servers without model transaction state retain their
+		// historical behavior. Production always installs ModelChanges.
+		return true
+	}
+	status, err := d.ModelChanges.Inspect()
+	if err != nil {
+		log.Warn("gateway: model readiness check failed; parking new work", "error", err)
+		return false
+	}
+	return status.ModelReady()
+}
+
+func (d *Server) backgroundReadyForWork() bool {
+	if d == nil || d.ModelChanges == nil {
+		return true
+	}
+	status, err := d.ModelChanges.Inspect()
+	if err != nil {
+		log.Warn("gateway: background model readiness check failed; parking maintenance", "error", err)
+		return false
+	}
+	// Maintenance roles have their own provider chains and may fall back to the
+	// verified auxiliary floor. A failed semantic_recall override must not park
+	// post-run learning or memory governance.
+	return status.RouteReady(modelchange.RouteAuxiliary)
+}
+
+func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
+	if d == nil || d.Control == nil || identity == nil {
+		message := "Model readiness is incomplete. Open `selfmind model` to repair the configured routes."
+		return api.MessageResponse{Identity: identity, Error: message, Turn: messageTurn("failed", "", "idle", "", "", message)}
+	}
+	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if d.coordinator().currentActive(identity.PersonID) != nil {
+		ahead++
+	}
+	_, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
+		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
+		ExecutionRoots: req.ExecutionRoots,
+	})
+	if err != nil {
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}
+	}
+	content := fmt.Sprintf("Queued until the configured models are ready (%d ahead). Open `selfmind model` to review or repair them.", ahead)
+	return api.MessageResponse{
+		Identity: identity, Content: content, Accepted: true,
+		Turn: messageTurn("queued", "queued", "idle", "", "", content),
+	}
+}
 
 // enqueueBehindActive stores a new task behind the person's active run and
 // returns an honest, conversational acceptance. "N ahead" counts the running
@@ -43,6 +98,33 @@ func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.Iden
 		Content:  content,
 		Accepted: true,
 		Turn:     messageTurn("queued", "queued", "running", "", "", content),
+	}
+}
+
+// enqueueDuringModelChange accepts new work while the daemon is draining for a
+// confirmed model transaction. The boot drain will start it with the new
+// frozen route; rejecting it would make the safe switch look like downtime.
+func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
+	if d == nil || d.Control == nil || identity == nil {
+		return api.MessageResponse{Identity: identity, Error: "queue is not available", Turn: messageTurn("failed", "", "draining", "", "", "queue is not available")}
+	}
+	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if d.coordinator().currentActive(identity.PersonID) != nil {
+		ahead++
+	}
+	_, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
+		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
+		ExecutionRoots: req.ExecutionRoots,
+	})
+	if err != nil {
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "draining", "", "", err.Error())}
+	}
+	content := fmt.Sprintf("Queued for the model change (%d ahead). It will start after SelfMind applies the new model.", ahead)
+	return api.MessageResponse{
+		Identity: identity, Content: content, Accepted: true,
+		Turn: messageTurn("queued", "queued", "draining", "", "", content),
 	}
 }
 
@@ -80,6 +162,16 @@ func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
 	requeued, dropped, _ := d.Control.RequeueStartedQueued(ctx)
 	if dropped > 0 {
 		log.Warn("gateway: dropped queued tasks that exhausted their restart budget", "dropped", dropped, "requeued", requeued)
+	}
+	d.drainQueuedWhenReady(ctx)
+}
+
+// drainQueuedWhenReady is the liveness edge for an in-process transition back
+// to Model Ready (for example cancelling a preview). The coordinator repeats
+// the readiness check immediately before claiming each person's first row.
+func (d *Server) drainQueuedWhenReady(ctx context.Context) {
+	if d == nil || d.Control == nil || !d.modelReadyForWork() {
+		return
 	}
 	rows, err := d.Control.ListAllQueued(ctx, control.QueueStatusQueued)
 	if err != nil {

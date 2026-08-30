@@ -94,6 +94,9 @@ func (a *App) doctor(args []string) int {
 			descriptionIssues, descriptionErr := tools.InspectSkillDescriptionsForTenant(a.tenantID(),
 				tools.WithSkillStorage(map[string]interface{}{"_tenant_id": a.tenantID()}, storage))
 			fullReport += "\n\n" + formatSkillDescriptionDiagnostics(descriptionIssues, descriptionErr)
+			frontMatterIssues, frontMatterErr := tools.InspectSkillFrontMatterForTenant(a.tenantID(),
+				tools.WithSkillStorage(map[string]interface{}{"_tenant_id": a.tenantID()}, storage))
+			fullReport += "\n\n" + formatSkillFrontMatterDiagnostics(frontMatterIssues, frontMatterErr)
 			migration, migrationErr := tools.MigratePersonSkillsToControl(skillRoot, a.tenantID(), false, tools.DefaultSkillMigrationGrace)
 			knownPersons, knownErr := store.ListPersonIDs(ctx)
 			cleanup := tools.PersonPartitionCleanupReport{Root: skillRoot}
@@ -136,7 +139,7 @@ func (a *App) doctor(args []string) int {
 				Details:  doctorRenderedSectionBody(probeSection),
 				Actions: []doctorAction{{
 					Description: "Check the configured model routes and live provider contract.",
-					Commands:    []string{"selfmind model check --live"},
+					Commands:    []string{"selfmind model"},
 				}},
 			})
 		} else if probeSection != "" {
@@ -280,6 +283,12 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 						actions = append(actions, doctorAction{
 							Description: "Requeue maintenance work that exhausted its retry limit.",
 							Commands:    []string{"selfmind maintenance replay"},
+						})
+					}
+					if strings.Contains(body, "network-blocked:") && !strings.Contains(body, "network-blocked: 0") {
+						actions = append(actions, doctorAction{
+							Description: "Restore the selected network route: on macOS start Clash or disable a stale System Proxy; on Linux restore the proxy/TUN or refresh the managed environment. SelfMind retries automatically after a detected route change.",
+							Commands:    []string{"selfmind env refresh --restart", "selfmind doctor"},
 						})
 					}
 					if strings.Contains(body, "prompt-revision-blocked:") && !strings.Contains(body, "prompt-revision-blocked: 0") {
@@ -447,7 +456,7 @@ func gatewayDoctorHealthy(body string) bool {
 	if !strings.HasPrefix(strings.TrimSpace(body), "running (state=running ") {
 		return false
 	}
-	if strings.Contains(body, "launchd=error") || strings.Contains(body, "launchd=installed-not-loaded") {
+	if backgroundServiceDoctorUnhealthy(body) {
 		return false
 	}
 	if strings.Contains(body, "build=mismatch:") {
@@ -497,9 +506,9 @@ func gatewayDoctorActions(body string) []doctorAction {
 			{Description: "After correcting or removing invalid schemas, restart the gateway.", Commands: []string{"selfmind gateway restart"}},
 		}
 	}
-	if strings.Contains(body, "launchd=error") || strings.Contains(body, "launchd=installed-not-loaded") {
+	if backgroundServiceDoctorUnhealthy(body) {
 		return []doctorAction{
-			{Description: "Install or refresh the launchd service definition.", Commands: []string{"selfmind gateway service install"}},
+			{Description: "Install or refresh the operating-system background service.", Commands: []string{"selfmind gateway service install"}},
 			{Description: "Restart the gateway through the service.", Commands: []string{"selfmind gateway restart"}},
 		}
 	}
@@ -507,6 +516,13 @@ func gatewayDoctorActions(body string) []doctorAction {
 		{Description: "Restart the gateway.", Commands: []string{"selfmind gateway restart"}},
 		{Description: "If it still fails, run it in the foreground and inspect the error.", Commands: []string{"selfmind gateway run"}},
 	}
+}
+
+func backgroundServiceDoctorUnhealthy(body string) bool {
+	return strings.Contains(body, "launchd=error") ||
+		strings.Contains(body, "launchd=installed-not-loaded") ||
+		strings.Contains(body, "systemd=error") ||
+		strings.Contains(body, "systemd=installed-not-running")
 }
 
 func skillPresentationDoctorActions(body string) []doctorAction {
@@ -604,7 +620,7 @@ func configDoctorIssue(d configDiagnostics) (doctorIssue, bool) {
 		}
 		if d.ModelError != "" {
 			fmt.Fprintf(&body, "model: not ready (%s)\n", oneLine(tools.RedactSensitive(d.ModelError), 160))
-			issue.Actions = append(issue.Actions, doctorAction{Description: "Check the configured model; use setup if you need to choose another one.", Commands: []string{"selfmind model check", "selfmind setup"}})
+			issue.Actions = append(issue.Actions, doctorAction{Description: "Open Model Manager; each completed selection is checked automatically.", Commands: []string{"selfmind model", "selfmind setup"}})
 		}
 		if d.SandboxWarning != "" {
 			fmt.Fprintf(&body, "exec_sandbox: %s\n", d.SandboxLine)
@@ -1062,8 +1078,9 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	if health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err != nil {
 		fmt.Fprintf(&sb, "(error: %v)\n", err)
 	} else {
-		fmt.Fprintf(&sb, "queued: %d  retrying: %d  running: %d  provider-blocked: %d  prompt-revision-blocked: %d\n",
-			health.Pending, health.Failed, health.Running, health.Blocked-health.BlockedPrompt, health.BlockedPrompt)
+		fmt.Fprintf(&sb, "queued: %d  retrying: %d  running: %d  provider-blocked: %d  network-blocked: %d  prompt-revision-blocked: %d\n",
+			health.Pending, health.Failed, health.Running,
+			health.Blocked-health.BlockedPrompt-health.NetworkBlocked, health.NetworkBlocked, health.BlockedPrompt)
 		if !health.OldestPendingAt.IsZero() {
 			fmt.Fprintf(&sb, "oldest unfinished: %s\n", time.Since(health.OldestPendingAt).Round(time.Second))
 		}
@@ -1321,6 +1338,40 @@ func formatSkillDescriptionDiagnostics(issues []tools.SkillDescriptionDiagnostic
 		sb.WriteString("  verify: selfmind doctor --verbose\n")
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func formatSkillFrontMatterDiagnostics(issues []tools.SkillFrontMatterDiagnostic, err error) string {
+	var sb strings.Builder
+	sb.WriteString("== Skill front matter ==\n")
+	if err != nil {
+		fmt.Fprintf(&sb, "(error: %s)", oneLine(tools.RedactSensitive(err.Error()), 180))
+		return sb.String()
+	}
+	if len(issues) == 0 {
+		sb.WriteString("status: healthy")
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "[WARNING] unmodelled_keys=%d; the assets load and run, but these declarations have no effect here\n", len(issues))
+	for _, issue := range issues {
+		fmt.Fprintf(&sb, "- [WARNING] id=skill_presentation.unknown_front_matter_key code=unknown_front_matter_key component=catalog_metadata ref=%s\n", oneLine(issue.Name, 100))
+		fmt.Fprintf(&sb, "  location: %s\n", oneLine(issue.Path, 220))
+		sb.WriteString("  expected: every front-matter key is one SelfMind models\n")
+		fmt.Fprintf(&sb, "  observed: keys=%s scope=%s source=%s provenance=%s writable=%t\n",
+			oneLine(strings.Join(issue.Keys, ","), 200), issue.Scope, issue.Source,
+			emptyDoctorValue(issue.Provenance), issue.Writable)
+		sb.WriteString("  cause: the Skill was authored for another agent whose front-matter vocabulary is wider\n")
+		sb.WriteString("  owner: the Skill file shown in location\n")
+		sb.WriteString("  repair: Confirm the declaration is not load-bearing here. Remove it from a writable Skill, or accept that a read-only external asset carries a key this runtime ignores.\n")
+		sb.WriteString("  verify: selfmind doctor --verbose\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func emptyDoctorValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func buildPromptWorkspaceDoctorSection(store *control.Store, dataDir string, cfg *config.Config) string {

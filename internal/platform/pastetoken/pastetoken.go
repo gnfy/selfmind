@@ -1,20 +1,13 @@
 // Package pastetoken owns the composer placeholder contract shared by the
 // client that PRODUCES a token and the daemon that REJECTS an unexpanded one.
 //
-// It exists because the two sides used to carry their own literal pattern in
-// two packages. They diverged: the composer's own label embedded "[80 lines]",
-// its expansion pattern forbade "]" inside a token, and the daemon's guard
-// allowed it. Every large paste therefore failed to expand on the client and
-// was then rejected by the daemon with "the pasted content was not expanded" —
-// a 100% reproducible dead end for the feature.
-//
 // The rules that keep the two sides consistent:
 //
 //   - Format is the ONLY way to build a token. It sanitizes the label so a
 //     token can never contain a bracket or a newline.
-//   - ContainsUnresolved stays deliberately permissive (it must still catch
-//     tokens minted by older clients, including the legacy bracket label), so
-//     it is a safety net, never the expansion mechanism.
+//   - ContainsUnresolved recognizes only the current public format. The former
+//     `[[ paste:0 ... ]]` spelling is ordinary text and has no compatibility
+//     behavior.
 //   - Expansion is exact string replacement against the registered token, never
 //     a pattern match. A label change can no longer strand a payload.
 package pastetoken
@@ -33,32 +26,33 @@ const (
 	KindImage = "image"
 )
 
-// tokenRE matches any composer placeholder, including the legacy bracketed
-// label form. `[^\r\n]*?` is lazy so a line carrying two tokens yields two
-// matches instead of one span swallowing the text between them.
-var tokenRE = regexp.MustCompile(`\[\[ (?:paste|image):[0-9]+ [^\r\n]*?\]\]`)
+// tokenRE matches only the canonical composer placeholders. Labels cannot
+// contain a closing bracket, so two tokens on one line remain independent.
+var tokenRE = regexp.MustCompile(`\[(?:Paste|Image) #[1-9][0-9]* · [^\]\r\n]*\]`)
 
-// labelUnsafeRE collapses everything that could break the token's own
-// delimiters: brackets (which made the old expansion pattern fail) and any
-// vertical whitespace (which would split a token across lines).
-var labelUnsafeRE = regexp.MustCompile(`[\[\]\r\n]+`)
+// labelBreakRE collapses vertical whitespace after brackets have been removed.
+var labelBreakRE = regexp.MustCompile(`[\r\n]+`)
 
 // Format renders the display token for a stored payload. The label is a
 // human-readable hint only; the payload is recovered from the client's registry
 // by exact token match, so sanitizing the label is free.
 func Format(kind string, index int, label string) string {
-	return fmt.Sprintf("[[ %s:%d %s ]]", kind, index, SanitizeLabel(label))
+	title := "Paste"
+	if kind == KindImage {
+		title = "Image"
+	}
+	return fmt.Sprintf("[%s #%d · %s]", title, index+1, SanitizeLabel(label))
 }
 
 // SanitizeLabel strips the characters a token label must never contain and
-// collapses the result to a single line. An empty label stays empty: Format
-// still produces a well-formed token ("[[ paste:0  ]]").
+// collapses the result to a single line. An empty label stays empty.
 //
 // Invalid UTF-8 is dropped rather than substituted, because the token doubles as
 // a registry key: a text widget that coerces a stray byte to U+FFFD would
 // otherwise hold a value that no longer equals the stored token.
 func SanitizeLabel(label string) string {
-	cleaned := labelUnsafeRE.ReplaceAllString(strings.ToValidUTF8(label, ""), " ")
+	cleaned := strings.NewReplacer("[", "", "]", "").Replace(strings.ToValidUTF8(label, ""))
+	cleaned = labelBreakRE.ReplaceAllString(cleaned, " ")
 	return strings.TrimSpace(strings.Join(strings.Fields(cleaned), " "))
 }
 

@@ -221,7 +221,11 @@ account → same person) flips rule 3/4 back and shows an **attach digest**:
 what finished/failed while away, pending approvals/questions, queued tasks —
 one person-scoped query. Pending approvals reconstruct the same server-issued
 interactive menu, including the exact reusable rule text and whether the
-original run is parked.
+original run is parked. Away events are anchored on immutable terminal-run
+completion time, never the mutable task-card update time: post-run labeling or
+maintenance cannot make an old interruption look newly failed. Older durable
+blockers remain visible as current state under **Still needs attention**, not
+under **While you were away**.
 
 Approval lifetime is independent from run lifetime. A resource timeout or
 daemon restart parks an unanswered approval without rejecting it; answering a

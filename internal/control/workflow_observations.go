@@ -65,6 +65,7 @@ type SkillIncidentEvidence struct {
 	ErrorCategory         string   `json:"error_category"`
 	FailedToolCallID      string   `json:"failed_tool_call_id,omitempty"`
 	ObservedErrorCategory string   `json:"observed_error_category,omitempty"`
+	RepairClass           string   `json:"repair_class,omitempty"`
 	FailureObserved       bool     `json:"failure_observed"`
 	NormalizedInputShape  string   `json:"normalized_input_shape,omitempty"`
 	Reason                string   `json:"reason"`
@@ -173,10 +174,48 @@ func (s *Store) MaterializeWorkflowObservations(ctx context.Context, tenantID, r
 			return nil, err
 		}
 		if n, _ := result.RowsAffected(); n == 1 {
+			if err := s.recordSkillVersionObservationHealth(ctx, observation); err != nil {
+				return nil, err
+			}
 			inserted = append(inserted, observation)
 		}
 	}
 	return inserted, nil
+}
+
+func (s *Store) recordSkillVersionObservationHealth(ctx context.Context, observation WorkflowObservation) error {
+	if strings.TrimSpace(observation.SkillKey) == "" || strings.TrimSpace(observation.VersionHash) == "" {
+		return nil
+	}
+	if observation.OutcomeStatus == WorkUnitCompleted && observation.VerificationState == "passed" && observation.EvidenceRole == "success_path" {
+		dependencyFingerprint, environmentFingerprint, verifiedAt := skillEvidenceHealth(
+			mustJSONBytes(SkillEvidenceDigest{SuccessObservations: []WorkflowObservation{observation}}), observation.CreatedAt)
+		_, err := s.db.ExecContext(ctx, `UPDATE skill_versions SET dependency_fingerprint=?,
+			verification_environment_fingerprint=?, last_verified_at=?
+			WHERE control_tenant_id=? AND skill_key=? AND version_hash=? AND state='active'`,
+			dependencyFingerprint, environmentFingerprint, verifiedAt, observation.ControlTenantID,
+			observation.SkillKey, observation.VersionHash)
+		return err
+	}
+	incident := observation.Incident
+	if incident == nil || !incident.FailureObserved || strings.TrimSpace(incident.FailedToolCallID) == "" {
+		return nil
+	}
+	switch ClassifySkillRepairIncident(incident) {
+	case SkillRepairClassDeterministicInterface, SkillRepairClassStablePrecondition, SkillRepairClassSemantic:
+		_, err := s.db.ExecContext(ctx, `UPDATE skill_versions SET state='quarantined'
+			WHERE control_tenant_id=? AND skill_key=? AND version_hash=? AND state='active'
+			AND parent_version_hash<>'' AND created_by='skill_curator'`, observation.ControlTenantID,
+			observation.SkillKey, observation.VersionHash)
+		return err
+	default:
+		return nil
+	}
+}
+
+func mustJSONBytes(value interface{}) []byte {
+	encoded, _ := json.Marshal(value)
+	return encoded
 }
 
 func (s *Store) runSkillActivations(ctx context.Context, tenantID, runID string) ([]SkillActivation, error) {
@@ -276,6 +315,7 @@ func accumulateWorkUnitEvents(units []RunWorkUnit, events []evolutionEvent) map[
 				acc.incident.FailedToolCallID = failure.ToolCallID
 				acc.incident.ObservedErrorCategory = failure.ErrorCategory
 				acc.incident.FailureObserved = SkillRepairObservedFailureEligible(acc.incident.ErrorCategory, failure.ErrorCategory)
+				acc.incident.RepairClass = ClassifySkillRepairIncident(acc.incident)
 			}
 			acc.failures = nil
 		}
@@ -334,6 +374,7 @@ func attachObservationIncident(observation *WorkflowObservation, metric *observa
 		return
 	}
 	incident := *metric.incident
+	incident.RepairClass = ClassifySkillRepairIncident(&incident)
 	incident.RecoveryToolSequence = normalizedToolSequence(incident.RecoveryToolSequence)
 	incident.RecoveryVerified = observation.OutcomeStatus == WorkUnitCompleted &&
 		observation.VerificationState == "passed" && len(incident.RecoveryToolSequence) > 0 && incident.RecoveryFailures == 0

@@ -10,9 +10,8 @@ import (
 	"selfmind/internal/ui/components"
 )
 
-// TUI approval flow: a Codex-style interactive panel in the ACTIVE region
-// (docs/tui-terminal-first-hybrid.md §3 lists the approval dialog as active
-// content). The controller only wires state here; the selectable panel itself
+// TUI approval flow: a Codex-style interactive active-region panel.
+// The controller only wires state here; the selectable panel itself
 // is the reusable components.ApprovalPrompt. IM/text approval surfaces are
 // untouched — this file is TUI-only presentation over the same gateway
 // approval lifecycle (POST /v1/approvals/respond with the grant Scope).
@@ -85,13 +84,14 @@ func (m *uiModel) approvalFlowActive() bool {
 	return m.approvalPrompt != nil || len(m.approvalQueue) > 0
 }
 
-// armApprovalPrompt shows the interactive panel for one approval request and
+// armApprovalPrompt shows the blocking inline panel for one approval request and
 // records ONE compact transcript line as the durable record. It deliberately
 // does not set the legacy "type y to allow" notice — the panel is the prompt.
 func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
+	m.stopModelWait()
 	m.pendingApprovalID = msg.ID
 	m.pendingApprovalTool = msg.Tool
-	m.approvalPrompt = components.NewApprovalPromptDetailed(components.ApprovalDetails{
+	m.approvalPrompt = components.NewApprovalPromptDetailedWithTheme(components.ApprovalDetails{
 		Tool:          msg.Tool,
 		Target:        msg.Target,
 		Reason:        msg.Reason,
@@ -112,7 +112,7 @@ func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 		TriageRationale:   msg.Rationale,
 		TriageRisk:        msg.Risk,
 		Options:           msg.Options,
-	})
+	}, m.common.Theme)
 	record := "⚠ Approval required: " + msg.Tool
 	if reason := strings.TrimSpace(msg.Reason); reason != "" {
 		record += " — " + reason
@@ -249,7 +249,7 @@ func (m *uiModel) resolveApprovalChoice(opt components.ApprovalOption) tea.Cmd {
 	noticeID := m.setStatusNotice(noticeSuccess, "Approved "+tool+" — resuming.")
 	m.resumeAfterApproval()
 	m.armNextQueuedApproval()
-	return tea.Batch(m.spinner.Tick, workingTick(), clearStatusNoticeAfter(noticeID, 1500*time.Millisecond))
+	return tea.Batch(workingTick(), clearStatusNoticeAfter(noticeID, 1500*time.Millisecond))
 }
 
 func (m *uiModel) cancelCurrentApproval() tea.Cmd {
@@ -277,7 +277,7 @@ func (m *uiModel) rejectCurrentApproval(cancelled bool) tea.Cmd {
 	noticeID := m.setStatusNotice(noticeError, status)
 	m.resumeAfterApproval()
 	m.armNextQueuedApproval()
-	return tea.Batch(m.spinner.Tick, workingTick(), clearStatusNoticeAfter(noticeID, 1500*time.Millisecond))
+	return tea.Batch(workingTick(), clearStatusNoticeAfter(noticeID, 1500*time.Millisecond))
 }
 
 // sendApprovalDecision answers the pending approval through the SAME path the
@@ -401,7 +401,7 @@ func (m *uiModel) resolveApprovalElsewhere(msg MsgApprovalResolved) tea.Cmd {
 		m.armNextQueuedApproval()
 		if status != "expired" && status != "archived" {
 			m.resumeAfterApproval()
-			cmds = append(cmds, m.spinner.Tick, workingTick())
+			cmds = append(cmds, workingTick())
 		}
 	}
 	return tea.Batch(cmds...)

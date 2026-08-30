@@ -69,8 +69,22 @@ func TestDigestReportsAwayStateAndActiveRun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, "outcome of "+title, nil); err != nil {
-			t.Fatal(err)
+		switch status {
+		case "done", "completed", "failed", "interrupted", api.RunStatusVerificationPartial:
+			run, err := store.StartRun(ctx, task, "cli", title)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{
+				Identity: *identity, RunID: run.ID, RunStatus: status,
+				TaskID: task.ID, TaskStatus: status, Summary: "outcome of " + title,
+			}); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, "outcome of "+title, nil); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return task
 	}
@@ -230,12 +244,77 @@ func TestDigestAnchorsOnAccountLastSeen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "completed", "", nil); err != nil {
+	run, err := store.StartRun(ctx, task, "cli", "finish after the beat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{
+		Identity: *identity, RunID: run.ID, RunStatus: "completed",
+		TaskID: task.ID, TaskStatus: "completed", Summary: "finished after the beat",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	digest = fetchDigest(t, daemon)
 	if len(digest.FinishedTasks) != 1 || digest.FinishedTasks[0].ID != task.ID {
 		t.Fatalf("task finished after the anchor missing: %+v", digest.FinishedTasks)
+	}
+}
+
+// TestDigestDoesNotRedateAnOldInterruptionDuringLifecycleReconcile covers the
+// startup false positive seen in the daily driver: post-run maintenance may
+// reconcile a task card long after its interrupted run. That bookkeeping must
+// not make the old run look as though it stopped while the CLI was away.
+func TestDigestDoesNotRedateAnOldInterruptionDuringLifecycleReconcile(t *testing.T) {
+	daemon, store, identity := newDigestTestServer(t)
+	ctx := context.Background()
+
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Implement binary search in Go",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "implement binary search")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{
+		Identity:   *identity,
+		RunID:      run.ID,
+		RunStatus:  "interrupted",
+		TaskID:     task.ID,
+		TaskStatus: "interrupted",
+		Summary:    "stopped before completion",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	storedRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil || storedRun == nil || storedRun.FinishedAt == nil {
+		t.Fatalf("terminal run missing: %+v, %v", storedRun, err)
+	}
+
+	// Account presence and run timestamps have second precision. Move into the
+	// next second so the old terminal event is unambiguously before the anchor.
+	for time.Now().Unix() <= storedRun.FinishedAt.Unix() {
+		time.Sleep(10 * time.Millisecond)
+	}
+	daemon.touchPresence(ctx, identity)
+
+	// This is the bookkeeping operation maintenance runs after a KEEP/MOVE
+	// decision. The old open blocker honestly keeps the task interrupted, but
+	// there was no new interrupted run after the presence anchor.
+	if err := store.ReconcileTaskAfterRun(ctx, identity.TenantID, task.ID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	digest := fetchDigest(t, daemon)
+	if len(digest.DisruptedTasks) != 0 {
+		t.Fatalf("old interruption was falsely redated by reconcile: %+v", digest.DisruptedTasks)
+	}
+	if len(digest.UnresolvedTasks) != 1 || digest.UnresolvedTasks[0].ID != task.ID {
+		t.Fatalf("old unresolved task must remain visible without a false away event: %+v", digest.UnresolvedTasks)
 	}
 }
 

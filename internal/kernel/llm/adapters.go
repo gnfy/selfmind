@@ -477,10 +477,22 @@ func (a *OpenAIAdapter) doOpenAIRequest(ctx context.Context, body []byte, apiKey
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	setConfiguredAPIKeyHeader(httpReq, apiKey, a.Quirks.AuthHeader)
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.applyHeaders(httpReq)
 	return ProviderHTTPClient().Do(httpReq)
+}
+
+func setConfiguredAPIKeyHeader(req *http.Request, apiKey, mode string) {
+	if req == nil || strings.TrimSpace(apiKey) == "" {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "x_api_key", "x-api-key":
+		req.Header.Set("x-api-key", apiKey)
+	default:
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 }
 
 func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {

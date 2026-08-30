@@ -21,18 +21,19 @@ type SkillFallbackInput struct {
 }
 
 type SkillFailureGuard struct {
-	ControlTenantID      string    `json:"control_tenant_id"`
-	SkillKey             string    `json:"skill_key"`
-	VersionHash          string    `json:"version_hash"`
-	FailureSignature     string    `json:"failure_signature"`
-	FailedStepID         string    `json:"failed_step_id,omitempty"`
-	ErrorCategory        string    `json:"error_category,omitempty"`
-	NormalizedInputShape string    `json:"normalized_input_shape,omitempty"`
-	State                string    `json:"state"`
-	SourceRunID          string    `json:"source_run_id"`
-	OccurrenceCount      int       `json:"occurrence_count"`
-	CreatedAt            time.Time `json:"created_at"`
-	LastSeenAt           time.Time `json:"last_seen_at"`
+	ControlTenantID        string    `json:"control_tenant_id"`
+	SkillKey               string    `json:"skill_key"`
+	VersionHash            string    `json:"version_hash"`
+	FailureSignature       string    `json:"failure_signature"`
+	FailedStepID           string    `json:"failed_step_id,omitempty"`
+	ErrorCategory          string    `json:"error_category,omitempty"`
+	NormalizedInputShape   string    `json:"normalized_input_shape,omitempty"`
+	EnvironmentFingerprint string    `json:"environment_fingerprint,omitempty"`
+	State                  string    `json:"state"`
+	SourceRunID            string    `json:"source_run_id"`
+	OccurrenceCount        int       `json:"occurrence_count"`
+	CreatedAt              time.Time `json:"created_at"`
+	LastSeenAt             time.Time `json:"last_seen_at"`
 }
 
 func (s *Store) FallbackCurrentSkill(ctx context.Context, input SkillFallbackInput) (*SkillActivation, error) {
@@ -60,6 +61,9 @@ func (s *Store) FallbackCurrentSkill(ctx context.Context, input SkillFallbackInp
 		return nil, fmt.Errorf("active skill activation not found: %w", err)
 	}
 	now := time.Now().Unix()
+	environmentFingerprint := ""
+	_ = tx.QueryRowContext(ctx, `SELECT COALESCE(environment_fingerprint,'') FROM execution_leases
+		WHERE tenant_id=? AND run_id=?`, input.IdentityTenantID, input.RunID).Scan(&environmentFingerprint)
 	var goal string
 	if err := tx.QueryRowContext(ctx, `SELECT goal_digest FROM run_work_units WHERE identity_tenant_id=? AND run_id=? AND id=?`,
 		input.IdentityTenantID, input.RunID, input.WorkUnitID).Scan(&goal); err == nil && strings.TrimSpace(goal) != "" {
@@ -78,15 +82,16 @@ func (s *Store) FallbackCurrentSkill(ctx context.Context, input SkillFallbackInp
 	if signature := strings.TrimSpace(input.FailureSignature); signature != "" && repairEligible {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO skill_failure_guards
 			(control_tenant_id, skill_key, version_hash, failure_signature, failed_step_id,
-			 error_category, normalized_input_shape, state, source_run_id, created_at, occurrence_count, last_seen_at)
-			VALUES(?,?,?,?,?,?,?,'active',?,?,1,?)
+			 error_category, normalized_input_shape, environment_fingerprint, state, source_run_id, created_at, occurrence_count, last_seen_at)
+			VALUES(?,?,?,?,?,?,?,?,'active',?,?,1,?)
 			ON CONFLICT(control_tenant_id, skill_key, version_hash, failure_signature) DO UPDATE SET
 			 failed_step_id=excluded.failed_step_id, error_category=excluded.error_category,
-			 normalized_input_shape=excluded.normalized_input_shape, state='active',
+			 normalized_input_shape=excluded.normalized_input_shape,
+			 environment_fingerprint=excluded.environment_fingerprint, state='active',
 			 source_run_id=excluded.source_run_id, occurrence_count=skill_failure_guards.occurrence_count+1,
 			 last_seen_at=excluded.last_seen_at`, activation.ControlTenantID, activation.SkillKey,
 			activation.VersionHash, signature, strings.TrimSpace(input.FailedStepID),
-			strings.TrimSpace(input.ErrorCategory), strings.TrimSpace(input.NormalizedInputShape),
+			strings.TrimSpace(input.ErrorCategory), strings.TrimSpace(input.NormalizedInputShape), environmentFingerprint,
 			input.RunID, now, now); err != nil {
 			return nil, err
 		}
@@ -179,17 +184,21 @@ func (s *Store) MatchSkillFailureGuardForWorkUnit(ctx context.Context, tenantID,
 	if shape == "" {
 		return nil, nil
 	}
+	environmentFingerprint := ""
+	_ = s.db.QueryRowContext(ctx, `SELECT COALESCE(environment_fingerprint,'') FROM execution_leases
+		WHERE tenant_id=? AND run_id=?`, normalizeTenant(tenantID), runID).Scan(&environmentFingerprint)
 	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, version_hash,
-		failure_signature, failed_step_id, error_category, normalized_input_shape, state,
+		failure_signature, failed_step_id, error_category, normalized_input_shape, environment_fingerprint, state,
 		source_run_id, occurrence_count, created_at, last_seen_at
 		FROM skill_failure_guards WHERE control_tenant_id=? AND skill_key=? AND version_hash=?
-		AND state='active' AND normalized_input_shape=? ORDER BY last_seen_at DESC, created_at DESC LIMIT 1`,
-		normalizeTenant(tenantID), skillKey, versionHash, shape)
+		AND state='active' AND normalized_input_shape=? AND environment_fingerprint=?
+		ORDER BY last_seen_at DESC, created_at DESC LIMIT 1`,
+		normalizeTenant(tenantID), skillKey, versionHash, shape, environmentFingerprint)
 	var guard SkillFailureGuard
 	var created, lastSeen int64
 	if err := row.Scan(&guard.ControlTenantID, &guard.SkillKey, &guard.VersionHash,
 		&guard.FailureSignature, &guard.FailedStepID, &guard.ErrorCategory,
-		&guard.NormalizedInputShape, &guard.State, &guard.SourceRunID,
+		&guard.NormalizedInputShape, &guard.EnvironmentFingerprint, &guard.State, &guard.SourceRunID,
 		&guard.OccurrenceCount, &created, &lastSeen); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -205,8 +214,8 @@ func (s *Store) RecordSkillFailureGuardMatch(ctx context.Context, guard SkillFai
 	now := time.Now().Unix()
 	result, err := s.db.ExecContext(ctx, `UPDATE skill_failure_guards SET occurrence_count=occurrence_count+1,
 		last_seen_at=? WHERE control_tenant_id=? AND skill_key=? AND version_hash=?
-		AND failure_signature=? AND state='active'`, now, guard.ControlTenantID, guard.SkillKey,
-		guard.VersionHash, guard.FailureSignature)
+		AND failure_signature=? AND environment_fingerprint=? AND state='active'`, now, guard.ControlTenantID, guard.SkillKey,
+		guard.VersionHash, guard.FailureSignature, guard.EnvironmentFingerprint)
 	if err != nil {
 		return 0, err
 	}

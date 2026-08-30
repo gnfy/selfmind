@@ -23,6 +23,31 @@ type EnsureResult struct {
 	Started bool // true if EnsureRunning spawned the daemon, false if it was already up
 }
 
+// WaitForRunning observes an externally started Gateway without creating a
+// competing detached owner. Managed-service installation uses this after
+// launchd/systemd has been kicked: falling back to StartDetached here would
+// make a reachable orphan mask a failed service-manager job.
+func WaitForRunning(ctx context.Context, opts EnsureOptions) (EnsureResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cfg, err := loadConfigOrDefault(opts.ConfigPath)
+	if err != nil {
+		return EnsureResult{}, err
+	}
+	dataDir := resolveDataDir(cfg)
+	url := ResolveURL(cfg.Gateway.URL)
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	if err := waitHealthy(ctx, url, timeout); err != nil {
+		return EnsureResult{URL: url}, fmt.Errorf("gateway did not become ready at %s within %s: %w", url, timeout, err)
+	}
+	record, _ := NewManager(dataDir, ResolveAddr(cfg.Gateway.Addr)).RunningRecord()
+	return EnsureResult{URL: url, Record: record}, nil
+}
+
 // EnsureRunning converges on a single local gateway daemon and returns its URL,
 // auto-starting a detached `selfmind gateway run` when none is healthy yet. It
 // is the foundation of the daemon-client model: every CLI/TUI client calls this

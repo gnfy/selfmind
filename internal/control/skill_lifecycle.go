@@ -213,6 +213,15 @@ func (s *Store) ActivateSkill(ctx context.Context, input ActivateSkillInput) (*S
 	}
 
 	now := time.Now().Unix()
+	var existingVersionState string
+	if err := tx.QueryRowContext(ctx, `SELECT state FROM skill_versions
+		WHERE control_tenant_id=? AND skill_key=? AND version_hash=?`, input.ControlTenantID, input.SkillKey, input.VersionHash).
+		Scan(&existingVersionState); err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if existingVersionState == "quarantined" {
+		return nil, fmt.Errorf("Skill version %s is quarantined after an attributable regression; continue with ordinary planning", input.VersionHash)
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE skill_versions SET state='previous'
 		WHERE control_tenant_id=? AND skill_key=? AND state='active' AND version_hash<>?`,
 		input.ControlTenantID, input.SkillKey, input.VersionHash); err != nil {

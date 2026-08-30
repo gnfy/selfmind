@@ -41,6 +41,14 @@ func planJSONFromEvent(event llm.StreamEvent) string {
 	return string(data)
 }
 
+func activityPhase(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	phase, _ := payload["phase"].(string)
+	return strings.TrimSpace(phase)
+}
+
 func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 	return func() tea.Msg {
 		if m.messageProcessor != nil {
@@ -200,11 +208,14 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 	switch event.EventType {
 	case "stream":
 		if event.Content != "" {
-			m.program.Send(MsgStream{Content: event.Content, Event: ref})
+			m.program.Send(MsgStream{Content: event.Content, Phase: event.Phase, Event: ref})
 		}
 	case "agent.thinking", "agent.step":
 		if event.Content != "" {
-			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.EventType, event.Content), Event: ref})
+			m.program.Send(MsgAgentActivity{
+				Content: displayActivityEvent(event.EventType, event.Content),
+				Phase:   activityPhase(event.Payload), Event: ref,
+			})
 		}
 	case "tool.started":
 		// update_plan renders as a plan checklist driven by the plan.updated
@@ -417,7 +428,10 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 		m.program.Send(MsgStream{Content: event.Content})
 	case "agent.thinking", "agent.step":
 		if event.Content != "" {
-			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.Type, event.Content)})
+			m.program.Send(MsgAgentActivity{
+				Content: displayActivityEvent(event.Type, event.Content),
+				Phase:   activityPhase(event.Payload),
+			})
 		}
 	case "tool.started":
 		if isHiddenLifecycleTool(event.ToolName) {

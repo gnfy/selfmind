@@ -28,8 +28,8 @@ func TestWatcherEventIsBoundToRunAndDeduplicated(t *testing.T) {
 	updated, _ = model.updateInner(msg)
 	model = updated.(*uiModel)
 
-	if len(model.messages) != 1 {
-		t.Fatalf("duplicate durable event rendered %d messages, want 1", len(model.messages))
+	if len(model.processState().tools) != 1 {
+		t.Fatalf("duplicate durable event rendered %d active tools, want 1", len(model.processState().tools))
 	}
 
 	updated, _ = model.updateInner(MsgToolStart{
@@ -43,8 +43,8 @@ func TestWatcherEventIsBoundToRunAndDeduplicated(t *testing.T) {
 		},
 	})
 	model = updated.(*uiModel)
-	if len(model.messages) != 1 {
-		t.Fatalf("event from another run was rendered: %+v", model.messages)
+	if len(model.processState().tools) != 1 {
+		t.Fatalf("event from another run was rendered: %+v", model.processState().tools)
 	}
 }
 

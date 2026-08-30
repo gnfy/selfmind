@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"selfmind/internal/executionenv"
 )
 
 func TestSkillLifecycleSeparatesWorkUnitsFallbackAndTaskAffinity(t *testing.T) {
@@ -504,6 +506,70 @@ func TestVerifiedSkillRepairIncidentRejectsTransientFailure(t *testing.T) {
 	}
 }
 
+func TestSkillRepairEvidenceClassesEnforceDifferentThresholds(t *testing.T) {
+	observation := func(runID, signature, repairCategory, observedCategory string) WorkflowObservation {
+		return WorkflowObservation{
+			RunID: runID, EvidenceRole: "failure_guard",
+			Incident: &SkillIncidentEvidence{
+				FailureSignature: signature, FailedStepID: "Procedure",
+				ErrorCategory: repairCategory, ObservedErrorCategory: observedCategory,
+				FailureObserved: true, RecoveryVerified: true,
+			},
+		}
+	}
+	interfaceDrift := observation("run-a", "schema-v2", "schema_changed", "tool_schema")
+	if got := ClassifySkillRepairIncident(interfaceDrift.Incident); got != SkillRepairClassDeterministicInterface {
+		t.Fatalf("interface class=%q", got)
+	}
+	if !SkillRepairAutomaticPromotionReady(SkillEvidenceDigest{NegativeObservations: []WorkflowObservation{interfaceDrift}}) {
+		t.Fatal("one verified deterministic interface recovery did not become ready")
+	}
+
+	precondition := observation("run-a", "manifest-moved", "stale_precondition", "not_found")
+	if got := ClassifySkillRepairIncident(precondition.Incident); got != SkillRepairClassStablePrecondition {
+		t.Fatalf("precondition class=%q", got)
+	}
+	if SkillRepairAutomaticPromotionReady(SkillEvidenceDigest{PublicationScope: "user", WorkspaceID: "workspace-a", NegativeObservations: []WorkflowObservation{precondition}}) {
+		t.Fatal("one workspace incident rewrote a user-global precondition")
+	}
+	if !SkillRepairAutomaticPromotionReady(SkillEvidenceDigest{PublicationScope: "workspace", WorkspaceID: "workspace-a", NegativeObservations: []WorkflowObservation{precondition}}) {
+		t.Fatal("verified workspace-scoped precondition recovery did not become ready")
+	}
+
+	semantic := []WorkflowObservation{
+		observation("run-a", "meaning-v2", "verification_mismatch", "check_definition"),
+		observation("run-b", "meaning-v2", "verification_mismatch", "check_definition"),
+	}
+	if got := ClassifySkillRepairIncident(semantic[0].Incident); got != SkillRepairClassSemantic {
+		t.Fatalf("semantic class=%q", got)
+	}
+	if !SkillRepairCandidateEvidenceReady(SkillEvidenceDigest{NegativeObservations: semantic[:1]}) {
+		t.Fatal("one semantic recovery did not create a reviewable candidate")
+	}
+	if SkillRepairAutomaticPromotionReady(SkillEvidenceDigest{NegativeObservations: semantic}) {
+		t.Fatal("two semantic recoveries crossed the three-run threshold")
+	}
+	semantic = append(semantic, observation("run-c", "meaning-v2", "verification_mismatch", "check_definition"))
+	if !SkillRepairAutomaticPromotionReady(SkillEvidenceDigest{NegativeObservations: semantic}) {
+		t.Fatal("three independent semantic recoveries did not become ready")
+	}
+	semantic[2].RunID = "run-b"
+	if SkillRepairAutomaticPromotionReady(SkillEvidenceDigest{NegativeObservations: semantic}) {
+		t.Fatal("replayed semantic recovery counted as independent evidence")
+	}
+
+	notApplicable := observation("run-a", "wrong-selection", "missing_failure_guard", "not_found")
+	if got := ClassifySkillRepairIncident(notApplicable.Incident); got != SkillRepairClassNotApplicable {
+		t.Fatalf("not-applicable class=%q", got)
+	}
+	if !SkillRepairCandidateEvidenceReady(SkillEvidenceDigest{PublicationScope: "workspace", WorkspaceID: "workspace-a", NegativeObservations: []WorkflowObservation{notApplicable}}) {
+		t.Fatal("not-applicable incident did not remain available for applicability review")
+	}
+	if SkillRepairAutomaticPromotionReady(SkillEvidenceDigest{PublicationScope: "workspace", WorkspaceID: "workspace-a", NegativeObservations: []WorkflowObservation{notApplicable}}) {
+		t.Fatal("not-applicable incident authorized a procedure repair")
+	}
+}
+
 func TestSkillRepairContentTopologyRequiresCanonicalUniqueSections(t *testing.T) {
 	canonical := `## Applicability
 A
@@ -719,6 +785,48 @@ func TestSkillFailureGuardMatchesOnlyTheSameInputShape(t *testing.T) {
 	count, err := store.RecordSkillFailureGuardMatch(ctx, *guard)
 	if err != nil || count != 2 {
 		t.Fatalf("matched count=%d err=%v", count, err)
+	}
+}
+
+func TestSkillFailureGuardMatchesOnlyTheSameEnvironmentFingerprint(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "guard-environment", "Guard")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect", Channel: "cli"})
+	runA, _ := store.StartRun(ctx, task, "cli", "inspect the release manifest")
+	if _, err := store.MaterializeExecutionLease(ctx, executionenv.Lease{
+		RunID: runA.ID, TenantID: identity.TenantID, PersonID: identity.PersonID, EnvironmentFingerprint: "environment-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	key := SkillKey(identity.TenantID, "inspect-build", "user", "agent-created", "/skills", "inspect-build/SKILL.md")
+	if _, err := store.ActivateSkill(ctx, ActivateSkillInput{
+		IdentityTenantID: identity.TenantID, ControlTenantID: identity.TenantID, PersonID: identity.PersonID,
+		RunID: runA.ID, WorkUnitID: runA.WorkUnitID, SkillKey: key, SkillName: "inspect-build", VersionHash: "v1", ContentBody: "inspect",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FallbackCurrentSkill(ctx, SkillFallbackInput{
+		IdentityTenantID: identity.TenantID, RunID: runA.ID, WorkUnitID: runA.WorkUnitID,
+		Reason: "schema changed", FailureSignature: "schema-v2", FailedStepID: "Procedure", ErrorCategory: "schema_changed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if guard, err := store.MatchSkillFailureGuardForWorkUnit(ctx, identity.TenantID, key, "v1", runA.ID, runA.WorkUnitID); err != nil || guard == nil || guard.EnvironmentFingerprint != "environment-a" {
+		t.Fatalf("same-environment guard=%+v err=%v", guard, err)
+	}
+	runB, _ := store.StartRun(ctx, task, "cli", "inspect the release manifest")
+	if _, err := store.MaterializeExecutionLease(ctx, executionenv.Lease{
+		RunID: runB.ID, TenantID: identity.TenantID, PersonID: identity.PersonID, EnvironmentFingerprint: "environment-b",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if guard, err := store.MatchSkillFailureGuardForWorkUnit(ctx, identity.TenantID, key, "v1", runB.ID, runB.WorkUnitID); err != nil || guard != nil {
+		t.Fatalf("cross-environment guard=%+v err=%v", guard, err)
 	}
 }
 

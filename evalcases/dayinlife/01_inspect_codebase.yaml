@@ -1,5 +1,5 @@
 id: dayinlife_inspect_codebase
-title: "inspect a real codebase and answer where the entrypoint is"
+title: "inspect a real codebase with visible action and tool progress"
 suite: dayinlife
 workspace: "."
 channel: cli
@@ -17,6 +17,12 @@ expect:
     - "<tool>"
     - "Process summary:"
 assert_state:
+  # The production CLI path must receive at least one action/activity event
+  # before or alongside its correlated tool evidence. Focused TUI Go tests own
+  # the terminal-only contrast, nesting, and bounded-frame assertions.
+  - on: events
+    type: agent.thinking
+    count_gte: 1
   # Persistence-boundary smoke guard: at least one production tool start and
   # completion event carries correlation identity. Focused Go tests enforce
   # complete identity and result pairing for every batch_read child.

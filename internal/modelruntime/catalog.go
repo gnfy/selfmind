@@ -23,6 +23,14 @@ type Catalog struct {
 	cachePath string
 }
 
+type CatalogResult struct {
+	Models     []string
+	Source     string
+	FetchedAt  time.Time
+	Stale      bool
+	FetchError error
+}
+
 // ModelDescriptor contains optional provider-published model capabilities.
 // Empty fields mean "unknown", not "unsupported": custom and compatible
 // providers often expose only model IDs.
@@ -50,21 +58,31 @@ func DefaultCatalogPath() string {
 // Models returns a live model list when possible, with a short local cache and
 // profile fallbacks so new provider releases do not require a SelfMind rebuild.
 func (c *Catalog) Models(ctx context.Context, profile ProviderProfile, rt Runtime, forceRefresh bool) ([]string, error) {
+	result := c.ModelsWithStatus(ctx, profile, rt, forceRefresh)
+	return result.Models, result.FetchError
+}
+
+// ModelsWithStatus distinguishes live, fresh-cache, stale-cache, and built-in
+// fallback data so UIs never present old provider metadata as current fact.
+func (c *Catalog) ModelsWithStatus(ctx context.Context, profile ProviderProfile, rt Runtime, forceRefresh bool) CatalogResult {
 	cacheKey := profile.ID + "|" + rt.BaseURL + "|" + credentialFingerprint(rt.APIKey)
 	if !forceRefresh {
-		if cached := c.readCache(cacheKey); len(cached) > 0 {
-			return cached, nil
+		if cached, fetchedAt, stale := c.readCacheEntry(cacheKey); len(cached) > 0 && !stale {
+			return CatalogResult{Models: cached, Source: "cache", FetchedAt: fetchedAt}
 		}
 	}
 	models, err := c.fetch(ctx, profile, rt)
 	if err == nil && len(models) > 0 {
 		c.writeCache(cacheKey, models)
-		return models, nil
+		return CatalogResult{Models: models, Source: "live", FetchedAt: time.Now()}
+	}
+	if cached, fetchedAt, _ := c.readCacheEntry(cacheKey); len(cached) > 0 {
+		return CatalogResult{Models: cached, Source: "cache", FetchedAt: fetchedAt, Stale: true, FetchError: err}
 	}
 	if len(profile.FallbackModels) > 0 {
-		return uniqueSorted(profile.FallbackModels), err
+		return CatalogResult{Models: uniqueSorted(profile.FallbackModels), Source: "fallback", Stale: true, FetchError: err}
 	}
-	return nil, err
+	return CatalogResult{Source: "unavailable", Stale: true, FetchError: err}
 }
 
 // Descriptors preserves the existing model-list behavior while enriching
@@ -451,21 +469,28 @@ func collectModelIDs(value interface{}) []string {
 }
 
 func (c *Catalog) readCache(key string) []string {
-	if c == nil || c.cachePath == "" {
+	models, _, stale := c.readCacheEntry(key)
+	if stale {
 		return nil
+	}
+	return models
+}
+
+func (c *Catalog) readCacheEntry(key string) ([]string, time.Time, bool) {
+	if c == nil || c.cachePath == "" {
+		return nil, time.Time{}, false
 	}
 	payload, err := readJSONFile(c.cachePath)
 	if err != nil {
-		return nil
+		return nil, time.Time{}, false
 	}
 	entry, _ := payload[key].(map[string]interface{})
 	if entry == nil {
-		return nil
+		return nil, time.Time{}, false
 	}
 	ts, _ := entry["ts"].(float64)
-	if ts <= 0 || time.Since(time.Unix(int64(ts), 0)) > time.Hour {
-		return nil
-	}
+	fetchedAt := time.Unix(int64(ts), 0)
+	stale := ts <= 0 || time.Since(fetchedAt) > time.Hour
 	raw, _ := entry["models"].([]interface{})
 	var out []string
 	for _, item := range raw {
@@ -473,7 +498,7 @@ func (c *Catalog) readCache(key string) []string {
 			out = append(out, s)
 		}
 	}
-	return out
+	return out, fetchedAt, stale
 }
 
 func (c *Catalog) writeCache(key string, models []string) {

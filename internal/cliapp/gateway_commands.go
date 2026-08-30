@@ -1,6 +1,7 @@
 package cliapp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -8,10 +9,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	appcore "selfmind/internal/app"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/promptassets"
 	gatewayrt "selfmind/internal/runtime/gateway"
@@ -61,6 +65,16 @@ func (a *App) gatewayRun(args []string) int {
 		Replace:    *replace,
 		ConfigPath: a.configPath,
 	}); err != nil {
+		if errors.Is(err, modelchange.ErrRecoveryRequired) {
+			fmt.Fprintln(a.stderr, err)
+			// launchd/systemd restart only on non-zero exit. A recovery circuit is
+			// deliberate terminal state, so supervised processes exit cleanly
+			// instead of creating an infinite restart storm.
+			if strings.TrimSpace(os.Getenv("XPC_SERVICE_NAME")) != "" || strings.TrimSpace(os.Getenv("INVOCATION_ID")) != "" {
+				return 0
+			}
+			return 1
+		}
 		if errors.Is(err, gatewayrt.ErrAlreadyRunning) {
 			fmt.Fprintln(a.stderr, err)
 			return 1
@@ -179,6 +193,7 @@ func (a *App) gatewayStop(args []string) int {
 		DataDir: dataDir,
 		Force:   *force,
 		Timeout: timeout,
+		Reason:  strings.TrimSpace(os.Getenv("SELF_GATEWAY_RESTART_REASON")),
 	}); err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -186,7 +201,7 @@ func (a *App) gatewayStop(args []string) int {
 	if serviceInstalled {
 		handled, message, err := gatewayServiceStopIfInstalled()
 		if !handled {
-			fmt.Fprintln(a.stderr, "SelfMind launchd service disappeared while stopping.")
+			fmt.Fprintln(a.stderr, "SelfMind background service disappeared while stopping.")
 			return 1
 		}
 		if err != nil {
@@ -216,6 +231,23 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	restartReason := strings.TrimSpace(os.Getenv("SELF_GATEWAY_RESTART_REASON"))
+	modelChangeID, modelRestart := modelChangeReasonID(restartReason)
+	if modelRestart {
+		delay := 1500 * time.Millisecond
+		if raw := strings.TrimSpace(os.Getenv("SELF_GATEWAY_RESTART_DELAY_MS")); raw != "" {
+			if millis, parseErr := strconv.Atoi(raw); parseErr == nil && millis >= 0 && millis <= 30_000 {
+				delay = time.Duration(millis) * time.Millisecond
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-a.ctx.Done():
+			timer.Stop()
+			return 1
+		case <-timer.C:
+		}
+	}
 	_ = drain // Accepted for an explicit upgrade command; restart already drains by default.
 	if err := validatePromptWorkspaceForRestart(a.configPath); err != nil {
 		fmt.Fprintf(a.stderr, "Prompt validation failed; the running gateway was not restarted: %v\n", err)
@@ -224,11 +256,20 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 	}
 	dataDir := a.gatewayDataDir()
 	// Capture before RequestShutdown removes the old PID record. A restart may
-	// be invoked from an updater or IDE that lacks the login shell's PATH or
-	// proxy variables; the new daemon must retain its tool and network paths.
+	// be invoked from an updater or IDE that lacks the login shell's PATH; the new
+	// daemon must retain its existing tool discovery paths without reviving stale
+	// ambient proxy state.
 	inheritedRestartEnv := gatewayrt.RunningRestartEnvironment(dataDir)
 	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
+	var modelChanges *modelchange.Service
+	if modelRestart {
+		modelChanges = &modelchange.Service{ConfigPath: a.configPath}
+	}
 	ctx, cancel := contextWithTimeout(a.ctx, timeout)
+	if modelRestart {
+		cancel()
+		ctx, cancel = context.WithCancel(a.ctx)
+	}
 	defer cancel()
 	serviceInstalled := false
 	if gatewayServiceSupported() {
@@ -240,22 +281,66 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 		}
 	}
 	if err := gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
-		URL:     a.gatewayURL(),
-		DataDir: dataDir,
-		Force:   *force,
-		Timeout: timeout,
+		URL:                 a.gatewayURL(),
+		DataDir:             dataDir,
+		Force:               *force,
+		Timeout:             timeout,
+		Reason:              restartReason,
+		WaitForSafeBoundary: modelRestart,
+		Abort: func() bool {
+			if modelChanges == nil {
+				return false
+			}
+			status, inspectErr := modelChanges.Inspect()
+			if inspectErr != nil {
+				return false
+			}
+			if status.Pending == nil || !strings.EqualFold(status.Pending.ID, modelChangeID) {
+				return true
+			}
+			switch status.Pending.Status {
+			case modelchange.StatusValidating, modelchange.StatusAwaitingSafeBoundary,
+				modelchange.StatusCommitting, modelchange.StatusDraining, modelchange.StatusRestarting:
+				return false
+			default:
+				return true
+			}
+		},
 	}); err != nil {
+		if modelRestart && errors.Is(err, gatewayrt.ErrShutdownAborted) {
+			fmt.Fprintf(a.stdout, "Model change %s was cancelled or replaced before restart.\n", modelChangeID)
+			return 0
+		}
+		if modelChanges != nil {
+			_, _ = modelChanges.MarkRecoveryRequired(modelChangeID, err)
+		}
 		fmt.Fprintln(a.stderr, err)
 		return 1
+	}
+	if modelRestart {
+		if _, err := modelChanges.BeginDraining(modelChangeID); err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		if _, err := modelChanges.MarkRestarting(modelChangeID, gatewayServiceKind()); err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
 	}
 	if serviceInstalled {
 		if handled, message, err := gatewayServiceRestartIfInstalled(a.configPath); handled {
 			if err != nil {
+				if modelChanges != nil {
+					_, _ = modelChanges.MarkRecoveryRequired(modelChangeID, err)
+				}
 				fmt.Fprintln(a.stderr, err)
 				return 1
 			}
 			if message != "" {
 				fmt.Fprintln(a.stdout, message)
+			}
+			if modelChanges != nil {
+				return a.waitForModelRestart(modelChanges, modelChangeID)
 			}
 			return 0
 		}
@@ -267,11 +352,78 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 		Environment:                 environment,
 	})
 	if err != nil {
+		if modelChanges != nil {
+			_, _ = modelChanges.MarkRecoveryRequired(modelChangeID, err)
+		}
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
 	fmt.Fprintf(a.stdout, "SelfMind gateway restarted (pid %d).\nLog: %s\n", result.PID, result.LogPath)
+	if modelChanges != nil {
+		return a.waitForModelRestart(modelChanges, modelChangeID)
+	}
 	return 0
+}
+
+func modelChangeReasonID(reason string) (string, bool) {
+	const prefix = "model_change:"
+	reason = strings.TrimSpace(reason)
+	if !strings.HasPrefix(strings.ToLower(reason), prefix) {
+		return "", false
+	}
+	id := strings.TrimSpace(reason[len(prefix):])
+	return id, id != ""
+}
+
+func (a *App) waitForModelRestart(service *modelchange.Service, changeID string) int {
+	deadline := time.Now().Add(120 * time.Second)
+	warnAt := time.Now().Add(30 * time.Second)
+	warned := false
+	for time.Now().Before(deadline) {
+		status, err := service.Inspect()
+		if err == nil {
+			if status.Pending != nil && status.Pending.ID == changeID && status.Pending.Status == modelchange.StatusRecoveryRequired {
+				fmt.Fprintf(a.stderr, "Model change %s requires recovery: %s\n", changeID, status.Pending.Failure)
+				return 1
+			}
+			for i := len(status.History) - 1; i >= 0; i-- {
+				change := status.History[i]
+				if change.ID != changeID {
+					continue
+				}
+				switch change.Status {
+				case modelchange.StatusApplied:
+					fmt.Fprintf(a.stdout, "Model change %s applied and gateway healthy.\n", changeID)
+					return 0
+				case modelchange.StatusRolledBack:
+					fmt.Fprintf(a.stderr, "Model change %s was rolled back: %s\n", changeID, change.Failure)
+					return 1
+				case modelchange.StatusConflict, modelchange.StatusFailed, modelchange.StatusCancelled, modelchange.StatusSuperseded:
+					fmt.Fprintf(a.stderr, "Model change %s ended as %s: %s\n", changeID, change.Status, change.Failure)
+					return 1
+				}
+			}
+		}
+		if !warned && time.Now().After(warnAt) {
+			warned = true
+			fmt.Fprintf(a.stderr, "Model change %s is taking longer than 30 seconds; still waiting for gateway health.\n", changeID)
+		}
+		select {
+		case <-a.ctx.Done():
+			return 1
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	cause := fmt.Errorf("gateway did not become healthy within 120 seconds")
+	status, err := service.MarkRecoveryRequired(changeID, cause)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	if status.Pending != nil {
+		fmt.Fprintf(a.stderr, "Model change %s requires recovery: %s\n", changeID, status.Pending.Failure)
+	}
+	return 1
 }
 
 func validatePromptWorkspaceForRestart(configPath string) error {
@@ -287,7 +439,7 @@ func validatePromptWorkspaceForRestart(configPath string) error {
 
 func (a *App) gatewayService(args []string) int {
 	if !gatewayServiceSupported() {
-		fmt.Fprintln(a.stderr, "launchd service management is only available on macOS.")
+		fmt.Fprintln(a.stderr, "Operating-system background service management is unavailable; SelfMind can still run on demand.")
 		return 1
 	}
 	action := "status"
@@ -296,41 +448,25 @@ func (a *App) gatewayService(args []string) int {
 	}
 	switch action {
 	case "install":
-		installed, _, err := gatewayServiceStatus()
+		receipt, err := a.reconcileManagedGateway()
 		if err != nil {
 			fmt.Fprintln(a.stderr, err)
 			return 1
 		}
-		// A legacy detached gateway and launchd must never own the same runtime
-		// at once. Drain the detached process before registering the service.
-		if !installed {
-			timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
-			ctx, cancel := contextWithTimeout(a.ctx, timeout)
-			err = gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
-				URL:     a.gatewayURL(),
-				DataDir: a.gatewayDataDir(),
-				Timeout: timeout,
-			})
-			cancel()
-			if err != nil {
-				fmt.Fprintln(a.stderr, err)
-				return 1
-			}
-		}
-		path, err := gatewayServiceInstall(a.configPath)
-		if err != nil {
+		if err := a.persistManagedGatewayReceipt(receipt); err != nil {
 			fmt.Fprintln(a.stderr, err)
 			return 1
 		}
-		fmt.Fprintf(a.stdout, "SelfMind launchd service installed and started.\nPlist: %s\n", path)
+		fmt.Fprintf(a.stdout, "SelfMind background service installed and started.\nDefinition: %s\n", receipt.Path)
 		return 0
 	case "status":
-		_, message, err := gatewayServiceStatus()
+		installed, message, err := gatewayServiceStatus()
 		if err != nil {
 			fmt.Fprintln(a.stderr, err)
 			return 1
 		}
 		fmt.Fprintln(a.stdout, message)
+		fmt.Fprintln(a.stdout, managedBackgroundStatusLine(a.currentManagedBackgroundStatus(installed, gatewayServiceHealthy())))
 		return 0
 	case "uninstall":
 		timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
@@ -380,6 +516,15 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	if runtime.RuntimeDir != "" {
 		fmt.Fprintf(a.stdout, "runtime: %s\n", runtime.RuntimeDir)
 	}
+	if runtime.ConfigPath != "" {
+		fmt.Fprintf(a.stdout, "config: %s\n", runtime.ConfigPath)
+	}
+	if runtime.ServiceManager != "" {
+		fmt.Fprintf(a.stdout, "service owner: %s generation=%s\n", runtime.ServiceManager, shortRuntimeIdentity(runtime.ServiceGeneration))
+	}
+	if runtime.ModelRouteFingerprint != "" {
+		fmt.Fprintf(a.stdout, "model routes: %s\n", shortRuntimeIdentity(runtime.ModelRouteFingerprint))
+	}
 	if status.StoreSchema.CurrentVersion > 0 {
 		fmt.Fprintf(a.stdout, "control schema: v%d (binary supports v%d)\n", status.StoreSchema.Version, status.StoreSchema.CurrentVersion)
 	}
@@ -401,6 +546,14 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	} else {
 		fmt.Fprintln(a.stdout, "active runs: 0")
 	}
+}
+
+func shortRuntimeIdentity(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
 }
 
 func (a *App) printPromptCustomizationHint() {

@@ -12,15 +12,19 @@ import (
 // derived only from durable activations and their terminal work-unit outcomes;
 // the legacy memory.db skill_metrics table is intentionally excluded.
 type SkillUsageStat struct {
-	SkillKey   string    `json:"skill_key"`
-	SkillName  string    `json:"skill_name"`
-	Calls      int       `json:"calls"`
-	Completed  int       `json:"completed"`
-	Fallbacks  int       `json:"fallbacks"`
-	Failures   int       `json:"failures"`
-	Parked     int       `json:"parked"`
-	Cancelled  int       `json:"cancelled"`
-	LastUsedAt time.Time `json:"last_used_at"`
+	SkillKey  string `json:"skill_key"`
+	SkillName string `json:"skill_name"`
+	Calls     int    `json:"calls"`
+	Completed int    `json:"completed"`
+	Fallbacks int    `json:"fallbacks"`
+	Failures  int    `json:"failures"`
+	Parked    int    `json:"parked"`
+	Cancelled int    `json:"cancelled"`
+	// Attributions counts implicit use: a work unit read this Skill's content
+	// without activating it. It is never admissible as curator or repair
+	// evidence, so it is reported beside Calls rather than folded into it.
+	Attributions int       `json:"attributions"`
+	LastUsedAt   time.Time `json:"last_used_at"`
 }
 
 // SkillUsageStats returns one control-tenant-scoped aggregate per logical
@@ -61,6 +65,31 @@ func (s *Store) SkillUsageStats(ctx context.Context, controlTenantID string) ([]
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	summaries, err := s.SkillAttributionSummaries(ctx, controlTenantID)
+	if err != nil {
+		return nil, err
+	}
+	byKey := make(map[string]int, len(stats))
+	for i := range stats {
+		byKey[stats[i].SkillKey] = i
+	}
+	for _, summary := range summaries {
+		idx, ok := byKey[summary.SkillKey]
+		if !ok {
+			// A Skill used only implicitly has no activation row, which is
+			// exactly the case the implicit column exists to show.
+			stats = append(stats, SkillUsageStat{
+				SkillKey: summary.SkillKey, SkillName: summary.SkillName,
+				Attributions: summary.Attributions, LastUsedAt: summary.LastObservedAt,
+			})
+			byKey[summary.SkillKey] = len(stats) - 1
+			continue
+		}
+		stats[idx].Attributions += summary.Attributions
+		if summary.LastObservedAt.After(stats[idx].LastUsedAt) {
+			stats[idx].LastUsedAt = summary.LastObservedAt
+		}
 	}
 	sort.Slice(stats, func(i, j int) bool {
 		if stats[i].LastUsedAt.Equal(stats[j].LastUsedAt) {

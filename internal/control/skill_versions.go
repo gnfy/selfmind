@@ -6,27 +6,74 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
 
 type SkillVersion struct {
-	ControlTenantID   string          `json:"control_tenant_id"`
-	SkillKey          string          `json:"skill_key"`
-	SkillName         string          `json:"skill_name"`
-	VersionHash       string          `json:"version_hash"`
-	ParentVersionHash string          `json:"parent_version_hash,omitempty"`
-	State             string          `json:"state"`
-	ContentRef        string          `json:"content_ref,omitempty"`
-	ContentBody       string          `json:"content_body,omitempty"`
-	PackageHash       string          `json:"package_hash,omitempty"`
-	ResourceManifest  json.RawMessage `json:"resource_manifest,omitempty"`
-	ObservationIDs    json.RawMessage `json:"source_observation_ids,omitempty"`
-	EvidenceSetHash   string          `json:"evidence_set_hash,omitempty"`
-	Evidence          json.RawMessage `json:"evidence,omitempty"`
-	CreatedBy         string          `json:"created_by"`
-	CreatedAt         time.Time       `json:"created_at"`
-	PromotedAt        *time.Time      `json:"promoted_at,omitempty"`
+	ControlTenantID                    string          `json:"control_tenant_id"`
+	SkillKey                           string          `json:"skill_key"`
+	SkillName                          string          `json:"skill_name"`
+	VersionHash                        string          `json:"version_hash"`
+	ParentVersionHash                  string          `json:"parent_version_hash,omitempty"`
+	State                              string          `json:"state"`
+	ContentRef                         string          `json:"content_ref,omitempty"`
+	ContentBody                        string          `json:"content_body,omitempty"`
+	PackageHash                        string          `json:"package_hash,omitempty"`
+	ResourceManifest                   json.RawMessage `json:"resource_manifest,omitempty"`
+	ObservationIDs                     json.RawMessage `json:"source_observation_ids,omitempty"`
+	EvidenceSetHash                    string          `json:"evidence_set_hash,omitempty"`
+	Evidence                           json.RawMessage `json:"evidence,omitempty"`
+	DependencyFingerprint              string          `json:"dependency_fingerprint,omitempty"`
+	VerificationEnvironmentFingerprint string          `json:"verification_environment_fingerprint,omitempty"`
+	LastVerifiedAt                     *time.Time      `json:"last_verified_at,omitempty"`
+	CreatedBy                          string          `json:"created_by"`
+	CreatedAt                          time.Time       `json:"created_at"`
+	PromotedAt                         *time.Time      `json:"promoted_at,omitempty"`
+}
+
+func skillEvidenceHealth(evidenceJSON []byte, now time.Time) (dependencyFingerprint, environmentFingerprint string, lastVerifiedAt int64) {
+	var digest SkillEvidenceDigest
+	if json.Unmarshal(evidenceJSON, &digest) != nil {
+		return "", "", 0
+	}
+	observations := append(append([]WorkflowObservation(nil), digest.SuccessObservations...), digest.NegativeObservations...)
+	dependencies := make([]string, 0, len(observations)*2)
+	environments := map[string]bool{}
+	for _, observation := range observations {
+		if observation.VerificationState != "passed" {
+			continue
+		}
+		if fingerprint := strings.TrimSpace(observation.EnvironmentFingerprint); fingerprint != "" {
+			environments[fingerprint] = true
+			dependencies = append(dependencies, "environment:"+fingerprint)
+		}
+		for _, tool := range observation.ToolEvidence {
+			classes := append([]string(nil), tool.OperationClasses...)
+			sort.Strings(classes)
+			dependencies = append(dependencies, strings.Join([]string{
+				"tool", strings.TrimSpace(tool.Origin), strings.TrimSpace(tool.Category), strings.TrimSpace(tool.Name), strings.Join(classes, ","),
+			}, ":"))
+		}
+		verifiedAt := observation.CreatedAt.Unix()
+		if verifiedAt <= 0 {
+			verifiedAt = now.Unix()
+		}
+		if verifiedAt > lastVerifiedAt {
+			lastVerifiedAt = verifiedAt
+		}
+	}
+	dependencies = uniqueSortedStrings(dependencies)
+	if len(dependencies) > 0 {
+		dependencyFingerprint = stableEvolutionHash(dependencies)
+	}
+	if len(environments) == 1 {
+		for fingerprint := range environments {
+			environmentFingerprint = fingerprint
+		}
+	}
+	return dependencyFingerprint, environmentFingerprint, lastVerifiedAt
 }
 
 func (s *Store) CreateSkillCandidateVersion(ctx context.Context, tenantID, skillKey, skillName, parentVersionHash, content, evidenceSetHash string, observationIDs []string, evidence interface{}) (string, error) {
@@ -48,22 +95,45 @@ func (s *Store) CreateSkillPackageCandidateVersion(ctx context.Context, tenantID
 	versionHash := fmt.Sprintf("%x", digest[:])
 	idsJSON, _ := json.Marshal(observationIDs)
 	evidenceJSON, _ := json.Marshal(evidence)
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO skill_versions
+	dependencyFingerprint, verificationEnvironment, lastVerifiedAt := skillEvidenceHealth(evidenceJSON, time.Now())
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO skill_versions
 		(control_tenant_id, skill_key, skill_name, version_hash, parent_version_hash, state,
 		 content_body, package_hash, resource_manifest_json, source_observation_ids_json, evidence_set_hash, evidence_json,
-		 created_by, created_at)
-		VALUES(?,?,?,?,?,'candidate',?,?,?,?,?,?,'skill_curator',?)`, normalizeTenant(tenantID),
+		 dependency_fingerprint, verification_environment_fingerprint, last_verified_at, created_by, created_at)
+		VALUES(?,?,?,?,?,'candidate',?,?,?,?,?,?,?,?,?,'skill_curator',?)`, normalizeTenant(tenantID),
 		skillKey, skillName, versionHash, parentVersionHash, content, strings.TrimSpace(packageHash), string(resourceManifestJSON), string(idsJSON),
-		evidenceSetHash, string(evidenceJSON), time.Now().Unix())
-	return versionHash, err
+		evidenceSetHash, string(evidenceJSON), dependencyFingerprint, verificationEnvironment, lastVerifiedAt, time.Now().Unix()); err != nil {
+		return "", err
+	}
+	if _, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO skill_candidate_evidence_snapshots
+		(control_tenant_id, skill_key, version_hash, evidence_set_hash, observation_ids_json, evidence_json, created_at)
+		VALUES(?,?,?,?,?,?,?)`, normalizeTenant(tenantID), skillKey, versionHash, evidenceSetHash,
+		string(idsJSON), string(evidenceJSON), time.Now().Unix()); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return versionHash, nil
 }
 
 func (s *Store) SkillCandidateByEvidence(ctx context.Context, tenantID, evidenceSetHash string) (*SkillVersion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, skill_name, version_hash,
 		parent_version_hash, state, content_ref, content_body, package_hash, resource_manifest_json, source_observation_ids_json,
-		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
-		FROM skill_versions WHERE control_tenant_id=? AND evidence_set_hash=? ORDER BY created_at DESC LIMIT 1`,
-		normalizeTenant(tenantID), strings.TrimSpace(evidenceSetHash))
+		evidence_set_hash, evidence_json, dependency_fingerprint, verification_environment_fingerprint, last_verified_at,
+		created_by, created_at, promoted_at
+		FROM skill_versions v WHERE control_tenant_id=? AND (
+			v.evidence_set_hash=? OR EXISTS (
+				SELECT 1 FROM skill_candidate_evidence_snapshots snapshot
+				WHERE snapshot.control_tenant_id=v.control_tenant_id AND snapshot.skill_key=v.skill_key
+				AND snapshot.version_hash=v.version_hash AND snapshot.evidence_set_hash=?))
+		ORDER BY created_at DESC LIMIT 1`,
+		normalizeTenant(tenantID), strings.TrimSpace(evidenceSetHash), strings.TrimSpace(evidenceSetHash))
 	version, err := scanSkillVersion(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -71,10 +141,32 @@ func (s *Store) SkillCandidateByEvidence(ctx context.Context, tenantID, evidence
 	return version, err
 }
 
+func (s *Store) SkillCandidateHasAutomaticRepairEvidence(ctx context.Context, tenantID, skillKey, versionHash string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT evidence_json FROM skill_candidate_evidence_snapshots
+		WHERE control_tenant_id=? AND skill_key=? AND version_hash=? ORDER BY created_at`,
+		normalizeTenant(tenantID), skillKey, versionHash)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return false, err
+		}
+		var digest SkillEvidenceDigest
+		if json.Unmarshal([]byte(raw), &digest) == nil && SkillRepairAutomaticPromotionReady(digest) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
 func (s *Store) GetSkillVersion(ctx context.Context, tenantID, skillKey, versionHash string) (*SkillVersion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, skill_name, version_hash,
 		parent_version_hash, state, content_ref, content_body, package_hash, resource_manifest_json, source_observation_ids_json,
-		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
+		evidence_set_hash, evidence_json, dependency_fingerprint, verification_environment_fingerprint, last_verified_at,
+		created_by, created_at, promoted_at
 		FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND version_hash=?`,
 		normalizeTenant(tenantID), skillKey, versionHash)
 	version, err := scanSkillVersion(row)
@@ -87,7 +179,8 @@ func (s *Store) GetSkillVersion(ctx context.Context, tenantID, skillKey, version
 func (s *Store) ActiveSkillVersion(ctx context.Context, tenantID, skillKey string) (*SkillVersion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, skill_name, version_hash,
 		parent_version_hash, state, content_ref, content_body, package_hash, resource_manifest_json, source_observation_ids_json,
-		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
+		evidence_set_hash, evidence_json, dependency_fingerprint, verification_environment_fingerprint, last_verified_at,
+		created_by, created_at, promoted_at
 		FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND state='active'`,
 		normalizeTenant(tenantID), skillKey)
 	version, err := scanSkillVersion(row)
@@ -101,10 +194,11 @@ func scanSkillVersion(row skillLifecycleScanner) (*SkillVersion, error) {
 	var version SkillVersion
 	var manifest, observations, evidence string
 	var created int64
-	var promoted sql.NullInt64
+	var lastVerified, promoted sql.NullInt64
 	if err := row.Scan(&version.ControlTenantID, &version.SkillKey, &version.SkillName,
 		&version.VersionHash, &version.ParentVersionHash, &version.State, &version.ContentRef,
 		&version.ContentBody, &version.PackageHash, &manifest, &observations, &version.EvidenceSetHash, &evidence,
+		&version.DependencyFingerprint, &version.VerificationEnvironmentFingerprint, &lastVerified,
 		&version.CreatedBy, &created, &promoted); err != nil {
 		return nil, err
 	}
@@ -112,6 +206,10 @@ func scanSkillVersion(row skillLifecycleScanner) (*SkillVersion, error) {
 	version.ResourceManifest = json.RawMessage(manifest)
 	version.Evidence = json.RawMessage(evidence)
 	version.CreatedAt = time.Unix(created, 0)
+	if lastVerified.Valid && lastVerified.Int64 > 0 {
+		at := time.Unix(lastVerified.Int64, 0)
+		version.LastVerifiedAt = &at
+	}
 	if promoted.Valid {
 		at := time.Unix(promoted.Int64, 0)
 		version.PromotedAt = &at
@@ -184,7 +282,8 @@ func (s *Store) ListSkillVersions(ctx context.Context, tenantID, skillKey, state
 	}
 	query := `SELECT control_tenant_id, skill_key, skill_name, version_hash,
 		parent_version_hash, state, content_ref, content_body, package_hash, resource_manifest_json, source_observation_ids_json,
-		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
+		evidence_set_hash, evidence_json, dependency_fingerprint, verification_environment_fingerprint, last_verified_at,
+		created_by, created_at, promoted_at
 		FROM skill_versions WHERE control_tenant_id=?`
 	args := []interface{}{normalizeTenant(tenantID)}
 	if strings.TrimSpace(skillKey) != "" {

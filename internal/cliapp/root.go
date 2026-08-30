@@ -14,7 +14,9 @@ import (
 
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/crashreport"
+	"selfmind/internal/gateway/api"
 	tui "selfmind/internal/gateway/cli"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 )
@@ -53,6 +55,29 @@ type App struct {
 	// interactive is true only when both stdin and stdout are attached to a
 	// terminal. First-run setup must never prompt scripts, cron, or pipes.
 	interactive bool
+	// onboarding is the reconciled first-use state for this invocation. It is
+	// populated before the TUI starts and supplies the initial workspace/model
+	// summary plus the one-shot first-success receipt callback.
+	onboarding *onboardingState
+	// onboardingGatewayStatus is the true external HTTP seam for setup
+	// readiness. Tests provide a status without binding a local port.
+	onboardingGatewayStatus func(context.Context) (api.GatewayStatusResponse, error)
+	// managedGatewayReconcile is the platform-service boundary used by focused
+	// onboarding acceptance tests. Production leaves it nil.
+	managedGatewayReconcile func() (gatewayServiceInstallReceipt, error)
+	managedServiceHealthy   func() bool
+	// modelChangeValidate is a focused test seam. Production uses the same
+	// role-aware live probes as daemon startup and onboarding.
+	modelChangeValidate modelchange.Validator
+	// Model recovery must replace the process that owns the failed candidate.
+	// Focused tests inject these boundaries to verify stop -> restore -> start
+	// ordering without touching the developer's real background service.
+	modelRecoveryStop  func() error
+	modelRecoveryStart func() error
+	modelRecoveryWait  func() error
+	// modelManagerOnly makes `selfmind model` open the same transient manager
+	// as `/model`, then exit instead of entering a chat session.
+	modelManagerOnly bool
 }
 
 var Version = buildinfo.Version
@@ -221,7 +246,7 @@ var documentedCLIUsages = []string{
 	"selfmind new [title]",
 	"selfmind config [doctor|upgrade]",
 	"selfmind env [show|refresh]",
-	"selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]",
+	"selfmind model",
 	"selfmind prompt [list|show|edit|diff|validate|test|reset|apply] ...",
 	"selfmind auth [login|status|logout] ...",
 	"selfmind doctor [--verbose] [--out FILE] [--probe-models]",
@@ -252,7 +277,7 @@ func (a *App) runTUI() int {
 		return 1
 	}
 
-	cfg, code := a.ensureInitialModelSetup(cfg, a.runInteractiveModelPicker)
+	cfg, code := a.prepareTUIConfig(cfg)
 	if code != 0 {
 		return code
 	}
@@ -279,6 +304,16 @@ func (a *App) runTUI() int {
 		return 1
 	}
 	return code
+}
+
+func (a *App) prepareTUIConfig(cfg *config.Config) (*config.Config, int) {
+	if a.modelManagerOnly {
+		// `selfmind model` repairs model configuration and its receipt, so an
+		// incomplete or stale onboarding receipt must not intercept the sole
+		// model-management entrypoint with the legacy setup picker.
+		return cfg, 0
+	}
+	return a.ensureOnboarding(cfg, onboardingOptions{})
 }
 
 func interactiveTerminal(stdin io.Reader, stdout io.Writer) bool {

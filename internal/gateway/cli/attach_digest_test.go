@@ -48,6 +48,7 @@ func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
 		"While you were away:",
 		"✔ 2 tasks finished: Ship the report, Fix the build",
 		"✖ 1 task stopped early: Refactor parser (use /resume to continue)",
+		"Still needs attention:",
 		"⚠ 1 approval waiting: [terminal] command=rm -rf build — destructive command — interactive choices restored below",
 		"⚠ 1 push may not have reached weixin (see /status)",
 	} {
@@ -65,6 +66,25 @@ func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
 	// Rendered once: a second sized frame must not repeat it.
 	if cmd := model.maybeShowStartupDigest(120); cmd != nil || len(model.messages) != 2 {
 		t.Fatalf("digest must render exactly once: %d messages", len(model.messages))
+	}
+}
+
+func TestStartupDigestLabelsOlderUnresolvedWorkWithoutAwayClaim(t *testing.T) {
+	text := formatStartupDigest(&api.DigestResponse{
+		UnresolvedTasks: []api.DigestTask{{
+			ID: "t-old", Title: "Implement binary search in Go", Status: "interrupted",
+		}},
+	})
+	if strings.Contains(text, "While you were away:") || strings.Contains(text, "stopped early") {
+		t.Fatalf("older unresolved work must not be presented as a new away event:\n%s", text)
+	}
+	for _, want := range []string{
+		"Still needs attention:",
+		"↻ 1 earlier task still needs attention: Implement binary search in Go (use /resume to continue)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("unresolved digest missing %q:\n%s", want, text)
+		}
 	}
 }
 

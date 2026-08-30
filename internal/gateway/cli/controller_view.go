@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	uitheme "selfmind/internal/ui/theme"
 	"strings"
 	"time"
 
@@ -38,6 +39,42 @@ func (m *uiModel) transcriptVisibleHeight() int {
 	return visibleH
 }
 
+const maxActiveProcessRows = 10
+
+func (m *uiModel) processRowBudget(width int) int {
+	if m == nil || m.height <= 0 {
+		return maxActiveProcessRows
+	}
+	reserved := 0
+	if m.editor != nil {
+		reserved += m.editor.PreferredHeight()
+	} else {
+		reserved++
+	}
+	reserved += lipgloss.Height(m.common.Styles.Status.Panel.Width(width).Render(m.statusLine()))
+	if notice := m.notificationBar(width); notice != "" {
+		reserved += lipgloss.Height(notice)
+	}
+	if hint := m.migrationHintBar(width); hint != "" {
+		reserved += lipgloss.Height(hint)
+	}
+	if plan := m.activePlanBlock(width); plan != "" {
+		reserved += lipgloss.Height(plan)
+	}
+	if m.approvalPrompt != nil {
+		reserved += lipgloss.Height(m.approvalPrompt.View(width))
+	}
+	reserved += m.composerGapHeight()
+	if hint := m.composerHint(); hint != "" {
+		reserved += lipgloss.Height(hint)
+	}
+	available := m.height - reserved
+	if available < 0 {
+		return 0
+	}
+	return min(available, maxActiveProcessRows)
+}
+
 // activePlanBlock gives the pinned plan its own visual band. The leading and
 // trailing blank rows keep live progress distinct from both transcript events
 // and the composer while remaining part of the measured active-region height.
@@ -45,7 +82,7 @@ func (m *uiModel) activePlanBlock(width int) string {
 	if m == nil {
 		return ""
 	}
-	plan := strings.TrimRight(renderPlanCell(m.activePlanJSON, 0, width), "\n")
+	plan := strings.TrimRight(renderPlanCellWithStyles(m.activePlanJSON, 0, width, newTranscriptStyles(m.common.Theme)), "\n")
 	if strings.TrimSpace(plan) == "" {
 		return ""
 	}
@@ -97,13 +134,28 @@ func (m *uiModel) notificationBar(width int) string {
 	if m.statusNoticeText == text {
 		kind = m.statusNoticeKind
 	}
-	glyph, color := noticeVisual(kind)
+	glyph, _ := noticeVisual(kind)
 	body := glyph + " " + text
 	return lipgloss.NewStyle().
 		Padding(0, 1).
-		Foreground(lipgloss.Color(color)).
+		Foreground(m.common.Theme.Color(noticeThemeRole(kind))).
 		Bold(true).
 		Render(truncateToWidth(body, width-2))
+}
+
+func noticeThemeRole(kind noticeKind) uitheme.Role {
+	switch kind {
+	case noticeSuccess:
+		return uitheme.Success
+	case noticeGuidance:
+		return uitheme.Accent
+	case noticeWarning:
+		return uitheme.Warning
+	case noticeError:
+		return uitheme.Error
+	default:
+		return uitheme.TextSecondary
+	}
 }
 
 func (m *uiModel) migrationHintBar(width int) string {
@@ -113,8 +165,7 @@ func (m *uiModel) migrationHintBar(width int) string {
 	return lipgloss.NewStyle().
 		Width(width).
 		Padding(0, 1).
-		Foreground(lipgloss.Color("212")).
-		Background(lipgloss.Color("236")).
+		Foreground(m.common.Theme.Color(uitheme.Warning)).
 		Italic(true).
 		Render(truncateToWidth("✨ "+m.migrationHint, width-2))
 }
@@ -134,11 +185,11 @@ func (m *uiModel) renderHistoryContent(width int) string {
 		// view bounds them; this overlay is where you see the whole change).
 		if msg.ToolName == "patch" && !msg.IsError {
 			if patch := patchArgOf(msg.ToolArgs); strings.TrimSpace(patch) != "" {
-				rendered = renderPatchCell(patch, msg.Duration, width, 1<<30)
+				rendered = renderPatchCellWithStyles(patch, msg.Duration, width, 1<<30, newTranscriptStyles(m.common.Theme))
 			}
 		}
 		if rendered == "" {
-			rendered = renderCell(msg, width)
+			rendered = m.renderCell(msg, width)
 		}
 		if rendered = strings.TrimRight(rendered, "\n"); rendered == "" {
 			continue
@@ -152,12 +203,13 @@ func (m *uiModel) renderHelpContent(width int) string {
 	if width < 40 {
 		width = 40
 	}
-	title := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
-	section := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
-	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
-	cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	t := m.common.Theme
+	title := lipgloss.NewStyle().Foreground(t.Color(uitheme.TextPrimary)).Bold(true)
+	section := lipgloss.NewStyle().Foreground(t.Color(uitheme.TextPrimary)).Bold(true)
+	keyStyle := lipgloss.NewStyle().Foreground(t.Color(uitheme.Warning)).Bold(true)
+	cmdStyle := lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary))
+	muted := lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative))
 
 	lines := []string{
 		"",
@@ -203,6 +255,13 @@ func (m *uiModel) statusLine() string {
 		st.Status.Value.Render(header),
 		st.Status.Value.Render(dir),
 		st.Status.Label.Render(formatUsageSession(m.runTokens, m.totalTokens, m.tokenLimit)),
+	}
+	if m.modelChangePhase != "" {
+		phase := strings.ReplaceAll(string(m.modelChangePhase), "_", " ")
+		if !m.modelChangePhaseAt.IsZero() {
+			phase = fmt.Sprintf("%s %.0fs", phase, time.Since(m.modelChangePhaseAt).Seconds())
+		}
+		parts = append(parts, st.Status.Warning.Render("model change: "+phase))
 	}
 
 	state := m.runStatus

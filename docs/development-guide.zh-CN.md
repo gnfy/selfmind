@@ -186,16 +186,14 @@ models:
 
 ```sh
 selfmind model
-selfmind model current
-selfmind model list
-selfmind model set openai gpt-4o
 ```
 
 交互流程：
 
-1. 展示供应商列表：OpenAI、Anthropic、Google、已保存 custom endpoint、`Custom endpoint (enter URL manually)`。
-2. 输入或保留 API key。
-3. 供应商支持时，实时拉取模型列表。
+1. 选择主模型、后台模型或可选的后台角色覆盖。
+2. 选择供应商和模型；缺少必需 API key 时再输入。
+3. 每完成一项选择就自动验证；模型列表优先实时发现，再使用缓存或静态 fallback。
+4. 统一检查所有修改，并作为一笔 daemon 事务应用。
 4. 用户选择模型；如果列表不可用，手动输入。
 5. 写入 `config.yaml`。
 
@@ -295,6 +293,10 @@ gateway:
 | `GET` | `/v1/tasks/events` | 查看当前任务或指定 task 的最近事件 |
 
 停机时 gateway 会进入 draining 状态，拒绝新 run，等待 active run 完成；CLI 可在需要时 force stop。
+shutdown endpoint 会先完整写出并 flush 接受响应，再允许 runtime owner 关闭
+HTTP server。为了兼容升级前的旧 Gateway，CLI 只有在请求已完整发出，并且本地
+runtime receipt 能证明原 owner 已消失或被替换时，才会把丢失响应视为成功；如果
+原 owner 仍存在，EOF 依然是错误。
 
 ## 身份、任务、Workspace
 
@@ -545,8 +547,7 @@ git diff --check
 手工 smoke test：
 
 ```sh
-selfmind -f ./tmp/config.yaml model set openai gpt-test
-selfmind -f ./tmp/config.yaml model current
+selfmind -f ./tmp/config.yaml model
 selfmind -f ./tmp/config.yaml gateway run
 selfmind -f ./tmp/config.yaml gateway status
 selfmind -f ./tmp/config.yaml gateway stop

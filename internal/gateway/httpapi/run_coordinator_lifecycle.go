@@ -1282,7 +1282,7 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 	}
 	if evolutionAdvice != nil && evolutionAdvice.Kind == "batch_read" {
 		fmt.Fprintf(&sb, "evolution_candidate_id: %s\n", evolutionAdvice.CandidateID)
-		sb.WriteString("This task has an enabled, evidence-backed read-only batching candidate. When several independent local file reads/searches/listings are needed, prefer batch_read with that candidate_id. On any partial failure, follow fallback_required and use ordinary tools. Never batch writes, shell commands, credentials, or network actions.\n")
+		sb.WriteString("This task has a read-only batching recipe backed by a verified candidate-versus-baseline comparison. When several independent local file reads/searches/listings are needed, prefer batch_read with that candidate_id. On any partial failure, follow fallback_required and use ordinary tools. Never batch writes, shell commands, credentials, or network actions.\n")
 	}
 	if workspace != nil && workspace.LocalPath != "" {
 		fmt.Fprintf(&sb, "workspace_id: %s\n", workspace.ID)

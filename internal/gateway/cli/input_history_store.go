@@ -16,7 +16,7 @@ import (
 // inputHistoryEntry is one line of ~/.selfmind/input_history.jsonl.
 type inputHistoryEntry struct {
 	TS      int64  `json:"ts"`
-	Channel string `json:"channel,omitempty"`
+	Channel string `json:"channel,omitempty"` // legacy read compatibility only
 	Text    string `json:"text"`
 }
 
@@ -33,7 +33,6 @@ type inputHistoryEntry struct {
 // cross-process lock (AGENTS.md).
 type inputHistoryStore struct {
 	path     string
-	channel  string
 	maxBytes int64
 
 	queue chan inputHistoryEntry
@@ -60,7 +59,7 @@ const (
 // newInputHistoryStore returns a running store, or nil when persistence is
 // disabled ("history.persistence: none") or no home directory is available.
 // A nil *inputHistoryStore is safe to use: Append/Close are no-ops.
-func newInputHistoryStore(cfg *config.Config, channel string) *inputHistoryStore {
+func newInputHistoryStore(cfg *config.Config) *inputHistoryStore {
 	if cfg == nil || !cfg.History.PersistEnabled() {
 		return nil
 	}
@@ -74,7 +73,6 @@ func newInputHistoryStore(cfg *config.Config, channel string) *inputHistoryStore
 	}
 	s := &inputHistoryStore{
 		path:     filepath.Join(home, ".selfmind", inputHistoryFileName),
-		channel:  channel,
 		maxBytes: maxBytes,
 		queue:    make(chan inputHistoryEntry, inputHistoryQueueSize),
 		done:     make(chan struct{}),
@@ -87,8 +85,8 @@ func newInputHistoryStore(cfg *config.Config, channel string) *inputHistoryStore
 // sessions' entries that seed the in-memory history (persistent prefix +
 // in-session suffix, same merge model as codex's composer history). Both
 // values are usable when persistence is off: nil store, empty history.
-func newInputHistoryState(cfg *config.Config, channel string) (*inputHistoryStore, []string) {
-	store := newInputHistoryStore(cfg, channel)
+func newInputHistoryState(cfg *config.Config) (*inputHistoryStore, []string) {
+	store := newInputHistoryStore(cfg)
 	if store == nil {
 		return nil, []string{}
 	}
@@ -128,7 +126,7 @@ func (s *inputHistoryStore) Append(text string) {
 	if text == "" || len(text) > maxInputHistoryEntryBytes {
 		return
 	}
-	entry := inputHistoryEntry{TS: time.Now().Unix(), Channel: s.channel, Text: text}
+	entry := inputHistoryEntry{TS: time.Now().Unix(), Text: text}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -223,7 +221,7 @@ func (s *inputHistoryStore) trimLocked() {
 }
 
 // parseHistoryLines extracts the last maxEntries valid texts, oldest first,
-// folding adjacent duplicates (matches recordInputHistory's dedup).
+// folding adjacent duplicates. Unknown legacy metadata is ignored.
 func parseHistoryLines(data []byte, maxEntries int) []string {
 	var texts []string
 	sc := bufio.NewScanner(bytes.NewReader(data))

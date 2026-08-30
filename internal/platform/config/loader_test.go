@@ -37,6 +37,46 @@ storage:
 	}
 }
 
+func TestTUIThemeDefaultsNormalizesAndValidates(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("{}\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(Options{Path: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TUI.Theme != "auto" {
+			t.Fatalf("tui.theme = %q, want auto", cfg.TUI.Theme)
+		}
+	})
+
+	t.Run("explicit mode", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("tui:\n  theme: LIGHT\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadConfig(Options{Path: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.TUI.Theme != "light" {
+			t.Fatalf("tui.theme = %q, want light", cfg.TUI.Theme)
+		}
+	})
+
+	t.Run("invalid mode", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte("tui:\n  theme: solarized\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(Options{Path: path}); err == nil || !strings.Contains(err.Error(), "invalid tui.theme") {
+			t.Fatalf("LoadConfig error = %v, want invalid tui.theme", err)
+		}
+	})
+}
+
 func TestProviderExtraOptionsNormalizeEnvironmentAndPreserveLegacyHeaders(t *testing.T) {
 	t.Setenv("PROVIDER_USER", "team-user-42")
 	t.Setenv("PROVIDER_TOKEN", "opaque-token-42")
@@ -249,6 +289,17 @@ func TestUpdateCheckDefaults(t *testing.T) {
 	}
 }
 
+func TestEvolutionDefaultsToObservationOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := LoadConfig(Options{Path: path, CreateIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Evolution.Enabled || cfg.Evolution.Mode != "observe" {
+		t.Fatalf("evolution defaults = enabled:%t mode:%q, want true/observe", cfg.Evolution.Enabled, cfg.Evolution.Mode)
+	}
+}
+
 func TestSaveConfigWritesNewProviderSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := &Config{
@@ -260,7 +311,7 @@ func TestSaveConfigWritesNewProviderSchema(t *testing.T) {
 			},
 		},
 		Providers: ProvidersConfig{
-			OpenAI: ProviderEndpoint{APIKey: "${OPENAI_API_KEY}", BaseURL: "https://api.openai.com/v1"},
+			OpenAI: ProviderEndpoint{APIKey: "${OPENAI_API_KEY}", BaseURL: "https://proxy.example/v1"},
 		},
 	}
 	if err := SaveConfig(path, cfg); err != nil {
@@ -278,6 +329,197 @@ func TestSaveConfigWritesNewProviderSchema(t *testing.T) {
 	}
 	if !strings.Contains(text, "models:") || !strings.Contains(text, "primary:") || !strings.Contains(text, "providers:") || !strings.Contains(text, "openai:") {
 		t.Fatalf("saved config missing new schema sections:\n%s", text)
+	}
+}
+
+func TestLoadConfigSupportsBuiltinOverridesAndMapCustomProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  deepseek:
+    base_url: "https://proxy.example/v1"
+  custom:
+    deepseek-local:
+      base_url: "http://127.0.0.1:8000/v1"
+      protocol: openai-compatible
+      auth: none
+      extra_headers:
+        X-Application: SelfMind
+models:
+  primary:
+    provider: deepseek
+    model: deepseek-chat
+  auxiliary:
+    enabled: false
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, ok := cfg.Providers.BuiltinEndpoint("deepseek")
+	if !ok || endpoint.BaseURL != "https://proxy.example/v1" {
+		t.Fatalf("deepseek endpoint = %#v, ok=%t", endpoint, ok)
+	}
+	custom, ok := cfg.Providers.CustomProvider("deepseek-local")
+	if !ok || custom.Protocol != "openai-compatible" || custom.Auth != "none" || custom.ExtraHeaders["x-application"] != "SelfMind" {
+		t.Fatalf("custom provider = %#v, ok=%t", custom, ok)
+	}
+	if cfg.Models.Auxiliary.Enabled == nil || *cfg.Models.Auxiliary.Enabled {
+		t.Fatalf("auxiliary enabled = %v, want explicit false", cfg.Models.Auxiliary.Enabled)
+	}
+	if cfg.AuxiliaryEnabled() {
+		t.Fatal("explicitly disabled auxiliary route reported enabled")
+	}
+	if _, _, ok := cfg.ResolveAuxiliaryRole("memory_extract"); ok {
+		t.Fatal("disabled background route still resolved a maintenance model")
+	}
+}
+
+func TestSaveConfigWritesCustomProvidersAsMapAndOmitsBuiltinDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := &Config{
+		Path:   path,
+		Models: ModelsConfig{Primary: ModelSelectionConfig{Provider: "openai", Model: "gpt-test"}},
+		Providers: ProvidersConfig{Custom: []CustomProvider{{
+			Name: "company-gateway", BaseURL: "https://llm.company.example/v1", Protocol: "openai-compatible",
+		}}},
+	}
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "- name: company-gateway") || !strings.Contains(text, "company-gateway:") {
+		t.Fatalf("custom providers must use map form:\n%s", text)
+	}
+	if strings.Contains(text, "https://api.openai.com/v1") || strings.Contains(text, "https://api.anthropic.com") {
+		t.Fatalf("built-in defaults must not be materialized:\n%s", text)
+	}
+}
+
+func TestLoadConfigRejectsUnknownCustomProviderField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  custom:
+    local:
+      baseurl: "http://127.0.0.1:8000/v1"
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(Options{Path: path})
+	if err == nil || !strings.Contains(err.Error(), "providers.custom.local.baseurl") || !strings.Contains(err.Error(), "base_url") {
+		t.Fatalf("error = %v, want path and suggestion", err)
+	}
+}
+
+func TestLoadConfigRejectsUnknownTopLevelProviderID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`providers:
+  opneai:
+    base_url: https://proxy.example/v1
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(Options{Path: path})
+	if err == nil || !strings.Contains(err.Error(), "did you mean providers.openai") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadConfigRejectsCaseInsensitiveDuplicateProviderHeaders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+providers:
+  custom:
+    router:
+      base_url: "https://router.example/v1"
+      extra_headers:
+        X-Title: One
+        x-title: Two
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(Options{Path: path})
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "duplicate header") || !strings.Contains(strings.ToLower(err.Error()), "x-title") {
+		t.Fatalf("error = %v, want duplicate header failure", err)
+	}
+}
+
+func TestLoadConfigRejectsCredentialBearingProviderHeaders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`providers:
+  custom:
+    lab:
+      base_url: https://lab.example/v1
+      extra_headers:
+        Authorization: Bearer embedded-secret
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(Options{Path: path})
+	if err == nil || !strings.Contains(err.Error(), "credential-bearing") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadConfigRejectsCredentialBearingProviderExtras(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`providers:
+  custom:
+    lab:
+      base_url: https://lab.example/v1
+      extra_body:
+        metadata:
+          access_token: embedded-secret
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadConfig(Options{Path: path})
+	if err == nil || !strings.Contains(err.Error(), "extra_body.metadata.access_token") || !strings.Contains(err.Error(), "credential-bearing") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestLoadConfigRejectsAmbiguousCustomProviderIDs(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{
+			name: "built-in collision",
+			yaml: "providers:\n  custom:\n    openai:\n      base_url: https://proxy.example/v1\n",
+			want: "collides with a built-in provider",
+		},
+		{
+			name: "normalized duplicate",
+			yaml: "providers:\n  custom:\n    company_api:\n      base_url: https://one.example/v1\n    company-api:\n      base_url: https://two.example/v1\n",
+			want: "duplicates",
+		},
+		{
+			name: "non-mapping providers",
+			yaml: "providers: []\n",
+			want: "providers must be a mapping",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := LoadConfig(Options{Path: path})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
 

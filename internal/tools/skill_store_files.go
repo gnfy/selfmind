@@ -341,7 +341,13 @@ func listSupportFiles(skillDir string) []string {
 	for subdir := range allowedSkillSubdirs {
 		root := filepath.Join(skillDir, subdir)
 		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if excludedSkillScanDirs[d.Name()] {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			rel, err := filepath.Rel(skillDir, path)

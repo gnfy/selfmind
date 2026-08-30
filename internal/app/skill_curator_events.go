@@ -29,6 +29,7 @@ func (c *llmSkillCurator) recordSkillCurationEvents(ctx context.Context, digest 
 		"parent_version_hash": parent, "evidence_set_hash": digest.EvidenceSetHash,
 		"action": proposal.Action, "reason": strings.TrimSpace(proposal.Reason),
 		"changed_sections": proposal.ChangedSections, "promoted": promoted,
+		"repair_class": repairClassForCurationObservation(observation),
 	})
 	if _, err := c.store.AppendEvent(eventCtx, control.Event{
 		TaskID: taskID, RunID: observation.RunID, Type: "skill.candidate.created",
@@ -47,6 +48,13 @@ func (c *llmSkillCurator) recordSkillCurationEvents(ctx context.Context, digest 
 	}); err != nil {
 		log.Warn("skill promotion event write failed", "skill", name, "error", err)
 	}
+}
+
+func repairClassForCurationObservation(observation *control.WorkflowObservation) string {
+	if observation == nil {
+		return ""
+	}
+	return control.ClassifySkillRepairIncident(observation.Incident)
 }
 
 func curationEventObservation(digest control.SkillEvidenceDigest, action string) *control.WorkflowObservation {

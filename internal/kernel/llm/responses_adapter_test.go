@@ -166,6 +166,64 @@ func TestResponsesAdapterStreamsMessageFromOutputItemDone(t *testing.T) {
 	}
 }
 
+func TestResponsesAdapterPreservesAssistantMessagePhase(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		writeSSE(t, w, map[string]interface{}{
+			"type": "response.output_item.added",
+			"item": map[string]interface{}{
+				"id":    "msg_commentary",
+				"type":  "message",
+				"role":  "assistant",
+				"phase": "commentary",
+			},
+		})
+		writeSSE(t, w, map[string]interface{}{
+			"type":    "response.output_text.delta",
+			"item_id": "msg_commentary",
+			"delta":   "I will inspect it.",
+		})
+		writeSSE(t, w, map[string]interface{}{
+			"type": "response.output_item.done",
+			"item": map[string]interface{}{
+				"id":    "msg_final",
+				"type":  "message",
+				"role":  "assistant",
+				"phase": "final_answer",
+				"content": []interface{}{
+					map[string]interface{}{"type": "output_text", "text": "Done."},
+				},
+			},
+		})
+		writeSSE(t, w, map[string]interface{}{"type": "response.completed"})
+	}))
+	defer server.Close()
+
+	adapter := NewResponsesAdapter("token", server.URL, "gpt-test")
+	ch, err := adapter.StreamChat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "inspect"}}})
+	if err != nil {
+		t.Fatalf("StreamChat failed: %v", err)
+	}
+	var textEvents []StreamEvent
+	for event := range ch {
+		if event.Err != nil {
+			t.Fatalf("stream event error: %v", event.Err)
+		}
+		if event.Content != "" {
+			textEvents = append(textEvents, event)
+		}
+	}
+	if len(textEvents) != 2 {
+		t.Fatalf("text events = %#v, want commentary and final", textEvents)
+	}
+	if got := textEvents[0].Phase; got != AssistantPhaseCommentary {
+		t.Fatalf("commentary phase = %q, want %q", got, AssistantPhaseCommentary)
+	}
+	if got := textEvents[1].Phase; got != AssistantPhaseFinalAnswer {
+		t.Fatalf("final phase = %q, want %q", got, AssistantPhaseFinalAnswer)
+	}
+}
+
 func TestResponsesAdapterStreamsMessageFromCompletedPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
@@ -295,6 +353,7 @@ func TestResponsesAdapterDoesNotDuplicateOutputTextAndMessageContent(t *testing.
 	payload.Output = append(payload.Output, struct {
 		ID        string `json:"id"`
 		Type      string `json:"type"`
+		Phase     string `json:"phase"`
 		CallID    string `json:"call_id"`
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`

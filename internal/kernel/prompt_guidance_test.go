@@ -5,6 +5,21 @@ import (
 	"testing"
 )
 
+func TestForegroundDeliveryGuidanceDefinesTerminalOutputContract(t *testing.T) {
+	guidance := foregroundDeliveryGuidance()
+	for _, want := range []string{
+		"terminal client will style",
+		"short descriptive headings",
+		"lists flat",
+		"file paths in inline code",
+		"Do not manufacture a fixed Summary/Done/Tests/Files/Risks template",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("foreground guidance missing %q:\n%s", want, guidance)
+		}
+	}
+}
+
 func TestInterfaceGuidanceIsSemanticAndProjectLed(t *testing.T) {
 	// The always-on guidance must stay domain-agnostic.
 	if strings.Contains(taskExecutionGuidance(), "INTERFACE") {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +28,8 @@ import (
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/gateway/weixin"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/modelchange"
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/promptassets"
@@ -55,25 +58,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	}
 	applyGatewayRuntimeEnv(cfg)
 	log.Init(log.Options{Level: cfg.Agent.LogLevel})
-
-	mem, dataDir, err := app.InitStorage(cfg)
-	if err != nil {
-		return fmt.Errorf("app.InitStorage failed: %w", err)
-	}
-	defer func() {
-		if mem != nil {
-			_ = mem.Close()
-		}
-	}()
-	prompts, promptStatus := app.InspectRuntimePromptSnapshot(cfg, dataDir)
-	if promptStatus.Source != app.PromptSourceActive {
-		log.Warn("gateway: invalid prompt workspace; continuing with safe fallback",
-			"source", promptStatus.Source,
-			"error_kind", promptStatus.ActiveErrorKind,
-			"error", tools.RedactSensitive(promptStatus.ActiveError),
-			"prompt_root", promptStatus.ActiveRoot)
-	}
-
+	dataDir := app.ResolveDataDir(cfg)
 	addr := ResolveAddr(firstNonEmpty(opts.Addr, cfg.Gateway.Addr))
 	// Fail closed: never expose the agent on a public interface without auth.
 	gwToken := firstNonEmpty(
@@ -89,6 +74,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		drainTimeout = resolveDrainTimeout(cfg.Gateway.DrainTimeout)
 	}
 	manager := NewManager(dataDir, addr)
+	manager.ConfigPath = cfg.Path
 	if opts.Replace {
 		_ = stopExistingForReplace(ctx, manager, drainTimeout)
 	}
@@ -96,10 +82,6 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return err
 	}
 	previousUnclean, hadUncleanExit := manager.ReconcilePreviousState()
-	localControlToken, err := EnsureLocalControlToken(dataDir)
-	if err != nil {
-		return fmt.Errorf("initialize local control token: %w", err)
-	}
 	exitReason := ""
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -116,6 +98,72 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		}
 		manager.Cleanup(exitReason)
 	}()
+
+	// Model transitions are reconciled only after this process owns
+	// gateway.lock. launchd/systemd may briefly start competing processes; they
+	// must not each increment attempts or mutate the same candidate transaction.
+	modelChanges := &modelchange.Service{
+		ConfigPath:  cfg.Path,
+		Validate:    app.ValidateModelChange,
+		Credentials: modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile),
+	}
+	modelStatus, modelRolledBack, err := modelChanges.ReconcileStartup(ctx)
+	if err != nil {
+		return fmt.Errorf("reconcile model configuration: %w", err)
+	}
+	modelStartupPending := modelStatus.Pending != nil && modelStatus.Pending.Status == modelchange.StatusStarting
+	modelStartupHealthy := false
+	defer func() {
+		if !modelStartupPending || modelStartupHealthy {
+			return
+		}
+		cause := runErr
+		if cause == nil {
+			cause = fmt.Errorf("gateway did not reach the healthy listener boundary")
+		}
+		if _, _, recoveryErr := modelChanges.FailStarting(cause); recoveryErr != nil {
+			log.Error("gateway: record model startup recovery failed", "error", tools.RedactSensitive(recoveryErr.Error()))
+		} else {
+			log.Warn("gateway: model startup requires recovery", "error", tools.RedactSensitive(cause.Error()))
+		}
+	}()
+	// A model-attributable startup probe may restore the last healthy routes.
+	// Reload before constructing providers so no module retains the rejected
+	// candidate.
+	cfg, err = config.LoadConfig(config.Options{Path: opts.ConfigPath})
+	if err != nil {
+		return fmt.Errorf("reload reconciled config: %w", err)
+	}
+	if modelRolledBack {
+		latest := "model candidate"
+		if n := len(modelStatus.History); n > 0 {
+			latest = modelStatus.History[n-1].ID
+		}
+		log.Warn("gateway: rejected model change and restored the last running routes", "change", latest)
+	}
+
+	mem, initializedDataDir, err := app.InitStorage(cfg)
+	if err != nil {
+		return fmt.Errorf("app.InitStorage failed: %w", err)
+	}
+	dataDir = initializedDataDir
+	defer func() {
+		if mem != nil {
+			_ = mem.Close()
+		}
+	}()
+	localControlToken, err := EnsureLocalControlToken(dataDir)
+	if err != nil {
+		return fmt.Errorf("initialize local control token: %w", err)
+	}
+	prompts, promptStatus := app.InspectRuntimePromptSnapshot(cfg, dataDir)
+	if promptStatus.Source != app.PromptSourceActive {
+		log.Warn("gateway: invalid prompt workspace; continuing with safe fallback",
+			"source", promptStatus.Source,
+			"error_kind", promptStatus.ActiveErrorKind,
+			"error", tools.RedactSensitive(promptStatus.ActiveError),
+			"prompt_root", promptStatus.ActiveRoot)
+	}
 
 	defaultTenantID := os.Getenv("SELF_TENANT_ID")
 	if defaultTenantID == "" {
@@ -275,6 +323,37 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			}
 		}()
 	}
+	semanticExpander := app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts)
+	semanticReadiness := modelStatus.RouteReadiness(modelchange.RouteSemanticRecall)
+	if pending := modelStatus.Pending; pending != nil && pending.Status == modelchange.StatusStarting {
+		for _, probe := range pending.Probes {
+			if probe.Route == modelchange.RouteSemanticRecall {
+				semanticReadiness = modelchange.RouteReadiness{
+					Ready: probe.OK, FailureClass: probe.FailureClass, Reason: probe.Error,
+				}
+				break
+			}
+		}
+	}
+	semanticHealth := httpapi.NewSemanticRecallHealth(httpapi.SemanticRecallHealthOptions{
+		Expander: semanticExpander, Initial: semanticReadiness,
+		Probe: func(probeCtx context.Context) modelchange.ProbeResult {
+			results := app.ValidateModelChange(probeCtx, cfg, []modelchange.Route{modelchange.RouteSemanticRecall})
+			for _, result := range results {
+				if result.Route == modelchange.RouteSemanticRecall {
+					return result
+				}
+			}
+			return modelchange.ProbeResult{
+				Route: modelchange.RouteSemanticRecall, Error: "semantic_recall probe returned no evidence",
+				FailureClass: modelchange.FailureInfrastructure,
+			}
+		},
+		Record: func(result modelchange.ProbeResult) error {
+			_, recordErr := modelChanges.RecordRouteProbe(result)
+			return recordErr
+		},
+	})
 
 	gatewayAPI := &httpapi.Server{
 		Control:                controlStore,
@@ -293,6 +372,25 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 				response.Error = tools.RedactSensitive(probe.Err.Error())
 			}
 			return response
+		},
+		ModelProbeFunc: func(ctx context.Context, role string) api.ModelProbeResponse {
+			runtime, err := app.ResolveModelRuntime(ctx, cfg, role)
+			if err != nil {
+				return api.ModelProbeResponse{Role: role, Error: tools.RedactSensitive(err.Error())}
+			}
+			probe := app.ProbeResolvedModelForRole(ctx, runtime, role)
+			response := api.ModelProbeResponse{
+				OK: probe.Err == nil, Role: role, Provider: runtime.Provider,
+				Model: runtime.Model, LatencyMS: probe.Latency.Milliseconds(),
+			}
+			if probe.Err != nil {
+				response.Error = tools.RedactSensitive(probe.Err.Error())
+			}
+			return response
+		},
+		ModelChanges: modelChanges,
+		ModelRestartFunc: func(changeID string) error {
+			return SpawnRestartHelper(cfg.Path, dataDir, changeID)
 		},
 		MCPHealthFunc:     mcpHealthFunc,
 		SkillStorage:      skillStorage,
@@ -327,7 +425,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
-		Recall: httpapi.NewRecallEngine(controlStore, mem, app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts)),
+		Recall: httpapi.NewRecallEngine(controlStore, mem, semanticHealth),
 		// Structured session APIs for thin clients (/v1/sessions): the daemon
 		// session index, person-partitioned (ACTIVE PLAN P0-3).
 		Sessions: mem,
@@ -368,12 +466,13 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			return err == nil && inserted
 		})
 	}
-	stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
-	defer stopMaintenanceWorker()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+	defer listener.Close()
 	stopTaskGovernanceSweeper := gatewayAPI.StartTaskGovernanceSweeper(ctx)
 	defer stopTaskGovernanceSweeper()
-	stopMemoryGovernance := gatewayAPI.StartMemoryGovernance(ctx)
-	defer stopMemoryGovernance()
 	var weixinAdapter *weixin.Adapter
 	if cfg.Gateway.Weixin.Enabled {
 		wxCfg := weixin.RuntimeConfigFrom(cfg.Gateway.Weixin, dataDir, defaultTenantID)
@@ -390,15 +489,6 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	defer stopStuckRunSweeper()
 	stopExternalWatchWorker := gatewayAPI.StartExternalWatchWorker(ctx)
 	defer stopExternalWatchWorker()
-	// Install the cron executor now that the Server + Delivery are ready, then
-	// start the scheduler. Scheduled jobs now run real agent turns and deliver
-	// results to their channel (e.g. a daily summary pushed to WeChat).
-	if gwDeps.CronScheduler != nil {
-		gwDeps.CronScheduler.SetExecutor(httpapi.NewCronExecutor(gatewayAPI, gwDeps.CronScheduler))
-		if err := app.StartCron(gwDeps.CronScheduler); err != nil {
-			log.Warn("gateway: cron scheduler did not start", "error", err)
-		}
-	}
 	if weixinAdapter != nil {
 		if err := weixinAdapter.Start(ctx); err != nil {
 			log.Warn("gateway: weixin adapter did not start", "error", err)
@@ -406,10 +496,6 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			defer weixinAdapter.Stop()
 		}
 	}
-	// Boot drain (G1+G2): resume tasks queued behind a run that a previous
-	// daemon never finished. Runs after Delivery/adapters are ready so queued
-	// items launched here can route their results back.
-	gatewayAPI.DrainQueuedAtBoot(ctx)
 	stopCh := make(chan struct{})
 	var stopOnce sync.Once
 	gatewayAPI.ShutdownFunc = func() {
@@ -420,17 +506,21 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	gatewayAPI.RuntimeStatusFunc = func() api.GatewayRuntimeInfo {
 		record := manager.Snapshot()
 		return api.GatewayRuntimeInfo{
-			PID:             os.Getpid(),
-			InstanceID:      record.InstanceID,
-			Addr:            addr,
-			DataDir:         dataDir,
-			RuntimeDir:      manager.Paths.RuntimeDir,
-			State:           gatewayAPI.GatewayState(),
-			StartedAt:       record.StartedAt,
-			UpdatedAt:       record.UpdatedAt,
-			HeartbeatAt:     record.HeartbeatAt,
-			ExitReason:      record.ExitReason,
-			DefaultTenantID: defaultTenantID,
+			PID:                   os.Getpid(),
+			InstanceID:            record.InstanceID,
+			Addr:                  addr,
+			DataDir:               dataDir,
+			RuntimeDir:            manager.Paths.RuntimeDir,
+			State:                 gatewayAPI.GatewayState(),
+			StartedAt:             record.StartedAt,
+			UpdatedAt:             record.UpdatedAt,
+			HeartbeatAt:           record.HeartbeatAt,
+			ExitReason:            record.ExitReason,
+			DefaultTenantID:       defaultTenantID,
+			ConfigPath:            cfg.Path,
+			ServiceManager:        strings.TrimSpace(os.Getenv("SELFMIND_SERVICE_MANAGER")),
+			ServiceGeneration:     strings.TrimSpace(os.Getenv("SELFMIND_SERVICE_GENERATION")),
+			ModelRouteFingerprint: modelchange.SnapshotFromConfig(cfg).Fingerprint(),
 		}
 	}
 
@@ -443,10 +533,49 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	errCh := make(chan error, 1)
 	go func() {
 		fmt.Printf("SelfMind gateway listening on http://%s\n", addr)
-		errCh <- httpServer.ListenAndServe()
+		errCh <- httpServer.Serve(listener)
 	}()
 	if err := manager.WriteStatus("running", defaultTenantID, ""); err != nil {
 		return err
+	}
+	if err := waitHealthy(ctx, localGatewayHealthURL(addr), 3*time.Second); err != nil {
+		return fmt.Errorf("verify gateway health before applying model change: %w", err)
+	}
+	healthyModelStatus, err := modelChanges.MarkStartupHealthy()
+	if err != nil {
+		return fmt.Errorf("commit healthy model startup: %w", err)
+	}
+	modelStartupHealthy = healthyModelStatus.ModelReady()
+	if semanticHealth != nil {
+		semanticHealth.SetNotifier(gatewayAPI.PublishBackgroundNotice)
+		stopSemanticRecallHealth := semanticHealth.Start(ctx)
+		defer stopSemanticRecallHealth()
+	}
+	if healthyModelStatus.RouteReady(modelchange.RouteAuxiliary) {
+		// Maintenance roles use their own route plus the verified auxiliary floor.
+		// A failed semantic_recall override degrades lexical expansion only.
+		stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
+		defer stopMaintenanceWorker()
+		stopMemoryGovernance := gatewayAPI.StartMemoryGovernance(ctx)
+		defer stopMemoryGovernance()
+	} else if modelStartupHealthy {
+		log.Warn("gateway: auxiliary model readiness is incomplete; maintenance and learning remain parked", "hint", "run `selfmind model`")
+	}
+	if modelStartupHealthy {
+		if gwDeps.CronScheduler != nil {
+			gwDeps.CronScheduler.SetExecutor(httpapi.NewCronExecutor(gatewayAPI, gwDeps.CronScheduler))
+			if err := app.StartCron(gwDeps.CronScheduler); err != nil {
+				log.Warn("gateway: cron scheduler did not start", "error", err)
+			}
+		}
+	}
+	// Resume durable work only after the candidate transaction is applied.
+	// Otherwise queued requests could begin on a route whose listener later
+	// fails the health gate and requires recovery.
+	if modelStartupHealthy {
+		gatewayAPI.DrainQueuedAtBoot(ctx)
+	} else {
+		log.Warn("gateway: model readiness is incomplete; queued work remains parked", "hint", "run `selfmind model`")
 	}
 	stopHeartbeat := make(chan struct{})
 	defer close(stopHeartbeat)
@@ -490,11 +619,32 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = httpServer.Shutdown(shutdownCtx)
+	if gatewayAPI.ActiveRunCount() == 0 {
+		// Safe-boundary shutdown has no foreground work left. Close persistent
+		// SSE observers immediately so they do not hold Server.Shutdown open for
+		// its full deadline; TUI clients already reconnect from durable cursors.
+		_ = httpServer.Close()
+	} else {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = httpServer.Shutdown(shutdownCtx)
+		cancel()
+	}
 	_ = manager.WriteStatus("stopped", defaultTenantID, exitReason)
 	return nil
+}
+
+func localGatewayHealthURL(addr string) string {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return "http://" + strings.TrimSpace(addr)
+	}
+	switch strings.TrimSpace(host) {
+	case "", "0.0.0.0":
+		host = "127.0.0.1"
+	case "::":
+		host = "::1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func applyGatewayRuntimeEnv(cfg *config.Config) {

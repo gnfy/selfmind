@@ -411,6 +411,65 @@ func TestResolverCustomProviderContextLength(t *testing.T) {
 	}
 }
 
+func TestResolverUsesDirectCustomConnectionAndGenericProtocolOptions(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{Provider: "local-deepseek", Model: "deepseek-local"}},
+		Providers: config.ProvidersConfig{Custom: []config.CustomProvider{{
+			Name: "local-deepseek", BaseURL: "http://127.0.0.1:8000/v1", Protocol: "openai-compatible", Auth: "none",
+			ExtraHeaders: map[string]string{"X-Application": "SelfMind"},
+			ExtraBody:    map[string]interface{}{"routing": "local"},
+		}}},
+	}
+	cfg.Normalize()
+
+	runtime, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Provider != "local-deepseek" || runtime.Protocol != ProtocolOpenAICompatible || runtime.AuthType != AuthNone {
+		t.Fatalf("runtime identity = provider:%q protocol:%q auth:%q", runtime.Provider, runtime.Protocol, runtime.AuthType)
+	}
+	if runtime.APIKey != "" || runtime.Headers["X-Application"] != "SelfMind" || runtime.ExtraBody["routing"] != "local" {
+		t.Fatalf("runtime options = key:%q headers:%#v body:%#v", runtime.APIKey, runtime.Headers, runtime.ExtraBody)
+	}
+}
+
+func TestResolverUsesProvidersBuiltinOverrideBeforeLegacyProfile(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-chat"}},
+		Providers: config.ProvidersConfig{Builtins: map[string]config.ProviderEndpoint{
+			"deepseek": {BaseURL: "https://new.example/v1", APIKey: "new-key"},
+		}},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"deepseek": {BaseURL: "https://legacy.example/v1", APIKey: "legacy-key"},
+		},
+	}
+	cfg.Normalize()
+
+	runtime, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.BaseURL != "https://new.example/v1" || runtime.APIKey != "new-key" {
+		t.Fatalf("runtime override = url:%q key:%q", runtime.BaseURL, runtime.APIKey)
+	}
+}
+
+func TestResolverRejectsCustomConnectionThatCollidesWithBuiltin(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-chat"}},
+		Providers: config.ProvidersConfig{Custom: []config.CustomProvider{{
+			Name: "deepseek", BaseURL: "https://custom.example/v1", Protocol: "openai-compatible", Auth: "none",
+		}}},
+	}
+	cfg.Normalize()
+
+	_, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err == nil || !strings.Contains(err.Error(), "conflicts with built-in") {
+		t.Fatalf("error = %v, want collision failure", err)
+	}
+}
+
 func TestResolverProviderProfileQuirksOverride(t *testing.T) {
 	cfg := &config.Config{
 		Model: config.ModelConfig{Provider: "custom-anthropic", Default: "custom-model"},

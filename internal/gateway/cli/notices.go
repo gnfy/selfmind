@@ -1,6 +1,7 @@
 package cli
 
 import (
+	uitheme "selfmind/internal/ui/theme"
 	"strings"
 	"time"
 
@@ -36,13 +37,19 @@ func noticeVisual(kind noticeKind) (glyph, color string) {
 	}
 }
 
-func noticeStyle(kind noticeKind) lipgloss.Style {
-	_, color := noticeVisual(kind)
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color(color))
-	if kind == noticeInfo {
-		style = style.Faint(true)
+func noticeStyleWithTheme(kind noticeKind, t uitheme.Theme) lipgloss.Style {
+	role := uitheme.TextSecondary
+	switch kind {
+	case noticeSuccess:
+		role = uitheme.Success
+	case noticeGuidance:
+		role = uitheme.Accent
+	case noticeWarning:
+		role = uitheme.Warning
+	case noticeError:
+		role = uitheme.Error
 	}
-	return style
+	return lipgloss.NewStyle().Foreground(t.Color(role))
 }
 
 // setStatusNotice installs one typed transient notice and returns its identity.

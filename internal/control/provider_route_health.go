@@ -276,6 +276,7 @@ func (s *Store) RequeueBlockedJobsForInactiveProviderRoutes(ctx context.Context,
 		next_retry_at = 0, blocked_route_id = '', last_error = '', updated_at = ?
 		WHERE tenant_id = ? AND status = ? AND TRIM(COALESCE(blocked_route_id, '')) != ''
 		AND blocked_route_id NOT LIKE 'policy:%%'
+		AND blocked_route_id NOT LIKE 'network:%%'
 		AND blocked_route_id NOT IN (%s)`, placeholders)
 	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {

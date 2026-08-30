@@ -17,11 +17,13 @@ const tcpKeepAlive = 30 * time.Second
 var sharedProviderClient = &http.Client{Transport: newProviderTransport()}
 
 // newProviderTransport clones the process default transport and enables TCP
-// keepalive on the dialer. Callers that need protocol tweaks (e.g. the Kimi
-// HTTP/1.1-only path) clone from here so keepalive stays consistent. It does
-// not set an overall client Timeout: streaming responses outlive any fixed
-// deadline, and liveness is bounded by the request context plus the SSE idle
-// watchdog.
+// keepalive on the dialer. Cloning deliberately preserves
+// http.ProxyFromEnvironment: a proxy configured for the current process is
+// honored, while an absent proxy leaves routing to the host network. Callers
+// that need protocol tweaks (e.g. the Kimi HTTP/1.1-only path) clone from here
+// so keepalive stays consistent. It does not set an overall client Timeout:
+// streaming responses outlive any fixed deadline, and liveness is bounded by
+// the request context plus the SSE idle watchdog.
 func newProviderTransport() *http.Transport {
 	var t *http.Transport
 	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
@@ -33,6 +35,7 @@ func newProviderTransport() *http.Transport {
 		Timeout:   30 * time.Second,
 		KeepAlive: tcpKeepAlive,
 	}).DialContext
+	t.Proxy = providerNetwork.Proxy
 	return t
 }
 

@@ -1,29 +1,4 @@
 {
-  "method": "stream",
-  "events": [
-    {
-      "content": "Preparing to run update_plan",
-      "event_type": "agent.thinking"
-    },
-    {
-      "tool_calls": [
-        {
-          "ID": "call_I02yV9w2UxqskuIadvAZcKFt",
-          "Function": "update_plan",
-          "Args": "{\"explanation\":\"按你的要求将两个读取目标拆成独立 work unit。\",\"plan\":[{\"step\":\"读取 frontend.txt 得到前端版本\",\"status\":\"in_progress\",\"work_unit\":true},{\"step\":\"读取 backend.txt 得到后端版本\",\"status\":\"pending\",\"work_unit\":true}]}"
-        }
-      ]
-    },
-    {
-      "usage": {
-        "input_tokens": 6892,
-        "output_tokens": 136,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 6892,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0,
-        "cache_usage_reported": true
-      }
-    }
-  ]
+  "method": "completion",
+  "completion": "frontend.txt backend.txt update_plan work unit Skill"
 }

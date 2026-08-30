@@ -4,14 +4,19 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
+
+	"selfmind/internal/gateway/api"
 )
 
 type StartResult struct {
@@ -49,6 +54,53 @@ type StopOptions struct {
 	DataDir string
 	Force   bool
 	Timeout time.Duration
+	Reason  string
+	// WaitForSafeBoundary leaves the wait bounded only by ctx. Model changes
+	// use it so an approval wait is never silently converted into a forced
+	// interruption after an arbitrary infrastructure timeout.
+	WaitForSafeBoundary bool
+	// Abort is checked while waiting for the old owner to stop. A model-change
+	// helper uses it to leave cleanly when its still-cancellable transaction is
+	// cancelled or superseded instead of lingering and starting the wrong route.
+	Abort func() bool
+}
+
+var ErrShutdownAborted = errors.New("gateway shutdown was aborted before the safe boundary")
+var ErrShutdownDeferred = errors.New("gateway shutdown was deferred to preserve active work")
+
+// SpawnRestartHelper launches the ordinary CLI restart path in a detached
+// helper. This preserves launchd/systemd ownership when a daemon-originated
+// model transaction needs to restart the process that is currently serving it.
+func SpawnRestartHelper(configPath, dataDir, changeID string) error {
+	exe, err := resolveDaemonExecutable("")
+	if err != nil {
+		return err
+	}
+	paths := ResolvePaths(dataDir)
+	if err := os.MkdirAll(paths.RuntimeDir, 0755); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	args := []string{"gateway", "restart", "--drain"}
+	if strings.TrimSpace(configPath) != "" {
+		args = append([]string{"--config", configPath}, args...)
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Env = append(os.Environ(),
+		"SELF_GATEWAY_RESTART_REASON=model_change:"+strings.TrimSpace(changeID),
+		"SELF_GATEWAY_RESTART_DELAY_MS=1500",
+	)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	configureDetachedCommand(&cmd.SysProcAttr)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
 
 func StartDetached(opts StartOptions) (StartResult, error) {
@@ -118,9 +170,10 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	return StartResult{PID: pid, LogPath: manager.Paths.LogPath}, nil
 }
 
-// RunningRestartEnvironment returns only PATH and proxy-related environment
-// values from the currently running local gateway. It is intentionally narrow:
-// restart callers must not copy arbitrary daemon credentials or process state.
+// RunningRestartEnvironment returns only PATH from the currently running local
+// gateway. It is intentionally narrow: restart callers may preserve tool
+// discovery, but must not copy arbitrary daemon credentials, process state, or
+// ambient proxy settings that disappeared from the current environment.
 func RunningRestartEnvironment(dataDir string) []string {
 	rec, ok := NewManager(dataDir, "").RunningRecord()
 	if !ok {
@@ -135,15 +188,11 @@ func detachedRunArgs() []string {
 
 func mergeRestartEnvironment(current, previous []string) []string {
 	merged := append([]string(nil), current...)
-	currentGroups := make(map[string]struct{}, len(current))
-	exactKeys := make(map[string]struct{}, len(current))
 	pathIndex := -1
 	currentPath := ""
 	for i, entry := range current {
 		if key, value, ok := strings.Cut(entry, "="); ok {
 			key = strings.TrimSpace(key)
-			currentGroups[strings.ToLower(key)] = struct{}{}
-			exactKeys[key] = struct{}{}
 			if strings.EqualFold(key, "PATH") {
 				pathIndex = i
 				currentPath = value
@@ -159,16 +208,7 @@ func mergeRestartEnvironment(current, previous []string) []string {
 		key = strings.TrimSpace(key)
 		if strings.EqualFold(key, "PATH") {
 			previousPath = value
-			continue
 		}
-		if _, ok := currentGroups[strings.ToLower(key)]; ok {
-			continue
-		}
-		if _, ok := exactKeys[key]; ok {
-			continue
-		}
-		merged = append(merged, entry)
-		exactKeys[key] = struct{}{}
 	}
 	if path := mergePathValues(currentPath, previousPath); path != "" {
 		entry := "PATH=" + path
@@ -196,7 +236,7 @@ func restartEnvironmentFromBlock(data []byte) []string {
 
 func isRestartEnvironmentKey(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "path", "http_proxy", "https_proxy", "all_proxy", "no_proxy":
+	case "path":
 		return true
 	default:
 		return false
@@ -303,15 +343,23 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 			initialPID = rec.PID
 		}
 	}
-	payload, _ := json.Marshal(map[string]interface{}{"force": opts.Force})
+	payload, _ := json.Marshal(map[string]interface{}{"force": opts.Force, "reason": strings.TrimSpace(opts.Reason)})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ResolveURL(opts.URL)+"/v1/gateway/shutdown", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	attachAuth(req)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
+	var requestWritten atomic.Bool
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				requestWritten.Store(true)
+			}
+		},
+	}))
+	resp, requestErr := http.DefaultClient.Do(req)
+	if requestErr != nil {
 		if opts.DataDir != "" {
 			manager := NewManager(opts.DataDir, "")
 			if _, ok := manager.RunningRecord(); !ok {
@@ -321,29 +369,68 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 		if opts.Force {
 			return forceStopFromDataDir(opts.DataDir)
 		}
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		data, _ := io.ReadAll(resp.Body)
-		if opts.Force {
-			return forceStopFromDataDir(opts.DataDir)
+		// A request that never reached the transport cannot have initiated a
+		// shutdown. Once the full request was written, however, an EOF is
+		// ambiguous: older Gateways closed their HTTP server before flushing the
+		// acceptance response. Continue only when the local runtime receipt can
+		// prove that exact owner subsequently disappeared or was replaced.
+		if opts.DataDir == "" || !requestWritten.Load() {
+			return requestErr
 		}
-		return fmt.Errorf("%s: %s", resp.Status, string(data))
+	} else {
+		if resp.StatusCode >= 400 {
+			data, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if opts.Force {
+				return forceStopFromDataDir(opts.DataDir)
+			}
+			return fmt.Errorf("%s: %s", resp.Status, string(data))
+		}
+		// Release the shutdown request's keep-alive connection before waiting for
+		// the daemon PID to disappear. Holding the response body open makes
+		// http.Server.Shutdown wait for its full ten-second deadline, needlessly
+		// extending the local blackout on every model change.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 	}
 
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	serviceReconcile := strings.EqualFold(strings.TrimSpace(opts.Reason), api.ShutdownReasonServiceReconcile)
+	for opts.WaitForSafeBoundary || time.Now().Before(deadline) {
+		if opts.Abort != nil && opts.Abort() {
+			return ErrShutdownAborted
+		}
+		gatewayReachable := false
+		if serviceReconcile {
+			if statusData, statusCode, statusErr := RequestStatus(ctx, opts.URL); statusErr == nil && statusCode < http.StatusBadRequest {
+				var status api.GatewayStatusResponse
+				if json.Unmarshal(statusData, &status) == nil {
+					gatewayReachable = true
+					if strings.EqualFold(strings.TrimSpace(status.State), "running") && !status.Draining {
+						return ErrShutdownDeferred
+					}
+				}
+			}
+		}
 		if opts.DataDir != "" {
 			manager := NewManager(opts.DataDir, "")
 			if rec, ok := manager.RunningRecord(); !ok || rec.PID <= 0 || (initialPID > 0 && rec.PID != initialPID) {
-				return nil
+				if !gatewayReachable {
+					return nil
+				}
 			}
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 	if opts.Force {
 		return forceStopFromDataDir(opts.DataDir)
+	}
+	if requestErr != nil {
+		return requestErr
 	}
 	return nil
 }

@@ -12,6 +12,42 @@ documents:
     owner: maintainers
     state: current
     language: en
+  - path: docs/adr/0001-separate-model-and-runtime-readiness.md
+    title: Separate Model and Runtime Readiness
+    class: decision
+    owner: architecture
+    state: current
+    language: en
+  - path: docs/adr/0002-verify-managed-gateway-ownership.md
+    title: Verify Managed Gateway Ownership
+    class: decision
+    owner: architecture
+    state: current
+    language: en
+  - path: docs/adr/0003-consume-external-skill-packages.md
+    title: Consume External Skill Packages
+    class: decision
+    owner: architecture
+    state: current
+    language: en
+  - path: docs/agents/domain.md
+    title: Domain Documentation for Engineering Skills
+    class: guide
+    owner: maintainers
+    state: current
+    language: en
+  - path: docs/agents/issue-tracker.md
+    title: Engineering Skills Issue Tracker
+    class: guide
+    owner: maintainers
+    state: current
+    language: en
+  - path: docs/agents/triage-labels.md
+    title: Engineering Skills Triage Labels
+    class: guide
+    owner: maintainers
+    state: current
+    language: en
   - path: docs/architecture-constraints.md
     title: Architecture Constraints
     class: contract
@@ -25,7 +61,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/architecture-constraints.md
-    source_hash: 1b2ae0a59572960a
+    source_hash: 47cd7a6957cf2103
   - path: docs/coding-agent-foundations.md
     title: Coding Agent Foundations
     class: reference
@@ -39,7 +75,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: ca153b49d2567c87
+    source_hash: 7c57dcf3e276f0c5
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -53,7 +89,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 86683635cb256521
+    source_hash: 8e0e717f6c6dda80
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -67,7 +103,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: 26347c96415555cc
+    source_hash: f40ba686e3dd0062
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -93,7 +129,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/development-guide.md
-    source_hash: 6345cf6eae54f4e4
+    source_hash: d3686bf04634860d
   - path: docs/eval-loop.md
     title: Evaluation Loop
     class: reference
@@ -164,10 +200,18 @@ documents:
     title: Daily-Driver Runtime Closure
     class: plan
     owner: maintainers
-    state: active
+    state: paused
     language: en
     approved_by: project-owner
     review_by: 2026-09-11
+  - path: docs/plans/external-skill-packages.md
+    title: External Skill Package Adoption
+    class: plan
+    owner: maintainers
+    state: active
+    language: en
+    approved_by: project-owner
+    review_by: 2026-09-25
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference
@@ -181,7 +225,13 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: d3100e8410120e4c
+    source_hash: 0036d2ee7a5198ef
+  - path: docs/skill-learning-and-repair.md
+    title: Skill Learning, Automatic Promotion, and Repair
+    class: decision
+    owner: skills
+    state: current
+    language: en
   - path: docs/skills-architecture.md
     title: Skills Architecture
     class: reference

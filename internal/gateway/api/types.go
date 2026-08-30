@@ -6,9 +6,14 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/modelchange"
 )
 
-const LocalControlTokenHeader = "X-SelfMind-Local-Control-Token"
+const (
+	LocalControlTokenHeader        = "X-SelfMind-Local-Control-Token"
+	ShutdownReasonServiceReconcile = "service_reconcile"
+	ModelControlProtocolVersion    = 2
+)
 
 type ActiveRunStatus struct {
 	TenantID       string `json:"tenant_id"`
@@ -22,21 +27,25 @@ type ActiveRunStatus struct {
 }
 
 type GatewayRuntimeInfo struct {
-	PID              int    `json:"pid"`
-	InstanceID       string `json:"instance_id,omitempty"`
-	Addr             string `json:"addr"`
-	DataDir          string `json:"data_dir,omitempty"`
-	RuntimeDir       string `json:"runtime_dir,omitempty"`
-	State            string `json:"state"`
-	StartedAt        string `json:"started_at,omitempty"`
-	UpdatedAt        string `json:"updated_at,omitempty"`
-	HeartbeatAt      string `json:"heartbeat_at,omitempty"`
-	ExitReason       string `json:"exit_reason,omitempty"`
-	DefaultTenantID  string `json:"default_tenant_id,omitempty"`
-	Version          string `json:"version,omitempty"`
-	Commit           string `json:"commit,omitempty"`
-	BuiltAt          string `json:"built_at,omitempty"`
-	BuildFingerprint string `json:"build_fingerprint,omitempty"`
+	PID                   int    `json:"pid"`
+	InstanceID            string `json:"instance_id,omitempty"`
+	Addr                  string `json:"addr"`
+	DataDir               string `json:"data_dir,omitempty"`
+	RuntimeDir            string `json:"runtime_dir,omitempty"`
+	State                 string `json:"state"`
+	StartedAt             string `json:"started_at,omitempty"`
+	UpdatedAt             string `json:"updated_at,omitempty"`
+	HeartbeatAt           string `json:"heartbeat_at,omitempty"`
+	ExitReason            string `json:"exit_reason,omitempty"`
+	DefaultTenantID       string `json:"default_tenant_id,omitempty"`
+	Version               string `json:"version,omitempty"`
+	Commit                string `json:"commit,omitempty"`
+	BuiltAt               string `json:"built_at,omitempty"`
+	BuildFingerprint      string `json:"build_fingerprint,omitempty"`
+	ConfigPath            string `json:"config_path,omitempty"`
+	ServiceManager        string `json:"service_manager,omitempty"`
+	ServiceGeneration     string `json:"service_generation,omitempty"`
+	ModelRouteFingerprint string `json:"model_route_fingerprint,omitempty"`
 	// Environment identity of the RUNNING daemon. `env refresh` must compare a
 	// fresh login-shell sample against THIS, not against the CLI's own
 	// environment: the CLI is usually the first process to see a new toolchain,
@@ -69,6 +78,58 @@ type ProviderToolCatalogProbeResponse struct {
 	LatencyMS int64                  `json:"latency_ms"`
 	Catalog   llm.ToolCatalogPreview `json:"catalog"`
 	Error     string                 `json:"error,omitempty"`
+}
+
+type ModelProbeRequest struct {
+	Role string `json:"role"`
+}
+
+type ModelProbeResponse struct {
+	OK        bool   `json:"ok"`
+	Role      string `json:"role"`
+	Provider  string `json:"provider,omitempty"`
+	Model     string `json:"model,omitempty"`
+	LatencyMS int64  `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
+}
+
+type ModelChangeRequest struct {
+	Action             string                      `json:"action"`
+	Route              string                      `json:"route,omitempty"`
+	Provider           string                      `json:"provider,omitempty"`
+	Model              string                      `json:"model,omitempty"`
+	Reasoning          *string                     `json:"reasoning,omitempty"`
+	ServiceTier        *string                     `json:"service_tier,omitempty"`
+	ChangeID           string                      `json:"change_id,omitempty"`
+	ExpectedGeneration int64                       `json:"expected_generation,omitempty"`
+	ReplacePending     bool                        `json:"replace_pending,omitempty"`
+	Patches            []ModelSelectionPatch       `json:"patches,omitempty"`
+	ValidateRoutes     []string                    `json:"validate_routes,omitempty"`
+	CredentialStage    string                      `json:"credential_stage,omitempty"`
+	ProviderPatches    []modelchange.ProviderPatch `json:"provider_patches,omitempty"`
+}
+
+type ModelSelectionPatch struct {
+	Route       string  `json:"route"`
+	Provider    string  `json:"provider,omitempty"`
+	Model       string  `json:"model,omitempty"`
+	Reasoning   *string `json:"reasoning,omitempty"`
+	ServiceTier *string `json:"service_tier,omitempty"`
+	Reset       bool    `json:"reset,omitempty"`
+	APIKey      string  `json:"api_key,omitempty"`
+	Enabled     *bool   `json:"enabled,omitempty"`
+}
+
+type ModelChangeResponse struct {
+	ProtocolVersion  int                       `json:"protocol_version,omitempty"`
+	Status           *modelchange.Status       `json:"status,omitempty"`
+	Change           *modelchange.Change       `json:"change,omitempty"`
+	Notices          []string                  `json:"notices,omitempty"`
+	NeedsConfirm     bool                      `json:"needs_confirm,omitempty"`
+	NeedsRestart     bool                      `json:"needs_restart,omitempty"`
+	Probes           []modelchange.ProbeResult `json:"probes,omitempty"`
+	RestartScheduled bool                      `json:"restart_scheduled,omitempty"`
+	CredentialStage  string                    `json:"credential_stage,omitempty"`
 }
 
 type MCPServerFailure struct {
@@ -348,6 +409,10 @@ type DigestResponse struct {
 	FinishedTasks []DigestTask `json:"finished_tasks,omitempty"`
 	// DisruptedTasks stopped early since the anchor (statuses failed/interrupted).
 	DisruptedTasks []DigestTask `json:"disrupted_tasks,omitempty"`
+	// UnresolvedTasks are older task cards that still need continuation. They
+	// are point-in-time state, not evidence that a run stopped while the client
+	// was away, so clients must present them separately from DisruptedTasks.
+	UnresolvedTasks []DigestTask `json:"unresolved_tasks,omitempty"`
 	// PendingApprovals is every approval still waiting for the person, in the
 	// same stable display order as /approvals (so ordinals keep meaning).
 	PendingApprovals []DigestApproval `json:"pending_approvals,omitempty"`
@@ -373,6 +438,7 @@ type DigestResponse struct {
 func (d *DigestResponse) Empty() bool {
 	return d == nil ||
 		(len(d.FinishedTasks) == 0 && len(d.DisruptedTasks) == 0 &&
+			len(d.UnresolvedTasks) == 0 &&
 			len(d.PendingApprovals) == 0 && len(d.PendingClarifies) == 0 &&
 			len(d.UnconfirmedPushes) == 0 && d.ActiveRun == nil)
 }

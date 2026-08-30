@@ -11,28 +11,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/ui/components"
+	uitheme "selfmind/internal/ui/theme"
 )
 
 func TestToolSemanticActionColors(t *testing.T) {
-	cases := []struct {
-		label string
-		want  lipgloss.Color
-	}{
-		{label: "terminal", want: lipgloss.Color("5")},
-		{label: "read_file", want: lipgloss.Color("6")},
-		{label: "search_files", want: lipgloss.Color("6")},
-		{label: "list_files", want: lipgloss.Color("6")},
-		{label: "write_file", want: lipgloss.Color("3")},
-		{label: "update_plan", want: lipgloss.Color("4")},
-	}
-	for _, tc := range cases {
-		if got := toolSemanticActionStyle(tc.label).GetForeground(); got != tc.want {
-			t.Fatalf("%s foreground = %v, want %v", tc.label, got, tc.want)
+	want := uitheme.Default().Color(uitheme.Accent)
+	for _, label := range []string{"terminal", "read_file", "search_files", "list_files", "write_file", "update_plan"} {
+		if got := toolSemanticActionStyle(label).GetForeground(); got != want {
+			t.Fatalf("%s foreground = %v, want shared semantic accent %v", label, got, want)
 		}
 	}
 }
@@ -54,6 +48,27 @@ func TestAgentDoneEmptyResponseShowsError(t *testing.T) {
 	}
 	if !strings.Contains(got.messages[0].Content, "empty response") {
 		t.Fatalf("message = %q, want empty response diagnostic", got.messages[0].Content)
+	}
+}
+
+func TestModelManagerRejectsOlderDaemonProtocol(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	status := modelchange.Status{}
+
+	updated, _ := model.Update(MsgModelManagerOpen{Response: api.ModelChangeResponse{
+		ProtocolVersion: api.ModelControlProtocolVersion - 1,
+		Status:          &status,
+	}})
+	got := updated.(*uiModel)
+
+	if got.modelManager != nil {
+		t.Fatal("model manager opened against an older daemon protocol")
+	}
+	if len(got.messages) != 1 || !got.messages[0].IsError {
+		t.Fatalf("messages = %+v, want one actionable error", got.messages)
+	}
+	if message := got.messages[0].Content; !strings.Contains(message, "gateway restart --drain") || !strings.Contains(message, "too old") {
+		t.Fatalf("message = %q, want restart guidance", message)
 	}
 }
 
@@ -79,35 +94,23 @@ func TestAgentDoneDoesNotDuplicateStreamedResponse(t *testing.T) {
 	}
 }
 
-func TestStreamBuffersPartialLineUntilFlush(t *testing.T) {
+func TestStreamShowsPartialLineWithoutCommittingHistory(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 80
 	model.height = 20
 
-	updated, cmd := model.Update(MsgStream{Content: "hello"})
+	updated, _ := model.Update(MsgStream{Content: "hello"})
 	model = updated.(*uiModel)
 
 	if len(model.messages) != 0 {
 		t.Fatalf("stream chunk should not be committed to history yet: %+v", model.messages)
 	}
-	if model.liveStreamContent != "" {
-		t.Fatalf("partial line should wait for flush, got %q", model.liveStreamContent)
-	}
-	if cmd == nil {
-		t.Fatalf("partial line should schedule a stream flush")
-	}
-
-	updated, _ = model.Update(MsgStreamFlush(time.Now()))
-	model = updated.(*uiModel)
-	if model.liveStreamContent != "hello" {
-		t.Fatalf("liveStreamContent = %q, want hello", model.liveStreamContent)
-	}
 	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "hello") {
-		t.Fatalf("live stream was not rendered in the active region: %q", view)
+		t.Fatalf("partial line was not visible as a literal preview: %q", view)
 	}
 }
 
-func TestStreamCommitsCompleteLineImmediately(t *testing.T) {
+func TestStreamKeepsCompleteAndPartialLinesOutOfHistory(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 80
 	model.height = 20
@@ -115,11 +118,11 @@ func TestStreamCommitsCompleteLineImmediately(t *testing.T) {
 	updated, _ := model.Update(MsgStream{Content: "hello\nnext"})
 	model = updated.(*uiModel)
 
-	if model.liveStreamContent != "hello\n" {
-		t.Fatalf("liveStreamContent = %q, want completed line", model.liveStreamContent)
-	}
 	if len(model.messages) != 0 {
 		t.Fatalf("complete stream line should still be live, not history: %+v", model.messages)
+	}
+	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "hello") || !strings.Contains(view, "next") {
+		t.Fatalf("stream preview = %q, want complete and partial lines", view)
 	}
 }
 
@@ -137,8 +140,8 @@ func TestAgentDoneFinalizesLiveStreamOnce(t *testing.T) {
 	if model.messages[0].Content != "streamed answer" {
 		t.Fatalf("content = %q", model.messages[0].Content)
 	}
-	if model.liveStreamContent != "" {
-		t.Fatalf("live stream should be cleared, got %q", model.liveStreamContent)
+	if model.processState().HasStreamContent() {
+		t.Fatalf("live stream should be cleared")
 	}
 }
 
@@ -150,14 +153,14 @@ func TestToolStartFinalizesLiveStreamBeforeToolCell(t *testing.T) {
 	updated, _ = model.Update(MsgToolStart{ToolName: "read_file", ToolCallID: "call-1", Args: `{"path":"README.md"}`})
 	model = updated.(*uiModel)
 
-	if len(model.messages) != 2 {
-		t.Fatalf("messages len = %d, want assistant plus tool", len(model.messages))
+	if len(model.messages) != 1 {
+		t.Fatalf("messages len = %d, want committed assistant only", len(model.messages))
 	}
 	if model.messages[0].Role != "assistant" || model.messages[0].Content != "I will inspect it." {
 		t.Fatalf("first message not finalized assistant: %+v", model.messages[0])
 	}
-	if model.messages[1].Role != "tool" || model.messages[1].ToolName != "read_file" {
-		t.Fatalf("second message not tool cell: %+v", model.messages[1])
+	if len(model.processState().tools) != 1 || model.processState().tools[0].ToolName != "read_file" {
+		t.Fatalf("active tool projection = %+v", model.processState().tools)
 	}
 }
 
@@ -181,19 +184,16 @@ func TestAgentDoneErrorKeepsPartialResponse(t *testing.T) {
 	}
 }
 
-func TestWorkingTickKeepsAnimatingWhileThinking(t *testing.T) {
+func TestWorkingTickReschedulesWhileThinking(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.thinking = true
 	model.thinkingStart = time.Now()
 
 	updated, cmd := model.Update(MsgWorkingTick(time.Now()))
-	got := updated.(*uiModel)
+	_ = updated.(*uiModel)
 
-	if got.thinkingDots != 1 {
-		t.Fatalf("thinkingDots = %d, want 1", got.thinkingDots)
-	}
 	if cmd == nil {
-		t.Fatalf("working tick should reschedule itself while thinking")
+		t.Fatalf("working tick should reschedule status refresh while thinking")
 	}
 }
 
@@ -202,16 +202,16 @@ func TestAgentActivityReplacesGenericWorkingText(t *testing.T) {
 	model.width = 80
 	model.height = 20
 
-	updated, _ := model.Update(MsgAgentActivity{Content: "Reading tool results and deciding the next step"})
+	updated, _ := model.Update(MsgAgentActivity{Phase: modelWaitPhase, Content: "Waiting for the model to decide after tool results (2s)"})
 	model = updated.(*uiModel)
 
 	if !model.thinking {
 		t.Fatalf("agent activity should show a thinking indicator")
 	}
-	if model.activityText != "Reading tool results and deciding the next step" {
+	if model.activityText != "Waiting for the model to decide after tool results" {
 		t.Fatalf("activityText = %q", model.activityText)
 	}
-	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "Reading tool results and deciding the next step") {
+	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "Waiting for the model to decide after tool results") {
 		t.Fatalf("activity text was not rendered in the active region: %q", view)
 	}
 }
@@ -224,11 +224,48 @@ func TestThinkingIndicatorRendersInActiveRegion(t *testing.T) {
 		Role:    "user",
 		Content: "analyze this project",
 	})
-	model.thinking = true
-	model.activityText = "Thinking about the request"
+	model.startModelWait("Waiting for the model to choose the first step")
 
-	if view := stripANSI(model.renderActiveBlock(100)); !strings.Contains(view, "Thinking about the request") {
+	if view := stripANSI(model.renderActiveBlock(100)); !strings.Contains(view, "Waiting for the model to choose the first step") {
 		t.Fatalf("activity indicator missing from the active region: %q", view)
+	}
+}
+
+func TestModelWaitSpinnerHasOneTenFPSTickChain(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	if got := model.spinner.Spinner.FPS; got != 100*time.Millisecond {
+		t.Fatalf("spinner FPS interval = %s, want 100ms", got)
+	}
+	if _, cmd := model.Update(spinner.TickMsg{}); cmd != nil {
+		t.Fatal("idle spinner tick scheduled another frame")
+	}
+
+	first := model.startModelWait("Waiting for the model (3s)")
+	if first == nil || !model.waitingForModel {
+		t.Fatal("first model_wait did not start the tick chain")
+	}
+	if repeated := model.startModelWait("Waiting for the model (4s)"); repeated != nil {
+		t.Fatal("repeated model_wait started a parallel tick chain")
+	}
+	before := model.spinner.View()
+	updated, next := model.Update(first())
+	model = updated.(*uiModel)
+	if next == nil || model.spinner.View() == before {
+		t.Fatal("active spinner did not advance and schedule its next frame")
+	}
+
+	updated, _ = model.Update(MsgToolStart{ToolName: "read_file", ToolCallID: "call-spinner"})
+	model = updated.(*uiModel)
+	if model.waitingForModel {
+		t.Fatal("tool start did not stop model-wait animation")
+	}
+	if _, cmd := model.Update(spinner.TickMsg{}); cmd != nil {
+		t.Fatal("stale tick kept running after tool start")
+	}
+	updated, restart := model.Update(MsgAgentActivity{Phase: modelWaitPhase, Content: "Waiting for the model after tool results"})
+	model = updated.(*uiModel)
+	if restart == nil || !model.waitingForModel {
+		t.Fatal("tool -> model_wait did not start a fresh tick chain")
 	}
 }
 
@@ -246,8 +283,8 @@ func TestToolStartClearsGenericActivityIndicator(t *testing.T) {
 	if model.activityText != "" {
 		t.Fatalf("activityText = %q, want empty", model.activityText)
 	}
-	if len(model.messages) == 0 || model.messages[len(model.messages)-1].ToolName != "terminal" {
-		t.Fatalf("tool message was not appended: %+v", model.messages)
+	if len(model.processState().tools) != 1 || model.processState().tools[0].ToolName != "terminal" {
+		t.Fatalf("tool was not projected: %+v", model.processState().tools)
 	}
 }
 
@@ -291,8 +328,8 @@ func TestGenericToolHeartbeatDoesNotBecomeNotification(t *testing.T) {
 	if model.statusMsg != "" {
 		t.Fatalf("generic heartbeat should not set statusMsg: %q", model.statusMsg)
 	}
-	if len(model.messages) == 0 || model.messages[len(model.messages)-1].RunningDetail != "" {
-		t.Fatalf("generic heartbeat should not be rendered as detail: %+v", model.messages)
+	if len(model.processState().tools) != 1 || model.processState().tools[0].RunningDetail != "" {
+		t.Fatalf("generic heartbeat should not be rendered as detail: %+v", model.processState().tools)
 	}
 }
 
@@ -319,16 +356,15 @@ func TestToolDoneMatchesStartedToolByCallID(t *testing.T) {
 	})
 	model = updated.(*uiModel)
 
-	if len(model.messages) < 2 {
-		t.Fatalf("messages len = %d, want at least 2", len(model.messages))
+	if len(model.messages) != 1 {
+		t.Fatalf("messages len = %d, want one completed tool", len(model.messages))
 	}
-	first := model.messages[len(model.messages)-2]
-	second := model.messages[len(model.messages)-1]
+	first := model.messages[0]
 	if first.ToolCallID != "call-a" || first.IsRunning {
 		t.Fatalf("first tool should be completed by call id: %+v", first)
 	}
-	if second.ToolCallID != "call-b" || !second.IsRunning {
-		t.Fatalf("second tool should still be running: %+v", second)
+	if len(model.processState().tools) != 1 || model.processState().tools[0].ToolCallID != "call-b" {
+		t.Fatalf("second tool should still be running: %+v", model.processState().tools)
 	}
 }
 
@@ -414,11 +450,12 @@ func TestToolOutputMatchesActiveToolByCallID(t *testing.T) {
 	updated, _ = model.Update(MsgToolOutput{ToolName: "terminal", ToolCallID: "call-a", Content: "output-a"})
 	model = updated.(*uiModel)
 
-	if model.messages[0].Content != "output-a" {
-		t.Fatalf("first tool output = %q, want output-a", model.messages[0].Content)
+	tools := model.processState().tools
+	if tools[0].Content != "output-a" {
+		t.Fatalf("first tool output = %q, want output-a", tools[0].Content)
 	}
-	if model.messages[1].Content != "" {
-		t.Fatalf("second tool was cross-wired: %+v", model.messages[1])
+	if tools[1].Content != "" {
+		t.Fatalf("second tool was cross-wired: %+v", tools[1])
 	}
 }
 
@@ -442,7 +479,7 @@ func TestActiveToolOutputIsBounded(t *testing.T) {
 		model = updated.(*uiModel)
 	}
 
-	if got := model.messages[0].Content; got != "two\nthree\nfour" {
+	if got := model.processState().tools[0].Content; got != "two\nthree\nfour" {
 		t.Fatalf("bounded output = %q", got)
 	}
 }
@@ -571,14 +608,11 @@ func TestStatusLineAlwaysShowsEffectiveApprovalMode(t *testing.T) {
 	}
 }
 
-func TestAssistantMessageDoesNotRenderAsBulletList(t *testing.T) {
+func TestAssistantMessageRendersWithFinalGutter(t *testing.T) {
 	rendered := stripANSI(renderAssistantMessage("hello\nworld", 80))
 
-	if strings.Contains(rendered, "•") {
-		t.Fatalf("assistant message should not use a bullet prefix: %q", rendered)
-	}
-	if !strings.Contains(rendered, "  hello") || !strings.Contains(rendered, "  world") {
-		t.Fatalf("assistant message did not render expected body: %q", rendered)
+	if !strings.Contains(rendered, "• hello world") {
+		t.Fatalf("assistant final should use the stable bullet gutter: %q", rendered)
 	}
 }
 
@@ -960,6 +994,120 @@ func TestHybridCommitsStartupCardToScrollbackOnce(t *testing.T) {
 	}
 }
 
+func TestOnboardingStartupCardShowsModelPairWorkspaceAndFirstTask(t *testing.T) {
+	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-primary", nil, "")
+	controller.SetOnboardingContext(OnboardingContext{
+		BackgroundModel: "openai/gpt-background",
+		WorkspaceID:     "ws-1", WorkspaceName: "project", WorkspacePath: "/work/project",
+		FirstTaskPending: true,
+	})
+	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(100), "\n"))
+	for _, expected := range []string{"gpt-primary", "openai/gpt-background", "WORKSPACE", "/work/project", "Try: Inspect this workspace"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("startup card missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestStartupCardUsesOpenFullWidthLayout(t *testing.T) {
+	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-primary", nil, "")
+	controller.SetOnboardingContext(OnboardingContext{
+		BackgroundModel: "openai/gpt-background",
+		WorkspaceID:     "ws-1", WorkspaceName: "project", WorkspacePath: "/work/project",
+	})
+
+	const width = 100
+	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(width), "\n"))
+	lines := strings.Split(rendered, "\n")
+	if len(lines) < 6 {
+		t.Fatalf("startup layout has %d lines, want title, rules, and data rows:\n%s", len(lines), rendered)
+	}
+	if lines[1] != strings.Repeat("─", width) {
+		t.Fatalf("startup rule width = %d, want %d: %q", runewidth.StringWidth(lines[1]), width, lines[1])
+	}
+	for _, line := range lines[:6] {
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "|") || strings.HasSuffix(line, "|") {
+			t.Fatalf("startup layout kept box rails: %q", line)
+		}
+	}
+	for _, expected := range []string{"MAIN", "gpt-primary · codex-cli", "/model", "BACKGROUND", "WORKSPACE"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("startup layout missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestStartupCardWrapsLongValuesWithoutTruncatingThem(t *testing.T) {
+	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "provider/model-with-a-long-identity", nil, "")
+	controller.SetOnboardingContext(OnboardingContext{
+		BackgroundModel: "provider/background-model-with-a-long-identity",
+		WorkspaceID:     "ws-1", WorkspaceName: "project",
+		WorkspacePath: "/work/a-very-long-workspace-path/whose-tail-must-survive",
+	})
+
+	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(40), "\n"))
+	compact := strings.NewReplacer("\n", "", " ", "").Replace(rendered)
+	for _, value := range []string{
+		"provider/model-with-a-long-identity",
+		"provider/background-model-with-a-long-identity",
+		"/work/a-very-long-workspace-path/whose-tail-must-survive",
+	} {
+		if !strings.Contains(compact, value) {
+			t.Fatalf("startup layout truncated %q:\n%s", value, rendered)
+		}
+	}
+	if strings.Contains(rendered, "...") {
+		t.Fatalf("startup layout used lossy ellipsis:\n%s", rendered)
+	}
+}
+
+func TestHelpExplainsImageClipboardShortcut(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	plain := stripANSI(model.renderHelpContent(100))
+	for _, expected := range []string{"Ctrl+V", "/paste-image", "local clipboard"} {
+		if !strings.Contains(plain, expected) {
+			t.Fatalf("help missing image-paste guidance %q:\n%s", expected, plain)
+		}
+	}
+}
+
+func TestHelpUsesTerminalReliableMultilineShortcut(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	plain := stripANSI(model.renderHelpContent(100))
+	if !strings.Contains(plain, "Ctrl+J") || !strings.Contains(plain, "Insert a newline") {
+		t.Fatalf("help missing reliable multiline shortcut:\n%s", plain)
+	}
+	if strings.Contains(plain, "Shift+Enter") {
+		t.Fatalf("help advertises Shift+Enter even though legacy terminal events cannot distinguish it:\n%s", plain)
+	}
+}
+
+func TestFirstSuccessfulOnboardingTaskIsRecordedOnce(t *testing.T) {
+	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-primary", nil, "")
+	calls := 0
+	controller.SetOnboardingContext(OnboardingContext{
+		FirstTaskPending: true,
+		OnFirstSuccess: func() error {
+			calls++
+			return nil
+		},
+	})
+
+	updated, _ := controller.model.Update(MsgAgentDone{Input: "Inspect this project", Response: "Finished."})
+	model := updated.(*uiModel)
+	if calls != 1 || model.firstTaskPending {
+		t.Fatalf("first completion calls=%d pending=%v", calls, model.firstTaskPending)
+	}
+	updated, _ = model.Update(MsgAgentDone{Input: "Inspect it again", Response: "Finished again."})
+	model = updated.(*uiModel)
+	if calls != 1 {
+		t.Fatalf("receipt callback ran %d times, want once", calls)
+	}
+	if len(model.messages) < 3 || model.messages[1].Role != "notice" || !strings.Contains(model.messages[1].Content, "Setup complete") {
+		t.Fatalf("missing one-shot setup completion notice: %+v", model.messages)
+	}
+}
+
 func TestWriteFileCellRendersDiff(t *testing.T) {
 	content := "Edited app.go (+1 -1)\n keep\n-old line\n+new line"
 	out := stripANSI(renderToolMessage(ChatMessage{
@@ -995,9 +1143,12 @@ func TestHybridActiveBlockShowsOnlyUncommitted(t *testing.T) {
 	model.width = 80
 	model.messages = []ChatMessage{
 		{Role: "assistant", Content: "committed answer", Committed: true},
-		{Role: "tool", ToolName: "terminal", ToolArgs: `{"command":"go test ./..."}`, IsRunning: true},
 	}
-	model.liveStreamContent = "streaming reply in progress"
+	model.processState().Update(processEvent{
+		kind: processToolStarted, toolName: "terminal", toolCallID: "call-1",
+		toolArgs: `{"command":"go test ./..."}`,
+	})
+	model.processState().Update(processEvent{kind: processStreamDelta, content: "streaming reply in progress"})
 
 	block := stripANSI(model.renderActiveBlock(80))
 	if strings.Contains(block, "committed answer") {
@@ -1162,6 +1313,68 @@ func TestDisplayModelNameShowsProviderAndModel(t *testing.T) {
 	}
 }
 
+func TestModelChangeReceiptKeepsRunningModelUntilObservedApplied(t *testing.T) {
+	model := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-old", nil, "").model
+	model.modelChangeObserver = func(context.Context, string) (ModelChangeObservation, error) {
+		return ModelChangeObservation{}, nil
+	}
+	change := modelchange.Change{
+		ID: "model_test", Status: modelchange.StatusAwaitingSafeBoundary, PhaseStartedAt: time.Now(),
+		Previous:  modelchange.Snapshot{Primary: config.ModelSelectionConfig{Provider: "codex-cli", Model: "gpt-old"}},
+		Candidate: modelchange.Snapshot{Primary: config.ModelSelectionConfig{Provider: "codex-cli", Model: "gpt-new", Reasoning: "high"}},
+	}
+	updated, cmd := model.Update(MsgModelChangeDone{Response: api.ModelChangeResponse{Change: &change, RestartScheduled: true}})
+	model = updated.(*uiModel)
+	if got := model.displayModelName(); got != "codex-cli/gpt-old" {
+		t.Fatalf("running display changed before health: %q", got)
+	}
+	if model.modelManagerStatus.ConfiguredPrimary != "codex-cli/gpt-new · reasoning=high" {
+		t.Fatalf("configured primary = %q", model.modelManagerStatus.ConfiguredPrimary)
+	}
+	if model.modelChangeID != change.ID || cmd == nil {
+		t.Fatalf("change was not observed: id=%q cmd=%v", model.modelChangeID, cmd)
+	}
+}
+
+func TestModelRestartOfflinePreservesDraftInsteadOfPosting(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.modelGatewayOffline = true
+	model.modelChangePhase = modelchange.StatusRestarting
+	model.editor.SetValue("inspect the workspace")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*uiModel)
+	if got := model.editor.Value(); got != "inspect the workspace" {
+		t.Fatalf("draft = %q", got)
+	}
+	if !strings.Contains(model.statusMsg, "gateway is restarting") {
+		t.Fatalf("status = %q", model.statusMsg)
+	}
+}
+
+func TestModelChangeSlowWarningIsShownOnlyOnce(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.modelChangeObserver = func(context.Context, string) (ModelChangeObservation, error) {
+		return ModelChangeObservation{}, nil
+	}
+	status := modelchange.Status{Pending: &modelchange.Change{
+		ID: "model_slow", Status: modelchange.StatusAwaitingSafeBoundary,
+		CreatedAt: time.Now().Add(-31 * time.Second), PhaseStartedAt: time.Now().Add(-31 * time.Second),
+	}}
+	for i := 0; i < 2; i++ {
+		updated, _ := model.Update(MsgModelChangeObserved{Observation: ModelChangeObservation{Status: status, GatewayReachable: true}})
+		model = updated.(*uiModel)
+	}
+	warnings := 0
+	for _, message := range model.messages {
+		if strings.Contains(message.Content, "taking longer than 30 seconds") {
+			warnings++
+		}
+	}
+	if warnings != 1 {
+		t.Fatalf("slow warnings = %d, want 1", warnings)
+	}
+}
+
 func TestFormatUsageUnknownLimit(t *testing.T) {
 	if got := formatUsage(42, 0); got != "42 run · ctx ?" {
 		t.Fatalf("formatUsage = %q", got)
@@ -1207,119 +1420,33 @@ func TestSelectionActionBarIsNotRendered(t *testing.T) {
 	}
 }
 
-func TestInputHistoryNavigatesWithArrowKeys(t *testing.T) {
+func TestControllerHistoryKeepsArrowOwnershipForRecalledSlashCommand(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("first question")
-	model.recordInputHistory("second question")
+	model.editor.SeedHistory([]string{"ordinary question", "/model"}, 1024)
 
 	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "second question" {
-		t.Fatalf("up value = %q, want second question", got)
+	if got := model.editor.Value(); got != "/model" {
+		t.Fatalf("first Up recalled %q, want /model", got)
 	}
 
 	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "first question" {
-		t.Fatalf("second up value = %q, want first question", got)
-	}
-
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "second question" {
-		t.Fatalf("down value = %q, want second question", got)
-	}
-
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "" {
-		t.Fatalf("final down value = %q, want empty draft", got)
+	if got := model.editor.Value(); got != "ordinary question" {
+		t.Fatalf("second Up recalled %q, want ordinary question", got)
 	}
 }
 
-func TestInputHistoryRestoresDraft(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("previous task")
-	model.editor.SetValue("draft task")
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "previous task" {
-		t.Fatalf("up value = %q, want previous task", got)
+func TestComposerHistoryDispositionExcludesOnlyClearCommand(t *testing.T) {
+	for _, input := range []string{"/clear", "/CLEAR now"} {
+		if got := composerHistoryDisposition(input); got != components.ComposerHistoryNone {
+			t.Fatalf("disposition(%q) = %v, want none", input, got)
+		}
 	}
-
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "draft task" {
-		t.Fatalf("restored draft = %q, want draft task", got)
-	}
-}
-
-func TestInputHistoryDeduplicatesConsecutiveEntries(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-
-	model.recordInputHistory("repeat")
-	model.recordInputHistory("repeat")
-
-	if got := len(model.inputHistory); got != 1 {
-		t.Fatalf("history len = %d, want 1", got)
-	}
-}
-
-func TestInputHistoryDoesNotStealMultilineArrowNavigation(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("previous")
-	model.editor.SetValue("line one\nline two")
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-
-	if got := model.editor.Value(); got != "line one\nline two" {
-		t.Fatalf("multiline value = %q, want unchanged multiline draft", got)
-	}
-	if model.historyIndex != -1 {
-		t.Fatalf("historyIndex = %d, want -1", model.historyIndex)
-	}
-}
-
-func TestInputHistoryDoesNotStealSoftWrappedArrowNavigation(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("previous")
-
-	// One logical line that soft-wraps across display rows: Up must move the
-	// cursor, not swap in history (matches codex composer behaviour).
-	draft := strings.Repeat("分析仓库结构", 8) // 96 display columns
-	model.editor.SetLayoutWidth(40)      // text width 36 → several wrapped rows
-	model.editor.SetValue(draft)
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-
-	if got := model.editor.Value(); got != draft {
-		t.Fatalf("soft-wrapped value = %q, want unchanged draft", got)
-	}
-	if model.historyIndex != -1 {
-		t.Fatalf("historyIndex = %d, want -1", model.historyIndex)
-	}
-}
-
-func TestInputHistoryContinuesFromRecalledMultilineEntry(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("older entry")
-	model.recordInputHistory("multi\nline entry")
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "multi\nline entry" {
-		t.Fatalf("recalled value = %q, want multi-line entry", got)
-	}
-
-	// The recall left the cursor at the end of the entry (a text boundary), so
-	// a second Up keeps browsing history instead of moving the cursor.
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "older entry" {
-		t.Fatalf("second recall = %q, want older entry", got)
+	for _, input := range []string{"/model", "/definitely-unknown", "ordinary request"} {
+		if got := composerHistoryDisposition(input); got != components.ComposerHistoryPersistent {
+			t.Fatalf("disposition(%q) = %v, want persistent", input, got)
+		}
 	}
 }
 

@@ -1,6 +1,6 @@
 # TUI: Terminal-First Hybrid — Revised Plan
 
-Status: proposed. Supersedes the target architecture in
+Status: implemented reference. Supersedes the target architecture in
 `docs/tui-claude-code-alignment.md` (Phase 1 of that doc still shipped and is
 partly reused — see "Carryover"). Design note, not a rule set; `AGENTS.md`
 stays canonical.
@@ -20,20 +20,88 @@ stays canonical.
   bounded drop-on-full queue (key path never blocks); every append/trim/read
   holds an advisory flock on a `.lock` sidecar (O_APPEND alone cannot serialize
   against trim rewrites); startup preloads the persistent prefix and in-session
-  entries append after it. Entries are the EXPANDED submitted text — paste
-  placeholders are never persisted (they die with the editor snippet buffer);
-  secure (password) input and entries over 4 KiB are never recorded, in memory
-  or on disk. See `internal/gateway/cli/input_history_store.go`.
-- **Soft-wrap composer + codex-style Up/Down gate (2026-07-23):** the composer
-  renders soft-wrapped long lines as multiple display rows (up to 4, scrolled
-  to the cursor row) instead of showing only the cursor's wrapped segment. The
+  entries append after it. The file is person-local CLI history rather than a
+  transcript channel: new records contain only timestamp and safe pure text,
+  while the reader remains compatible with older records that also contain a
+  random `channel`. Secure input, unresolved tokens, image paths, rich-paste
+  payloads, and text over 4 KiB are never persisted. Current-process history
+  retains complete paste/image snapshots for lossless recall, bounded together
+  with the persistent prefix by `max_bytes` and 200 entries; Ctrl+C-cleared
+  drafts are session-only. See `internal/gateway/cli/input_history_store.go`
+  and `internal/ui/components/composer_history.go`.
+- **Soft-wrap composer + codex-style key arbitration (2026-08-29):** the composer
+  renders soft-wrapped long lines as multiple display rows. Its visible input
+  cap is `min(6, max(2, terminalHeight/3))` and scrolls to the cursor row instead
+  of showing only the cursor's wrapped segment. The
   display wrap clones the embedded bubbles textarea wrap so rows align with
-  `LineInfo` cursor offsets (`internal/ui/components/editor.go`). Up/Down swap
-  in history only when the composer is empty, when a fresh draft fits one
-  display row (shell-style recall), or when the text is exactly the previously
-  recalled entry with the cursor at its start/end (codex
-  `should_handle_navigation`); otherwise the keys move the cursor through
-  multi-line / soft-wrapped drafts (`internal/gateway/cli/history.go`).
+  `LineInfo` cursor offsets (`internal/ui/components/editor.go`). History starts
+  only from an empty composer. While the text exactly matches a recalled entry
+  and the cursor is at the whole-buffer start/end, Up/Down continue browsing;
+  Down past the newest entry clears the composer. Recalled history suppresses
+  slash/Skill completion, while a manually typed completion owns arrows. Editing
+  the recalled text or moving into its interior returns ownership to completion
+  or the textarea. Esc dismisses completion only for the unchanged token.
+  `Editor` owns this arbitration and returns typed outcomes to the controller.
+  Completed known commands enter history canonically, unknown commands remain
+  verbatim, and `/clear` is excluded.
+- **Open input/history boundaries and compact attachments (2026-08-30):** a
+  finalized user request and the active Composer inherit the terminal
+  background and use only full-width top/bottom rules, with no side rails. The
+  Composer labels ordinary, recalled, and overflowing drafts as `Message`,
+  `History N/M`, and `Lines A–B/T` (combined when both apply). Large multi-line
+  pastes display `[Paste #1 · 80 lines]`, long single lines display a character
+  count, and images display `[Image #1 · screenshot.png]`; payload previews are
+  never embedded. On terminals wide enough to keep the label readable, the top
+  boundary advertises `Ctrl+J newline · Ctrl+V image`; after attachment it
+  reports the live image count and changes the final action to `Ctrl+V more`.
+  Hints shorten and then disappear before they can widen a narrow Composer.
+  Plain Enter submits; Ctrl+J is the portable newline key because traditional
+  terminal input cannot reliably distinguish Shift+Enter from Enter. The
+  former `[[...]]` spelling is ordinary text. Tokens remain
+  real editor text so cursor movement, wide-character wrapping, history recall,
+  exact expansion, and delete-to-detach keep one contract. On a local macOS,
+  Linux, or WSL session, `Ctrl+V` asks SelfMind to attach an image from the GUI
+  clipboard; macOS `Cmd+V` remains the terminal application's text-paste
+  shortcut and is not a reliable image signal. `/paste-image` provides the same
+  explicit image action. Native Linux requires `wl-paste` or `xclip`; an SSH
+  session has no local GUI clipboard, so use an image path or an IM attachment.
+  Attaching an image changes only Composer state; it does not commit a success
+  notice to transcript history. Deleting the complete image token before submit
+  immediately clears its live count and detaches it from the outgoing request.
+- **Semantic assistant results, process surface, and terminal theme (2026-08-30):** assistant Markdown is parsed as
+  CommonMark/GFM and rendered as width-aware terminal blocks rather than by
+  line regexes. Headings, inline emphasis/code, hanging-indent lists,
+  blockquotes, fenced code, links, local file references, strikethrough, task
+  lists, and tables share one semantic renderer. Tables use a grid when it fits
+  and key/value records on narrow terminals. Typed
+  `commentary` and `final_answer` metadata travels through the provider,
+  kernel, daemon event, client, and TUI seams when available; deterministic
+  tool/final boundaries cover providers that omit it. The immutable semantic
+  theme in `internal/ui/theme` is resolved once at TUI startup and injected into
+  renderers; components consume roles such as Primary, Secondary, Accent,
+  Success, Warning, and Error rather than owning ANSI/RGB values. `tui.theme`
+  accepts only `auto`, `dark`, `light`, or `mono`. `auto` follows terminal
+  capability and background detection, `dark`/`light` select contrast without
+  painting the terminal background, and `mono` disables color while preserving
+  glyphs and font weight. `NO_COLOR` and a no-color terminal profile are a hard
+  floor. Mainline prose, including action narration in every writing system,
+  uses the terminal's default foreground; the `› ` marker and semantic action
+  verbs share Accent. Tool evidence is nested one level below its action and
+  uses a readable Secondary color rather than ANSI `Faint`. Approval uses no
+  background fill. ANSI-16 terminals receive a bounded basic-color mapping;
+  richer terminals receive adaptive dark/light colors. Until a
+  provider phase resolves, streaming text is a
+  neutral preview; completed Markdown blocks render semantically while the
+  mutable tail remains literal, preventing lists and fences from changing
+  shape on every token. The private `processSurface` owns this mutable stream,
+  active tool correlation, grouping, and immutable commit effects. It caps the
+  process frame at ten rows (or the smaller measured terminal budget), keeps
+  the composer/status visible, and shares one Dot spinner at 10 FPS. Exactly
+  one tick chain runs during structured `model_wait`; tool execution, streamed
+  output, Approval, completion, and idle state stop it, while elapsed text
+  refreshes once per second. A final answer
+  uses a dim `• ` gutter. Raw Markdown remains the `/copy` source. Full syntax
+  highlighting and resize reflow of immutable scrollback remain deferred.
 - **Remaining (deferred follow-ups, not blocking default):**
   - Legacy rendering path + `SELFMIND_TUI_LEGACY`: ✅ deleted 2026-07-10
     (viewport, `controller_mouse.go`, app scroll, `renderCache`).
@@ -48,9 +116,21 @@ Migrate the CLI/TUI from "app-owned full-viewport re-render" to a
 - **History → native terminal scrollback** (committed once, immutable). The
   terminal owns scroll, selection, copy, and long-history performance — the
   things most prone to bugs and slowdown in an app-owned model.
-- **Active region → app-controlled** (bubbletea inline view): input, spinner,
-  the currently-streaming reply, the currently-running tool cell, and transient
-  dialogs (approval, menus).
+- **Active region → app-controlled** (bubbletea inline view): input, one
+  spinner, the bounded process surface (streaming narration plus running tool
+  evidence), transient menus, and a blocking Approval panel. Approval stays next
+  to the Composer, owns keyboard input, and temporarily preempts a pager without
+  hiding the active process, Plan, draft, or status context.
+
+After guided setup, the startup identity band shows the accepted
+primary/background model pair and logical workspace without exposing
+launchd/systemd details. It uses full-width open horizontal rules with no side
+rails or background fill. `MAIN` combines model and provider, `/model` stays
+right-aligned when it fits, and all values wrap losslessly instead of being
+truncated on narrow terminals. Until
+the first successful non-command local task, it also shows one read-only starter
+task. That successful final outcome records the private first-use receipt once;
+slash commands, empty answers, and failed runs do not complete onboarding.
 
 Key realization driving this: **both reference tools are already this hybrid.**
 Codex commits history via `insert_history_lines`/`scroll_region_up`; Claude
@@ -74,10 +154,11 @@ Migration anchor: `internal/gateway/cli/controller.go:295` uses
   region** — a small, bounded surface.
 - Finalized cells are emitted to scrollback with `tea.Printf`/`tea.Println`
   (returned as `tea.Cmd`s), printed above the inline view and never re-rendered.
-- **Commit-on-finalize rule:** the moment a cell finalizes (tool completes,
-  assistant message ends, system note done) it is committed to scrollback and
-  removed from the active region. Only actively-changing cells + input stay in
-  `View()`, so the active region stays bounded even during a 20-tool turn.
+- **Commit-on-finalize rule:** the moment a process cell finalizes (an action
+  reaches its tool boundary, a tool completes, or the assistant answer ends),
+  it is committed to scrollback and removed from the process surface. Only the
+  mutable projection + input stay in `View()`, so the active region stays
+  bounded even during a 20-tool turn.
 - Native terminal handles scroll / selection / copy. App relinquishes mouse
   capture.
 - Rich history review (scroll far back, search, expand a big diff) is a
@@ -86,9 +167,12 @@ Migration anchor: `internal/gateway/cli/controller.go:295` uses
 
 ## 3. Active region contract (what `View()` draws)
 
-Included: input editor, status bar, spinner/activity line, the in-progress
-assistant stream, the in-progress tool cell(s), transient dialogs (approval
-prompt, selection menu), the notification line.
+Included: input editor, status bar, one spinner/activity line, the bounded
+process surface (neutral/typed assistant preview and correlated tool cells),
+transient selection menus, the notification line, and an unanswered Approval.
+The Approval action target uses the available terminal width and wraps without
+abbreviation; descriptive context remains compact. Its keyboard ownership lasts
+until the daemon accepts a decision.
 
 Excluded (now in scrollback): all finalized user/assistant/tool/system cells.
 
@@ -108,7 +192,7 @@ Excluded (now in scrollback): all finalized user/assistant/tool/system cells.
 | streaming assistant commit | **rework** | stream in active region; Println final on end |
 | pager overlays (`/help`, detail, status) | **rework** | become full-screen overlay (temporary alt-screen) |
 | input editor, status bar, spinner | **keep** | active region |
-| image paste / attachments | **keep** | input side; 2026-07-27: pasted images register as `[[ image:N name ]]` composer tokens (mirroring `[[ paste:N ]]`), never raw paths — `Editor.AttachImage`/`ExpandValue` substitute the path back at submit, the transcript echoes the compact token, and the gateway imports attachment files into the person-partitioned scope store (`httpapi/attachments.go`) |
+| image paste / attachments | **keep** | input side; pasted images register as `[Image #N · name]` composer tokens (mirroring `[Paste #N · size]`), never raw paths — `Editor.AttachImage`/`ExpandValue` substitute the path back at submit, the transcript echoes the compact token, and the gateway imports attachment files into the person-partitioned scope store (`httpapi/attachments.go`) |
 | preamble narration, notification bar restyle, command-output formatting | **keep** | already shipped; renderers reused at commit time |
 
 ## 5. Phases
@@ -148,8 +232,8 @@ substrate). Document results in this file.
 - `Start()` runs inline (no alt-screen) + no mouse capture when hybrid.
 - `history_commit.go`: `commit(*ChatMessage)` prints a finalized cell to
   scrollback via `Program.Println` and marks it `Committed` (immutable);
-  `renderActiveBlock` renders only the uncommitted tail (in-progress tools, live
-  stream, spinner); `viewActiveRegion` is the hybrid View.
+  `renderActiveBlock` renders only `processSurface` plus the single spinner;
+  `viewActiveRegion` is the hybrid View.
 - Commit-on-finalize wired: user/system/assistant via `addMessage` +
   `addErrorMessage`; tools via `MsgToolDone` (running tools show in the active
   region, commit on completion — folds in the core of H2). Merge-into-last
@@ -194,20 +278,41 @@ substrate). Document results in this file.
   actionable line only.
 - Production-path coverage, not renderer-only tests, guards canonical child
   identity, orphan completion routing, and terminal cleanup.
-- Codex-style `Exploring` / `Explored` grouping remains deferred until a mutable
-  group owns bounded flush, member errors, and the same terminal cleanup. There
-  is no dormant renderer on the immutable per-tool commit path.
+- Action/tool grouping is shipped through `processSurface`: narration owns a
+  stable process-group id, active and completed tools retain that id, member
+  errors use the same terminal cleanup, and tools render one indentation level
+  below the action. Existing `Exploring` aggregation remains unchanged.
+
+### H2e - Bounded reasoning-process projection
+
+- `processSurface.Update` is the only mutable reducer for foreground assistant
+  deltas and tool lifecycle events. Its effects contain only finalized cells
+  ready for immutable transcript commit; `m.messages` is no longer an active
+  tool or stream store.
+- Commentary is the readable action mainline in English, Chinese, and mixed
+  text. Tool rows are subordinate evidence. An unspecified provider phase stays
+  neutral until a tool or final boundary resolves it, so the UI never guesses a
+  final answer from a partial stream.
+- Live Markdown uses immutable-block rendering: blank-line-closed blocks are
+  parsed, while the incomplete tail is sanitized, wrapped, and shown literally.
+  This removes token-by-token structural churn without delaying visible text.
+- The process viewport preserves its first action anchor and newest evidence,
+  inserts one bounded elision marker when necessary, and never consumes more
+  than ten physical rows or the remaining measured height above the composer
+  and status line.
 
 ### H2a - Live plan pinned above the composer
 
 - A plan is active run state, not an append-only transcript cell. The daemon's
   latest `plan.updated` snapshot replaces the previous snapshot in memory.
 - The active plan renders after normal transcript content and notifications,
-  immediately above the approval panel or composer. This matches the compact
-  bottom placement used by coding-agent CLIs while preserving native terminal
-  scrollback for completed conversation and tool cells. One measured blank row
-  above and below the plan keeps it visually separate without causing layout
-  overlap or pushing the composer beyond the terminal height.
+  immediately above the composer. A blocking Approval retains the Plan state
+  and renders below it rather than hiding it behind a separate surface. This
+  matches the compact bottom placement used by coding-agent CLIs while
+  preserving native terminal scrollback for completed conversation and tool
+  cells. One measured blank row above and below the plan keeps it visually
+  separate without causing layout overlap or pushing the composer beyond the
+  terminal height.
 - Terminal run states, cancellation, `/clear`, and a new user turn clear stale
   active plan state. Plan height is included in transcript layout calculations
   so it cannot cover history or move the composer off screen.
@@ -247,6 +352,10 @@ substrate). Document results in this file.
 
 - The active-run digest carries the daemon run id. A reconnecting TUI watches
   that exact run instead of every event associated with the person.
+- Startup digest headings distinguish event time from current state: terminal
+  runs completed after the last presence appear under `While you were away`,
+  while older unresolved task blockers appear under `Still needs attention`.
+  Maintenance-only task-card updates never re-date a terminal run.
 - Every forwarded event retains its durable event id/cursor, live sequence,
   task id, and run id. The reducer deduplicates replayed events and accepts
   watcher events only while their run is still the run being watched.
@@ -270,6 +379,12 @@ substrate). Document results in this file.
 
 ### H2d - Approval resolution and notices
 
+- An armed prompt is the highest-priority TUI surface. It owns every terminal
+  row and every key, centers the existing 76-column-readable decision panel,
+  and hides process narration, tools, Plan, Composer, status, pager, and Model
+  Manager until resolution. Resize recomputes the surface; resolving restores
+  the underlying transient page or active region without committing either to
+  transcript history.
 - Approval prompts remain FIFO and may wait behind active typing. A successful
   answer clears local state only after the daemon accepts it; transport failure
   keeps the same panel available for retry and never records a false approval.

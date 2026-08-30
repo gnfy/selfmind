@@ -26,7 +26,10 @@ This document is for maintainers and future AI coding tools. It defines the guar
 - `/help` and similar temporary pages do not enter chat history and should restore the previous transcript after closing.
 - Multi-line input must remain in normal layout flow and must not float over transcript history.
 - Composer height must have a cap; extra lines scroll inside the composer.
-- Colors, spacing, and selection styles should come from `internal/ui/common` style tokens first.
+- Colors come from semantic roles resolved by `internal/ui/theme`; reusable
+  spacing and component styles come from `internal/ui/common`. Resolve the
+  immutable theme at the TUI composition root and inject it—do not add raw
+  component-local colors or mutable global palettes.
 
 ## Gateway And Channel Constraints
 

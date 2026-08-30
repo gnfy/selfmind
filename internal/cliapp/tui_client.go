@@ -3,14 +3,17 @@ package cliapp
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	appcore "selfmind/internal/app"
 	"selfmind/internal/gateway/api"
 	tui "selfmind/internal/gateway/cli"
 	gwclient "selfmind/internal/gateway/client"
 	"selfmind/internal/gateway/httpapi"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 	gatewayrt "selfmind/internal/runtime/gateway"
 )
@@ -65,12 +68,62 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// and client mode gates agent-backed slash commands so nothing dereferences
 	// the absent in-process agent.
 	ctrl := tui.NewControllerWithGateway(nil, nil, nil, displayProvider, displayModel, cfg, tenantID)
+	ctrl.SetModelManagerOnly(a.modelManagerOnly)
+	if state := a.onboarding; state != nil {
+		auxiliary := cfg.EffectiveAuxiliary()
+		statePath := onboardingStatePath(cfg, a.configPath)
+		ctrl.SetOnboardingContext(tui.OnboardingContext{
+			BackgroundModel:  onboardingModelLabel(auxiliary),
+			WorkspaceID:      state.WorkspaceID,
+			WorkspaceName:    state.WorkspaceName,
+			WorkspacePath:    state.WorkspacePath,
+			FirstTaskPending: !state.FirstTaskCompleted,
+			OnFirstSuccess: func() error {
+				latest, err := loadOnboardingState(statePath)
+				if err != nil {
+					return err
+				}
+				latest.recordFirstTask()
+				if err := saveOnboardingState(statePath, latest); err != nil {
+					return err
+				}
+				*state = latest
+				return nil
+			},
+		})
+	}
 	ctrl.SetSessionChannel(a.resumeChannel)
 	ctrl.SetAdditionalRoots(a.additionalDirs)
 	// One person-scoped SSE stream stays open for the TUI lifetime. The POST
 	// itself is deliberately non-streaming: queued requests return immediately,
 	// while their later daemon runs continue to render through this watcher.
 	ctrl.SetMessageProcessor(client.ProcessMessageDetached)
+	ctrl.SetModelChangeProcessor(func(ctx context.Context, req api.ModelChangeRequest) (api.ModelChangeResponse, error) {
+		return a.requestModelChange(ctx, req)
+	})
+	modelObserver := &modelchange.Service{ConfigPath: cfg.Path}
+	ctrl.SetModelChangeObserver(func(ctx context.Context, _ string) (tui.ModelChangeObservation, error) {
+		status, err := modelObserver.Inspect()
+		if err != nil {
+			return tui.ModelChangeObservation{}, err
+		}
+		probeCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		defer cancel()
+		req, reqErr := http.NewRequestWithContext(probeCtx, http.MethodGet, res.URL+"/health", nil)
+		if reqErr != nil {
+			return tui.ModelChangeObservation{Status: status}, nil
+		}
+		resp, requestErr := http.DefaultClient.Do(req)
+		reachable := requestErr == nil && resp.StatusCode == http.StatusOK
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		return tui.ModelChangeObservation{Status: status, GatewayReachable: reachable}, nil
+	})
+	ctrl.SetModelRecoveryProcessor(func(_ context.Context, action, changeID string) error {
+		_, _, err := a.performModelRecovery(cfg, action, changeID)
+		return err
+	})
 	ctrl.SetEventWatcher(func(ctx context.Context, observer httpapi.StreamObserver, onEvent func(api.RunEvent)) {
 		client.WatchEvents(ctx, tenantID, observer, onEvent)
 	})

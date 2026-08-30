@@ -15,6 +15,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/tools"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/components"
@@ -35,21 +36,44 @@ type Controller struct {
 
 type MessageProcessor func(context.Context, api.MessageRequest) (api.MessageResponse, int)
 type EventWatcher func(context.Context, httpapi.StreamObserver, func(api.RunEvent))
+type ModelChangeProcessor func(context.Context, api.ModelChangeRequest) (api.ModelChangeResponse, error)
+type ModelChangeObserver func(context.Context, string) (ModelChangeObservation, error)
+type ModelRecoveryProcessor func(context.Context, string, string) error
+
+type ModelChangeObservation struct {
+	Status           modelchange.Status
+	GatewayReachable bool
+}
+
+// OnboardingContext carries the small, user-facing part of the completed CLI
+// setup into the TUI. Platform service details remain in cliapp/doctor; the TUI
+// only needs the model pair, initial logical workspace, and one-shot success
+// callback.
+type OnboardingContext struct {
+	BackgroundModel  string
+	WorkspaceID      string
+	WorkspaceName    string
+	WorkspacePath    string
+	FirstTaskPending bool
+	OnFirstSuccess   func() error
+}
 
 // ChatMessage represents a single message in the conversation history.
 type ChatMessage struct {
-	Role          string // "user", "assistant", "system", "tool"
-	Content       string
-	Timestamp     time.Time
-	ToolName      string // populated when Role == "tool"
-	ToolCallID    string
-	RunID         string  // run that owns this tool call; prevents late cross-run completion routing
-	ToolArgs      string  // Fix: add ToolArgs to store call arguments
-	Duration      float64 // Fix: add Duration for performance display
-	IsError       bool    // Fix: add IsError flag
-	IsRunning     bool
-	RunningDetail string
-	NoticeKind    noticeKind // structured semantics for notice-role cells; never inferred from prose
+	Role           string // "user", "assistant", "system", "tool"
+	Content        string
+	AssistantPhase llm.AssistantPhase
+	Timestamp      time.Time
+	ToolName       string // populated when Role == "tool"
+	ToolCallID     string
+	RunID          string  // run that owns this tool call; prevents late cross-run completion routing
+	ToolArgs       string  // Fix: add ToolArgs to store call arguments
+	Duration       float64 // Fix: add Duration for performance display
+	IsError        bool    // Fix: add IsError flag
+	IsRunning      bool
+	RunningDetail  string
+	ProcessGroupID uint64     // action narration group; grouped tools render one level below it
+	NoticeKind     noticeKind // structured semantics for notice-role cells; never inferred from prose
 	// Committed is set in terminal-first hybrid mode once this message has been
 	// printed into native scrollback. Committed messages are immutable and are
 	// not re-rendered in the active region. Unused in legacy (viewport) mode.
@@ -58,44 +82,55 @@ type ChatMessage struct {
 
 // uiModel is the main TUI model. It holds all conversation state.
 type uiModel struct {
-	program            *tea.Program
-	width, height      int
-	common             *common.Common
-	sidebar            *sidebar.Sidebar
-	status             *status.Status
-	editor             *components.Editor
-	sessionBrowser     *components.SessionBrowser
-	sessionBrowserOpen bool
-	pager              *components.Pager
-	messages           []ChatMessage
-	thinking           bool
-	toolExecuting      string
-	runTokens          int
-	totalTokens        int
-	tokenLimit         int
-	modelMeta          string
-	startTime          time.Time
-	provider           llm.Provider
-	providerName       string
-	modelName          string
-	agent              *kernel.Agent
-	gateway            *router.Gateway
-	messageProcessor   MessageProcessor
-	eventWatcher       EventWatcher
-	eventWatchCancel   context.CancelFunc
-	tenantID           string
-	channel            string // 'cli' | 'wechat' | 'dingtalk' | 'web'
-	approvalMode       string // codex-style session override: on-request | read-only | auto-edit | full-auto | smart. In client mode "" means "defer to the person's persisted mode".
+	program               *tea.Program
+	width, height         int
+	common                *common.Common
+	sidebar               *sidebar.Sidebar
+	status                *status.Status
+	editor                *components.Editor
+	sessionBrowser        *components.SessionBrowser
+	sessionBrowserOpen    bool
+	pager                 *components.Pager
+	modelManager          *components.ModelManager
+	modelManagerOnly      bool
+	modelManagerStatus    components.ModelManagerStatus
+	modelManagerRoutes    []components.ModelManagerProvider
+	messages              []ChatMessage
+	process               *processSurface
+	thinking              bool
+	toolExecuting         string
+	runTokens             int
+	totalTokens           int
+	tokenLimit            int
+	modelMeta             string
+	startTime             time.Time
+	provider              llm.Provider
+	providerName          string
+	modelName             string
+	backgroundModelName   string
+	agent                 *kernel.Agent
+	gateway               *router.Gateway
+	messageProcessor      MessageProcessor
+	modelChangeProcessor  ModelChangeProcessor
+	modelChangeObserver   ModelChangeObserver
+	modelRecovery         ModelRecoveryProcessor
+	modelChangeID         string
+	modelChangePhase      modelchange.ChangeStatus
+	modelChangePhaseAt    time.Time
+	modelChangeSlowWarned bool
+	modelGatewayOffline   bool
+	eventWatcher          EventWatcher
+	eventWatchCancel      context.CancelFunc
+	tenantID              string
+	channel               string // 'cli' | 'wechat' | 'dingtalk' | 'web'
+	approvalMode          string // codex-style session override: on-request | read-only | auto-edit | full-auto | smart. In client mode "" means "defer to the person's persisted mode".
 	// persistedApprovalMode is the person's daemon-side effective mode, learned
 	// from GET /v1/digest at startup. It backs the status-bar display when the
 	// session has no explicit override (approvalMode == ""), so the bar always
 	// shows the real effective mode instead of nothing.
 	persistedApprovalMode string
 	spinner               spinner.Model
-	inputHistory          []string
 	inputHistoryStore     *inputHistoryStore // nil when persistence is disabled
-	historyIndex          int
-	historyDraft          string
 	clarifyBridge         *tools.ClarifyBridge
 	updateNotices         <-chan UpdateNotice // one-shot background update-check result (update_notice.go); nil after consumption
 	updateNoticeAnnounced string              // version already announced (startup notice or in-session), the dedup key
@@ -112,9 +147,9 @@ type uiModel struct {
 	statusNoticeKind      noticeKind
 	statusNoticeID        uint64
 	nextStatusNoticeID    uint64
-	thinkingDots          int       // Counter for "..." animation
 	thinkingStart         time.Time // When current thinking started
 	activityText          string    // Current model/tool phase shown in transcript
+	waitingForModel       bool      // exactly one spinner tick chain owns this structured model_wait phase
 	activePlanJSON        string    // Latest complete plan snapshot, rendered above the composer
 	runStatus             string    // ready | queued | working | done | error | cancelled
 	queuedCount           int       // requests submitted by this TUI and accepted into the daemon queue
@@ -136,9 +171,6 @@ type uiModel struct {
 	backgroundOrigin        string
 	backgroundResultPending bool
 	migrationHint           string // Hint for migrating Hermes skills
-	streamController        markdownStreamController
-	liveStreamContent       string
-	streamFlushPending      bool
 	cursorVisible           bool
 	clientMode              bool // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
 	// workspaceOverride* pin this session's execution workspace after a
@@ -152,10 +184,16 @@ type uiModel struct {
 	workspaceOverrideID   string
 	workspaceOverrideName string
 	workspaceOverridePath string
+	firstTaskPending      bool
+	firstTaskReported     bool
+	onFirstTaskSuccess    func() error
 	// additionalRoots is the invocation-local --add-dir overlay supplied by
 	// cliapp. It rides every new agent turn but is never persisted as workspace
 	// configuration by the TUI.
-	additionalRoots   []string
+	additionalRoots []string
+	// skillCompletion is the cached `$` completion inventory. It is refreshed
+	// rather than rebuilt per keystroke because discovery walks the filesystem.
+	skillCompletion   []tools.SkillCompletionCandidate
 	toolDispatchFn    func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
 	approvalResponder func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope is daemon-issued; grantKey is a rule the ask offered)
 	steerFn           func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
@@ -212,10 +250,14 @@ type uiModel struct {
 type MsgClearStatus struct{ NoticeID uint64 }
 type MsgWorkingTick time.Time
 type MsgCursorBlinkTick time.Time
-type MsgStreamFlush time.Time
 type MsgAgentActivity struct {
 	Content string
+	Phase   string
 	Event   uiEventRef
+}
+type MsgBackgroundNotice struct {
+	Content string
+	Success bool
 }
 
 // MsgApprovalRequest is emitted (client mode) when the daemon blocks a run
@@ -285,7 +327,7 @@ type MsgClarifyAnswerResult struct {
 }
 
 func workingTick() tea.Cmd {
-	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return MsgWorkingTick(t)
 	})
 }
@@ -296,16 +338,71 @@ func cursorBlinkTick() tea.Cmd {
 	})
 }
 
-func streamFlushTick() tea.Cmd {
-	return tea.Tick(90*time.Millisecond, func(t time.Time) tea.Msg {
-		return MsgStreamFlush(t)
-	})
-}
 func (c *Controller) SetMessageProcessor(processor MessageProcessor) {
 	if c == nil || c.model == nil {
 		return
 	}
 	c.model.messageProcessor = processor
+}
+
+func (c *Controller) SetModelChangeProcessor(processor ModelChangeProcessor) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.modelChangeProcessor = processor
+}
+
+func (c *Controller) SetModelChangeObserver(observer ModelChangeObserver) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.modelChangeObserver = observer
+}
+
+func (c *Controller) SetModelRecoveryProcessor(processor ModelRecoveryProcessor) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.modelRecovery = processor
+}
+
+// SetModelManagerOnly starts directly in the model manager and exits after it
+// closes or successfully submits. This is the single `selfmind model` CLI
+// surface; normal TUI sessions keep `/model` as a transient page.
+func (c *Controller) SetModelManagerOnly(enabled bool) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.modelManagerOnly = enabled
+}
+
+// SetOnboardingContext initializes the first-use summary without making the
+// TUI own setup persistence or platform service mechanics.
+func (c *Controller) SetOnboardingContext(ctx OnboardingContext) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.backgroundModelName = strings.TrimSpace(ctx.BackgroundModel)
+	c.model.workspaceOverrideID = strings.TrimSpace(ctx.WorkspaceID)
+	c.model.workspaceOverrideName = strings.TrimSpace(ctx.WorkspaceName)
+	c.model.workspaceOverridePath = strings.TrimSpace(ctx.WorkspacePath)
+	c.model.firstTaskPending = ctx.FirstTaskPending
+	c.model.onFirstTaskSuccess = ctx.OnFirstSuccess
+}
+
+func (m *uiModel) completeFirstOnboardingTask() {
+	if m == nil || !m.firstTaskPending || m.firstTaskReported {
+		return
+	}
+	m.firstTaskReported = true
+	if m.onFirstTaskSuccess != nil {
+		if err := m.onFirstTaskSuccess(); err != nil {
+			m.addMessage("notice", "Your task completed, but SelfMind could not save the setup receipt: "+err.Error())
+			return
+		}
+	}
+	m.firstTaskPending = false
+	m.addMessage("notice", "Setup complete. SelfMind is ready.")
 }
 
 // SetAdditionalRoots installs the invocation-local --add-dir overlay. The
@@ -440,12 +537,10 @@ func (c *Controller) SessionChannel() string {
 // worth resuming. A freshly opened-and-closed TUI gets a session id for
 // isolation, but should not advertise a useless resume command. The signal is
 // a user-role message in the transcript — every submit path (chat, command
-// echo, clarify answer) adds one. inputHistory is deliberately NOT consulted:
-// since persistent input history (2026-07-20) it is pre-seeded from
-// ~/.selfmind/input_history.jsonl at startup, so its length reflects all-time
-// typing, not this session (the regression that made the hint print on every
-// zero-input exit). Assistant/system startup content (digest, notices) must
-// not trigger the hint either.
+// echo, clarify answer) adds one. Composer history is deliberately NOT
+// consulted: its persistent prefix reflects all-time typing, not this session
+// (the regression that made the hint print on every zero-input exit).
+// Assistant/system startup content (digest, notices) must not trigger the hint.
 func (c *Controller) HasConversationHistory() bool {
 	if c == nil || c.model == nil {
 		return false
@@ -503,16 +598,67 @@ func cliSessionChannel() string {
 }
 
 func (m *uiModel) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, cursorBlinkTick())
+	if m.modelManagerOnly {
+		return tea.Batch(cursorBlinkTick(), m.openModelManager())
+	}
+	var observe tea.Cmd
+	if m.modelChangeObserver != nil {
+		observe = m.observeModelChange(false, 0)
+	}
+	m.editor.SetSkillFilter(m.skillCompletionHints)
+	return tea.Batch(cursorBlinkTick(), observe, m.loadSkillCompletion())
+}
+
+const modelWaitPhase = "model_wait"
+
+// startModelWait is the only entrypoint that starts the animation. Repeated
+// model_wait events refresh the label without creating parallel tick chains.
+func (m *uiModel) startModelWait(content string) tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	wasWaiting := m.waitingForModel
+	m.waitingForModel = true
+	m.thinking = true
+	m.activityText = trimActivityElapsed(content)
+	if m.activityText == "" {
+		m.activityText = "Waiting for the model"
+	}
+	if !wasWaiting || m.thinkingStart.IsZero() {
+		m.thinkingStart = time.Now()
+	}
+	if wasWaiting {
+		return nil
+	}
+	return m.spinner.Tick
+}
+
+func (m *uiModel) stopModelWait() {
+	if m != nil {
+		m.waitingForModel = false
+	}
+}
+
+func trimActivityElapsed(content string) string {
+	content = strings.TrimSpace(content)
+	open := strings.LastIndex(content, " (")
+	if open < 0 || !strings.HasSuffix(content, "s)") {
+		return content
+	}
+	digits := content[open+2 : len(content)-2]
+	if digits == "" {
+		return content
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return content
+		}
+	}
+	return strings.TrimSpace(content[:open])
 }
 
 func (m *uiModel) anyToolRunning() bool {
-	for i := range m.messages {
-		if m.messages[i].Role == "tool" && m.messages[i].IsRunning {
-			return true
-		}
-	}
-	return false
+	return m.processState().HasRunningTools()
 }
 
 func isGenericToolHeartbeat(toolName, content string) bool {
@@ -529,14 +675,6 @@ func isGenericToolHeartbeat(toolName, content string) bool {
 	}
 	return false
 }
-func (m *uiModel) scheduleStreamFlush() tea.Cmd {
-	if m.streamFlushPending || !m.streamController.Pending() {
-		return nil
-	}
-	m.streamFlushPending = true
-	return streamFlushTick()
-}
-
 func (m *uiModel) openHelp() {
 	width := m.width
 	if width <= 0 {
@@ -555,6 +693,129 @@ func (m *uiModel) openHistory() {
 		width = 80
 	}
 	m.pager = components.NewPager(m.common, width, m.height, m.renderHistoryContent)
+}
+
+func (m *uiModel) openModelManager() tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	processor := m.modelChangeProcessor
+	if processor == nil {
+		m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
+		return nil
+	}
+	m.thinking = true
+	m.activityText = "Loading model routes"
+	return func() tea.Msg {
+		response, err := processor(context.Background(), api.ModelChangeRequest{Action: "status"})
+		return MsgModelManagerOpen{Response: response, Err: err}
+	}
+}
+
+func (m *uiModel) observeModelChange(openManager bool, delay time.Duration) tea.Cmd {
+	observer := m.modelChangeObserver
+	changeID := m.modelChangeID
+	return func() tea.Msg {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			<-timer.C
+		}
+		if observer == nil {
+			return MsgModelChangeObserved{OpenManager: openManager, Err: fmt.Errorf("model state observer is unavailable")}
+		}
+		observation, err := observer(context.Background(), changeID)
+		return MsgModelChangeObserved{Observation: observation, OpenManager: openManager, Err: err}
+	}
+}
+
+func (m *uiModel) recoverModelChange(action string) tea.Cmd {
+	processor := m.modelRecovery
+	changeID := m.modelChangeID
+	return func() tea.Msg {
+		if processor == nil {
+			return MsgModelRecoveryDone{Action: action, Err: fmt.Errorf("local model recovery is unavailable")}
+		}
+		return MsgModelRecoveryDone{Action: action, Err: processor(context.Background(), action, changeID)}
+	}
+}
+
+func (m *uiModel) applyModelStatus(status modelchange.Status) {
+	m.modelManagerStatus = modelManagerStatusFrom(status)
+	if status.Pending != nil {
+		if m.modelChangeID != status.Pending.ID {
+			m.modelChangeSlowWarned = false
+		}
+		m.modelChangeID = status.Pending.ID
+		m.modelChangePhase = status.Pending.Status
+		m.modelChangePhaseAt = status.Pending.PhaseStartedAt
+		return
+	}
+	m.modelChangeID = ""
+	m.modelChangePhase = ""
+	m.modelChangePhaseAt = time.Time{}
+	m.modelChangeSlowWarned = false
+	m.modelGatewayOffline = false
+	m.providerName = status.Running.Primary.Provider
+	m.modelName = status.Running.Primary.Model
+	m.backgroundModelName = status.Running.Auxiliary.Model
+	m.modelMeta = strings.TrimSpace(status.Running.Primary.Reasoning)
+}
+
+func modelManagerPatches(draft []components.ModelManagerSubmission) []api.ModelSelectionPatch {
+	patches := make([]api.ModelSelectionPatch, 0, len(draft))
+	for _, submission := range draft {
+		reasoning := submission.Reasoning
+		serviceTier := submission.ServiceTier
+		patches = append(patches, api.ModelSelectionPatch{
+			Route: submission.Route, Provider: submission.Provider, Model: submission.Model,
+			Reasoning: &reasoning, ServiceTier: &serviceTier, Reset: submission.Reset, APIKey: submission.APIKey,
+			Enabled: submission.Enabled,
+		})
+	}
+	return patches
+}
+
+func modelManagerProviderPatches(draft []components.ModelManagerProviderSubmission) []modelchange.ProviderPatch {
+	patches := make([]modelchange.ProviderPatch, 0, len(draft))
+	for _, submission := range draft {
+		patches = append(patches, modelchange.ProviderPatch{
+			Connection: modelchange.ProviderConnection{
+				ID: submission.ID, Custom: submission.Custom, BaseURL: submission.BaseURL,
+				Protocol: submission.Protocol, Auth: submission.Auth,
+			},
+			Delete: submission.Delete, PreserveAdvanced: true,
+		})
+	}
+	return patches
+}
+
+func (m *uiModel) validateModelManager(route string, draft []components.ModelManagerSubmission, providers []components.ModelManagerProviderSubmission, credentialStage string) tea.Cmd {
+	processor := m.modelChangeProcessor
+	return func() tea.Msg {
+		if processor == nil {
+			return MsgModelValidationDone{Route: route, Err: fmt.Errorf("model management is unavailable in this client")}
+		}
+		response, err := processor(context.Background(), api.ModelChangeRequest{
+			Action: "validate", Patches: modelManagerPatches(draft), ValidateRoutes: []string{route},
+			CredentialStage: credentialStage, ProviderPatches: modelManagerProviderPatches(providers),
+		})
+		return MsgModelValidationDone{Route: route, Response: response, Err: err}
+	}
+}
+
+func (m *uiModel) submitModelManager(draft []components.ModelManagerSubmission, providers []components.ModelManagerProviderSubmission, credentialStage string) tea.Cmd {
+	processor := m.modelChangeProcessor
+	return func() tea.Msg {
+		if processor == nil {
+			return MsgModelChangeDone{Err: fmt.Errorf("model management is unavailable in this client")}
+		}
+		response, err := processor(context.Background(), api.ModelChangeRequest{
+			Action: "apply", Patches: modelManagerPatches(draft), CredentialStage: credentialStage,
+			ProviderPatches: modelManagerProviderPatches(providers),
+		})
+		return MsgModelChangeDone{Response: response, Err: err}
+	}
 }
 func patchArgOf(toolArgs string) string {
 	var a map[string]interface{}
@@ -642,6 +903,7 @@ func (m *uiModel) injectMidRunGuidance(input string) tea.Cmd {
 }
 
 func (m *uiModel) armClarifyPrompt(req tools.ClarifyRequest, viaGateway bool) {
+	m.stopModelWait()
 	m.thinking = false
 	m.toolExecuting = ""
 	m.clarifyMode = true
@@ -714,6 +976,33 @@ type MsgAgentDone struct {
 	Turn     *api.TurnStatus
 }
 
+type MsgModelChangeDone struct {
+	Response api.ModelChangeResponse
+	Err      error
+}
+
+type MsgModelValidationDone struct {
+	Route    string
+	Response api.ModelChangeResponse
+	Err      error
+}
+
+type MsgModelManagerOpen struct {
+	Response api.ModelChangeResponse
+	Err      error
+}
+
+type MsgModelChangeObserved struct {
+	Observation ModelChangeObservation
+	OpenManager bool
+	Err         error
+}
+
+type MsgModelRecoveryDone struct {
+	Action string
+	Err    error
+}
+
 type MsgSkillInvocationResolved struct {
 	SlashName   string
 	Found       bool
@@ -745,6 +1034,7 @@ type MsgDaemonRunFinished struct {
 
 type MsgStream struct {
 	Content string
+	Phase   llm.AssistantPhase
 	Event   uiEventRef
 }
 
@@ -825,8 +1115,8 @@ type helpRow struct {
 
 var shortcutHelpRows = []helpRow{
 	{Left: "Enter", Right: "Submit the current message"},
-	{Left: "Shift+Enter", Right: "Insert a newline"},
 	{Left: "Ctrl+J", Right: "Insert a newline"},
+	{Left: "Ctrl+V", Right: "Attach an image from the local clipboard (/paste-image is the fallback)"},
 	{Left: "PageUp/PageDown", Right: "Scroll the transcript by one page"},
 	{Left: "Ctrl+Up/Ctrl+Down", Right: "Scroll the transcript by a few lines"},
 	{Left: "Ctrl+Home/Ctrl+End", Right: "Jump to the top or bottom of the transcript"},
@@ -880,7 +1170,8 @@ func (m *uiModel) cancelActiveRunLocally() tea.Cmd {
 		return nil
 	}
 	m.cancelFn()
-	m.finalizeLiveStream("")
+	m.finalizeLiveStream("", llm.AssistantPhaseCommentary)
+	m.stopModelWait()
 	m.thinking = false
 	m.activityText = ""
 	m.toolExecuting = ""

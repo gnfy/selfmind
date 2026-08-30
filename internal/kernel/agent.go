@@ -33,7 +33,6 @@ type Agent struct {
 	memory           *memory.MemoryManager
 	backend          AgentBackend
 	llm              llm.Provider
-	fastProvider     llm.Provider                 // optional fast model for simple direct-answer turns
 	summaryProvider  llm.Provider                 // optional cheap model for over-budget context compaction, kept OFF the main run provider
 	summaryMaxTokens int                          // resolved output ceiling for the summarizer route
 	judgeProvider    llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
@@ -125,17 +124,6 @@ func (a *Agent) SetUseMemoryFence(enabled bool) {
 	}
 }
 
-// SetFastProvider installs an optional fast model used for simple, pure
-// direct-answer turns. It is a role-resolved provider that falls back to the
-// default model when no fast model is configured, so callers always get a
-// working provider.
-func (a *Agent) SetFastProvider(p llm.Provider) {
-	if a == nil {
-		return
-	}
-	a.fastProvider = p
-}
-
 // SetSummaryProvider installs the cheap provider used to compact over-budget
 // context into a summary (the summarizer role, kept OFF the main coding
 // provider). It is remembered so SetContextWindow, which rebuilds the context
@@ -207,12 +195,10 @@ func (a *Agent) activeLLM() llm.Provider {
 	return a.llm
 }
 
-// chooseRunProvider routes pure simple-answer turns to the fast provider when
-// one is available; everything else uses the default coding provider.
-func (a *Agent) chooseRunProvider(strategy TaskStrategy) llm.Provider {
-	if a.fastProvider != nil && strategy.Class == TaskClassSimpleAnswer {
-		return a.fastProvider
-	}
+// chooseRunProvider keeps every user-visible turn on the coding provider.
+// Cheap role providers are reserved for bounded classifiers, judges, and
+// background work; they never own a complete foreground answer.
+func (a *Agent) chooseRunProvider(_ TaskStrategy) llm.Provider {
 	return a.llm
 }
 
@@ -413,6 +399,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 		if !llm.IsRetryableError(err) {
 			return nil, err
 		}
+		llm.RefreshProviderNetworkRouteAfterError(err)
 		if attempt == max {
 			break
 		}
@@ -420,7 +407,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 			return nil, werr
 		}
 	}
-	return nil, fmt.Errorf("llm chat failed after %d attempts: %w", max, lastErr)
+	return nil, fmt.Errorf("llm chat failed after %d attempts: %w", max, llm.ActionableProviderNetworkError(lastErr))
 }
 
 // chatWithRetry implements runtime provider fallback.
@@ -460,6 +447,7 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 		if !llm.IsRetryableError(err) {
 			return nil, err
 		}
+		llm.RefreshProviderNetworkRouteAfterError(err)
 		if attempt == max {
 			break
 		}
@@ -467,7 +455,7 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 			return nil, werr
 		}
 	}
-	return nil, fmt.Errorf("llm stream chat failed after %d attempts: %w", max, lastErr)
+	return nil, fmt.Errorf("llm stream chat failed after %d attempts: %w", max, llm.ActionableProviderNetworkError(lastErr))
 }
 
 // ensureActiveSkillProviderDelivery is the final provider-bound preflight. It
@@ -860,8 +848,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	strategy = strategy.normalized()
 	strategy = a.toolBudgetPolicy.apply(strategy)
 
-	// Route this run's model calls per strategy (simple direct-answer turns may
-	// use a fast model). Safe because runMu serializes RunConversation.
+	// Freeze this run on the foreground coding provider. Safe because runMu
+	// serializes RunConversation.
 	a.runLLM = a.chooseRunProvider(strategy)
 	defer func() { a.runLLM = nil }()
 	EmitAgentEvent(eventCh, AgentEvent{
@@ -1177,27 +1165,45 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		var streamErr error
 		finishReason := ""
 		var pendingStream strings.Builder
+		pendingStreamPhase := llm.AssistantPhaseUnspecified
 		suppressLegacyToolStream := false
 		legacyToolSeen := false
 		legacyToolReady := false
 		nativeToolActivityAnnounced := false
 		emitAgentActivity(eventCh, activityForIteration(i), "thinking", i)
-		emitStream := func(content string) {
+		emitStream := func(content string, phase llm.AssistantPhase) {
 			if strings.TrimSpace(content) == "" || eventCh == nil {
 				return
 			}
-			EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content})
+			EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content, Phase: phase})
 		}
-		handleStreamContent := func(content string) {
+		flushPendingStream := func() {
+			if suppressLegacyToolStream {
+				pendingStream.Reset()
+				pendingStreamPhase = llm.AssistantPhaseUnspecified
+				return
+			}
+			emitStream(pendingStream.String(), pendingStreamPhase)
+			pendingStream.Reset()
+			pendingStreamPhase = llm.AssistantPhaseUnspecified
+		}
+		handleStreamContent := func(content string, phase llm.AssistantPhase) {
 			fullResp.WriteString(content)
 			if suppressLegacyToolStream {
 				return
 			}
+			if phase != llm.AssistantPhaseUnspecified && pendingStreamPhase != llm.AssistantPhaseUnspecified && phase != pendingStreamPhase {
+				flushPendingStream()
+			}
+			if phase != llm.AssistantPhaseUnspecified {
+				pendingStreamPhase = phase
+			}
 			pendingStream.WriteString(content)
 			pending := pendingStream.String()
 			if idx := legacyToolMarkerIndex(pending); idx >= 0 {
-				emitStream(pending[:idx])
+				emitStream(pending[:idx], pendingStreamPhase)
 				pendingStream.Reset()
+				pendingStreamPhase = llm.AssistantPhaseUnspecified
 				suppressLegacyToolStream = true
 				if !legacyToolSeen {
 					legacyToolSeen = true
@@ -1210,17 +1216,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				pendingStream.Reset()
 				pendingStream.WriteString(keep)
 				if emit != "" {
-					emitStream(emit)
+					emitStream(emit, pendingStreamPhase)
 				}
 			}
-		}
-		flushPendingStream := func() {
-			if suppressLegacyToolStream {
-				pendingStream.Reset()
-				return
-			}
-			emitStream(pendingStream.String())
-			pendingStream.Reset()
 		}
 
 		appendChatResponse := func(chatResp *llm.ChatResponse) {
@@ -1249,7 +1247,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			meta.Content = ""
 			appendChatResponse(&meta)
 			if content != "" {
-				handleStreamContent(content)
+				handleStreamContent(content, chatResp.Phase)
 			}
 		}
 
@@ -1320,7 +1318,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						continue
 					}
 					if event.Content != "" {
-						handleStreamContent(textutil.CleanUTF8(event.Content))
+						handleStreamContent(textutil.CleanUTF8(event.Content), event.Phase)
 					}
 					if event.ReasoningContent != "" {
 						reasoningResp.WriteString(textutil.CleanUTF8(event.ReasoningContent))
@@ -1366,6 +1364,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
 				}
 				if streamErr != nil {
+					llm.RefreshProviderNetworkRouteAfterError(streamErr)
 					recoveryMessages := messages
 					phase := "transport_recovery"
 					if llm.IsContextWindowError(streamErr) {
@@ -1873,6 +1872,7 @@ func emitProviderEvent(eventCh chan string, event llm.StreamEvent, iteration int
 	agentEvent := AgentEvent{
 		Type:            event.EventType,
 		Content:         textutil.CleanUTF8(event.Content),
+		Phase:           event.Phase,
 		ToolName:        event.ToolName,
 		ToolCallID:      event.ToolCallID,
 		ToolArgs:        event.ToolArgs,

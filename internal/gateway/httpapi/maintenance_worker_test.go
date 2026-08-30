@@ -5,7 +5,70 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/modelchange"
 )
+
+func TestMaintenancePassStopsWhenAReadyModelBecomesPending(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	task := seedTask(t, store, identity, "ready boundary", "done", 1)
+	runs, err := store.ListTaskRuns(context.Background(), identity.TenantID, task.ID, 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+	if err := store.FinishRunWithMaintenancePayload(context.Background(), identity.TenantID,
+		runs[0].ID, "done", postRunAnalyzerVersion, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	service, _ := testModelChangeService(t)
+	if _, err := service.AcceptMigrationReadiness(); err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := status.Running
+	candidate.Primary.Model = "gpt-pending"
+	if _, err := service.Prepare(context.Background(), modelchange.PrepareRequest{
+		Candidate: candidate, Source: "test", RequireConfirmation: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	labeler := &fakeLabeler{reply: "KEEP"}
+	daemon.PostRunAnalyzer = labeler
+	daemon.ModelChanges = service
+	daemon.runMaintenancePass(context.Background())
+	labeler.mu.Lock()
+	calls := labeler.calls
+	labeler.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("maintenance analyzer calls = %d after Model Readiness became pending", calls)
+	}
+}
+
+func TestSemanticRecallDegradationKeepsMaintenanceFloorReady(t *testing.T) {
+	service, _ := testModelChangeService(t)
+	if _, err := service.AcceptMigrationReadiness(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RecordRouteProbe(modelchange.ProbeResult{
+		Route: modelchange.RouteSemanticRecall, Error: "context deadline exceeded",
+		FailureClass: modelchange.FailureInfrastructure,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{ModelChanges: service}
+	if !daemon.backgroundReadyForWork() {
+		t.Fatal("semantic_recall degradation parked unrelated maintenance")
+	}
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.BackgroundReady() || !status.RouteReady(modelchange.RouteAuxiliary) {
+		t.Fatalf("role-scoped readiness = %+v", status.Readiness)
+	}
+}
 
 func TestMaintenanceWorkerSeesCurrentGenerationJob(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)

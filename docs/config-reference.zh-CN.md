@@ -91,8 +91,8 @@ provider_profiles:
 - 三个映射中的字符串都支持 `${ENV_VAR}` 展开。
 - DeepSeek 将 `user_id` 定义为同一账号下用于调度与隔离的标识，并非凭证；但仍
   建议使用稳定、无业务含义的值，不要写姓名、邮箱、手机号、提示词等隐私信息。
-- `selfmind model check` 会显示合并后的 header 来源，以及 body/query 的键名，
-  但不会回显 body/query 的值。
+- `selfmind model` 会显示有效路由；每完成一个选择都会自动执行有界探测，且不会
+  回显 body/query 的值。
 - 旧 `headers` 继续兼容；新配置和文档统一使用 `extra_headers`，同名键由新字段
   覆盖。
 
@@ -113,7 +113,7 @@ provider_profiles:
 布尔 quirk 省略时继承内置 profile；只有 endpoint 契约不同时才显式写 `true` 或
 `false`。匿名身份可用 `auto`、`user_id`、`metadata.user_id`、`off`；HTTP 版本可用
 `auto`、`http1`、`http2`。`system_message_mode` 已废弃并被忽略。
-`selfmind model check` 会显示最终契约和警告。
+Model Manager 会自动校验最终契约，并把警告保留在草稿中。
 
 ## 2. 模型路由
 
@@ -141,14 +141,21 @@ models:
 `models.auxiliary`。
 
 本地安装省略 auxiliary 的 provider/model 时，会有意默认使用 primary 的选择。
-初始化和第一次执行 `selfmind model set` 会把这两个槽位明确写入 YAML。一旦
+初始化和第一次接受 Model Manager 变更会把这两个槽位明确写入 YAML。一旦
 auxiliary 已经落盘或被用户自定义，之后修改 primary 不会覆盖它。这样初始化只需
 呈现两个模型槽位，无需把内部角色目录暴露给新用户。
 
 `reasoning` 和 `service_tier`
 都可省略；省略或写 `auto` 时使用 provider/模型默认值，不强制向接口发送。
-存在能力元数据时，`selfmind model set` 会动态校验取值，
-`selfmind model current` 会显示探测到的默认值。
+存在能力元数据时，Model Manager 会自动校验完成的选择并显示探测到的默认值。
+
+模型切换不需要额外 YAML 字段。SelfMind 会在本文件同目录的
+`model-state.json` 中保存不含密钥的事务 generation、pending 变更、上一次运行
+快照、探测摘要、运行快照验证时间和有界历史。该文件是“模型就绪”的唯一权威，
+onboarding 不会复制其中的路由；不要直接编辑该状态文件。直接修改 `models.primary`
+或 `models.auxiliary` 后，只会被视为 configured、尚未验证，直到 daemon 启动并
+完成探测。正常情况下请使用经过校验的
+`selfmind model` 路径。
 
 `kimi-coding` 的全部角色都使用供应商默认的 Anthropic Messages 传输
 （`https://api.kimi.com/coding/v1/messages`），与 Hermes 和 Kimi Coding
@@ -333,7 +340,7 @@ models:
       model: "kimi-for-coding"
 ```
 
-`selfmind model check --role memory_extract` 会打印解析出的回落目标；当两级
+`selfmind model` 中的 `memory_extract` 行会显示解析出的回落目标；当两级
 共享同一 endpoint 和凭据时，它会明确说明没有可用回落。
 
 `memory.governance.model_role`、`tasks.maintenance_model_role` 和
@@ -445,7 +452,7 @@ editor:
   large_paste_lines: 10
 evolution:
   enabled: true                 # 技能审查 + 确定性工作流画像
-  mode: "auto-readonly"         # observe | shadow | auto-readonly
+  mode: "observe"               # observe | shadow | auto-readonly（旧模式也只观测）
   min_complexity_threshold: 5
   nudge_interval: 10
   shadow_after_observations: 3
@@ -471,10 +478,11 @@ evolution:
 配置值。
 
 自进化画像是由已完成 run 的持久事件确定性派生，不会增加前台模型调用。
-`observe` 只记录画像；`shadow` 还会评估受限的只读批处理候选，但不会使用；
-`auto-readonly` 只有在观察次数和低失败率门槛都通过后才启用候选。自动进化
-永远不会批处理写操作、shell 命令、凭证或网络动作。旧的 `mode: auto` 仍作为
-`auto-readonly` 的兼容别名接受。
+默认的 `observe` 只记录画像，不启用批处理建议。`shadow`、
+`auto-readonly` 和 `auto` 别名仍为配置兼容而保留，但普通已完成 run 现在只会
+增加观测次数：不会增加 shadow 命中、复活 degraded 候选或授权运行时建议。
+`batch_read` 建议必须具有单独验证过的候选与基线比较契约；当前画像器不会生成
+这种契约。自动进化永远不会批处理写操作、shell 命令、凭证或网络动作。
 
 ## 13. 更新检查与反馈
 

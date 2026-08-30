@@ -28,33 +28,22 @@ func ListSkillsForTenant(tenantID string, includeArchived bool, invocation ...ma
 				usage[name] = rec
 			}
 		}
-		entries, err := os.ReadDir(root.Path)
+		scan, err := discoverSkillPaths(root)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
 			return nil, err
 		}
-		for _, entry := range entries {
-			name := entry.Name()
-			if strings.HasPrefix(name, ".") {
+		for _, found := range scan.Paths {
+			info, ok := readSkillInfo(found.Path, found.Format, usage, root)
+			if !ok {
 				continue
 			}
-			path := filepath.Join(root.Path, name)
-			format := ""
-			if entry.IsDir() {
-				format = "dir"
-			} else if strings.HasSuffix(name, ".md") {
-				format = "file"
-			}
-			if format == "" {
+			info.PackageName = scan.PackageName
+			key := skillPathKey(info.Path)
+			if seen[key] {
 				continue
 			}
-			info, ok := readSkillInfo(path, format, usage, root)
-			if ok && !seen[normalizeSkillCommandName(info.Name)] {
-				seen[normalizeSkillCommandName(info.Name)] = true
-				skills = append(skills, info)
-			}
+			seen[key] = true
+			skills = append(skills, info)
 		}
 		if includeArchived && root.Writable {
 			archiveDir := filepath.Join(root.Path, ".archive")
@@ -62,8 +51,11 @@ func ListSkillsForTenant(tenantID string, includeArchived bool, invocation ...ma
 			skills = append(skills, archived...)
 		}
 	}
-	sort.Slice(skills, func(i, j int) bool {
-		return skills[i].Name < skills[j].Name
+	sort.SliceStable(skills, func(i, j int) bool {
+		if skills[i].Name != skills[j].Name {
+			return skills[i].Name < skills[j].Name
+		}
+		return skills[i].Path < skills[j].Path
 	})
 	return skills, nil
 }
@@ -114,23 +106,203 @@ func ReadSkillForTenant(tenantID, name string, invocation ...map[string]interfac
 	return sb.String(), nil
 }
 
+// findSkill resolves one Skill by bare or qualified name. A bare name resolves
+// only when it is unambiguous: when several enabled Skills share it, resolution
+// fails and names the qualified candidates rather than silently preferring one
+// root. Descriptions never take part in the decision, because they are author
+// text and on an external package that author is untrusted.
 func findSkill(tenantID, name string, invocation ...map[string]interface{}) (SkillInfo, error) {
 	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
 	if err != nil {
 		return SkillInfo{}, err
 	}
-	safe := kernel.SanitizeSkillName(name)
-	for _, s := range skills {
-		if s.Name == name || s.Name == safe || kernel.SanitizeSkillName(s.Name) == safe {
-			return s, nil
+	matches := matchSkillsByName(skills, name)
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return SkillInfo{}, &skillNotFoundError{Name: name}
+	default:
+		return SkillInfo{}, &skillAmbiguousError{Name: name, Candidates: qualifiedSkillNames(matches)}
+	}
+}
+
+// matchSkillsByName returns every Skill a bare name, a qualified name, or a
+// discovery path selects. A path is the disambiguator of last resort: two roots
+// can share both scope and source, so the qualified form is not guaranteed
+// unique while the path always is.
+func matchSkillsByName(skills []SkillInfo, name string) []SkillInfo {
+	trimmed := strings.TrimSpace(name)
+	if strings.ContainsRune(trimmed, filepath.Separator) || strings.Contains(trimmed, "/") {
+		if matches := matchSkillsByPath(skills, filepath.FromSlash(trimmed)); len(matches) > 0 {
+			return matches
+		}
+		// A path the person typed may route through a symlink while discovery
+		// recorded the resolved location, which is ordinary on macOS where /tmp
+		// and /var are links. Resolving is the fallback, not the hot path.
+		if resolved, err := filepath.EvalSymlinks(filepath.FromSlash(trimmed)); err == nil {
+			if matches := matchSkillsByPath(skills, resolved); len(matches) > 0 {
+				return matches
+			}
 		}
 	}
-	return SkillInfo{}, &skillNotFoundError{Name: name}
+	if source, short, ok := splitQualifiedSkillName(trimmed); ok {
+		safe := kernel.SanitizeSkillName(short)
+		var matches []SkillInfo
+		for _, s := range skills {
+			if skillSourceLabel(s) != source {
+				continue
+			}
+			if s.Name == short || kernel.SanitizeSkillName(s.Name) == safe {
+				matches = append(matches, s)
+			}
+		}
+		return matches
+	}
+	safe := kernel.SanitizeSkillName(trimmed)
+	var matches []SkillInfo
+	for _, s := range skills {
+		if s.Name == trimmed || s.Name == safe || kernel.SanitizeSkillName(s.Name) == safe {
+			matches = append(matches, s)
+		}
+	}
+	return matches
+}
+
+// splitQualifiedSkillName splits a `source:name` reference. Skill names are
+// sanitized to lowercase letters, digits, and hyphens, so a colon is an
+// unambiguous separator.
+func splitQualifiedSkillName(name string) (source, short string, ok bool) {
+	idx := strings.Index(name, ":")
+	if idx <= 0 || idx == len(name)-1 {
+		return "", "", false
+	}
+	source = normalizeSkillCommandName(name[:idx])
+	short = strings.TrimSpace(name[idx+1:])
+	if source == "" || short == "" {
+		return "", "", false
+	}
+	return source, short, true
+}
+
+// skillSourceLabel is the qualifier half of a qualified name: the
+// manifest-declared package name when one governs the root, and the root scope
+// otherwise. A relative path is deliberately not used, because it moves
+// whenever a category directory is renamed.
+func skillSourceLabel(info SkillInfo) string {
+	source := strings.TrimSpace(info.PackageName)
+	if source == "" && info.Provenance == SkillProvenanceExternal {
+		source = SkillProvenanceExternal
+	}
+	if source == "" {
+		source = info.Scope
+	}
+	if strings.TrimSpace(source) == "" {
+		return "unknown"
+	}
+	return normalizeSkillCommandName(source)
+}
+
+// QualifiedSkillName renders the `source:name` form used to disambiguate.
+func QualifiedSkillName(info SkillInfo) string {
+	return skillSourceLabel(info) + ":" + kernel.SanitizeSkillName(info.Name)
+}
+
+// qualifiedSkillNames renders the candidate list for an ambiguity refusal. When
+// two candidates share a qualified name their paths are appended, so every
+// listed candidate is something the person can actually type back.
+func qualifiedSkillNames(skills []SkillInfo) []string {
+	counts := make(map[string]int, len(skills))
+	for _, s := range skills {
+		counts[QualifiedSkillName(s)]++
+	}
+	out := make([]string, 0, len(skills))
+	for _, s := range skills {
+		qualified := QualifiedSkillName(s)
+		if counts[qualified] > 1 {
+			qualified += " (" + filepath.ToSlash(s.Path) + ")"
+		}
+		out = append(out, qualified)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// primarySkillsByName keeps the highest-precedence Skill for each name. Model
+// surfaces need one entry per name; listing and lookup keep every entry so a
+// collision stays visible.
+func primarySkillsByName(skills []SkillInfo) []SkillInfo {
+	best := make(map[string]int, len(skills))
+	out := make([]SkillInfo, 0, len(skills))
+	for _, info := range skills {
+		key := normalizeSkillCommandName(info.Name)
+		if idx, ok := best[key]; ok {
+			if info.Precedence < out[idx].Precedence {
+				out[idx] = info
+			}
+			continue
+		}
+		best[key] = len(out)
+		out = append(out, info)
+	}
+	return out
+}
+
+// findSkillByPrecedence resolves a name to the winning root without refusing a
+// collision. Reference-based and stored-identity lookups use it because their
+// own identity recheck, not a refusal, is what catches a root that has newly
+// won precedence for the same name.
+func findSkillByPrecedence(tenantID, name string, invocation ...map[string]interface{}) (SkillInfo, error) {
+	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
+	if err != nil {
+		return SkillInfo{}, err
+	}
+	matches := matchSkillsByName(skills, name)
+	if len(matches) == 0 {
+		return SkillInfo{}, &skillNotFoundError{Name: name}
+	}
+	winner := matches[0]
+	for _, candidate := range matches[1:] {
+		if candidate.Precedence < winner.Precedence {
+			winner = candidate
+		}
+	}
+	return winner, nil
+}
+
+func matchSkillsByPath(skills []SkillInfo, path string) []SkillInfo {
+	key := skillPathKey(path)
+	var matches []SkillInfo
+	for _, s := range skills {
+		if skillPathKey(s.Path) == key || skillPathKey(skillMainFilePath(s)) == key {
+			matches = append(matches, s)
+		}
+	}
+	return matches
+}
+
+func skillPathKey(path string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	return strings.ToLower(filepath.Clean(abs))
 }
 
 type skillNotFoundError struct{ Name string }
 
 func (e *skillNotFoundError) Error() string { return fmt.Sprintf("skill not found: %s", e.Name) }
+
+// skillAmbiguousError reports a bare name that several Skills answer to.
+type skillAmbiguousError struct {
+	Name       string
+	Candidates []string
+}
+
+func (e *skillAmbiguousError) Error() string {
+	return fmt.Sprintf("skill name %q is ambiguous across %d Skills; use a qualified name: %s",
+		e.Name, len(e.Candidates), strings.Join(e.Candidates, ", "))
+}
 
 func readSkillInfo(path, format string, usage map[string]SkillUsageRecord, root SkillRoot) (SkillInfo, bool) {
 	if format == "dir" && isDeveloperAgentOnlySkill(path) {
@@ -173,6 +345,9 @@ func readSkillInfo(path, format string, usage map[string]SkillUsageRecord, root 
 		Source:              source,
 		Scope:               root.Scope,
 		Root:                root.Path,
+		Provenance:          root.Provenance,
+		ModelInvocable:      def.ModelInvocation == nil || *def.ModelInvocation,
+		Precedence:          root.Priority,
 		Writable:            root.Writable,
 		LastUsed:            rec.LastUsed,
 		Pinned:              rec.Pinned,
@@ -219,6 +394,10 @@ func formatSkillsList(skills []SkillInfo) string {
 	if len(skills) == 0 {
 		return "No skills found."
 	}
+	shortNameCounts := make(map[string]int, len(skills))
+	for _, s := range skills {
+		shortNameCounts[normalizeSkillCommandName(s.Name)]++
+	}
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d skills:\n\n", len(skills)))
 	for _, s := range skills {
@@ -230,7 +409,11 @@ func formatSkillsList(skills []SkillInfo) string {
 		if s.Writable {
 			writable = "writable"
 		}
-		sb.WriteString(fmt.Sprintf("- %s [%s/%s/%s/%s%s]: %s\n  %s\n", s.Name, s.State, s.Scope, s.Source, writable, pin, emptyDefault(s.Description, "(no description)"), s.Path))
+		label := s.Name
+		if shortNameCounts[normalizeSkillCommandName(s.Name)] > 1 {
+			label = QualifiedSkillName(s)
+		}
+		sb.WriteString(fmt.Sprintf("- %s [%s/%s/%s/%s%s]: %s\n  %s\n", label, s.State, s.Scope, s.Source, writable, pin, emptyDefault(s.Description, "(no description)"), s.Path))
 	}
 	return sb.String()
 }

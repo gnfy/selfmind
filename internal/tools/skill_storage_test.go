@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"selfmind/internal/kernel"
 )
 
 func TestInjectedSkillStorageKeepsReadsSideEffectFree(t *testing.T) {
@@ -98,5 +100,54 @@ func TestInjectedSkillStorageContainsWritesWithoutCreatingSiblingSkills(t *testi
 	}
 	if _, err := os.Stat(filepath.Join(home, ".selfmind", "person_eval")); !os.IsNotExist(err) {
 		t.Fatalf("write escaped injected storage: %v", err)
+	}
+}
+
+func TestManagedWorkspaceSkillStorageIsIsolatedAndDoesNotWriteTheRepository(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "assets")
+	storage, err := NewSkillStorage(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := filepath.Join(t.TempDir(), "repo")
+	if err := os.MkdirAll(repository, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workspaceArgs := func(workspaceID string) map[string]interface{} {
+		return WithSkillStorage(map[string]interface{}{
+			"_tenant_id": "default",
+			"_invocation_scope": kernel.ToolInvocationScope{
+				ControlTenantID: "default", WorkspaceID: workspaceID,
+				SkillPublicationScope: kernel.SkillPublicationWorkspace,
+			},
+		}, storage)
+	}
+	argsA := workspaceArgs("workspace-a")
+	if _, err := createSkill("default", "learned-inspection", "Inspect the declared record.", "Inspect declared records.", SkillSourceAgentCreated, argsA); err != nil {
+		t.Fatal(err)
+	}
+	wantRoot := ManagedWorkspaceSkillsDir(base, "default", "workspace-a")
+	if _, err := os.Stat(filepath.Join(wantRoot, "learned-inspection", "SKILL.md")); err != nil {
+		t.Fatalf("managed workspace Skill missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repository, ".selfmind", "skills")); !os.IsNotExist(err) {
+		t.Fatalf("automatic workspace publication touched repository: %v", err)
+	}
+	if listed, err := ListSkillsForTenant("default", false, argsA); err != nil || len(listed) != 1 || listed[0].Scope != SkillScopeWorkspace {
+		t.Fatalf("workspace A list=%+v err=%v", listed, err)
+	}
+	runtimeArgsA := WithSkillStorage(map[string]interface{}{
+		"_tenant_id":        "default",
+		"_invocation_scope": kernel.ToolInvocationScope{ControlTenantID: "default", WorkspaceID: "workspace-a"},
+	}, storage)
+	if err := MarkSkillUsed("default", "learned-inspection", runtimeArgsA); err != nil {
+		t.Fatalf("mark managed Skill used: %v", err)
+	}
+	usage, err := loadSkillUsageForDir(wantRoot)
+	if err != nil || usage["learned-inspection"].UseCount != 1 {
+		t.Fatalf("managed usage=%+v err=%v", usage, err)
+	}
+	if listed, err := ListSkillsForTenant("default", false, workspaceArgs("workspace-b")); err != nil || len(listed) != 0 {
+		t.Fatalf("workspace B saw workspace A Skill: %+v err=%v", listed, err)
 	}
 }

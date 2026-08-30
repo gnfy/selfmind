@@ -144,7 +144,7 @@ func (m *uiModel) detachWatchedRunForNewTurn() {
 	if !m.watchingRun {
 		return
 	}
-	m.finalizeLiveStream("")
+	m.finalizeLiveStream("", llm.AssistantPhaseCommentary)
 	m.watchingRun = false
 	m.watchedRunID = ""
 	m.watchedTaskTitle = ""
@@ -160,36 +160,52 @@ func (m *uiModel) detachWatchedRunForNewTurn() {
 	}
 }
 
-// formatStartupDigest renders the digest as one compact conversational block.
-// Ids are deliberately absent: approvals resolve by ordinal via /approvals on
-// the gateway, tasks resume via /resume — UUID hashes carry no meaning here.
+// formatStartupDigest renders the digest as compact event/state sections. Ids
+// are deliberately absent: approvals resolve by ordinal via /approvals on the
+// gateway, tasks resume via /resume — UUID hashes carry no meaning here.
 func formatStartupDigest(digest *api.DigestResponse) string {
 	if digest.Empty() {
 		return ""
 	}
-	lines := []string{"While you were away:"}
+	var sections []string
+	away := []string{"While you were away:"}
 	if n := len(digest.FinishedTasks); n > 0 {
-		lines = append(lines, fmt.Sprintf("✔ %s finished: %s", countNoun(n, "task"), digestTitleList(digest.FinishedTasks)))
+		away = append(away, fmt.Sprintf("✔ %s finished: %s", countNoun(n, "task"), digestTitleList(digest.FinishedTasks)))
 	}
 	if n := len(digest.DisruptedTasks); n > 0 {
-		lines = append(lines, fmt.Sprintf("✖ %s stopped early: %s (use /resume to continue)", countNoun(n, "task"), digestTitleList(digest.DisruptedTasks)))
+		away = append(away, fmt.Sprintf("✖ %s stopped early: %s (use /resume to continue)", countNoun(n, "task"), digestTitleList(digest.DisruptedTasks)))
+	}
+	if n := len(digest.UnconfirmedPushes); n > 0 {
+		away = append(away, fmt.Sprintf("⚠ %s may not have reached %s (see /status)", countNoun(n, "push"), digestPushTargets(digest.UnconfirmedPushes)))
+	}
+	if len(away) > 1 {
+		sections = append(sections, strings.Join(away, "\n"))
+	}
+
+	attention := []string{"Still needs attention:"}
+	if n := len(digest.UnresolvedTasks); n == 1 {
+		attention = append(attention, fmt.Sprintf("↻ 1 earlier task still needs attention: %s (use /resume to continue)", digestTitleList(digest.UnresolvedTasks)))
+	} else if n > 1 {
+		attention = append(attention, fmt.Sprintf("↻ %d earlier tasks still need attention: %s (use /resume to continue)", n, digestTitleList(digest.UnresolvedTasks)))
 	}
 	switch n := len(digest.PendingApprovals); {
 	case n == 1:
-		lines = append(lines, fmt.Sprintf("⚠ 1 approval waiting: %s — interactive choices restored below", digest.PendingApprovals[0].Line))
+		attention = append(attention, fmt.Sprintf("⚠ 1 approval waiting: %s — interactive choices restored below", digest.PendingApprovals[0].Line))
 	case n > 1:
-		lines = append(lines, fmt.Sprintf("⚠ %d approvals waiting — see /approvals", n))
+		attention = append(attention, fmt.Sprintf("⚠ %d approvals waiting — see /approvals", n))
 	}
 	switch n := len(digest.PendingClarifies); {
 	case n == 1:
-		lines = append(lines, fmt.Sprintf("⚠ 1 question waiting: %s — just reply with your answer", digest.PendingClarifies[0].Line))
+		attention = append(attention, fmt.Sprintf("⚠ 1 question waiting: %s — just reply with your answer", digest.PendingClarifies[0].Line))
 	case n > 1:
-		lines = append(lines, fmt.Sprintf("⚠ %d questions waiting — see /status", n))
+		attention = append(attention, fmt.Sprintf("⚠ %d questions waiting — see /status", n))
 	}
-	if n := len(digest.UnconfirmedPushes); n > 0 {
-		lines = append(lines, fmt.Sprintf("⚠ %s may not have reached %s (see /status)", countNoun(n, "push"), digestPushTargets(digest.UnconfirmedPushes)))
+	if len(attention) > 1 {
+		sections = append(sections, strings.Join(attention, "\n"))
 	}
+
 	if active := digest.ActiveRun; active != nil {
+		lines := []string{"Current:"}
 		title := strings.TrimSpace(active.Title)
 		if title == "" {
 			title = "untitled task"
@@ -204,8 +220,9 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 		if activity := strings.TrimSpace(active.LatestActivity); activity != "" {
 			lines = append(lines, "    now: "+activity)
 		}
+		sections = append(sections, strings.Join(lines, "\n"))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(sections, "\n\n")
 }
 
 // digestTitleList joins up to three task titles; the rest collapse into a

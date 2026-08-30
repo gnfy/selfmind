@@ -331,14 +331,15 @@ func writeLifecycleVersionFile(store *control.Store, tenantID string, version *c
 	if version.ParentVersionHash != "" {
 		return "", fmt.Errorf("active Skill for PATCH/rollback is unavailable: %w", findErr)
 	}
-	root, err := userSkillsDirForTenant(tenantID, args)
+	writeRoot, err := ResolveWritableSkillRootForTenant(tenantID, args)
 	if err != nil {
 		return "", err
 	}
+	root := writeRoot.Path
 	safeName := kernel.SanitizeSkillName(version.SkillName)
-	expectedKey := control.SkillKey(tenantID, safeName, SkillScopeUser, SkillSourceAgentCreated, root, safeName+"/SKILL.md")
+	expectedKey := control.SkillKey(tenantID, safeName, writeRoot.Scope, SkillSourceAgentCreated, root, safeName+"/SKILL.md")
 	if expectedKey != version.SkillKey {
-		return "", fmt.Errorf("candidate identity does not match the control-tenant Skill root")
+		return "", fmt.Errorf("candidate identity does not match the selected managed Skill root")
 	}
 	content := ensureFrontMatter(version.ContentBody, safeName, "")
 	if err := validateSkillEnvironmentDeclarations(content); err != nil {

@@ -17,18 +17,39 @@ selfmind uninstall --prepare [--purge-data --yes]
 selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>
 ```
 
-- Running `selfmind` opens the TUI. On the first interactive launch, a missing
-  model configuration opens guided setup before any daemon is started.
-  Cancelling setup exits cleanly. Non-interactive launches never prompt and
-  instead print the exact `setup` or `model set` command to run. `--config`
+- Running `selfmind` opens the TUI. On the first interactive launch, an
+  incomplete installation opens the sole Model Manager when Model Readiness is
+  missing, then resumes the runtime/first-use setup on a later launch. Linux and
+  macOS use the same flow. Non-interactive
+  launches never prompt and instead print the exact `setup` command to run. `--config`
   selects another configuration file and `--resume` restores a prior TUI
   session. Repeatable `--add-dir` grants that CLI invocation access to another
   local directory without modifying the registered workspace.
-- `setup` creates or upgrades configuration, guides the person through one
-  primary model and one optional auxiliary model, then starts the local
-  gateway. The auxiliary model covers approval triage, memory, recall,
-  summaries, and skill work; per-role tuning remains an advanced YAML option.
-  Its skip flags make the flow suitable for automation.
+- `setup` creates missing configuration and owns only runtime/first-use state.
+  If Model Readiness is absent, it directs the person to `selfmind model` rather
+  than presenting a second picker or probe path. The Model Manager exposes the
+  Main model for interactive work, the Background model for maintenance, and
+  optional role overrides; each completed selection is validated automatically.
+  Setup then confirms one project workspace,
+  its trust boundary, the approval mode, and background operation. A failed
+  runtime stage resumes without repeating or reconfirming model work. The
+  installed daemon validates the selected routes from its own environment before
+  Model Readiness is recorded. Shell-only API
+  credentials accepted by the person are copied to SelfMind's private auth
+  store, never to an operating-system service definition. The selected
+  workspace cannot default silently to `/` or the user's home directory.
+  launchd on macOS and per-user systemd on Linux are implementation details.
+  Managed readiness requires the running service job and Gateway to report the
+  same non-secret service generation, version, and configuration. A compatible
+  Gateway with active work may remain available as Runtime Degraded while
+  service repair is deferred. A first successful non-command TUI task completes
+  the separate first-use receipt. The skip flags remain available for
+  controlled automation.
+- `gateway service status` distinguishes an absent, starting, managed healthy,
+  managed unhealthy, conflicting/unowned, or Runtime Degraded background. A
+  running job is healthy only when its service generation, version,
+  configuration identity, and non-secret effective-route fingerprint agree
+  with the responding Gateway and current installation.
 - `update check` only checks for an update. `update` performs the full
   upgrade: it checks the selected npm channel, runs the package-manager
   install, verifies the new binary with `selfmind --version`, and restarts a
@@ -129,7 +150,7 @@ selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspac
 ```text
 selfmind config [doctor|upgrade]
 selfmind env [show|refresh]
-selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
+selfmind model
 selfmind prompt [list|show|edit|diff|validate|test|reset|apply] ...
 selfmind auth [login|status|logout] ...
 selfmind doctor [--verbose] [--out FILE] [--probe-models]
@@ -144,9 +165,6 @@ selfmind weixin [login|status] ...
 Detailed forms:
 
 ```text
-selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]
-selfmind model check [--live] [--role <name>]
-
 selfmind prompt [list|status]
 selfmind prompt show <agent|role>
 selfmind prompt edit <agent|role>
@@ -180,20 +198,35 @@ selfmind weixin status
 
 - `config doctor` reports missing or stale configuration without changing it;
   `config upgrade` adds supported defaults while preserving existing values.
-- `model set` writes the primary selection under `models.primary`. When
-  auxiliary has no provider/model yet, the first write also initializes
-  `models.auxiliary` to the same provider/model. Later primary changes preserve
-  an existing auxiliary selection. Reasoning/service-tier values are validated
-  against discovered capabilities when available; `auto` leaves the choice to
-  the provider/model.
-- A shared daemon does not hot-switch from TUI `/model`. Restart at a safe turn
-  boundary with `selfmind gateway restart --drain` after changing the model.
-- `model check` resolves credentials, protocol, endpoint, and model without
-  exposing secrets. `--role auxiliary` checks the shared auxiliary route;
-  `--role <name>` checks that role after auxiliary/override resolution;
-  `--live` sends bounded requests and validates native tool-schema
-  compatibility. Providers with a multi-turn thinking/tool contract, such as
-  DeepSeek V4, also replay one no-op tool result and verify the final answer;
+- `selfmind model` is the only CLI model command. It opens the same Model
+  Manager as bare `/model` in the TUI. Passing a subcommand is rejected instead
+  of exposing a second mutation path.
+- The manager shows Main, Background, optional overrides for
+  `fast_classifier`, `memory_extract`, `background_review`, `skill_curator`,
+  `semantic_recall`, and `summarizer`, plus change/recovery status. Unset role
+  overrides visibly use Background. Main is the only route allowed to own a
+  complete user-visible turn.
+- One session may edit Main, Background, and several roles. Every completed
+  selection is probed automatically in the daemon environment; there is no
+  separate verify command. A failed probe keeps the draft editable and does
+  not change YAML. Missing API-key credentials can be entered without terminal
+  echo and are written to the private auth store only after a successful probe.
+  The final review submits one non-secret atomic snapshot and schedules one
+  safe restart.
+- Existing reasoning, service-tier, context, and YAML-only transport fields are
+  preserved when compatible. Unknown compatibility resets only the affected
+  selectable option to `auto` with a notice. The first Main selection may
+  initialize an empty Background slot; later Main changes never overwrite it.
+- An accepted online change schedules a safe daemon restart. The current run
+  retains its frozen route; new work received during the drain is queued for
+  the next daemon. Startup probes the candidate again and commits it only after
+  the Agent and `/health` are healthy. Deterministic model incompatibility
+  restores the last running routes; infrastructure or unknown failure enters
+  `recovery_required`. Retry/restore choices appear inside Change status; the
+  bounded non-secret history and running/configured/pending views remain
+  internal parts of the manager rather than separate commands. Providers with
+  a multi-turn thinking/tool contract, such as DeepSeek V4, also replay one
+  no-op tool result during automatic validation and verify the final answer;
   the probe therefore consumes a small amount of provider quota.
 - `prompt` manages the operator-owned workspace next to the active config file
   (normally `~/.selfmind/prompts/`); no `config.yaml` keys are required.
@@ -254,10 +287,15 @@ selfmind weixin status
   invalid or unavailable environment.
 - `gateway restart` drains to a safe turn boundary by default; `--force` is an
   explicit last resort.
-- On macOS, `gateway service install` creates the current user's launchd
-  LaunchAgent. `gateway start`, `stop`, `status`, and `restart` then operate on
-  that stable service; `restart --drain` lets the active turn reach a safe
-  boundary before launchd relaunches the daemon.
+- `gateway service install` creates a per-user launchd LaunchAgent on macOS or
+  a per-user systemd unit on Linux. `gateway start`, `stop`, `status`, and
+  `restart` then operate on that stable service; `restart --drain` lets the
+  active turn reach a safe boundary before the service relaunches the daemon.
+  Neither personal service needs administrator access. An active system-wide
+  Linux `selfmind.service` is reported as a conflict instead of being stopped
+  or replaced by personal setup. After handing startup to launchd/systemd,
+  installation waits for that managed process and never starts a detached
+  fallback that could mask a failed service job.
 - If Weixin reports an expired iLink session, run `selfmind weixin login`
   again. The running gateway watches the account credential file and resumes
   polling after the refreshed credentials are saved; no daemon restart is
@@ -423,6 +461,13 @@ These commands depend on local TUI state and are not sent through IM channels.
 /search [current|query]
 /copy
 ```
+
+For a local TUI, `Ctrl+V` attaches an image from the GUI clipboard and
+`/paste-image` is the explicit fallback. On macOS, `Cmd+V` is owned by the
+terminal application and should be treated as text paste, not as the image
+shortcut. Native Linux needs `wl-paste` or `xclip`; SSH sessions have no local
+GUI clipboard, so provide an image path or send the image through IM. Deleting
+the complete `[Image #N · name]` token before submit detaches that image.
 
 - `/memory` presents the human-oriented memory index; its subcommands inspect,
   correct, pin, forget, and audit canonical memories.

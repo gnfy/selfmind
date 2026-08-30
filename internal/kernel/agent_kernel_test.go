@@ -114,6 +114,23 @@ func (p *mockLLMProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (
 	return ch, nil
 }
 
+type namedAnswerProvider struct{ answer string }
+
+func (p *namedAnswerProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return p.answer, nil
+}
+
+func (p *namedAnswerProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: p.answer}, nil
+}
+
+func (p *namedAnswerProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	ch := make(chan llm.StreamEvent, 1)
+	ch <- llm.StreamEvent{Content: p.answer}
+	close(ch)
+	return ch, nil
+}
+
 type streamEOFThenChatProvider struct {
 	streamRequests int
 	chatRequests   int
@@ -789,6 +806,24 @@ func TestAgentRun(t *testing.T) {
 		t.Fatalf("Agent failed: %v", err)
 	}
 	fmt.Printf("Result: %s\n", res)
+}
+
+func TestAgentUsesPrimaryProviderForSimpleUserVisibleTurn(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	primary := &namedAnswerProvider{answer: "main"}
+	agent := NewAgent(mem, &mockBackend{}, primary, "helpful", 1, 1, nil)
+	if got := agent.chooseRunProvider(TaskStrategy{Class: TaskClassSimpleAnswer, ToolMode: ToolModeNone}); got != primary {
+		t.Fatalf("light foreground strategy provider = %T, want primary", got)
+	}
+
+	ctx := memory.WithTenantID(context.Background(), "user123")
+	answer, _, err := agent.RunConversation(ctx, "user123", "cli", "你是什么模型？")
+	if err != nil {
+		t.Fatalf("RunConversation: %v", err)
+	}
+	if answer != "main" {
+		t.Fatalf("answer = %q, want primary provider answer", answer)
+	}
 }
 
 func TestAgentFallsBackToNonStreamingWhenStreamFailsBeforeOutput(t *testing.T) {

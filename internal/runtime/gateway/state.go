@@ -1,11 +1,13 @@
 package gateway
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,6 +25,79 @@ const gatewayHeartbeatStaleAfter = 45 * time.Second
 
 var ErrAlreadyRunning = errors.New("selfmind gateway is already running")
 
+// WaitForOwnerRelease waits for the authoritative runtime lock rather than a
+// PID receipt. Service-manager replacement calls it after graceful shutdown so
+// a new managed process cannot start in the cleanup window and lose the lock.
+func WaitForOwnerRelease(ctx context.Context, dataDir string) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	manager := NewManager(dataDir, "")
+	for {
+		_, owned, err := manager.RuntimeOwnerRecord()
+		if err != nil {
+			return err
+		}
+		if !owned {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// WaitForRuntimeAbsence proves that no recorded process, runtime-lock owner, or
+// TCP listener remains before an OS service manager may activate a replacement.
+// Each signal is checked independently because a stale PID file, an unlocked
+// runtime, and a still-bound listener represent different failure windows.
+func WaitForRuntimeAbsence(ctx context.Context, dataDir, addr string, expectedPID int) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	manager := NewManager(dataDir, addr)
+	addr = ResolveAddr(addr)
+	for {
+		_, recordedProcessRunning := manager.RunningRecord()
+		expectedProcessRunning := expectedPID > 0 && processAlive(expectedPID)
+		_, owned, err := manager.RuntimeOwnerRecord()
+		if err != nil {
+			return err
+		}
+		listenerRunning := tcpListenerReachable(addr)
+		if !recordedProcessRunning && !expectedProcessRunning && !owned && !listenerRunning {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// RunningPID captures the current process identity before a shutdown removes
+// its receipt. Callers pass it to WaitForRuntimeAbsence so PID-file cleanup
+// cannot be mistaken for process exit.
+func RunningPID(dataDir string) int {
+	record, ok := NewManager(dataDir, "").RunningRecord()
+	if !ok {
+		return 0
+	}
+	return record.PID
+}
+
+func tcpListenerReachable(addr string) bool {
+	conn, err := net.DialTimeout("tcp", ResolveAddr(addr), 100*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
 type StatusRecord struct {
 	PID             int      `json:"pid"`
 	Kind            string   `json:"kind"`
@@ -30,6 +105,7 @@ type StatusRecord struct {
 	Version         string   `json:"version,omitempty"`
 	Addr            string   `json:"addr"`
 	DataDir         string   `json:"data_dir"`
+	ConfigPath      string   `json:"config_path,omitempty"`
 	DefaultTenantID string   `json:"default_tenant_id,omitempty"`
 	Argv            []string `json:"argv,omitempty"`
 	State           string   `json:"state"`
@@ -69,6 +145,7 @@ func (e AlreadyRunningError) Unwrap() error {
 type Manager struct {
 	Paths      Paths
 	Addr       string
+	ConfigPath string
 	Started    time.Time
 	InstanceID string
 	lock       *runtimeFileLock
@@ -193,6 +270,7 @@ func (m *Manager) statusRecordLocked(now time.Time) StatusRecord {
 		Version:         buildinfo.Version,
 		Addr:            m.Addr,
 		DataDir:         m.Paths.DataDir,
+		ConfigPath:      m.ConfigPath,
 		DefaultTenantID: m.tenantID,
 		Argv:            os.Args,
 		State:           m.state,

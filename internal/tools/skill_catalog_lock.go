@@ -198,6 +198,11 @@ func hashSkillDirectory(skillDir string) (string, []string, error) {
 			return err
 		}
 		if d.IsDir() {
+			// Same exclusion as discovery and the resource manifest, so the
+			// install lock and package identity agree on what a package is.
+			if path != skillDir && excludedSkillScanDirs[d.Name()] {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		rel, err := filepath.Rel(skillDir, path)

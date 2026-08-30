@@ -56,6 +56,12 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	// dir, so every dispatcher (daemon, worker pool, eval) can resolve the
 	// artifacts the coordinator writes.
 	disp.RegisterTool(tools.NewToolOutputViewTool(filepath.Join(ResolveDataDir(cfg), "tool-output")))
+	if controlStore != nil {
+		// Attribution watches the single registry execution path and records
+		// implicit Skill use. It is not a middleware: it never decides whether a
+		// call runs, only observes one that already completed.
+		registry.InjectSkillAttributionObserver(tools.NewSkillAttributionObserver(controlStore))
+	}
 	disp.RegisterTool(tools.NewSkillManageTool(controlStore))
 	disp.RegisterTool(tools.NewSkillsListTool(controlStore))
 	disp.RegisterTool(tools.NewSkillViewTool(controlStore))

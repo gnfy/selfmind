@@ -72,6 +72,11 @@ func (c *llmSkillCurator) ProposeSkillCuration(ctx context.Context, tenantID, pa
 	if err := json.Unmarshal([]byte(payloadJSON), &digest); err != nil {
 		return "", fmt.Errorf("decode skill evidence digest: %w", err)
 	}
+	if err := normalizeSkillPublicationScope(&digest); err != nil {
+		return "", err
+	}
+	normalizedPayload, _ := json.Marshal(digest)
+	payloadJSON = string(normalizedPayload)
 	if !skillCurationProposalEligible(digest) {
 		return `{"action":"SKIP","reason":"cohort is not ready"}`, nil
 	}
@@ -135,6 +140,9 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 	if err := json.Unmarshal([]byte(payloadJSON), &digest); err != nil {
 		return "", fmt.Errorf("decode skill evidence digest: %w", err)
 	}
+	if err := normalizeSkillPublicationScope(&digest); err != nil {
+		return "", err
+	}
 	if !skillCurationProposalEligible(digest) {
 		return "skill candidate skipped: cohort is not ready", nil
 	}
@@ -155,7 +163,7 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 			eventProposal.Action = strings.ToUpper(strings.TrimSpace(eventProposal.Action))
 		}
 		if existing.State == "candidate" && autoPromoteSkillCandidateEligible(digest) {
-			blockedReason, blockErr := c.automaticCandidatePromotionBlockedReason(ctx, tenantID, existing)
+			blockedReason, blockErr := c.automaticCandidatePromotionBlockedReason(ctx, tenantID, digest.WorkspaceID, existing)
 			if blockErr != nil {
 				return "", blockErr
 			}
@@ -163,7 +171,7 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 				c.recordSkillCurationEvents(ctx, digest, eventProposal, existing.SkillKey, existing.SkillName, existing.VersionHash, existing.ParentVersionHash, false)
 				return fmt.Sprintf("skill candidate created: %s@%s (automatic promotion blocked by %s; active unchanged)", existing.SkillName, existing.VersionHash, blockedReason), nil
 			}
-			promoted, promoteErr := c.publishCandidate(ctx, tenantID, existing.SkillKey, existing.VersionHash)
+			promoted, promoteErr := c.publishCandidate(ctx, tenantID, digest.WorkspaceID, existing.SkillKey, existing.VersionHash)
 			if promoteErr != nil {
 				return "", promoteErr
 			}
@@ -201,7 +209,12 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 			return "", fmt.Errorf("skill curator storage is not configured")
 		}
 		root := tools.SkillsDirForTenant(storage.BaseDir(), tenantID)
-		skillKey = control.SkillKey(tenantID, name, tools.SkillScopeUser, tools.SkillSourceAgentCreated, root, name+"/SKILL.md")
+		scope := tools.SkillScopeUser
+		if digest.PublicationScope == kernel.SkillPublicationWorkspace {
+			root = tools.ManagedWorkspaceSkillsDir(storage.BaseDir(), tenantID, digest.WorkspaceID)
+			scope = tools.SkillScopeWorkspace
+		}
+		skillKey = control.SkillKey(tenantID, name, scope, tools.SkillSourceAgentCreated, root, name+"/SKILL.md")
 		parent = ""
 	case "PATCH":
 		if skillKey == "" || digest.TargetSkillName == "" {
@@ -210,7 +223,7 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 		if !digestHasVerifiedRepairIncident(digest) {
 			return "", fmt.Errorf("curator PATCH requires a verified attributable repair incident")
 		}
-		if ok, reason := c.automaticRepairTargetEligible(tenantID, digest.TargetSkillName); !ok {
+		if ok, reason := c.automaticRepairTargetEligible(tenantID, digest); !ok {
 			return "skill repair skipped: " + reason, nil
 		}
 		name = digest.TargetSkillName
@@ -218,7 +231,7 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 			return "", fmt.Errorf("automatic curator PATCH cannot change linked resources")
 		}
 		pack, packErr := tools.ReadSkillPackageForTenant(tenantID, name,
-			tools.WithSkillStorage(map[string]interface{}{"_tenant_id": tenantID, "_context": ctx}, c.skillStorage))
+			c.skillInvocationArgs(ctx, tenantID, digest.WorkspaceID, digest.PublicationScope, kernel.SkillMutationCandidateOnly))
 		if packErr != nil {
 			return "", fmt.Errorf("load active Skill package for PATCH: %w", packErr)
 		}
@@ -252,16 +265,17 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 		ids = append(ids, observation.ID)
 	}
 	evidenceJSON, _ := json.Marshal(digest)
-	created, err := tools.NewSkillLifecycleManageTool(c.store).Execute(tools.WithSkillStorage(map[string]interface{}{
+	createArgs := c.skillInvocationArgs(ctx, tenantID, digest.WorkspaceID, digest.PublicationScope, kernel.SkillMutationCandidateOnly)
+	for key, value := range map[string]interface{}{
 		"action": "candidate_create", "skill_key": skillKey, "name": name,
 		"parent_version_hash": parent, "content": strings.TrimSpace(proposal.Content),
 		"resources_json":    string(mustJSONTextMap(proposal.Resources)),
 		"evidence_set_hash": digest.EvidenceSetHash, "observation_ids": ids,
-		"evidence_json": string(evidenceJSON), "_tenant_id": tenantID, "_context": ctx,
-		"_invocation_scope": kernel.ToolInvocationScope{
-			ControlTenantID: tenantID, SkillMutationMode: kernel.SkillMutationCandidateOnly,
-		},
-	}, c.skillStorage))
+		"evidence_json": string(evidenceJSON),
+	} {
+		createArgs[key] = value
+	}
+	created, err := tools.NewSkillLifecycleManageTool(c.store).Execute(createArgs)
 	if err != nil {
 		return "", err
 	}
@@ -278,12 +292,12 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 		if versionErr != nil {
 			return "", versionErr
 		}
-		blockedReason, blockErr := c.automaticCandidatePromotionBlockedReason(ctx, tenantID, version)
+		blockedReason, blockErr := c.automaticCandidatePromotionBlockedReason(ctx, tenantID, digest.WorkspaceID, version)
 		if blockErr != nil {
 			return "", blockErr
 		}
 		if blockedReason == "" {
-			promoted, err = c.publishCandidate(ctx, tenantID, skillKey, versionHash)
+			promoted, err = c.publishCandidate(ctx, tenantID, digest.WorkspaceID, skillKey, versionHash)
 			if err != nil {
 				return "", err
 			}
@@ -332,20 +346,76 @@ func mustJSONText(value string) []byte {
 	return encoded
 }
 
-func (c *llmSkillCurator) publishCandidate(ctx context.Context, tenantID, skillKey, versionHash string) (bool, error) {
-	_, err := tools.NewSkillLifecycleManageTool(c.store).Execute(tools.WithSkillStorage(map[string]interface{}{
-		"action": "candidate_promote", "skill_key": skillKey, "version_hash": versionHash,
-		"_tenant_id": tenantID, "_context": ctx,
-		"_invocation_scope": kernel.ToolInvocationScope{
-			ControlTenantID: tenantID, SkillMutationMode: kernel.SkillMutationDirect,
-		},
-	}, c.skillStorage))
-	if err != nil {
-		return false, err
-	}
+func (c *llmSkillCurator) publishCandidate(ctx context.Context, tenantID, workspaceID, skillKey, versionHash string) (bool, error) {
 	version, err := c.store.GetSkillVersion(ctx, tenantID, skillKey, versionHash)
 	if err != nil {
 		return false, err
 	}
+	publicationScope := c.versionPublicationScope(tenantID, workspaceID, version)
+	args := c.skillInvocationArgs(ctx, tenantID, workspaceID, publicationScope, kernel.SkillMutationDirect)
+	args["action"] = "candidate_promote"
+	args["skill_key"] = skillKey
+	args["version_hash"] = versionHash
+	_, err = tools.NewSkillLifecycleManageTool(c.store).Execute(args)
+	if err != nil {
+		return false, err
+	}
+	version, err = c.store.GetSkillVersion(ctx, tenantID, skillKey, versionHash)
+	if err != nil {
+		return false, err
+	}
 	return version != nil && version.State == "active", nil
+}
+
+func (c *llmSkillCurator) skillInvocationArgs(ctx context.Context, tenantID, workspaceID, publicationScope, mutationMode string) map[string]interface{} {
+	return tools.WithSkillStorage(map[string]interface{}{
+		"_tenant_id": tenantID, "_context": ctx,
+		"_invocation_scope": kernel.ToolInvocationScope{
+			ControlTenantID: tenantID, WorkspaceID: workspaceID,
+			SkillPublicationScope: publicationScope, SkillMutationMode: mutationMode,
+		},
+	}, c.skillStorage)
+}
+
+func (c *llmSkillCurator) versionPublicationScope(tenantID, workspaceID string, version *control.SkillVersion) string {
+	if version != nil {
+		var digest control.SkillEvidenceDigest
+		if json.Unmarshal(version.Evidence, &digest) == nil && digest.PublicationScope != "" {
+			return digest.PublicationScope
+		}
+		if c != nil && c.skillStorage != nil && strings.TrimSpace(workspaceID) != "" {
+			root := tools.ManagedWorkspaceSkillsDir(c.skillStorage.BaseDir(), tenantID, workspaceID)
+			key := control.SkillKey(tenantID, version.SkillName, tools.SkillScopeWorkspace, tools.SkillSourceAgentCreated, root, version.SkillName+"/SKILL.md")
+			if key == version.SkillKey {
+				return kernel.SkillPublicationWorkspace
+			}
+		}
+	}
+	return kernel.SkillPublicationUser
+}
+
+func normalizeSkillPublicationScope(digest *control.SkillEvidenceDigest) error {
+	if digest == nil {
+		return fmt.Errorf("skill evidence digest is required")
+	}
+	digest.PublicationScope = strings.ToLower(strings.TrimSpace(digest.PublicationScope))
+	if digest.PublicationScope == "" {
+		if digest.TargetSkillKey == "" && strings.TrimSpace(digest.WorkspaceID) != "" {
+			digest.PublicationScope = kernel.SkillPublicationWorkspace
+		} else {
+			digest.PublicationScope = kernel.SkillPublicationUser
+		}
+	}
+	if digest.PublicationScope != kernel.SkillPublicationWorkspace && digest.PublicationScope != kernel.SkillPublicationUser {
+		return fmt.Errorf("unsupported Skill publication scope %q", digest.PublicationScope)
+	}
+	if digest.PublicationScope == kernel.SkillPublicationWorkspace && strings.TrimSpace(digest.WorkspaceID) == "" {
+		return fmt.Errorf("workspace Skill publication requires workspace identity")
+	}
+	for index := range digest.NegativeObservations {
+		if incident := digest.NegativeObservations[index].Incident; incident != nil {
+			incident.RepairClass = control.ClassifySkillRepairIncident(incident)
+		}
+	}
+	return nil
 }

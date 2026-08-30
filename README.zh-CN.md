@@ -175,23 +175,23 @@ SELF_CONFIG=/etc/selfmind/config.yaml ./selfmind gateway run
 selfmind model
 ```
 
-交互流程参考 Hermes：
+交互流程：
 
-1. 选择供应商：OpenAI、Anthropic、Google、`Custom endpoint (enter URL manually)`、Coding CLI 登录复用入口，或其它内置 provider profile。
-2. 输入或保留 API key；Codex CLI、Claude Code、Gemini CLI、Qwen CLI 会尝试复用已有 CLI 登录。
-3. SelfMind 尝试实时拉取供应商模型列表并写入本地缓存。
-4. 选择模型；如果实时列表不可用，会使用 fallback 列表或允许手动输入模型名。
-5. 选择结果写入 `config.yaml`。
+1. 选择主模型、后台模型，或六个可选后台角色覆盖之一。
+2. 选择供应商：OpenAI、Anthropic、Google、`Custom endpoint (enter URL manually)`、Coding CLI 登录复用入口，或其它内置 provider profile。
+3. 缺少必需 API key 时再输入；Codex CLI、Claude Code、Gemini CLI、Qwen CLI 会尝试复用已有 CLI 登录。
+4. 选择实时发现或缓存的模型，也可以手动输入模型 ID。
+5. 每一项选择完成后都会自动验证；失败时保留可编辑草稿。
+6. 最后统一检查全部修改，并作为一次安全事务写入 `config.yaml`。
 
-常用非交互命令：
+随时打开模型管理器：
 
 ```sh
-selfmind model current
-selfmind model list
-selfmind model set openai gpt-4o
-selfmind model set codex-cli gpt-5.6-sol --reasoning xhigh
-selfmind model set custom:local-llm qwen2.5-coder
+selfmind model
 ```
+
+管理器会展示主模型、后台模型和可选的后台角色覆盖；每完成一项选择就自动验证，
+最后把确认过的整份草稿作为一次原子变更保存。
 
 ### 配置示例
 
@@ -486,15 +486,15 @@ models:
 只有真正需要不同模型的角色才写进 `models.roles`；它的优先级高于 auxiliary，
 不需要额外的 `default` role：
 
-- `coding_agent`：主 Agent 编码和任务执行。
 - `memory_extract`：记忆事实提取。
 - `background_review`：任务结束后的后台学习复盘。
-- `fast_classifier`：直答路由、廉价分类和低延迟 smart 审批裁决。
+- `fast_classifier`：廉价分类和低延迟 smart 审批裁决。
 - `skill_curator`：Skill 整理和治理。
 - `semantic_recall`：历史会话语义召回。
 - `summarizer`：有界上下文压缩摘要。
 
-个人版从本地 YAML 读取。后续 SaaS 版可以沿用同样的 role 名称，从数据库中的租户、用户、workspace、预算策略里解析模型配置。
+所有完整的用户可见回合都由 Main 负责；旧配置中的 `coding_agent` 角色选择会被忽略，
+不能再覆盖 `models.primary`。
 
 smart 审批使用显式配置或由 auxiliary 继承的 `fast_classifier`。旧配置可以兼容回退到显式配置的
 `background_review`，但绝不会静默借用 `models.primary`；两者都没配置时会安全地询问用户。
@@ -540,7 +540,7 @@ selfmind -f ./config/config.yaml
 | `/curator` | 查看、预览、生成报告、运行或恢复 Skill curator 操作。 |
 | `/checkpoint` | 保存、读取、列出或删除会话 checkpoint。 |
 | `/migrate` | 从 Hermes Agent 迁移 Skills。 |
-| `/model` | 查看 daemon 当前模型，以及用于修改模型的 CLI 命令。 |
+| `/model` | 在 TUI 打开模型管理器；IM 渠道返回只读路由摘要。 |
 | `/clear` | 清屏。 |
 | `/exit` | 退出。 |
 

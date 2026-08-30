@@ -422,7 +422,7 @@ func (d *Server) failClaimedPostRun(ctx context.Context, prepared *preparedPostR
 		return
 	}
 	if llm.IsRetryableError(err) {
-		_ = d.Control.FailMaintenanceJob(ctx, prepared.request.TenantID, prepared.request.RunID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+		d.failRetryableMaintenanceJob(ctx, prepared.request.TenantID, prepared.request.RunID, postRunAnalyzerVersion, err, maintenanceRetryDelay)
 		return
 	}
 	d.blockMaintenanceProviderJob(ctx, prepared.identity, prepared.task, prepared.run, postRunAnalyzerVersion, err)

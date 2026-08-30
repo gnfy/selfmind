@@ -1,11 +1,11 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package cliapp
 
 import "fmt"
 
-func gatewayServiceInstall(string) (string, error) {
-	return "", fmt.Errorf("launchd service management is only available on macOS")
+func gatewayServiceInstall(string, int, []string) (gatewayServiceInstallReceipt, error) {
+	return gatewayServiceInstallReceipt{}, fmt.Errorf("operating-system service management is unavailable")
 }
 
 func gatewayServiceStatus() (bool, string, error) {
@@ -30,6 +30,14 @@ func gatewayServiceStopIfInstalled() (bool, string, error) {
 
 func gatewayServiceSupported() bool {
 	return false
+}
+
+func gatewayServicePreflight() error { return nil }
+
+func gatewayServiceHealthy() bool { return false }
+
+func gatewayServiceKind() string {
+	return "on-demand"
 }
 
 func gatewayServiceDoctorLine() string {

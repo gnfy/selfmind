@@ -18,6 +18,9 @@ expect:
   must_not_contain:
     - "<tool>"
     - "\"tool_calls\""
+    - "Summary:"
+    - "Done:"
+    - "Tests:"
   max_duration_seconds: 120
 
 checks:

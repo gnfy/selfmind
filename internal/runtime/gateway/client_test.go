@@ -1,17 +1,137 @@
 package gateway
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDetachedRunArgsDoNotLeakLifecycleFlags(t *testing.T) {
 	want := []string{"gateway", "run"}
 	if got := detachedRunArgs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("detachedRunArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestRequestShutdownCanAbortCancellableSafeBoundaryWait(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	err := RequestShutdown(context.Background(), StopOptions{
+		URL: server.URL, Timeout: time.Second, WaitForSafeBoundary: true,
+		Abort: func() bool { return true },
+	})
+	if !errors.Is(err, ErrShutdownAborted) {
+		t.Fatalf("RequestShutdown error = %v; want ErrShutdownAborted", err)
+	}
+}
+
+func TestRequestShutdownAcceptsLostResponseOnlyAfterOwnerRelease(t *testing.T) {
+	dataDir := t.TempDir()
+	manager := NewManager(dataDir, "")
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.WriteStatus("running", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { manager.Cleanup("test cleanup") })
+
+	released := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking unavailable", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
+		go func() {
+			time.Sleep(25 * time.Millisecond)
+			manager.Cleanup("shutdown requested")
+			close(released)
+		}()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := RequestShutdown(ctx, StopOptions{URL: server.URL, DataDir: dataDir, Timeout: time.Second}); err != nil {
+		t.Fatalf("lost response with confirmed owner release = %v, want success", err)
+	}
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("runtime owner was not released")
+	}
+}
+
+func TestRequestShutdownRejectsLostResponseWhileOwnerRemains(t *testing.T) {
+	dataDir := t.TempDir()
+	manager := NewManager(dataDir, "")
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.WriteStatus("running", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { manager.Cleanup("test cleanup") })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijacking unavailable", http.StatusInternalServerError)
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	err := RequestShutdown(ctx, StopOptions{URL: server.URL, DataDir: dataDir, Timeout: 80 * time.Millisecond})
+	if err == nil {
+		t.Fatal("lost response was accepted while the original runtime owner remained")
+	}
+	if _, ok := manager.RunningRecord(); !ok {
+		t.Fatal("test runtime owner unexpectedly disappeared")
+	}
+}
+
+func TestServiceReconcileReportsDeferredWhenGatewayResumesAfterBoundedDrain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/gateway/shutdown":
+			w.WriteHeader(http.StatusAccepted)
+		case "/v1/gateway/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"state":"running","draining":false,"active_run_count":1}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	err := RequestShutdown(context.Background(), StopOptions{
+		URL: server.URL, DataDir: t.TempDir(), Timeout: time.Second,
+		Reason: "service_reconcile", WaitForSafeBoundary: true,
+	})
+	if !errors.Is(err, ErrShutdownDeferred) {
+		t.Fatalf("service reconciliation error = %v, want ErrShutdownDeferred", err)
 	}
 }
 
@@ -52,7 +172,7 @@ func TestPickDaemonExecutable(t *testing.T) {
 	}
 }
 
-func TestMergeRestartEnvironmentPreservesPathAndProxy(t *testing.T) {
+func TestMergeRestartEnvironmentUsesOnlyCurrentProxy(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	current := []string{"PATH=" + strings.Join([]string{"/usr/bin"}, sep), "HTTP_PROXY=http://new-proxy:8080", "NO_PROXY="}
 	previous := []string{
@@ -79,8 +199,8 @@ func TestMergeRestartEnvironmentPreservesPathAndProxy(t *testing.T) {
 	if strings.Contains(joined, "http_proxy=http://old-proxy:8080") {
 		t.Fatalf("old case variant must not override a current proxy: %v", got)
 	}
-	if !strings.Contains(joined, "https_proxy=http://old-proxy:8080") {
-		t.Fatalf("missing proxy key must survive restart: %v", got)
+	if strings.Contains(joined, "https_proxy=http://old-proxy:8080") {
+		t.Fatalf("a proxy missing from the current environment must not survive restart: %v", got)
 	}
 	if strings.Contains(joined, "NO_PROXY=localhost") {
 		t.Fatalf("an explicitly empty current value must clear the old value: %v", got)
@@ -90,22 +210,21 @@ func TestMergeRestartEnvironmentPreservesPathAndProxy(t *testing.T) {
 	}
 }
 
-func TestMergeRestartEnvironmentKeepsProxyCaseVariantsFromOldDaemon(t *testing.T) {
+func TestMergeRestartEnvironmentDoesNotResurrectOldProxy(t *testing.T) {
 	got := mergeRestartEnvironment(
 		[]string{"PATH=/usr/bin"},
 		[]string{"HTTP_PROXY=http://proxy:8080", "http_proxy=http://proxy:8080"},
 	)
 	joined := strings.Join(got, "\n")
-	if !strings.Contains(joined, "HTTP_PROXY=http://proxy:8080") ||
-		!strings.Contains(joined, "http_proxy=http://proxy:8080") {
-		t.Fatalf("proxy case variants must survive an environment-less restart: %v", got)
+	if strings.Contains(joined, "PROXY=") || strings.Contains(joined, "proxy=") {
+		t.Fatalf("old proxy settings must not survive an environment-less restart: %v", got)
 	}
 }
 
 func TestRestartEnvironmentFromBlockFiltersKeys(t *testing.T) {
 	block := []byte("PATH=/usr/bin\x00HTTPS_PROXY=http://proxy:8080\x00no_proxy=localhost\x00TOKEN=secret\x00")
 	got := restartEnvironmentFromBlock(block)
-	want := []string{"PATH=/usr/bin", "HTTPS_PROXY=http://proxy:8080", "no_proxy=localhost"}
+	want := []string{"PATH=/usr/bin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("restartEnvironmentFromBlock() = %v, want %v", got, want)
 	}

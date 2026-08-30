@@ -1,11 +1,33 @@
 package components
 
 import (
+	uitheme "selfmind/internal/ui/theme"
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"github.com/muesli/termenv"
 )
+
+func TestApprovalPromptUsesNoBackgroundInEveryTheme(t *testing.T) {
+	profile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(profile) })
+
+	for _, mode := range []uitheme.Mode{uitheme.ModeDark, uitheme.ModeLight, uitheme.ModeMono} {
+		resolved, err := uitheme.Resolve(uitheme.Options{Mode: mode, Profile: termenv.TrueColor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		view := NewApprovalPromptDetailedWithTheme(ApprovalDetails{
+			Tool: "terminal", Target: "go test ./...", Reason: "runs a command",
+		}, resolved).View(80)
+		if strings.Contains(view, "\x1b[48;") {
+			t.Fatalf("mode %q approval painted a background: %q", mode, view)
+		}
+	}
+}
 
 func TestApprovalPromptViewRendersPanel(t *testing.T) {
 	p := NewApprovalPrompt("write_file", "/mnt/d/wwwroot/ai/game/ember-citadel-tank-battle.html", "accesses path outside project root")
@@ -43,14 +65,10 @@ func TestApprovalPromptViewFitsWidth(t *testing.T) {
 	p := NewApprovalPrompt("terminal", longTarget, "invokes dangerous command: "+strings.Repeat("x", 200))
 	for _, width := range []int{20, 40, 60, 76, 200} {
 		view := p.View(width)
-		max := width
-		if max > approvalPanelMaxWidth {
-			max = approvalPanelMaxWidth
-		}
 		for _, ln := range strings.Split(view, "\n") {
 			plain := stripANSIForTest(ln)
-			if w := runewidth.StringWidth(plain); w > max {
-				t.Errorf("width=%d: line overflows (%d > %d): %q", width, w, max, plain)
+			if w := runewidth.StringWidth(plain); w > width {
+				t.Errorf("width=%d: line overflows (%d > %d): %q", width, w, width, plain)
 			}
 		}
 	}

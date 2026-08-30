@@ -142,6 +142,7 @@ func agentEventToStream(event string) llm.StreamEvent {
 		stream := llm.StreamEvent{
 			EventType:       structured.Type,
 			Content:         structured.Content,
+			Phase:           structured.Phase,
 			ToolName:        structured.ToolName,
 			ToolCallID:      structured.ToolCallID,
 			ToolArgs:        structured.ToolArgs,

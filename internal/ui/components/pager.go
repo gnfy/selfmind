@@ -62,10 +62,10 @@ func (p *Pager) Update(msg tea.Msg) (closed bool, cmd tea.Cmd) {
 func (p *Pager) View() string {
 	p.refresh()
 	footerText := fmt.Sprintf(" line %d  q/Esc close - up/down scroll", p.viewport.YOffset+1)
-	footerStyle := lipgloss.NewStyle().
-		Background(lipgloss.Color("255")).
-		Foreground(lipgloss.Color("0")).
-		Width(p.width)
+	footerStyle := lipgloss.NewStyle().Bold(true).Width(p.width)
+	if p.common != nil && p.common.Styles != nil {
+		footerStyle = p.common.Styles.Chat.Selected.Copy().Bold(true).Width(p.width)
+	}
 	if p.common != nil && p.common.Styles != nil && p.common.Width > 0 {
 		footerStyle = footerStyle.MaxWidth(p.common.Width)
 	}

@@ -2,86 +2,24 @@
   "method": "stream",
   "events": [
     {
-      "content": "已"
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
     },
     {
-      "content": "完成"
-    },
-    {
-      "content": "，只"
-    },
-    {
-      "content": "读"
-    },
-    {
-      "content": "读取"
-    },
-    {
-      "content": "，"
-    },
-    {
-      "content": "未"
-    },
-    {
-      "content": "修改"
-    },
-    {
-      "content": "文件"
-    },
-    {
-      "content": "。\n\n"
-    },
-    {
-      "content": "前"
-    },
-    {
-      "content": "端"
-    },
-    {
-      "content": "版本"
-    },
-    {
-      "content": "："
-    },
-    {
-      "content": "web"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": "7"
-    },
-    {
-      "content": "  \n"
-    },
-    {
-      "content": "后"
-    },
-    {
-      "content": "端"
-    },
-    {
-      "content": "版本"
-    },
-    {
-      "content": "："
-    },
-    {
-      "content": "api"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": "9"
+      "tool_calls": [
+        {
+          "ID": "call_OEOegIA57palq7taL4raNX57",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"done\",\"summary\":\"已按两个独立 work unit 顺序完成前端与后端版本读取，并分别选择了名称对应的 Skill；未修改文件。\",\"done\":[\"frontend.txt 的精确值为 frontend=web-7\",\"backend.txt 的精确值为 backend=api-9\"],\"tests\":[\"直接只读检查 frontend.txt\",\"直接只读检查 backend.txt\"],\"files\":[]}"
+        }
+      ]
     },
     {
       "usage": {
-        "input_tokens": 8870,
-        "output_tokens": 29,
+        "input_tokens": 8798,
+        "output_tokens": 100,
         "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 8870,
+        "cache_miss_input_tokens": 8798,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true

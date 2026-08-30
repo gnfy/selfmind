@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-08-30
+**Snapshot:** 2026-08-31
 
 ## Release Health
 
@@ -16,8 +16,11 @@
   declare `model_required: false`.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
-- Linux CI and tag releases replay the complete offline corpus for the exact
-  source SHA. npm publication waits for packed-artifact install plus isolated
+- Pull requests run the fast offline corpus and core Linux/macOS checks. Main
+  CI runs the complete offline corpus, focused race tests, and package smoke in
+  parallel for the exact merge SHA. Prerelease publication reuses that exact
+  successful main result; stable releases repeat the full source gate. Release
+  tags are created or verified only after packed-artifact install plus isolated
   daemon start/health, authenticated status/tasks, restart persistence, and
   stop smoke on Linux x64 and macOS arm64; native coverage for the other
   packaged architectures remains release evidence to add.

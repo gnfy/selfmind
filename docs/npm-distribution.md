@@ -230,23 +230,34 @@ Release channels use npm dist-tags:
 
 Tags and manual dispatches use `.github/workflows/release.yml`:
 
-1. require an existing tag that points at the workflow SHA and is reachable
-   from `main`;
-2. run docs, vet, build, tests, focused race tests, and the complete offline
-   release corpus;
-3. build Linux and macOS binaries for x64 and arm64;
-4. stage and pack all five npm packages without publishing them;
-5. install the packed Linux x64 launcher and native package, then start,
+1. require the workflow SHA to be reachable from `main` and require the exact
+   SHA's main CI push run to have succeeded;
+2. accept a missing tag from a manual dispatch, reject an existing tag that
+   points anywhere else, and require an explicit tag whenever publication is
+   enabled;
+3. reuse exact-SHA main CI for prereleases; stable versions independently run
+   docs, vet, build, tests, focused race tests, and the complete offline corpus;
+4. build Linux and macOS binaries for x64 and arm64;
+5. stage and pack all five npm packages without publishing them;
+6. install the packed Linux x64 launcher and native package, then start,
    health-check, exercise authenticated `status` and `tasks` against its
    isolated `control.db`, drain-restart, recheck durable access, and stop its
    daemon in an isolated home/data directory;
-6. run the same packed-package lifecycle on a native macOS arm64 runner;
-7. publish all native packages first, then publish the launcher, using the
+7. run the same packed-package lifecycle on a native macOS arm64 runner;
+8. create the missing lightweight tag at the verified SHA only after both
+   package smokes pass, or verify an existing exact tag for an idempotent rerun;
+9. publish all native packages first, then publish the launcher, using the
    already-smoked tarballs;
-8. fail closed when only part of a version already exists; a fully existing
+10. fail closed when only part of a version already exists; a fully existing
    version may resume only when every registry integrity matches the verified
    tarball;
-9. attach archives, npm tarballs, and checksums to the GitHub release.
+11. attach archives, npm tarballs, and checksums to the GitHub release.
+
+The tag-finalization job alone receives `contents: write`; it uses the
+repository `GITHUB_TOKEN`, not a maintainer PAT. GitHub does not recursively
+start the tag-push workflow for events created by that token. All other jobs
+retain read-only repository permissions except npm trusted publishing and the
+final GitHub Release write.
 
 Release tarballs contain the binary and documentation. They do not bundle the
 obsolete root/system-wide Linux installer; supported service setup is the

@@ -25,10 +25,56 @@ env:
   SELFMIND_EVAL_OFFLINE: "1"
 
 jobs:
-  gate:
-    name: Linux build, test, offline eval
+  core:
+    name: Linux core checks
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Documentation contract
+        run: go run ./cmd/selfmind docs check
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
+
+  race:
+    name: Race-sensitive runtime tests
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Race-sensitive runtime tests
+        run: go test -race ./internal/runpool ./internal/control ./internal/gateway/httpapi
+
+  eval:
+    name: Provider-offline eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,30 +90,13 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Documentation contract
-        run: go run ./cmd/selfmind docs check
+      - name: Fast provider-offline PR corpus
+        if: github.event_name == 'pull_request'
+        run: go run ./cmd/selfmind selfcheck --profile local-fast --skip-go
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: Build
-        run: go build ./...
-
-      - name: Test
-        run: go test ./...
-
-      - name: Race-sensitive runtime tests
-        env:
-          CGO_ENABLED: "1"
-        run: go test -race ./internal/runpool ./internal/control ./internal/gateway/httpapi
-
-      - name: Complete provider-offline release corpus
-        # Linux owns the deterministic release corpus. Platform-specific cases
-        # still run on their native runner below.
+      - name: Complete provider-offline main corpus
+        if: github.event_name != 'pull_request'
         run: go run ./cmd/selfmind selfcheck --profile local-full --skip-go
-
-      - name: Package and install npm distribution
-        run: bash scripts/smoke-npm-packages.sh 0.0.0-ci
 
       - name: Upload eval diagnostics
         if: failure()
@@ -76,6 +105,28 @@ jobs:
           name: selfmind-eval-linux
           path: evalruns/
           if-no-files-found: warn
+
+  npm-linux:
+    name: Package and smoke npm on Linux x64
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Package and install npm distribution
+        run: bash scripts/smoke-npm-packages.sh 0.0.0-ci
 
   macos:
     name: macOS build and test

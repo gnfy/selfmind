@@ -166,6 +166,14 @@ func TestReleaseWorkflowPublishesOnlyAfterPackageSmoke(t *testing.T) {
 	}
 
 	run := workflowRunText(publishJob)
+	if !strings.Contains(run, `archive_path="./npm-packs/${archive}"`) || !strings.Contains(run, `test -f "${archive_path}"`) {
+		t.Fatal("publish-npm must fail explicitly when a downloaded tarball is missing")
+	}
+	publishCalls := strings.Count(run, "npm publish ")
+	localPublishCalls := strings.Count(run, `npm publish "./npm-packs/`)
+	if publishCalls == 0 || localPublishCalls != publishCalls {
+		t.Fatalf("every npm publish input must be an explicit local tarball path; publish calls=%d explicit local calls=%d", publishCalls, localPublishCalls)
+	}
 	platformPublish := strings.Index(run, `packages[@]:0:4`)
 	launcherPublish := strings.Index(run, `packages[4]`)
 	if platformPublish < 0 || launcherPublish < 0 || platformPublish >= launcherPublish {

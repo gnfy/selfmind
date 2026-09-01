@@ -59,13 +59,49 @@ func TestRecoveryNotificationDeliveredOnce(t *testing.T) {
 	if msg.Kind != "recovery" || msg.RunID != run.ID || msg.Platform != "weixin" {
 		t.Fatalf("recovery message = %+v", msg)
 	}
-	if !strings.Contains(msg.Content, "saved task is safe and resumable") {
+	if !strings.Contains(msg.Content, "Recovery handoff:") ||
+		!strings.Contains(msg.Content, "the exact approval flow owns this continuation") ||
+		!strings.Contains(msg.Content, "/resume "+run.ID) ||
+		strings.Contains(msg.Content, "safe and resumable") {
 		t.Fatalf("content = %q", msg.Content)
 	}
 
 	daemon.sweepRecoveryNotifications()
 	if len(recorder.messages) != 1 {
 		t.Fatalf("recovery notification was delivered twice: %+v", recorder.messages)
+	}
+}
+
+func TestAutomaticRecoveryDisableFallsBackToStructuredHandoff(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "inspect and continue safely")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_recovery_disabled", "WeChat"); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	daemon.DisableAutomaticRunRecovery = true
+	if recovered, err := store.MarkInterruptedRuns(ctx, 0); err != nil || recovered != 1 {
+		t.Fatalf("recover: count=%d err=%v", recovered, err)
+	}
+
+	daemon.sweepRecoveryNotifications()
+	if len(recorder.messages) != 1 {
+		t.Fatalf("messages=%+v", recorder.messages)
+	}
+	content := recorder.messages[0].Content
+	if !strings.Contains(content, "automatic continuation is disabled") ||
+		!strings.Contains(content, "Original goal: inspect and continue safely") ||
+		!strings.Contains(content, "/resume "+run.ID) {
+		t.Fatalf("content=%q", content)
+	}
+	queued, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(queued) != 0 {
+		t.Fatalf("disabled recovery queued work: %+v err=%v", queued, err)
 	}
 }
 
@@ -110,9 +146,63 @@ func TestAutomaticRecoveryQueuesOneExactParentBelowForeground(t *testing.T) {
 	}
 }
 
-func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
+func TestAutomaticRecoveryDisableCancelsPreviouslyScheduledRowBeforeClaim(t *testing.T) {
 	daemon, store, identity, task, _ := newApprovalTestServer(t)
 	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "continue after restart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_recovery_rollback", "WeChat"); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := store.MarkInterruptedRuns(ctx, 0); err != nil || recovered != 1 {
+		t.Fatalf("recover: count=%d err=%v", recovered, err)
+	}
+	items, err := store.ListPendingRecoveryNotifications(ctx, 10)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items=%+v err=%v", items, err)
+	}
+	if scheduled, err := daemon.scheduleAutomaticRunRecovery(ctx, items[0], false); err != nil || !scheduled {
+		t.Fatalf("schedule=%v err=%v", scheduled, err)
+	}
+	rows, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("queued=%+v err=%v", rows, err)
+	}
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	daemon.DisableAutomaticRunRecovery = true
+	if !daemon.cancelDisabledRecoveryQueue(ctx, identity, &rows[0]) {
+		t.Fatal("disabled recovery row was not handled")
+	}
+	if queued, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); err != nil || len(queued) != 0 {
+		t.Fatalf("recovery row remained claimable: %+v err=%v", queued, err)
+	}
+	if cancelled, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusCancelled); err != nil || len(cancelled) != 1 {
+		t.Fatalf("cancelled=%+v err=%v", cancelled, err)
+	}
+	if len(recorder.messages) != 1 || !strings.Contains(recorder.messages[0].Content, "automatic continuation is disabled") ||
+		!strings.Contains(recorder.messages[0].Content, "/resume "+run.ID) {
+		t.Fatalf("messages=%+v", recorder.messages)
+	}
+}
+
+func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
+	daemon, store, identity, _, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	// This scenario verifies watcher finalization, not approval parking. Use a
+	// clean task so scheduler timing cannot race the fixture's unrelated pending
+	// approval into waiting_user.
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Monitor external build",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_watch", "WeChat"); err != nil {
 		t.Fatal(err)
 	}

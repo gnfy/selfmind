@@ -6,6 +6,7 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 
 - [Daily Driver Readiness Plan](daily-driver-readiness-plan.md) - archived, en
 - [执行质量历史方案](execution-quality-plan.zh-CN.md) - archived, zh-CN
+- [Agent Execution and Recovery Closure](plans/agent-execution-recovery.md) - archived, en
 - [Documentation and Release-Gate Governance](plans/document-governance.md) - archived, en
 - [TUI Claude Code Alignment Record](tui-claude-code-alignment.md) - archived, en
 
@@ -21,6 +22,7 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 - [Verify Managed Gateway Ownership](adr/0002-verify-managed-gateway-ownership.md) - current, en
 - [Consume External Skill Packages](adr/0003-consume-external-skill-packages.md) - current, en
 - [Execution Concurrency Design](execution-concurrency-plan.md) - paused, zh-CN
+- [Fast Path for Verified Read-Only Evidence](fast-path-readonly-evidence.md) - current, en
 - [Skill Learning, Automatic Promotion, and Repair](skill-learning-and-repair.md) - current, en
 
 ## Guide
@@ -40,7 +42,6 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 
 ## Plan
 
-- [Agent Execution and Recovery Closure](plans/agent-execution-recovery.md) - active, en
 - [Daily-Driver Runtime Closure](plans/daily-driver-closure.md) - paused, en
 - [External Skill Package Adoption](plans/external-skill-packages.md) - paused, en
 

@@ -37,6 +37,7 @@ type workflowStepDef struct {
 	Name string `yaml:"name"`
 	If   string `yaml:"if"`
 	Run  string `yaml:"run"`
+	Uses string `yaml:"uses"`
 }
 
 func loadWorkflowContract(t *testing.T, name string) workflowContract {
@@ -121,6 +122,29 @@ func TestCIWorkflowSeparatesFastPRFromCompleteParallelMainGate(t *testing.T) {
 	for _, name := range []string{"npm-linux", "macos"} {
 		if run := workflowRunText(workflow.Jobs[name]); !strings.Contains(run, "smoke-npm-packages.sh") {
 			t.Fatalf("%s must smoke the packed npm distribution", name)
+		}
+	}
+}
+
+func TestWorkflowsUseNode24ActionMajors(t *testing.T) {
+	want := map[string]string{
+		"actions/checkout":          "v5",
+		"actions/setup-go":          "v6",
+		"actions/setup-node":        "v5",
+		"actions/upload-artifact":   "v6",
+		"actions/download-artifact": "v7",
+	}
+	for _, workflowName := range []string{"ci.yml", "release.yml"} {
+		workflow := loadWorkflowContract(t, workflowName)
+		for jobName, job := range workflow.Jobs {
+			for _, step := range job.Steps {
+				for action, major := range want {
+					if strings.HasPrefix(step.Uses, action+"@") && step.Uses != action+"@"+major {
+						t.Errorf("%s job %s step %q uses %s; want %s@%s to avoid the retired Node 20 runtime",
+							workflowName, jobName, step.Name, step.Uses, action, major)
+					}
+				}
+			}
 		}
 	}
 }

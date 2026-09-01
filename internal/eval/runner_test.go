@@ -158,6 +158,24 @@ func TestApplyEvalModelOverridePreservesProviderForModelOnlyOverride(t *testing.
 	}
 }
 
+func TestConfigureCredentiallessReplayRoutesPreservesPrimary(t *testing.T) {
+	t.Setenv("SELFMIND_EVAL_VCR", "replay")
+	cfg := &config.Config{Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{
+		Provider: "codex-cli", Model: "gpt-primary", Reasoning: "high",
+	}}}
+	configureCredentiallessReplayRoutes(cfg)
+	if got := cfg.EffectivePrimary(); got.Provider != "codex-cli" || got.Model != "gpt-primary" || got.Reasoning != "high" {
+		t.Fatalf("replay changed foreground selection: %+v", got)
+	}
+	if got := cfg.EffectiveAuxiliary(); got.Provider != evalReplayProvider || got.Model != evalReplayModel {
+		t.Fatalf("replay auxiliary route = %+v", got)
+	}
+	provider, ok := cfg.Providers.CustomProvider(evalReplayProvider)
+	if !ok || provider.Auth != "none" || provider.BaseURL != "http://127.0.0.1:1/v1" {
+		t.Fatalf("replay provider = %+v ok=%v", provider, ok)
+	}
+}
+
 func TestEvalTurnVCRContextDoesNotLeakIntoFlightRecording(t *testing.T) {
 	t.Setenv("SELFMIND_FLIGHT_RECORDER", "1")
 	t.Setenv("SELFMIND_EVAL_VCR", "")
@@ -278,6 +296,36 @@ func TestRunCaseCredentiallessReplayCrossesModelReadiness(t *testing.T) {
 	if result.Status != "passed" || !ChecksPassed(result.Checks) {
 		data, _ := os.ReadFile(output)
 		t.Fatalf("credentialless replay did not cross model readiness: result=%+v\n%s", result, data)
+	}
+}
+
+// TestNewRuntimeHarnessCredentiallessReplayBuildsAuxiliaryRoles covers the
+// clean-runner boundary that a foreground-only cassette test misses. Offline
+// replay must construct every role required by the case without inheriting an
+// operator provider, credential, or models.roles entry.
+func TestNewRuntimeHarnessCredentiallessReplayBuildsAuxiliaryRoles(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boots the full gateway harness")
+	}
+	_, cfgPath := writeRunnerFixtures(t)
+	c := writeRunnerCase(t, "credentialless_replay_roles", "continuity_mode: safe\n")
+	c.Turns[0].WaitForMaintenance = true
+	root, err := makeEvalTempRoot(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cleanupEvalTempRoot(root) })
+
+	harness, err := newRuntimeHarness(RunOptions{ConfigPath: cfgPath}, c, filepath.Join(root, "data"))
+	if err != nil {
+		t.Fatalf("newRuntimeHarness: %v", err)
+	}
+	defer harness.Close()
+	if harness.server.ContinuityResolver == nil {
+		t.Fatal("offline replay did not configure fast_classifier")
+	}
+	if harness.server.PostRunAnalyzer == nil {
+		t.Fatal("offline replay did not configure memory_extract")
 	}
 }
 

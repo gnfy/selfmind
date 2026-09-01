@@ -747,6 +747,11 @@ func (d *Server) taskDetailReply(ctx context.Context, identity *control.Identity
 			fmt.Fprintf(&sb, "- %s\n", f)
 		}
 	}
+	if recovery := d.latestRecoveryHandoffForTask(ctx, identity, task.ID); recovery != nil {
+		sb.WriteString("\n")
+		sb.WriteString(formatRecoveryHandoff(recovery))
+		sb.WriteString("\n")
+	}
 	sb.WriteString(taskUsage)
 	return strings.TrimSpace(sb.String()), nil
 }

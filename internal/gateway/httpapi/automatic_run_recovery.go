@@ -35,6 +35,9 @@ func (d *Server) scheduleAutomaticRunRecovery(ctx context.Context, item control.
 	if d == nil || d.Control == nil || strings.TrimSpace(item.RunID) == "" {
 		return false, nil
 	}
+	if d.DisableAutomaticRunRecovery {
+		return false, nil
+	}
 	decision, err := d.Control.AutomaticRunRecoveryDecisionForRun(ctx, item.TenantID, item.RunID)
 	if err != nil || !decision.Eligible {
 		return false, err

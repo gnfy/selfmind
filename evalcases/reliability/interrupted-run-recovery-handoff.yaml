@@ -1,0 +1,38 @@
+id: reliability_interrupted_run_recovery_handoff
+title: "interrupted work exposes one structured cross-endpoint recovery handoff"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+
+setup:
+  task:
+    title: "Cross-endpoint release check"
+    parked_runs:
+      - input: "Inspect the release state and finish only after verification"
+        status: interrupted
+
+turns:
+  - input: "/task 1"
+    channel: weixin
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains:
+    - "Recovery handoff:"
+    - "Original goal: Inspect the release state and finish only after verification"
+    - "Automatic continuation: not started"
+    - "Unlock:"
+    - "Resume: /resume run_"
+  must_not_contain:
+    - "safe and resumable"
+    - "secret"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

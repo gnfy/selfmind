@@ -103,7 +103,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: cbde49c402ef1d80
+    source_hash: a99bf130dcdb7075
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -160,6 +160,12 @@ documents:
     owner: authentication
     state: current
     language: en
+  - path: docs/fast-path-readonly-evidence.md
+    title: Fast Path for Verified Read-Only Evidence
+    class: decision
+    owner: execution
+    state: current
+    language: en
   - path: docs/identity-continuity.md
     title: Identity and Cross-Endpoint Continuity
     class: contract
@@ -206,12 +212,10 @@ documents:
     review_by: 2026-09-11
   - path: docs/plans/agent-execution-recovery.md
     title: Agent Execution and Recovery Closure
-    class: plan
+    class: archive
     owner: maintainers
-    state: active
+    state: archived
     language: en
-    approved_by: project-owner
-    review_by: 2026-09-15
   - path: docs/plans/external-skill-packages.md
     title: External Skill Package Adoption
     class: plan

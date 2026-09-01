@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"selfmind/internal/control"
@@ -184,8 +185,13 @@ func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 	}
 	server := &Server{Control: store, DefaultTenantID: "default"}
 	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli", errors.New("unexpected EOF"))
-	if outcome.Status != "interrupted" || outcome.CompletionReason != "provider_or_transport_error" || !outcome.Resumable {
+	if outcome.Status != "interrupted" || outcome.CompletionReason != "provider_or_transport_error" || !outcome.Resumable ||
+		!outcome.RecoveryScheduled || outcome.Recovery != nil {
 		t.Fatalf("outcome = %#v", outcome)
+	}
+	if content, errorText := interruptedRunResponse(task.Title, outcome); errorText != "" ||
+		!strings.Contains(content, "recovery run is queued") || strings.Contains(content, "unexpected EOF") {
+		t.Fatalf("response content=%q error=%q", content, errorText)
 	}
 	runs, err := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
 	if err != nil || len(runs) != 1 || runs[0].Status != "interrupted" {
@@ -218,6 +224,49 @@ func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 	}
 	if replay.Outcome.Status != "interrupted" || replay.Run.ID != run.ID {
 		t.Fatalf("maintenance replay = %#v", replay)
+	}
+}
+
+func TestFinalizeErroredRunReturnsStructuredHandoffWhenMutationCannotAutoResume(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "external release", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "release and verify")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordToolDispatch(ctx, identity.TenantID, control.ToolLedgerEntry{
+		RunID: run.ID, ToolCallID: "call-release", ToolName: "terminal", ArgsHash: "private-hash",
+		RetryClass: "side_effect", EffectID: "effect-release", Strategy: "mutate",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordToolOutcome(ctx, identity.TenantID, run.ID, "call-release", true); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Control: store, DefaultTenantID: "default"}
+	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli", errors.New("unexpected EOF"))
+	if outcome.RecoveryScheduled || outcome.Recovery == nil || outcome.Recovery.Reason != "known_effect_requires_user_resume" {
+		t.Fatalf("outcome=%#v", outcome)
+	}
+	content, errorText := interruptedRunResponse(task.Title, outcome)
+	if errorText != "" || !strings.Contains(content, "Recovery handoff:") ||
+		!strings.Contains(content, "Original goal: release and verify") ||
+		!strings.Contains(content, "/resume "+run.ID) || strings.Contains(content, "private-hash") {
+		t.Fatalf("response content=%q error=%q", content, errorText)
 	}
 }
 

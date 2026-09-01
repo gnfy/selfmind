@@ -387,17 +387,22 @@ type RunSteerResponse struct {
 const RunStatusVerificationPartial = "verification_partial"
 
 type RunOutcome struct {
-	Status           string               `json:"status"`
-	CompletionReason string               `json:"completion_reason,omitempty"`
-	Resumable        bool                 `json:"resumable,omitempty"`
-	Summary          string               `json:"summary,omitempty"`
-	Done             []string             `json:"done,omitempty"`
-	NextSteps        []string             `json:"next_steps,omitempty"`
-	Files            []string             `json:"files,omitempty"`
-	Tests            []string             `json:"tests,omitempty"`
-	Risks            []string             `json:"risks,omitempty"`
-	NeedApprove      bool                 `json:"need_approve,omitempty"`
-	Verification     *VerificationOutcome `json:"verification,omitempty"`
+	Status           string `json:"status"`
+	CompletionReason string `json:"completion_reason,omitempty"`
+	Resumable        bool   `json:"resumable,omitempty"`
+	// RecoveryScheduled means the daemon durably queued one exact-parent child.
+	// Recovery is present instead when automatic continuation did not start and
+	// the person needs an actionable, person-scoped handoff.
+	RecoveryScheduled bool                     `json:"recovery_scheduled,omitempty"`
+	Recovery          *control.RecoveryHandoff `json:"recovery,omitempty"`
+	Summary           string                   `json:"summary,omitempty"`
+	Done              []string                 `json:"done,omitempty"`
+	NextSteps         []string                 `json:"next_steps,omitempty"`
+	Files             []string                 `json:"files,omitempty"`
+	Tests             []string                 `json:"tests,omitempty"`
+	Risks             []string                 `json:"risks,omitempty"`
+	NeedApprove       bool                     `json:"need_approve,omitempty"`
+	Verification      *VerificationOutcome     `json:"verification,omitempty"`
 	// External records the independently observed result of a durable external
 	// operation. A failed deployment does not mean the SelfMind finalization run
 	// failed: the run may have correctly detected, recorded, and reported that

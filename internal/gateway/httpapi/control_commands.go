@@ -623,6 +623,9 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 	handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
 	plan := d.latestPlanForTask(ctx, task.ID)
 	card := formatTaskStatus(task, handoff, active, plan)
+	if recovery := d.latestRecoveryHandoffForTask(ctx, identity, task.ID); recovery != nil {
+		card += "\n\n" + formatRecoveryHandoff(recovery)
+	}
 	// A run blocked on an approval looks "stuck" unless the card says the run
 	// is waiting for the HUMAN (observed live: 15 minutes of staring at
 	// "running" while an ls_r approval sat pending). Surface it with the same

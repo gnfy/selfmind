@@ -582,6 +582,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	provider := firstNonEmpty(opts.Provider, c.Provider)
 	model := firstNonEmpty(opts.Model, c.Model)
 	applyEvalModelOverride(cfg, provider, model)
+	configureCredentiallessReplayRoutes(cfg)
 	// Isolated scenarios get a fresh data dir so control.db / memory start clean
 	// and never touch the user's real ~/.selfmind data.
 	isolatedEvalConfig(cfg, dataDirOverride)
@@ -944,6 +945,46 @@ func applyEvalModelOverride(cfg *config.Config, provider, model string) {
 		Provider:  provider,
 		Model:     model,
 		Reasoning: reasoning,
+	}
+	cfg.Models.Roles = nil
+}
+
+const (
+	evalReplayProvider = "eval-replay"
+	evalReplayModel    = "cassette"
+)
+
+// configureCredentiallessReplayRoutes gives clean offline runners a complete
+// in-memory provider route for auxiliary roles. The foreground keeps its
+// configured route (or the existing VCR-wrapped diagnostic provider), while
+// strict replay returns a cassette miss before the inert loopback transport
+// can run. Record/live eval keeps the operator's real provider and readiness
+// requirements.
+func configureCredentiallessReplayRoutes(cfg *config.Config) {
+	if cfg == nil || !llm.EvalVCRReplayMode() {
+		return
+	}
+	provider := config.CustomProvider{
+		Name:     evalReplayProvider,
+		BaseURL:  "http://127.0.0.1:1/v1",
+		Protocol: "openai-compatible",
+		Auth:     "none",
+		Model:    evalReplayModel,
+	}
+	found := false
+	for i := range cfg.Providers.Custom {
+		if strings.EqualFold(strings.TrimSpace(cfg.Providers.Custom[i].Name), evalReplayProvider) {
+			cfg.Providers.Custom[i] = provider
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.Providers.Custom = append(cfg.Providers.Custom, provider)
+	}
+	cfg.Models.Auxiliary = config.ModelSelectionConfig{
+		Provider: evalReplayProvider,
+		Model:    evalReplayModel,
 	}
 	cfg.Models.Roles = nil
 }

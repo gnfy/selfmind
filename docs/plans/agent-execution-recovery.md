@@ -18,9 +18,9 @@ remote Runner, or a permanent parallel loop.
 - Owner: SelfMind project owner
 - Approver: project owner
 - Review date: 2026-09-15
-- Status: active. This plan pauses
-  [`external-skill-packages.md`](external-skill-packages.md); that plan keeps
-  its existing scope and review date.
+- Status: implemented and closed on 2026-09-01. Release evidence and daily
+  operation continue through `docs/STATUS.md`; they do not keep an
+  implementation plan active indefinitely.
 
 ## Invariants
 
@@ -148,7 +148,14 @@ and watch waits. Eligible daemon/provider interruptions enqueue one
 idempotent, exact-parent recovery child below foreground priority. Unknown
 effects enter verification-only mode; the kernel exposes trusted read-only
 tools and refuses mutations before dispatch. Recovery-origin children do not
-recursively auto-recover, and historical Runs remain inert.
+recursively auto-recover, and historical Runs remain inert. When automatic
+continuation is ineligible, the control layer now projects one person-scoped
+recovery handoff containing the original goal, completed and unresolved plan
+steps, uncertain effects, attempted strategies, cause, unlock condition, and
+exact `/resume <run_id>` path. Immediate CLI/IM interruption results,
+notifications, `/status`, `/task`, and the current-task HTTP response consume
+that projection instead of returning a raw provider error or claiming that
+every interrupted task is safe.
 
 ## Batch 4: Structured durable waits
 
@@ -193,16 +200,20 @@ guardrail refusals, unknown-effect verification mode, wait-group outcomes, and
 post-failure approvals from durable events. Full local release gates and the
 installed npm v8-to-v9 migration smoke pass; CI and diverse multi-day
 daily-driver evidence determine whether the next beta may remove compatibility
-behavior.
+behavior. A deterministic cross-endpoint eval also pins the structured
+interrupted-Run handoff. Compatibility removal was not required to close this
+plan and remains evidence-gated rather than implied by elapsed time.
 
 ## Rollback
 
-New schema rows are additive and versioned. Runtime rollback disables creation
-and claiming of the new recovery contract; it does not delete columns or
-reinterpret historical rows. Because an older binary correctly refuses a newer
-database schema, replacing a v9 binary with a v8 binary is not a normal
-rollback. Restoring the verified pre-migration backup is disaster recovery and
-may discard newer user data.
+New schema rows are additive and versioned. Setting
+`gateway.automatic_run_recovery: false` stops both new automatic scheduling and
+claiming of already-scheduled recovery rows. The durable plan, effect ledger,
+structured handoff, and explicit `/resume` remain available; the rollback does
+not delete columns or reinterpret historical rows. Because an older binary
+correctly refuses a newer database schema, replacing a v9 binary with a v8
+binary is not a normal rollback. Restoring the verified pre-migration backup is
+disaster recovery and may discard newer user data.
 
 ## Evidence gates
 

@@ -206,15 +206,53 @@ jobs:
         if: needs.metadata.outputs.prerelease != 'true'
         run: go test ./...
 
-      - name: Race-sensitive runtime tests
-        if: needs.metadata.outputs.prerelease != 'true'
-        env:
-          CGO_ENABLED: "1"
-        run: go test -race -p=1 -timeout 12m ./internal/runpool ./internal/control ./internal/gateway/httpapi
-
       - name: Complete provider-offline release corpus
         if: needs.metadata.outputs.prerelease != 'true'
         run: go run ./cmd/selfmind selfcheck --profile local-full --skip-go
+
+  # The race gate runs beside the stable release gate instead of serially
+  # inside it (the single-job `-p=1` form spent 8-11 minutes alone). Separate
+  # jobs give each package the same process isolation `-p=1` provided, in the
+  # exact shape main CI already uses. Prerelease skips the steps and succeeds,
+  # mirroring the stable gate's reuse of the exact-SHA main CI result.
+  race:
+    name: Stable release race gate (${{ matrix.name }})
+    needs:
+      - metadata
+      - source
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: runpool
+            package: ./internal/runpool
+          - name: control
+            package: ./internal/control
+          - name: httpapi
+            package: ./internal/gateway/httpapi
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - name: Reuse successful main CI for prerelease
+        if: needs.metadata.outputs.prerelease == 'true'
+        run: echo "prerelease reuses the successful exact-SHA main CI gate"
+
+      - name: Checkout
+        if: needs.metadata.outputs.prerelease != 'true'
+        uses: actions/checkout@v5
+
+      - name: Set up Go
+        if: needs.metadata.outputs.prerelease != 'true'
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Race-sensitive runtime tests
+        if: needs.metadata.outputs.prerelease != 'true'
+        run: go test -race -timeout 12m ${{ matrix.package }}
 
   build:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
@@ -222,6 +260,7 @@ jobs:
       - metadata
       - source
       - test
+      - race
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -316,9 +355,6 @@ jobs:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
-
-      - name: Install trusted-publishing npm CLI
-        run: npm install --global npm@11.5.1
 
       - name: Download native binaries
         uses: actions/download-artifact@v7

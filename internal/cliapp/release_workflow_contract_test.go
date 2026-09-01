@@ -212,6 +212,31 @@ func TestReleaseWorkflowPublishesOnlyAfterPackageSmoke(t *testing.T) {
 		t.Fatalf("stable releases must rerun the full gate while prereleases reuse main CI; run steps:\n%s", run)
 	}
 
+	// The race gate runs as its own matrixed job beside the stable gate (the
+	// serial in-job form spent 8-11 minutes alone); binaries must still wait
+	// for BOTH, and prereleases skip the race steps the same way the stable
+	// gate skips its own.
+	raceJob, ok := workflow.Jobs["race"]
+	if !ok {
+		t.Fatal("release workflow has no stable race gate job")
+	}
+	if !containsNeed(raceJob.Needs, "source") {
+		t.Fatalf("stable race gate must wait for source verification; needs=%v", raceJob.Needs)
+	}
+	if run := workflowRunText(raceJob); !strings.Contains(run, "go test -race") || !strings.Contains(run, "reuses the successful exact-SHA main CI gate") {
+		t.Fatalf("stable race gate must run race tests and skip for prereleases; run steps:\n%s", run)
+	}
+	raceStep := workflowStep(t, raceJob, "Race-sensitive runtime tests")
+	if !strings.Contains(raceStep.If, "prerelease != 'true'") {
+		t.Fatalf("race tests must be gated to stable releases; if=%q", raceStep.If)
+	}
+	buildJob := workflow.Jobs["build"]
+	for _, need := range []string{"test", "race"} {
+		if !containsNeed(buildJob.Needs, need) {
+			t.Fatalf("release binaries must wait for the %s gate; needs=%v", need, buildJob.Needs)
+		}
+	}
+
 	packageJob := workflow.Jobs["npm"]
 	packageRun := workflowRunText(packageJob)
 	if strings.Contains(packageRun, "npm publish") {

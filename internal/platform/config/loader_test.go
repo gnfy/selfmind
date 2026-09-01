@@ -300,6 +300,27 @@ func TestEvolutionDefaultsToObservationOnly(t *testing.T) {
 	}
 }
 
+func TestAutomaticRunRecoveryDefaultsEnabledAndCanBeDisabled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := LoadConfig(Options{Path: path, CreateIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Gateway.AutomaticRunRecovery {
+		t.Fatal("automatic run recovery should default enabled")
+	}
+	if err := os.WriteFile(path, []byte("gateway:\n  automatic_run_recovery: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Gateway.AutomaticRunRecovery {
+		t.Fatal("explicit automatic_run_recovery=false was not preserved")
+	}
+}
+
 func TestSaveConfigWritesNewProviderSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := &Config{

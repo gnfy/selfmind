@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -17,6 +18,20 @@ import (
 )
 
 const DefaultTenantID = "default"
+
+const sqliteBusyPrimaryCode = 5
+
+type sqliteErrorCoder interface {
+	Code() int
+}
+
+// isSQLiteBusy recognizes SQLITE_BUSY and all of its extended result codes
+// (for example SQLITE_BUSY_SNAPSHOT=517) without depending on driver-specific
+// error text.
+func isSQLiteBusy(err error) bool {
+	var coded sqliteErrorCoder
+	return errors.As(err, &coded) && coded.Code()&0xff == sqliteBusyPrimaryCode
+}
 
 type Store struct {
 	db              *sql.DB
@@ -2375,7 +2390,7 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		var err error
 		for attempt := 0; attempt < 3; attempt++ {
 			run, err = s.startRunOnce(ctx, task, channel, inputSummary, options)
-			if err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") {
+			if err == nil || !isSQLiteBusy(err) {
 				return run, err
 			}
 			select {

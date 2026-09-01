@@ -310,12 +310,18 @@ The always-on daemon. CLI, IM, cron, and HTTP all converge on it.
 gateway:
   addr: "127.0.0.1:8765"       # bind address; a public bind REQUIRES a token
   token: ""                    # shared secret; mandatory for non-loopback binds
+  automatic_run_recovery: true # false stops daemon-owned child runs; explicit /resume remains available
   presence_idle_timeout: "0"   # deprecated compatibility key; presence follows client process liveness
   pending_notify_after: "15m"  # attached CLI: escalate an unanswered approval/question after T1; detached pushes immediately
   outbound_retention: "336h"   # retain terminal delivery history for 14 days; 0 disables pruning
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 ```
+
+`automatic_run_recovery: false` is the fail-closed operational rollback for
+daemon/provider interruption continuation. It does not discard durable plans,
+effect evidence, or recovery handoffs, and it does not alter historical rows.
+The person reviews `/task` and uses the exact `/resume <run_id>` path instead.
 
 Each IM platform is a subsection under `gateway`, all disabled by default:
 

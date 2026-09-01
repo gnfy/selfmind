@@ -265,12 +265,17 @@ memory 的行为配置不再选择模型角色。
 gateway:
   addr: "127.0.0.1:8765"       # 绑定地址；公网绑定必须配 token
   token: ""                    # 共享密钥；非 loopback 绑定时强制
+  automatic_run_recovery: true # false 停止 daemon 自动创建子 run；显式 /resume 仍可用
   presence_idle_timeout: "0"   # 已弃用的兼容配置；presence 只跟随客户端进程存活
   pending_notify_after: "15m"  # CLI 已附着时超过 T1 才补推；CLI 脱离后立即推送
   outbound_retention: "336h"   # 终态投递记录保留 14 天；0 表示禁用清理
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 ```
+
+`automatic_run_recovery: false` 是 daemon/provider 中断自动续跑的 fail-closed
+运维回滚开关。它不会丢弃持久计划、effect 证据或 recovery handoff，也不会改变
+历史数据语义。用户可先通过 `/task` 审查，再使用精确的 `/resume <run_id>` 路径。
 
 每个 IM 平台是 `gateway` 下的子段，默认全部关闭：
 

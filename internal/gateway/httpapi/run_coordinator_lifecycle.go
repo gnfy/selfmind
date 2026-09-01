@@ -108,10 +108,13 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 	}
 	if outcome.Status == "interrupted" && outcome.Resumable &&
 		(outcome.CompletionReason == "provider_or_transport_error" || outcome.CompletionReason == "daemon_recovery") {
-		_, _ = c.srv.scheduleAutomaticRunRecovery(finCtx, control.RecoveryNotification{
+		outcome.RecoveryScheduled, _ = c.srv.scheduleAutomaticRunRecovery(finCtx, control.RecoveryNotification{
 			TenantID: identity.TenantID, PersonID: identity.PersonID,
 			TaskID: task.ID, RunID: run.ID, Channel: channel, Title: task.Title,
 		}, false)
+		if !outcome.RecoveryScheduled {
+			outcome.Recovery = c.srv.recoveryHandoffForRun(finCtx, identity.TenantID, identity.PersonID, run.ID)
+		}
 	}
 	return outcome
 }

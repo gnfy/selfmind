@@ -265,15 +265,18 @@ func (d *Server) handleCurrentTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var handoff *control.Handoff
+	var recovery *control.RecoveryHandoff
 	var artifacts []control.Artifact
 	if task != nil {
 		handoff, _ = d.Control.LatestHandoff(r.Context(), task.ID)
+		recovery = d.latestRecoveryHandoffForTask(r.Context(), identity, task.ID)
 		artifacts, _ = d.Control.ListTaskArtifacts(r.Context(), task.ID, 100)
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"identity":   identity,
 		"task":       task,
 		"handoff":    handoff,
+		"recovery":   recovery,
 		"artifacts":  artifacts,
 		"active_run": formatActiveRunStatus(d.coordinator().currentActive(identity.PersonID)),
 	})

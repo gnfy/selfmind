@@ -3,8 +3,28 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 )
+
+type testSQLiteError struct {
+	code int
+}
+
+func (e testSQLiteError) Error() string { return fmt.Sprintf("sqlite error (%d)", e.code) }
+func (e testSQLiteError) Code() int     { return e.code }
+
+func TestIsSQLiteBusyRecognizesExtendedCodes(t *testing.T) {
+	for _, code := range []int{5, 261, 517, 773} {
+		err := fmt.Errorf("wrapped: %w", testSQLiteError{code: code})
+		if !isSQLiteBusy(err) {
+			t.Errorf("code %d was not recognized as SQLITE_BUSY", code)
+		}
+	}
+	if isSQLiteBusy(testSQLiteError{code: 6}) {
+		t.Fatal("SQLITE_LOCKED was misclassified as SQLITE_BUSY")
+	}
+}
 
 func continuityFixture(t *testing.T) (*Store, *IdentityContext, *Task) {
 	t.Helper()

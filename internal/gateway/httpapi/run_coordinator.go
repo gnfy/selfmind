@@ -466,8 +466,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			}, http.StatusOK
 		}
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, fmt.Errorf("materialize execution lease: %w", leaseErr), replay)
+		content, errorText := interruptedRunResponse(task.Title, outcome)
 		return api.MessageResponse{
-			Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks),
+			Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Error: errorText,
 			Turn:    messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary),
 			Context: d.messageContextBudget(llmUsageZero()),
 		}, http.StatusOK
@@ -568,13 +569,15 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(llmUsageZero())}, http.StatusOK
+		content, errorText := interruptedRunResponse(task.Title, outcome)
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(llmUsageZero())}, http.StatusOK
 	}
 
 	content, usage, eventSummary, hasFinalContent, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}, http.StatusOK
+		content, errorText := interruptedRunResponse(task.Title, outcome)
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}, http.StatusOK
 	}
 
 	// Finalization must survive turn cancellation. The turn ctx can be
@@ -940,6 +943,15 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		var err error
 		next, err = c.srv.Control.NextQueued(ctx, identity.TenantID, personID)
 		if err != nil || next == nil {
+			return
+		}
+		// The operational recovery rollback applies at both creation and claim
+		// time. A row scheduled before the daemon restarted with the switch off
+		// must not slip through merely because it is already durable.
+		if c.srv.DisableAutomaticRunRecovery && next.Class == control.QueueClassRecovery {
+			if c.srv.cancelDisabledRecoveryQueue(ctx, identity, next) {
+				continue
+			}
 			return
 		}
 		var claimed bool

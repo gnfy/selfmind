@@ -17,7 +17,6 @@ package httpapi
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -221,11 +220,8 @@ func (d *Server) sweepRecoveryNotifications() {
 			continue
 		}
 		identity := &control.IdentityContext{TenantID: item.TenantID, PersonID: item.PersonID, Platform: "cli"}
-		title := item.Title
-		if title == "" {
-			title = "a task"
-		}
-		content := fmt.Sprintf("SelfMind restarted while %q was running. The saved task is safe and resumable.\n\nReply continue to resume from durable progress.", title)
+		content := recoveryNotificationContent(item.Title,
+			d.recoveryHandoffForRun(ctx, item.TenantID, item.PersonID, item.RunID))
 		if d.coordinator().routePendingNotification(ctx, identity, item.Channel, delivery.Message{
 			TenantID: item.TenantID, PersonID: item.PersonID, TaskID: item.TaskID, RunID: item.RunID,
 			Content: content, Kind: "recovery",

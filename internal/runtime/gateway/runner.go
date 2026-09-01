@@ -419,6 +419,9 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// remains the only component allowed to create, steer, or resume a run.
 		ContinuityResolver: app.NewConfiguredContinuityResolver(mem, cfg, defaultTenantID),
 		ContinuityMode:     cfg.Continuity.EffectiveMode(),
+		// Operational rollback keeps durable recovery evidence readable while
+		// preventing the daemon from creating automatic exact-parent children.
+		DisableAutomaticRunRecovery: !cfg.Gateway.AutomaticRunRecovery,
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
 		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, prompts, controlStore),

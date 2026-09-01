@@ -34,6 +34,9 @@ storage:
 gateway:
   addr: "127.0.0.1:8765"
   token: ""
+  # Fail-closed rollback for daemon-owned continuation after an interruption.
+  # Durable evidence and explicit /resume remain available when disabled.
+  automatic_run_recovery: true
   # Deprecated compatibility key. Presence now means a live endpoint, not
   # recent keyboard activity; this value is ignored.
   presence_idle_timeout: "0"
@@ -635,6 +638,10 @@ type GatewayConfig struct {
 	URL          string `mapstructure:"url" yaml:"url,omitempty"`
 	Token        string `mapstructure:"token" yaml:"token,omitempty"`
 	DrainTimeout string `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
+	// AutomaticRunRecovery controls daemon-owned exact-parent continuation after
+	// daemon/provider interruptions. False is an operational rollback: durable
+	// evidence and explicit /resume stay available.
+	AutomaticRunRecovery bool `mapstructure:"automatic_run_recovery" yaml:"automatic_run_recovery"`
 	// PresenceIdleTimeout is a deprecated compatibility key. Presence now means
 	// endpoint liveness and never depends on keyboard activity.
 	PresenceIdleTimeout string `mapstructure:"presence_idle_timeout" yaml:"presence_idle_timeout,omitempty"`
@@ -1160,6 +1167,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intent.thresholds.direct", 0.8)
 	v.SetDefault("intent.thresholds.ask", 0.55)
 	v.SetDefault("continuity.mode", "safe")
+	v.SetDefault("gateway.automatic_run_recovery", true)
 	v.SetDefault("gateway.pending_notify_after", "15m")
 	v.SetDefault("gateway.outbound_retention", "336h")
 	v.SetDefault("exec_sandbox.enabled", true)

@@ -125,6 +125,11 @@ type Server struct {
 	// batching observations. Runtime advice requires separately verified
 	// comparison evidence; ordinary profiles never promote a candidate.
 	SelfEvolution control.EvolutionPolicy
+	// DisableAutomaticRunRecovery is the fail-closed operational rollback for
+	// daemon/provider interruption continuation. Durable plans, tool evidence,
+	// and explicit /resume remain available; only daemon-owned child scheduling
+	// stops. False is the production default and preserves minimal tests.
+	DisableAutomaticRunRecovery bool
 	// MemoryConsolidator is the background memory self-organization pass
 	// (docs/memory-governance.zh-CN.md §4). Nil disables governance entirely;
 	// the loop is started by the gateway runner via StartMemoryGovernance.

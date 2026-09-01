@@ -16,7 +16,10 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Cancel superseded runs only for pull requests. A cancelled main push run
+  # leaves that SHA without the successful exact-SHA CI evidence the release
+  # workflow's source gate requires, blocking any release from it.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CGO_ENABLED: "0"
@@ -25,6 +28,64 @@ env:
   SELFMIND_EVAL_OFFLINE: "1"
 
 jobs:
+  # Classifies the diff so documentation-only changes skip the platform,
+  # package, and race jobs. The core job (documentation contract, vet, build,
+  # full test) and the eval job always run, so every main SHA keeps
+  # build/test/corpus evidence. Fails open: any doubt (API error, truncated
+  # listing, force push, manual dispatch) counts as a code change.
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - name: Detect non-documentation changes
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "code=true" >> "${GITHUB_OUTPUT}"
+
+          files=""
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            files="$(gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}/files?per_page=100" \
+              --jq '.[] | .filename, (.previous_filename // empty)')" || exit 0
+          elif [[ "${{ github.event_name }}" == "push" ]]; then
+            before="${{ github.event.before }}"
+            if [[ -z "${before}" || "${before}" == "0000000000000000000000000000000000000000" ]]; then
+              exit 0
+            fi
+            files="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/compare/${before}...${GITHUB_SHA}" \
+              --jq '.files[] | .filename, (.previous_filename // empty)')" || exit 0
+            # The compare API caps the file listing; a huge diff is code.
+            count="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${before}...${GITHUB_SHA}" --jq '.files | length')" || exit 0
+            if [[ "${count}" -ge 300 ]]; then
+              exit 0
+            fi
+          else
+            exit 0
+          fi
+
+          if [[ -z "${files}" ]]; then
+            exit 0
+          fi
+          while IFS= read -r file; do
+            [[ -z "${file}" ]] && continue
+            case "${file}" in
+              docs/*|README.md|AGENTS.md|CLAUDE.md|CONTEXT.md) ;;
+              *)
+                exit 0
+                ;;
+            esac
+          done <<<"${files}"
+          echo "documentation-only change; platform, package, and race jobs are skipped"
+          echo "code=false" >> "${GITHUB_OUTPUT}"
+
   core:
     name: Linux core checks
     runs-on: ubuntu-latest
@@ -53,7 +114,8 @@ jobs:
 
   race:
     name: Race-sensitive runtime tests (${{ matrix.name }})
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: github.event_name != 'pull_request' && needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -119,6 +181,8 @@ jobs:
 
   npm-linux:
     name: Package and smoke npm on Linux x64
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -137,11 +201,15 @@ jobs:
           node-version: "22"
           package-manager-cache: false
 
+      # Build and stage only the platform this job installs; the release
+      # workflow still stages and verifies all four platforms.
       - name: Package and install npm distribution
-        run: bash scripts/smoke-npm-packages.sh 0.0.0-ci
+        run: bash scripts/smoke-npm-packages.sh 0.0.0-ci linux-x64
 
   macos:
     name: macOS build and test
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: macos-14
     timeout-minutes: 20
     steps:
@@ -172,8 +240,10 @@ jobs:
       - name: CI-owned platform eval (provider replay only)
         run: go run ./cmd/selfmind selfcheck --profile ci --skip-go
 
+      # Build and stage only the platform this job installs; the release
+      # workflow still stages and verifies all four platforms.
       - name: Package and install npm distribution
-        run: bash scripts/smoke-npm-packages.sh 0.0.0-ci
+        run: bash scripts/smoke-npm-packages.sh 0.0.0-ci darwin-arm64
 
       - name: Upload eval diagnostics
         if: failure()

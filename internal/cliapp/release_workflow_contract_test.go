@@ -1,6 +1,7 @@
 package cliapp
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 type workflowContract struct {
 	On          workflowTriggers          `yaml:"on"`
+	Concurrency map[string]any            `yaml:"concurrency"`
 	Permissions map[string]string         `yaml:"permissions"`
 	Jobs        map[string]workflowJobDef `yaml:"jobs"`
 }
@@ -119,9 +121,56 @@ func TestCIWorkflowSeparatesFastPRFromCompleteParallelMainGate(t *testing.T) {
 	if !strings.Contains(full.If, "event_name != 'pull_request'") || !strings.Contains(full.Run, "--profile local-full --skip-go") {
 		t.Fatalf("main eval is not the complete profile: if=%q run=%q", full.If, full.Run)
 	}
-	for _, name := range []string{"npm-linux", "macos"} {
-		if run := workflowRunText(workflow.Jobs[name]); !strings.Contains(run, "smoke-npm-packages.sh") {
-			t.Fatalf("%s must smoke the packed npm distribution", name)
+	for job, platform := range map[string]string{"npm-linux": "linux-x64", "macos": "darwin-arm64"} {
+		run := workflowRunText(workflow.Jobs[job])
+		if !strings.Contains(run, "smoke-npm-packages.sh") {
+			t.Fatalf("%s must smoke the packed npm distribution", job)
+		}
+		// CI smokes only the platform it installs; building the other three
+		// cross-compiled binaries was pure waste (release.yml still stages
+		// and verifies all four).
+		if !strings.Contains(run, "smoke-npm-packages.sh 0.0.0-ci "+platform) {
+			t.Fatalf("%s must smoke exactly its own platform %s; run steps:\n%s", job, platform, run)
+		}
+	}
+}
+
+// A cancelled main push run leaves that SHA without the successful exact-SHA
+// CI evidence release.yml's source gate requires, so superseded-run
+// cancellation must stay scoped to pull requests.
+func TestCIWorkflowCancelsOnlyPullRequestRuns(t *testing.T) {
+	workflow := loadWorkflowContract(t, "ci.yml")
+	cancel := fmt.Sprint(workflow.Concurrency["cancel-in-progress"])
+	if !strings.Contains(cancel, "github.event_name == 'pull_request'") {
+		t.Fatalf("ci concurrency cancel-in-progress = %q, want it scoped to pull_request events", cancel)
+	}
+}
+
+// Documentation-only changes skip the platform, package, and race jobs while
+// the core job (docs contract, vet, build, full test) and the eval corpus
+// keep running, so every main SHA still carries build/test/corpus evidence.
+// The classifier must fail open: doubt counts as a code change.
+func TestCIWorkflowSkipsPlatformJobsForDocsOnlyChanges(t *testing.T) {
+	workflow := loadWorkflowContract(t, "ci.yml")
+	changes, ok := workflow.Jobs["changes"]
+	if !ok {
+		t.Fatal("CI workflow has no changes classification job")
+	}
+	if run := workflowRunText(changes); !strings.Contains(run, `echo "code=true"`) {
+		t.Fatalf("changes classifier must default (fail open) to code=true; run steps:\n%s", run)
+	}
+	for _, name := range []string{"npm-linux", "macos", "race"} {
+		job := workflow.Jobs[name]
+		if !containsNeed(job.Needs, "changes") {
+			t.Fatalf("%s must depend on the changes classifier; needs=%v", name, job.Needs)
+		}
+		if !strings.Contains(job.If, "needs.changes.outputs.code == 'true'") {
+			t.Fatalf("%s must skip documentation-only changes; if=%q", name, job.If)
+		}
+	}
+	for _, name := range []string{"core", "eval"} {
+		if got := workflow.Jobs[name].If; got != "" {
+			t.Fatalf("%s must run unconditionally; if=%q", name, got)
 		}
 	}
 }

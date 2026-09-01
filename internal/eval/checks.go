@@ -20,6 +20,7 @@ type RunSnapshot struct {
 	ErrorCategories   map[string]int
 	TaskIDs           []string
 	RunIDs            []string
+	CreatedRunIDs     []string
 	Workspace         string
 	ExpectedWorkspace string
 	DurationSeconds   float64
@@ -95,7 +96,7 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 		add("require_no_task", len(uniqueStrings(snap.TaskIDs)) == 0, "rejected input must not create or attach a task")
 	}
 	if c.Expect.RequireNoRun {
-		add("require_no_run", len(uniqueStrings(snap.RunIDs)) == 0, "rejected input must not create a run")
+		add("require_no_run", len(uniqueStrings(snap.CreatedRunIDs)) == 0, "interaction must not create a run")
 	}
 	if c.Expect.RequireTaskSwitch {
 		add("require_task_switch", len(c.Turns) > 1 && len(uniqueStrings(snap.TaskIDs)) > 1, "new work without continuation evidence should create its own task, not attach to the parked one")

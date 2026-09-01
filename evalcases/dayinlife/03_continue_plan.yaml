@@ -9,10 +9,11 @@ channel: cli
 turns:
   - input: "帮我规划'给一个目录的图片批量加水印'的小工具,先给 3 步方案,不要写代码、不要看本地文件,每步一句话。"
   - input: "可以,继续,把第一步细化成开发清单,最多 4 条,仍然不要写代码。"
+# P2: turn 1 completes, so the follow-up owns its own root task; answer
+# continuity flows through the spine (content checks below).
 expect:
   status: completed
-  require_same_task: true
-  require_continuation: true
+  require_task_switch: true
   max_tool_calls: 0
   max_tool_errors: 2
   max_duration_seconds: 420

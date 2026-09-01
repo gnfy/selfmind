@@ -8,10 +8,14 @@ workspace: isolated
 channel: cli
 require_cassette: true
 
-# North-star scenario: the CLI turn proposes a plan; a bare `继续` arriving on
-# the weixin channel must continue the same task instead of starting a new one
-# or asking "continue what?". `require_same_task` + `require_continuation`
-# assert on task IDs from the structured response, not on model prose.
+# North-star scenario: the CLI turn proposes a plan and COMPLETES; a bare
+# `继续` arriving on the weixin channel continues the CONTENT via the
+# cross-endpoint spine. With simplification P2, completed work has no
+# resumable run, so the cue is ordinary new work owning its own root task —
+# `require_task_switch` pins that deterministic grouping while
+# `must_not_contain` pins the answer continuity ("continue what?" is a fail).
+# Run-precise resume of a WAITING run is covered by Go tests at ProcessMessage
+# (parent claim); a waiting-turn cassette is a recording follow-up.
 turns:
   - input: "帮我规划'重构配置加载'的方案,先给 3 步,每步一句话,不要写代码、不要看本地文件。"
     channel: cli
@@ -20,8 +24,7 @@ turns:
 
 expect:
   status: completed
-  require_same_task: true
-  require_continuation: true
+  require_task_switch: true
   max_tool_calls: 0
   max_tool_errors: 2
   max_duration_seconds: 420

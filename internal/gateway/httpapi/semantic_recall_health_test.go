@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -135,5 +136,32 @@ func TestSemanticRecallLiveTimeoutStopsPerTurnCalls(t *testing.T) {
 	defer expander.mu.Unlock()
 	if expander.calls != 1 {
 		t.Fatalf("degraded role made %d per-turn calls, want 1", expander.calls)
+	}
+}
+
+func TestSemanticRecallLiveFailureNoticeIsDebouncedAndNamesRoute(t *testing.T) {
+	expander := &semanticHealthExpander{err: context.DeadlineExceeded}
+	notices := make(chan string, 2)
+	h := NewSemanticRecallHealth(SemanticRecallHealthOptions{
+		Expander: expander, Initial: modelchange.RouteReadiness{Ready: true},
+		RouteLabel: "deepseek/deepseek-v4-flash",
+	})
+	h.SetNotifier(func(message string, _ bool) { notices <- message })
+	if got := h.Expand(context.Background(), "release"); got != "release" {
+		t.Fatalf("expanded=%q", got)
+	}
+	select {
+	case notice := <-notices:
+		t.Fatalf("first transient failure should be quiet, got %q", notice)
+	default:
+	}
+	h.markFailure(modelchange.ProbeResult{FailureClass: modelchange.FailureInfrastructure, Error: "retry timeout"})
+	select {
+	case notice := <-notices:
+		if !strings.Contains(notice, "semantic_recall (deepseek/deepseek-v4-flash)") {
+			t.Fatalf("notice=%q", notice)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second failure did not emit degraded notice")
 	}
 }

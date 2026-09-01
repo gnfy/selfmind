@@ -42,6 +42,11 @@ type ToolResultEnvelope struct {
 	ErrorCode           string
 	ErrorCategory       string
 	RecoveryHint        string
+	FailurePhase        string
+	Retryability        string
+	EffectState         string
+	StateChanged        bool
+	Alternatives        []string
 	Truncated           bool
 	Bytes               int
 	DiagnosticExcerpt   string
@@ -56,6 +61,14 @@ type stableToolFailure interface {
 	ToolErrorCategory() string
 	ModelSafeMessage() string
 	ToolRecoveryHint() string
+}
+
+type recoveryAwareToolFailure interface {
+	ToolFailurePhase() string
+	ToolRetryability() string
+	ToolEffectState() string
+	ToolStateChanged() bool
+	ToolAlternatives() []string
 }
 
 func packageToolResult(name, raw string) ToolResultEnvelope {
@@ -133,6 +146,23 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 			hint = value
 		}
 	}
+	failurePhase := ""
+	retryability := ""
+	effectState := ""
+	stateChanged := false
+	var alternatives []string
+	var recovery recoveryAwareToolFailure
+	if errors.As(err, &recovery) {
+		failurePhase = strings.TrimSpace(recovery.ToolFailurePhase())
+		retryability = strings.TrimSpace(recovery.ToolRetryability())
+		effectState = strings.TrimSpace(recovery.ToolEffectState())
+		stateChanged = recovery.ToolStateChanged()
+		for _, alternative := range recovery.ToolAlternatives() {
+			if value := strings.TrimSpace(alternative); value != "" {
+				alternatives = append(alternatives, value)
+			}
+		}
+	}
 	// Boundary enforcement: the typed envelope is opt-in per call site, so a
 	// tool that never wraps its error used to hand raw driver text straight to
 	// the model (observed live: "resolve work unit: sql: no rows in result set"
@@ -158,6 +188,18 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 	if category != "" && !userRejected && !alreadyClassified {
 		msg += fmt.Sprintf("\nerror_class: %s; hint: %s", category, hint)
 	}
+	if failurePhase != "" {
+		msg += "\nfailure_phase: " + failurePhase
+	}
+	if retryability != "" {
+		msg += "\nretryability: " + retryability
+	}
+	if effectState != "" {
+		msg += "\neffect_state: " + effectState
+	}
+	if len(alternatives) > 0 {
+		msg += "\nalternatives: " + strings.Join(alternatives, ", ")
+	}
 	msg = textutil.CleanUTF8(msg)
 	// A user rejection is a decision, not a failure. The generic
 	// diagnose-and-retry guidance below is exactly what made the model retry a
@@ -177,6 +219,11 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 		ErrorCode:     code,
 		ErrorCategory: category,
 		RecoveryHint:  hint,
+		FailurePhase:  failurePhase,
+		Retryability:  retryability,
+		EffectState:   effectState,
+		StateChanged:  stateChanged,
+		Alternatives:  append([]string(nil), alternatives...),
 		Truncated:     len(modelContent) > 4000,
 		Bytes:         len(msg),
 	}
@@ -273,6 +320,11 @@ func packageDispatchedToolFailureCtx(ctx context.Context, name, raw string, err 
 		ErrorCode:           errEnv.ErrorCode,
 		ErrorCategory:       errEnv.ErrorCategory,
 		RecoveryHint:        errEnv.RecoveryHint,
+		FailurePhase:        errEnv.FailurePhase,
+		Retryability:        errEnv.Retryability,
+		EffectState:         errEnv.EffectState,
+		StateChanged:        errEnv.StateChanged,
+		Alternatives:        append([]string(nil), errEnv.Alternatives...),
 		Truncated:           truncated || len(modelContent) > 6000,
 		Bytes:               len(raw),
 		DiagnosticExcerpt:   excerpt,

@@ -1,0 +1,85 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Confirmation",
+      "phase": "commentary"
+    },
+    {
+      "content": " received",
+      "phase": "commentary"
+    },
+    {
+      "content": ";",
+      "phase": "commentary"
+    },
+    {
+      "content": " I",
+      "phase": "commentary"
+    },
+    {
+      "content": "’m",
+      "phase": "commentary"
+    },
+    {
+      "content": " closing",
+      "phase": "commentary"
+    },
+    {
+      "content": " the",
+      "phase": "commentary"
+    },
+    {
+      "content": " run",
+      "phase": "commentary"
+    },
+    {
+      "content": " with",
+      "phase": "commentary"
+    },
+    {
+      "content": " no",
+      "phase": "commentary"
+    },
+    {
+      "content": " remaining",
+      "phase": "commentary"
+    },
+    {
+      "content": " open",
+      "phase": "commentary"
+    },
+    {
+      "content": " inputs",
+      "phase": "commentary"
+    },
+    {
+      "content": ".",
+      "phase": "commentary"
+    },
+    {
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_Xm67NjrwUar8mF2O7pQWKqII",
+          "Function": "finish_run",
+          "Args": "{\"done\":[\"Received the required user confirmation.\",\"Completed the task after confirmation.\"],\"next_steps\":[],\"risks\":[],\"status\":\"done\",\"summary\":\"Confirmation received and the run is complete.\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 7680,
+        "output_tokens": 95,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 7680,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

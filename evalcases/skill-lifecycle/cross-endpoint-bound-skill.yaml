@@ -25,6 +25,11 @@ setup:
   task:
     title: "Inspect the current release"
     default_skill: release-inspection
+    # P2: a bare continuation binds through the run ladder, so the bound task
+    # must hold an unclaimed resumable run for the IM cue to continue it.
+    parked_runs:
+      - input: "开始检查当前发布版本"
+        status: waiting_user
 
 turns:
   - input: "继续这个任务。按已经绑定的流程读取 release.txt，告诉我精确版本号；不要修改文件。"

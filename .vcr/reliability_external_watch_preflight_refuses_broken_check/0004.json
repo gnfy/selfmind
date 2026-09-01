@@ -2,377 +2,203 @@
   "method": "stream",
   "events": [
     {
-      "content": "The"
+      "content": "Observed",
+      "phase": "final_answer"
     },
     {
-      "content": " durable"
+      "content": " deploy",
+      "phase": "final_answer"
     },
     {
-      "content": " external"
+      "content": " status",
+      "phase": "final_answer"
     },
     {
-      "content": " watch"
+      "content": ":",
+      "phase": "final_answer"
     },
     {
-      "content": " named"
+      "content": " `",
+      "phase": "final_answer"
     },
     {
-      "content": " \""
+      "content": "SU",
+      "phase": "final_answer"
     },
     {
-      "content": "de"
+      "content": "CCEEDED",
+      "phase": "final_answer"
     },
     {
-      "content": "ploy"
+      "content": "`.\n\n",
+      "phase": "final_answer"
     },
     {
-      "content": " status"
+      "content": "`",
+      "phase": "final_answer"
     },
     {
-      "content": "\""
+      "content": "watch",
+      "phase": "final_answer"
     },
     {
-      "content": " could"
+      "content": "_external",
+      "phase": "final_answer"
     },
     {
-      "content": " not"
+      "content": "`",
+      "phase": "final_answer"
     },
     {
-      "content": " be"
+      "content": " was",
+      "phase": "final_answer"
     },
     {
-      "content": " registered"
+      "content": " called",
+      "phase": "final_answer"
     },
     {
-      "content": ":"
+      "content": " exactly",
+      "phase": "final_answer"
     },
     {
-      "content": " the"
+      "content": " once",
+      "phase": "final_answer"
     },
     {
-      "content": " registration"
+      "content": ",",
+      "phase": "final_answer"
     },
     {
-      "content": " attempt"
+      "content": " but",
+      "phase": "final_answer"
     },
     {
-      "content": " required"
+      "content": " preparation",
+      "phase": "final_answer"
     },
     {
-      "content": " an"
+      "content": " refused",
+      "phase": "final_answer"
     },
     {
-      "content": " approval"
+      "content": " the",
+      "phase": "final_answer"
     },
     {
-      "content": " for"
+      "content": " unsupported",
+      "phase": "final_answer"
     },
     {
-      "content": " the"
+      "content": " check",
+      "phase": "final_answer"
     },
     {
-      "content": " pre"
+      "content": " and",
+      "phase": "final_answer"
     },
     {
-      "content": "flight"
+      "content": " dispatched",
+      "phase": "final_answer"
     },
     {
-      "content": "/"
+      "content": " nothing",
+      "phase": "final_answer"
     },
     {
-      "content": "check"
+      "content": ".",
+      "phase": "final_answer"
     },
     {
-      "content": " of"
+      "content": " I",
+      "phase": "final_answer"
     },
     {
-      "content": " the"
+      "content": " then",
+      "phase": "final_answer"
     },
     {
-      "content": " polling"
+      "content": " read",
+      "phase": "final_answer"
     },
     {
-      "content": " command"
+      "content": " `",
+      "phase": "final_answer"
     },
     {
-      "content": " `"
+      "content": "status",
+      "phase": "final_answer"
     },
     {
-      "content": "self"
+      "content": ".txt",
+      "phase": "final_answer"
     },
     {
-      "content": "mind"
+      "content": "`",
+      "phase": "final_answer"
     },
     {
-      "content": "-no"
+      "content": " exactly",
+      "phase": "final_answer"
     },
     {
-      "content": "-s"
+      "content": " once",
+      "phase": "final_answer"
     },
     {
-      "content": "uch"
+      "content": " as",
+      "phase": "final_answer"
     },
     {
-      "content": "-release"
+      "content": " the",
+      "phase": "final_answer"
     },
     {
-      "content": "-cl"
+      "content": " required",
+      "phase": "final_answer"
     },
     {
-      "content": "i"
+      "content": " bounded",
+      "phase": "final_answer"
     },
     {
-      "content": " describe"
+      "content": " fallback",
+      "phase": "final_answer"
     },
     {
-      "content": " --"
+      "content": ".",
+      "phase": "final_answer"
     },
     {
-      "content": "status"
+      "content": " No",
+      "phase": "final_answer"
     },
     {
-      "content": "`,"
+      "content": " durable",
+      "phase": "final_answer"
     },
     {
-      "content": " and"
+      "content": " watch",
+      "phase": "final_answer"
     },
     {
-      "content": " that"
+      "content": " was",
+      "phase": "final_answer"
     },
     {
-      "content": " approval"
+      "content": " registered",
+      "phase": "final_answer"
     },
     {
-      "content": " timed"
-    },
-    {
-      "content": " out"
-    },
-    {
-      "content": " with"
-    },
-    {
-      "content": " no"
-    },
-    {
-      "content": " answer"
-    },
-    {
-      "content": " ("
-    },
-    {
-      "content": "n"
-    },
-    {
-      "content": "obody"
-    },
-    {
-      "content": " is"
-    },
-    {
-      "content": " at"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " keyboard"
-    },
-    {
-      "content": "),"
-    },
-    {
-      "content": " so"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " environment"
-    },
-    {
-      "content": " refused"
-    },
-    {
-      "content": " to"
-    },
-    {
-      "content": " register"
-    },
-    {
-      "content": " or"
-    },
-    {
-      "content": " execute"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " watch"
-    },
-    {
-      "content": "."
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": " did"
-    },
-    {
-      "content": " not"
-    },
-    {
-      "content": " run"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " polling"
-    },
-    {
-      "content": " command"
-    },
-    {
-      "content": " myself"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": " did"
-    },
-    {
-      "content": " not"
-    },
-    {
-      "content": " invent"
-    },
-    {
-      "content": " a"
-    },
-    {
-      "content": " substitute"
-    },
-    {
-      "content": " command"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": " am"
-    },
-    {
-      "content": " making"
-    },
-    {
-      "content": " no"
-    },
-    {
-      "content": " claim"
-    },
-    {
-      "content": " about"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " deployment"
-    },
-    {
-      "content": "'s"
-    },
-    {
-      "content": " state"
-    },
-    {
-      "content": " —"
-    },
-    {
-      "content": " it"
-    },
-    {
-      "content": " remains"
-    },
-    {
-      "content": " unknown"
-    },
-    {
-      "content": "."
-    },
-    {
-      "content": " The"
-    },
-    {
-      "content": " run"
-    },
-    {
-      "content": " has"
-    },
-    {
-      "content": " been"
-    },
-    {
-      "content": " finished"
-    },
-    {
-      "content": " as"
-    },
-    {
-      "content": " waiting"
-    },
-    {
-      "content": " on"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " user"
-    },
-    {
-      "content": ";"
-    },
-    {
-      "content": " no"
-    },
-    {
-      "content": " watch"
-    },
-    {
-      "content": " is"
-    },
-    {
-      "content": " currently"
-    },
-    {
-      "content": " active"
-    },
-    {
-      "content": "."
-    },
-    {
-      "finish_reason": "stop"
+      "content": ".",
+      "phase": "final_answer"
     },
     {
       "usage": {
-        "input_tokens": 11987,
-        "output_tokens": 122,
+        "input_tokens": 7412,
+        "output_tokens": 52,
         "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 11987,
+        "cache_miss_input_tokens": 7412,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true

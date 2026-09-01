@@ -1,0 +1,64 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Waiting",
+      "phase": "final_answer"
+    },
+    {
+      "content": " for",
+      "phase": "final_answer"
+    },
+    {
+      "content": " your",
+      "phase": "final_answer"
+    },
+    {
+      "content": " confirmation",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " Confirmation",
+      "phase": "final_answer"
+    },
+    {
+      "content": " is",
+      "phase": "final_answer"
+    },
+    {
+      "content": " the",
+      "phase": "final_answer"
+    },
+    {
+      "content": " only",
+      "phase": "final_answer"
+    },
+    {
+      "content": " open",
+      "phase": "final_answer"
+    },
+    {
+      "content": " input",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "usage": {
+        "input_tokens": 6828,
+        "output_tokens": 16,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 6828,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

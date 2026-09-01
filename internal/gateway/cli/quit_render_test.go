@@ -14,7 +14,7 @@ import (
 // one blank line: an empty string makes the renderer skip the frame entirely,
 // leaving the previous composer painted.
 func TestQuitBlanksActiveRegion(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width, model.height = 100, 30
 
 	if view := stripANSI(model.View()); !strings.Contains(view, "Ask SelfMind") {
@@ -48,7 +48,7 @@ func TestQuitBlanksActiveRegion(t *testing.T) {
 // TestExitCommandBlanksActiveRegion covers the /exit slash command, which is a
 // separate quit path from ctrl+c and regressed independently.
 func TestExitCommandBlanksActiveRegion(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width, model.height = 100, 30
 
 	var exit *slashCommand

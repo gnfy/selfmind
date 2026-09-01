@@ -24,6 +24,12 @@ type dailyQualityStats struct {
 	RunStatuses             map[string]int
 	CompletionReasons       map[string]int
 	ExternalStatuses        map[string]int
+	RecoveryScheduled       map[string]int
+	RecoveryRuns            int
+	RecoveryStatuses        map[string]int
+	RecoveryGuardrails      map[string]int
+	PostFailureApprovals    int
+	WaitGroupOutcomes       map[string]int
 	ProviderCalls           int
 	InputTokens             int64
 	OutputTokens            int64
@@ -86,6 +92,10 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		RunStatuses:            make(map[string]int),
 		CompletionReasons:      make(map[string]int),
 		ExternalStatuses:       make(map[string]int),
+		RecoveryScheduled:      make(map[string]int),
+		RecoveryStatuses:       make(map[string]int),
+		RecoveryGuardrails:     make(map[string]int),
+		WaitGroupOutcomes:      make(map[string]int),
 		ApprovalCounts:         make(map[string]int),
 		MemoryDisposition:      make(map[string]int),
 		ToolFailureClasses:     make(map[string]int),
@@ -110,10 +120,13 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			runOrigins[event.RunID] = strings.TrimSpace(payload.Origin)
 			if payload.Origin == runOriginApproval {
 				stats.ContinuationRuns++
+			} else if payload.Origin == runOriginRecovery {
+				stats.RecoveryRuns++
 			}
 		}
 	}
 	terminalRuns := make(map[string]bool)
+	failedToolRuns := make(map[string]bool)
 	for _, event := range events {
 		switch event.Type {
 		case "run.finished", "run.interrupted", "run.failed", "run.cancelled":
@@ -131,6 +144,8 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			stats.RunStatuses[status]++
 			if runOrigins[event.RunID] == runOriginApproval {
 				stats.ContinuationStatuses[status]++
+			} else if runOrigins[event.RunID] == runOriginRecovery {
+				stats.RecoveryStatuses[status]++
 			}
 			if reason := strings.TrimSpace(payload.Outcome.CompletionReason); reason != "" {
 				stats.CompletionReasons[reason]++
@@ -181,8 +196,12 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 				Tool          string `json:"tool"`
 				Error         string `json:"error"`
 				ErrorCategory string `json:"error_category"`
+				ErrorCode     string `json:"error_code"`
 			}
 			if json.Unmarshal(event.Payload, &p) == nil && strings.TrimSpace(p.Error) != "" {
+				if strings.TrimSpace(event.RunID) != "" {
+					failedToolRuns[event.RunID] = true
+				}
 				category := strings.TrimSpace(p.ErrorCategory)
 				if category == "" {
 					category = "unknown"
@@ -194,6 +213,9 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 					stats.ToolFailureClasses[category]++
 				}
 			}
+			if code := strings.TrimSpace(p.ErrorCode); code != "" && isRecoveryGuardrailCode(code) {
+				stats.RecoveryGuardrails[code]++
+			}
 			name := strings.TrimSpace(p.ToolName)
 			if name == "" {
 				name = strings.TrimSpace(p.Tool)
@@ -203,6 +225,31 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			}
 		case "approval.requested", "approval.approved", "approval.rejected", "approval.parked", "approval.expired", "approval.archived":
 			stats.ApprovalCounts[strings.TrimPrefix(event.Type, "approval.")]++
+			if event.Type == "approval.requested" && failedToolRuns[event.RunID] {
+				stats.PostFailureApprovals++
+			}
+		case "run.recovery_scheduled":
+			var p struct {
+				Mode string `json:"mode"`
+			}
+			if json.Unmarshal(event.Payload, &p) == nil {
+				mode := strings.TrimSpace(p.Mode)
+				if mode == "" {
+					mode = "unknown"
+				}
+				stats.RecoveryScheduled[mode]++
+			}
+		case "external_watch.group_resolved":
+			var p struct {
+				Mode   string `json:"mode"`
+				Status string `json:"status"`
+			}
+			if json.Unmarshal(event.Payload, &p) == nil {
+				key := strings.TrimSpace(p.Mode) + ":" + strings.TrimSpace(p.Status)
+				if key != ":" {
+					stats.WaitGroupOutcomes[strings.Trim(key, ":")]++
+				}
+			}
 		case "context.recall":
 			var p struct {
 				Candidates map[string]int `json:"candidates"`
@@ -339,6 +386,11 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	fmt.Fprintf(&sb, "Runs: %s\n", formatCountMap(stats.RunStatuses))
 	fmt.Fprintf(&sb, "Completion reasons: %s\n", formatCountMap(stats.CompletionReasons))
 	fmt.Fprintf(&sb, "External outcomes: %s\n", formatCountMap(stats.ExternalStatuses))
+	fmt.Fprintf(&sb, "Automatic recovery: scheduled %s; %d child run(s), outcomes %s; guardrails %s\n",
+		formatCountMap(stats.RecoveryScheduled), stats.RecoveryRuns,
+		formatCountMap(stats.RecoveryStatuses), formatCountMap(stats.RecoveryGuardrails))
+	fmt.Fprintf(&sb, "Durable waits: groups %s; post-failure approvals %d\n",
+		formatCountMap(stats.WaitGroupOutcomes), stats.PostFailureApprovals)
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
 	if stats.ContextSamples > 0 {
@@ -426,6 +478,16 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		fmt.Fprintf(&sb, "Evidence: LOWER BOUND — the window exceeded the %d-event safety cap after cursor pagination.\n", dailyReportEventLimit)
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func isRecoveryGuardrailCode(code string) bool {
+	switch strings.TrimSpace(code) {
+	case "recovery_attempt_repeated", "recovery_strategy_exhausted",
+		"unknown_effect_requires_observation", "verification_only_mutation_refused":
+		return true
+	default:
+		return false
+	}
 }
 
 func (d *Server) listDailyReportEvents(ctx context.Context, identity *control.IdentityContext, since time.Time) ([]control.Event, bool, error) {

@@ -269,8 +269,6 @@ copied. Install with `apt install bubblewrap`.
 
 ```yaml
 memory:
-  auto_extract_interval: 5       # extract durable facts at most every N turns
-  auto_extract_min_chars: 80     # skip trivially short turns
   semantic_recall: true          # attach related prior-work slices per turn
   use_memory_fence: true         # wrap recalled memory as untrusted background data
   governance:
@@ -450,7 +448,7 @@ delegation:           # multi-agent sub-tasks; empty values use the default mode
   max_iterations: 50
 ```
 
-## 10. Intent routing (advanced — rarely changed)
+## 10. Intent and work continuity (advanced)
 
 ```yaml
 intent:
@@ -458,10 +456,22 @@ intent:
   thresholds:
     direct: 0.8
     ask: 0.55
+continuity:
+  mode: "safe"         # shadow | safe | full | off
 ```
 
 Ordinary language always reaches the agent; these knobs only tune
 explicit-command and continuation detection. Defaults are fine for most users.
+
+`continuity.mode` controls the bounded `fast_classifier` decision over prior
+run cards. `shadow` records decisions but preserves the deterministic legacy
+path. `safe` (default) applies read-only progress, new-work decisions, and clear
+guidance to the currently active run, but asks before resuming historical work.
+`full` also applies a clear historical resume. `off` disables this model call;
+explicit IDs, reply metadata, `/resume`, `/choose`, `/new --run`, and standalone
+continue controls remain deterministic in every mode. The call uses the
+`models.roles.fast_classifier` override or `models.auxiliary`, with thinking
+disabled and a six-second total deadline.
 
 ## 11. MCP servers
 

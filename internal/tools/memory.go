@@ -32,7 +32,7 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 					},
 					"target": {
 						Type:        "string",
-						Description: "Which memory store: 'user' for user preferences/profile, 'memory' for technical notes/environment facts, 'pinned' for authoritative facts the user confirmed (always injected into prompts, immune to automatic maintenance). Optional for history and undo.",
+						Description: "Which memory store: 'user' for explicitly stated user preferences/profile, 'pinned' for authoritative facts the user confirmed (always injected into prompts, immune to automatic maintenance). Project/environment knowledge belongs in repository convention files, not person memory. 'memory' remains readable for historical rows only. Optional for history and undo.",
 						Enum:        []string{"user", "memory", "pinned"},
 					},
 					"content": {
@@ -97,12 +97,22 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 	ctx := context.Background()
 
 	switch action {
-	case "add":
+	case "add", "remember":
+		explicitUser := action == "remember"
+		if explicitUser && target == "" {
+			target = "user"
+		}
 		if target == "" {
 			return "", fmt.Errorf("target is required for add")
 		}
 		if content == "" {
 			return "", fmt.Errorf("content is required for add")
+		}
+		if target != "user" && target != "pinned" {
+			// Preference-only person memory (simplification P3): project and
+			// environment knowledge belongs in repository convention files
+			// (AGENTS.md and peers), run state in handoffs and artifacts.
+			return "", fmt.Errorf("person memory stores user preferences only (target \"user\", or \"pinned\" under explicit user authority); record project or environment knowledge in the repository's convention files instead")
 		}
 		if target != "pinned" && memory.ClassifyTransientContent(content) == memory.TransientConfirmed {
 			return "", fmt.Errorf("transient run/build state belongs in the task handoff or artifact, not long-term memory")
@@ -110,7 +120,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		// The pinned target is user authority by definition (/memory pin routes
 		// here); everything else the agent saves on its own initiative.
 		source := memory.SourceAgent
-		if target == "pinned" {
+		if target == "pinned" || explicitUser {
 			source = memory.SourceUser
 		}
 		fact := memory.Fact{
@@ -134,7 +144,11 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 				return "", fmt.Errorf("write canonical memory: %w", err)
 			}
 		}
-		recordMemoryLearningChangeScoped(tenantID, target, fact.Scope, "add", "", content, "memory_tool", args)
+		auditSource := "memory_tool"
+		if explicitUser {
+			auditSource = "memory_user"
+		}
+		recordMemoryLearningChangeScoped(tenantID, target, fact.Scope, "add", "", content, auditSource, args)
 		return fmt.Sprintf("Added to %s memory: %s", target, content), nil
 
 	case "remove":

@@ -69,34 +69,42 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 		t.Fatalf("async accept failed: status=%d resp=%+v", status, resp)
 	}
 
-	// The run executes in the background on the pre-labeled current task. A weak
-	// guess may stamp channel activity but must preserve the established task's
-	// lifecycle until post-run labeling confirms KEEP or MOVE.
+	// The run executes in the background on its OWN fresh task (P2): the
+	// unrelated current label keeps its lifecycle untouched, and the pointer
+	// (a UI projection) follows the task the run actually resolved.
+	var freshID string
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		after, err := store.GetTask(ctx, identity.TenantID, currentTask.ID)
+		tasks, err := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if after != nil && after.LastChannel == "send" {
-			if after.Status != currentTask.Status {
-				t.Fatalf("weak pre-label changed task lifecycle from %q to %q", currentTask.Status, after.Status)
+		for _, task := range tasks {
+			if task.ID != currentTask.ID && task.LastChannel == "send" {
+				freshID = task.ID
 			}
+		}
+		if freshID != "" {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("async run never became visible on the pre-labeled task: got %+v", after)
+			t.Fatalf("async run never became visible on its own task: got %+v", tasks)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// The pointer stays on the label the run resolved, so /status shows it.
+	after, err := store.GetTask(ctx, identity.TenantID, currentTask.ID)
+	if err != nil || after == nil || after.Status != currentTask.Status || after.LastChannel != "cli" {
+		t.Fatalf("the unrelated current label must stay untouched: %+v err=%v", after, err)
+	}
 	current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if current == nil || current.ID != currentTask.ID {
-		t.Fatalf("pointer should stay on the pre-labeled task; got %+v", current)
+	if current == nil || current.ID != freshID {
+		t.Fatalf("pointer should follow the run's own task %s; got %+v", freshID, current)
 	}
 }
 
-func TestWeakAttachWithSoleOpenLabelReconcilesWithoutAnalyzer(t *testing.T) {
+// The continuation ladder binds the sole waiting run; without any analyzer
+// the finalize path itself must commit the derived lifecycle onto the task.
+func TestSoleWaitingRunContinuationReconcilesWithoutAnalyzer(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
 	store, err := control.OpenStore(t.TempDir())
@@ -113,6 +121,13 @@ func TestWeakAttachWithSoleOpenLabelReconcilesWithoutAnalyzer(t *testing.T) {
 		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Only open work", Channel: "cli",
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := store.StartRun(ctx, task, "cli", "prepare the only open work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, waiting.ID, "waiting_user"); err != nil {
 		t.Fatal(err)
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}

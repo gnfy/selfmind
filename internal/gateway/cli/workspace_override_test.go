@@ -19,7 +19,7 @@ import (
 const switchReply = "Current workspace: game (ws_123)\n/mnt/d/wwwroot/ai/game"
 
 func TestWorkspaceSelectPinsSessionOverride(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	m := c.model
 
 	var captured []api.MessageRequest
@@ -89,7 +89,7 @@ func TestWorkspaceSelectPinsSessionOverride(t *testing.T) {
 }
 
 func TestWorkspaceSelectFailureSetsNoOverride(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	m := c.model
 	c.SetMessageProcessor(func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
 		return api.MessageResponse{Content: "No workspace matching 9. Run /workspaces to see the list."}, 200

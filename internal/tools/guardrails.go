@@ -4,9 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 type ToolGuardrails struct {
@@ -33,7 +36,7 @@ func (g *ToolGuardrails) Middleware(next ToolExecutor) ToolExecutor {
 		}
 		toolName, _ := args["_tool_name"].(string)
 		if reason := activeTurnPollingReason(toolName, args); reason != "" {
-			return "", fmt.Errorf("%s; register one durable watch_external check and end this turn instead", reason)
+			return "", fmt.Errorf("%s; choose a supported durable watch_external check, provider-native wait, or one bounded status observation; if none is available, park with an actionable blocker", reason)
 		}
 		runID := guardrailRunID(args)
 		key := guardrailKey(runID, toolName, args)
@@ -46,7 +49,7 @@ func (g *ToolGuardrails) Middleware(next ToolExecutor) ToolExecutor {
 		}
 		if noProgressToolCall(toolName, args) && rec.SameResults >= 3 {
 			g.mu.Unlock()
-			return "", fmt.Errorf("tool guardrail blocked a repeated no-progress check for %s; use the existing result or register watch_external for durable waiting", toolName)
+			return "", fmt.Errorf("tool guardrail blocked a repeated no-progress check for %s; use the existing result, choose a supported watch_external or provider-native wait, or park with an actionable blocker", toolName)
 		}
 		g.mu.Unlock()
 
@@ -111,12 +114,56 @@ func activeTurnPollingReason(toolName string, args map[string]interface{}) strin
 }
 
 func containsPollingLoop(command string) bool {
-	normalized := " " + strings.ToLower(strings.Join(strings.Fields(command), " ")) + " "
-	if strings.Contains(normalized, " sleep ") || strings.Contains(normalized, " until ") ||
-		strings.Contains(normalized, " while ") || strings.Contains(normalized, " watch ") {
-		return true
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
+	if err != nil || file == nil {
+		// This guard prevents token-burning wait loops, not unsafe execution.
+		// On parse failure only reject constructs that are independently strong
+		// evidence of an unbounded wait; the normal safety middleware still owns
+		// whether the command may execute.
+		normalized := " " + strings.ToLower(strings.Join(strings.Fields(command), " ")) + " "
+		return strings.Contains(normalized, " while ") || strings.Contains(normalized, " until ") ||
+			strings.Contains(normalized, " watch ") || strings.Contains(normalized, " for ((")
 	}
-	return strings.Contains(normalized, " for ") && strings.Contains(normalized, " do ")
+	activeWait := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if node == nil || activeWait {
+			return false
+		}
+		switch value := node.(type) {
+		case *syntax.WhileClause:
+			activeWait = true
+		case *syntax.ForClause:
+			activeWait = !finiteLiteralForLoop(value)
+		case *syntax.CallExpr:
+			if len(value.Args) == 0 {
+				return true
+			}
+			name, ok := staticObservationWord(value.Args[0])
+			activeWait = ok && strings.EqualFold(filepath.Base(name), "watch")
+		}
+		return !activeWait
+	})
+	return activeWait
+}
+
+// finiteLiteralForLoop distinguishes a bounded batch such as
+// `for id in a b; do aws ...; done` from C-style, positional, dynamic, or
+// interactive loops. Array length is capped so a generated giant literal list
+// cannot occupy an agent turn indefinitely.
+func finiteLiteralForLoop(clause *syntax.ForClause) bool {
+	if clause == nil || clause.Select {
+		return false
+	}
+	iter, ok := clause.Loop.(*syntax.WordIter)
+	if !ok || !iter.InPos.IsValid() || len(iter.Items) > 100 {
+		return false
+	}
+	for _, item := range iter.Items {
+		if _, ok := staticObservationWord(item); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func isRemoteStatusCommand(command string) bool {

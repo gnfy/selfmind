@@ -57,7 +57,8 @@ func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.I
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
 		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
 		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
-		ExecutionRoots: req.ExecutionRoots,
+		ExecutionRoots: req.ExecutionRoots, ReplyToRunID: req.ReplyToRunID,
+		ApprovalID: req.ApprovalID, ClarifyID: req.ClarifyID,
 	})
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}
@@ -88,6 +89,9 @@ func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.Iden
 		ApprovalMode:   req.ApprovalMode,
 		WorkspaceID:    req.WorkspaceID,
 		ExecutionRoots: req.ExecutionRoots,
+		ReplyToRunID:   req.ReplyToRunID,
+		ApprovalID:     req.ApprovalID,
+		ClarifyID:      req.ClarifyID,
 	})
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}
@@ -116,7 +120,8 @@ func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
 		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
 		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
-		ExecutionRoots: req.ExecutionRoots,
+		ExecutionRoots: req.ExecutionRoots, ReplyToRunID: req.ReplyToRunID,
+		ApprovalID: req.ApprovalID, ClarifyID: req.ClarifyID,
 	})
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "draining", "", "", err.Error())}

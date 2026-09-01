@@ -97,9 +97,12 @@ stays canonical.
   active tool correlation, grouping, and immutable commit effects. It caps the
   process frame at ten rows (or the smaller measured terminal budget), keeps
   the composer/status visible, and shares one Dot spinner at 10 FPS. Exactly
-  one tick chain runs during structured `model_wait`; tool execution, streamed
-  output, Approval, completion, and idle state stop it, while elapsed text
-  refreshes once per second. A final answer
+  one tick chain starts with the structured `thinking` phase and remains active
+  through `model_wait` heartbeats; Plan updates refresh in place without
+  creating an idle-looking gap. Tool execution, streamed output, Approval,
+  completion, and idle state stop it, while elapsed text refreshes once per
+  second. A waiting provider retains one measured activity row even when a Plan
+  and tall Composer consume the normal process budget. A final answer
   uses a dim `• ` gutter. Raw Markdown remains the `/copy` source. Full syntax
   highlighting and resize reflow of immutable scrollback remain deferred.
 - **Remaining (deferred follow-ups, not blocking default):**
@@ -122,12 +125,15 @@ Migrate the CLI/TUI from "app-owned full-viewport re-render" to a
   to the Composer, owns keyboard input, and temporarily preempts a pager without
   hiding the active process, Plan, draft, or status context.
 
-After guided setup, the startup identity band shows the accepted
-primary/background model pair and logical workspace without exposing
-launchd/systemd details. It uses full-width open horizontal rules with no side
-rails or background fill. `MAIN` combines model and provider, `/model` stays
-right-aligned when it fits, and all values wrap losslessly instead of being
-truncated on narrow terminals. Until
+After guided setup, the startup identity band shows Main, Background, every
+explicit role-model override, and the logical workspace without exposing
+launchd/systemd details. Each displayed route includes one normal-contrast
+sentence describing its responsibility; inherited roles are represented by the
+Background description instead of six duplicate rows. It uses full-width open
+horizontal rules with no side rails or background fill. `MAIN` combines model,
+provider, and explicit reasoning, `/model` stays right-aligned when it fits,
+and all values and descriptions wrap losslessly instead of being truncated on
+narrow terminals. Until
 the first successful non-command local task, it also shows one read-only starter
 task. That successful final outcome records the private first-use receipt once;
 slash commands, empty answers, and failed runs do not complete onboarding.
@@ -241,6 +247,11 @@ substrate). Document results in this file.
 - Tests: `TestHybridCommitMarksMessageImmutable`,
   `TestHybridActiveBlockShowsOnlyUncommitted`,
   `TestHybridViewDoesNotReRenderCommittedHistory`. Legacy tests unchanged.
+- A subsequent `WindowSizeMsg` clears the visible inline screen before the
+  bounded active region repaints. This is required because terminal reflow can
+  change physical rows before Bubble Tea updates its cached logical row count;
+  without the clean redraw, Composer and status rows are duplicated after a
+  container resize. Immutable history remains in native scrollback.
 - Pending interactive verification (H0 gate) before flipping the default.
 
 **H1 fix log:**

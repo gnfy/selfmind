@@ -37,6 +37,34 @@ func buildRunOutcome(content string) api.RunOutcome {
 	return out
 }
 
+// latestPlanForRun returns one run's newest plan snapshot. Continuations
+// re-inject only the parent run's plan (P0 run-scoped context); the task-wide
+// variant below remains for display surfaces (/status, digest).
+func (d *Server) latestPlanForRun(ctx context.Context, tenantID, personID, taskID, runID string) []taskPlanStep {
+	if d == nil || d.Control == nil || personID == "" || taskID == "" || runID == "" {
+		return nil
+	}
+	events, err := d.Control.ListRunEvents(ctx, tenantID, personID, taskID, runID, 50)
+	if err != nil {
+		return nil
+	}
+	for _, event := range events {
+		if event.Type != "plan.updated" {
+			continue
+		}
+		var payload struct {
+			Plan []taskPlanStep `json:"plan"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			continue
+		}
+		if len(payload.Plan) > 0 {
+			return payload.Plan
+		}
+	}
+	return nil
+}
+
 func (d *Server) latestPlanForTask(ctx context.Context, taskID string) []taskPlanStep {
 	if d == nil || d.Control == nil || taskID == "" {
 		return nil

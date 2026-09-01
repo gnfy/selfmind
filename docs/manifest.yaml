@@ -75,7 +75,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: 7c57dcf3e276f0c5
+    source_hash: af41df18b1e9e676
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -89,7 +89,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 8e0e717f6c6dda80
+    source_hash: f845a2b8ee121aa4
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -103,7 +103,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: 410e2ff0b8e8f6d8
+    source_hash: cbde49c402ef1d80
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -129,7 +129,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/development-guide.md
-    source_hash: 381184249e3fd7b5
+    source_hash: 4988ec18975ced9f
   - path: docs/eval-loop.md
     title: Evaluation Loop
     class: reference
@@ -204,11 +204,19 @@ documents:
     language: en
     approved_by: project-owner
     review_by: 2026-09-11
+  - path: docs/plans/agent-execution-recovery.md
+    title: Agent Execution and Recovery Closure
+    class: plan
+    owner: maintainers
+    state: active
+    language: en
+    approved_by: project-owner
+    review_by: 2026-09-15
   - path: docs/plans/external-skill-packages.md
     title: External Skill Package Adoption
     class: plan
     owner: maintainers
-    state: active
+    state: paused
     language: en
     approved_by: project-owner
     review_by: 2026-09-25
@@ -225,7 +233,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: 0036d2ee7a5198ef
+    source_hash: c07280a5e3df615e
   - path: docs/skill-learning-and-repair.md
     title: Skill Learning, Automatic Promotion, and Repair
     class: decision
@@ -275,5 +283,7 @@ documents:
     state: current
     language: en
 excluded_documents:
+  - path: docs/task-run-memory-simplification.zh-CN.md
+    reason: Private Chinese implementation analysis and migration record; current public behavior lives in the English Work Timeline and STATUS documents.
   - path: docs/vision-saas-enterprise.zh-CN.md
     reason: Private strategy and enterprise vision; intentionally absent from public source distributions.

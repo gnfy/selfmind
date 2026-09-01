@@ -12,14 +12,18 @@ import (
 )
 
 type Case struct {
-	ID            string `yaml:"id" json:"id"`
-	Title         string `yaml:"title" json:"title,omitempty"`
-	Suite         string `yaml:"suite" json:"suite,omitempty"`
-	Workspace     string `yaml:"workspace" json:"workspace,omitempty"`
-	Provider      string `yaml:"provider" json:"provider,omitempty"`
-	Model         string `yaml:"model" json:"model,omitempty"`
-	Channel       string `yaml:"channel" json:"channel,omitempty"`
-	RecordContent bool   `yaml:"record_content" json:"record_content,omitempty"`
+	ID        string `yaml:"id" json:"id"`
+	Title     string `yaml:"title" json:"title,omitempty"`
+	Suite     string `yaml:"suite" json:"suite,omitempty"`
+	Workspace string `yaml:"workspace" json:"workspace,omitempty"`
+	Provider  string `yaml:"provider" json:"provider,omitempty"`
+	Model     string `yaml:"model" json:"model,omitempty"`
+	Channel   string `yaml:"channel" json:"channel,omitempty"`
+	// ContinuityMode opts a case into the production fast-classifier ingress
+	// seam. It is explicit so existing cassette call counts stay stable while
+	// continuity-specific cases exercise shadow/safe/full behavior.
+	ContinuityMode string `yaml:"continuity_mode,omitempty" json:"continuity_mode,omitempty"`
+	RecordContent  bool   `yaml:"record_content" json:"record_content,omitempty"`
 	// ModelRequired distinguishes agent-backed scenarios from deterministic
 	// gateway/control-plane scenarios. It defaults to true. A false value lets
 	// selfcheck execute the case strictly offline without a VCR cassette; if the
@@ -98,6 +102,19 @@ type Turn struct {
 	// identity isolation: person-scoped task/run state must not leak across
 	// accounts. Empty means the case's default eval identity.
 	PlatformUserID string `yaml:"platform_user_id" json:"platform_user_id,omitempty"`
+	// ReplyToTurn marks this turn as a platform reply to the run started by an
+	// EARLIER turn (1-based turn number). The runner resolves it to that turn's
+	// actual run id and sends it as MessageRequest.ReplyToRunID — the
+	// structured reply edge cross-endpoint cases assert. 0 means no reply
+	// metadata.
+	ReplyToTurn int    `yaml:"reply_to_turn" json:"reply_to_turn,omitempty"`
+	ApprovalID  string `yaml:"approval_id,omitempty" json:"approval_id,omitempty"`
+	ClarifyID   string `yaml:"clarify_id,omitempty" json:"clarify_id,omitempty"`
+	// WaitForMaintenance runs one immediately-due post-run maintenance pass
+	// before the next turn. It is opt-in because wiring maintenance into every
+	// historical case would change the model-call cassette contract. Use it for
+	// scenarios whose next turn must observe asynchronous preference intake.
+	WaitForMaintenance bool `yaml:"wait_for_maintenance,omitempty" json:"wait_for_maintenance,omitempty"`
 }
 
 type Expectations struct {
@@ -174,6 +191,14 @@ func (c *Case) normalize() error {
 	if strings.TrimSpace(c.Channel) == "" {
 		c.Channel = "cli"
 	}
+	c.ContinuityMode = strings.ToLower(strings.TrimSpace(c.ContinuityMode))
+	if c.ContinuityMode != "" {
+		switch c.ContinuityMode {
+		case "shadow", "safe", "full", "off":
+		default:
+			return fmt.Errorf("continuity_mode must be shadow, safe, full, or off")
+		}
+	}
 	for i := range c.Turns {
 		c.Turns[i].Input = strings.TrimSpace(c.Turns[i].Input)
 		c.Turns[i].Channel = strings.TrimSpace(c.Turns[i].Channel)
@@ -191,6 +216,11 @@ func (c *Case) normalize() error {
 	c.Turns = filtered
 	if len(c.Turns) == 0 {
 		return fmt.Errorf("at least one turn is required")
+	}
+	for i, turn := range c.Turns {
+		if turn.ReplyToTurn < 0 || turn.ReplyToTurn > i {
+			return fmt.Errorf("turn %d: reply_to_turn must name an earlier turn (1..%d)", i+1, i)
+		}
 	}
 	if !c.RequiresModel() && c.RequireCassette {
 		return fmt.Errorf("model_required: false cannot be combined with require_cassette: true")

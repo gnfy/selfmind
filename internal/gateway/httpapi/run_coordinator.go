@@ -103,6 +103,27 @@ func (c *RunCoordinator) currentActive(personID string) *activeRun {
 	return &copy
 }
 
+// setActiveDeliveryOverride moves only the final-result destination of the
+// exact active run to the authenticated endpoint that asked. It cannot name an
+// arbitrary account, and a CLI has no push sender so it is not a valid target.
+func (c *RunCoordinator) setActiveDeliveryOverride(personID, runID string, req api.MessageRequest) bool {
+	if c == nil || c.srv == nil || c.srv.Delivery == nil || strings.EqualFold(strings.TrimSpace(req.Platform), "cli") ||
+		!c.srv.Delivery.SupportsPlatform(req.Platform) {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	active := c.active[personID]
+	if active == nil || strings.TrimSpace(active.RunID) == "" || active.RunID != strings.TrimSpace(runID) {
+		return false
+	}
+	active.DeliveryOverride = true
+	active.DeliveryPlatform = strings.TrimSpace(req.Platform)
+	active.DeliveryPlatformUserID = strings.TrimSpace(req.PlatformUserID)
+	active.DeliveryChannel = strings.TrimSpace(req.Channel)
+	return active.DeliveryPlatform != "" && active.DeliveryPlatformUserID != "" && active.DeliveryChannel != ""
+}
+
 func (c *RunCoordinator) stopActive(personID string) *activeRun {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -224,12 +245,38 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	task, attach, err := c.resolveTask(ctx, identity, req, intent)
 	if err != nil {
-		if strings.Contains(err.Error(), "no task to continue") {
-			return api.MessageResponse{Identity: identity, Content: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusOK
+		var candidates *continuationCandidatesError
+		if errors.As(err, &candidates) {
+			return c.crossTaskCandidatesResponse(ctx, identity, req, candidates.runs), http.StatusOK
 		}
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+		status := http.StatusInternalServerError
+		if strings.TrimSpace(req.ReplyToRunID) != "" || strings.TrimSpace(req.ApprovalID) != "" || strings.TrimSpace(req.ClarifyID) != "" {
+			status = http.StatusConflict
+		}
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, status
 	}
 	attach.effectKey = strings.TrimSpace(req.EffectKey)
+	// Resolve the parent run READ-ONLY before anything is created: every full-context
+	// channel (selector, resume block, loop checkpoint) receives this one
+	// answer, and an ambiguous person-typed continuation stops here with a
+	// deterministic candidate list instead of starting a model run under a
+	// guessed parent.
+	var parentRes parentRunResolution
+	if task != nil && attach.resolvedPolicy().ContextMode == attachContextFull {
+		if attach.parentRunID != "" {
+			// Structured evidence (reply/approval) named the exact run: resolve
+			// only it — the task's other unresolved runs are irrelevant here.
+			parentRes, err = c.resolveExplicitParent(ctx, identity, task, attach.parentRunID)
+		} else {
+			parentRes, err = c.resolveParentRun(ctx, identity, task)
+			if parentRes.ambiguous() && attach.selectsPriorRun() && isUserOriginTurn(ctx, req) {
+				return c.parentCandidatesResponse(ctx, identity, req, task, parentRes.candidates), http.StatusOK
+			}
+		}
+		if err != nil {
+			return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusConflict
+		}
+	}
 	// Keep the per-person current_task pointer on the task this run actually
 	// attached to. Channel-scoped resolution (and async sends in particular)
 	// can pick a task that differs from the pointer; without this sync,
@@ -246,11 +293,31 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
 
+	// A deliberate continuation claims its resolved parent in the SAME
+	// transaction that creates the child run (P1: creation and ownership are
+	// one atomic step; the unique parent index is the cross-process backstop).
+	// Explicit task/resume attaches also claim an exact parent; ambiguity stops
+	// before run creation.
+	parent := parentRes.exact()
+	claimParentID := ""
+	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery) {
+		claimParentID = parent.ID
+	}
 	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
-		WorkKey:               attach.workKey,
-		PreserveTaskLifecycle: attach.resolvedPolicy().PreserveTaskLifecycle,
-		ExecutionRoots:        req.ExecutionRoots,
+		WorkKey:        attach.workKey,
+		ExecutionRoots: req.ExecutionRoots,
+		ParentRunID:    claimParentID,
 	})
+	if errors.Is(err, control.ErrParentRunClaimed) || errors.Is(err, control.ErrParentRunNotResumable) {
+		// A concurrent continuation claimed the parent first (or it stopped
+		// being resumable). No fork: nothing was created; report the claimed
+		// state deterministically instead of running under shared ownership.
+		content := fmt.Sprintf("That work was just claimed by another continuation (%s). Use /status to see the active run, or /task %s runs to inspect the timeline.", shortRunID(claimParentID), shortTaskID(task.ID))
+		return api.MessageResponse{
+			Identity: identity, Task: task, Content: content,
+			Turn: messageTurn("waiting_user", task.Status, "idle", task.ID, "", content),
+		}, http.StatusOK
+	}
 	if err != nil {
 		if attach.created {
 			_, _ = d.Control.DeleteEmptyTask(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, task.ID)
@@ -294,8 +361,12 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if origin := runOrigin(ctx, req); origin != "" {
 		startedPayload["origin"] = origin
 	}
-	if approvalID := strings.TrimSpace(req.SourceApprovalID); approvalID != "" {
+	approvalID := strings.TrimSpace(req.ApprovalID)
+	if approvalID != "" {
 		startedPayload["source_approval_id"] = approvalID
+	}
+	if clarifyID := strings.TrimSpace(req.ClarifyID); clarifyID != "" {
+		startedPayload["source_clarify_id"] = clarifyID
 	}
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
@@ -305,6 +376,22 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Channel:    req.Channel,
 		Payload:    mustJSON(startedPayload),
 	})
+	if run.ParentRunID != "" {
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID:     task.ID,
+			RunID:      run.ID,
+			Type:       "run.resumed",
+			Visibility: "task",
+			Channel:    req.Channel,
+			Payload: mustJSON(map[string]interface{}{
+				"parent_run_id": run.ParentRunID,
+				"claimed":       true,
+				"reason":        intent.Reason,
+				"confidence":    intent.Confidence,
+				"work_key":      strings.ToUpper(strings.TrimSpace(attach.workKey)),
+			}),
+		})
+	}
 	c.recordTaskResolution(ctx, identity, run, req, task, attach, task.ID, "pending", false)
 	if attach.workKey != "" {
 		d.appendLabelAssignedEvent(ctx, task.ID, run.ID, map[string]interface{}{
@@ -408,6 +495,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		ExecutionScopeKey: runScopeKey,
 		ExecutionLane:     "main",
 		AttachmentMode:    string(attach.reason),
+		RecoveryMode:      strings.TrimSpace(req.RecoveryMode),
 		SkillMutationMode: kernel.SkillMutationCandidateOnly,
 	}
 	if run != nil {
@@ -419,54 +507,12 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	if lease != nil {
 		invocationScope.LeaseID = lease.ID
+		invocationScope.EnvironmentGeneration = lease.EnvironmentGeneration
 	}
 	ctx = kernel.WithToolInvocationScope(ctx, invocationScope)
+	ctx = kernel.WithRunExecutionState(ctx, kernel.NewRunExecutionState())
 	if run != nil {
-		ctx = tools.WithPlanProjectionSink(ctx, func(callCtx context.Context, steps []tools.PlanStep) ([]tools.PlanWorkUnitIdentity, error) {
-			projected := make([]workUnitProjectionStep, 0, len(steps))
-			for _, step := range steps {
-				projected = append(projected, workUnitProjectionStep{
-					Step: step.Step, Status: step.Status, RelatedTaskID: step.RelatedTaskID,
-					WorkUnitID: step.WorkUnitID, WorkUnit: step.WorkUnit,
-				})
-			}
-			plan := projectWorkUnitPlan(projected)
-			units, err := c.srv.Control.SyncRunWorkUnits(callCtx, identity.TenantID, run.ID, plan)
-			if err != nil {
-				return nil, err
-			}
-			out := make([]tools.PlanWorkUnitIdentity, 0, len(units))
-			for _, unit := range units {
-				projectedIdentity := tools.PlanWorkUnitIdentity{
-					ID: unit.ID, Sequence: unit.Sequence, Goal: unit.GoalDigest,
-					PlanStatus: unit.PlanStatus, RelatedTaskID: unit.RelatedTaskID,
-				}
-				if unit.PlanStatus == "in_progress" {
-					bindingBlocksCandidates := false
-					if unit.RelatedTaskID != "" {
-						binding, bindingErr := c.srv.Control.GetTaskSkillBinding(callCtx, identity.TenantID, identity.PersonID, unit.RelatedTaskID)
-						if bindingErr == nil && binding != nil && binding.State != control.TaskSkillBindingReleased {
-							bindingBlocksCandidates = true
-							if binding.State == control.TaskSkillBindingActive {
-								projectedIdentity.BoundSkillName = binding.SkillName
-							}
-						}
-					}
-					if !bindingBlocksCandidates {
-						candidateArgs := tools.WithSkillStorage(map[string]interface{}{
-							"_tenant_id": identity.TenantID, "_context": callCtx, "_invocation_scope": invocationScope,
-						}, c.srv.SkillStorage)
-						_, catalog, _, prepared := c.prepareSkillCandidateSnapshot(
-							callCtx, identity, run.ID, unit.ID, unit.GoalDigest, invocationScope, candidateArgs)
-						if prepared {
-							projectedIdentity.SkillCatalog = catalog
-						}
-					}
-				}
-				out = append(out, projectedIdentity)
-			}
-			return out, nil
-		})
+		ctx = tools.WithRunPlanProjection(ctx, c.newRunPlanProjection(identity, run, invocationScope))
 	}
 	if workspace != nil && workspace.LocalPath != "" {
 		contextRoots := executionenv.ContextRootPaths(req.ExecutionRoots)
@@ -495,10 +541,15 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if sink := c.newLoopCheckpointSink(identity, task, run); sink != nil {
 		ctx = kernel.WithLoopCheckpointSink(ctx, sink)
 	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode))
-	ctx = c.withLoopCheckpointResume(ctx, identity, task, run, intent)
-	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.ExecutionRoots, req.Attachments)
-	agentInput = c.withResumeContext(ctx, identity, task, run, intent, attach.claimsPriorRuns(), attach.workKey, agentInput)
+	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode, parent))
+	ctx = c.withLoopCheckpointResume(ctx, identity, task, parent, intent)
+	promptInput := req.Content
+	if continuity := strings.TrimSpace(req.ContinuityContext); continuity != "" {
+		promptInput = "[SelfMind read-only related-work status]\n" + continuity +
+			"\n[/SelfMind read-only related-work status]\n\n[Current user request]\n" + req.Content
+	}
+	agentInput := c.withGatewayContext(promptInput, identity, task, workspace, req.ExecutionRoots, req.Attachments)
+	agentInput = c.withResumeContext(ctx, identity, task, parent, intent, attach.claimsPriorRuns(), agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
 	// (crash-orphaned) side-effect tool calls must verify before repeating
 	// (P0-B closure — a boot-requeued run re-drains as a "new" message).
@@ -578,7 +629,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// Invariant: finalization must leave the run terminal and must never leave
 	// the task 'running' with zero live runs. A 'running' outcome means "turn
 	// finished, more work planned", so the task parks as 'in_progress' — still
-	// non-terminal (resolveContinueTask keeps offering it for `继续`/`/resume`)
+	// non-terminal (the continuation ladder keeps offering its runs for `继续`/`/resume`)
 	// but honest in /tasks and /status: nothing is executing anymore.
 	// Store.FinishRun coerces the run-side status to a terminal value itself.
 	// Run completion and task-label lifecycle are different contracts. A plain
@@ -652,6 +703,7 @@ const (
 	runOriginWatch    = "watch"
 	runOriginCron     = "cron"
 	runOriginApproval = "approval"
+	runOriginRecovery = "recovery"
 )
 
 // runOrigin names the initiator of a daemon-started run, or "" for a person's
@@ -669,6 +721,15 @@ func runOrigin(ctx context.Context, req api.MessageRequest) string {
 	return strings.TrimSpace(kernel.TurnSourceFromContext(ctx))
 }
 
+// isUserOriginTurn reports whether the person themself typed this turn.
+// Daemon-originated turns (cron, watch finalization, approval resume) must
+// never steer the person's active run or trigger ambiguous-continuation
+// prompts just because their generated text happens to contain a cue word —
+// they queue durably like any other system work.
+func isUserOriginTurn(ctx context.Context, req api.MessageRequest) bool {
+	return runOrigin(ctx, req) == ""
+}
+
 // startAsyncRun accepts a turn immediately and runs it in the background,
 // delivering the result back to the source channel when it finishes.
 func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) api.MessageResponse {
@@ -680,6 +741,7 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		PlatformUserID: req.PlatformUserID,
 		WorkspaceID:    req.WorkspaceID,
 		ApprovalMode:   req.ApprovalMode,
+		Origin:         runOrigin(context.Background(), req),
 		ExecutionRoots: executionenv.CloneRootBindings(req.ExecutionRoots),
 		QueueID:        req.QueueID,
 		Summary:        truncate(req.Content, 240),
@@ -911,7 +973,12 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		// A system-originated finalization row carries the task it closes;
 		// resolveTask honors an explicit TaskID before any label guess.
 		TaskID: next.TaskID,
-		Async:  true,
+		// Reply metadata survives the durable queue so a threaded reply that
+		// waited behind an active run still binds its exact parent run.
+		ReplyToRunID: next.ReplyToRunID,
+		ApprovalID:   next.ApprovalID,
+		ClarifyID:    next.ClarifyID,
+		Async:        true,
 		// Carry the queue row id so the drained run's finalization marks it done
 		// (QueueStatusDone) — otherwise the row stays 'started' and boot recovery
 		// re-runs the already-completed work.
@@ -923,9 +990,11 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
 		req.WatchID = externalWatchIDFromFinalizationKey(next.IdempotencyKey)
 		req.Origin = runOriginWatch
-	} else if strings.HasPrefix(next.IdempotencyKey, "approval-resume:") {
+	} else if strings.HasPrefix(next.IdempotencyKey, "run-recovery:") {
+		req.Origin = runOriginRecovery
+		req.RecoveryMode = recoveryModeFromQueueKey(next.IdempotencyKey)
+	} else if strings.TrimSpace(next.ApprovalID) != "" {
 		req.Origin = runOriginApproval
-		req.SourceApprovalID = strings.TrimSpace(strings.TrimPrefix(next.IdempotencyKey, "approval-resume:"))
 	}
 	// Reproduce the queued item's route while preserving its durable person.
 	// Never create an account here: system rows may intentionally omit

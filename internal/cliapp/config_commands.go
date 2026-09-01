@@ -61,6 +61,8 @@ var configMigrations = []configMigration{
 	{From: []string{"memory", "governance", "model_role"}, Label: "memory.governance.model_role is deprecated; configure models.roles.memory_extract instead", Deprecated: true},
 	{From: []string{"tasks", "maintenance_model_role"}, Label: "tasks.maintenance_model_role is deprecated; configure models.roles.memory_extract instead", Deprecated: true},
 	{From: []string{"tasks", "maintenance_fallback_roles"}, Label: "tasks.maintenance_fallback_roles is deprecated; background roles fall back to models.auxiliary", Deprecated: true},
+	{From: []string{"memory", "auto_extract_interval"}, Label: "memory.auto_extract_interval is deprecated; the per-turn fact extractor was removed", Deprecated: true},
+	{From: []string{"memory", "auto_extract_min_chars"}, Label: "memory.auto_extract_min_chars is deprecated; the per-turn fact extractor was removed", Deprecated: true},
 }
 
 var configReportDefaultPaths = [][]string{
@@ -91,8 +93,7 @@ var configReportDefaultPaths = [][]string{
 	{"intent", "mode"},
 	{"intent", "thresholds", "direct"},
 	{"intent", "thresholds", "ask"},
-	{"memory", "auto_extract_interval"},
-	{"memory", "auto_extract_min_chars"},
+	{"continuity", "mode"},
 	{"memory", "semantic_recall"},
 	{"memory", "use_memory_fence"},
 	{"memory", "governance", "enabled"},
@@ -105,7 +106,6 @@ var configReportDefaultPaths = [][]string{
 	{"memory", "governance", "archive_after"},
 	{"memory", "governance", "pause_while_run_active"},
 	{"models", "source"},
-	{"tasks", "inbox_enabled"},
 	{"tasks", "default_list_limit"},
 	{"tasks", "auto_archive_done_after"},
 	{"tasks", "auto_archive_cancelled_after"},

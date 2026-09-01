@@ -33,7 +33,7 @@ func (s *Store) ListPendingRecoveryNotifications(ctx context.Context, limit int)
 		   AND NOT EXISTS (
 		     SELECT 1 FROM task_events n
 		      WHERE n.task_id = e.task_id AND COALESCE(n.run_id, '') = COALESCE(e.run_id, '')
-		        AND n.type = 'run.recovery_notified'
+		        AND n.type IN ('run.recovery_notified', 'run.recovery_scheduled')
 		   )
 		 ORDER BY e.cursor ASC LIMIT ?`, limit)
 	if err != nil {
@@ -58,6 +58,22 @@ func (s *Store) ListPendingRecoveryNotifications(ctx context.Context, limit int)
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+// MarkAutomaticRecoveryScheduled is the durable marker that generic recovery
+// claimed an interruption. It suppresses the fallback "reply continue"
+// notification only after the idempotent queue row exists.
+func (s *Store) MarkAutomaticRecoveryScheduled(ctx context.Context, item RecoveryNotification, mode, queueID string) error {
+	payload, _ := json.Marshal(map[string]string{
+		"recovery_event_id": item.EventID,
+		"mode":              mode,
+		"queue_id":          queueID,
+	})
+	_, err := s.AppendEvent(ctx, Event{
+		TaskID: item.TaskID, RunID: item.RunID, Type: "run.recovery_scheduled", Visibility: "task", Channel: item.Channel,
+		Payload: payload, IdempotencyKey: "run-recovery-scheduled:" + item.RunID,
+	})
+	return err
 }
 
 func (s *Store) MarkRecoveryNotificationSent(ctx context.Context, item RecoveryNotification) error {

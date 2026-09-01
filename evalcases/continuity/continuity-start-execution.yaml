@@ -14,10 +14,11 @@ turns:
   - input: >-
       开始执行，但在本次评估中只回复：CONTINUED。不要查看文件或使用工具。
 
+# P2: turn 1 completes, so the follow-up owns its own root task; answer
+# continuity flows through the spine (content checks below).
 expect:
   status: completed
-  require_same_task: true
-  require_continuation: true
+  require_task_switch: true
   max_tool_calls: 0
   max_duration_seconds: 120
   contains:

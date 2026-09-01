@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
@@ -239,25 +240,6 @@ func TestCardTaskIDRoundTrip(t *testing.T) {
 	}
 }
 
-func TestHiddenInboxDoesNotResolveAsUserTask(t *testing.T) {
-	daemon, store, identity := newTaskViewServer(t)
-	inbox, err := store.EnsureInboxTask(context.Background(), identity.TenantID, identity.PersonID, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := daemon.findTaskByRef(context.Background(), identity, inbox.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != nil {
-		t.Fatalf("hidden inbox must not resolve through user task commands: %+v", got)
-	}
-}
-
-// TestTaskOrdinalResolvesCardOrder: /task <n> and /resume <n> resolve the
-// SAME task the default /tasks view numbers <n> (display order = resolution
-// order), and out-of-range ordinals return a clear pointer to /tasks instead
-// of "Task not found".
 func TestTaskOrdinalResolvesCardOrder(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)
 	seedTask(t, store, identity, "first open task", "in_progress", 1)
@@ -268,7 +250,7 @@ func TestTaskOrdinalResolvesCardOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	open, _, _ := splitTasksForDisplay(tasks)
+	open := tasks
 	if len(open) != 2 {
 		t.Fatalf("want 2 open tasks, got %d", len(open))
 	}
@@ -293,11 +275,104 @@ func TestTaskOrdinalResolvesCardOrder(t *testing.T) {
 
 	// Numbers beyond the open list are a reference mistake, not a 500 and not
 	// a bare "Task not found" — done tasks never take a number.
-	if out := controlReply(t, daemon, "/task 3"); !strings.Contains(out, "No open task number 3") || !strings.Contains(out, "/tasks") {
+	if out := controlReply(t, daemon, "/task 3"); !strings.Contains(out, "No task number 3") || !strings.Contains(out, "/tasks") {
 		t.Fatalf("out-of-range ordinal reply: %s", out)
 	}
-	if out := controlReply(t, daemon, "/resume 99"); !strings.Contains(out, "No open task number 99") {
+	if out := controlReply(t, daemon, "/resume 99"); !strings.Contains(out, "No task number 99") {
 		t.Fatalf("out-of-range /resume reply: %s", out)
+	}
+}
+
+// The default open view ranks human-waiting work ahead of newer one-shot
+// labels. Ordinal commands must resolve the cards the person actually saw,
+// rather than re-sorting the same rows by update time.
+func TestTaskOrdinalUsesRankedOpenCardOrder(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	ctx := context.Background()
+	waiting, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Title: "older waiting work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, waiting, "cli", waiting.Title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTaskStatus(ctx, identity.TenantID, waiting.ID, "interrupted", "needs attention", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Task timestamps are stored at second precision; make the ordinary row
+	// observably newer so the old updated_at resolver disagrees with QueryTasks.
+	time.Sleep(1100 * time.Millisecond)
+	newer := seedTask(t, store, identity, "newer ordinary work", "in_progress", 0)
+
+	listed := controlReply(t, daemon, "/tasks")
+	if !strings.Contains(listed, "1. [interrupted] "+waiting.Title) {
+		t.Fatalf("ranked card 1 is not the waiting task:\n%s", listed)
+	}
+	if detail := controlReply(t, daemon, "/task 1"); !strings.Contains(detail, "ID: "+waiting.ID) {
+		t.Fatalf("/task 1 selected %s instead of displayed card 1 %s:\n%s", newer.ID, waiting.ID, detail)
+	}
+}
+
+func TestTaskOrdinalSnapshotSurvivesLaterReordering(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	first := seedTask(t, store, identity, "snapshot first", "in_progress", 0)
+	second := seedTask(t, store, identity, "snapshot second", "in_progress", 0)
+
+	listed := controlReply(t, daemon, "/tasks")
+	firstPos := strings.Index(listed, "1. ")
+	firstTitle := first.Title
+	firstID := first.ID
+	if strings.Index(listed, second.Title) > firstPos && strings.Index(listed, second.Title) < strings.Index(listed, first.Title) {
+		firstTitle, firstID = second.Title, second.ID
+	}
+
+	// Mutating the other task changes the live ranking, but must not change what
+	// the already displayed number means on this endpoint.
+	otherID := first.ID
+	if otherID == firstID {
+		otherID = second.ID
+	}
+	if err := store.SetTaskPinned(context.Background(), identity.TenantID, otherID, true); err != nil {
+		t.Fatal(err)
+	}
+	if detail := controlReply(t, daemon, "/task 1"); !strings.Contains(detail, "ID: "+firstID) {
+		t.Fatalf("displayed card 1 (%s) drifted after reordering:\n%s", firstTitle, detail)
+	}
+}
+
+func TestTaskCompleteAcceptsOrdinalAndIDAndCanBeResumed(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	first := seedTask(t, store, identity, "finish by id", "in_progress", 0)
+	second := seedTask(t, store, identity, "finish by number", "in_progress", 0)
+
+	listed := controlReply(t, daemon, "/tasks")
+	numbered := first
+	byID := second
+	if strings.Index(listed, second.Title) < strings.Index(listed, first.Title) {
+		numbered, byID = second, first
+	}
+	if reply := controlReply(t, daemon, "/task 1 complete"); !strings.Contains(reply, "Completed task") {
+		t.Fatalf("ordinal completion reply: %s", reply)
+	}
+	if reply := controlReply(t, daemon, "/task "+byID.ID+" complete"); !strings.Contains(reply, "Completed task") {
+		t.Fatalf("id completion reply: %s", reply)
+	}
+	for _, task := range []*control.Task{numbered, byID} {
+		got, err := store.GetTask(context.Background(), identity.TenantID, task.ID)
+		if err != nil || got == nil || got.Status != "done" {
+			t.Fatalf("completed task %s = %+v err=%v", task.ID, got, err)
+		}
+	}
+	if reply := controlReply(t, daemon, "/resume "+numbered.ID); !strings.Contains(reply, "Resumed task") {
+		t.Fatalf("explicit resume did not accept completed task: %s", reply)
 	}
 }
 
@@ -469,13 +544,16 @@ func TestArchivedExcludedEverywhere(t *testing.T) {
 			t.Fatalf("archived label leaked into recall cards: %+v", card)
 		}
 	}
-	// Implicit continuation never resurrects archived work.
-	resumable, err := daemon.resolveContinueTask(ctx, identity)
+	// Implicit continuation never resurrects archived work: the run ladder
+	// excludes runs whose task is archived.
+	candidates, err := store.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumable != nil && resumable.ID == task.ID {
-		t.Fatalf("resolveContinueTask offered an archived label: %+v", resumable)
+	for _, run := range candidates {
+		if run.TaskID == task.ID {
+			t.Fatalf("continuation ladder offered an archived label's run: %+v", run)
+		}
 	}
 	if !terminalTaskStatus("archived") {
 		t.Fatal("archived must be terminal for continuation and pre-label")

@@ -113,7 +113,9 @@ func TestMergeTasksMovesEverythingAndArchivesSource(t *testing.T) {
 	if ref := byValue["tank-release"]; !ref.UserConfirmed || ref.Status != TaskReferenceActive {
 		t.Fatalf("confirmed source reference did not follow merge: %+v", ref)
 	}
-	if ref := byValue["customer-portal"]; ref.Status != TaskReferenceActive || ref.SupportCount != 2 {
+	// Auto-promotion is frozen (simplification P2): folded run support keeps a
+	// reference at candidate; only user confirmation activates.
+	if ref := byValue["customer-portal"]; ref.Status != TaskReferenceCandidate || ref.SupportCount != 2 {
 		t.Fatalf("duplicate evidence was not folded and reconciled: %+v", ref)
 	}
 	if refs, err := store.ListTaskReferencesForTask(ctx, identity.TenantID, identity.PersonID, src.ID, 10); err != nil || len(refs) != 0 {

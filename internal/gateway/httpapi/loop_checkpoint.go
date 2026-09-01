@@ -38,24 +38,37 @@ func (s *controlLoopCheckpointSink) SaveLoopCheckpoint(ctx context.Context, chec
 	if err != nil {
 		return fmt.Errorf("encode loop checkpoint: %w", err)
 	}
+	recovery, err := s.store.RunRecoveryState(ctx, s.tenantID, s.runID)
+	if err != nil {
+		return fmt.Errorf("read run recovery state: %w", err)
+	}
+	recoveryJSON, err := json.Marshal(recovery)
+	if err != nil {
+		return fmt.Errorf("encode run recovery state: %w", err)
+	}
 	return s.store.SaveLoopCheckpoint(ctx, control.LoopCheckpointRecord{
 		TenantID: s.tenantID, PersonID: s.personID, TaskID: s.taskID, RunID: s.runID,
+		ContractVersion: recovery.ContractVersion, Recovery: recoveryJSON,
 		Iteration: checkpoint.Iteration, Outcome: string(checkpoint.Outcome), Detail: checkpoint.Detail,
 		Snapshot: snapshot,
 	})
 }
 
-func (c *RunCoordinator) withLoopCheckpointResume(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, intent router.IntentResult) context.Context {
-	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || intent.Intent != router.IntentContinue {
+// withLoopCheckpointResume restores the message ledger of the run this turn
+// continues. Run-scoped by P0: only the exact resolved parent's incomplete
+// checkpoint may replace the message array — the old "most recently updated
+// checkpoint anywhere under the task" pick let recency, not ownership, decide
+// which work line was resumed.
+func (c *RunCoordinator) withLoopCheckpointResume(ctx context.Context, identity *control.IdentityContext, task *control.Task, parent *control.Run, _ router.IntentResult) context.Context {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || parent == nil {
 		return ctx
 	}
-	excludeRunID := ""
-	if run != nil {
-		excludeRunID = run.ID
+	if parent.TaskID != task.ID {
+		return ctx
 	}
-	record, err := c.srv.Control.LatestIncompleteLoopCheckpoint(ctx, identity.TenantID, task.ID, excludeRunID)
+	record, err := c.srv.Control.IncompleteLoopCheckpointForRun(ctx, identity.TenantID, parent.ID)
 	if err != nil {
-		log.Warn("loop checkpoint lookup failed", "task_id", task.ID, "error", err)
+		log.Warn("loop checkpoint lookup failed", "task_id", task.ID, "run_id", parent.ID, "error", err)
 		return ctx
 	}
 	if record == nil || len(record.Snapshot) == 0 {

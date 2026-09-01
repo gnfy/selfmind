@@ -95,9 +95,17 @@ type Run struct {
 	InputSummary   string                     `json:"input_summary,omitempty"`
 	WorkKey        string                     `json:"work_key,omitempty"`
 	WorkUnitID     string                     `json:"work_unit_id,omitempty"`
-	Status         string                     `json:"status"`
-	StartedAt      time.Time                  `json:"started_at"`
-	FinishedAt     *time.Time                 `json:"finished_at,omitempty"`
+	// ParentRunID is the forward continuation edge: the prior run this run
+	// deliberately continues. At most one child may claim a parent
+	// (idx_task_runs_parent_once); the edge is written atomically with the
+	// child row and never rewritten by rename/merge/display operations.
+	ParentRunID string `json:"parent_run_id,omitempty"`
+	// RecoveryContractVersion is zero for historical rows. New Runs opt into
+	// the durable plan/effect/checkpoint contract explicitly.
+	RecoveryContractVersion int        `json:"recovery_contract_version,omitempty"`
+	Status                  string     `json:"status"`
+	StartedAt               time.Time  `json:"started_at"`
+	FinishedAt              *time.Time `json:"finished_at,omitempty"`
 }
 
 type Event struct {
@@ -116,8 +124,12 @@ type Event struct {
 }
 
 type Handoff struct {
-	ID           string    `json:"id"`
-	TaskID       string    `json:"task_id"`
+	ID     string `json:"id"`
+	TaskID string `json:"task_id"`
+	// RunID is the run whose finalization recorded this handoff (the formal
+	// run key since schema v7; historical rows are backfilled from the
+	// deterministic "handoff_run_<run_id>" primary key).
+	RunID        string    `json:"run_id,omitempty"`
 	Summary      string    `json:"summary"`
 	DoneItems    []string  `json:"done_items,omitempty"`
 	NextSteps    []string  `json:"next_steps,omitempty"`
@@ -2020,7 +2032,7 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 	// (and any not-yet-run) tasks look running with no run behind them, so the
 	// stuck-run sweeper then flipped them to 'interrupted' (observed live: a
 	// brand-new empty task showing [interrupted]). Start as 'new' — non-terminal
-	// (resolveContinueTask still offers it, the sweeper ignores it) and honest.
+	// (the continuation ladder still offers its runs, the sweeper ignores it) and honest.
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO tasks (id, tenant_id, person_id, workspace_id, title, status, kind, visibility,
 		 pinned, last_channel, last_activity_at, created_at, updated_at)
@@ -2277,16 +2289,45 @@ func (s *Store) ListTasksByStatus(ctx context.Context, tenantID, personID string
 }
 
 func (s *Store) UpdateTaskStatus(ctx context.Context, tenantID, taskID, status, summary string, nextSteps []string) error {
+	tenant := normalizeTenant(tenantID)
 	nextStepsJSON, _ := json.Marshal(nextSteps)
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Park/interrupt transitions describe the task's current active run moving
+	// out of foreground execution. Exclude that run from the concurrent-run
+	// check just as atomic finalization does; other active runs still win.
+	finishingRunID := ""
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "waiting_user", "waiting_external", "waiting_finalization", "verification_partial", "blocked", "interrupted":
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(active_run_id, '') FROM tasks WHERE tenant_id = ? AND id = ?`,
+			tenant, taskID,
+		).Scan(&finishingRunID); err != nil {
+			return err
+		}
+	}
+	status, err = resolveFinalTaskStatusTx(ctx, tx, tenant, taskID, finishingRunID, status)
+	if err != nil {
+		return fmt.Errorf("reduce task status: %w", err)
+	}
+	result, err := tx.ExecContext(ctx,
 		`UPDATE tasks SET status = ?, current_summary = COALESCE(NULLIF(?, ''), current_summary),
 		 next_steps_json = ?, archived_at = CASE
 		   WHEN ? = 'archived' THEN COALESCE(archived_at, ?)
 		   ELSE NULL
 		 END, last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		status, summary, string(nextStepsJSON), status, now, now, now, normalizeTenant(tenantID), taskID)
-	return err
+		status, summary, string(nextStepsJSON), status, now, now, now, tenant, taskID)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return fmt.Errorf("update task affected %d rows", n)
+	}
+	return tx.Commit()
 }
 
 func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary string) (*Run, error) {
@@ -2294,9 +2335,14 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 }
 
 type StartRunOptions struct {
-	WorkKey               string
-	PreserveTaskLifecycle bool
-	ExecutionRoots        []executionenv.RootBinding
+	WorkKey        string
+	ExecutionRoots []executionenv.RootBinding
+	// ParentRunID claims the named prior run as this run's continuation parent
+	// in the SAME transaction that creates the child. The claim validates
+	// tenant/person/task agreement and the parent's resumable, unclaimed state
+	// inside the transaction; a lost race surfaces as ErrParentRunClaimed and
+	// creates nothing.
+	ParentRunID string
 }
 
 // StartRunWithWorkKey atomically creates a run with its deterministic work
@@ -2318,18 +2364,46 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 	if task == nil {
 		return nil, fmt.Errorf("task is required")
 	}
+	// A parent-claiming creation races other connections by design (the whole
+	// point of the unique parent index). Under WAL, the loser's deferred
+	// transaction reads on a pre-commit snapshot and its write upgrade fails
+	// immediately with SQLITE_BUSY instead of waiting. Retry on a fresh
+	// snapshot: the re-run validation then sees the committed child and
+	// returns ErrParentRunClaimed deterministically.
+	if strings.TrimSpace(options.ParentRunID) != "" {
+		var run *Run
+		var err error
+		for attempt := 0; attempt < 3; attempt++ {
+			run, err = s.startRunOnce(ctx, task, channel, inputSummary, options)
+			if err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") {
+				return run, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(25*(attempt+1)) * time.Millisecond):
+			}
+		}
+		return run, err
+	}
+	return s.startRunOnce(ctx, task, channel, inputSummary, options)
+}
+
+func (s *Store) startRunOnce(ctx context.Context, task *Task, channel, inputSummary string, options StartRunOptions) (*Run, error) {
 	run := &Run{
-		ID:             "run_" + uuid.NewString(),
-		TaskID:         task.ID,
-		TenantID:       task.TenantID,
-		PersonID:       task.PersonID,
-		WorkspaceID:    task.WorkspaceID,
-		ExecutionRoots: executionenv.CloneRootBindings(options.ExecutionRoots),
-		Channel:        normalizeName(channel, "cli"),
-		InputSummary:   inputSummary,
-		WorkKey:        strings.ToUpper(strings.TrimSpace(options.WorkKey)),
-		Status:         "running",
-		StartedAt:      time.Now(),
+		ID:                      "run_" + uuid.NewString(),
+		TaskID:                  task.ID,
+		TenantID:                task.TenantID,
+		PersonID:                task.PersonID,
+		WorkspaceID:             task.WorkspaceID,
+		ExecutionRoots:          executionenv.CloneRootBindings(options.ExecutionRoots),
+		Channel:                 normalizeName(channel, "cli"),
+		InputSummary:            inputSummary,
+		WorkKey:                 strings.ToUpper(strings.TrimSpace(options.WorkKey)),
+		ParentRunID:             strings.TrimSpace(options.ParentRunID),
+		RecoveryContractVersion: RunRecoveryContractVersion,
+		Status:                  "running",
+		StartedAt:               time.Now(),
 	}
 	run.WorkUnitID = "wu_" + uuid.NewString()
 	rootsJSON, err := json.Marshal(run.ExecutionRoots)
@@ -2343,11 +2417,26 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if run.ParentRunID != "" {
+		if err := validateParentClaimTx(ctx, tx, run); err != nil {
+			return nil, err
+		}
+	}
 	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, status, started_at, heartbeat_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, parent_run_id, recovery_contract_version, status, started_at, heartbeat_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.ParentRunID, run.RecoveryContractVersion, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		if run.ParentRunID != "" && strings.Contains(err.Error(), "idx_task_runs_parent_once") {
+			return nil, ErrParentRunClaimed
+		}
 		return nil, err
+	}
+	if run.ParentRunID != "" {
+		// The claim settles the parent's open wait records in the same
+		// transaction: the continuation now owns that unresolved condition.
+		if err := resolveOriginRunBlockersTx(ctx, tx, run.TenantID, run.TaskID, run.ParentRunID, run.ID); err != nil {
+			return nil, err
+		}
 	}
 	if _, err = tx.ExecContext(ctx,
 		`INSERT INTO run_work_units
@@ -2359,39 +2448,15 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx,
-		`UPDATE tasks SET active_run_id = ?, status = CASE WHEN ? THEN status ELSE 'running' END, last_channel = ?,
+		`UPDATE tasks SET active_run_id = ?, status = 'running', last_channel = ?,
 		 archived_at = NULL, last_activity_at = ?, updated_at = ? WHERE id = ?`,
-		run.ID, options.PreserveTaskLifecycle, run.Channel, time.Now().Unix(), time.Now().Unix(), run.TaskID); err != nil {
+		run.ID, run.Channel, time.Now().Unix(), time.Now().Unix(), run.TaskID); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return run, nil
-}
-
-// PriorRunChannel returns the channel of the task's most recent run other than
-// exceptRunID (typically the current run). It backs the backward-compat read of
-// working-context history: a task whose transcript was stored channel-keyed
-// before history became task-keyed can still be loaded under this channel. It is
-// a bounded, read-only lookup; an empty result (no prior run) is not an error.
-func (s *Store) PriorRunChannel(ctx context.Context, tenantID, taskID, exceptRunID string) (string, error) {
-	if strings.TrimSpace(taskID) == "" {
-		return "", nil
-	}
-	var channel string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(channel, '') FROM task_runs
-		 WHERE tenant_id = ? AND task_id = ? AND id != ?
-		 ORDER BY started_at DESC, id DESC LIMIT 1`,
-		normalizeTenant(tenantID), taskID, exceptRunID).Scan(&channel)
-	if err == sql.ErrNoRows {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return channel, nil
 }
 
 // GetRun reads one run by id. It is used by recovery/finalization paths that
@@ -2407,13 +2472,13 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 	var rootsJSON string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), channel,
-		        COALESCE(input_summary, ''), COALESCE(work_key, ''),
+		        COALESCE(input_summary, ''), COALESCE(work_key, ''), COALESCE(parent_run_id, ''),
 		        COALESCE((SELECT id FROM run_work_units WHERE run_id = task_runs.id ORDER BY sequence LIMIT 1), ''),
-		        status, started_at, finished_at
+		        COALESCE(recovery_contract_version, 0), status, started_at, finished_at
 		 FROM task_runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).
 		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &rootsJSON, &r.Channel,
-			&r.InputSummary, &r.WorkKey, &r.WorkUnitID, &r.Status, &started, &finished)
+			&r.InputSummary, &r.WorkKey, &r.ParentRunID, &r.WorkUnitID, &r.RecoveryContractVersion, &r.Status, &started, &finished)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -2594,16 +2659,24 @@ func (s *Store) SaveHandoff(ctx context.Context, handoff Handoff) (*Handoff, err
 	if handoff.TaskID == "" {
 		return nil, fmt.Errorf("task id is required")
 	}
-	handoff.ID = "handoff_" + uuid.NewString()
+	// A caller-supplied id is preserved so run-keyed handoffs
+	// ("handoff_run_<run_id>", the finalization key RunHandoff reads) can be
+	// written through this path too.
+	if strings.TrimSpace(handoff.ID) == "" {
+		handoff.ID = "handoff_" + uuid.NewString()
+	}
+	if strings.TrimSpace(handoff.RunID) == "" && strings.HasPrefix(handoff.ID, "handoff_run_") {
+		handoff.RunID = strings.TrimPrefix(handoff.ID, "handoff_run_")
+	}
 	handoff.CreatedAt = time.Now()
 	doneJSON, _ := json.Marshal(handoff.DoneItems)
 	nextJSON, _ := json.Marshal(handoff.NextSteps)
 	filesJSON, _ := json.Marshal(handoff.ChangedFiles)
 	risksJSON, _ := json.Marshal(handoff.Risks)
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO task_handoffs (id, task_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		handoff.ID, handoff.TaskID, handoff.Summary, string(doneJSON), string(nextJSON), string(filesJSON), handoff.TestStatus, string(risksJSON), handoff.CreatedAt.Unix())
+		`INSERT INTO task_handoffs (id, task_id, run_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		handoff.ID, handoff.TaskID, handoff.RunID, handoff.Summary, string(doneJSON), string(nextJSON), string(filesJSON), handoff.TestStatus, string(risksJSON), handoff.CreatedAt.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -2615,10 +2688,10 @@ func (s *Store) LatestHandoff(ctx context.Context, taskID string) (*Handoff, err
 	var doneJSON, nextJSON, filesJSON, risksJSON string
 	var created int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, task_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at
+		`SELECT id, task_id, COALESCE(run_id, ''), summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at
 		 FROM task_handoffs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1`,
 		taskID).
-		Scan(&h.ID, &h.TaskID, &h.Summary, &doneJSON, &nextJSON, &filesJSON, &h.TestStatus, &risksJSON, &created)
+		Scan(&h.ID, &h.TaskID, &h.RunID, &h.Summary, &doneJSON, &nextJSON, &filesJSON, &h.TestStatus, &risksJSON, &created)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

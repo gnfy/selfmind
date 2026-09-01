@@ -109,15 +109,28 @@ func TestTaskReferenceRecallPriorityRequiresConfirmedOrExactActiveSurface(t *tes
 	if _, err := store.UpsertTaskReference(ctx, write); err != nil {
 		t.Fatal(err)
 	}
+	// Run support alone never activates (P2 freeze): still advisory.
+	hits, err = source.Search(ctx, query)
+	if err != nil || len(hits) != 1 || hits[0].Priority != 0 {
+		t.Fatalf("supported-but-unconfirmed reference must stay advisory: hits=%+v err=%v", hits, err)
+	}
+	confirm := write
+	confirm.Status = control.TaskReferenceActive
+	confirm.UserConfirmed = true
+	confirm.Provenance = "user_control"
+	confirm.SourceRef = "test-confirm"
+	if _, err := store.UpsertTaskReference(ctx, confirm); err != nil {
+		t.Fatal(err)
+	}
 	hits, err = source.Search(ctx, query)
 	if err != nil || len(hits) != 1 || hits[0].Priority != -1 {
-		t.Fatalf("active literal in original user text must be authoritative: hits=%+v err=%v", hits, err)
+		t.Fatalf("confirmed literal in original user text must be authoritative: hits=%+v err=%v", hits, err)
 	}
 
 	query.Message = "please inspect the deployment"
 	hits, err = source.Search(ctx, query)
-	if err != nil || len(hits) != 1 || hits[0].Priority != 0 {
-		t.Fatalf("semantic expansion alone must not make an automatic binding authoritative: hits=%+v err=%v", hits, err)
+	if err != nil || len(hits) != 1 || hits[0].Priority != -1 {
+		t.Fatalf("a user-confirmed reference is authoritative regardless of surface form: hits=%+v err=%v", hits, err)
 	}
 }
 
@@ -742,7 +755,7 @@ func TestRecallEphemeralNotPersistedInHistory(t *testing.T) {
 
 	provider := &capturingProvider{answer: "Done."}
 	agent := kernel.NewAgent(mem, stubToolBackend{}, provider, "test agent", 2, 1, nil)
-	gw := router.NewGateway(nil, nil, agent, nil)
+	gw := router.NewGateway(agent, nil)
 	daemon := &Server{
 		Control:         store,
 		Gateway:         gw,

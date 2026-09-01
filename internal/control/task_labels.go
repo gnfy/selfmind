@@ -212,7 +212,7 @@ func (s *Store) ListTaskRuns(ctx context.Context, tenantID, taskID string, limit
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
-		        COALESCE(input_summary, ''), status, started_at, finished_at
+		        COALESCE(input_summary, ''), COALESCE(parent_run_id, ''), status, started_at, finished_at
 		 FROM task_runs
 		 WHERE tenant_id = ? AND task_id = ?
 		 ORDER BY started_at DESC, id DESC LIMIT ?`,
@@ -227,7 +227,7 @@ func (s *Store) ListTaskRuns(ctx context.Context, tenantID, taskID string, limit
 		var started int64
 		var finished sql.NullInt64
 		if err := rows.Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel,
-			&r.InputSummary, &r.Status, &started, &finished); err != nil {
+			&r.InputSummary, &r.ParentRunID, &r.Status, &started, &finished); err != nil {
 			return nil, err
 		}
 		r.StartedAt = time.Unix(started, 0)
@@ -251,76 +251,6 @@ func (s *Store) SetRunWorkKey(ctx context.Context, tenantID, runID, workKey stri
 		`UPDATE task_runs SET work_key = ? WHERE tenant_id = ? AND id = ?`,
 		strings.ToUpper(strings.TrimSpace(workKey)), normalizeTenant(tenantID), runID)
 	return err
-}
-
-// MarkTaskRunsResumed records which prior resumable run a deliberate
-// continuation actually owns. Exactly one unresolved predecessor is required;
-// ambiguity is preserved instead of letting a product-specific token or model
-// summary erase unrelated work that shares the same display task.
-func (s *Store) MarkTaskRunsResumed(ctx context.Context, tenantID, taskID, resumedByRunID string) (int64, error) {
-	if strings.TrimSpace(taskID) == "" || strings.TrimSpace(resumedByRunID) == "" {
-		return 0, nil
-	}
-	tenant := normalizeTenant(tenantID)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	candidateID, unambiguous, err := soleUnresolvedRun(ctx, tx, tenant, taskID, resumedByRunID)
-	if err != nil {
-		return 0, err
-	}
-	if !unambiguous {
-		return 0, tx.Commit()
-	}
-	res, err := tx.ExecContext(ctx,
-		`UPDATE task_runs SET resumed_by_run_id = ?
-		 WHERE tenant_id = ? AND id = ? AND COALESCE(resumed_by_run_id, '') = ''`,
-		resumedByRunID, tenant, candidateID)
-	if err != nil {
-		return 0, err
-	}
-	if affected, affectedErr := res.RowsAffected(); affectedErr != nil {
-		return 0, affectedErr
-	} else if affected == 1 {
-		if err := resolveOriginRunBlockersTx(ctx, tx, tenant, taskID, candidateID, resumedByRunID); err != nil {
-			return 0, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
-	}
-	return res.RowsAffected()
-}
-
-func soleUnresolvedRun(ctx context.Context, tx *sql.Tx, tenantID, taskID, excludeRunID string) (string, bool, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id FROM task_runs
-		 WHERE tenant_id = ? AND task_id = ? AND id <> ?
-		   AND status IN ('interrupted', 'waiting_user', 'verification_partial', 'blocked')
-		   AND COALESCE(resumed_by_run_id, '') = ''
-		 ORDER BY started_at DESC, id DESC LIMIT 2`,
-		tenantID, taskID, excludeRunID)
-	if err != nil {
-		return "", false, err
-	}
-	var candidates []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return "", false, err
-		}
-		candidates = append(candidates, id)
-	}
-	if err := rows.Close(); err != nil {
-		return "", false, err
-	}
-	if len(candidates) != 1 {
-		return "", false, nil
-	}
-	return candidates[0], true, nil
 }
 
 // ReassignRun re-points one finished run from fromTaskID to toTaskID: the

@@ -27,14 +27,22 @@ const (
 const ToolLedgerRetention = 7 * 24 * time.Hour
 
 type ToolLedgerEntry struct {
-	RunID      string
-	ToolCallID string
-	ToolName   string
-	ArgsHash   string
-	RetryClass string
-	Status     string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	RunID                 string
+	ToolCallID            string
+	ToolName              string
+	ArgsHash              string
+	RetryClass            string
+	EffectID              string
+	PlanVersion           int
+	PlanStepID            string
+	Strategy              string
+	EffectClass           string
+	EnvironmentGeneration int64
+	ResultRef             string
+	VerificationState     string
+	Status                string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 // ToolDispatchClaim is the durable decision made before a tool may execute.
@@ -70,20 +78,28 @@ func (s *Store) ClaimToolDispatch(ctx context.Context, tenantID string, e ToolLe
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `INSERT INTO tool_ledger
-		(tenant_id, run_id, tool_call_id, tool_name, args_hash, retry_class, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(tenant_id, run_id, tool_call_id, tool_name, args_hash, retry_class, effect_id, plan_version,
+		 plan_step_id, strategy, effect_class, environment_generation, status, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(run_id, tool_call_id) DO NOTHING`,
 		tenantID, e.RunID, e.ToolCallID, e.ToolName, e.ArgsHash,
-		e.RetryClass, ToolLedgerPlanned, now, now); err != nil {
+		e.RetryClass, e.EffectID, e.PlanVersion, e.PlanStepID, e.Strategy, e.EffectClass,
+		e.EnvironmentGeneration, ToolLedgerPlanned, now, now); err != nil {
 		return ToolDispatchClaim{}, err
 	}
-	var toolName, argsHash, retryClass, status string
-	if err := tx.QueryRowContext(ctx, `SELECT tool_name, args_hash, retry_class, status
+	var toolName, argsHash, retryClass, effectID, planStepID, strategy, effectClass, status string
+	var planVersion int
+	var environmentGeneration int64
+	if err := tx.QueryRowContext(ctx, `SELECT tool_name, args_hash, retry_class, effect_id, plan_version,
+		plan_step_id, strategy, effect_class, environment_generation, status
 		FROM tool_ledger WHERE tenant_id = ? AND run_id = ? AND tool_call_id = ?`,
-		tenantID, e.RunID, e.ToolCallID).Scan(&toolName, &argsHash, &retryClass, &status); err != nil {
+		tenantID, e.RunID, e.ToolCallID).Scan(&toolName, &argsHash, &retryClass, &effectID, &planVersion,
+		&planStepID, &strategy, &effectClass, &environmentGeneration, &status); err != nil {
 		return ToolDispatchClaim{}, err
 	}
-	if toolName != e.ToolName || argsHash != e.ArgsHash || retryClass != e.RetryClass {
+	if toolName != e.ToolName || argsHash != e.ArgsHash || retryClass != e.RetryClass ||
+		effectID != e.EffectID || planVersion != e.PlanVersion || planStepID != e.PlanStepID ||
+		strategy != e.Strategy || effectClass != e.EffectClass || environmentGeneration != e.EnvironmentGeneration {
 		return ToolDispatchClaim{}, fmt.Errorf("tool call id %s was already claimed with different arguments", e.ToolCallID)
 	}
 	if status != ToolLedgerPlanned {
@@ -121,13 +137,17 @@ func (s *Store) RecordToolDispatch(ctx context.Context, tenantID string, e ToolL
 
 // RecordToolOutcome closes the uncertain window after execution returns.
 func (s *Store) RecordToolOutcome(ctx context.Context, tenantID, runID, toolCallID string, ok bool) error {
+	return s.RecordToolOutcomeWithRef(ctx, tenantID, runID, toolCallID, ok, "")
+}
+
+func (s *Store) RecordToolOutcomeWithRef(ctx context.Context, tenantID, runID, toolCallID string, ok bool, resultRef string) error {
 	status := ToolLedgerCompleted
 	if !ok {
 		status = ToolLedgerFailed
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE tool_ledger SET status = ?, updated_at = ?
+	res, err := s.db.ExecContext(ctx, `UPDATE tool_ledger SET status = ?, result_ref = ?, verification_state = 'recorded', updated_at = ?
 		WHERE tenant_id = ? AND run_id = ? AND tool_call_id = ? AND status IN (?, ?)`,
-		status, time.Now().Unix(), normalizeTenant(tenantID), runID, toolCallID,
+		status, strings.TrimSpace(resultRef), time.Now().Unix(), normalizeTenant(tenantID), runID, toolCallID,
 		ToolLedgerStarted, ToolLedgerDispatched)
 	if err != nil {
 		return err
@@ -157,7 +177,9 @@ func (s *Store) ListUncertainToolEntries(ctx context.Context, tenantID, runID st
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT run_id, tool_call_id, tool_name, args_hash, retry_class, status, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT run_id, tool_call_id, tool_name, args_hash, retry_class,
+		effect_id, plan_version, plan_step_id, strategy, effect_class, environment_generation,
+		result_ref, verification_state, status, created_at, updated_at
 		FROM tool_ledger
 		WHERE tenant_id = ? AND run_id = ? AND status IN (?, ?) AND retry_class != ?
 		ORDER BY created_at ASC LIMIT ?`,
@@ -170,8 +192,9 @@ func (s *Store) ListUncertainToolEntries(ctx context.Context, tenantID, runID st
 	for rows.Next() {
 		var e ToolLedgerEntry
 		var created, updated int64
-		if err := rows.Scan(&e.RunID, &e.ToolCallID, &e.ToolName, &e.ArgsHash,
-			&e.RetryClass, &e.Status, &created, &updated); err != nil {
+		if err := rows.Scan(&e.RunID, &e.ToolCallID, &e.ToolName, &e.ArgsHash, &e.RetryClass,
+			&e.EffectID, &e.PlanVersion, &e.PlanStepID, &e.Strategy, &e.EffectClass,
+			&e.EnvironmentGeneration, &e.ResultRef, &e.VerificationState, &e.Status, &created, &updated); err != nil {
 			return nil, err
 		}
 		e.CreatedAt = time.Unix(created, 0)
@@ -191,7 +214,9 @@ func (s *Store) ListUncertainToolEntriesForTask(ctx context.Context, tenantID, t
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT l.run_id, l.tool_call_id, l.tool_name, l.args_hash, l.retry_class, l.status, l.created_at, l.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT l.run_id, l.tool_call_id, l.tool_name, l.args_hash, l.retry_class,
+		l.effect_id, l.plan_version, l.plan_step_id, l.strategy, l.effect_class, l.environment_generation,
+		l.result_ref, l.verification_state, l.status, l.created_at, l.updated_at
 		FROM tool_ledger l JOIN task_runs r ON r.id = l.run_id AND r.tenant_id = l.tenant_id
 		WHERE l.tenant_id = ? AND r.task_id = ? AND l.status IN (?, ?) AND l.retry_class != ?
 		ORDER BY l.created_at ASC LIMIT ?`,
@@ -204,8 +229,9 @@ func (s *Store) ListUncertainToolEntriesForTask(ctx context.Context, tenantID, t
 	for rows.Next() {
 		var e ToolLedgerEntry
 		var created, updated int64
-		if err := rows.Scan(&e.RunID, &e.ToolCallID, &e.ToolName, &e.ArgsHash,
-			&e.RetryClass, &e.Status, &created, &updated); err != nil {
+		if err := rows.Scan(&e.RunID, &e.ToolCallID, &e.ToolName, &e.ArgsHash, &e.RetryClass,
+			&e.EffectID, &e.PlanVersion, &e.PlanStepID, &e.Strategy, &e.EffectClass,
+			&e.EnvironmentGeneration, &e.ResultRef, &e.VerificationState, &e.Status, &created, &updated); err != nil {
 			return nil, err
 		}
 		e.CreatedAt = time.Unix(created, 0)

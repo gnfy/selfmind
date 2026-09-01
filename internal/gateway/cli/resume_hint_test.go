@@ -9,7 +9,7 @@ import (
 // regression: composer history is all-time typing, not this session transcript,
 // so a zero-input open-and-close must NOT advertise a resume command.
 func TestHasConversationHistoryIgnoresPersistedInputHistory(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	c.model.editor.SeedHistory([]string{"prior session command", "another one"}, 1024)
 	if c.HasConversationHistory() {
 		t.Fatal("persisted input history alone must not report conversation history")

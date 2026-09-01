@@ -38,6 +38,10 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware())
 	disp.InjectMiddleware(tools.EvidenceMiddleware())
 	disp.InjectMiddleware(tools.SkillStorageMiddleware(storage))
+	// Static watcher proof belongs before approval: impossible registrations
+	// should not ask a person. The real network/credential preflight remains in
+	// the tool body and therefore still runs only after authorization.
+	disp.InjectMiddleware(tools.ExternalWatchStaticValidationMiddleware())
 
 	tools.RegisterBuiltins(disp)
 	// Exec sandbox (P0-D): process-wide Linux policy. Auto mode prefers bwrap;

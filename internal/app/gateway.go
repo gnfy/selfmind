@@ -6,13 +6,10 @@ import (
 	"fmt"
 
 	"selfmind/internal/control"
-	"selfmind/internal/gateway/channel"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
-	"selfmind/internal/kernel/identity"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
-	"selfmind/internal/kernel/task"
 	"selfmind/internal/kernel/task/cron"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
@@ -21,19 +18,14 @@ import (
 
 // GatewayDeps holds the components that InitGateway wires together.
 type GatewayDeps struct {
-	IdentityMapper *identity.IdentityMapper
-	TaskManager    *task.Manager
-	CronScheduler  *cron.Scheduler
-	Gateway        *router.Gateway
-	Bridge         *channel.Bridge
+	CronScheduler *cron.Scheduler
+	Gateway       *router.Gateway
 }
 
-// InitGateway builds the identity mapper, task manager, cron scheduler
-// (optional), and the unified gateway.
+// InitGateway builds the cron scheduler (optional) and the agent-execution
+// gateway. Identity, tasks, and delivery are owned by gateway/httpapi +
+// control.db; the legacy tasks.db manager and IM bridge are gone.
 func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent, cfg *config.Config) (*GatewayDeps, error) {
-	idMapper := identity.NewIdentityMapper(dataDir)
-	taskMgr := task.NewManager(dataDir)
-
 	var cronSched *cron.Scheduler
 	if cfg.Cron.Enabled {
 		cronDB, err := sql.Open("sqlite", dataDir+"/cron.db?_journal=WAL&_sync=NORMAL")
@@ -90,7 +82,7 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 	if agent != nil {
 		provider = agent.Provider()
 	}
-	gw := router.NewGateway(idMapper, taskMgr, agent, provider)
+	gw := router.NewGateway(agent, provider)
 	gw.SetIntentClassifier(router.NewIntentClassifierWithRules(router.IntentRuleConfig{
 		Mode:            cfg.Intent.Mode,
 		Rules:           cfg.Intent.Rules,
@@ -99,14 +91,10 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 	}))
 	displayProvider, displayModel, _ := ResolveModelDisplay(cfg)
 	gw.SetModelDisplay(displayProvider, displayModel)
-	bridge := channel.NewBridge(gw)
 
 	return &GatewayDeps{
-		IdentityMapper: idMapper,
-		TaskManager:    taskMgr,
-		CronScheduler:  cronSched,
-		Gateway:        gw,
-		Bridge:         bridge,
+		CronScheduler: cronSched,
+		Gateway:       gw,
 	}, nil
 }
 

@@ -34,7 +34,7 @@ func runCmdTree(cmd tea.Cmd) {
 // cancel or quit — it shows the exit prompt (teaching the detached-run design);
 // pressing c then cancels through the registry-backed /stop and stays.
 func TestCtrlCShowsExitPromptThenCancelViaC(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	got := make(chan string, 4)
 	model.messageProcessor = func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
@@ -96,7 +96,7 @@ func TestCtrlCShowsExitPromptThenCancelViaC(t *testing.T) {
 // TestExitPromptBackgroundQuitDoesNotStop: choosing b (or a second ctrl+c)
 // quits while leaving the daemon-owned run untouched — no /stop, no cancel.
 func TestExitPromptBackgroundQuitDoesNotStop(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	stopDispatched := make(chan string, 2)
 	model.messageProcessor = func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
 		stopDispatched <- req.Content
@@ -138,7 +138,7 @@ func TestExitPromptBackgroundQuitDoesNotStop(t *testing.T) {
 // TestRequestDaemonStopIsNoOpWithoutProcessor covers the legacy in-process
 // agent path, where the local ctx still owns the run and no /stop exists.
 func TestRequestDaemonStopIsNoOpWithoutProcessor(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.messageProcessor = nil
 	if cmd := model.requestDaemonStop(); cmd != nil {
 		t.Fatal("requestDaemonStop must be a no-op without a message processor")

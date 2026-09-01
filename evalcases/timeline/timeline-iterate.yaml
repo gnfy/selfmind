@@ -16,11 +16,13 @@ turns:
   - input: "写一首两行的关于秋天的短诗,直接给出诗句,不要解释,不要读文件,不要写代码。"
   - input: "把刚才那首诗改成夏天主题,还是两行,直接给出诗句。"
 
+# P2: turn 1 completes, so the follow-up owns its own root task; answer
+# continuity flows through the spine (content checks below).
 expect:
   status: completed
   max_tool_calls: 0
   max_duration_seconds: 300
-  require_same_task: true
+  require_task_switch: true
 
 checks:
   no_mojibake: true

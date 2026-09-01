@@ -64,6 +64,19 @@ type SeedTask struct {
 	Title        string `yaml:"title" json:"title,omitempty"`
 	Status       string `yaml:"status" json:"status,omitempty"`
 	DefaultSkill string `yaml:"default_skill,omitempty" json:"default_skill,omitempty"`
+	// ParkedRuns seeds unclaimed resumable runs on the task before the first
+	// turn, so cases can exercise the deterministic continuation ladder
+	// (unique parent claim, cross-task candidates) through the production
+	// message path without a live model producing the waiting state first.
+	ParkedRuns []SeedParkedRun `yaml:"parked_runs,omitempty" json:"parked_runs,omitempty"`
+}
+
+// SeedParkedRun is one pre-existing run parked in a resumable status.
+type SeedParkedRun struct {
+	Input string `yaml:"input" json:"input"`
+	// Status must be one of the resumable statuses (interrupted, waiting_user,
+	// verification_partial, blocked); empty defaults to waiting_user.
+	Status string `yaml:"status,omitempty" json:"status,omitempty"`
 }
 
 // StatePredicate is a single assertion over the world state after a scenario
@@ -219,7 +232,11 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			continue
 		}
 		if mem != nil && content != "" {
-			if err := mem.AddFact(ctx, identity.TenantID, target, f.Content); err != nil {
+			partition := strings.TrimSpace(identity.PersonID)
+			if partition == "" {
+				partition = identity.TenantID
+			}
+			if err := mem.AddFact(ctx, partition, target, f.Content); err != nil {
 				return err
 			}
 		}
@@ -266,7 +283,28 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 		if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
 			return err
 		}
-		if skillName := kernel.SanitizeSkillName(setup.Task.DefaultSkill); skillName != "" {
+		for i, parked := range setup.Task.ParkedRuns {
+			run, err := store.StartRun(ctx, task, channel, strings.TrimSpace(parked.Input))
+			if err != nil {
+				return fmt.Errorf("seed parked run %d: %w", i, err)
+			}
+			status := strings.TrimSpace(parked.Status)
+			if status == "" {
+				status = "waiting_user"
+			}
+			switch status {
+			case "interrupted", "waiting_user", "verification_partial", "blocked":
+			default:
+				return fmt.Errorf("seed parked run %d: status %q is not resumable", i, status)
+			}
+			if err := store.FinishRun(ctx, identity.TenantID, run.ID, status); err != nil {
+				return fmt.Errorf("park seeded run %d: %w", i, err)
+			}
+			if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, "", nil); err != nil {
+				return fmt.Errorf("seed parked run %d task status: %w", i, err)
+			}
+		}
+		if skillName := kernel.SanitizeSkillName(setup.Task.DefaultSkill); strings.TrimSpace(setup.Task.DefaultSkill) != "" && skillName != "" {
 			skillsRoot := filepath.Join(workspaceRoot, ".selfmind", "skills")
 			skillPath := filepath.Join(skillsRoot, skillName, "SKILL.md")
 			content, err := os.ReadFile(skillPath)

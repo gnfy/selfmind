@@ -20,7 +20,7 @@ type approvalRespondCall struct {
 }
 
 func newApprovalTestModel() (*uiModel, *[]approvalRespondCall) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 100
 	model.height = 30
 	calls := &[]approvalRespondCall{}

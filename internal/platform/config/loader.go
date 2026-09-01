@@ -116,6 +116,9 @@ intent:
     direct: 0.8
     ask: 0.55
 
+continuity:
+  mode: "safe" # shadow | safe | full | off
+
 cron:
   enabled: true
 
@@ -124,13 +127,10 @@ flight_recorder:
   keep: 20
 
 memory:
-  auto_extract_interval: 5
-  auto_extract_min_chars: 80
   semantic_recall: true
   use_memory_fence: true
 
 tasks:
-  inbox_enabled: true
   default_list_limit: 10
   auto_archive_done_after: "720h"
   auto_archive_cancelled_after: "168h"
@@ -222,6 +222,7 @@ type Config struct {
 	Tasks            TaskConfig                  `mapstructure:"tasks" yaml:"tasks,omitempty"`
 	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
 	Intent           IntentConfig                `mapstructure:"intent" yaml:"intent,omitempty"`
+	Continuity       ContinuityConfig            `mapstructure:"continuity" yaml:"continuity,omitempty"`
 	Web              WebConfig                   `mapstructure:"web" yaml:"web,omitempty"`
 	ExecSandbox      ExecSandboxConfig           `mapstructure:"exec_sandbox" yaml:"exec_sandbox,omitempty"`
 	History          HistoryConfig               `mapstructure:"history" yaml:"history,omitempty"`
@@ -284,6 +285,23 @@ type IntentThresholdsConfig struct {
 	Ask    float64 `mapstructure:"ask" yaml:"ask,omitempty"`
 }
 
+// ContinuityConfig controls the single pre-run continuity authority. Safe is
+// the release default: read-only observation and unambiguous active steering
+// may execute, while historical resume remains an explicit human choice until
+// shadow evidence supports full mode.
+type ContinuityConfig struct {
+	Mode string `mapstructure:"mode" yaml:"mode,omitempty"`
+}
+
+func (c ContinuityConfig) EffectiveMode() string {
+	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
+	case "shadow", "safe", "full", "off":
+		return strings.ToLower(strings.TrimSpace(c.Mode))
+	default:
+		return "safe"
+	}
+}
+
 type EditorConfig struct {
 	LargePasteChars int `mapstructure:"large_paste_chars" yaml:"large_paste_chars,omitempty"`
 	LargePasteLines int `mapstructure:"large_paste_lines" yaml:"large_paste_lines,omitempty"`
@@ -333,11 +351,9 @@ type AuthConfig struct {
 }
 
 type MemoryConfig struct {
-	AutoExtractInterval int                    `mapstructure:"auto_extract_interval" yaml:"auto_extract_interval,omitempty"`
-	AutoExtractMinChars int                    `mapstructure:"auto_extract_min_chars" yaml:"auto_extract_min_chars,omitempty"`
-	SemanticRecall      bool                   `mapstructure:"semantic_recall" yaml:"semantic_recall,omitempty"`
-	UseMemoryFence      bool                   `mapstructure:"use_memory_fence" yaml:"use_memory_fence,omitempty"`
-	Governance          MemoryGovernanceConfig `mapstructure:"governance" yaml:"governance,omitempty"`
+	SemanticRecall bool                   `mapstructure:"semantic_recall" yaml:"semantic_recall,omitempty"`
+	UseMemoryFence bool                   `mapstructure:"use_memory_fence" yaml:"use_memory_fence,omitempty"`
+	Governance     MemoryGovernanceConfig `mapstructure:"governance" yaml:"governance,omitempty"`
 }
 
 // MemoryGovernanceConfig controls background memory self-organization
@@ -367,6 +383,9 @@ type MemoryGovernanceConfig struct {
 }
 
 type TaskConfig struct {
+	// Deprecated: the post-run INBOX decision was removed with simplification
+	// P2 (one-shot Q&A is handled by derived display priority instead). The
+	// key is still parsed so existing config files keep loading; it is ignored.
 	InboxEnabled              bool   `mapstructure:"inbox_enabled" yaml:"inbox_enabled,omitempty"`
 	DefaultListLimit          int    `mapstructure:"default_list_limit" yaml:"default_list_limit,omitempty"`
 	AutoArchiveDoneAfter      string `mapstructure:"auto_archive_done_after" yaml:"auto_archive_done_after,omitempty"`
@@ -1103,8 +1122,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("updates.channel", "auto")
 	v.SetDefault("updates.check_interval", "15m")
 	v.SetDefault("feedback.repository", "gnfy/selfmind")
-	v.SetDefault("memory.auto_extract_interval", 5)
-	v.SetDefault("memory.auto_extract_min_chars", 80)
 	v.SetDefault("memory.semantic_recall", true)
 	v.SetDefault("memory.use_memory_fence", true)
 	// Governance starts in observation-only mode. It is inert when the
@@ -1142,6 +1159,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intent.mode", "hybrid")
 	v.SetDefault("intent.thresholds.direct", 0.8)
 	v.SetDefault("intent.thresholds.ask", 0.55)
+	v.SetDefault("continuity.mode", "safe")
 	v.SetDefault("gateway.pending_notify_after", "15m")
 	v.SetDefault("gateway.outbound_retention", "336h")
 	v.SetDefault("exec_sandbox.enabled", true)

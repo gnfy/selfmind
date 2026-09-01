@@ -3,6 +3,7 @@ package tools
 // ClarifyRequest represents a pending clarify request from the agent.
 // The ClarifyTool blocks the agent goroutine here until the TUI delivers a response.
 type ClarifyRequest struct {
+	ID           string
 	Question     string
 	Choices      []string
 	ResponseChan chan string

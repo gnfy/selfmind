@@ -15,11 +15,13 @@ turns:
   - input: "帮我起一个两个词的英文项目名,主题是天气预报,只回项目名,不要读文件。"
   - input: "继续刚才的,把这个项目名翻译成中文并加一句宣传语。"
     channel: weixin
+# P2: turn 1 completes, so the follow-up owns its own root task; answer
+# continuity flows through the spine (content checks below).
 expect:
   status: completed
   max_tool_calls: 0
   max_duration_seconds: 300
-  require_same_task: true
+  require_task_switch: true
 
 checks:
   no_mojibake: true

@@ -73,6 +73,22 @@ type cancelledOutcomeLedger struct {
 	ctxErr   error
 }
 
+type capturingToolLedger struct{ entry ToolLedgerEntry }
+
+func (l *capturingToolLedger) ClaimDispatch(_ context.Context, entry ToolLedgerEntry) (ToolDispatchDecision, error) {
+	l.entry = entry
+	return ToolDispatchDecision{Execute: true, Status: "started"}, nil
+}
+
+func (*capturingToolLedger) RecordOutcome(context.Context, string, string, bool) error { return nil }
+
+type successfulToolBackend struct{}
+
+func (successfulToolBackend) Dispatch(string, map[string]interface{}) (string, error) {
+	return "ok", nil
+}
+func (successfulToolBackend) GetToolDefinitions() []map[string]interface{} { return nil }
+
 func (l *cancelledOutcomeLedger) ClaimDispatch(context.Context, ToolLedgerEntry) (ToolDispatchDecision, error) {
 	return ToolDispatchDecision{Execute: true, Status: "started"}, nil
 }
@@ -135,6 +151,29 @@ func TestCancelledToolClosesLedgerWithCleanupContext(t *testing.T) {
 	}
 	if ledger.ctxErr != nil {
 		t.Fatalf("ledger cleanup context was cancelled: %v", ledger.ctxErr)
+	}
+}
+
+func TestToolLedgerClaimCarriesPlanEffectAndEnvironmentCorrelation(t *testing.T) {
+	ctx := WithTaskRuntimeContext(context.Background(), TaskRuntimeContext{RunID: "run-correlated"})
+	ctx = WithToolInvocationScope(ctx, ToolInvocationScope{ControlTenantID: "default", RunID: "run-correlated", EnvironmentGeneration: 7})
+	state := NewRunExecutionState()
+	ctx = WithRunExecutionState(ctx, state)
+	UpdateRunExecutionPlan(ctx, 3, "step-verify")
+	ledger := &capturingToolLedger{}
+	ctx = WithToolLedger(ctx, ledger)
+	agent := &Agent{backend: successfulToolBackend{}}
+	result := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{
+		ID: "call-write", Function: "terminal", Args: `{"command":"touch result"}`,
+	})
+	if !result.success {
+		t.Fatalf("tool result=%+v", result)
+	}
+	entry := ledger.entry
+	if entry.EffectID != ToolEffectID("run-correlated", "call-write") || entry.PlanVersion != 3 ||
+		entry.PlanStepID != "step-verify" || entry.Strategy != "mutate" || entry.EffectClass != "side_effect" ||
+		entry.EnvironmentGeneration != 7 {
+		t.Fatalf("correlated ledger entry=%+v", entry)
 	}
 }
 
@@ -222,5 +261,21 @@ func TestEmitStructuredToolEventSuppressesUnchangedPlan(t *testing.T) {
 	emitStructuredToolEvent(events, "update_plan", args, `{"changed":true}`, nil)
 	if len(events) != 1 {
 		t.Fatalf("changed plan emitted %d event(s), want 1", len(events))
+	}
+}
+
+func TestPlanUpdatedEventUsesServerIssuedPlanResult(t *testing.T) {
+	events := make(chan string, 1)
+	args := map[string]interface{}{
+		"plan": []interface{}{map[string]interface{}{"step": "Inspect", "status": "in_progress"}},
+	}
+	emitStructuredToolEvent(events, "update_plan", args,
+		`{"changed":true,"plan_version":4,"plan":[{"step_id":"step-issued","step":"Inspect","status":"in_progress","success_criteria":"state captured"}],"work_units":[{"id":"wu-issued","sequence":1}]}`, nil)
+	event, ok := DecodeAgentEvent(<-events)
+	if !ok || len(event.Plan) != 1 || event.Plan[0].StepID != "step-issued" || event.Plan[0].SuccessCriteria != "state captured" || event.Payload["plan_version"] != float64(4) && event.Payload["plan_version"] != 4 {
+		t.Fatalf("plan event=%+v ok=%v", event, ok)
+	}
+	if _, ok := event.Payload["work_units"]; !ok {
+		t.Fatalf("plan event lost durable work-unit projection: %+v", event)
 	}
 }

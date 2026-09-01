@@ -66,11 +66,176 @@ func TestClarifyAnswerResolvesPendingQuestion(t *testing.T) {
 	}
 }
 
+// TestClarifyMultiplePendingDisambiguates pins the P1 contract: an answer must
+// never land on a question the person did not mean. Two pending questions get
+// a deterministic numbered list; an "N: answer" prefix picks one exactly, and
+// the other stays pending.
+func TestClarifyMultiplePendingDisambiguates(t *testing.T) {
+	daemon, store, identity, task, run := newClarifyTestServer(t)
+	ctx := context.Background()
+	first, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Question: "Which environment?", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Question: "Which region?", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handled, reply, err := daemon.tryHandleClarifyAnswer(ctx, identity, "", "staging please", "cli")
+	if err != nil || !handled {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(reply, "Several questions are waiting") || !strings.Contains(reply, "Which environment?") || !strings.Contains(reply, "Which region?") {
+		t.Fatalf("ambiguous answer must list the pending questions, got %q", reply)
+	}
+	if got, _ := store.GetClarifyRequest(ctx, identity.TenantID, first.ID); got == nil || got.Status != "pending" {
+		t.Fatalf("no question may be blindly claimed: %+v", got)
+	}
+
+	// Pick "Which region?" by the number the DISPLAYED list assigned it — the
+	// person answers against that list, whatever internal order produced it.
+	regionNumber := ""
+	for _, line := range strings.Split(reply, "\n") {
+		if strings.Contains(line, "Which region?") {
+			regionNumber, _, _ = strings.Cut(line, ".")
+			break
+		}
+	}
+	if strings.TrimSpace(regionNumber) == "" {
+		t.Fatalf("could not find the region question's number in %q", reply)
+	}
+	handled, reply, err = daemon.tryHandleClarifyAnswer(ctx, identity, "", regionNumber+": us-east-1", "cli")
+	if err != nil || !handled || !strings.Contains(reply, "Got it") {
+		t.Fatalf("numbered pick failed: handled=%v reply=%q err=%v", handled, reply, err)
+	}
+	if got, _ := store.GetClarifyRequest(ctx, identity.TenantID, second.ID); got == nil || got.Status != "answered" || got.Answer != "us-east-1" {
+		t.Fatalf("picked question = %+v, want answered with us-east-1", got)
+	}
+	if got, _ := store.GetClarifyRequest(ctx, identity.TenantID, first.ID); got == nil || got.Status != "pending" {
+		t.Fatalf("unpicked question must stay pending: %+v", got)
+	}
+}
+
+func TestClarifyIDAnswersExactPendingQuestion(t *testing.T) {
+	daemon, store, identity, task, run := newClarifyTestServer(t)
+	ctx := context.Background()
+	first, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Question: "Which environment?", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Question: "Which region?", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli",
+		Content: "us-east-1", ClarifyID: second.ID,
+	})
+	if status != http.StatusOK || !strings.Contains(resp.Content, "Got it") {
+		t.Fatalf("exact clarify answer failed: status=%d resp=%+v", status, resp)
+	}
+	if got, _ := store.GetClarifyRequest(ctx, identity.TenantID, second.ID); got == nil || got.Status != "answered" || got.Answer != "us-east-1" {
+		t.Fatalf("named clarification was not answered: %+v", got)
+	}
+	if got, _ := store.GetClarifyRequest(ctx, identity.TenantID, first.ID); got == nil || got.Status != "pending" {
+		t.Fatalf("unrelated clarification changed: %+v", got)
+	}
+}
+
+func TestParkedClarifyAnswerResumesExactOriginRun(t *testing.T) {
+	daemon, store, identity, task, origin := newClarifyTestServer(t)
+	ctx := context.Background()
+	clarify, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: origin.ID,
+		Question: "Which region?", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, origin.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	sibling := seedUnresolvedRun(t, store, identity.TenantID, task, "cli", "unrelated interrupted work", "interrupted")
+
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli",
+		Content: "us-east-1", ClarifyID: clarify.ID,
+	})
+	if status != http.StatusOK || !strings.Contains(resp.Content, "continuing") {
+		t.Fatalf("parked clarification answer failed: status=%d resp=%+v", status, resp)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		runs, listErr := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 20)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		for _, run := range runs {
+			if run.ParentRunID == sibling.ID {
+				t.Fatalf("clarification resumed the sibling run: %+v", run)
+			}
+			if run.ParentRunID == origin.ID {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("answering a parked clarification did not create a child run for its exact origin")
+}
+
+func TestParkedClarifyAnswerDoesNotFollowAClaimedOrigin(t *testing.T) {
+	daemon, store, identity, task, origin := newClarifyTestServer(t)
+	ctx := context.Background()
+	clarify, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: origin.ID,
+		Question: "Which region?", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, origin.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.StartRunWithOptions(ctx, task, "cli", "already continuing", control.StartRunOptions{ParentRunID: origin.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli",
+		Content: "us-east-1", ClarifyID: clarify.ID,
+	})
+	if status != http.StatusOK || !strings.Contains(resp.Content, "no longer waiting") {
+		t.Fatalf("stale clarification response: status=%d resp=%+v", status, resp)
+	}
+	stored, err := store.GetClarifyRequest(ctx, identity.TenantID, clarify.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Status != "expired" {
+		t.Fatalf("stale clarification = %+v, want expired", stored)
+	}
+}
+
 // TestClarifyAnswerIgnoredWithNoPending: a plain message with no question
 // pending must NOT be claimed — it flows on to normal routing.
 func TestClarifyAnswerIgnoredWithNoPending(t *testing.T) {
 	daemon, _, identity, _, _ := newClarifyTestServer(t)
-	handled, _, _ := daemon.tryHandleClarifyAnswer(context.Background(), identity, "hello there", "cli")
+	handled, _, _ := daemon.tryHandleClarifyAnswer(context.Background(), identity, "", "hello there", "cli")
 	if handled {
 		t.Fatal("free text with no pending question must fall through")
 	}
@@ -87,7 +252,7 @@ func TestClarifySlashNotTreatedAsAnswer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	handled, _, _ := daemon.tryHandleClarifyAnswer(ctx, identity, "/status", "cli")
+	handled, _, _ := daemon.tryHandleClarifyAnswer(ctx, identity, "", "/status", "cli")
 	if handled {
 		t.Fatal("a slash command must not be treated as a clarify answer")
 	}
@@ -191,6 +356,37 @@ func TestGatewayClarifyStopsWhenRunIsCancelled(t *testing.T) {
 	}
 	if stored == nil || stored.Status != "expired" {
 		t.Fatalf("clarify after cancellation = %+v, want expired", stored)
+	}
+}
+
+// TestGatewayClarifyPreservesQuestionOnGatewayShutdown separates a daemon
+// restart from an ordinary user cancellation. The waiter exits in both cases,
+// but restart recovery needs the pending row so a later answer can resume the
+// exact origin run through its ClarifyID.
+func TestGatewayClarifyPreservesQuestionOnGatewayShutdown(t *testing.T) {
+	daemon, store, identity, task, run := newClarifyTestServer(t)
+	runCtx, cancel := context.WithCancelCause(context.Background())
+	handler := daemon.coordinator().gatewayClarify(runCtx, identity, task, run, "cli")
+
+	resultCh := make(chan string, 1)
+	go func() { resultCh <- handler("Which environment?", nil) }()
+	clarify := waitForPendingClarify(t, store, identity)
+	cancel(errGatewayShutdown)
+
+	select {
+	case got := <-resultCh:
+		if got != clarifyFallbackSentinel {
+			t.Fatalf("clarify result = %q, want fallback sentinel", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("gatewayClarify ignored gateway shutdown")
+	}
+	stored, err := store.GetClarifyRequest(context.Background(), identity.TenantID, clarify.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Status != "pending" {
+		t.Fatalf("clarify after gateway shutdown = %+v, want pending", stored)
 	}
 }
 

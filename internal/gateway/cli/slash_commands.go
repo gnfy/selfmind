@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
+	"selfmind/internal/gateway/command"
 	"selfmind/internal/ui/components"
 )
 
@@ -54,7 +57,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/id", Usage: "/id", Description: "Show your resolved account identity", Hint: "show your account identity"},
 	{Name: "/new", Usage: "/new [title]", Description: "Create a new task", Hint: "create a new task"},
 	{Name: "/resume", Usage: "/resume [n|task_id]", Description: "Pick a recent task to resume (bare), or resume one by number or id", Hint: "pick a task to resume"},
-	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|archive|references|reference add|remove <name>]", Description: "Show or manage a task and its references", Hint: "inspect or manage one task"},
+	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|complete|archive|references|reference add|remove <name>]", Description: "Show, complete, archive, or manage a task", Hint: "inspect or manage one task"},
 	{Name: "/workspace", Usage: "/workspace [n|id]", Description: "List workspaces (bare) or select one by number/id", Hint: "list or select a workspace"},
 	{Name: "/ws", Usage: "/ws [n|id]", Description: "Short alias for /workspace (bare lists, arg selects)", Hint: "list or select a workspace"},
 	{Name: "/workspaces", Usage: "/workspaces", Description: "List workspaces (same as bare /workspace)", Hint: "list your workspaces"},
@@ -62,15 +65,31 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/notify", Usage: "/notify <platform|auto>", Description: "Choose where detached CLI notifications go", Hint: "set notify preference"},
 }
 
-// gatewayPassthroughCommands are the Gateway-scope control commands whose TUI
-// wiring is a pure relay to the daemon (no local rendering). Kept as a list so
-// the cross-endpoint drift-guard test can assert the TUI exposes every gateway
-// command.
-var gatewayPassthroughCommands = []string{
-	"/approvals", "/approve", "/reject", "/stop", "/cancel", "/id", "/new",
-	"/resume", "/task", "/workspace", "/workspaces", "/ws", "/events", "/notify",
-	"/watchers", "/report",
-}
+// gatewayPassthroughCommands are derived from the cross-endpoint registry. The
+// small wired set below has richer local rendering; every other gateway command
+// is a pure relay to the daemon. This keeps newly added controls visible in the
+// TUI without maintaining a second command-name catalog.
+var gatewayPassthroughCommands = func() []string {
+	wired := map[string]bool{
+		"/help": true, "/model": true, "/status": true, "/tasks": true,
+		"/mode": true, "/queue": true, "/diag": true,
+	}
+	out := make([]string, 0)
+	for _, entry := range command.All() {
+		if entry.Scope != command.Gateway {
+			continue
+		}
+		names := append([]string{entry.Name}, entry.Aliases...)
+		for _, name := range names {
+			// Multi-word aliases are parser conveniences, not editor commands.
+			if wired[name] || strings.ContainsAny(name, " \t") {
+				continue
+			}
+			out = append(out, name)
+		}
+	}
+	return out
+}()
 
 var slashCommands = []slashCommand{
 	{
@@ -216,6 +235,14 @@ func metaByName(name string) slashCommandMeta {
 			return meta
 		}
 	}
+	if entry, ok := command.Lookup(name); ok {
+		return slashCommandMeta{
+			Name:        name,
+			Usage:       entry.Usage,
+			Description: entry.Summary,
+			Hint:        entry.Summary,
+		}
+	}
 	return slashCommandMeta{Name: name}
 }
 
@@ -262,11 +289,32 @@ var slashCommandIndex = func() map[string]slashCommand {
 }()
 
 func slashCommandHints() []components.CommandHint {
-	hints := make([]components.CommandHint, 0, len(slashCommandMetas))
-	for _, cmd := range slashCommandMetas {
+	commands := slashHelpMetas()
+	hints := make([]components.CommandHint, 0, len(commands))
+	for _, cmd := range commands {
 		hints = append(hints, components.CommandHint{Name: cmd.Name, Description: cmd.Hint})
 	}
 	return hints
+}
+
+// slashHelpMetas returns the locally rendered command metadata plus any
+// registry-derived gateway passthroughs that do not have a local presentation.
+// Keeping this independent of allSlashCommands avoids a package-init cycle:
+// the /help command itself opens the view that consumes this list.
+func slashHelpMetas() []slashCommandMeta {
+	out := append([]slashCommandMeta(nil), slashCommandMetas...)
+	seen := make(map[string]bool, len(out))
+	for _, meta := range out {
+		seen[meta.Name] = true
+	}
+	for _, name := range gatewayPassthroughCommands {
+		if seen[name] {
+			continue
+		}
+		out = append(out, metaByName(name))
+		seen[name] = true
+	}
+	return out
 }
 
 func runHelpCommand(m *uiModel, args []string) tea.Cmd {

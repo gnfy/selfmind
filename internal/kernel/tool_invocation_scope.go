@@ -30,16 +30,20 @@ const (
 // authority. It contains identifiers only: credentials and environment values
 // never cross this boundary.
 type ToolInvocationScope struct {
-	ControlTenantID   string
-	PersonID          string
-	TaskID            string
-	WorkspaceID       string
-	RunID             string
-	LeaseID           string
-	ExecutionScopeKey string
-	WorkUnitID        string
-	ExecutionLane     string
-	AttachmentMode    string
+	ControlTenantID       string
+	PersonID              string
+	TaskID                string
+	WorkspaceID           string
+	RunID                 string
+	LeaseID               string
+	EnvironmentGeneration int64
+	ExecutionScopeKey     string
+	WorkUnitID            string
+	ExecutionLane         string
+	AttachmentMode        string
+	// RecoveryMode is daemon-owned. A verification-only recovery is enforced
+	// again at dispatch so a provider cannot escape it with fallback tool syntax.
+	RecoveryMode string
 	// SkillPublicationScope is trusted lifecycle metadata for choosing a
 	// managed asset root. It is separate from execution authority and cannot be
 	// supplied by model-visible JSON.

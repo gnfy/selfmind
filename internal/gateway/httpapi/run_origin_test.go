@@ -73,17 +73,34 @@ func TestApprovalOriginAndSourceReachRunStartedEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task: %v", err)
 	}
+	origin, err := store.StartRun(ctx, task, "cli", "waiting for approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, origin.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: origin.ID,
+		ActionType: "terminal",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err = store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli", control.ApprovalDecisionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	provider.releaseNow()
 
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
-		TenantID:         identity.TenantID,
-		Platform:         "cli",
-		PlatformUserID:   "local",
-		Channel:          "cli",
-		Content:          "resume the parked approval",
-		TaskID:           task.ID,
-		Origin:           runOriginApproval,
-		SourceApprovalID: "apr_source",
+		TenantID:       identity.TenantID,
+		Platform:       "cli",
+		PlatformUserID: "local",
+		Channel:        "cli",
+		Content:        "The pending action was approved.",
+		Origin:         runOriginApproval,
+		ApprovalID:     approval.ID,
 	})
 	if status != 200 || resp.Task == nil {
 		t.Fatalf("approval continuation = status %d resp %+v", status, resp)
@@ -116,7 +133,7 @@ func TestApprovalOriginAndSourceReachRunStartedEvent(t *testing.T) {
 	if started == nil {
 		t.Fatal("no run.started event recorded")
 	}
-	if started.Origin != runOriginApproval || started.SourceApprovalID != "apr_source" {
+	if started.Origin != runOriginApproval || started.SourceApprovalID != approval.ID {
 		t.Fatalf("run.started provenance = %+v", started)
 	}
 	if strings.TrimSpace(started.WatchID) != "" {

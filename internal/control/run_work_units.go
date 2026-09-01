@@ -72,6 +72,21 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 		return nil, err
 	}
 	defer tx.Rollback()
+	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, plan)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return units, nil
+}
+
+// syncRunWorkUnitsTx is the transactional seam shared by the public
+// compatibility API and the durable Run-plan projection. Keeping plan steps
+// and their coarser work-unit attribution in one transaction prevents a crash
+// from publishing only half of the execution structure.
+func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runID string, plan []WorkUnitPlanInput) ([]RunWorkUnit, error) {
 	var personID, workspaceID, primaryTaskID string
 	if err := tx.QueryRowContext(ctx, `SELECT person_id, COALESCE(workspace_id,''), task_id FROM task_runs WHERE tenant_id=? AND id=?`, tenant, runID).
 		Scan(&personID, &workspaceID, &primaryTaskID); err != nil {
@@ -151,10 +166,7 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 			return nil, err
 		}
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return s.ListRunWorkUnits(ctx, tenant, runID)
+	return listRunWorkUnitsTx(ctx, tx, tenant, runID)
 }
 
 func resolvePlanWorkUnit(runID string, item WorkUnitPlanInput, existing []RunWorkUnit, byID map[string]*RunWorkUnit, used map[string]bool) (*RunWorkUnit, error) {

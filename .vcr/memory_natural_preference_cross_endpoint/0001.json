@@ -1,0 +1,72 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "明",
+      "phase": "final_answer"
+    },
+    {
+      "content": "白",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "content": "以后",
+      "phase": "final_answer"
+    },
+    {
+      "content": "我",
+      "phase": "final_answer"
+    },
+    {
+      "content": "会",
+      "phase": "final_answer"
+    },
+    {
+      "content": "先",
+      "phase": "final_answer"
+    },
+    {
+      "content": "给",
+      "phase": "final_answer"
+    },
+    {
+      "content": "结",
+      "phase": "final_answer"
+    },
+    {
+      "content": "论",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，再",
+      "phase": "final_answer"
+    },
+    {
+      "content": "给",
+      "phase": "final_answer"
+    },
+    {
+      "content": "依据",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "usage": {
+        "input_tokens": 6833,
+        "output_tokens": 18,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 6833,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

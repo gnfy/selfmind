@@ -34,7 +34,7 @@ func TestMessageContextBudgetUsesExecutingAgentWindow(t *testing.T) {
 			if tt.contextTokens > 0 {
 				agent := kernel.NewAgent(nil, nil, nil, "test", 1, 1, nil)
 				agent.SetContextWindow(tt.contextTokens)
-				server.Gateway = router.NewGateway(nil, nil, agent, nil)
+				server.Gateway = router.NewGateway(agent, nil)
 			}
 			got := server.messageContextBudget(llm.UsageStats{InputTokens: 7, OutputTokens: 3})
 			want := kernel.RuntimeContextBudgetForContextTokens(tt.contextTokens)
@@ -707,6 +707,14 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 		t.Fatalf("test setup expected empty workspace: %+v", task)
 	}
 
+	waiting, err := store.StartRun(ctx, task, "cli", "parked work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, waiting.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	req := api.MessageRequest{
 		Platform:       "cli",
@@ -718,8 +726,8 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	if _, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		t.Fatal(err)
 	}
-	// Continuation evidence attaches to the workspace-less current task and
-	// binds the request's resolved CLI workspace to it.
+	// A continuation resolves through the run ladder to the waiting run's
+	// workspace-less task and binds the request's resolved CLI workspace to it.
 	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentContinue})
 	if err != nil {
 		t.Fatal(err)
@@ -727,28 +735,27 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	if resolved == nil || resolved.ID != task.ID || resolved.WorkspaceID != req.WorkspaceID {
 		t.Fatalf("resolved task = %+v, req workspace = %s", resolved, req.WorkspaceID)
 	}
-	if attach.preLabel || attach.created {
-		t.Fatalf("continuation attach must be explicit, got %+v", attach)
+	if attach.preLabel || attach.created || attach.parentRunID != waiting.ID {
+		t.Fatalf("continuation attach must be explicit with the exact parent, got %+v", attach)
 	}
-	// Plain new work pre-labels onto the open current task (Work Timeline P3)
-	// — a display guess — while the EXECUTION workspace still follows the
-	// request (workspaceForTask), so the guess is harmless.
+	// Plain new work owns a fresh root task (simplification P2); the EXECUTION
+	// workspace follows the request either way.
 	fresh, attach, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh == nil || fresh.ID != task.ID {
-		t.Fatalf("plain work should pre-label onto the open current task, got %+v", fresh)
+	if fresh == nil || fresh.ID == task.ID {
+		t.Fatalf("plain work must own a fresh root task, got %+v", fresh)
 	}
-	if !attach.preLabel || attach.created {
-		t.Fatalf("pre-label reuse must be flagged preLabel (not created), got %+v", attach)
+	if !attach.created {
+		t.Fatalf("fresh root task attach must be flagged created, got %+v", attach)
 	}
 	ws, err := daemon.coordinator().workspaceForTask(ctx, identity, fresh, req, attach)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if ws == nil || ws.ID != req.WorkspaceID {
-		t.Fatalf("pre-label run must execute in the REQUEST workspace %s, got %+v", req.WorkspaceID, ws)
+		t.Fatalf("a fresh root run must execute in the REQUEST workspace %s, got %+v", req.WorkspaceID, ws)
 	}
 }
 
@@ -763,7 +770,11 @@ func addActiveTaskReference(t *testing.T, store *control.Store, task *control.Ta
 	}
 }
 
-func TestResolveTaskUsesActiveReferenceBeforeCurrentPreLabel(t *testing.T) {
+// TestReferencesNeverRouteAttachment pins the P2 demotion: an active,
+// user-confirmed reference matching the message text is a search hint only —
+// an ordinary message still owns its own fresh root task, with the deterministic
+// work key kept as display metadata.
+func TestReferencesNeverRouteAttachment(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -775,19 +786,10 @@ func TestResolveTaskUsesActiveReferenceBeforeCurrentPreLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-100 old release", Channel: "cli",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
 	target, err := store.CreateTask(ctx, control.TaskCreate{
 		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-369 GCP release", Channel: "cli",
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, current.ID); err != nil {
 		t.Fatal(err)
 	}
 	addActiveTaskReference(t, store, target, "RUQX-369")
@@ -800,175 +802,14 @@ func TestResolveTaskUsesActiveReferenceBeforeCurrentPreLabel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.ID != target.ID {
-		t.Fatalf("explicit work key resolved to %+v, want %s", resolved, target.ID)
+	if resolved == nil || resolved.ID == target.ID {
+		t.Fatalf("a reference must not route the message onto its task: %+v", resolved)
 	}
-	if !attach.preLabel || attach.created || attach.claimsPriorRuns() {
-		t.Fatalf("an existing work-key attach must stay display-only: %+v", attach)
+	if !attach.created || attach.claimsPriorRuns() {
+		t.Fatalf("ordinary message must own a fresh task without prior-run claims: %+v", attach)
 	}
 	if attach.workKey != "RUQX-369" {
-		t.Fatalf("work key=%q want RUQX-369", attach.workKey)
-	}
-}
-
-func TestResolveTaskUsesActiveReferenceBeforeImplicitContinuation(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	ctx := context.Background()
-	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-work-key-continue", "Local User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	current, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-100 old release", Channel: "cli",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	target, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-511 GCP release", Channel: "cli",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, current.ID); err != nil {
-		t.Fatal(err)
-	}
-	addActiveTaskReference(t, store, target, "RUQX-511")
-
-	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local-work-key-continue", Channel: "cli",
-		Content: "continue checking RUQX-511",
-	}, router.IntentResult{Intent: router.IntentContinue})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolved == nil || resolved.ID != target.ID {
-		t.Fatalf("explicit work key resolved to %+v, want %s", resolved, target.ID)
-	}
-	if attach.preLabel || attach.claimsPriorRuns() || attach.workKey != "RUQX-511" {
-		t.Fatalf("reference continuation must remain non-authoritative: %+v", attach)
-	}
-}
-
-func TestReferenceContinuationCannotChangeExecutionWorkspace(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "reference-scope", "Local User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	requestRoot, taskRoot := t.TempDir(), t.TempDir()
-	requestWS, err := store.RegisterWorkspace(ctx, control.Workspace{
-		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID, Name: "request", LocalPath: requestRoot,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	taskWS, err := store.RegisterWorkspace(ctx, control.Workspace{
-		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID, Name: "task", LocalPath: taskRoot,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	target, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: taskWS.ID,
-		Title: "Customer portal", Channel: "cli",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	addActiveTaskReference(t, store, target, "customer portal")
-	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	req := api.MessageRequest{Platform: "cli", PlatformUserID: "reference-scope", Channel: "cli",
-		WorkspaceID: requestWS.ID, Content: "continue customer portal"}
-	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, req,
-		router.IntentResult{Intent: router.IntentContinue})
-	if err != nil || resolved == nil || resolved.ID != target.ID {
-		t.Fatalf("resolved=%+v attach=%+v err=%v", resolved, attach, err)
-	}
-	if attach.claimsPriorRuns() {
-		t.Fatalf("semantic reference claimed prior runs: %+v", attach)
-	}
-	executionWS, err := daemon.coordinator().workspaceForTask(ctx, identity, resolved, req, attach)
-	if err != nil || executionWS == nil || executionWS.ID != requestWS.ID {
-		t.Fatalf("reference changed execution workspace: got=%+v want=%s err=%v", executionWS, requestWS.ID, err)
-	}
-}
-
-func TestArchivedReferenceFallsBackToOpenContinuation(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "archived-reference", "Local User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	openTask, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Current work", Channel: "cli",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	archived, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Old portal", Channel: "cli",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.UpdateTaskStatus(ctx, identity.TenantID, archived.ID, "archived", "", nil); err != nil {
-		t.Fatal(err)
-	}
-	addActiveTaskReference(t, store, archived, "old portal")
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, openTask.ID); err != nil {
-		t.Fatal(err)
-	}
-	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "archived-reference", Channel: "cli", Content: "continue old portal",
-	}, router.IntentResult{Intent: router.IntentContinue})
-	if err != nil || resolved == nil || resolved.ID != openTask.ID {
-		t.Fatalf("archived reference blocked ordinary continuation: task=%+v attach=%+v err=%v", resolved, attach, err)
-	}
-	if len(attach.candidateTaskIDs) != 1 || attach.candidateTaskIDs[0] != archived.ID {
-		t.Fatalf("unavailable candidate audit lost: %+v", attach)
-	}
-}
-
-func TestReferenceAmbiguityListsRoutableTasks(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "reference-ambiguity", "Local User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Alpha rollout", Channel: "cli"})
-	second, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Beta rollout", Channel: "cli"})
-	addActiveTaskReference(t, store, first, "alpha rollout")
-	addActiveTaskReference(t, store, second, "beta rollout")
-	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	_, _, err = daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "reference-ambiguity", Channel: "cli",
-		Content: "continue alpha rollout and beta rollout",
-	}, router.IntentResult{Intent: router.IntentContinue})
-	if err == nil || !strings.Contains(err.Error(), shortTaskID(first.ID)) || !strings.Contains(err.Error(), shortTaskID(second.ID)) {
-		t.Fatalf("ambiguity did not identify both candidates: %v", err)
+		t.Fatalf("work key=%q want RUQX-369 (display metadata only)", attach.workKey)
 	}
 }
 
@@ -989,7 +830,11 @@ func TestResolveContinuationDoesNotDeriveReferenceFromTaskTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
+	waiting, err := store.StartRun(ctx, task, "cli", "prepare RUQX-371")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, waiting.ID, "waiting_user"); err != nil {
 		t.Fatal(err)
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
@@ -999,12 +844,14 @@ func TestResolveContinuationDoesNotDeriveReferenceFromTaskTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() || attach.workKey != "" {
+	// The bare cue continues the unique waiting RUN; the ticket-shaped title is
+	// never identity evidence and mints no work key.
+	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() || attach.workKey != "" || attach.parentRunID != waiting.ID {
 		t.Fatalf("resolved=%+v attach=%+v", resolved, attach)
 	}
 }
 
-func TestExplicitTaskDetailedMessageDoesNotClaimPriorWork(t *testing.T) {
+func TestExplicitTaskDetailedMessageSelectsPriorWork(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1029,12 +876,12 @@ func TestExplicitTaskDetailedMessageDoesNotClaimPriorWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.ID != task.ID || attach.claimsPriorRuns() {
-		t.Fatalf("detailed explicit attach must select the label without claiming old work: resolved=%+v attach=%+v", resolved, attach)
+	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() {
+		t.Fatalf("explicit task selection must participate in run-level continuation: resolved=%+v attach=%+v", resolved, attach)
 	}
 }
 
-func TestResumePinDetailedMessageDoesNotClaimPriorWork(t *testing.T) {
+func TestResumePinDetailedMessageSelectsPriorWork(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -1062,8 +909,8 @@ func TestResumePinDetailedMessageDoesNotClaimPriorWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.ID != task.ID || attach.claimsPriorRuns() {
-		t.Fatalf("detailed resume-pin attach must not claim old work: resolved=%+v attach=%+v", resolved, attach)
+	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() {
+		t.Fatalf("resume pin must participate in run-level continuation: resolved=%+v attach=%+v", resolved, attach)
 	}
 }
 
@@ -1097,10 +944,12 @@ func TestResolveTaskTreatsUnregisteredWorkKeyAsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.ID != old.ID {
-		t.Fatalf("an unregistered token must not select or create a task at ingress: old=%s resolved=%+v", old.ID, resolved)
+	// The unregistered token never SELECTS existing work: the message owns a
+	// fresh root task (P2), with the token recorded as display metadata only.
+	if resolved == nil || resolved.ID == old.ID {
+		t.Fatalf("an unregistered token must not select existing work at ingress: old=%s resolved=%+v", old.ID, resolved)
 	}
-	if !attach.preLabel || attach.created || attach.claimsPriorRuns() || attach.workKey != "RUQX-370" {
+	if !attach.created || attach.claimsPriorRuns() || attach.workKey != "RUQX-370" {
 		t.Fatalf("unregistered work-key metadata = %+v", attach)
 	}
 }
@@ -1156,25 +1005,31 @@ func TestUnresolvedPastePlaceholderIsRejectedBeforeDispatch(t *testing.T) {
 	}
 }
 
-func TestContinueWithoutTaskReturnsUserMessage(t *testing.T) {
+// TestContinueWithoutPendingWorkBecomesNewWork pins §5.3 step 8: a bare cue
+// with nothing pending anywhere is ordinary new work — it owns a fresh root
+// task instead of failing the turn (the spine carries any conversational
+// context it referred to).
+func TestContinueWithoutPendingWorkBecomesNewWork(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	resp, status := daemon.ProcessMessage(httptest.NewRequest(http.MethodPost, "/", nil).Context(), api.MessageRequest{
-		Platform:       "cli",
-		PlatformUserID: "local",
-		Channel:        "cli",
-		Content:        "\u7ee7\u7eed",
-	})
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, resp = %+v", status, resp)
+	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "继续",
+	}, router.IntentResult{Intent: router.IntentContinue})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if resp.Error != "" || !strings.Contains(resp.Content, "no task to continue") {
-		t.Fatalf("resp = %+v", resp)
+	if resolved == nil || !attach.created || attach.parentRunID != "" {
+		t.Fatalf("cue without pending work must create a fresh root task: task=%+v attach=%+v", resolved, attach)
 	}
 }
 
@@ -1198,7 +1053,12 @@ func TestResumeContextIncludesLatestHandoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parent, err := store.StartRun(ctx, task, "cli", "first attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.SaveHandoff(ctx, control.Handoff{
+		ID:           "handoff_run_" + parent.ID,
 		TaskID:       task.ID,
 		Summary:      "patched gateway",
 		DoneItems:    []string{"wired store"},
@@ -1207,20 +1067,21 @@ func TestResumeContextIncludesLatestHandoff(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.FinishRun(ctx, identity.TenantID, parent.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	content := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, false, "", "continue")
+	content := daemon.coordinator().withResumeContext(ctx, identity, task, parent, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, false, "continue")
 	for _, want := range []string{"[SelfMind resume context]", "patched gateway", "wired store", "run tests", "internal/gateway/httpapi/server.go"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("resume context missing %q:\n%s", want, content)
 		}
 	}
-	events, err := store.ListTaskEvents(ctx, task.ID, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) == 0 || events[0].Type != "run.resumed" {
-		t.Fatalf("run.resumed event missing: %+v", events)
+	// Without a resolved parent the resume block must not exist at all — the
+	// spine tail and bounded task card are the only background then (P0).
+	if got := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue}, false, "continue"); got != "continue" {
+		t.Fatalf("parentless continuation must keep the input unchanged, got:\n%s", got)
 	}
 }
 
@@ -1251,16 +1112,15 @@ func TestExplicitTaskAttachResumesPriorRun(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveHandoff(ctx, control.Handoff{TaskID: task.ID, Summary: "resume me"}); err != nil {
-		t.Fatal(err)
-	}
-	current, err := store.StartRun(ctx, task, "cli", "caller supplied task id")
+	// The continuation claims its resolved parent atomically with its own
+	// creation (P1: creation and ownership are one transaction).
+	current, err := store.StartRunWithOptions(ctx, task, "cli", "caller supplied task id", control.StartRunOptions{ParentRunID: prior.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	_ = daemon.coordinator().withResumeContext(ctx, identity, task, current, router.IntentResult{Intent: router.IntentTask}, true, "", "continue explicitly")
+	if current.ParentRunID != prior.ID {
+		t.Fatalf("parent edge not recorded: %+v", current)
+	}
 	if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{
 		Identity: *identity, RunID: current.ID, RunStatus: "done",
 		TaskID: task.ID, TaskStatus: "done", Summary: "completed",
@@ -1300,9 +1160,14 @@ func TestResumeContextIncludesCreatedFilesFromEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parent, err := store.StartRun(ctx, task, "wechat", "build the game")
+	if err != nil {
+		t.Fatal(err)
+	}
 	// A write_file the prior (interrupted) run performed — no handoff was saved.
 	if _, err := store.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
+		RunID:      parent.ID,
 		Type:       "tool.started",
 		Visibility: "task",
 		Channel:    "wechat",
@@ -1312,6 +1177,7 @@ func TestResumeContextIncludesCreatedFilesFromEvents(t *testing.T) {
 	}
 	if _, err := store.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
+		RunID:      parent.ID,
 		Type:       "tool.completed",
 		Visibility: "task",
 		Channel:    "wechat",
@@ -1319,9 +1185,12 @@ func TestResumeContextIncludesCreatedFilesFromEvents(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.FinishRun(ctx, identity.TenantID, parent.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	content := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, false, "", "继续")
+	content := daemon.coordinator().withResumeContext(ctx, identity, task, parent, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, false, "继续")
 	for _, want := range []string{"files_this_task_created_or_changed", "arcade-fury-97.html", "Edit these existing files directly"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("resume context missing %q:\n%s", want, content)
@@ -1409,6 +1278,10 @@ func TestResumeChangedFilesHarvestsPatchAndEditPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parent, err := store.StartRun(ctx, task, "cli", "refactor")
+	if err != nil {
+		t.Fatal(err)
+	}
 	events := []control.Event{
 		{Type: "tool.started", Payload: mustJSON(map[string]interface{}{"tool": "patch", "args": `{"patch":"*** Begin Patch\n*** Update File: internal/foo.go\n*** End Patch"}`})},
 		{Type: "tool.started", Payload: mustJSON(map[string]interface{}{"tool": "apply_patch", "args": `{"patch":"*** Begin Patch\n*** Add File: internal/bar.go\n*** End Patch"}`})},
@@ -1416,6 +1289,7 @@ func TestResumeChangedFilesHarvestsPatchAndEditPaths(t *testing.T) {
 	}
 	for _, ev := range events {
 		ev.TaskID = task.ID
+		ev.RunID = parent.ID
 		ev.Visibility = "task"
 		ev.Channel = "cli"
 		if _, err := store.AppendEvent(ctx, ev); err != nil {
@@ -1424,7 +1298,7 @@ func TestResumeChangedFilesHarvestsPatchAndEditPaths(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	got := daemon.coordinator().resumeChangedFiles(ctx, task, nil, 10)
+	got := daemon.coordinator().resumeChangedFiles(ctx, task, parent, nil, 10)
 	want := map[string]bool{"internal/foo.go": false, "internal/bar.go": false, "internal/baz.go": false}
 	for _, p := range got {
 		if _, ok := want[p]; ok {

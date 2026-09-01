@@ -11,7 +11,8 @@ func TestLoopCheckpointOverwritesAndFindsIncomplete(t *testing.T) {
 
 	first := LoopCheckpointRecord{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
-		TaskID: task.ID, RunID: run.ID, Iteration: 1,
+		TaskID: task.ID, RunID: run.ID, ContractVersion: RunRecoveryContractVersion,
+		Recovery: []byte(`{"plan_version":2,"current_plan_step_id":"step-a"}`), Iteration: 1,
 		Outcome: "execute_tools", Detail: "read_file", Snapshot: []byte(`[1]`),
 	}
 	if err := store.SaveLoopCheckpoint(ctx, first); err != nil {
@@ -29,7 +30,8 @@ func TestLoopCheckpointOverwritesAndFindsIncomplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil || got.Iteration != 2 || string(got.Snapshot) != `[2]` {
+	if got == nil || got.Iteration != 2 || got.ContractVersion != RunRecoveryContractVersion ||
+		string(got.Recovery) != `{"plan_version":2,"current_plan_step_id":"step-a"}` || string(got.Snapshot) != `[2]` {
 		t.Fatalf("checkpoint = %+v", got)
 	}
 	var rows int

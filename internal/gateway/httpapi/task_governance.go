@@ -9,7 +9,6 @@ import (
 )
 
 type TaskGovernanceOptions struct {
-	InboxEnabled              bool
 	DefaultListLimit          int
 	AutoArchiveDoneAfter      time.Duration
 	AutoArchiveCancelledAfter time.Duration
@@ -52,6 +51,11 @@ func (d *Server) StartTaskGovernanceSweeper(ctx context.Context) func() {
 }
 
 func (d *Server) runTaskGovernanceSweep(ctx context.Context) int {
+	if choices, resolutions, pruneErr := d.Control.PruneTurnContinuity(ctx, time.Now()); pruneErr != nil {
+		log.Warn("gateway: continuity retention sweep failed", "error", pruneErr)
+	} else if choices > 0 || resolutions > 0 {
+		log.Info("gateway: pruned continuity control metadata", "choices", choices, "resolutions", resolutions)
+	}
 	archived, err := d.Control.ArchiveStaleTasks(ctx, time.Now(),
 		d.TaskGovernance.AutoArchiveDoneAfter,
 		d.TaskGovernance.AutoArchiveCancelledAfter)

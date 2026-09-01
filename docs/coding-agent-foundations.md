@@ -34,6 +34,33 @@ For an ordinary coding request, the agent should:
    of repeating command variants blindly.
 7. Report what changed, the verification evidence, and any remaining risk.
 
+The runtime enforces the same recovery discipline below the prompt. Tool
+attempts are correlated with the current durable plan step, target, strategy,
+and environment. One changed-input correction may follow diagnostic evidence;
+an identical retry, a third cosmetic variant, or a new mutation after an
+unknown effect is refused before dispatch. The Agent must then observe current
+state, select a genuinely different strategy, or finish with an actionable
+blocker. A plan step sets `verification_required` only when executable evidence
+is actually required by the user, repository instructions, or the nature of
+the change; optional verification remains reportable without making direct
+inspection tasks impossible to finish.
+
+New Runs opt into a versioned recovery contract. A daemon or provider
+interruption with no external effect may enqueue one idempotent exact-parent
+child Run. An uncertain dispatched effect instead enters verification-only
+recovery: only trusted read-only tools are exposed and mutation is refused at
+dispatch. Approval, clarification, and external-watch rows keep their
+specialist owners, and historical Runs never gain automatic execution merely
+because the binary was upgraded. Queued foreground user work has higher
+priority than an automatic recovery that has not started.
+
+Long external waits use a frozen durable observation contract rather than
+model-driven polling. A successful preflight records the command hash,
+environment generation, typed observation adapter, target, deadline, and
+capabilities. The adapter returns `pending`, `succeeded`, or `failed`; provider
+grammar remains in the tools layer. Run-local `all` and `any` wait groups emit
+one aggregate verdict and at most one finalization Run.
+
 Completion is evidence-based:
 
 - `completed`: requested work is done and relevant verification passed, or no

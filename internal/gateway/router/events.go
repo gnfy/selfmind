@@ -43,18 +43,6 @@ func PrepareRunWatchdog(ctx context.Context) (context.Context, func()) {
 	return ctx, stop
 }
 
-func (g *Gateway) HandleWithEvents(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
-	if g == nil || g.agent == nil {
-		if g == nil {
-			return nil, fmt.Errorf("gateway is not configured")
-		}
-		return g.Handle(ctx, unifiedUID, channel, input)
-	}
-	return g.withAgentEvents(ctx, func(ctx context.Context) (*HandleResponse, error) {
-		return g.Handle(ctx, unifiedUID, channel, input)
-	})
-}
-
 func (g *Gateway) RunAgentWithEvents(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
 	if g == nil {
 		return nil, fmt.Errorf("gateway is not configured")

@@ -12,14 +12,16 @@ import (
 
 // selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 //
-// The command is dry-run by default. --apply only materializes missing blocker
-// evidence when an inactive task and its newest finished run have the exact
-// same blocker status. Conflicting histories remain human-review findings.
+// Read-only Task/Run continuity audit. Findings cover legacy resume edges the
+// v7 backfill could not convert, illegal parent edges, ownerless pending
+// approvals/clarifies, and task status projections that disagree with the
+// derived reduction. --apply reconciles ONLY projection mismatches through
+// the production reducer; every other finding stays human review.
 func (a *App) runMaintenanceTaskAudit(args []string) int {
 	fs := flag.NewFlagSet("selfmind maintenance task-audit", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
-	apply := fs.Bool("apply", false, "backfill only unambiguous missing task blockers")
-	limit := fs.Int("limit", 200, "maximum parked tasks to inspect (1-1000)")
+	apply := fs.Bool("apply", false, "reconcile only projection-mismatch findings via the reducer")
+	limit := fs.Int("limit", 200, "maximum findings/tasks to inspect (1-1000)")
 	dataDir := fs.String("data-dir", "", "control data directory (default: the configured storage data dir)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -40,42 +42,37 @@ func (a *App) runMaintenanceTaskAudit(args []string) int {
 	defer store.Close()
 	ctx, cancel := context.WithTimeout(a.ctx, 20*time.Second)
 	defer cancel()
-	findings, err := store.AuditMissingTaskBlockers(ctx, a.tenantID(), *limit)
+	findings, err := store.AuditTaskRunContinuity(ctx, a.tenantID(), *limit)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "task-audit: %v\n", err)
 		return 1
 	}
 	if len(findings) == 0 {
-		fmt.Fprintln(a.stdout, "No missing task blocker evidence found.")
+		fmt.Fprintln(a.stdout, "No continuity findings.")
 		return 0
 	}
 	safe, review, applied := 0, 0, 0
 	for _, finding := range findings {
 		label := "REVIEW"
-		if finding.SafeToApply {
-			label = "BACKFILL"
+		if finding.SafeFix {
+			label = "RECONCILE"
 			safe++
 		} else {
 			review++
 		}
-		fmt.Fprintf(a.stdout, "%s task=%s status=%s latest_run=%s/%s kind=%s title=%q reason=%s\n",
-			label, finding.TaskID, finding.TaskStatus, valueOrDash(finding.LatestRunID),
-			valueOrDash(finding.LatestRunStatus), valueOrDash(finding.BlockerKind),
-			truncateTaskAuditTitle(finding.Title), finding.Reason)
-		if *apply && finding.SafeToApply {
-			changed, applyErr := store.BackfillTaskBlocker(ctx, a.tenantID(), finding)
-			if applyErr != nil {
+		fmt.Fprintf(a.stdout, "%s kind=%s task=%s run=%s %s\n",
+			label, finding.Kind, valueOrDash(finding.TaskID), valueOrDash(finding.RunID), finding.Detail)
+		if *apply && finding.SafeFix {
+			if applyErr := store.ReconcileTaskProjection(ctx, a.tenantID(), finding.TaskID); applyErr != nil {
 				fmt.Fprintf(a.stderr, "task-audit: apply %s: %v\n", finding.TaskID, applyErr)
 				return 1
 			}
-			if changed {
-				applied++
-			}
+			applied++
 		}
 	}
-	fmt.Fprintf(a.stdout, "Scan result: safe %d, review %d, applied %d. Task and run statuses were not changed.\n", safe, review, applied)
+	fmt.Fprintf(a.stdout, "Scan result: reconcile %d, review %d, applied %d. Runs, edges, and memory were not changed.\n", safe, review, applied)
 	if !*apply && safe > 0 {
-		fmt.Fprintln(a.stdout, "Re-run with --apply to backfill only the BACKFILL entries.")
+		fmt.Fprintln(a.stdout, "Re-run with --apply to reconcile only the RECONCILE entries.")
 	}
 	return 0
 }
@@ -85,12 +82,4 @@ func valueOrDash(value string) string {
 		return "-"
 	}
 	return strings.TrimSpace(value)
-}
-
-func truncateTaskAuditTitle(value string) string {
-	runes := []rune(strings.Join(strings.Fields(value), " "))
-	if len(runes) > 80 {
-		return string(runes[:80]) + "..."
-	}
-	return string(runes)
 }

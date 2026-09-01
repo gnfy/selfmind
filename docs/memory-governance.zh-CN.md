@@ -1,9 +1,8 @@
-# SelfMind 记忆治理方案（整合设计稿）
+# SelfMind 记忆治理机制
 
-> 状态：设计稿（2026-07-11），尚未实施。整合来源：记忆系统缺陷诊断（2026-07-11
-> 会话实测）、Codex 提案、`docs/memory-self-organization-eval.md` 的两阶段实验
-> 与 Intake Contract。本稿为中文工作稿；采纳落地时应产出英文 canonical 版，并在
-> `AGENTS.md` 的 Context & Memory 一节加 **mandatory** 指针。
+> 状态：当前机制。2026-07-11 的缺陷与数据保留为历史基线；后文标注的
+> 2026-08-31 P2/P3 修订覆盖早期 task-routing 与 environment-memory 设计。
+> 整合来源：记忆系统缺陷诊断、两阶段实验与 Intake Contract。
 >
 > 本稿不是优先级清单；实施排期以 `docs/STATUS.md` 为准。
 
@@ -17,7 +16,7 @@
 |---|------|------|--------|
 | D1 | pinned 记忆从不进入 prompt：`buildSystemPrompt` 只读 `user`/`memory` target；唯一消费 pinned 的 `ProfileSynthesizer.MaybeSynthesize` 无任何调用者（死代码） | `internal/kernel/agent.go:1734`、`profile_synthesizer.go` | 高（功能 bug） |
 | D2 | 重复确认不强化：写入去重命中后静默丢弃，不刷新 `LastVerifiedAt`/confidence；`RepetitionBoost` 是死代码。被反复证实的事实与一次性过时事实按同样的 90 天半衰期衰减，置信度体系形同虚设 | `post_run_analyzer.go` `duplicatePostRunFact`、`governance.go` | 高 |
-| D3 | 无入库决策：唯一的"是否值得写"判断是 prompt 指令 + 宽松资格门（≥160 字符），合格 run 每次最多写 6+6 条；无 REINFORCE/SUPERSEDE/MERGE | `post_run_analyzer.go` | 高 |
+| D3 | 历史缺陷：唯一的“是否值得写”判断是 prompt 指令 + ≥160 字符资格门，且无 REINFORCE/SUPERSEDE；现由 v4 偏好限定与确定性 apply 修复 | `post_run_analyzer.go`、`memory_intake.go` | 已修复 |
 | D4 | 自动抽取写入不进 learning audit：`storeFacts` 不调 `recordMemoryLearningChange`，`/memory history` 与 undo 覆盖不到自动写入 | `post_run_analyzer.go` | 高 |
 | D5 | agent 的 `memory` 工具 add/replace/pin 走 legacy `AddFact`：无 source/scope/confidence 元数据；replace 丢原 ID 与元数据 | `internal/tools/memory.go` | 中 |
 | D6 | 存储无界：无归档/上限/合并 apply；衰减只影响选择分数，数据只增不减 | 全局 | 高 |
@@ -61,8 +60,8 @@
   主 coding model）。
 - **每个 run 至多一个维护结果，但多个 run 可以共用一次模型调用。** run 终态
   事务只持久化证据；daemon 按 tenant/person/workspace 防抖分组，批量调用一次
-  便宜模型，再按 run_id 冻结和应用各自的 task + memory 决策。记忆入库决策
-  必须与 task labeler 共用这条通路，不得新增第二条抽取/决策通路。显式的用户
+  便宜模型，再按 run_id 冻结和应用各自的偏好决策与 Task Reference 候选。
+  Task 路由不属于维护分析器。不得新增第二条抽取/决策通路。显式的用户
   memory 命令仍即时执行；最近对话由 work spine 即时承接，不依赖治理完成。
 - **pinned 与 `SourceUser` 对自动维护不可变。** 自动流程对其只允许
   KEEP/CONFLICT。
@@ -76,7 +75,7 @@
 
 ```
 Run 进入终态 ──(FinishRun 事务/恢复 sweep)──▶ maintenance_job
-  → 确定性资格门 → 确定性邻居召回 → 一次廉价模型判断(labeler+memory)
+  → 确定性资格门 → 确定性邻居召回 → 一次廉价模型判断(preference+reference hint)
   → 确定性策略校验 → observations / canonical / evidence / events 落库
 定时 Consolidator ──▶ 同一"召回→判断→校验"管道（存量整理）
 用户 correct/pin/forget ──▶ 直接进策略层（最高权威）
@@ -183,10 +182,11 @@ UNIQUE(run_id, analyzer_version)
 
 ### 3.1 确定性资格门（不花钱）
 
-直接跳过：run 失败且 outcome 无任何有效证据；输入+结果 < 160 字符且 outcome
-无结构化字段（沿用 `postRunMemoryEligible` 并收紧：纯诊断 run 不学习）。
-每 run 候选上限从 6+6 降为 **3+3**——有了 REINFORCE，低配额不丢信息（重复出现
-的事实以强化而非新增沉淀）。
+直接跳过：run 失败且 outcome 无任何有效证据；或输入/结果短到不足以形成候选且
+outcome 无结构化字段。当前语言无关下限为：输入至少 6 个 Unicode code points、
+结果摘要至少 8 个、合计至少 16 个；因此“以后先给结论”这类紧凑 CJK 偏好不会
+再被旧的 160 字符门槛漏掉。门槛只决定是否值得进行异步廉价分析，不判定语义、
+不影响前台路由。每 run 最多保留 **3 条 user 决策**。
 
 ### 3.2 确定性邻居召回（不花钱）
 
@@ -202,25 +202,24 @@ neighbors = top-8 by ConsolidationSimilarity(turn文本, canonical.content)
 重复几乎总发生在时间邻近的 run 之间；把最近条目无条件塞进邻居集，让模型（跨
 语言无障碍）来判重。embedding 到位后此处整体替换为向量检索，下游不动。
 
-### 3.3 一次模型调用（与 run labeler 合并，红线）
+### 3.3 一次模型调用（偏好与引用提示合并，红线）
 
-扩展现有 `analyzeFinishedRun` 的 prompt 与 wire 格式——**同一次调用**产出任务
-标签决策与记忆决策：
+同一次 post-run 调用只产出 Task Reference 候选与个人偏好决策；它不产出、
+不重放任何 Task 路由决定：
 
 ```json
 {
-  "task_decision": "KEEP",
   "memory_decisions": [
-    {"decision": "REINFORCE", "ref": "663fc723", "content": "用户沟通使用中文", "confidence": 0.95},
-    {"decision": "SUPERSEDE", "ref": "f2d994ee", "content": "默认模型已改为 kimi-k2", "confidence": 0.98, "reason": "config changed this run"},
-    {"decision": "ADD", "content": "项目用 GOWORK=off 跑测试", "confidence": 0.9}
+    {"target": "user", "decision": "REINFORCE", "ref": "663fc723", "content": "用户偏好先给结论", "confidence": 0.95, "durability": "durable"},
+    {"target": "user", "decision": "SUPERSEDE", "ref": "f2d994ee", "content": "用户现在偏好简短回答", "confidence": 0.98, "durability": "durable"}
   ]
 }
 ```
 
-prompt 附上邻居集（带 id），指令要求对每条候选在
+prompt 附上同 person 的偏好邻居集（带 id），指令要求对每条候选在
 SKIP / ADD / REINFORCE:&lt;id&gt; / SUPERSEDE:&lt;id&gt; / CONFLICT:&lt;id&gt;
-中裁决；turn 文本包在数据分隔符里按不可信数据处理（沿用 labeler 的注入防御）。
+中裁决；项目事实、仓库约定、命令与运行状态必须 SKIP，且确定性 apply 会再次
+拒绝非 `user` target。turn 文本包在数据分隔符里按不可信数据处理。
 
 ### 3.4 确定性策略校验与落库（不花钱）
 
@@ -414,21 +413,29 @@ intake 也必须丢弃，不能进入长期 canonical。带业务前缀的运行
 `CI_PENDING_APPROVAL`）同样识别。召回命中后的访问打点使用脱离前台取消信号的
 短事务；只有已进入 prompt 预算的 canonical 才会被 touch。
 
-### 5.3 四类知识职责（2026-08-15）
+### 5.3 四类知识职责（2026-08-15；2026-08-31 简化 P2/P3 修订）
 
 长期连续性不能由一个“万能 memory 表”承担，当前实现明确分为四类：
 
 | 类型 | 负责内容 | 写入/更新方式 | 是否参与任务路由 |
 |---|---|---|---|
-| Work Spine / handoff | run、证据、当前状态、下一步 | 每轮确定性落库 | 否 |
-| Task Reference | 任务的名称、编号、实体别名、描述性地址 | 现有 post-run 维护调用提案 + 确定性激活；用户可直接增删 | 仅唯一 active 精确命中 |
-| Canonical memory | 跨任务可复用的用户偏好与声明性事实 | observation/canonical 治理 | 否，只参与召回 |
+| Work Spine / handoff / parent Run 切片 | run、证据、当前状态、下一步 | 每轮确定性落库 | 否 |
+| Task Reference | 任务的名称、编号、实体别名、描述性地址 | post-run 维护提案 + 用户确认激活；用户可直接增删 | 否（P2 起纯别名/搜索提示，只参与召回） |
+| Canonical memory | 用户明确表达的个人偏好、习惯与纠正（P3 起仅此一类） | 显式 `/remember`/`/forget` 为主，post-run 自动候选为辅（仅偏好证据），observation/canonical 治理 | 否，只参与召回 |
 | Workspace knowledge | `AGENTS.md`、`.selfmind.md` 等项目规则与程序性知识 | 授权扫描器生成路径/hash/mtime/章节/有界摘录；文件变更整份替换 | 否，只参与当前 workspace 召回 |
 
-Task Reference 的自动激活需要两个不同 run 的原始用户文本支持；标题、摘要、
-recall 结果和模型生成文本都不算证据。同一 reference 指向多个 task 时全部进入
-`conflicted`，系统拒绝猜测。普通“提到”只加载 bounded task context，不改变
-current task、workspace、权限或生命周期；明确“继续”才允许 full task context。
+2026-08-31 的偏好记忆简化之后，`target="memory"` 的环境/项目事实**不再自动
+写入**个人记忆：分析器只判定用户明确表达的偏好
+（确定性 apply 层跳过一切非 user 目标的决策，冻结旧提案重放同样被跳过并计入
+`environment_target_retired` disposition）；memory 工具的 `add` 拒绝
+environment 目标并指向仓库约定文件。存量 environment 行继续可读、可被
+`selfmind maintenance memory-archive-environment [--apply]` 可逆归档
+（pinned/用户确认行不动）。
+
+Task Reference 的自动激活已冻结（P2）：run 支持只能到 `candidate`（召回
+信号），仅用户确认激活；同一 value 出现多个确认绑定进入 `conflicted` 弃权。
+标题、摘要、recall 结果和模型生成文本都不算证据。引用不再路由消息、不加载
+任务上下文、不改变 current task、workspace、权限或生命周期。
 用户可通过 `/task <id> references`、`reference add|remove` 查看和裁决。
 
 Workspace knowledge 不复制整份文档到 canonical memory，也不调用额外模型。

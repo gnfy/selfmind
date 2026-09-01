@@ -109,53 +109,9 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 			return MsgAgentDone{Response: content, Usage: usage, Input: input, Turn: resp.Turn}
 		}
 
-		if m.gateway != nil {
-			resp, err := m.gateway.HandleWithEvents(ctx, m.tenantID, m.channel, input)
-			if err != nil {
-				return MsgAgentDone{Err: err}
-			}
-			if resp == nil {
-				return MsgAgentDone{Err: fmt.Errorf("gateway returned no response")}
-			}
-
-			if !resp.IsStreaming {
-				return MsgAgentDone{Response: resp.Content, Usage: resp.Usage, Err: nil}
-			}
-
-			var full strings.Builder
-			var usage llm.UsageStats
-			sawStream := false
-			for event := range resp.Stream {
-				if event.Err != nil && event.EventType == "" {
-					return MsgAgentDone{Response: full.String(), Usage: usage, Err: event.Err}
-				}
-				if event.EventType != "" {
-					m.forwardGatewayEvent(event)
-					if event.EventType == "stream" {
-						sawStream = true
-						full.WriteString(event.Content)
-					}
-					if event.Usage != nil {
-						usage = *event.Usage
-					}
-					continue
-				}
-				if event.Content != "" && !sawStream {
-					full.WriteString(event.Content)
-					if m.program != nil {
-						m.program.Send(MsgStream{Content: event.Content})
-					}
-				}
-				if event.Usage != nil {
-					usage = *event.Usage
-				}
-			}
-			return MsgAgentDone{Response: full.String(), Usage: usage}
-		}
-
-		go m.pumpAgentEvents()
-		resp, usage, err := m.agent.RunConversation(ctx, m.tenantID, m.channel, input)
-		return MsgAgentDone{Response: resp, Usage: usage, Err: err}
+		// The TUI is a daemon client with no in-process fallback: without a
+		// connected message processor there is nothing to run against.
+		return MsgAgentDone{Err: fmt.Errorf("gateway daemon is not connected")}
 	}
 }
 
@@ -387,35 +343,6 @@ func clarifyChoicesFromPayload(payload map[string]interface{}) []string {
 		return choices
 	default:
 		return nil
-	}
-}
-
-func (m *uiModel) pumpAgentEvents() {
-	if m.agent == nil || m.agent.EventChannel == nil {
-		return
-	}
-	for {
-		select {
-		case event, ok := <-m.agent.EventChannel:
-			if !ok {
-				return
-			}
-			if structured, ok := kernel.DecodeAgentEvent(event); ok {
-				m.handleStructuredAgentEvent(structured)
-				continue
-			}
-			switch {
-			case strings.HasPrefix(event, "stream:"):
-				content := strings.TrimPrefix(event, "stream:")
-				if m.program != nil {
-					m.program.Send(MsgStream{Content: content})
-				}
-			case strings.HasPrefix(event, "review:"):
-				if m.program != nil {
-					m.program.Send(MsgLearningEvent{Content: strings.TrimPrefix(event, "review:")})
-				}
-			}
-		}
 	}
 }
 

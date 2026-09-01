@@ -165,6 +165,15 @@ func (d *Server) runMaintenancePass(ctx context.Context) {
 	d.runMaintenancePassAt(ctx, time.Now())
 }
 
+// RunMaintenancePass executes one bounded maintenance sweep immediately. The
+// daemon normally uses StartMaintenanceWorker's debounce/ticker; explicit
+// lifecycle harnesses use this entrypoint only after they have configured an
+// immediately-due policy and need to observe the durable result before the
+// next turn.
+func (d *Server) RunMaintenancePass(ctx context.Context) {
+	d.runMaintenancePass(ctx)
+}
+
 type queuedPostRunMaintenance struct {
 	job      control.MaintenanceJob
 	payload  postRunJobPayload

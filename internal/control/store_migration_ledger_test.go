@@ -84,6 +84,76 @@ func TestVersionFiveMigrationAddsSkillRepairHealthColumnsToVersionFourShape(t *t
 	}
 }
 
+func TestVersionEightMigrationAddsContinuityControlTables(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var migration *schemaMigration
+	for index := range orderedMigrations {
+		if orderedMigrations[index].Version == 8 {
+			migration = &orderedMigrations[index]
+		}
+	}
+	if migration == nil {
+		t.Fatal("v8 migration is missing")
+	}
+	if err := migration.Apply(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"pending_turn_choices", "turn_resolution_events"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("table %s count=%d err=%v", table, count, err)
+		}
+	}
+}
+
+func TestVersionNineMigrationAddsCapabilityInertRecoveryContract(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE task_runs (id TEXT PRIMARY KEY);
+		CREATE TABLE tool_ledger (id INTEGER PRIMARY KEY, tenant_id TEXT NOT NULL, run_id TEXT NOT NULL);
+		CREATE TABLE loop_checkpoints (run_id TEXT PRIMARY KEY);
+		CREATE TABLE external_watches (id TEXT PRIMARY KEY);`); err != nil {
+		t.Fatal(err)
+	}
+	var migration *schemaMigration
+	for index := range orderedMigrations {
+		if orderedMigrations[index].Version == 9 {
+			migration = &orderedMigrations[index]
+		}
+	}
+	if migration == nil {
+		t.Fatal("v9 migration is missing")
+	}
+	if err := migration.Apply(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"run_plan_versions", "run_plan_steps", "external_watch_groups"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("table %s count=%d err=%v", table, count, err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO task_runs(id) VALUES('legacy')`); err != nil {
+		t.Fatal(err)
+	}
+	var contract int
+	if err := db.QueryRow(`SELECT recovery_contract_version FROM task_runs WHERE id='legacy'`).Scan(&contract); err != nil || contract != 0 {
+		t.Fatalf("legacy recovery contract=%d err=%v, want capability-inert 0", contract, err)
+	}
+	var verificationColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('run_plan_steps') WHERE name='verification_required'`).Scan(&verificationColumns); err != nil || verificationColumns != 1 {
+		t.Fatalf("run_plan_steps.verification_required columns=%d err=%v", verificationColumns, err)
+	}
+}
+
 // TestOrderedMigrationsCoverCurrentSchemaVersion pins the declaration itself:
 // the steps stay sorted, carry unique versions, and the highest one is the
 // version this binary claims to support. Without this, adding a table to

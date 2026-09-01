@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "waiting_user user_confirmation confirmation_required pending_user open_input"
+}

@@ -34,6 +34,14 @@ func TestRecoveryNotificationDeliveredOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A specialist-owned approval Run keeps the compatibility notification
+	// path; generic automatic recovery must not steal its row-specific resume.
+	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		TaskID: task.ID, RunID: run.ID, ActionType: "tool_call", RequestedChannel: "cli",
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_recovery", "WeChat"); err != nil {
 		t.Fatal(err)
 	}
@@ -58,6 +66,47 @@ func TestRecoveryNotificationDeliveredOnce(t *testing.T) {
 	daemon.sweepRecoveryNotifications()
 	if len(recorder.messages) != 1 {
 		t.Fatalf("recovery notification was delivered twice: %+v", recorder.messages)
+	}
+}
+
+func TestAutomaticRecoveryQueuesOneExactParentBelowForeground(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "inspect and continue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_auto_recovery", "WeChat"); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := store.MarkInterruptedRuns(ctx, 0); err != nil || recovered != 1 {
+		t.Fatalf("recover: count=%d err=%v", recovered, err)
+	}
+	items, err := store.ListPendingRecoveryNotifications(ctx, 10)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("items=%+v err=%v", items, err)
+	}
+	for i := 0; i < 2; i++ {
+		scheduled, err := daemon.scheduleAutomaticRunRecovery(ctx, items[0], false)
+		if err != nil || !scheduled {
+			t.Fatalf("schedule %d: scheduled=%v err=%v", i, scheduled, err)
+		}
+	}
+	rows, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows=%+v err=%v", rows, err)
+	}
+	queued := rows[0]
+	if queued.TaskID != task.ID || queued.ReplyToRunID != run.ID || queued.Class != control.QueueClassRecovery ||
+		queued.Priority >= control.QueuePriorityForeground || queued.Priority <= control.QueuePriorityBackground {
+		t.Fatalf("queued recovery=%+v", queued)
+	}
+	if got := recoveryModeFromQueueKey(queued.IdempotencyKey); got != control.RunRecoveryModeContinue {
+		t.Fatalf("recovery mode=%q", got)
+	}
+	items, err = store.ListPendingRecoveryNotifications(ctx, 10)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("scheduled recovery still requested a fallback notification: %+v err=%v", items, err)
 	}
 }
 
@@ -253,8 +302,11 @@ func TestExternalWatchFinalizationUsesRecordedEvidence(t *testing.T) {
 }
 
 func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
-	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	daemon, store, identity, task, approval := newApprovalTestServer(t)
 	ctx := context.Background()
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
+		t.Fatal(err)
+	}
 	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{TaskID: "other-task"}) {
 		t.Fatal("failed to install active-run guard")
 	}
@@ -312,8 +364,11 @@ func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
 }
 
 func TestExternalWatchFinalizationRepairsLegacyGatewayShutdownCancellation(t *testing.T) {
-	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	daemon, store, identity, task, approval := newApprovalTestServer(t)
 	ctx := context.Background()
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
+		t.Fatal(err)
+	}
 	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{TaskID: "other-task"}) {
 		t.Fatal("failed to install active-run guard")
 	}

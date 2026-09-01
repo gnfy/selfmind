@@ -1,10 +1,13 @@
 id: reliability_task_stays_waiting_on_open_blocker
-title: "An unresolved user blocker keeps the task waiting"
+title: "An unclaimed waiting run keeps the task waiting"
 suite: reliability
 workspace: isolated
 channel: cli
 require_cassette: true
 
+# §10.3: the run parked as waiting_user is itself the wait authority — the task
+# projection must derive waiting_user from the unclaimed resumable run (no
+# durable blocker rows are involved anymore).
 turns:
   - input: >-
       Park this task because the user must provide a production change ticket.

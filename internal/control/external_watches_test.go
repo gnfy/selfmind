@@ -430,6 +430,83 @@ func TestExternalWatchFinalizationIdempotencyKeys(t *testing.T) {
 	}
 }
 
+func TestTypedExternalWatchPersistsPreflightReceipt(t *testing.T) {
+	store, identity, task, run := newRecoveryFixture(t)
+	receipt := ExternalWatchPreflightReceipt{
+		Version: 1, CommandHash: "command-hash", EnvironmentGeneration: 4,
+		Adapter: "status_json.v1", Target: "build", DeadlineUnix: time.Now().Add(time.Hour).Unix(),
+		Capabilities: []string{"network:shared"},
+	}
+	watch, err := store.CreateExternalWatch(context.Background(), ExternalWatch{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		CWD: t.TempDir(), Command: "status", SpecVersion: 3, ObservationAdapter: "status_json.v1",
+		PreflightReceipt: receipt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetExternalWatch(context.Background(), identity.TenantID, watch.ID)
+	if err != nil || got == nil || got.ObservationAdapter != receipt.Adapter ||
+		got.PreflightReceipt.CommandHash != receipt.CommandHash || got.PreflightReceipt.EnvironmentGeneration != 4 {
+		t.Fatalf("watch=%+v err=%v", got, err)
+	}
+}
+
+func TestExternalWatchGroupsResolveAllAndAnyOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, firstStatus, secondStatus, want string
+	}{
+		{name: "all succeeds after every member", mode: ExternalWatchGroupAll, firstStatus: ExternalWatchSucceeded, secondStatus: ExternalWatchSucceeded, want: ExternalWatchSucceeded},
+		{name: "any succeeds on first success", mode: ExternalWatchGroupAny, firstStatus: ExternalWatchSucceeded, secondStatus: "", want: ExternalWatchSucceeded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, identity, task, run := newRecoveryFixture(t)
+			group, err := store.ResolveOrCreateExternalWatchGroup(context.Background(), identity.TenantID, identity.PersonID,
+				task.ID, run.ID, "checks", tc.mode, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			makeWatch := func(command string) *ExternalWatch {
+				watch, err := store.CreateExternalWatch(context.Background(), ExternalWatch{
+					TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+					CWD: t.TempDir(), Command: command, SuccessPattern: "DONE", WaitGroupID: group.ID,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return watch
+			}
+			first, second := makeWatch("one"), makeWatch("two")
+			if _, err := store.FinishExternalWatch(context.Background(), identity.TenantID, first.ID, tc.firstStatus, "", ""); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := store.ResolveExternalWatchGroup(context.Background(), identity.TenantID, group.ID, first.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.mode == ExternalWatchGroupAll && resolved.Terminal {
+				t.Fatalf("all group resolved before every member: %+v", resolved)
+			}
+			if tc.secondStatus != "" {
+				if _, err := store.FinishExternalWatch(context.Background(), identity.TenantID, second.ID, tc.secondStatus, "", ""); err != nil {
+					t.Fatal(err)
+				}
+				resolved, err = store.ResolveExternalWatchGroup(context.Background(), identity.TenantID, group.ID, second.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if !resolved.Terminal || !resolved.Won || resolved.Status != tc.want {
+				t.Fatalf("resolution=%+v", resolved)
+			}
+			again, err := store.ResolveExternalWatchGroup(context.Background(), identity.TenantID, group.ID, second.ID)
+			if err != nil || !again.Terminal || again.Won {
+				t.Fatalf("second aggregate claimant=%+v err=%v", again, err)
+			}
+		})
+	}
+}
+
 // The circuit breaker's input: an identical failure must accumulate, a different
 // one must reset, and a recovered check must clear the streak. Without this a
 // watch that can never observe anything keeps polling until its deadline.

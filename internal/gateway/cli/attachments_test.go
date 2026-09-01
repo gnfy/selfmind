@@ -44,7 +44,7 @@ func TestDeletedComposerImageTokenDoesNotCreateAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	token := model.editor.AttachImage(path)
 	model.editor.SetValue("describe the remaining text")
 	preview := model.editor.PreviewSubmission()
@@ -58,7 +58,7 @@ func TestDeletedComposerImageTokenDoesNotCreateAttachment(t *testing.T) {
 }
 
 func TestClipboardImageAttachmentDoesNotCommitAHistoryNotice(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.attachClipboardImage(filepath.Join(t.TempDir(), "clipboard.png"), "")
 
 	if !strings.Contains(model.editor.Value(), "[Image #1 · clipboard.png]") {

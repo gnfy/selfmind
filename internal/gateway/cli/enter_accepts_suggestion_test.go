@@ -12,7 +12,7 @@ import (
 // the highlighted command and run it — not submit "/m" and report "Unknown
 // command". The user should never have to type the command in full.
 func TestEnterAcceptsHighlightedSuggestion(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 100
 	model.height = 30
 
@@ -52,7 +52,7 @@ func TestEnterAcceptsHighlightedSuggestion(t *testing.T) {
 // is typed the popup closes, so Enter submits the full "/command args" verbatim
 // (AcceptSuggestion never fires).
 func TestEnterWithArgsDoesNotClobber(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 100
 	model.height = 30
 

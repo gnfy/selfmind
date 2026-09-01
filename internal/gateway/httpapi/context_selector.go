@@ -28,18 +28,44 @@ import (
 // (/resume, task_id, continuation cue) keep the full context.
 func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, platform, channel, userMessage string, preLabel bool) kernel.TaskRuntimeContext {
 	mode := attachContextFull
+	var parent *control.Run
 	if preLabel {
 		mode = attachContextNone
+	} else if c != nil && c.srv != nil && c.srv.Control != nil && task != nil {
+		// Direct callers (tests, non-coordinator paths) resolve the parent here;
+		// runMessage resolves it once up front and passes it explicitly.
+		identity := &control.IdentityContext{TenantID: task.TenantID, PersonID: task.PersonID}
+		if resolved, err := c.resolveParentRun(ctx, identity, task); err == nil {
+			parent = resolved.exact()
+		}
 	}
-	return c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, platform, channel, userMessage, mode)
+	return c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, platform, channel, userMessage, mode, parent)
 }
 
-func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, platform, channel, userMessage string, mode attachContextMode) kernel.TaskRuntimeContext {
+// selectedTaskRuntimeContextWithMode assembles the runtime slice under the
+// P0 continuity contract: full task context exists only run-scoped, keyed by
+// the resolved parent run. A full-mode attach WITHOUT an exact parent is
+// downgraded to the bounded task card (summary/next steps/blockers — no
+// handoff, no artifacts, no events), so a mixed-history task can never leak an
+// unrelated run's slice into a new run's prompt.
+func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, platform, channel, userMessage string, mode attachContextMode, parent *control.Run) kernel.TaskRuntimeContext {
 	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
 		return kernel.TaskRuntimeContext{}
 	}
+	requestedMode := mode
+	if mode == attachContextFull && parent == nil {
+		mode = attachContextBounded
+	}
+	if parent != nil && parent.TaskID != task.ID {
+		// A parent from another task is a caller bug; refuse rather than leak.
+		parent = nil
+		if mode == attachContextFull {
+			mode = attachContextBounded
+		}
+	}
 	includeTask := mode == attachContextBounded || mode == attachContextFull
 	includeFull := mode == attachContextFull
+	c.appendContextScopeEvent(ctx, task, run, channel, requestedMode, mode, parent)
 	selected := kernel.TaskRuntimeContext{
 		TaskID:      task.ID,
 		Title:       task.Title,
@@ -60,80 +86,68 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 			selected.WorkspaceID = run.WorkspaceID
 		}
 	}
-	// Backward-compat read key: the channel of the task's most recent PRIOR run.
-	// A task created before working history became task-keyed stored its
-	// transcript channel-keyed; without this the first task-keyed continuation
-	// would look amnesiac. StartRun already stamped task.LastChannel with the
-	// current channel, so query the runs table for the previous run instead.
-	exceptRunID := ""
-	if run != nil {
-		exceptRunID = run.ID
-	}
-	if includeFull {
-		if prior, err := c.srv.Control.PriorRunChannel(ctx, task.TenantID, task.ID, exceptRunID); err == nil {
-			selected.PriorChannel = prior
-		}
+	// Backward-compat read key: the channel of the parent run this turn
+	// continues. A task created before working history became task-keyed stored
+	// its transcript channel-keyed; without this the first task-keyed
+	// continuation would look amnesiac. Run-scoped by P0: only the exact parent
+	// may supply it.
+	if includeFull && parent != nil {
+		selected.PriorChannel = parent.Channel
 	}
 	if workspace != nil {
 		selected.WorkspaceID = firstNonEmptyString(selected.WorkspaceID, workspace.ID)
 		selected.Workspace = workspace.LocalPath
 	}
-	if handoff, _ := c.srv.Control.LatestHandoff(ctx, task.ID); handoff != nil && includeTask {
-		selected.Handoff = &kernel.TaskHandoffContext{
-			Summary:      handoff.Summary,
-			DoneItems:    append([]string{}, handoff.DoneItems...),
-			NextSteps:    append([]string{}, handoff.NextSteps...),
-			ChangedFiles: append([]string{}, handoff.ChangedFiles...),
-			TestStatus:   handoff.TestStatus,
-			Risks:        append([]string{}, handoff.Risks...),
-			CreatedAt:    handoff.CreatedAt,
-		}
-		if selected.Summary == "" {
-			selected.Summary = handoff.Summary
-		}
-		if len(selected.NextSteps) == 0 {
-			selected.NextSteps = append([]string{}, handoff.NextSteps...)
-		}
-	}
-	artifactLimit := 6
-	if mode == attachContextBounded {
-		artifactLimit = 3
-	}
-	if artifacts, _ := c.srv.Control.ListTaskArtifacts(ctx, task.ID, artifactLimit); len(artifacts) > 0 && includeTask {
-		selected.Artifacts = make([]kernel.TaskArtifactContext, 0, len(artifacts))
-		for _, artifact := range artifacts {
-			selected.Artifacts = append(selected.Artifacts, kernel.TaskArtifactContext{
-				ID:        artifact.ID,
-				Kind:      artifact.Kind,
-				Name:      artifact.Name,
-				URI:       artifact.URI,
-				MimeType:  artifact.MimeType,
-				Summary:   artifactMetadataSummary(artifact.Metadata),
-				CreatedAt: artifact.CreatedAt,
-			})
+	if includeFull && parent != nil {
+		if handoff, _ := c.srv.Control.RunHandoff(ctx, task.TenantID, task.PersonID, parent.ID); handoff != nil {
+			selected.Handoff = &kernel.TaskHandoffContext{
+				Summary:      handoff.Summary,
+				DoneItems:    append([]string{}, handoff.DoneItems...),
+				NextSteps:    append([]string{}, handoff.NextSteps...),
+				ChangedFiles: append([]string{}, handoff.ChangedFiles...),
+				TestStatus:   handoff.TestStatus,
+				Risks:        append([]string{}, handoff.Risks...),
+				CreatedAt:    handoff.CreatedAt,
+			}
+			if selected.Summary == "" {
+				selected.Summary = handoff.Summary
+			}
+			if len(selected.NextSteps) == 0 {
+				selected.NextSteps = append([]string{}, handoff.NextSteps...)
+			}
 		}
 	}
-	if blockers, _ := c.srv.Control.ListOpenTaskBlockers(ctx, task.TenantID, task.ID, 12); len(blockers) > 0 && includeTask {
-		selected.OpenBlockers = make([]kernel.TaskBlockerContext, 0, len(blockers))
-		for _, blocker := range blockers {
-			selected.OpenBlockers = append(selected.OpenBlockers, kernel.TaskBlockerContext{
-				ID: blocker.ID, Kind: blocker.Kind, OriginRunID: blocker.OriginRunID,
-				Summary: taskBlockerSummary(blocker.Detail),
-			})
+	if includeFull && parent != nil {
+		if artifacts, _ := c.srv.Control.ListRunArtifacts(ctx, task.TenantID, task.PersonID, task.ID, parent.ID, 6); len(artifacts) > 0 {
+			selected.Artifacts = make([]kernel.TaskArtifactContext, 0, len(artifacts))
+			for _, artifact := range artifacts {
+				selected.Artifacts = append(selected.Artifacts, kernel.TaskArtifactContext{
+					ID:        artifact.ID,
+					Kind:      artifact.Kind,
+					Name:      artifact.Name,
+					URI:       artifact.URI,
+					MimeType:  artifact.MimeType,
+					Summary:   artifactMetadataSummary(artifact.Metadata),
+					CreatedAt: artifact.CreatedAt,
+				})
+			}
 		}
 	}
 	// Fetch a larger candidate window, then keep the most relevant events
-	// within the budget (W3d) rather than just the most recent 8.
-	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 40); len(events) > 0 && includeFull {
-		ranked := rankTaskEvents(events, 8)
-		selected.Events = make([]kernel.TaskEventContext, 0, len(ranked))
-		for _, event := range ranked {
-			selected.Events = append(selected.Events, kernel.TaskEventContext{
-				Type:      event.Type,
-				Channel:   event.Channel,
-				Summary:   eventPayloadSummary(event.Payload),
-				CreatedAt: event.CreatedAt,
-			})
+	// within the budget (W3d) rather than just the most recent 8. Run-scoped
+	// by P0: only the exact parent run's events qualify.
+	if includeFull && parent != nil {
+		if events, _ := c.srv.Control.ListRunEvents(ctx, task.TenantID, task.PersonID, task.ID, parent.ID, 40); len(events) > 0 {
+			ranked := rankTaskEvents(events, 8)
+			selected.Events = make([]kernel.TaskEventContext, 0, len(ranked))
+			for _, event := range ranked {
+				selected.Events = append(selected.Events, kernel.TaskEventContext{
+					Type:      event.Type,
+					Channel:   event.Channel,
+					Summary:   eventPayloadSummary(event.Payload),
+					CreatedAt: event.CreatedAt,
+				})
+			}
 		}
 	}
 	// A fresh IM inbound already triggers channel-specific catch-up. CLI cannot
@@ -216,14 +230,36 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 	return selected
 }
 
-func taskBlockerSummary(raw json.RawMessage) string {
-	var detail struct {
-		Summary string `json:"summary"`
+// appendContextScopeEvent records, per selector call, which context depth the
+// turn actually received: the requested attach mode, the effective mode after
+// the parent gate, and the parent run (if any). Redacted and structured — it
+// is the observability row behind the `turn_binding_decision` metric and the
+// deterministic eval assertions for P0.
+func (c *RunCoordinator) appendContextScopeEvent(ctx context.Context, task *control.Task, run *control.Run, channel string, requested, effective attachContextMode, parent *control.Run) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
+		return
 	}
-	if json.Unmarshal(raw, &detail) == nil {
-		return textutil.Truncate(strings.TrimSpace(detail.Summary), 240)
+	runID := ""
+	if run != nil {
+		runID = run.ID
 	}
-	return ""
+	payload := map[string]interface{}{
+		"requested_mode": string(requested),
+		"mode":           string(effective),
+	}
+	if parent != nil {
+		payload["parent_run_id"] = parent.ID
+	} else if requested == attachContextFull {
+		payload["downgraded"] = true
+	}
+	_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
+		TaskID:     task.ID,
+		RunID:      runID,
+		Type:       "context.scope",
+		Visibility: "task",
+		Channel:    fallback(channel, task.LastChannel),
+		Payload:    mustJSON(payload),
+	})
 }
 
 func reverseEvents(events []control.Event) []control.Event {

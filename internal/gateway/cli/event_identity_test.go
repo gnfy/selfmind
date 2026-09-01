@@ -6,7 +6,7 @@ import (
 )
 
 func TestWatcherEventIsBoundToRunAndDeduplicated(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	model := c.model
 	model.watchingRun = true
 	model.watchedRunID = "run-current"
@@ -49,7 +49,7 @@ func TestWatcherEventIsBoundToRunAndDeduplicated(t *testing.T) {
 }
 
 func TestDetachWatcherFinalizesOldStreamBeforeNewUserMessage(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	model := c.model
 	model.watchingRun = true
 	model.watchedRunID = "run-old"

@@ -14,10 +14,9 @@ dependency order; the order is not interchangeable.
 - Owner: SelfMind project owner
 - Approver: project owner
 - Review date: 2026-09-25
-
-Supersedes the active slot previously held by
-[`daily-driver-closure.md`](daily-driver-closure.md), which is paused and keeps
-its own approver and review date.
+- Status: paused while
+  [`agent-execution-recovery.md`](agent-execution-recovery.md) holds the active
+  slot. The review date stands; no scope item is withdrawn.
 
 ## Batch 1: Close the package contract
 

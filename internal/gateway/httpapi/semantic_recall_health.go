@@ -35,6 +35,9 @@ type SemanticRecallHealthOptions struct {
 
 	RetryInitial time.Duration
 	RetryMax     time.Duration
+	// RouteLabel is safe provider/model metadata shown only in transition
+	// notices so a person can verify which configured role actually failed.
+	RouteLabel string
 }
 
 // SemanticRecallHealth gates expansion, retries transient failures with
@@ -55,6 +58,7 @@ type SemanticRecallHealth struct {
 	retryScheduled   bool
 	retryCh          chan time.Duration
 	notify           func(string, bool)
+	routeLabel       string
 }
 
 func NewSemanticRecallHealth(opts SemanticRecallHealthOptions) *SemanticRecallHealth {
@@ -73,7 +77,7 @@ func NewSemanticRecallHealth(opts SemanticRecallHealthOptions) *SemanticRecallHe
 		expander: opts.Expander, probe: opts.Probe, record: opts.Record,
 		ready: opts.Initial.Ready, fatal: !opts.Initial.Ready && opts.Initial.FailureClass == modelchange.FailureModel,
 		retryInitial: initial, retryMax: maximum, retryDelay: initial,
-		retryCh: make(chan time.Duration, 1),
+		retryCh: make(chan time.Duration, 1), routeLabel: strings.TrimSpace(opts.RouteLabel),
 	}
 }
 
@@ -133,7 +137,7 @@ func (h *SemanticRecallHealth) Start(ctx context.Context) func() {
 	}
 	h.mu.Unlock()
 	if emitDegraded && notify != nil {
-		notify(semanticRecallDegradedNotice, false)
+		notify(h.notice(semanticRecallDegradedNotice), false)
 	}
 	go h.run(workerCtx)
 	return cancel
@@ -193,7 +197,7 @@ func (h *SemanticRecallHealth) markSuccess(result modelchange.ProbeResult) {
 	}
 	h.mu.Unlock()
 	if shouldNotify && notify != nil {
-		notify(semanticRecallRecoveredNotice, true)
+		notify(h.notice(semanticRecallRecoveredNotice), true)
 	}
 }
 
@@ -212,9 +216,18 @@ func (h *SemanticRecallHealth) markFailure(result modelchange.ProbeResult) {
 		}
 	}
 	h.mu.Lock()
+	wasReady := h.ready
 	h.ready = false
 	h.fatal = result.FailureClass == modelchange.FailureModel
-	notify, emitDegraded := h.claimDegradedNoticeLocked()
+	var notify func(string, bool)
+	emitDegraded := false
+	// One live transient failure immediately disables semantic expansion and
+	// starts recovery, but does not flash a degraded/recovered pair in the UI.
+	// Notify only if the retry also fails. A degraded state loaded at startup is
+	// still announced immediately by Start.
+	if !wasReady || h.fatal {
+		notify, emitDegraded = h.claimDegradedNoticeLocked()
+	}
 	if !h.fatal {
 		delay := h.retryDelay
 		h.retryDelay *= 2
@@ -225,8 +238,15 @@ func (h *SemanticRecallHealth) markFailure(result modelchange.ProbeResult) {
 	}
 	h.mu.Unlock()
 	if emitDegraded && notify != nil {
-		notify(semanticRecallDegradedNotice, false)
+		notify(h.notice(semanticRecallDegradedNotice), false)
 	}
+}
+
+func (h *SemanticRecallHealth) notice(base string) string {
+	if h == nil || strings.TrimSpace(h.routeLabel) == "" {
+		return base
+	}
+	return strings.Replace(base, "semantic_recall", "semantic_recall ("+h.routeLabel+")", 1)
 }
 
 func (h *SemanticRecallHealth) claimDegradedNoticeLocked() (func(string, bool), bool) {

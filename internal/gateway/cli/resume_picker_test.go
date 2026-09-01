@@ -14,7 +14,7 @@ import (
 // /resume <n> is resolved there; a locally numbered menu would drift from the
 // resolver and resume the wrong task.
 func TestBareResumeArmsPickerFromDaemonList(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width, model.height = 100, 30
 
 	var relayed []string
@@ -45,7 +45,7 @@ func TestBareResumeArmsPickerFromDaemonList(t *testing.T) {
 // TestResumeWithReferenceStaysAPlainRelay keeps the explicit form unchanged: it
 // must reach the daemon as /resume <ref>, not as a task listing.
 func TestResumeWithReferenceStaysAPlainRelay(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	var relayed []string
 	model.messageProcessor = fakeControlProcessor(&relayed, "Resumed.")
 	model.resumePickerArmed = true
@@ -98,7 +98,7 @@ func TestArmedPickerExpandsBareNumber(t *testing.T) {
 // TestSearchCurrentOpensFullDiffPager pins the /history fold: deleting the
 // command must not delete the only way to read a truncated diff in full.
 func TestSearchCurrentOpensFullDiffPager(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width, model.height = 100, 30
 
 	if cmd := model.handleSessionSearch([]string{"current"}); cmd != nil {

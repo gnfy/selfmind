@@ -3,9 +3,31 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
+
+type durablePlanProjectionTest struct {
+	plan          PlanState
+	version       int
+	completionErr error
+}
+
+func (p *durablePlanProjectionTest) Project(_ context.Context, state PlanState) (PlanProjectionResult, error) {
+	p.version++
+	for i := range state.Plan {
+		if state.Plan[i].StepID == "" {
+			state.Plan[i].StepID = "step-issued"
+		}
+	}
+	p.plan = state
+	return PlanProjectionResult{Plan: state, Version: p.version, Changed: true}, nil
+}
+
+func (p *durablePlanProjectionTest) ValidateCompletion(context.Context) error {
+	return p.completionErr
+}
 
 func TestUpdatePlanToolRecordsStructuredPlan(t *testing.T) {
 	tool := NewUpdatePlanTool()
@@ -30,6 +52,26 @@ func TestUpdatePlanToolRecordsStructuredPlan(t *testing.T) {
 	}
 	if state.Plan[1].Status != "in_progress" {
 		t.Fatalf("second step status = %q", state.Plan[1].Status)
+	}
+}
+
+func TestPlanToolsUseDurableProjectionAsCompletionAuthority(t *testing.T) {
+	projection := &durablePlanProjectionTest{}
+	ctx := WithRunPlanProjection(context.Background(), projection)
+	plan := NewUpdatePlanTool()
+	result, err := plan.Execute(map[string]interface{}{
+		"plan": []interface{}{map[string]interface{}{"step": "Inspect", "status": "completed"}}, "_context": ctx,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, `"step_id":"step-issued"`) || !strings.Contains(result, `"plan_version":1`) {
+		t.Fatalf("durable projection result missing server identity: %s", result)
+	}
+	projection.completionErr = errors.New("uncertain effect")
+	finish := NewFinishRunTool()
+	if _, err := finish.Execute(map[string]interface{}{"status": "done", "summary": "done", "_context": ctx}); err == nil || !strings.Contains(err.Error(), "uncertain effect") {
+		t.Fatalf("finish_run ignored durable completion authority: %v", err)
 	}
 }
 
@@ -134,7 +176,10 @@ func TestFinishRunToolNormalizesApprovalStatus(t *testing.T) {
 	}
 }
 
-func TestFinishRunToolPreservesResolvedBlockerIDs(t *testing.T) {
+func TestFinishRunToolIgnoresLegacyResolvedBlockerIDs(t *testing.T) {
+	// resolved_blocker_ids left the finish_run contract with the task_blockers
+	// authority (§10.3). Recorded cassettes still replay calls carrying it, so
+	// the tool must accept and drop the argument instead of erroring.
 	tool := NewFinishRunTool()
 	result, err := tool.Execute(map[string]interface{}{
 		"status": "done", "summary": "verified",
@@ -143,8 +188,8 @@ func TestFinishRunToolPreservesResolvedBlockerIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, `"resolved_blocker_ids":["blocker_one","blocker_two"]`) {
-		t.Fatalf("result=%s", result)
+	if strings.Contains(result, "resolved_blocker_ids") {
+		t.Fatalf("legacy argument must not survive into the outcome: %s", result)
 	}
 }
 
@@ -172,6 +217,31 @@ func TestFinishRunToolEmitsCanonicalCompletionReason(t *testing.T) {
 				t.Fatalf("completion_reason=%v, want %q", payload["completion_reason"], want)
 			}
 		})
+	}
+}
+
+func TestFinishRunDispatchRejectsUserLifecycleStatuses(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(NewFinishRunTool())
+	for _, status := range []string{"cancelled", "archived"} {
+		t.Run(status, func(t *testing.T) {
+			if _, err := registry.Dispatch("finish_run", map[string]interface{}{
+				"status": status, "summary": "model tried to end user-owned lifecycle",
+			}); err == nil {
+				t.Fatalf("finish_run accepted user-only lifecycle status %q", status)
+			}
+		})
+	}
+}
+
+func TestFinishRunExecuteRejectsUserLifecycleStatuses(t *testing.T) {
+	tool := NewFinishRunTool()
+	for _, status := range []string{"cancelled", "archived"} {
+		if _, err := tool.Execute(map[string]interface{}{
+			"status": status, "summary": "model tried to end user-owned lifecycle",
+		}); err == nil {
+			t.Fatalf("direct finish_run execution accepted user-only lifecycle status %q", status)
+		}
 	}
 }
 

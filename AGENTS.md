@@ -136,9 +136,14 @@ daemon must not expose that directory as a product runtime Skill.
 
 ## Tasks, Context, and Memory
 
-- A task is a reversible work label, not a context boundary. Wrong automatic
-  attachment may affect display only. Explicit task ids, `/resume`, and clear
-  continuation cues remain deterministic; do not add an ingress LLM classifier.
+- A task is a reversible work label, not a context boundary. Explicit task ids,
+  `/resume`, structured reply edges, and standalone continuation controls remain
+  deterministic. The one allowed ingress inference seam is the bounded
+  `fast_classifier` continuity resolver: it sees gateway-issued person-scoped
+  run cards, never raw transcripts or tool output; it recommends NEW, OBSERVE,
+  STEER, RESUME, or CLARIFY; and the gateway revalidates every target before
+  acting. Do not add a second classifier or let model output select permissions,
+  workspaces, task labels, or context rows directly.
 - Continuity comes from the person-level work spine: one slim user/final-answer
   entry per agent turn plus touched paths and source. Tool intermediates and
   system prompts remain in run events.
@@ -157,17 +162,19 @@ daemon must not expose that directory as a product runtime Skill.
   foreground turn.
 - Person data is person-partitioned; skills are control-tenant assets. Durable
   ownership and execution authority are separate typed scope fields.
-- User preferences are global; project/environment memory uses logical
-  workspace scope. Update `last_accessed_at` only after actual prompt injection.
+- User preferences are global. Project/environment conventions belong to
+  bounded logical-workspace knowledge, not automatic person-memory intake.
+  Update `last_accessed_at` only after actual prompt injection.
 - Pinned and user-corrected memory is protected from automatic rewriting and
   normal decay. User correction, forget, pin, and unpin always win.
 - Do not save every message. Maintenance chooses `SKIP`, `ADD`, `REINFORCE`,
   `SUPERSEDE`, or `CONFLICT` against same-scope evidence. Similarity proposes
   candidates but never authorizes a merge.
 - Post-run maintenance is asynchronous, eligibility-filtered, debounced, and
-  idempotent. One frozen result includes task and memory decisions. Never add a
-  second extractor, a synchronous per-run maintenance call, or fallback to the
-  primary coding model.
+  idempotent. One frozen result includes preference decisions and optional task
+  reference hints; it never decides task routing. Never add a second extractor,
+  a synchronous per-run maintenance call, or fallback to the primary coding
+  model.
 - Automatic retention may archive stale terminal tasks with no live run or
   pending human input. It never deletes run/artifact history, touches open work,
   or overrides a pin.

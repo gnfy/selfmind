@@ -36,6 +36,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		resized := m.width > 0 && m.height > 0 && (m.width != msg.Width || m.height != msg.Height)
 		m.width, m.height = msg.Width, msg.Height
 		m.common.Width, m.common.Height = msg.Width, msg.Height
 		if m.editor != nil {
@@ -58,7 +59,20 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Attach digest waits for the first sized frame so it lands after the
 		// startup card and renders at a real width in both renderers.
-		return m, m.maybeShowStartupDigest(msg.Width)
+		cmd := m.maybeShowStartupDigest(msg.Width)
+		if resized {
+			// In inline mode the terminal may reflow the previous active region
+			// before Bubble Tea learns the new width. Its cached logical line
+			// count then no longer matches the physical rows, which leaves stale
+			// composer/status fragments on the screen. Clear only the visible
+			// screen and let the next frame repaint the bounded active region;
+			// committed history remains in native scrollback.
+			if cmd != nil {
+				return m, tea.Sequence(tea.ClearScreen, cmd)
+			}
+			return m, tea.ClearScreen
+		}
+		return m, cmd
 
 	case spinner.TickMsg:
 		if !m.waitingForModel {
@@ -84,7 +98,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
-		if strings.EqualFold(strings.TrimSpace(msg.Phase), modelWaitPhase) && !m.passiveDaemonEvent(msg.Event) {
+		if animatedModelPhase(msg.Phase) && !m.passiveDaemonEvent(msg.Event) {
 			return m, m.startModelWait(msg.Content)
 		}
 		m.stopModelWait()
@@ -609,7 +623,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgClarifyRequest:
 		m.stopModelWait()
-		m.armClarifyPrompt(tools.ClarifyRequest{Question: msg.Question, Choices: msg.Choices}, true)
+		m.armClarifyPrompt(tools.ClarifyRequest{ID: msg.ID, Question: msg.Question, Choices: msg.Choices}, true)
 		return m, nil
 
 	case MsgClarifyAnswerResult:

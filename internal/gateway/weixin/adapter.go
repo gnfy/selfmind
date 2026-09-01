@@ -245,6 +245,9 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		DisplayName:    displayName,
 		Channel:        chatID,
 		Content:        text,
+		ReplyToRunID:   stringFromMap(msg, "reply_to_run_id"),
+		ApprovalID:     stringFromMap(msg, "approval_id"),
+		ClarifyID:      stringFromMap(msg, "clarify_id"),
 		Async:          !isControlCommand(text),
 		Attachments:    attachments,
 	}

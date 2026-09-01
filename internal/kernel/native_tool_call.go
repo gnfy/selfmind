@@ -57,6 +57,9 @@ func toolDefinitionsForLLM(ctx context.Context, defs []map[string]interface{}, s
 		if !strategy.AllowsTool(name) {
 			continue
 		}
+		if strategy.VerificationOnly && !isLifecycleToolName(name) && !toolDefinitionReadOnly(d) {
+			continue
+		}
 		params := toolDefinitionParameters(d)
 		if params == nil {
 			params = map[string]interface{}{
@@ -71,6 +74,12 @@ func toolDefinitionsForLLM(ctx context.Context, defs []map[string]interface{}, s
 		})
 	}
 	return out
+}
+
+func toolDefinitionReadOnly(def map[string]interface{}) bool {
+	metadata, _ := def["selfmind"].(map[string]interface{})
+	readOnly, _ := metadata["read_only"].(bool)
+	return readOnly
 }
 
 func filterToolCallsByStrategy(calls []llm.ToolCall, strategy TaskStrategy) []llm.ToolCall {
@@ -451,6 +460,17 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	if invocationScope, ok := ToolInvocationScopeFromContext(ctx); ok {
 		args["_invocation_scope"] = invocationScope
 	}
+	if scope, ok := ToolInvocationScopeFromContext(ctx); ok && scope.RecoveryMode == "verify_only" && !isLifecycleToolName(name) {
+		provider, available := a.backend.(ToolExecutionMetadataProvider)
+		if !available || !provider.ToolExecutionMetadata(name, args).ReadOnly {
+			return a.toolDispatchRefused(eventCh, idx, call, signature,
+				newRecoveryPolicyError(
+					"verification_only_mutation_refused", "uncertain_effect", "after_user_input", "not_dispatched",
+					"This recovery turn may only observe uncertain state; the requested mutation was not executed.",
+					[]string{"inspect_current_state", "report_actionable_blocker", "ask_user_to_resume_mutation"},
+				))
+		}
+	}
 	if workspace, ok := WorkspaceContextFromContext(ctx); ok && strings.TrimSpace(workspace.ID) != "" {
 		// Mutation tools need the logical workspace id as well as the root used
 		// by WorkspaceScopeMiddleware. Memory uses this hidden value to keep
@@ -463,6 +483,17 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	// call id was already claimed, do not execute the side effect.
 	var ledgerRunID string
 	retryClass := ClassifyToolRetry(name)
+	recoveryAttempt := recoveryAttemptFromCall(ctx, name, args, signature, retryClass)
+	if policy := RecoveryPolicyFromContext(ctx); policy != nil {
+		if policyErr := policy.BeforeDispatch(recoveryAttempt); policyErr != nil {
+			return a.toolDispatchRefused(eventCh, idx, call, signature, policyErr)
+		}
+	}
+	planVersion, planStepID := CurrentRunExecutionPlan(ctx)
+	environmentGeneration := int64(0)
+	if invocationScope, ok := ToolInvocationScopeFromContext(ctx); ok {
+		environmentGeneration = invocationScope.EnvironmentGeneration
+	}
 	if rt, ok := TaskRuntimeContextFromContext(ctx); ok {
 		ledgerRunID = rt.RunID
 	}
@@ -474,11 +505,11 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		}
 		if ledger != nil {
 			decision, claimErr := ledger.ClaimDispatch(ctx, ToolLedgerEntry{
-				RunID:      ledgerRunID,
-				ToolCallID: call.ID,
-				ToolName:   name,
-				ArgsHash:   ToolArgsHash(call.Args),
-				RetryClass: retryClass,
+				RunID: ledgerRunID, ToolCallID: call.ID, ToolName: name,
+				ArgsHash: ToolArgsHash(call.Args), RetryClass: retryClass,
+				EffectID: ToolEffectID(ledgerRunID, call.ID), PlanVersion: planVersion,
+				PlanStepID: planStepID, Strategy: ToolExecutionStrategy(name, retryClass),
+				EffectClass: string(retryClass), EnvironmentGeneration: environmentGeneration,
 			})
 			if claimErr != nil && retryClass != ToolRetryReadOnly {
 				return a.toolDispatchRefused(eventCh, idx, call, signature,
@@ -526,7 +557,12 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		// stopped by /stop or the watchdog. Closing the durable ledger is cleanup,
 		// not more execution; it must survive that cancellation or the call remains
 		// falsely "started" and every resume treats the side effect as uncertain.
-		ledgerErr = ledger.RecordOutcome(context.WithoutCancel(ctx), ledgerRunID, call.ID, err == nil)
+		cleanupCtx := context.WithoutCancel(ctx)
+		if recorder, ok := ledger.(ToolLedgerOutcomeRecorder); ok {
+			ledgerErr = recorder.RecordOutcomeWithRef(cleanupCtx, ledgerRunID, call.ID, err == nil, ToolResultReference(result, err == nil))
+		} else {
+			ledgerErr = ledger.RecordOutcome(cleanupCtx, ledgerRunID, call.ID, err == nil)
+		}
 	}
 
 	if err != nil {
@@ -538,6 +574,13 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			metadata = completedMetadata[0]
 		}
 		packaged := packageDispatchedToolFailureCtx(ctx, name, result, err, metadata)
+		if policy := RecoveryPolicyFromContext(ctx); policy != nil {
+			policy.RecordFailure(RecoveryFailure{
+				Attempt: recoveryAttempt, ErrorCode: packaged.ErrorCode, FailureClass: packaged.ErrorCategory,
+				Retryability: packaged.Retryability, EffectState: packaged.EffectState,
+				StateChanged: packaged.StateChanged, Alternatives: packaged.Alternatives,
+			})
+		}
 		if eventCh != nil {
 			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err, completedMetadata...)
 		}
@@ -561,6 +604,9 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 
 	modelResult := modelVisibleSkillToolResult(name, result)
 	packaged := packageToolResultCtx(ctx, name, modelResult)
+	if policy := RecoveryPolicyFromContext(ctx); policy != nil {
+		policy.RecordSuccess(recoveryAttempt)
+	}
 	activated := activateToolsFromSearchResult(ctx, name, result)
 	if eventCh != nil {
 		if len(activated) > 0 {
@@ -752,17 +798,29 @@ func emitStructuredToolEvent(eventCh chan string, name string, args map[string]i
 	switch name {
 	case "update_plan":
 		var update struct {
-			Changed *bool `json:"changed"`
+			Changed     *bool                    `json:"changed"`
+			PlanVersion int                      `json:"plan_version"`
+			Plan        []PlanItem               `json:"plan"`
+			WorkUnits   []map[string]interface{} `json:"work_units"`
 		}
 		if json.Unmarshal([]byte(result), &update) == nil && update.Changed != nil && !*update.Changed {
 			return
 		}
+		plan := update.Plan
+		if len(plan) == 0 {
+			plan = planItemsFromArgs(args)
+		}
+		payload := map[string]interface{}{"explanation": stringArg(args, "explanation")}
+		if update.PlanVersion > 0 {
+			payload["plan_version"] = update.PlanVersion
+		}
+		if len(update.WorkUnits) > 0 {
+			payload["work_units"] = update.WorkUnits
+		}
 		EmitAgentEvent(eventCh, AgentEvent{
-			Type: "plan.updated",
-			Plan: planItemsFromArgs(args),
-			Payload: map[string]interface{}{
-				"explanation": stringArg(args, "explanation"),
-			},
+			Type:    "plan.updated",
+			Plan:    plan,
+			Payload: payload,
 		})
 	case "finish_run":
 		payload := map[string]interface{}{}
@@ -792,12 +850,13 @@ func planItemsFromArgs(args map[string]interface{}) []PlanItem {
 			continue
 		}
 		workUnit, _ := obj["work_unit"].(bool)
+		verificationRequired, _ := obj["verification_required"].(bool)
 		items = append(items, PlanItem{
-			Step:          fmt.Sprintf("%v", obj["step"]),
-			Status:        fmt.Sprintf("%v", obj["status"]),
-			RelatedTaskID: stringArg(obj, "related_task_id"),
-			WorkUnitID:    stringArg(obj, "work_unit_id"),
-			WorkUnit:      workUnit,
+			StepID: stringArg(obj, "step_id"), Step: fmt.Sprintf("%v", obj["step"]),
+			Status: fmt.Sprintf("%v", obj["status"]), SuccessCriteria: stringArg(obj, "success_criteria"),
+			VerificationRequired: verificationRequired,
+			RelatedTaskID:        stringArg(obj, "related_task_id"), WorkUnitID: stringArg(obj, "work_unit_id"),
+			WorkUnit: workUnit,
 		})
 	}
 	return items

@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"selfmind/internal/gateway/router"
-	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/modelchange"
 	"selfmind/internal/modelruntime"
@@ -26,10 +24,11 @@ import (
 	"github.com/muesli/termenv"
 )
 
-func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, tenantID string) *Controller {
-	if a != nil {
-		a.SetEvolutionNotifyChannel(a.EventChannel)
-	}
+// NewController builds the TUI controller. The TUI is a pure daemon client:
+// chat, tools, and control commands all flow through the message processor
+// installed by the caller (SetClientMode wiring); there is no in-process
+// agent or gateway fallback.
+func NewController(providerName, modelName string, cfg *config.Config, tenantID string) *Controller {
 	c := common.New(resolveTUITheme(cfg))
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
@@ -62,66 +61,8 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			messages:           []ChatMessage{},
 			thinking:           false,
 			cursorVisible:      true,
-			provider:           provider,
-			agent:              a,
-			tenantID:           tenantID,
-			channel:            channel,
-			spinner:            sp,
-			inputHistoryStore:  historyStore,
-			approvalMode:       "", // unset: requests omit the mode so the persisted /mode preference governs
-			startTime:          time.Now(),
-			runStatus:          "ready",
-			tokenLimit:         resolveUITokenLimit(cfg, "", ""),
-			modelMeta:          resolveUIModelMeta(cfg),
-			modelManagerStatus: modelManagerStatus,
-			modelManagerRoutes: modelManagerRoutes,
-			clarifyBridge:      tools.NewClarifyBridge(),
-			process:            newProcessSurface(),
-		},
-	}
-}
-
-func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider llm.Provider, providerName, modelName string, cfg *config.Config, tenantID string) *Controller {
-	if agent != nil {
-		agent.SetEvolutionNotifyChannel(agent.EventChannel)
-	}
-	c := common.New(resolveTUITheme(cfg))
-	sp := spinner.New()
-	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(c.Theme.Color(uitheme.TextDecorative))
-
-	var editorCfg *config.EditorConfig
-	if cfg != nil {
-		editorCfg = &cfg.Editor
-	}
-	if tenantID == "" {
-		tenantID = "default"
-	}
-	editor := components.NewEditor(c, editorCfg)
-	editor.SetCommandHints(slashCommandHints())
-	channel := cliSessionChannel()
-	historyStore, persistedHistory := newInputHistoryState(cfg)
-	historyMaxBytes := int64(0)
-	if cfg != nil {
-		historyMaxBytes = cfg.History.MaxBytes
-	}
-	editor.SeedHistory(persistedHistory, historyMaxBytes)
-	modelManagerStatus, modelManagerRoutes := buildModelManagerData(cfg)
-
-	return &Controller{
-		model: &uiModel{
-			common:             c,
-			sidebar:            sidebar.New(c),
-			status:             status.New(c),
-			editor:             editor,
-			messages:           []ChatMessage{},
-			thinking:           false,
-			cursorVisible:      true,
-			provider:           provider,
 			providerName:       providerName,
 			modelName:          modelName,
-			agent:              agent,
-			gateway:            gw,
 			tenantID:           tenantID,
 			channel:            channel,
 			spinner:            sp,

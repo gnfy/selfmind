@@ -227,6 +227,41 @@ func TestRewriteCassetteMapsSkillCandidateRefsFromCurrentRequest(t *testing.T) {
 	}
 }
 
+func TestRewriteCassetteMapsContinuityCandidateIDsFromCurrentRequest(t *testing.T) {
+	recordedTask := "task_11111111-1111-4111-8111-111111111111"
+	recordedRun := "run_22222222-2222-4222-8222-222222222222"
+	recordMessages := []Message{{Role: "user", Content: `{"candidate_cards_json":[{"task_id":"` + recordedTask + `","run_id":"` + recordedRun + `"}]}`}}
+	original := cassette{Method: "chat", Chat: &ChatResponse{ToolCalls: []ToolCall{{
+		Function: "resolve_continuity", Args: `{"target_task_id":"` + recordedTask + `","target_run_id":"` + recordedRun + `"}`,
+	}}}}
+	stored := original
+	for i, id := range vcrTaskIDs(recordMessages) {
+		stored = rewriteCassette(stored, id, vcrTaskIDPlaceholder(i))
+	}
+	for i, id := range vcrRunIDs(recordMessages) {
+		stored = rewriteCassette(stored, id, vcrRunIDPlaceholder(i))
+	}
+	data, _ := json.Marshal(stored)
+	if strings.Contains(string(data), recordedTask) || strings.Contains(string(data), recordedRun) {
+		t.Fatalf("stored continuity identity is not portable: %s", data)
+	}
+
+	replayTask := "task_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	replayRun := "run_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	replayMessages := []Message{{Role: "user", Content: `{"candidate_cards_json":[{"task_id":"` + replayTask + `","run_id":"` + replayRun + `"}]}`}}
+	replayed := stored
+	for i, id := range vcrTaskIDs(replayMessages) {
+		replayed = rewriteCassette(replayed, vcrTaskIDPlaceholder(i), id)
+	}
+	for i, id := range vcrRunIDs(replayMessages) {
+		replayed = rewriteCassette(replayed, vcrRunIDPlaceholder(i), id)
+	}
+	got := replayed.Chat.ToolCalls[0].Args
+	if !strings.Contains(got, replayTask) || !strings.Contains(got, replayRun) {
+		t.Fatalf("replayed continuity identity = %s", got)
+	}
+}
+
 func TestRecordModePreservesImmediateFailuresInSequence(t *testing.T) {
 	dir := t.TempDir()
 	inner := &failOnceVCRProvider{}

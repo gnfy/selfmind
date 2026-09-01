@@ -2,684 +2,104 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Even"
+      "content": "The",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " the"
+      "content": " bounded",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " terminal"
+      "content": " observation",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " check"
+      "content": " reports",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " requires"
+      "content": " `",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " approval"
+      "content": "SU",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " which"
+      "content": "CCEEDED",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " timed"
+      "content": "`;",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " out"
+      "content": " I",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": "."
+      "content": "’m",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " So"
+      "content": " recording",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " I"
+      "content": " completion",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " can"
+      "content": " without",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": "'t"
+      "content": " retry",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " run"
+      "content": "ing",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " any"
+      "content": " the",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " commands"
+      "content": " unsupported",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": "."
+      "content": " watcher",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " The"
+      "content": ".",
+      "phase": "commentary"
     },
     {
-      "reasoning_content": " watch"
-    },
-    {
-      "reasoning_content": " could"
-    },
-    {
-      "reasoning_content": " not"
-    },
-    {
-      "reasoning_content": " be"
-    },
-    {
-      "reasoning_content": " registered"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " registration"
-    },
-    {
-      "reasoning_content": " attempt"
-    },
-    {
-      "reasoning_content": " required"
-    },
-    {
-      "reasoning_content": " approval"
-    },
-    {
-      "reasoning_content": " ("
-    },
-    {
-      "reasoning_content": "the"
-    },
-    {
-      "reasoning_content": " pre"
-    },
-    {
-      "reasoning_content": "flight"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": " of"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " command"
-    },
-    {
-      "reasoning_content": ")"
-    },
-    {
-      "reasoning_content": " which"
-    },
-    {
-      "reasoning_content": " expired"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " no"
-    },
-    {
-      "reasoning_content": " answer"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " I"
-    },
-    {
-      "reasoning_content": " should"
-    },
-    {
-      "reasoning_content": " not"
-    },
-    {
-      "reasoning_content": " ret"
-    },
-    {
-      "reasoning_content": "ry"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " not"
-    },
-    {
-      "reasoning_content": " invent"
-    },
-    {
-      "reasoning_content": " a"
-    },
-    {
-      "reasoning_content": " substitute"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " not"
-    },
-    {
-      "reasoning_content": " claim"
-    },
-    {
-      "reasoning_content": " anything"
-    },
-    {
-      "reasoning_content": " about"
-    },
-    {
-      "reasoning_content": " deployment"
-    },
-    {
-      "reasoning_content": " state"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Per"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " user"
-    },
-    {
-      "reasoning_content": "'s"
-    },
-    {
-      "reasoning_content": " instruction"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "If"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " watch"
-    },
-    {
-      "reasoning_content": " cannot"
-    },
-    {
-      "reasoning_content": " be"
-    },
-    {
-      "reasoning_content": " registered"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " explain"
-    },
-    {
-      "reasoning_content": " why"
-    },
-    {
-      "reasoning_content": " in"
-    },
-    {
-      "reasoning_content": " one"
-    },
-    {
-      "reasoning_content": " short"
-    },
-    {
-      "reasoning_content": " paragraph"
-    },
-    {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " stop"
-    },
-    {
-      "reasoning_content": ".\"\n\n"
-    },
-    {
-      "reasoning_content": "And"
-    },
-    {
-      "reasoning_content": " per"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " tool"
-    },
-    {
-      "reasoning_content": " directive"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "fin"
-    },
-    {
-      "reasoning_content": "ish"
-    },
-    {
-      "reasoning_content": " waiting"
-    },
-    {
-      "reasoning_content": "_user"
-    },
-    {
-      "reasoning_content": "\".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " explanation"
-    },
-    {
-      "reasoning_content": " in"
-    },
-    {
-      "reasoning_content": " one"
-    },
-    {
-      "reasoning_content": " short"
-    },
-    {
-      "reasoning_content": " paragraph"
-    },
-    {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " call"
-    },
-    {
-      "reasoning_content": " finish"
-    },
-    {
-      "reasoning_content": "_run"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " waiting"
-    },
-    {
-      "reasoning_content": "_user"
-    },
-    {
-      "reasoning_content": " status"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " The"
-    },
-    {
-      "reasoning_content": " summary"
-    },
-    {
-      "reasoning_content": " should"
-    },
-    {
-      "reasoning_content": " be"
-    },
-    {
-      "reasoning_content": " short"
-    },
-    {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " user"
-    },
-    {
-      "reasoning_content": "-facing"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "content": "The"
-    },
-    {
-      "content": " watch"
-    },
-    {
-      "content": " could"
-    },
-    {
-      "content": " not"
-    },
-    {
-      "content": " be"
-    },
-    {
-      "content": " registered"
-    },
-    {
-      "content": ":"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " registration"
-    },
-    {
-      "content": " attempt"
-    },
-    {
-      "content": " required"
-    },
-    {
-      "content": " a"
-    },
-    {
-      "content": " pre"
-    },
-    {
-      "content": "flight"
-    },
-    {
-      "content": " approval"
-    },
-    {
-      "content": " that"
-    },
-    {
-      "content": " expired"
-    },
-    {
-      "content": " with"
-    },
-    {
-      "content": " no"
-    },
-    {
-      "content": " answer"
-    },
-    {
-      "content": " ("
-    },
-    {
-      "content": "n"
-    },
-    {
-      "content": "obody"
-    },
-    {
-      "content": " is"
-    },
-    {
-      "content": " at"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " keyboard"
-    },
-    {
-      "content": "),"
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " environment"
-    },
-    {
-      "content": " refused"
-    },
-    {
-      "content": " to"
-    },
-    {
-      "content": " run"
-    },
-    {
-      "content": " or"
-    },
-    {
-      "content": " verify"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " polling"
-    },
-    {
-      "content": " command"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "self"
-    },
-    {
-      "content": "mind"
-    },
-    {
-      "content": "-no"
-    },
-    {
-      "content": "-s"
-    },
-    {
-      "content": "uch"
-    },
-    {
-      "content": "-release"
-    },
-    {
-      "content": "-cl"
-    },
-    {
-      "content": "i"
-    },
-    {
-      "content": " describe"
-    },
-    {
-      "content": " --"
-    },
-    {
-      "content": "status"
-    },
-    {
-      "content": "`,"
-    },
-    {
-      "content": " so"
-    },
-    {
-      "content": " no"
-    },
-    {
-      "content": " durable"
-    },
-    {
-      "content": " watch"
-    },
-    {
-      "content": " named"
-    },
-    {
-      "content": " \""
-    },
-    {
-      "content": "de"
-    },
-    {
-      "content": "ploy"
-    },
-    {
-      "content": " status"
-    },
-    {
-      "content": "\""
-    },
-    {
-      "content": " was"
-    },
-    {
-      "content": " created"
-    },
-    {
-      "content": "."
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": " am"
-    },
-    {
-      "content": " not"
-    },
-    {
-      "content": " ret"
-    },
-    {
-      "content": "rying"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " not"
-    },
-    {
-      "content": " substituting"
-    },
-    {
-      "content": " another"
-    },
-    {
-      "content": " command"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": " cannot"
-    },
-    {
-      "content": " claim"
-    },
-    {
-      "content": " anything"
-    },
-    {
-      "content": " about"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " deployment"
-    },
-    {
-      "content": "'s"
-    },
-    {
-      "content": " state"
-    },
-    {
-      "content": " —"
-    },
-    {
-      "content": " treat"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " deployment"
-    },
-    {
-      "content": " status"
-    },
-    {
-      "content": " as"
-    },
-    {
-      "content": " unknown"
-    },
-    {
-      "content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
-    },
-    {
-      "usage": {
-        "input_tokens": 11767,
-        "output_tokens": 419,
-        "cache_read_input_tokens": 11648,
-        "cache_miss_input_tokens": 119,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 125,
-        "cache_usage_reported": true
-      }
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_or8oxhM68AzQOFDiifEu6182",
+          "ID": "call_4keaXIirnjqt6VCkMvA7IPAP",
           "Function": "finish_run",
-          "Args": "{\"status\": \"waiting_user\", \"summary\": \"The durable external watch \\\"deploy status\\\" could not be registered: the watch preflight/approval timed out with no answer and the broken polling command selfmind-no-such-release-cli was not registered or executed. No watch exists; deployment status is unknown.\", \"done\": [], \"next_steps\": [\"Re-run registration of the watch when an operator is available to approve, or supply a valid release CLI command\"], \"risks\": [\"No durable watch is active; deployment status has not been verified\"]}"
+          "Args": "{\"done\":[\"Called `watch_external` exactly once for `deploy status`; preparation refused the unsupported check and nothing was dispatched.\",\"Read `status.txt` exactly once as the required bounded observation.\",\"Observed deployment status `SUCCEEDED`.\"],\"risks\":[\"No durable watch was registered because watcher preparation could not prove the requested command was read-only.\"],\"status\":\"done\",\"summary\":\"Deployment status observed as SUCCEEDED via the required bounded fallback after watch registration was not dispatched.\",\"tests\":[\"`status.txt` returned `SUCCEEDED`.\"]}"
         }
       ]
+    },
+    {
+      "usage": {
+        "input_tokens": 7305,
+        "output_tokens": 185,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 7305,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
     }
   ]
 }

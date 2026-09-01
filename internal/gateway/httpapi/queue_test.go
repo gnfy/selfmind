@@ -109,13 +109,20 @@ func TestDrainAutoStartsNextQueued(t *testing.T) {
 		n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 		return n == 0
 	}, "queued item was never drained")
+	// The drained item is genuinely new work and owns its own root task
+	// (simplification P2): two tasks, one run each.
 	waitUntil(t, 10*time.Second, func() bool {
 		tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
-		if len(tasks) != 1 {
+		if len(tasks) != 2 {
 			return false
 		}
-		runs, _ := store.ListTaskRuns(ctx, identity.TenantID, tasks[0].ID, 10)
-		return len(runs) == 2
+		for _, task := range tasks {
+			runs, _ := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
+			if len(runs) != 1 {
+				return false
+			}
+		}
+		return true
 	}, "drained task never ran")
 	// No run should be left executing.
 	waitUntil(t, 5*time.Second, func() bool {
@@ -153,12 +160,42 @@ func TestQueueSurvivesRestartBootDrain(t *testing.T) {
 	}, "boot drain did not consume the queued rows")
 	waitUntil(t, 30*time.Second, func() bool {
 		tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
-		if len(tasks) != 1 {
+		if len(tasks) != 2 {
 			return false
 		}
-		runs, _ := store.ListTaskRuns(ctx, identity.TenantID, tasks[0].ID, 10)
-		return len(runs) == 2
+		for _, task := range tasks {
+			runs, _ := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
+			if len(runs) != 1 {
+				return false
+			}
+		}
+		return true
 	}, "boot-drained tasks never ran")
+}
+
+func TestModelChangeQueuePreservesReplyMetadata(t *testing.T) {
+	provider := newSlowLLMProvider("done")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := daemon.enqueueDuringModelChange(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "threaded answer",
+		ReplyToRunID: "run_parent",
+	})
+	if resp.Error != "" {
+		t.Fatalf("enqueue failed: %+v", resp)
+	}
+	rows, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("queued rows=%+v err=%v", rows, err)
+	}
+	if rows[0].ReplyToRunID != "run_parent" {
+		t.Fatalf("reply metadata lost during model change: %+v", rows[0])
+	}
 }
 
 func TestRecoverApprovalContinuationsRepairsDecisionCrashWindow(t *testing.T) {
@@ -186,7 +223,7 @@ func TestRecoverApprovalContinuationsRepairsDecisionCrashWindow(t *testing.T) {
 		t.Fatalf("recovered continuations = %d, want 1", got)
 	}
 	queued, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
-	if err != nil || len(queued) != 1 || queued[0].TaskID != task.ID || !strings.HasPrefix(queued[0].IdempotencyKey, "approval-resume:") {
+	if err != nil || len(queued) != 1 || queued[0].TaskID != task.ID || queued[0].ApprovalID != approval.ID || !strings.HasPrefix(queued[0].IdempotencyKey, "approval-resume:") {
 		t.Fatalf("queued=%+v err=%v", queued, err)
 	}
 	if got := daemon.recoverApprovalContinuations(ctx, false); got != 0 {

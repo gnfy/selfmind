@@ -344,9 +344,9 @@ Rules:
 
 ### Agent Concurrency
 
-An `Agent` instance is still serialized with `runMu`, but gateway event streaming no longer mutates the shared `Agent.EventChannel`. Gateway paths must install a per-run event sink with `kernel.WithEventChannel(ctx, ch)` and then consume the resulting stream events through `router.HandleWithEvents`.
+An `Agent` instance is still serialized with `runMu`, but gateway event streaming no longer mutates the shared `Agent.EventChannel`. Gateway paths must install a per-run event sink with `kernel.WithEventChannel(ctx, ch)` and then consume the resulting stream events through `router.RunAgentWithEvents`.
 
-`Agent.EventChannel` remains a legacy fallback for local TUI paths. Do not temporarily replace it in gateway, IM, or future Web code. Gateway paths that need true parallel active runs should construct separate agent instances per run or introduce a worker pool after the per-run event sink contract is preserved.
+Do not temporarily replace the per-run event sink in gateway, IM, or future Web code. Gateway paths that need true parallel active runs should construct separate agent instances per run or introduce a worker pool after the per-run event sink contract is preserved.
 
 `syncTurn` uses a bounded background queue instead of spawning an unbounded goroutine for every assistant turn. High-frequency conversations should prefer dropping stale sync snapshots over piling up memory-sync workers.
 

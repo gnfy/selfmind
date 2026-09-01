@@ -12,8 +12,9 @@
 
 **The source of truth for context is a person-level continuous work timeline
 (the "spine"); `task` keeps its name but is demoted from a context boundary to
-a work label/view; per-turn context is assembled by a ContextComposer; and
-disambiguation happens inside the agent's turn — never in an ingress router.**
+a work label/view; per-turn context is assembled by a ContextComposer; and one
+bounded continuity resolver may interpret a natural-language operation against
+gateway-issued run cards before a run starts.**
 
 ## Why: three failures of ownership-by-guessing (evolution history)
 
@@ -24,18 +25,25 @@ Future agents: do NOT re-introduce any of these. Each was observed live.
    channel's most recent task without looking at content. A brand-new request
    inherited an unrelated parked task's identity and missing workspace →
    out-of-root approval storms.
-2. **Explicit-evidence-only attach (the over-correction, current code).** The
+2. **Explicit-evidence-only attach (the 2026-07 over-correction).** The
    fix flipped the default to "no continuation evidence → always a NEW task".
-   Safe against capture, but real use (iterating on one feature: "再多做几个角色",
-   "动画不好看" …) spawned a new context-less task per message → task
-   proliferation + fragmented context.
-3. **The proposed fix we rejected: an ingress TaskAttachDecider** (LLM router
+   Safe against capture, but at the time context was still task-scoped, so it
+   spawned context-LESS tasks per message → fragmented context. NOTE
+   (2026-08-31): simplification P2 deliberately returned to task-per-message —
+   now safe because context is spine- and parent-run-scoped (labels never gate
+   context) and derived display priority keeps one-shot rows out of the
+   default list. The failure here was context loss, not task count.
+3. **The broad fix we rejected: an ingress TaskAttachDecider** (LLM router
    classifying "which task does this message belong to" before the run).
    Structurally inverted: it decides *which context to load* while having *no
    context* — a pre-agent classifier of exactly the kind this repo bans, with
    an irreducible error rate, whose failures silently corrupt execution
    context. Confidence thresholds, audit tables, and confirmation prompts are
-   patches over that inversion, not a cure.
+   patches over that inversion, not a cure. The later continuity resolver is a
+   narrower exception: the gateway first retrieves bounded run cards from the
+   person work spine, the model classifies the requested operation rather than
+   inventing a task/context query, and the gateway revalidates the selected run
+   before any state change.
 
 The common root cause: using recency/pointers/ingress classification as a
 proxy for "which work does this belong to", when the only reliable judge is
@@ -48,8 +56,8 @@ spine-first:  message → load spine context → agent acts (asks if ambiguous)
 ```
 
 A recall miss is recoverable in-conversation (the agent asks, searches, or
-reads the workspace). A routing miss silently corrupts execution. Choose the
-architecture whose failure mode is recoverable.
+reads the workspace). The continuity resolver therefore fails closed to a
+durable choice and never silently guesses a parent run.
 
 ## Architecture
 
@@ -81,26 +89,63 @@ unfinished run under that label.
   `task_runs.work_key`. It is display/closure evidence only: it never selects a
   workspace, context slice, permission, sandbox, or execution environment.
 - Selecting a label by explicit task id or one-shot `/resume` pin does not by
-  itself claim unfinished runs. Only a message classified as an explicit
-  continuation creates a durable ownership edge.
-- A deliberate continuation owns a predecessor only when the selected label has
-  exactly one unresolved run. External issue keys and model-written summaries
-  are display evidence only; they never decide run ownership. When multiple
-  unresolved runs share a label, ambiguity remains visible instead of being
-  guessed away.
-- `resumed_by_run_id` is the durable ownership edge. Final reduction may close
-  only the work represented by that edge; unrelated unfinished work keeps the
-  label open.
-- A durable `task_blockers` row is the source of truth for a concrete unresolved
-  condition (approval, clarification, verification, environment, or an explicit
-  interrupted handoff). Historical run statuses are evidence, not live
-  blockers. Each turn receives the bounded open-blocker list and may resolve
-  only exact ids through `finish_run.resolved_blocker_ids`; deterministic
-  approval/clarification/resume events settle only the blocker they own.
-- Task display status is reduced from the latest run outcome plus current open
-  blockers. A newer successful run therefore cannot erase unrelated unfinished
-  work, while a resolved old blocker cannot keep an otherwise completed label
-  permanently interrupted.
+  itself claim unfinished runs. Only a structured reply edge, a deterministic
+  standalone continuation control, a claimed durable choice, or a validated
+  continuity RESUME decision creates a durable ownership edge.
+- A deliberate continuation owns exactly one predecessor. The gateway builds
+  person-scoped candidate cards from active/unclaimed runs, exact references,
+  the full local FTS work history, and a five-run recent fallback; it enriches
+  at most eight cards with bounded handoff/plan/activity state. In `safe` mode a
+  historical RESUME remains a durable human choice; `full` may apply a clear
+  RESUME. Ambiguous, timed-out, malformed, stale, or unavailable decisions show
+  at most three candidates plus "This is new work" and create no run.
+- The parent run is resolved READ-ONLY before the child run is created
+  (`resolveParentRun`), and every context channel — the selector slice, the
+  resume block, and loop-checkpoint restore — consumes that one answer.
+  `task_runs.parent_run_id` (schema v7) is the durable ownership edge: the
+  child claims its parent ATOMICALLY inside its own creation transaction
+  (`StartRunOptions.ParentRunID`), which re-validates tenant/person/task
+  agreement and the parent's resumable, unclaimed state; the unique partial
+  index `idx_task_runs_parent_once` is the cross-process backstop, and a lost
+  race surfaces as `ErrParentRunClaimed` with nothing created. The legacy
+  reverse `resumed_by_run_id` is read-only compatibility (backfilled by the
+  v7 migration where an exact single-parent relationship existed). Final
+  reduction may close only the work represented by the claimed edge;
+  unrelated unfinished work keeps the label open.
+- Structured return edges outrank every guess (simplification P1): a
+  daemon-originated approval continuation binds the parked approval's origin
+  run via the approval row (`attach reason approval_resume`), and
+  an answer to a parked clarification is committed atomically with a durable
+  queue row carrying `ClarifyID`; draining that row binds the exact origin run
+  (`clarify_resume`). Gateway shutdown preserves the pending question while
+  ordinary cancellation and terminal/already-claimed origins expire it, so a
+  later answer cannot drift to another work line. Likewise,
+  platform-proven reply metadata (`MessageRequest.ReplyToRunID`, preserved
+  across the durable queue) binds the exact run it answers (`reply_to_run`).
+  The old "Resume task after parked approval …" prose no longer routes
+  anything, and a clarify answer never lands on "the oldest pending" — one
+  pending question is answered structurally, several get a deterministic
+  numbered pick.
+- Run-scoped context (2026-08-31 simplification): full task context exists
+  only keyed by the resolved parent run — its finalization handoff
+  (`handoff_run_<run_id>`), its events, its artifacts, its plan, its
+  checkpoint. A full-mode attach without an exact parent downgrades to the
+  bounded task card (summary/next steps; no handoff, no artifacts, no
+  events). Daemon-originated turns (cron/watch/approval) never steer the
+  person's active run via a text cue.
+- The wait authority is the run itself (simplification §10.3): a run parked in
+  `waiting_user` / `verification_partial` / `blocked` / `interrupted` that no
+  child has claimed through the atomic `parent_run_id` edge keeps the task in
+  that state. Pending approvals and clarifications are their own live rows.
+  The legacy `task_blockers` table lost this authority — no new rows are
+  created, `finish_run` has no blocker parameter, and remaining open legacy
+  rows are settled as hygiene when their origin run is claimed.
+- Task display status is reduced from the finishing run's outcome plus live
+  wait evidence (pending human input, active watches, queued watcher
+  finalization, unclaimed resumable runs). A newer unrelated successful run
+  therefore cannot erase unfinished parked work; claiming and completing the
+  parked run releases it atomically. `selfmind maintenance task-audit` reports
+  projection drift read-only and reconciles only through the same reducer.
 
 ### Per-turn context (ContextComposer)
 
@@ -158,6 +203,11 @@ authoritative instruction. If it changes direction, the latest message wins."*
   historical wording, or useful cross-language equivalents. It preserves exact
   identifiers and must not answer the query, infer a new intent, or broaden it
   into generic topics; recall is not limited to technical conversations.
+  A first transient live failure disables expansion and schedules a bounded
+  retry without flashing a user notice; a failed retry emits one degraded
+  notice naming the actual provider/model, and successful recovery emits one
+  matching recovery notice. Authentication/model/configuration failures remain
+  immediately visible. Lexical FTS remains available throughout.
   Observability: redacted `context.recall` task event (source counts + refs,
   no excerpts). Canonical `last_accessed_at` changes only for rows that survive
   the shared budget and are actually injected; selected canonical rows are
@@ -174,97 +224,88 @@ authoritative instruction. If it changes direction, the latest message wins."*
   inspect-before-build reads the workspace (both already shipped). Never a
   silent wrong attach.
 
-### Labels (task demoted, name kept) — SHIPPED (P3, 2026-07-06)
+### Labels (task demoted, name kept) — simplified 2026-08-31 (P2)
 
-- After a run finishes, finalization persists replayable evidence without
-  calling a model. The daemon eligibility-filters and batches adjacent jobs for
-  the same tenant/person/workspace after a five-minute quiet window (bounded by
-  a fifteen-minute maximum wait and a configurable run-count cap). One
-  cheap-model call may therefore combine reversible task hygiene with durable
-  fact extraction for several runs, while returning one independently frozen
-  result keyed by each run id. Implementation:
-  `httpapi/run_labeler.go` (`PostRunAnalyzer` on `Server`, built by
-  `app.NewConfiguredPostRunAnalyzer` from the stable `memory_extract` role;
-  an explicit `models.roles.memory_extract` route wins, otherwise it uses
-  `models.auxiliary`). Its task decision is KEEP /
-  MOVE:<task_id> / TITLE:<short title> / NEW:<short title> / INBOX. `NEW` may
-  split independent durable work out of an established weak pre-label; it is
-  rejected for explicit task/reference/resume attachments. Its destination id
-  is derived from the completed run id, so replay after a crash reuses the
-  same label instead of creating another one. MOVE only targets an offered
-  open label, every failure preserves the completed run, and semantic
-  maintenance runs asynchronously in the daemon under a bounded timeout.
-- Titles are stable: generated once (TITLE, new placeholders only; fallback
-  stays the truncated first input), never auto-renamed; `/task <id> rename`
-  for humans.
-- `resolveTask` at run start is a *pre-label guess* (explicit
-  `/resume`/task_id/cue wins; else current open label or a new placeholder). A
-  wrong guess is corrected post-run by re-pointing the run's task_id —
-  `control.Store.ReassignRun` moves task_runs + task_events + task_artifacts
-  in one transaction, folds handoffs into the target and deletes an
-  auto-created placeholder left with zero runs — harmless, because labels
-  never gate context, and the EXECUTION workspace follows the REQUEST for
-  pre-label turns. This keeps `task_runs.task_id NOT NULL` and every
-  control-plane constraint intact.
-- Label decisions are recorded (`label.assigned` task event: decision,
-  from/to, run id, bounded reason) so eval can score labeling accuracy.
-  Mislabels are display bugs, not context corruption.
-- Task identity is governed through **Task References**, not a product-specific
-  ticket regex. The existing post-run maintenance call may propose literal,
-  entity, or descriptive references; deterministic validation activates an
-  automatic reference only after two distinct user-text-supported runs. A
-  user-added reference is active immediately. The same normalized reference
-  bound to multiple tasks becomes conflicted and ingress abstains. Task titles,
-  summaries, recall output, and model prose are never activation evidence.
-  Task merge moves and deduplicates these references and their evidence in the
-  same transaction as the task history; identity evidence cannot be stranded
-  on the archived source label.
-- Mention and continuation have different context depth, but neither grants
-  execution authority. A unique active reference in an ordinary mention
-  attaches only bounded task context; an explicit continuation with the same
-  reference may load full task context and update the current-task pointer.
-  Both continue to execute in the request/current workspace and neither claims
-  unfinished prior runs. Only explicit `/resume`, an explicit task id, or a
-  plain continuation resolved from the already-current task may inherit the
-  task-bound workspace. Every resolution is recorded as pending, corrected, or
-  accepted-but-unverified for diagnostics; a wrong semantic match remains a
-  display/context-selection defect, never permission or workspace authority.
-- Ticket-shaped keys (for example `RUQX-224`) may still appear as bounded
-  display metadata. They never search existing task titles or summaries,
-  select a task, claim a prior run, or become context/workspace/permission
-  authority. Reusable task identity is learned through governed Task
-  References instead.
-- Historical `task_runs.work_key` values are not auto-promoted at startup.
-  `selfmind maintenance migrate-task-references` audits them explicitly and
-  imports only values whose exact surface form occurs in the original user
-  input. Two distinct run-level user-text observations are still required for
-  automatic activation; inferred legacy metadata remains inert.
-- Task cards have source protection (2026-08-08): an ordinary weak pre-label
-  attachment to an existing label may add its run, events, handoff, and
-  maintenance proposal, but it cannot overwrite that label's stable lifecycle,
-  summary, or next steps before label resolution. A deterministic sole label
-  or a successful KEEP decision reconciles lifecycle afterward. A placeholder
-  created for the current turn may receive its first card. Post-run relabeling
-  remains display-only.
+- Every root run OWNS a fresh task; a continuation's child run inherits its
+  parent's task through the claimed parent edge. There is no pre-label guess
+  left to repair, so the post-run KEEP / MOVE / NEW / TITLE / INBOX routing was
+  removed (`postRunAnalyzerVersion` 3): post-run maintenance is memory
+  extraction plus reference search hints only, and a legacy frozen v2 proposal
+  replays with its task decision audited and ignored
+  (`label.assigned` `decision: ignored_legacy`).
+- Task status, summary, and next steps are DERIVED projections: every
+  finalization commits the reduced status (`resolveFinalTaskStatusTx` over
+  pending approvals/questions, live runs, watches, and open blockers) plus the
+  run's card. The weak-attach lifecycle deferral (`PreserveTaskLifecycle` /
+  `PreserveTaskCard`) is gone.
+- Titles remain stable: the provisional truncated first input stands until a
+  human renames (`/task <id> rename`). Nothing auto-renames.
+- The default `/tasks` open view ranks by a DERIVED display priority instead
+  of hiding one-shot Q&A in an Inbox: pinned first, then work waiting on the
+  person (open blockers / pending approvals / pending questions), then real
+  work lines (several runs, artifacts, or recorded next steps), then recency.
+  Ranking never changes retention, search, or continuity. The hidden Inbox
+  label (`kind='inbox'`) is no longer created; historical inbox rows remain
+  readable for audit, and `tasks.inbox_enabled` is parsed but ignored.
+- **Task References are aliases and search hints only.** They never route a
+  message, never load task context, and never move the current-task pointer.
+  Automatic promotion is frozen: run-count support keeps a reference at
+  `candidate` (a recall signal); only an explicit user confirmation activates
+  one, and two confirmed bindings for one value conflict and abstain.
+  Ticket-shaped keys (`RUQX-224`) stay bounded display metadata.
+- `current_task` is a UI convenience projection (written for `/status`
+  display), never continuation authority.
 
-### Ingress (simplified) — SHIPPED (P3, 2026-07-06)
+### Ingress continuity authority
 
 ```
 message → control-command filter (unchanged)
-  → run active? → steer / queue (unchanged, G1+G2)
-  → else: execute directly with spine context
-      resolveTask = explicit /resume|task_id;
-      else unique active Task Reference (mention or continuation policy);
-      else current open label or new placeholder
+  → structured return edge (approval / clarification origin run / platform reply_to_run_id)
+  → /new --run, /choose, task_id, /resume pin, and standalone continue controls
+      remain deterministic
+  → daemon-originated turn → never consult continuity inference
+  → retrieve person-scoped run cards (structural + exact reference + full-history FTS + recent)
+      no candidates → ordinary new work
+      candidates → fast_classifier, ≤6 seconds, thinking disabled, one bounded retry
+        OBSERVE → deterministic read-only progress snapshot; no task/run
+        STEER → only the revalidated currently active run
+        RESUME → only a revalidated unclaimed resumable run
+        NEW → fresh root task (spine still carries context)
+        CLARIFY/error/stale → durable choice; no task/run
 ```
 
-- The implicit-continuation LLM upgrade (`intent.continue_window`) is REMOVED
-  (P3) — attachment no longer affects context, so the call bought nothing.
-  `intent.continue_window` in existing configs is ignored (deprecated field);
-  `router.UpgradeTaskToContinueWithLLM` was deleted.
-- No disambiguation machinery at ingress. Two games in context and an
-  ambiguous "这个游戏动画不好看" → the agent asks "九七还是坦克?" as a normal
-  turn. Judging with context in hand always beats classifying without it.
+- This is the single allowed ingress inference seam. It classifies an operation
+  over gateway-issued cards; it does not issue SQL, select prompt rows, choose a
+  workspace/permission, or parse prose to mutate lifecycle state. Candidate
+  fields are quoted untrusted data. The gateway checks person ownership,
+  candidate membership, task/run agreement, current run status, and active-run
+  identity again after inference and relies on the atomic parent claim at child
+  creation as the final race backstop.
+- `continuity.mode` is `shadow`, `safe` (default), `full`, or `off`. Shadow only
+  records content-free decision evidence. Safe applies OBSERVE, NEW, and clear
+  active STEER but asks before historical RESUME. Full additionally applies a
+  clear historical RESUME. Off retains deterministic controls without the
+  resolver.
+- The only compound decision is OBSERVE+NEW: the deterministic prior-run status
+  becomes a bounded prompt-only data block for a fresh root turn while channel
+  history and run audit retain the original user message. No other action
+  combination is accepted. `delivery_action=move_to_current` is honored only
+  for an exact active run and the authenticated current IM endpoint; it changes
+  that run's final-result destination, never authority or an arbitrary account.
+- Pending choices are person-partitioned and single-use (schema v8). A bare
+  number is accepted only when exactly one choice was created in the last 30
+  minutes; `/choose <choice_id> <number>` or platform `choice_id` metadata stays
+  valid for 24 hours and works from another bound endpoint. The saved request is
+  a short-lived bounded snapshot erased atomically when claimed (expired choice
+  metadata is pruned after seven days); resolution audit is retained for 90
+  days and stores only an input hash,
+  candidate IDs, typed decision/evidence, provider/model, latency, and error
+  class—never raw transcript or prompt content. A claimed human choice appends
+  a `correction_of` decision edge for routing evaluation; it is not person
+  memory and does not rewrite a Task Reference automatically.
+- Content ambiguity inside a selected run remains the coding agent's job. Cron,
+  watch, approval, and other daemon-originated turns never steer or disambiguate
+  from text.
 
 ### Run completion versus label lifecycle
 
@@ -287,11 +328,18 @@ message → control-command filter (unchanged)
 
 Default shows open/running/waiting/paused labels with `run: N 次`, latest
 activity, next-step hint; done collapses (`/tasks done|archived|all` expands);
-`/task <id>` detail, `/task <id> runs|rename|pin|unpin|archive|references` and
+`/task <n|id>` detail, `/task <n|id> runs|rename|pin|unpin|complete|archive|references` and
 `/task <id> reference add|remove <name>` (archive is a terminal
 status: hidden from open lists, recall label cards, and the pre-label guess;
-only an explicit `/resume <id>` reopens it). Short ids (`task_xxxxxxxx`) are
-shown and accepted back. Implementation: `httpapi/task_view.go`, shared by CLI
+only an explicit `/resume <n|id>` reopens it). `complete` is explicit person
+authority over label lifecycle: it preserves historical run outcomes while
+expiring pending input and queued continuation rows; it refuses live runs and
+external watchers. Completed labels are also reopened only by explicit
+`/resume`. Archive uses the same parked-input/queued-continuation cleanup and
+live-effect guard. Open-list ordinals resolve an endpoint-local 30-minute snapshot of
+the exact ranked/grouped cards the person saw; a stable ID is the restart-safe
+fallback. Short ids (`task_xxxxxxxx`) are shown and accepted back.
+Implementation: `httpapi/task_view.go`, shared by CLI
 and IM via the control-command path; `/task` is registered in
 `internal/gateway/command`. `/tasks search <keyword>` queries complete visible
 history, including prior run summaries and handoff file paths. Status/view,
@@ -299,30 +347,27 @@ workspace, keyword, and pagination are applied in SQLite (`--workspace`,
 `--page`, `--limit`) instead of filtering a fixed recent window in memory; the
 default open view stays bounded by `tasks.default_list_limit`.
 
-### Task governance (post-run, reversible)
+### Task governance (reversible)
 
 Tasks remain work labels, but a long-lived assistant also needs label hygiene:
 
-- `work` and `recurring` labels are visible; one `inbox` label per
-  person/workspace is hidden and archived.
-- One logical `PostRunAnalyzer` result per eligible run combines task-label
-  hygiene and durable user/workspace fact extraction. Several same-person,
-  same-workspace results may share one provider call according to
-  `tasks.maintenance_debounce`, `tasks.maintenance_max_wait`, and
-  `tasks.maintenance_batch_max_runs`. It uses the stable `memory_extract`
-  semantic role: `models.roles.memory_extract` is the optional advanced
-  override and `models.auxiliary` is the shared floor. It may answer `INBOX`
-  only for casual,
-  identity/model, or one-off diagnostic turns with no durable work thread. It
-  never runs at ingress and never changes the context the completed run saw.
-  Recent turns remain immediately available from the person work spine; only
-  label and long-term-memory governance is delayed.
-- Analysis is eligibility-gated: a new placeholder, real cross-label
-  ambiguity, or a substantive durable outcome may trigger one call. A simple
-  established-label turn with no durable facts skips it. Explicit attachment
-  is never relabeled, though a substantive run can still yield memory facts.
-- Inbox is excluded from `/tasks`, recall cards, current-task selection, and
-  implicit continuation. Runs and events remain stored for audit.
+- `work` and `recurring` labels are visible. The hidden `inbox` kind is no
+  longer created (historical rows stay readable for audit); one-shot Q&A is
+  ranked after pinned, human-waiting, and evidence-rich work. It remains
+  searchable and may appear after stronger rows in the bounded default view.
+- One logical `PostRunAnalyzer` result per eligible run covers explicit user
+  preference decisions and reference search-hint proposals — no task or
+  workspace-memory decisions. Several same-person, same-workspace results may share one
+  provider call according to `tasks.maintenance_debounce`,
+  `tasks.maintenance_max_wait`, and `tasks.maintenance_batch_max_runs`. It
+  uses the stable `memory_extract` semantic role: `models.roles.memory_extract`
+  is the optional advanced override and `models.auxiliary` is the shared
+  floor. It never runs at ingress and never changes the context the completed
+  run saw.
+- Analysis is eligibility-gated on durable evidence (outcome structure or a
+  substantive input/result pair) or a reference surfacing in the user text.
+  Compact preference statements remain eligible; tiny low-information turns
+  skip the call.
 - A person may pin/unpin a visible task. Retention never archives pinned,
   open, interrupted, active, or human-waiting work.
 - Automatic retention only changes an old terminal label to `archived`; it
@@ -351,10 +396,12 @@ session keys (hermes-style), Honcho-style dialectic user modeling.
   keys, fallback reads, task-session indexing all carry over.)
 - **P2 recall v1:** query-expansion + FTS as an automatic Composer slice;
   label-card/artifact indexing; embedding interface reserved. Parallel to P1.
-- **P3 labels & view: ✅ landed 2026-07-06.** resolveTask → pre-label;
-  post-run labeler + re-point; `/tasks` aggregation; `/task` subcommands
-  (runs/rename/pin/unpin/archive); hidden Inbox and retention governance;
-  complete-history task search; implicit-continuation LLM upgrade removed.
+- **P3 labels & view: landed 2026-07-06; superseded by the 2026-08-31
+  simplification:**
+  pre-label and the post-run labeler routing were removed — every root run
+  owns its task, `/tasks` ranks by derived display priority, and `/task`
+  subcommands (runs/rename/pin/unpin/archive), retention governance, and
+  complete-history search remain.
 - **P4 eval:** the ten acceptance scenarios below, recorded cassettes,
   zh/en/elliptical/cross-endpoint coverage.
 
@@ -367,16 +414,19 @@ the next package (standing workflow).
 > table in its README.
 
 1. "用JS写九七游戏" → new label, new run.
-2. "再多做几个角色" → context continuous via spine tail (no routing); same
-   label, new run.
+2. "再多做几个角色" → context continuous via spine tail (no routing); a new
+   root task per message (P2), with the answer still building on the game —
+   grouping is display-only and never a context boundary.
 3. "帮我总结今天股市" → new label; game chatter in the spine does not
    interfere (models handle topic interleaving inside a window).
 4. "这个游戏动画不好看" with two game labels → the agent ASKS which one,
    in-turn.
 5. Task started on CLI; WeChat says "继续优化那个九七游戏" → spine is
    cross-endpoint, context is simply there.
-6. `/tasks` shows aggregated threads, not one row per message.
-7. A mislabel only affects display; `rename`/re-point fixes it.
+6. `/tasks` ranks pinned, waiting, and evidence-rich work before one-shot rows;
+   manual rename/merge remains the correction path for display grouping.
+7. A wrong-looking grouping only affects display; `rename`/`merge` fixes it
+   without touching parent chains or authority.
 8. Long-run: after compaction the agent still states the original goal;
    last week's artifact comes back via recall.
 9. Approvals / queue / interrupted-recovery / hard floor: zero regression.
@@ -389,4 +439,4 @@ the next package (standing workflow).
 | Recall misses (new load-bearing wall) | Two-tier build; failure degrades to in-turn asking + workspace inspection — recoverable by design |
 | Spine becomes a noise stream | Turn-level slimming; single-active-run serialization; cron entries tagged |
 | Third reversal of the attach invariant | This doc records the full causal chain; AGENTS.md points here as mandatory reading |
-| Labeler misbehaves | Harmless domain (display only) + rename/archive human override |
+| One-task-per-message crowds the list | Derived display priority + pin + search; grouping is never a context boundary |

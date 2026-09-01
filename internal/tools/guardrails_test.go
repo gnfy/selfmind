@@ -38,6 +38,44 @@ func TestToolGuardrailsAllowOneShotRemoteStatus(t *testing.T) {
 	}
 }
 
+func TestToolGuardrailsAllowFiniteRemoteStatusBatch(t *testing.T) {
+	called := false
+	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+		called = true
+		return "RUNNING\nSUCCEEDED", nil
+	})
+
+	result, err := exec(map[string]interface{}{
+		"_tool_name": "terminal",
+		"command":    `for build in build-1 build-2; do aws codebuild batch-get-builds --ids "$build"; done`,
+	})
+	if err != nil || result != "RUNNING\nSUCCEEDED" {
+		t.Fatalf("finite status batch result=%q err=%v", result, err)
+	}
+	if !called {
+		t.Fatal("finite status batch did not reach the executor")
+	}
+}
+
+func TestToolGuardrailsBlockUnboundedCStyleRemotePolling(t *testing.T) {
+	called := false
+	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+		called = true
+		return "RUNNING", nil
+	})
+
+	_, err := exec(map[string]interface{}{
+		"_tool_name": "terminal",
+		"command":    `for ((;;)); do aws codebuild batch-get-builds --ids build-1; sleep 5; done`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider-native wait") {
+		t.Fatalf("unbounded polling rejection = %v", err)
+	}
+	if called {
+		t.Fatal("unbounded polling reached the executor")
+	}
+}
+
 func TestToolGuardrailsBlockRepeatedRemoteStatusWithoutProgress(t *testing.T) {
 	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
 		return "RUNNING", nil

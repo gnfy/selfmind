@@ -97,57 +97,71 @@ Rules (also in `docs/architecture-constraints.md`):
 ## Continuity contract (how "continue" works)
 
 The mechanism agents must preserve when touching resume/continuation behavior.
-Code: `internal/gateway/httpapi/continue_resolver.go`.
+Code: `internal/gateway/httpapi/continuity_resolver.go`,
+`turn_choices.go`, and `continue_resolver.go`.
 
-> **Landed (2026-07-06, Work Timeline P1–P3):** context ownership lives on the
-> person-level work spine; `task` is a work label and ingress attach is a
-> harmless pre-label guess corrected by a post-run labeler.
+> **Landed (2026-07-06, Work Timeline P1–P3; revised 2026-08-31):**
+> context ownership lives on the person-level work spine plus the parent-run
+> slice; `task` is a work label, every root run owns a fresh one, and
+> `child.parent_run_id` is the only continuation authority.
 > `docs/work-timeline.md` is the canonical description (mandatory reading
 > before changing this contract); the rules below are the live behavior.
 
-1. **Continuation detection.** Short acceptances (`ok`, `继续`, `可以`, …) are
-   matched by `looksLikeAffirmativeContinuation`; richer cues come from
-   `internal/gateway/router/intent*.go` (`IntentContinue`). Intent rules must
-   stay high-confidence; ordinary messages go to the agent as-is. The implicit
-   pre-agent "continue vs new" LLM upgrade (`intent.continue_window`,
-   `router.UpgradeTaskToContinueWithLLM`) was REMOVED with Work Timeline P3:
-   working context is the person-level spine, so an implicit follow-up
-   ("质量太差了") keeps its context regardless of which task label the run gets
-   — the call bought nothing, and its failure mode (a wrong pre-agent routing
-   decision) was worse than its absence. `intent.continue_window` in existing
-   config files is ignored. Do not reintroduce ingress continuation
-   classifiers; see `docs/work-timeline.md` "Ingress (simplified)".
-2. **Task resolution** (`resolveContinueTask`, person-scoped, never
-   channel-scoped): the person's `CurrentTask` if set; otherwise the most
-   recent non-terminal task from the last 10 (`terminalTaskStatus`: done /
-   completed / cancelled / failed); otherwise, if exactly one recent task
-   exists, that one; otherwise no resume — the message routes to the agent as
-   normal input.
-3. **Resume context injection** (`withResumeContext`): the turn is prefixed
-   with a bounded `[SelfMind resume context]` block — task id/title/status,
-   latest handoff (summary, done, next_steps, changed_files, test_status,
-   risks), up to 8 recent events, and the live plan with per-step status — and
-   a `run.resumed` event is appended. This block is selected, bounded context;
-   never dump raw control rows or full tool output into it.
-4. **Cross-channel by construction.** Because resolution keys on
-   `person_id`, a task started from CLI resumes from WeChat and vice versa.
-   The channel only affects where the reply is delivered
-   (`task.LastChannel`) and the feedback style (stream vs. concise notices).
-5. **Ordinary messages get a harmless pre-label guess** (Work Timeline P3,
-   2026-07-06 — supersedes the 2026-07-05 "new work never attaches" rule). A
-   message with no continuation evidence — no cue, no short acceptance, no
-   explicit task id, no pin — runs under the person's current OPEN
-   (non-terminal, non-archived) task label, else a fresh placeholder; async
-   dispatches, queued-task drains, and cron turns follow the same rule. The
-   guess is safe because labels never gate context (the spine does) and the
-   EXECUTION workspace follows the REQUEST for pre-label turns — the harm of
-   the old capture bug (wrong workspace, wrong context) is structurally gone.
-   A cheap post-run labeler re-points a wrong guess (KEEP/MOVE/TITLE,
-   `label.assigned` audit event); mislabels are display bugs. An explicit
-   `/resume <task_id>` is continuation evidence for exactly the NEXT
+1. **Deterministic controls stay first.** Structured return edges, explicit
+   task/run IDs, `/resume`, `/new --run`, a claimed `/choose`, and exact
+   standalone continuation controls never call an ingress model. Approval and
+   clarification answers retain priority over a bare numbered continuity
+   choice. Daemon-originated work never uses text to steer another run.
+2. **Structured return edges outrank cues.** A daemon-originated approval
+   continuation binds the parked approval's origin run; platform reply
+   metadata (`reply_to_run_id`, durable across the queue) binds the exact run
+   it answers; a clarify answer lands structurally (one pending) or via a
+   deterministic numbered pick (several pending). If a restart parked the
+   asking run, the answer and its durable `clarify_id` queue edge commit in one
+   transaction and the child claims that exact origin; terminal or already
+   claimed origins are expired instead of falling back to another question.
+3. **Natural-language run resolution is agent-first and person-scoped.** The
+   gateway ranks active/unclaimed runs, exact Task References, full local FTS
+   work history, and a recent fallback, then sends at most eight bounded cards
+   to `fast_classifier`. The call has a six-second total deadline, disabled
+   thinking, and at most one retry inside that same budget. The typed result is
+   NEW, OBSERVE, STEER, RESUME, or CLARIFY. The gateway re-reads ownership and
+   status before applying it; timeout, provider failure, invalid JSON, stale
+   state, or a genuine tie creates no task/run and returns a durable choice.
+   OBSERVE returns deterministic run/handoff/plan progress without a model run.
+   The one supported compound result, OBSERVE+NEW, carries that deterministic
+   status as prompt-only data into a fresh turn without rewriting channel
+   history. An explicit request to send an active run's final result to the
+   current endpoint may retarget only that authenticated bound IM endpoint.
+   In default `safe` mode historical RESUME still requires the choice; `full`
+   mode may apply a clear revalidated RESUME. The chosen parent is claimed
+   ATOMICALLY inside child-run creation (`task_runs.parent_run_id`, unique
+   partial index; a lost race reports "already claimed" and creates nothing).
+4. **Resume context injection** (`withResumeContext`): the turn is prefixed
+   with a bounded `[SelfMind resume context]` block selected from the PARENT
+   RUN — its finalization handoff, its events, its file manifest, its plan —
+   and a `run.resumed` event records the claimed edge. No exact parent means
+   no resume block and no full task context (the selector downgrades to the
+   bounded task card; loop-checkpoint restore is parent-gated too).
+5. **Cross-channel and restart-safe by construction.** Candidate retrieval and
+   pending choices key on `person_id`, not an open CLI process or current
+   channel. A CLI-created task can be observed or continued from a bound IM,
+   after closing/reopening the CLI, and after daemon restart. Raw transcripts
+   remain local. A bare number claims a choice only when one person-wide choice
+   was created within 30 minutes; `/choose <choice_id> <number>` or platform
+   choice metadata remains exact for 24 hours.
+6. **Messages resolved as NEW own a fresh root task** (simplification P2,
+   2026-08-31 — supersedes the 2026-07-06 pre-label guess). A message with no
+   prior-work match, structured edge, explicit task id, or pin creates its own
+   task; async dispatches,
+   queued-task drains, and cron turns follow the same rule, and
+   daemon-originated text never steers the active run via cues. Grouping is
+   display-only (labels never gate context), the default `/tasks` view ranks
+   by derived display priority, and there is no post-run relabeling. An
+   explicit `/resume <task_id>` is continuation evidence for exactly the NEXT
    agent-bound message (a one-shot pin, consumed on use) and is the only way
    to reopen an ARCHIVED label (`/task <id> archive` shelves one)
-   (`internal/gateway/httpapi` `resolveTask`, `run_labeler.go`).
+   (`internal/gateway/httpapi` `resolveTask`).
 
 Account binding: `POST /v1/accounts/bind` attaches a platform account to an
 existing person. `/id` shows the current tenant/person/account resolution.

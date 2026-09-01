@@ -111,6 +111,39 @@ func TestCLIAsyncResultRoutesToPreferredIM(t *testing.T) {
 	}
 }
 
+func TestExplicitContinuityDeliveryMoveTargetsCurrentBoundIM(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "long release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wx-current", "Current IM"); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	coord := daemon.coordinator()
+	if ok := coord.beginActive(identity.PersonID, &activeRun{TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID}); !ok {
+		t.Fatal("could not register active run")
+	}
+	defer coord.endActive(identity.PersonID)
+	if !coord.setActiveDeliveryOverride(identity.PersonID, run.ID, api.MessageRequest{
+		Platform: "weixin", PlatformUserID: "wx-current", Channel: "wx-chat",
+	}) {
+		t.Fatal("delivery override was not accepted")
+	}
+	if !coord.deliverAsyncResult(ctx, identity, api.MessageRequest{Platform: "cli", Channel: "cli"}, api.MessageResponse{
+		Task: task, Run: run, Content: "release finished",
+	}) {
+		t.Fatal("delivery was not accepted")
+	}
+	if len(recorder.messages) != 1 || recorder.messages[0].Platform != "weixin" ||
+		recorder.messages[0].PlatformUserID != "wx-current" || recorder.messages[0].Channel != "wx-chat" {
+		t.Fatalf("messages=%+v", recorder.messages)
+	}
+}
+
 func TestRecordToolOutputIsLiveOnly(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {

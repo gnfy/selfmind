@@ -111,7 +111,8 @@ func TestKnownMatchesGatewayContract(t *testing.T) {
 	want := []string{
 		"/help", "/model", "/id", "/status", "/tasks", "/task", "/queue", "/watchers", "/diag",
 		"/report", "/events", "/approvals", "/approve", "/reject", "/mode", "/stop",
-		"/cancel", "/notify", "/new", "/resume", "/workspace", "/workspaces",
+		"/cancel", "/notify", "/new", "/choose", "/resume", "/workspace", "/workspaces",
+		"/remember", "/forget",
 	}
 	got := Known()
 	sort.Strings(want)

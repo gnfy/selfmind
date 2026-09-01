@@ -18,8 +18,9 @@ function parseArgs(argv) {
     const value = argv[i + 1];
     if (!key?.startsWith("--") || value === undefined) {
       fail(
-        "Usage: stage-npm-packages.mjs --version VERSION --linux-x64 PATH " +
-          "--linux-arm64 PATH --darwin-x64 PATH --darwin-arm64 PATH --out DIR",
+        "Usage: stage-npm-packages.mjs --version VERSION --out DIR " +
+          "[--linux-x64 PATH] [--linux-arm64 PATH] [--darwin-x64 PATH] [--darwin-arm64 PATH] " +
+          "(at least one platform)",
       );
     }
     result[key.slice(2)] = value;
@@ -43,14 +44,7 @@ function rewritePackageJson(filePath, version) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-for (const required of [
-  "version",
-  "linux-x64",
-  "linux-arm64",
-  "darwin-x64",
-  "darwin-arm64",
-  "out",
-]) {
+for (const required of ["version", "out"]) {
   if (!args[required]) fail(`Missing --${required}`);
 }
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(args.version)) {
@@ -62,31 +56,30 @@ const outDir = path.resolve(args.out);
 fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
 
-const packages = [
-  {
-    template: "selfmind",
-  },
-  {
-    template: "selfmind-linux-x64",
-    binary: path.resolve(args["linux-x64"]),
-    triple: "x86_64-unknown-linux-gnu",
-  },
-  {
-    template: "selfmind-linux-arm64",
-    binary: path.resolve(args["linux-arm64"]),
-    triple: "aarch64-unknown-linux-gnu",
-  },
-  {
-    template: "selfmind-darwin-x64",
-    binary: path.resolve(args["darwin-x64"]),
-    triple: "x86_64-apple-darwin",
-  },
-  {
-    template: "selfmind-darwin-arm64",
-    binary: path.resolve(args["darwin-arm64"]),
-    triple: "aarch64-apple-darwin",
-  },
+// The launcher is always staged. Platform packages are staged only for the
+// binaries the caller provides: the release workflow passes all four, while
+// the CI smoke passes just the platform it installs. The launcher's
+// optionalDependencies still name every platform; installs that omit optional
+// siblings (the smoke and the documented offline flow) are unaffected.
+const platformPackages = [
+  { flag: "linux-x64", template: "selfmind-linux-x64", triple: "x86_64-unknown-linux-gnu" },
+  { flag: "linux-arm64", template: "selfmind-linux-arm64", triple: "aarch64-unknown-linux-gnu" },
+  { flag: "darwin-x64", template: "selfmind-darwin-x64", triple: "x86_64-apple-darwin" },
+  { flag: "darwin-arm64", template: "selfmind-darwin-arm64", triple: "aarch64-apple-darwin" },
 ];
+
+const packages = [{ template: "selfmind" }];
+for (const item of platformPackages) {
+  if (!args[item.flag]) continue;
+  packages.push({
+    template: item.template,
+    binary: path.resolve(args[item.flag]),
+    triple: item.triple,
+  });
+}
+if (packages.length === 1) {
+  fail("At least one platform binary is required (--linux-x64/--linux-arm64/--darwin-x64/--darwin-arm64)");
+}
 
 for (const item of packages) {
   const packageDir = path.join(outDir, item.template);

@@ -18,7 +18,12 @@
   contract, then build/test and provider-offline eval according to profile.
 - Pull requests run the fast offline corpus and core Linux/macOS checks. Main
   CI runs the complete offline corpus, focused race tests, and package smoke in
-  parallel for the exact merge SHA. Prerelease publication reuses that exact
+  parallel for the exact merge SHA; superseded-run cancellation applies only to
+  pull requests so every main SHA keeps its CI evidence. Documentation-only
+  changes skip the platform, package, and race jobs (fail-open classifier)
+  while the core build/test gate and offline corpus still run; each CI package
+  smoke builds only the platform it installs, and the release workflow stages
+  and verifies all four. Prerelease publication reuses that exact
   successful main result; stable releases repeat the full source gate. Release
   tags are created or verified only after packed-artifact install plus isolated
   daemon start/health, authenticated status/tasks, restart persistence, and

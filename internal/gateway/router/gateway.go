@@ -2,15 +2,12 @@ package router
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"runtime/debug"
 	"strings"
 
 	"selfmind/internal/kernel"
-	"selfmind/internal/kernel/identity"
 	"selfmind/internal/kernel/llm"
-	"selfmind/internal/kernel/task"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/runpool"
 )
@@ -30,11 +27,13 @@ func recoverStreamPanic(respChan chan<- llm.StreamEvent) {
 	}
 }
 
-// Gateway is the lightweight routing facade used by CLI/HTTP/IM before a
-// message enters the durable control-plane flow.
+// Gateway is the agent-execution facade the daemon's httpapi orchestration
+// runs turns through: intent classification, the worker pool, event bridging,
+// and management-tool dispatch. It has no routing or task authority of its
+// own — identity, tasks, runs, and delivery live in gateway/httpapi +
+// control.db (the raw-inbound Handle path and its IM adapters were removed
+// with the legacy tasks.db manager).
 type Gateway struct {
-	identityMapper   *identity.IdentityMapper
-	taskManager      *task.Manager
 	intentClassifier *IntentClassifier
 	agent            *kernel.Agent
 	llmProvider      llm.Provider
@@ -159,15 +158,8 @@ func workspaceSerialPaths(ctx context.Context) []string {
 	return ws.ContextRoots()
 }
 
-func NewGateway(
-	identityMapper *identity.IdentityMapper,
-	taskManager *task.Manager,
-	agent *kernel.Agent,
-	llmProvider llm.Provider,
-) *Gateway {
+func NewGateway(agent *kernel.Agent, llmProvider llm.Provider) *Gateway {
 	return &Gateway{
-		identityMapper:   identityMapper,
-		taskManager:      taskManager,
 		intentClassifier: NewIntentClassifier(),
 		agent:            agent,
 		llmProvider:      llmProvider,
@@ -205,103 +197,6 @@ type HandleResponse struct {
 	IntentReason string
 }
 
-// Handle classifies intent and runs the agent/skill/query path. It has NO
-// control-command detection: fed "/status" it would create a task, not answer
-// the status card. That is safe ONLY because the single live caller — the
-// in-process TUI via HandleWithEvents — intercepts every slash/control command
-// before reaching here (see internal/gateway/cli handleCommand).
-//
-// DEAD (2026-07-05): the IM adapters that route raw inbound text straight into
-// Handle — internal/gateway/telegram, internal/gateway/wechat, and
-// internal/platform/wechat via internal/gateway/channel.Bridge — are UNMOUNTED
-// (no non-test importer; GatewayDeps.Bridge is created but never consumed). The
-// live inbound funnel is httpapi ProcessMessage → tryHandleControlCommand, which
-// owns control detection. Do NOT wire Handle to a raw inbound endpoint without
-// first routing through that funnel, or control commands become tasks. Removing
-// the dead adapters is a separate cleanup (touches app.GatewayDeps wiring); see
-// docs/STATUS.md item 11.
-func (g *Gateway) Handle(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
-	result := g.ClassifyIntent(input)
-	intent, reason := result.Intent, result.Reason
-	switch intent {
-	case IntentSkill:
-		content, usage, err := g.handleSkill(ctx, unifiedUID, channel, input)
-		return &HandleResponse{Content: content, Usage: usage, Intent: intent, IntentReason: reason}, err
-	case IntentQuery:
-		content, usage, err := g.handleQuery(ctx, unifiedUID, channel, input)
-		return &HandleResponse{Content: content, Usage: usage, Intent: intent, IntentReason: reason}, err
-	case IntentRoute:
-		content, usage, err := g.handleRoute(ctx, unifiedUID, channel, input)
-		return &HandleResponse{Content: content, Usage: usage, Intent: intent, IntentReason: reason}, err
-	case IntentContinue, IntentTask, IntentCasual:
-		return g.handleTaskStreaming(ctx, unifiedUID, channel, input, intent, reason)
-	default:
-		return g.handleTaskStreaming(ctx, unifiedUID, channel, input, IntentTask, "agent-first fallback")
-	}
-}
-
-func (g *Gateway) handleTaskStreaming(ctx context.Context, unifiedUID, channel, input string, intent Intent, reason string) (*HandleResponse, error) {
-	if g == nil || g.agent == nil {
-		return nil, fmt.Errorf("gateway agent is not configured")
-	}
-	if g.taskManager == nil {
-		return g.runAgentStreaming(ctx, unifiedUID, channel, input, intent, reason)
-	}
-
-	var taskID int64
-	var err error
-	if intent == IntentContinue {
-		t, _, err := g.taskManager.GetCurrentTask(ctx, unifiedUID)
-		if err != nil || t == nil {
-			return &HandleResponse{Content: "No active task to continue. Tell me what you want to work on next."}, nil
-		}
-		taskID = t.ID
-	} else {
-		taskID, err = g.taskManager.CreateTask(ctx, unifiedUID, extractTitle(input))
-		if err != nil {
-			return nil, err
-		}
-	}
-	g.taskManager.AppendContext(ctx, unifiedUID, channel, "user", input)
-
-	respChan := make(chan llm.StreamEvent, 256)
-	go func() {
-		defer close(respChan)
-		defer recoverStreamPanic(respChan)
-		resp, usage, err := g.runConversation(ctx, unifiedUID, channel, input)
-		if err != nil {
-			respChan <- llm.StreamEvent{Err: err}
-			if intent == IntentTask {
-				g.taskManager.UpdateTaskStatus(ctx, unifiedUID, taskID, "failed")
-			}
-			return
-		}
-		g.taskManager.AppendContext(ctx, unifiedUID, channel, "assistant", resp)
-		if isTaskDone(resp) {
-			g.taskManager.UpdateTaskStatus(ctx, unifiedUID, taskID, "done")
-		}
-		if resp != "" {
-			respChan <- llm.StreamEvent{Content: resp}
-		}
-		respChan <- llm.StreamEvent{Usage: &usage}
-	}()
-
-	return &HandleResponse{
-		IsStreaming:  true,
-		Stream:       respChan,
-		Intent:       intent,
-		IntentReason: reason,
-	}, nil
-}
-
-func (g *Gateway) handleCasual(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	reply := g.casualReply(input)
-	if g.taskManager != nil {
-		_ = g.taskManager.SaveCasualSummary(ctx, unifiedUID, channel, "casual: "+input)
-	}
-	return reply, llm.UsageStats{}, nil
-}
-
 func (g *Gateway) RunAgent(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
 	return g.runAgentStreaming(ctx, unifiedUID, channel, input, IntentTask, "agent-only")
 }
@@ -332,21 +227,6 @@ func (g *Gateway) runAgentStreaming(ctx context.Context, unifiedUID, channel, in
 	}, nil
 }
 
-func isModelStatusQuestion(input string) bool {
-	cleaned := normalizeQuestionText(input)
-	if cleaned == "" {
-		return false
-	}
-	if !containsAnyNormalized(cleaned, []string{"model", "llm", "\u6a21\u578b", "\u5927\u6a21\u578b", "\u540e\u7aef"}) {
-		return false
-	}
-	return containsAnyNormalized(cleaned, []string{
-		"what", "which", "current", "using", "running", "active",
-		"\u4ec0\u4e48", "\u54ea\u4e2a", "\u54ea\u4e00\u4e2a", "\u5f53\u524d", "\u73b0\u5728", "\u76ee\u524d",
-		"\u6b63\u5728\u7528", "\u7528\u7684", "\u4f7f\u7528\u7684", "\u8fde\u63a5\u7684", "\u8dd1\u7684",
-	})
-}
-
 func normalizeQuestionText(input string) string {
 	input = strings.ToLower(strings.TrimSpace(input))
 	replacer := strings.NewReplacer(
@@ -369,15 +249,6 @@ func normalizeQuestionText(input string) string {
 		";", "",
 	)
 	return replacer.Replace(input)
-}
-
-func containsAnyNormalized(value string, needles []string) bool {
-	for _, needle := range needles {
-		if strings.Contains(value, needle) {
-			return true
-		}
-	}
-	return false
 }
 
 func (g *Gateway) modelStatusReply() string {
@@ -413,72 +284,6 @@ func (g *Gateway) modelDisplayLabel() string {
 	}
 }
 
-func (g *Gateway) casualReply(input string) string {
-	if reply, ok := g.directCasualReply(input); ok {
-		return reply
-	}
-	return "I understand. Tell me what you want me to inspect, change, test, or continue."
-}
-
-func (g *Gateway) directCasualReply(input string) (string, bool) {
-	switch normalizeQuestionText(input) {
-	case "\u4f60\u597d", "\u60a8\u597d", "hi", "hello", "\u55e8", "hey":
-		return "Hello, I am SelfMind. I can help with development tasks, code inspection, tool execution, and multi-device collaboration.", true
-	case "\u4f60\u662f\u8c01", "\u4f60\u53eb\u4ec0\u4e48", "\u4f60\u662f\u5e72\u561b\u7684", "whoareyou", "whatareyou":
-		reply := "I am SelfMind, an AI work assistant for development tasks and multi-device collaboration."
-		if label := g.modelDisplayLabel(); label != "" {
-			reply += " The current model is " + label + "."
-		}
-		return reply, true
-	case "\u8c22\u8c22", "\u591a\u8c22", "\u8c22\u4e86", "thanks", "thankyou":
-		return "You're welcome. Tell me directly when you want to continue a task.", true
-	case "\u518d\u89c1", "\u62dc\u62dc", "bye", "\u665a\u5b89":
-		return "Goodbye. Come back whenever you need help.", true
-	}
-	return "", false
-}
-
-func (g *Gateway) handleSkill(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	resolvedInput := trimKnownPrefix(input, []string{"/skill ", "/s "})
-	skillName, instruction, _ := strings.Cut(strings.TrimSpace(resolvedInput), " ")
-	instruction = strings.TrimSpace(instruction)
-	if skillName == "" {
-		return "Please specify the skill to run.", llm.UsageStats{}, nil
-	}
-	if g == nil || g.agent == nil || g.agent.Dispatcher() == nil {
-		return "", llm.UsageStats{}, fmt.Errorf("skill dispatcher is not configured")
-	}
-	resolved, err := g.agent.Dispatcher().Dispatch("skill_invocation_resolve", map[string]interface{}{
-		"command": skillName, "instruction": instruction,
-		"_tenant_id": unifiedUID,
-	})
-	if err != nil {
-		return "", llm.UsageStats{}, err
-	}
-	var invocation struct {
-		Found       bool   `json:"found"`
-		Kind        string `json:"kind"`
-		Prompt      string `json:"prompt"`
-		Name        string `json:"name"`
-		SkillKey    string `json:"skill_key"`
-		VersionHash string `json:"version_hash"`
-		PackageHash string `json:"package_hash"`
-	}
-	if err := json.Unmarshal([]byte(resolved), &invocation); err != nil {
-		return "", llm.UsageStats{}, fmt.Errorf("decode Skill invocation: %w", err)
-	}
-	if !invocation.Found {
-		return fmt.Sprintf("Skill %q was not found.", skillName), llm.UsageStats{}, nil
-	}
-	if invocation.Kind == "skill" {
-		ctx = kernel.WithExplicitSkillInvocation(ctx, kernel.ExplicitSkillInvocation{
-			Name: invocation.Name, SkillKey: invocation.SkillKey,
-			VersionHash: invocation.VersionHash, PackageHash: invocation.PackageHash,
-		})
-	}
-	return g.runConversation(ctx, unifiedUID, channel, invocation.Prompt)
-}
-
 // DispatchTool runs a single management tool through the agent's backend and
 // returns its text result. It powers daemon-side execution of agent-backed
 // slash commands (/skills, /memory subcommands, /bundles, /curator,
@@ -492,114 +297,4 @@ func (g *Gateway) DispatchTool(tool string, args map[string]interface{}) (string
 		return "", fmt.Errorf("gateway agent is not configured")
 	}
 	return g.agent.Dispatcher().Dispatch(tool, args)
-}
-
-func (g *Gateway) handleQuery(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	query := trimKnownPrefix(input, []string{"/query ", "/search "})
-	if query == "" {
-		query = strings.TrimSpace(input)
-	}
-	if g == nil || g.agent == nil || g.agent.Dispatcher() == nil {
-		return "", llm.UsageStats{}, fmt.Errorf("session search is not configured")
-	}
-	resp, err := g.agent.Dispatcher().Dispatch("session_search", map[string]interface{}{
-		"query":      query,
-		"limit":      10,
-		"_tenant_id": unifiedUID,
-	})
-	return resp, llm.UsageStats{}, err
-}
-
-func (g *Gateway) handleRoute(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	return fmt.Sprintf("Route command received. Current channel: %s.", channel), llm.UsageStats{}, nil
-}
-
-func trimKnownPrefix(input string, prefixes []string) string {
-	value := strings.TrimSpace(input)
-	lower := strings.ToLower(value)
-	for _, prefix := range prefixes {
-		prefix = strings.TrimSpace(prefix)
-		if prefix == "" {
-			continue
-		}
-		if strings.HasPrefix(lower, strings.ToLower(prefix)) {
-			return strings.TrimSpace(value[len(prefix):])
-		}
-	}
-	return value
-}
-
-func (g *Gateway) ResolveUID(ctx context.Context, platform, platformID string) (string, error) {
-	return g.identityMapper.EnsureBound(ctx, platform, platformID)
-}
-
-func (g *Gateway) ListTasks(ctx context.Context, unifiedUID string) ([]task.Task, error) {
-	return g.taskManager.ListTasks(ctx, unifiedUID)
-}
-
-func (g *Gateway) GetCurrentTaskInfo(ctx context.Context, unifiedUID string) (*task.Task, error) {
-	tt, _, err := g.taskManager.GetCurrentTask(ctx, unifiedUID)
-	return tt, err
-}
-
-func isTaskDone(response string) bool {
-	return taskResponseLooksComplete(response)
-}
-
-func taskResponseLooksComplete(response string) bool {
-	trimmed := strings.TrimSpace(response)
-	lower := strings.ToLower(trimmed)
-	if lower == "" {
-		return false
-	}
-	if taskResponseContainsAny(lower, []string{
-		"not done", "not completed", "not finished", "remaining work", "still need",
-		"need to continue", "next steps", "todo:", "blocked",
-	}) || taskResponseContainsAny(trimmed, []string{
-		"\u672a\u5b8c\u6210", "\u8fd8\u6ca1\u5b8c\u6210", "\u6ca1\u6709\u5b8c\u6210",
-		"\u5f85\u5b8c\u6210", "\u9700\u8981\u7ee7\u7eed", "\u963b\u585e",
-	}) {
-		return false
-	}
-	if lower == "done" || lower == "completed" || lower == "finished" || lower == "all done" {
-		return true
-	}
-	return taskResponseContainsAny(lower, []string{
-		"task complete", "task completed", "completed successfully",
-		"finished successfully", "all done", "implementation complete", "tests pass",
-	}) || taskResponseContainsAny(trimmed, []string{
-		"\u5df2\u5b8c\u6210", "\u4efb\u52a1\u5b8c\u6210", "\u5904\u7406\u5b8c\u6210",
-		"\u5df2\u5904\u7406\u5b8c", "\u5df2\u7ecf\u5b8c\u6210", "\u641e\u5b9a",
-	})
-}
-
-func taskResponseContainsAny(value string, needles []string) bool {
-	for _, needle := range needles {
-		if strings.Contains(value, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func extractTitle(input string) string {
-	title := strings.TrimSpace(input)
-	for _, prefix := range []string{"please"} {
-		if strings.HasPrefix(strings.ToLower(title), strings.ToLower(prefix)) {
-			title = strings.TrimSpace(title[len(prefix):])
-			break
-		}
-	}
-	if len([]rune(title)) > 30 {
-		runes := []rune(title)
-		title = string(runes[:30]) + "..."
-	}
-	if title == "" {
-		return "New task"
-	}
-	return title
-}
-
-func (g *Gateway) QuickReply(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
-	return g.Handle(ctx, unifiedUID, channel, input)
 }

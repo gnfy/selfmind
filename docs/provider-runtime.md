@@ -266,8 +266,10 @@ continue through their verified auxiliary fallback floor when an unrelated
 override is unavailable. In particular, an explicit `semantic_recall` failure
 degrades turn-start expansion to deterministic lexical recall without falling
 back to auxiliary or parking other maintenance. Transient timeout, rate, and
-network failures retry with bounded backoff; authentication, missing-model, and
-configuration failures wait for human repair. A successful bounded probe
+network failures retry with bounded backoff; the first live transient is quiet,
+a failed retry emits one notice with the resolved provider/model, and recovery
+emits one matching notice. Authentication, missing-model, and configuration
+failures remain immediately visible and wait for human repair. A successful bounded probe
 persists recovery and resumes normal role work without draining a backlog.
 Aggregate background readiness remains a summary of all enabled roles. A failed or disabled Background route does
 not take a verified Main route offline: status reports degraded or disabled
@@ -315,6 +317,17 @@ output explicitly; the maintenance provider chain enforces that contract again
 at dispatch. A user-selected `high` or `xhigh` auxiliary profile therefore
 does not multiply routine governance cost, while foreground reasoning remains
 unchanged.
+
+Natural-language work continuity is the one bounded foreground use of
+`fast_classifier`. It resolves from an explicit role override or
+`models.auxiliary`, never from a fallback chain to `coding_agent`; each request
+sets `reasoning_effort: none`, caps output at 512 tokens, and shares one
+six-second deadline across at most one retry. The provider sees only bounded
+gateway-issued run cards. Its output is advisory: the gateway validates the
+selected person/task/run and current state before any observe, steer, or resume
+action. `continuity.mode: shadow` records decisions only; `safe` is the release
+default; `full` additionally permits clear historical resume; `off` disables
+the model seam.
 
 `user_identity_field: auto` maps to `user_id` for OpenAI-compatible requests
 and `metadata.user_id` for Anthropic Messages. The value is a stable opaque

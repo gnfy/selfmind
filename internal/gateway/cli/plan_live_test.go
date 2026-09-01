@@ -6,7 +6,7 @@ import (
 )
 
 func TestLivePlanReplacesSnapshotAboveComposer(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 100
 	model.height = 30
 	model.runStatus = "working"
@@ -43,7 +43,7 @@ func TestLivePlanReplacesSnapshotAboveComposer(t *testing.T) {
 }
 
 func TestLivePlanClearsWhenRunFinishes(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 100
 	model.height = 30
 	model.runStatus = "working"
@@ -56,5 +56,21 @@ func TestLivePlanClearsWhenRunFinishes(t *testing.T) {
 	}
 	if rendered := stripANSI(model.viewActiveRegion()); strings.Contains(rendered, "Updated plan") {
 		t.Fatalf("finished UI must not retain the live plan: %q", rendered)
+	}
+}
+
+func TestWaitingAnimationKeepsOneRowWhenPlanConsumesTightLayout(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.width = 48
+	model.height = 6
+	model.runStatus = "working"
+	model.activePlanJSON = `{"plan":[{"step":"inspect files","status":"completed"},{"step":"apply changes","status":"in_progress"},{"step":"run tests","status":"pending"}]}`
+	model.startModelWait("Reading tool results and deciding the next step")
+
+	if budget := model.processRowBudget(model.width); budget < 1 {
+		t.Fatalf("waiting animation lost its reserved row: budget=%d", budget)
+	}
+	if rendered := stripANSI(model.renderActiveBlock(model.width)); !strings.Contains(rendered, "Reading tool results and deciding the next step") {
+		t.Fatalf("waiting animation disappeared beside a live plan: %q", rendered)
 	}
 }

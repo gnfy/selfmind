@@ -41,8 +41,14 @@ func CollectWorldState(ctx context.Context, store *control.Store, mem *memory.Me
 	}
 	w.Approvals, _ = store.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "", 50)
 	if mem != nil {
+		// Person memory is person-partitioned; the tenant partition is only a
+		// fallback for degenerate identities (mirrors production reads).
+		partition := strings.TrimSpace(identity.PersonID)
+		if partition == "" {
+			partition = identity.TenantID
+		}
 		for _, target := range []string{"user", "memory"} {
-			if facts, err := mem.GetFacts(ctx, identity.TenantID, target); err == nil {
+			if facts, err := mem.GetFacts(ctx, partition, target); err == nil {
 				w.Facts[target] = facts
 			}
 		}

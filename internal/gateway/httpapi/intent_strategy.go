@@ -3,6 +3,7 @@ package httpapi
 import (
 	"strings"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
@@ -31,6 +32,12 @@ func taskStrategyForRequest(req api.MessageRequest, intent router.IntentResult) 
 		}
 	case router.IntentCasual:
 		strategy.Reason = combineReasons("agent-first normal input", intent.Reason, strategy.Reason)
+	}
+	if strings.TrimSpace(req.RecoveryMode) == control.RunRecoveryModeVerifyOnly {
+		strategy.VerificationOnly = true
+		strategy.ToolMode = kernel.ToolModeLocalRead
+		strategy.PlanPolicy = kernel.PlanPolicyOptional
+		strategy.Reason = combineReasons("verification-only automatic recovery", strategy.Reason)
 	}
 	return strategy
 }

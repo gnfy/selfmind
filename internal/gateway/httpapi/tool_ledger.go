@@ -34,11 +34,10 @@ func (l *controlToolLedger) ClaimDispatch(ctx context.Context, entry kernel.Tool
 		return kernel.ToolDispatchDecision{}, fmt.Errorf("tool ledger is unavailable")
 	}
 	claim, err := l.store.ClaimToolDispatch(ctx, l.tenantID, control.ToolLedgerEntry{
-		RunID:      entry.RunID,
-		ToolCallID: entry.ToolCallID,
-		ToolName:   entry.ToolName,
-		ArgsHash:   entry.ArgsHash,
-		RetryClass: string(entry.RetryClass),
+		RunID: entry.RunID, ToolCallID: entry.ToolCallID, ToolName: entry.ToolName,
+		ArgsHash: entry.ArgsHash, RetryClass: string(entry.RetryClass), EffectID: entry.EffectID,
+		PlanVersion: entry.PlanVersion, PlanStepID: entry.PlanStepID, Strategy: entry.Strategy,
+		EffectClass: entry.EffectClass, EnvironmentGeneration: entry.EnvironmentGeneration,
 	})
 	if err != nil {
 		log.Warn("tool ledger dispatch record failed", "run_id", entry.RunID, "tool", entry.ToolName, "error", err)
@@ -48,10 +47,14 @@ func (l *controlToolLedger) ClaimDispatch(ctx context.Context, entry kernel.Tool
 }
 
 func (l *controlToolLedger) RecordOutcome(ctx context.Context, runID, toolCallID string, ok bool) error {
+	return l.RecordOutcomeWithRef(ctx, runID, toolCallID, ok, "")
+}
+
+func (l *controlToolLedger) RecordOutcomeWithRef(ctx context.Context, runID, toolCallID string, ok bool, resultRef string) error {
 	if l == nil || l.store == nil {
 		return fmt.Errorf("tool ledger is unavailable")
 	}
-	if err := l.store.RecordToolOutcome(ctx, l.tenantID, runID, toolCallID, ok); err != nil {
+	if err := l.store.RecordToolOutcomeWithRef(ctx, l.tenantID, runID, toolCallID, ok, resultRef); err != nil {
 		log.Warn("tool ledger outcome record failed", "run_id", runID, "error", err)
 		return err
 	}

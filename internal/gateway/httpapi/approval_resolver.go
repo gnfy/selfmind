@@ -154,7 +154,7 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 			}
 			return nil, fmt.Errorf("approval %s no longer has a resumable task", resolved.ID)
 		}
-		content := parkedApprovalResumeContent(*resolved, decision, input.Note)
+		content := parkedApprovalDecisionContent(decision, input.Note)
 		var executionRoots []executionenv.RootBinding
 		if sourceRun, runErr := d.Control.GetRun(ctx, identity.TenantID, resolved.RunID); runErr != nil {
 			return nil, runErr
@@ -168,6 +168,7 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 				PersonID: identity.PersonID, Platform: identity.Platform,
 				PlatformUserID: identity.PlatformUserID, Channel: fallback(channel, identity.Platform),
 				Content: content, WorkspaceID: task.WorkspaceID, TaskID: task.ID,
+				ApprovalID:     resolved.ID,
 				ExecutionRoots: executionRoots,
 				IdempotencyKey: "approval-resume:" + resolved.ID,
 				Class:          control.QueueClassForeground,
@@ -249,11 +250,11 @@ func sameApprovalAnswerRoute(route control.Delivery, identity *control.IdentityC
 	return strings.TrimSpace(answerChannel) != "" && strings.TrimSpace(answerChannel) == strings.TrimSpace(route.Channel)
 }
 
-func parkedApprovalResumeContent(approval control.ApprovalRequest, decision, note string) string {
+func parkedApprovalDecisionContent(decision, note string) string {
 	if strings.EqualFold(strings.TrimSpace(decision), "approved") || strings.EqualFold(strings.TrimSpace(decision), "approve") {
-		return fmt.Sprintf("Resume task after parked approval %s was approved. Re-evaluate the interrupted step from durable evidence. Approval authority is enforced by the execution middleware; never infer permission from this message.", approval.ID)
+		return "The pending action was approved. Re-evaluate the interrupted step from durable evidence; authority remains enforced by the execution middleware."
 	}
-	content := fmt.Sprintf("Resume task after parked approval %s was rejected. Do not retry the rejected operation or a cosmetic variant; choose a safe alternative or finish with an actionable explanation.", approval.ID)
+	content := "The pending action was rejected. Do not retry it or a cosmetic variant; choose a safe alternative or finish with an actionable explanation."
 	if reason := strings.TrimSpace(note); reason != "" {
 		content += " User guidance: " + reason
 	}

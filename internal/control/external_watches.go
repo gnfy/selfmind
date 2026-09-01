@@ -68,6 +68,11 @@ type ExternalWatch struct {
 	TargetPattern          string
 	TerminalSuccessPattern string
 	TerminalFailurePattern string
+	// ObservationAdapter opts spec v3 into a typed three-state parser owned by
+	// the tool registry. Empty retains the v1/v2 regex compatibility path.
+	ObservationAdapter     string
+	PreflightReceipt       ExternalWatchPreflightReceipt
+	WaitGroupID            string
 	Status                 string
 	CheckerStatus          string
 	OperationStatus        string
@@ -124,6 +129,16 @@ type ExternalWatch struct {
 	FinishedAt          *time.Time
 }
 
+type ExternalWatchPreflightReceipt struct {
+	Version               int      `json:"version"`
+	CommandHash           string   `json:"command_hash"`
+	EnvironmentGeneration int64    `json:"environment_generation"`
+	Adapter               string   `json:"adapter"`
+	Target                string   `json:"target"`
+	DeadlineUnix          int64    `json:"deadline_unix"`
+	Capabilities          []string `json:"capabilities,omitempty"`
+}
+
 // externalWatchColumns is the single SELECT list for a full watch row.
 //
 // It exists because the same column list was repeated in four queries against
@@ -134,7 +149,8 @@ const externalWatchColumns = `id, tenant_id, person_id,
 	COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
 	description, cwd, command, success_pattern, failure_pattern,
 	COALESCE(spec_version, 1), COALESCE(target_pattern, ''),
-	COALESCE(terminal_success_pattern, ''), COALESCE(terminal_failure_pattern, ''), status,
+	COALESCE(terminal_success_pattern, ''), COALESCE(terminal_failure_pattern, ''),
+	COALESCE(observation_adapter, ''), COALESCE(preflight_receipt_json, '{}'), COALESCE(wait_group_id, ''), status,
 	COALESCE(checker_status, ''), COALESCE(operation_status, 'pending'), COALESCE(verification_status, 'not_required'),
 	interval_seconds, COALESCE(current_interval_seconds, 0), command_timeout_seconds, timeout_at, next_check_at, attempts,
 	COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(finalized, 0), COALESCE(notified, 0), last_output, last_error,
@@ -159,8 +175,11 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 	watch.TargetPattern = strings.TrimSpace(watch.TargetPattern)
 	watch.TerminalSuccessPattern = strings.TrimSpace(watch.TerminalSuccessPattern)
 	watch.TerminalFailurePattern = strings.TrimSpace(watch.TerminalFailurePattern)
+	watch.ObservationAdapter = strings.TrimSpace(watch.ObservationAdapter)
 	if watch.SpecVersion <= 0 {
-		if watch.TargetPattern != "" || watch.TerminalSuccessPattern != "" || watch.TerminalFailurePattern != "" {
+		if watch.ObservationAdapter != "" {
+			watch.SpecVersion = 3
+		} else if watch.TargetPattern != "" || watch.TerminalSuccessPattern != "" || watch.TerminalFailurePattern != "" {
 			watch.SpecVersion = 2
 		} else {
 			watch.SpecVersion = 1
@@ -199,6 +218,10 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 	if err != nil {
 		return nil, fmt.Errorf("encode external watch execution binding: %w", err)
 	}
+	receiptJSON, err := json.Marshal(watch.PreflightReceipt)
+	if err != nil {
+		return nil, fmt.Errorf("encode external watch preflight receipt: %w", err)
+	}
 	watch.Status = ExternalWatchPending
 	watch.NextCheckAt = now
 	watch.CreatedAt = now
@@ -206,17 +229,18 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 	_, err = s.db.ExecContext(ctx, `INSERT INTO external_watches (
 		id, tenant_id, person_id, workspace_id, task_id, run_id, channel,
 		description, cwd, command, success_pattern, failure_pattern,
-		spec_version, target_pattern, terminal_success_pattern, terminal_failure_pattern, status,
+		spec_version, target_pattern, terminal_success_pattern, terminal_failure_pattern,
+		observation_adapter, preflight_receipt_json, wait_group_id, status,
 		interval_seconds, current_interval_seconds, command_timeout_seconds, timeout_at, next_check_at,
 		attempts, last_output, last_output_hash, last_error,
 		environment_snapshot_id, environment_generation, principal_fingerprint,
 		environment_fingerprint, credential_source_hash, execution_binding_json,
 		created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)`,
 		watch.ID, watch.TenantID, watch.PersonID, watch.WorkspaceID, watch.TaskID,
 		watch.RunID, watch.Channel, watch.Description, watch.CWD, watch.Command,
 		watch.SuccessPattern, watch.FailurePattern, watch.SpecVersion, watch.TargetPattern,
-		watch.TerminalSuccessPattern, watch.TerminalFailurePattern, watch.Status,
+		watch.TerminalSuccessPattern, watch.TerminalFailurePattern, watch.ObservationAdapter, string(receiptJSON), watch.WaitGroupID, watch.Status,
 		watch.IntervalSeconds, watch.CurrentIntervalSeconds, watch.CommandTimeoutSeconds, watch.TimeoutAt.Unix(),
 		watch.NextCheckAt.Unix(),
 		watch.EnvironmentSnapshotID, watch.EnvironmentGeneration, watch.PrincipalFingerprint,
@@ -234,6 +258,12 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 // outcomes. Without those exits a successful or failed operation can only age
 // into timed_out even though the check output is conclusive.
 func ValidateExternalWatchSpec(watch ExternalWatch) error {
+	if watch.SpecVersion >= 3 {
+		if strings.TrimSpace(watch.ObservationAdapter) == "" {
+			return fmt.Errorf("watch spec v3 requires an observation adapter")
+		}
+		return nil
+	}
 	if watch.SpecVersion <= 1 {
 		if strings.TrimSpace(watch.SuccessPattern) == "" {
 			return fmt.Errorf("success pattern is required for watch spec v1")
@@ -800,14 +830,15 @@ type externalWatchScanner interface {
 
 func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 	var watch ExternalWatch
-	var bindingJSON string
+	var bindingJSON, receiptJSON string
 	var timeoutAt, nextCheckAt, createdAt, updatedAt int64
 	var finalized, notified int
 	var finishedAt sql.NullInt64
 	err := scanner.Scan(&watch.ID, &watch.TenantID, &watch.PersonID, &watch.WorkspaceID,
 		&watch.TaskID, &watch.RunID, &watch.Channel, &watch.Description, &watch.CWD,
 		&watch.Command, &watch.SuccessPattern, &watch.FailurePattern,
-		&watch.SpecVersion, &watch.TargetPattern, &watch.TerminalSuccessPattern, &watch.TerminalFailurePattern, &watch.Status,
+		&watch.SpecVersion, &watch.TargetPattern, &watch.TerminalSuccessPattern, &watch.TerminalFailurePattern,
+		&watch.ObservationAdapter, &receiptJSON, &watch.WaitGroupID, &watch.Status,
 		&watch.CheckerStatus, &watch.OperationStatus, &watch.VerificationStatus,
 		&watch.IntervalSeconds, &watch.CurrentIntervalSeconds, &watch.CommandTimeoutSeconds, &timeoutAt, &nextCheckAt,
 		&watch.Attempts, &watch.Extensions, &watch.VerdictRevision, &finalized, &notified, &watch.LastOutput, &watch.LastError,
@@ -828,6 +859,9 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 	watch.Notified = notified != 0
 	if err := json.Unmarshal([]byte(bindingJSON), &watch.ExecutionBinding); err != nil {
 		return ExternalWatch{}, fmt.Errorf("decode external watch execution binding: %w", err)
+	}
+	if err := json.Unmarshal([]byte(receiptJSON), &watch.PreflightReceipt); err != nil {
+		return ExternalWatch{}, fmt.Errorf("decode external watch preflight receipt: %w", err)
 	}
 	if finishedAt.Valid {
 		value := time.Unix(finishedAt.Int64, 0)

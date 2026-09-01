@@ -174,10 +174,26 @@ type MessageRequest struct {
 	// names paths on the daemon host and is therefore accepted only from an
 	// authenticated loopback CLI request. The gateway canonicalizes these into
 	// ExecutionRoots before queueing or starting a run.
-	ClientAdditionalRoots []string            `json:"client_additional_roots,omitempty"`
-	TaskID                string              `json:"task_id"`
-	Async                 bool                `json:"async"`
-	Attachments           []MessageAttachment `json:"attachments,omitempty"`
+	ClientAdditionalRoots []string `json:"client_additional_roots,omitempty"`
+	TaskID                string   `json:"task_id"`
+	// ReplyToRunID is platform-proven reply metadata: the client or adapter
+	// asserts this message is a reply to the output of one specific run
+	// (a threaded IM reply, a numbered pick). The gateway validates the run
+	// against the resolved person and binds the turn to it as the exact
+	// continuation parent; an invalid, foreign, stale, or already-claimed id
+	// fails closed and is never downgraded to ordinary routing.
+	ReplyToRunID string `json:"reply_to_run_id,omitempty"`
+	// ApprovalID and ClarifyID are structured return edges. Adapters may attach
+	// them when the platform proves which pending interaction the user answered;
+	// the gateway validates person ownership before using either id.
+	ApprovalID string `json:"approval_id,omitempty"`
+	ClarifyID  string `json:"clarify_id,omitempty"`
+	// ChoiceID names a durable pre-run continuity clarification. It is safe to
+	// carry across bound endpoints; the gateway still validates person ownership
+	// and atomically consumes the choice before applying its selected target.
+	ChoiceID    string              `json:"choice_id,omitempty"`
+	Async       bool                `json:"async"`
+	Attachments []MessageAttachment `json:"attachments,omitempty"`
 	// AllowWeb opts this turn into web tools even though the default policy keeps
 	// them off. Used by scheduled jobs that must look things up (e.g. a market
 	// summary). It does not force web use; it only makes the tools available.
@@ -203,10 +219,6 @@ type MessageRequest struct {
 	// request from a durable request whose bindings were restored internally.
 	// It prevents a continuation from changing an in-flight run's authority.
 	AdditionalRootsRequested bool `json:"-"`
-	// SourceApprovalID links a daemon-originated continuation to the parked
-	// approval that caused it. It is durable event provenance, never accepted
-	// from a wire client and never inferred later from prompt prose.
-	SourceApprovalID string `json:"-"`
 	// ExecutionProfile carries an internal execution contract for durable
 	// system work. It is never accepted from the wire. Ordinary user turns leave
 	// it empty; watcher finalization uses a constrained unattended profile.
@@ -222,6 +234,24 @@ type MessageRequest struct {
 	// never accepted from the wire. Clients read it back from `run.started` and
 	// render such a run as a result line instead of replaying its progress.
 	Origin string `json:"-"`
+	// RecoveryMode is trusted queue-derived state for a daemon-owned recovery
+	// child. "verify_only" narrows the provider-visible and dispatchable tool
+	// surface to read-only observation plus lifecycle tools.
+	RecoveryMode string `json:"-"`
+	// ForceNew is set only by the gateway's deterministic /new escape hatch or
+	// a claimed "this is new work" choice. It is never accepted over the wire.
+	ForceNew bool `json:"-"`
+	// ContinuityAction records the typed action of an atomically claimed turn
+	// choice. In particular, "observe" must finish on the read-only progress
+	// path instead of accidentally creating a continuation run.
+	ContinuityAction string `json:"-"`
+	// ContinuityContext is bounded gateway-derived prior-work state for the one
+	// supported OBSERVE+NEW compound turn. It is prompt-only: the original user
+	// message remains unchanged in channel history and run audit.
+	ContinuityContext string `json:"-"`
+	// ContinuityResolutionID links a durable human choice to the advisory model
+	// decision it corrected. It is control-plane metadata, never a wire input.
+	ContinuityResolutionID string `json:"-"`
 }
 
 // DispatchRequest runs a single management tool on the daemon. It backs
@@ -262,6 +292,20 @@ type MessageResponse struct {
 	Usage    llm.UsageStats           `json:"usage"`
 	Error    string                   `json:"error,omitempty"`
 	Accepted bool                     `json:"accepted,omitempty"`
+	Choice   *TurnChoice              `json:"choice,omitempty"`
+}
+
+// TurnChoice is the structured, cross-endpoint form of a continuity
+// clarification. Clients may render the concise text Content, but should
+// preserve ID when the platform supports reply metadata.
+type TurnChoice struct {
+	ID      string             `json:"id"`
+	Options []TurnChoiceOption `json:"options"`
+}
+
+type TurnChoiceOption struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
 }
 
 type TurnStatus struct {
@@ -343,18 +387,17 @@ type RunSteerResponse struct {
 const RunStatusVerificationPartial = "verification_partial"
 
 type RunOutcome struct {
-	Status             string               `json:"status"`
-	CompletionReason   string               `json:"completion_reason,omitempty"`
-	Resumable          bool                 `json:"resumable,omitempty"`
-	Summary            string               `json:"summary,omitempty"`
-	Done               []string             `json:"done,omitempty"`
-	NextSteps          []string             `json:"next_steps,omitempty"`
-	Files              []string             `json:"files,omitempty"`
-	Tests              []string             `json:"tests,omitempty"`
-	Risks              []string             `json:"risks,omitempty"`
-	NeedApprove        bool                 `json:"need_approve,omitempty"`
-	ResolvedBlockerIDs []string             `json:"resolved_blocker_ids,omitempty"`
-	Verification       *VerificationOutcome `json:"verification,omitempty"`
+	Status           string               `json:"status"`
+	CompletionReason string               `json:"completion_reason,omitempty"`
+	Resumable        bool                 `json:"resumable,omitempty"`
+	Summary          string               `json:"summary,omitempty"`
+	Done             []string             `json:"done,omitempty"`
+	NextSteps        []string             `json:"next_steps,omitempty"`
+	Files            []string             `json:"files,omitempty"`
+	Tests            []string             `json:"tests,omitempty"`
+	Risks            []string             `json:"risks,omitempty"`
+	NeedApprove      bool                 `json:"need_approve,omitempty"`
+	Verification     *VerificationOutcome `json:"verification,omitempty"`
 	// External records the independently observed result of a durable external
 	// operation. A failed deployment does not mean the SelfMind finalization run
 	// failed: the run may have correctly detected, recorded, and reported that

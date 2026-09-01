@@ -65,11 +65,17 @@ func ClassifyToolRetry(name string) ToolRetryClass {
 
 // ToolLedgerEntry is one dispatch record.
 type ToolLedgerEntry struct {
-	RunID      string
-	ToolCallID string
-	ToolName   string
-	ArgsHash   string
-	RetryClass ToolRetryClass
+	RunID                 string
+	ToolCallID            string
+	ToolName              string
+	ArgsHash              string
+	RetryClass            ToolRetryClass
+	EffectID              string
+	PlanVersion           int
+	PlanStepID            string
+	Strategy              string
+	EffectClass           string
+	EnvironmentGeneration int64
 }
 
 // ToolDispatchDecision is the durable claim result returned before execution.
@@ -91,11 +97,47 @@ type ToolLedger interface {
 	RecordOutcome(ctx context.Context, runID, toolCallID string, ok bool) error
 }
 
+// ToolLedgerOutcomeRecorder is the v1 recovery-contract extension. The result
+// reference is a content hash only; raw tool output remains in its existing
+// bounded event/artifact surfaces.
+type ToolLedgerOutcomeRecorder interface {
+	RecordOutcomeWithRef(ctx context.Context, runID, toolCallID string, ok bool, resultRef string) error
+}
+
 // ToolArgsHash is the stable dispatch fingerprint used to correlate a ledger
 // entry with the model's tool call across a restart.
 func ToolArgsHash(args string) string {
 	sum := sha256.Sum256([]byte(args))
 	return hex.EncodeToString(sum[:16])
+}
+
+func ToolEffectID(runID, toolCallID string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(runID) + "\x00" + strings.TrimSpace(toolCallID)))
+	return "effect_" + hex.EncodeToString(sum[:12])
+}
+
+func ToolResultReference(raw string, ok bool) string {
+	state := "failed"
+	if ok {
+		state = "completed"
+	}
+	sum := sha256.Sum256([]byte(state + "\x00" + raw))
+	return "result_" + hex.EncodeToString(sum[:12])
+}
+
+func ToolExecutionStrategy(name string, retryClass ToolRetryClass) string {
+	switch strings.TrimSpace(name) {
+	case "update_plan", "finish_run", "clarify":
+		return "interact"
+	case "verify":
+		return "verify"
+	case "watch_external", "process_poll":
+		return "wait"
+	}
+	if retryClass == ToolRetryReadOnly {
+		return "observe"
+	}
+	return "mutate"
 }
 
 type toolLedgerKey struct{}

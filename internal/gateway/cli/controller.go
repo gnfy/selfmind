@@ -11,8 +11,6 @@ import (
 	"selfmind/internal/app"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/httpapi"
-	"selfmind/internal/gateway/router"
-	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelchange"
@@ -104,12 +102,9 @@ type uiModel struct {
 	tokenLimit            int
 	modelMeta             string
 	startTime             time.Time
-	provider              llm.Provider
 	providerName          string
 	modelName             string
 	backgroundModelName   string
-	agent                 *kernel.Agent
-	gateway               *router.Gateway
 	messageProcessor      MessageProcessor
 	modelChangeProcessor  ModelChangeProcessor
 	modelChangeObserver   ModelChangeObserver
@@ -609,10 +604,23 @@ func (m *uiModel) Init() tea.Cmd {
 	return tea.Batch(cursorBlinkTick(), observe, m.loadSkillCompletion())
 }
 
-const modelWaitPhase = "model_wait"
+const (
+	modelThinkingPhase = "thinking"
+	modelWaitPhase     = "model_wait"
+)
 
-// startModelWait is the only entrypoint that starts the animation. Repeated
-// model_wait events refresh the label without creating parallel tick chains.
+func animatedModelPhase(phase string) bool {
+	switch strings.ToLower(strings.TrimSpace(phase)) {
+	case modelThinkingPhase, modelWaitPhase:
+		return true
+	default:
+		return false
+	}
+}
+
+// startModelWait is the only entrypoint that starts the animation. The initial
+// thinking event starts it immediately; later model_wait heartbeats refresh the
+// label without creating parallel tick chains.
 func (m *uiModel) startModelWait(content string) tea.Cmd {
 	if m == nil {
 		return nil
@@ -928,6 +936,7 @@ func (m *uiModel) answerClarifyViaGateway(response string) tea.Cmd {
 	}
 	processor := m.messageProcessor
 	req := m.controlMessageRequest(response)
+	req.ClarifyID = m.clarifyReq.ID
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()

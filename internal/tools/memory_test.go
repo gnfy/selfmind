@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"selfmind/internal/kernel/memory"
 )
@@ -21,11 +22,27 @@ func TestMemoryToolListAction(t *testing.T) {
 
 	for _, c := range []struct{ target, content string }{
 		{"user", "Prefers Go over Python."},
-		{"memory", "Repo builds with GOWORK=off."},
 		{"pinned", "Name is Wei."},
 	} {
 		if _, err := tool.Execute(map[string]interface{}{"action": "add", "target": c.target, "content": c.content, "_tenant_id": tenantID}); err != nil {
 			t.Fatalf("add %s: %v", c.target, err)
+		}
+	}
+	// A historical environment row (pre-P3) must stay listable even though the
+	// tool no longer accepts new target="memory" adds.
+	if err := mem.AddFactMeta(context.Background(), tenantID, memory.Fact{
+		ID: "99999999-aaaa-4bbb-8ccc-ddddeeee0000", Target: "memory",
+		Content: "Repo builds with GOWORK=off.", Source: memory.SourceFactExtractor,
+		Scope: "global", Confidence: 0.65, LastVerifiedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if store, ok := mem.Canonical(); ok {
+		if err := store.ApplyIntakeWrite(context.Background(), tenantID, memory.IntakeWrite{
+			Decision: "ADD", Target: "memory", Scope: "global",
+			Source: memory.SourceFactExtractor, Content: "Repo builds with GOWORK=off.",
+		}); err != nil {
+			t.Fatal(err)
 		}
 	}
 
@@ -58,7 +75,7 @@ func TestMemoryToolRejectsTransientRunState(t *testing.T) {
 	tool := NewMemoryTool(mem)
 
 	_, err = tool.Execute(map[string]interface{}{
-		"action": "add", "target": "memory",
+		"action": "add", "target": "user",
 		"content":    "Build ID: cw-prod:0d4a9e81 has been created",
 		"_tenant_id": "tenant-transient",
 	})
@@ -267,11 +284,28 @@ func TestMemoryToolScopesProjectFactsAndPinsExistingCanonical(t *testing.T) {
 	tool := NewMemoryTool(mem)
 	tenantID := "tenant-scope-pin"
 
+	// New environment adds are refused (preference-only person memory, P3)…
 	if _, err := tool.Execute(map[string]interface{}{
 		"action": "add", "target": "memory", "content": "This project uses PostgreSQL.",
 		"_tenant_id": tenantID, "_workspace_id": "workspace-db",
+	}); err == nil || !strings.Contains(err.Error(), "convention files") {
+		t.Fatalf("environment add must be refused with guidance, got %v", err)
+	}
+	// …while a HISTORICAL workspace-scoped row (pre-P3) keeps its governance.
+	if err := mem.AddFactMeta(ctx, tenantID, memory.Fact{
+		ID: "88888888-aaaa-4bbb-8ccc-ddddeeee1111", Target: "memory",
+		Content: "This project uses PostgreSQL.", Source: memory.SourceFactExtractor,
+		Scope: memory.DeriveFactScope("memory", "workspace-db"), Confidence: 0.65, LastVerifiedAt: time.Now(),
 	}); err != nil {
 		t.Fatal(err)
+	}
+	if store, ok := mem.Canonical(); ok {
+		if err := store.ApplyIntakeWrite(ctx, tenantID, memory.IntakeWrite{
+			Decision: "ADD", Target: "memory", Scope: memory.DeriveFactScope("memory", "workspace-db"),
+			Source: memory.SourceFactExtractor, Content: "This project uses PostgreSQL.", WorkspaceID: "workspace-db",
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	facts, _ := memory.ReadModelFacts(ctx, mem, tenantID)
 	if len(facts) != 1 || facts[0].Scope != "workspace:workspace-db" {
@@ -427,25 +461,25 @@ func TestMemoryToolHistoryAndUndo(t *testing.T) {
 
 	if _, err := tool.Execute(map[string]interface{}{
 		"action":     "add",
-		"target":     "memory",
-		"content":    "Project uses PowerShell for local commands.",
+		"target":     "user",
+		"content":    "Prefers PowerShell examples for local commands.",
 		"_tenant_id": tenantID,
 	}); err != nil {
 		t.Fatalf("second add failed: %v", err)
 	}
 	if _, err := tool.Execute(map[string]interface{}{
 		"action":     "remove",
-		"target":     "memory",
+		"target":     "user",
 		"old_text":   "PowerShell",
 		"_tenant_id": tenantID,
 	}); err != nil {
 		t.Fatalf("remove failed: %v", err)
 	}
-	changes, err = ListMemoryLearningChanges(tenantID, "memory", 10)
+	changes, err = ListMemoryLearningChanges(tenantID, "user", 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(changes) == 0 || changes[0].Action != "remove" || changes[0].Before != "Project uses PowerShell for local commands." {
+	if len(changes) == 0 || changes[0].Action != "remove" || changes[0].Before != "Prefers PowerShell examples for local commands." {
 		t.Fatalf("unexpected remove history: %+v", changes)
 	}
 	if _, err := tool.Execute(map[string]interface{}{
@@ -455,17 +489,17 @@ func TestMemoryToolHistoryAndUndo(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("undo remove failed: %v", err)
 	}
-	facts, err = mem.GetFacts(ctx, tenantID, "memory")
+	facts, err = mem.GetFacts(ctx, tenantID, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facts) != 1 || facts[0].Content != "Project uses PowerShell for local commands." {
+	if len(facts) != 1 || facts[0].Content != "Prefers PowerShell examples for local commands." {
 		t.Fatalf("expected removed memory to be restored, facts=%+v", facts)
 	}
 	visible, _ = memory.ReadModelFacts(ctx, mem, tenantID)
 	found := false
 	for _, fact := range visible {
-		found = found || fact.Content == "Project uses PowerShell for local commands."
+		found = found || fact.Content == "Prefers PowerShell examples for local commands."
 	}
 	if !found {
 		t.Fatalf("undo remove did not restore canonical read model: %+v", visible)

@@ -314,6 +314,22 @@ func ValidateArgs(schema ToolSchema, args map[string]interface{}) error {
 		if err := validateType(param, val, def.Type); err != nil {
 			return err
 		}
+		if len(def.Enum) > 0 {
+			value, ok := val.(string)
+			if !ok {
+				return fmt.Errorf("parameter %s must be one of %s", param, strings.Join(def.Enum, ", "))
+			}
+			allowed := false
+			for _, candidate := range def.Enum {
+				if value == candidate {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("parameter %s must be one of %s, got %q", param, strings.Join(def.Enum, ", "), value)
+			}
+		}
 	}
 
 	return nil

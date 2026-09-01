@@ -150,10 +150,11 @@ func (d *Server) recoverApprovalContinuations(ctx context.Context, drain bool) i
 			Platform:       route.Platform,
 			PlatformUserID: route.PlatformUserID,
 			Channel:        fallback(channel, route.Platform),
-			Content:        parkedApprovalResumeContent(approval, approval.Status, approval.DecisionNote),
+			Content:        parkedApprovalDecisionContent(approval.Status, approval.DecisionNote),
 			WorkspaceID:    task.WorkspaceID,
 			ExecutionRoots: executionRoots,
 			TaskID:         task.ID,
+			ApprovalID:     approval.ID,
 			IdempotencyKey: "approval-resume:" + approval.ID,
 			Class:          control.QueueClassForeground,
 		})
@@ -214,6 +215,11 @@ func (d *Server) sweepRecoveryNotifications() {
 		return
 	}
 	for _, item := range items {
+		if scheduled, scheduleErr := d.scheduleAutomaticRunRecovery(ctx, item, true); scheduleErr != nil {
+			log.Warn("gateway: automatic run recovery scheduling failed", "run", item.RunID, "error", scheduleErr)
+		} else if scheduled {
+			continue
+		}
 		identity := &control.IdentityContext{TenantID: item.TenantID, PersonID: item.PersonID, Platform: "cli"}
 		title := item.Title
 		if title == "" {

@@ -475,7 +475,11 @@ func TestMaintenanceProviderChainObservesQuotaInsideStream(t *testing.T) {
 	}
 }
 
-func TestPostRunAnalyzerCombinesDecisionAndFactPersistence(t *testing.T) {
+func TestPostRunAnalyzerIgnoresLegacyFactArrays(t *testing.T) {
+	// Flat user_facts/memory_facts arrays are a v2/v3 payload shape. Their
+	// application was retired with preference-only memory: a frozen legacy
+	// proposal replaying them must decode cleanly and write NOTHING — memory
+	// writes flow only through memory_decisions.
 	provider, err := memory.NewSQLiteProvider(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -503,50 +507,17 @@ func TestPostRunAnalyzerCombinesDecisionAndFactPersistence(t *testing.T) {
 	if err := analyzer.Apply(context.Background(), req, got); err != nil {
 		t.Fatal(err)
 	}
-	// Background learning must land in the person partition — the one the
-	// foreground agent reads — never in the control tenant partition (the
-	// 2026-07-17 partition-split regression).
-	userFacts, err := mem.GetFacts(context.Background(), "person", "user")
-	if err != nil || len(userFacts) != 1 {
-		t.Fatalf("user facts=%+v err=%v", userFacts, err)
+	for _, target := range []string{"user", "memory"} {
+		facts, err := mem.GetFacts(context.Background(), "person", target)
+		if err != nil || len(facts) != 0 {
+			t.Fatalf("legacy %s facts must not be written: %+v err=%v", target, facts, err)
+		}
 	}
-	if userFacts[0].CreatedFromRun != "run" || userFacts[0].Scope != "global" {
-		t.Fatalf("user fact metadata=%+v", userFacts[0])
-	}
-	workspaceFacts, err := mem.GetFacts(context.Background(), "person", "memory")
-	if err != nil || len(workspaceFacts) != 1 {
-		t.Fatalf("memory facts=%+v err=%v", workspaceFacts, err)
-	}
-	if workspaceFacts[0].Scope != "workspace:workspace" {
-		t.Fatalf("workspace fact metadata=%+v", workspaceFacts[0])
-	}
-	if tenantFacts, err := mem.GetFacts(context.Background(), "tenant", "user"); err != nil || len(tenantFacts) != 0 {
-		t.Fatalf("control tenant partition must stay empty, got %+v err=%v", tenantFacts, err)
-	}
-
-	// Re-analyzing the same durable facts must not duplicate memory rows —
-	// and the duplicate observation is corroborating evidence, so the stored
-	// fact must be REINFORCED (confidence up, verification time refreshed),
-	// never silently dropped.
-	firstConfidence := userFacts[0].Confidence
-	firstVerified := userFacts[0].LastVerifiedAt
-	replayed, err := analyzer.Analyze(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := analyzer.Apply(context.Background(), req, replayed); err != nil {
-		t.Fatal(err)
-	}
-	userFacts, _ = mem.GetFacts(context.Background(), "person", "user")
-	workspaceFacts, _ = mem.GetFacts(context.Background(), "person", "memory")
-	if len(userFacts) != 1 || len(workspaceFacts) != 1 {
-		t.Fatalf("duplicates stored: user=%d memory=%d", len(userFacts), len(workspaceFacts))
-	}
-	if userFacts[0].Confidence != firstConfidence {
-		t.Fatalf("same-run replay must not reinforce twice: %v -> %v", firstConfidence, userFacts[0].Confidence)
-	}
-	if userFacts[0].LastVerifiedAt.Before(firstVerified) {
-		t.Fatalf("reinforcement must not move last_verified_at backwards: %v -> %v", firstVerified, userFacts[0].LastVerifiedAt)
+	if store, ok := mem.Canonical(); ok {
+		canonicals, err := store.ListCanonicalMemories(context.Background(), "person", memory.CanonicalFilter{})
+		if err != nil || len(canonicals) != 0 {
+			t.Fatalf("legacy arrays must not mint canonical memory: %+v err=%v", canonicals, err)
+		}
 	}
 }
 
@@ -584,12 +555,13 @@ func TestPostRunAnalyzerBatchesProviderCallAndKeysResultsByRun(t *testing.T) {
 
 func TestPostRunBatchSystemContractIsSelfContained(t *testing.T) {
 	for _, want := range []string{
-		"SKIP: temporary, speculative, secret, episodic, or already fully represented",
+		"SKIP: not an explicit personal preference, temporary, speculative, secret, episodic, or already fully represented",
 		"REINFORCE, SUPERSEDE, and CONFLICT must set ref to an id from that run's nearby list",
-		`target is "user" for user preferences/identity and "memory" for workspace facts and conventions`,
+		`target is always "user"`,
 		"Never carry a ref or decision across runs",
-		"Write memory content in the language of its supporting user statement or durable result",
-		"SelfMind-generated task decision rules",
+		"Write memory content in the language of its supporting user statement",
+		"Project facts, repository conventions, build commands, and workspace state are always SKIP",
+		"Never concatenate those temporary instructions into memory",
 	} {
 		if !strings.Contains(postRunBatchAnalyzerSystemPrompt, want) {
 			t.Fatalf("batch maintenance contract missing %q:\n%s", want, postRunBatchAnalyzerSystemPrompt)

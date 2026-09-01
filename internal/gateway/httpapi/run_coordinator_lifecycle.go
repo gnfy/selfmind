@@ -106,6 +106,13 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		evidence.WorkspaceID, evidence.UserInput, channel, "", outcome, evidence.Attach, handoff, event); err != nil {
 		return outcome
 	}
+	if outcome.Status == "interrupted" && outcome.Resumable &&
+		(outcome.CompletionReason == "provider_or_transport_error" || outcome.CompletionReason == "daemon_recovery") {
+		_, _ = c.srv.scheduleAutomaticRunRecovery(finCtx, control.RecoveryNotification{
+			TenantID: identity.TenantID, PersonID: identity.PersonID,
+			TaskID: task.ID, RunID: run.ID, Channel: channel, Title: task.Title,
+		}, false)
+	}
 	return outcome
 }
 
@@ -209,22 +216,98 @@ func (c *RunCoordinator) recordOutcomeArtifacts(ctx context.Context, task *contr
 	}
 }
 
-// resolveTask decides which task label this turn runs under (Work Timeline P3,
-// docs/work-timeline.md "Labels"/"Ingress"). Explicit evidence is
-// deterministic and wins: a caller-supplied task id, the one-shot /resume pin,
-// or an active governed Task Reference. Only then may an
-// implicit IntentContinue classification (router cue or short acceptance)
-// select the current task. Everything else
-// gets a harmless PRE-LABEL guess: the person's current
-// task when it is OPEN (non-terminal, non-archived), else a fresh placeholder
-// label. The guess is safe because context is spine-based (P1) and recall
-// (P2) — labels never gate what the model sees — and the post-run labeler
-// re-points a wrong guess; a mislabel is a display bug, not context
-// corruption. task_runs.task_id stays NOT NULL and the control plane
+// resolveTask decides which task this turn runs under (simplification P2,
+// Deterministic evidence wins in a fixed ladder: structured return edges (approval origin run,
+// platform reply metadata), a caller-supplied task id, the one-shot /resume
+// pin, then an explicit continuation cue resolved through the person-wide
+// unclaimed-run ladder (same channel first, then global; several candidates
+// stay visible, none is guessed). Everything else owns a FRESH root task:
+// grouping is display-only — context comes from the spine and the parent-run
+// slice, so a new task per message can never corrupt execution.
+// task_runs.task_id stays NOT NULL and the control plane
 // (queue/approvals/busy/steer) is untouched.
 func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, taskAttach, error) {
 	store := c.srv.Control
 	inputWorkKey := uniqueTaskWorkKey(req.Content)
+	// Structured return edges win before every guess (simplification §5.3
+	// steps 2–3): an approval continuation names its origin run via the parked
+	// approval row, and a platform reply names the exact run it answers. Both
+	// bind a precise parent; an invalid, foreign, or stale id fails closed so it
+	// can never be applied to another pending item.
+	approvalID := strings.TrimSpace(req.ApprovalID)
+	if approvalID != "" {
+		approval, err := store.GetApprovalRequest(ctx, identity.TenantID, approvalID)
+		if err != nil {
+			return nil, taskAttach{}, fmt.Errorf("load approval continuation: %w", err)
+		}
+		if approval == nil || approval.PersonID != identity.PersonID || approval.TaskID == "" || approval.RunID == "" ||
+			(approval.Status != "approved" && approval.Status != "rejected") {
+			return nil, taskAttach{}, fmt.Errorf("approval continuation is invalid or no longer available")
+		}
+		task, err := store.GetTask(ctx, identity.TenantID, approval.TaskID)
+		if err != nil {
+			return nil, taskAttach{}, fmt.Errorf("load approval task: %w", err)
+		}
+		if task == nil || task.PersonID != identity.PersonID {
+			return nil, taskAttach{}, fmt.Errorf("approval task is invalid or no longer available")
+		}
+		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
+		attach := newTaskAttach(taskAttachApprovalResume, inputWorkKey, false, false)
+		attach.parentRunID = approval.RunID
+		return task, attach, err
+	}
+	clarifyID := strings.TrimSpace(req.ClarifyID)
+	if clarifyID != "" {
+		clarify, err := store.GetClarifyRequest(ctx, identity.TenantID, clarifyID)
+		if err != nil {
+			return nil, taskAttach{}, fmt.Errorf("load clarification continuation: %w", err)
+		}
+		if clarify == nil || clarify.PersonID != identity.PersonID || clarify.TaskID == "" || clarify.RunID == "" ||
+			clarify.Status != "answered" || strings.TrimSpace(clarify.Answer) == "" {
+			return nil, taskAttach{}, fmt.Errorf("clarification continuation is invalid or no longer available")
+		}
+		task, err := store.GetTask(ctx, identity.TenantID, clarify.TaskID)
+		if err != nil {
+			return nil, taskAttach{}, fmt.Errorf("load clarification task: %w", err)
+		}
+		if task == nil || task.PersonID != identity.PersonID {
+			return nil, taskAttach{}, fmt.Errorf("clarification task is invalid or no longer available")
+		}
+		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
+		attach := newTaskAttach(taskAttachClarifyResume, inputWorkKey, false, false)
+		attach.parentRunID = clarify.RunID
+		return task, attach, err
+	}
+	if replyRunID := strings.TrimSpace(req.ReplyToRunID); replyRunID != "" {
+		parent, err := store.GetRun(ctx, identity.TenantID, replyRunID)
+		if err != nil {
+			return nil, taskAttach{}, fmt.Errorf("load reply parent: %w", err)
+		}
+		if parent == nil || parent.PersonID != identity.PersonID {
+			return nil, taskAttach{}, fmt.Errorf("reply target is invalid or no longer available")
+		}
+		task, err := store.GetTask(ctx, identity.TenantID, parent.TaskID)
+		if err != nil {
+			return nil, taskAttach{}, fmt.Errorf("load reply task: %w", err)
+		}
+		if task == nil || task.PersonID != identity.PersonID {
+			return nil, taskAttach{}, fmt.Errorf("reply task is invalid or no longer available")
+		}
+		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
+		attach := newTaskAttach(taskAttachReplyToRun, inputWorkKey, false, false)
+		attach.parentRunID = parent.ID
+		return task, attach, err
+	}
+	if req.ForceNew {
+		// /new is the deterministic escape hatch when continuity resolution is
+		// unavailable or the user rejects every historical candidate. Consume a
+		// stale one-shot /resume pin so it cannot capture a later message, then
+		// create a root regardless of current-task projection or cue text.
+		_, _, _ = c.srv.consumeResumePin(ctx, identity)
+		task, attach, err := c.createRootTask(ctx, identity, req)
+		attach.workKey = inputWorkKey
+		return task, attach, err
+	}
 	if req.TaskID != "" {
 		task, err := store.GetTask(ctx, identity.TenantID, req.TaskID)
 		if err != nil || task != nil {
@@ -239,64 +322,94 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	// The /resume pin covers exactly the NEXT agent-bound message, so it is
 	// consumed here no matter which branch wins below — a stale pin must never
 	// capture unrelated work later.
-	pinned := c.srv.consumeResumePin(ctx, identity)
-	// An explicit /resume is a deliberate act, so it may reopen even an
-	// ARCHIVED label; the other terminal statuses (done/cancelled/failed) stay
-	// closed to the pin exactly as before.
-	if pinned != nil && (!terminalTaskStatus(pinned.Status) || archivedTaskStatus(pinned.Status)) {
+	pinned, pinnedRunID, pinErr := c.srv.consumeResumePin(ctx, identity)
+	if pinErr != nil {
+		return nil, taskAttach{}, pinErr
+	}
+	// An explicit /resume is a deliberate act, so it may reopen a label the
+	// person completed or archived. Cancelled/failed labels stay closed.
+	if pinned != nil && (!terminalTaskStatus(pinned.Status) || resumableTaskStatus(pinned.Status)) {
 		task, err := c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
-		return task, newTaskAttach(taskAttachResumePin, inputWorkKey, false, false), err
+		attach := newTaskAttach(taskAttachResumePin, inputWorkKey, false, false)
+		attach.parentRunID = pinnedRunID
+		return task, attach, err
 	}
-	refTask, refAttach, matched, err := c.resolveTaskReference(ctx, identity, req, intent.Intent == router.IntentContinue)
-	if err != nil {
-		return nil, taskAttach{}, err
-	}
-	if matched {
-		if refAttach.resolvedPolicy().ExecutionWorkspaceSource == attachWorkspaceTask {
-			refTask, err = c.bindTaskWorkspaceIfMissing(ctx, identity, refTask, req, nil)
-		}
-		return refTask, refAttach, err
-	}
+	// §5.3 steps 5–7: an explicit continuation cue continues the unique
+	// unclaimed resumable run — same channel first, then person-global. Task
+	// References and the current-task pointer no longer route anything
+	// (simplification P2): references are search hints, current_task is a UI
+	// projection.
 	if intent.Intent == router.IntentContinue {
-		task, err := c.srv.resolveContinueTask(ctx, identity)
+		task, attach, err := c.resolveContinuationByRuns(ctx, identity, req, inputWorkKey)
 		if err != nil || task != nil {
-			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
-			attach := newTaskAttach(taskAttachContinuation, inputWorkKey, false, false)
-			attach.matchedSurfaceForms = refAttach.matchedSurfaceForms
-			attach.candidateTaskIDs = refAttach.candidateTaskIDs
-			attach.candidateTaskHints = refAttach.candidateTaskHints
 			return task, attach, err
 		}
-		if len(refAttach.candidateTaskHints) > 0 {
-			return nil, taskAttach{}, fmt.Errorf("task reference matched only unavailable work: %s; use /resume <task_id> to reopen it", strings.Join(refAttach.candidateTaskHints, "; "))
-		}
-		return nil, taskAttach{}, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
+		// No pending run anywhere: the cue has nothing to continue, so the
+		// message is ordinary new work (§5.3 step 8) — the spine tail carries
+		// any conversational context it referred to.
 	}
-	// Pre-label guess: reuse the person's current OPEN label. Display-only —
-	// the workspace still follows the request (workspaceForTask) and the
-	// post-run labeler corrects a wrong guess.
-	if current, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil &&
-		current != nil && current.IsVisible() && !current.IsInbox() && !terminalTaskStatus(current.Status) {
-		attach := newTaskAttach(taskAttachCurrentPreLabel, inputWorkKey, false, true)
-		attach.matchedSurfaceForms = refAttach.matchedSurfaceForms
-		attach.candidateTaskIDs = refAttach.candidateTaskIDs
-		attach.candidateTaskHints = refAttach.candidateTaskHints
-		return current, attach, nil
-	}
-	// No open label → new placeholder. An explicit request workspace wins;
-	// otherwise the person's current workspace seeds the task scope.
-	task, attach, err := c.createPreLabelTask(ctx, identity, req)
+	// §5.3 step 8: every ordinary message owns a fresh root task. Wrong-looking
+	// grouping is a display concern only — context comes from the spine and the
+	// parent-run slice, and the default /tasks view ranks one-shot Q&A last.
+	task, attach, err := c.createRootTask(ctx, identity, req)
 	attach.workKey = inputWorkKey
-	attach.matchedSurfaceForms = refAttach.matchedSurfaceForms
-	attach.candidateTaskIDs = refAttach.candidateTaskIDs
-	attach.candidateTaskHints = refAttach.candidateTaskHints
 	return task, attach, err
 }
 
-// createPreLabelTask creates the display placeholder for genuinely new work.
-// An explicit request workspace wins; otherwise the person's current
-// workspace seeds the label without making it an execution boundary.
-func (c *RunCoordinator) createPreLabelTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (*control.Task, taskAttach, error) {
+// continuationCandidatesError carries the deterministic cross-task candidate
+// set for an ambiguous person-typed continuation. runMessage renders it; it is
+// a control-flow signal, not a failure.
+type continuationCandidatesError struct {
+	runs []control.Run
+}
+
+func (e *continuationCandidatesError) Error() string {
+	return fmt.Sprintf("continuation matches %d unfinished runs", len(e.runs))
+}
+
+// resolveContinuationByRuns implements the §5.3 candidate ladder for a
+// deliberate continuation cue. It returns (nil, zero, nil) when the person has
+// no pending run at all — the caller then treats the message as new work.
+func (c *RunCoordinator) resolveContinuationByRuns(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, inputWorkKey string) (*control.Task, taskAttach, error) {
+	store := c.srv.Control
+	candidates, err := store.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, req.Channel, 5)
+	if err != nil {
+		return nil, taskAttach{}, err
+	}
+	if len(candidates) == 0 {
+		candidates, err = store.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 5)
+		if err != nil {
+			return nil, taskAttach{}, err
+		}
+	}
+	switch len(candidates) {
+	case 0:
+		return nil, taskAttach{}, nil
+	case 1:
+		parent := candidates[0]
+		task, err := store.GetTask(ctx, identity.TenantID, parent.TaskID)
+		if err != nil || task == nil {
+			return nil, taskAttach{}, err
+		}
+		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
+		attach := newTaskAttach(taskAttachContinuation, inputWorkKey, false, false)
+		attach.parentRunID = parent.ID
+		return task, attach, err
+	default:
+		if !isUserOriginTurn(ctx, req) {
+			// A daemon-originated text (cron output that happens to contain a
+			// cue word) is never asked to disambiguate; it proceeds as new work.
+			return nil, taskAttach{}, nil
+		}
+		return nil, taskAttach{}, &continuationCandidatesError{runs: candidates}
+	}
+}
+
+// createRootTask creates the fresh root task every ordinary message owns
+// (simplification P2). An explicit request workspace wins; otherwise the
+// person's current workspace seeds the label without making it an execution
+// boundary.
+func (c *RunCoordinator) createRootTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (*control.Task, taskAttach, error) {
 	store := c.srv.Control
 	workspaceID := req.WorkspaceID
 	if workspaceID == "" {
@@ -687,11 +800,14 @@ func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *contro
 		for {
 			select {
 			case <-waitCtx.Done():
-				// The waiter is gone (timeout): a row left 'pending' would keep
-				// intercepting the next free-text message as an answer to a
-				// question nobody is waiting on. Expire it; the orphan sweep is
-				// the backstop for waiters that die without reaching this line.
-				_ = store.ExpireClarifyRequest(context.WithoutCancel(waitCtx), identity.TenantID, clarify.ID, "waiter gone: "+waitCtx.Err().Error())
+				// A planned gateway shutdown parks the origin run as interrupted.
+				// Preserve its question: the next endpoint answer creates an exact
+				// child continuation through ClarifyID. A timeout or ordinary
+				// cancellation is terminal for this waiter and must expire the row
+				// so it cannot intercept an unrelated later message.
+				if !errors.Is(context.Cause(waitCtx), errGatewayShutdown) {
+					_ = store.ExpireClarifyRequest(context.WithoutCancel(waitCtx), identity.TenantID, clarify.ID, "waiter gone: "+waitCtx.Err().Error())
+				}
 				return clarifyFallbackSentinel
 			case <-ticker.C:
 				current, err := store.GetClarifyRequest(waitCtx, identity.TenantID, clarify.ID)

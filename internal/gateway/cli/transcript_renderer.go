@@ -7,6 +7,7 @@ import (
 
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/ui/components"
 	uitheme "selfmind/internal/ui/theme"
 
@@ -24,7 +25,8 @@ type transcriptStyles struct {
 	markdown                                       components.MarkdownRenderer
 	startupBorder, startupBrand, startupLabel      lipgloss.Style
 	startupValue                                   lipgloss.Style
-	startupSubtle, startupCommand                  lipgloss.Style
+	startupDescription, startupSubtle              lipgloss.Style
+	startupCommand                                 lipgloss.Style
 	userBoundary, userLabel, userText              lipgloss.Style
 	currentMarker, finalBullet, narrationMarker    lipgloss.Style
 	toolEvidence, toolBulletRun                    lipgloss.Style
@@ -36,34 +38,35 @@ type transcriptStyles struct {
 
 func newTranscriptStyles(t uitheme.Theme) transcriptStyles {
 	return transcriptStyles{
-		markdown:        components.NewMarkdownRenderer(t),
-		startupBorder:   lipgloss.NewStyle().Foreground(t.Color(uitheme.BorderMuted)),
-		startupBrand:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Brand)).Bold(true),
-		startupLabel:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
-		startupValue:    lipgloss.NewStyle().Foreground(t.Color(uitheme.TextPrimary)),
-		startupSubtle:   lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
-		startupCommand:  lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
-		userBoundary:    lipgloss.NewStyle().Foreground(t.Color(uitheme.BorderMuted)),
-		userLabel:       lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
-		userText:        lipgloss.NewStyle(),
-		currentMarker:   lipgloss.NewStyle().Bold(true).Foreground(t.Color(uitheme.Accent)),
-		finalBullet:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
-		narrationMarker: lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
-		toolEvidence:    lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
-		toolBulletRun:   lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
-		toolBulletOK:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Success)),
-		toolBulletErr:   lipgloss.NewStyle().Foreground(t.Color(uitheme.Error)),
-		toolBulletDim:   lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
-		toolAction:      lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
-		diffAdd:         lipgloss.NewStyle().Foreground(t.Color(uitheme.Success)),
-		diffDel:         lipgloss.NewStyle().Foreground(t.Color(uitheme.Error)),
-		diffContext:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
-		planDone:        lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)).Strikethrough(true),
-		planActive:      lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
-		planPending:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
-		planExplain:     lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)).Italic(true),
-		planHeader:      lipgloss.NewStyle().Bold(true),
-		planSecondary:   lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+		markdown:           components.NewMarkdownRenderer(t),
+		startupBorder:      lipgloss.NewStyle().Foreground(t.Color(uitheme.BorderMuted)),
+		startupBrand:       lipgloss.NewStyle().Foreground(t.Color(uitheme.Brand)).Bold(true),
+		startupLabel:       lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		startupValue:       lipgloss.NewStyle().Foreground(t.Color(uitheme.TextPrimary)),
+		startupDescription: lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		startupSubtle:      lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+		startupCommand:     lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
+		userBoundary:       lipgloss.NewStyle().Foreground(t.Color(uitheme.BorderMuted)),
+		userLabel:          lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		userText:           lipgloss.NewStyle(),
+		currentMarker:      lipgloss.NewStyle().Bold(true).Foreground(t.Color(uitheme.Accent)),
+		finalBullet:        lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+		narrationMarker:    lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)),
+		toolEvidence:       lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		toolBulletRun:      lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		toolBulletOK:       lipgloss.NewStyle().Foreground(t.Color(uitheme.Success)),
+		toolBulletErr:      lipgloss.NewStyle().Foreground(t.Color(uitheme.Error)),
+		toolBulletDim:      lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
+		toolAction:         lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		diffAdd:            lipgloss.NewStyle().Foreground(t.Color(uitheme.Success)),
+		diffDel:            lipgloss.NewStyle().Foreground(t.Color(uitheme.Error)),
+		diffContext:        lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		planDone:           lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)).Strikethrough(true),
+		planActive:         lipgloss.NewStyle().Foreground(t.Color(uitheme.Accent)).Bold(true),
+		planPending:        lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)),
+		planExplain:        lipgloss.NewStyle().Foreground(t.Color(uitheme.TextSecondary)).Italic(true),
+		planHeader:         lipgloss.NewStyle().Bold(true),
+		planSecondary:      lipgloss.NewStyle().Foreground(t.Color(uitheme.TextDecorative)),
 	}
 }
 
@@ -131,18 +134,51 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	if version == "" {
 		version = "dev"
 	}
-	mainValue := styles.startupValue.Render(modelName)
-	if providerName != "" && providerName != modelName && providerName != "active" {
-		mainValue += styles.startupSubtle.Render(" · " + providerName)
-	}
+	mainValue := renderStartupModelValue(modelName, providerName, m.modelManagerStatus.PrimaryReasoning, styles)
 
 	lines := []string{
 		styles.startupBrand.Render(">_ SelfMind") + styles.startupSubtle.Render("  "+version),
 		styles.startupBorder.Render(strings.Repeat("─", width)),
 	}
 	lines = append(lines, renderStartupDataLines("MAIN", mainValue, width, styles.startupCommand.Render("/model"), styles)...)
-	if background := strings.TrimSpace(m.backgroundModelName); background != "" {
-		lines = append(lines, renderStartupDataLines("BACKGROUND", styles.startupValue.Render(background), width, "", styles)...)
+	lines = append(lines, renderStartupDescriptionLines("Handles requests, planning, tool use, and final answers.", width, styles)...)
+	lines = append(lines, "")
+
+	backgroundValue := ""
+	backgroundStatusKnown := strings.TrimSpace(m.modelManagerStatus.ConfiguredBackground) != "" ||
+		strings.TrimSpace(m.modelManagerStatus.BackgroundProvider) != "" || strings.TrimSpace(m.modelManagerStatus.BackgroundModel) != ""
+	if backgroundStatusKnown && !m.modelManagerStatus.BackgroundEnabled {
+		backgroundValue = styles.startupValue.Render("disabled")
+	} else if m.modelManagerStatus.BackgroundProvider != "" || m.modelManagerStatus.BackgroundModel != "" {
+		backgroundValue = renderStartupModelValue(
+			m.modelManagerStatus.BackgroundModel,
+			m.modelManagerStatus.BackgroundProvider,
+			m.modelManagerStatus.BackgroundReasoning,
+			styles,
+		)
+	} else if background := strings.TrimSpace(m.backgroundModelName); background != "" {
+		backgroundValue = styles.startupValue.Render(background)
+	} else {
+		backgroundValue = styles.startupValue.Render("uses Main")
+	}
+	lines = append(lines, renderStartupDataLines("BACKGROUND", backgroundValue, width, "", styles)...)
+	lines = append(lines, renderStartupDescriptionLines("Default for maintenance and roles without an explicit override.", width, styles)...)
+	lines = append(lines, "")
+
+	roleLabel := "ROLES"
+	for _, route := range modelchange.ManagedRoleRoutes() {
+		role, ok := m.modelManagerStatus.RoleOverrides[string(route)]
+		if !ok || (strings.TrimSpace(role.Provider) == "" && strings.TrimSpace(role.Model) == "") {
+			continue
+		}
+		roleValue := styles.startupValue.Render(string(route)) + styles.startupSubtle.Render(" · ") +
+			renderStartupModelValue(role.Model, role.Provider, role.Reasoning, styles)
+		lines = append(lines, renderStartupDataLines(roleLabel, roleValue, width, "", styles)...)
+		lines = append(lines, renderStartupDescriptionLines(startupRoleDescription(string(route)), width, styles)...)
+		roleLabel = ""
+	}
+	if roleLabel == "" {
+		lines = append(lines, "")
 	}
 	workspaceValue := currentWorkingDir()
 	if strings.TrimSpace(m.workspaceOverridePath) != "" {
@@ -166,6 +202,46 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		)
 	}
 	return lines
+}
+
+func renderStartupModelValue(model, provider, reasoning string, styles transcriptStyles) string {
+	model = strings.TrimSpace(model)
+	provider = strings.TrimSpace(provider)
+	reasoning = strings.TrimSpace(reasoning)
+	if model == "" {
+		model = provider
+		provider = ""
+	}
+	if model == "" {
+		model = "active"
+	}
+	parts := []string{styles.startupValue.Render(model)}
+	if provider != "" && !strings.EqualFold(provider, model) && !strings.EqualFold(provider, "active") {
+		parts = append(parts, styles.startupValue.Render(provider))
+	}
+	if reasoning != "" && !strings.EqualFold(reasoning, "auto") {
+		parts = append(parts, styles.startupValue.Render(reasoning))
+	}
+	return strings.Join(parts, styles.startupSubtle.Render(" · "))
+}
+
+func startupRoleDescription(role string) string {
+	switch strings.TrimSpace(role) {
+	case "fast_classifier":
+		return "Makes fast, bounded decisions for approval triage."
+	case "memory_extract":
+		return "Extracts and consolidates durable user preferences."
+	case "background_review":
+		return "Reviews completed work and supports maintenance fallback."
+	case "skill_curator":
+		return "Creates or repairs Skills from verified reusable evidence."
+	case "semantic_recall":
+		return "Expands recall queries to find relevant memory and work history."
+	case "summarizer":
+		return "Compacts long context while preserving decisions and unresolved work."
+	default:
+		return ""
+	}
 }
 
 func renderUserMessageWithStyles(content string, width int, styles transcriptStyles) string {
@@ -224,6 +300,27 @@ func renderStartupDataLines(label, value string, width int, suffix string, style
 		lines = append(lines, indent+strings.Repeat(" ", max(0, valueWidth-suffixWidth))+suffix)
 	}
 	return lines
+}
+
+func renderStartupDescriptionLines(description string, width int, styles transcriptStyles) []string {
+	const labelWidth = 12
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return nil
+	}
+	if width <= labelWidth {
+		wrapped := strings.Split(wrapText(description, max(1, width)), "\n")
+		for i := range wrapped {
+			wrapped[i] = styles.startupDescription.Render(wrapped[i])
+		}
+		return wrapped
+	}
+	indent := strings.Repeat(" ", labelWidth)
+	wrapped := strings.Split(wrapText(description, width-labelWidth), "\n")
+	for i := range wrapped {
+		wrapped[i] = indent + styles.startupDescription.Render(wrapped[i])
+	}
+	return wrapped
 }
 
 func renderAssistantStreamPreviewWithStyles(content string, width int, phase llm.AssistantPhase, styles transcriptStyles) string {

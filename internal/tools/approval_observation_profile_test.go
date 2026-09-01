@@ -50,6 +50,17 @@ func TestHashBoundObservationScriptProfile(t *testing.T) {
 	}
 }
 
+func TestAWSCodeBuildProjectLookupIsCredentialSafeObservation(t *testing.T) {
+	args := map[string]interface{}{
+		"_tool_name":         "terminal",
+		"command":            "aws --region us-east-1 codebuild batch-get-projects --names api www",
+		credentialReadArgKey: true,
+	}
+	if !observationOnlyExec("terminal", args) {
+		t.Fatal("aws codebuild batch-get-projects should be a proven read-only observation")
+	}
+}
+
 func TestObservationScriptProfileRequiresTrustedWorkspaceAndDeclaredEnvironment(t *testing.T) {
 	root := t.TempDir()
 	script := filepath.Join(root, "inspect.sh")

@@ -613,6 +613,19 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 		if result.ErrorCode != "" {
 			payload["error_code"] = result.ErrorCode
 		}
+		if result.FailurePhase != "" {
+			payload["failure_phase"] = result.FailurePhase
+		}
+		if result.Retryability != "" {
+			payload["retryability"] = result.Retryability
+		}
+		if result.EffectState != "" {
+			payload["effect_state"] = result.EffectState
+			payload["state_changed"] = result.StateChanged
+		}
+		if len(result.Alternatives) > 0 {
+			payload["alternatives"] = append([]string(nil), result.Alternatives...)
+		}
 		if exitCode, ok := toolFailureExitCode(err.Error()); ok {
 			payload["exit_code"] = exitCode
 		}
@@ -840,6 +853,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 	}
 	ctx = llm.WithModelContext(ctx, modelCtx)
+	if RecoveryPolicyFromContext(ctx) == nil {
+		ctx = WithRecoveryPolicy(ctx, NewStrategyRecoveryPolicy())
+	}
 
 	strategy, ok := taskStrategyFromContext(ctx)
 	if !ok {
@@ -1962,6 +1978,28 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
 		selectorProvided = true
 		rt := runtime
+		// Recall rides the bundle's own budget (ComposerRecallChars), never the
+		// task slice budget: rendered inside TaskRuntimeContext it competed with
+		// handoff/events inside TaskChars and events — last in render order —
+		// were the first casualty of truncation. The context VALUE keeps its
+		// slices (overlap telemetry reads it); only this bundle copy moves them.
+		if len(rt.RecallSlices) > 0 {
+			for _, slice := range rt.RecallSlices {
+				summary := strings.TrimSpace(slice.Title)
+				if excerpt := strings.TrimSpace(slice.Excerpt); excerpt != "" {
+					if summary != "" {
+						summary += ": "
+					}
+					summary += excerpt
+				}
+				bundle.Recall = append(bundle.Recall, RuntimeMemoryContext{
+					Source:  slice.Source,
+					ID:      slice.Ref,
+					Summary: summary,
+				})
+			}
+			rt.RecallSlices = nil
+		}
 		bundle.Task = &rt
 		bundle.SelectionNotes = append(bundle.SelectionNotes, "active task/run slice selected from control event log")
 	}
@@ -2639,19 +2677,32 @@ func (a *Agent) loadMemoryForPrompt(ctx context.Context, tenantID string) (pinne
 }
 
 func recalledCanonicalIDs(ctx context.Context) map[string]struct{} {
-	var slices []RecallSlice
-	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok && bundle.Task != nil {
-		slices = bundle.Task.RecallSlices
-	} else if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
-		slices = runtime.RecallSlices
-	}
 	ids := make(map[string]struct{})
-	for _, slice := range slices {
-		if slice.Source != "canonical" {
-			continue
+	add := func(source, ref string) {
+		if source != "canonical" {
+			return
 		}
-		if id := strings.TrimSpace(slice.Ref); id != "" {
+		if id := strings.TrimSpace(ref); id != "" {
 			ids[id] = struct{}{}
+		}
+	}
+	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok && (bundle.Task != nil || len(bundle.Recall) > 0) {
+		if bundle.Task != nil {
+			for _, slice := range bundle.Task.RecallSlices {
+				add(slice.Source, slice.Ref)
+			}
+		}
+		// The bundle assembly moves selector recall slices into bundle.Recall
+		// (ID carries the slice ref); count those too or the unconditional
+		// memory block would re-serve rows recall already delivered.
+		for _, item := range bundle.Recall {
+			add(item.Source, item.ID)
+		}
+		return ids
+	}
+	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
+		for _, slice := range runtime.RecallSlices {
+			add(slice.Source, slice.Ref)
 		}
 	}
 	return ids

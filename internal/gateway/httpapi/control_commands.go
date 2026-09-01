@@ -29,7 +29,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	// logic, so a blocking run gets its answer instead of the reply being queued
 	// or steered. Runs after the bare y/n approval leg (which wins for y/n-looking
 	// input) and before the "/" gate (slash commands are never answers).
-	if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, trimmed, req.Channel); handled {
+	if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, req.ClarifyID, trimmed, req.Channel); handled {
 		return true, reply, err
 	}
 	// Command-shaped tokens only: a "/"-leading file path ("/mnt/c/pic.png …")
@@ -48,6 +48,12 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		return true, reply, err
 	case lower == "/id":
 		return true, formatIdentity(identity), nil
+	case lower == "/remember" || strings.HasPrefix(lower, "/remember "):
+		reply, err := d.handleRememberCommand(ctx, identity, strings.TrimSpace(trimmed[len("/remember"):]))
+		return true, reply, err
+	case lower == "/forget" || strings.HasPrefix(lower, "/forget "):
+		reply, err := d.handleForgetCommand(ctx, identity, strings.TrimSpace(trimmed[len("/forget"):]))
+		return true, reply, err
 	case lower == "/stop":
 		active := d.coordinator().stopActive(identity.PersonID)
 		if active == nil {
@@ -109,18 +115,53 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "", err
 		}
 		return true, fmt.Sprintf("Created task: %s (%s)", task.Title, task.ID), nil
+	case lower == "/choose" || strings.HasPrefix(lower, "/choose "):
+		// ProcessMessage handles /choose before this generic switch so it can
+		// restore and continue the original request. Reaching this branch means
+		// the invocation did not satisfy that typed contract.
+		return true, "Usage: /choose <choice_id> <number>", nil
 	case lower == "/task status" || lower == "/status":
 		reply, err := d.statusReply(ctx, identity)
 		return true, reply, err
 	case strings.HasPrefix(lower, "/resume "):
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
-			return true, "Usage: /resume <n|task_id>", nil
+			return true, "Usage: /resume <n|task_id|run_id>", nil
+		}
+		if strings.HasPrefix(strings.ToLower(parts[1]), "run_") {
+			run, userErr, err := d.resolveUnresolvedRunReference(ctx, identity, parts[1])
+			if err != nil {
+				return true, "", err
+			}
+			if userErr != "" {
+				return true, userErr, nil
+			}
+			task, err := d.Control.GetTask(ctx, identity.TenantID, run.TaskID)
+			if err != nil || task == nil || task.PersonID != identity.PersonID {
+				if err != nil {
+					return true, "", err
+				}
+				return true, "Run not found or no longer resumable.", nil
+			}
+			// Write the run pin first. A crash before the task pin is harmless;
+			// writing only the task pin could otherwise silently lose the precise
+			// choice and fall back to task-level ambiguity.
+			if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, run.ID); err != nil {
+				return true, "", err
+			}
+			if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, task.ID); err != nil {
+				_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, "")
+				return true, "", err
+			}
+			if err := d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
+				return true, "", err
+			}
+			return true, fmt.Sprintf("Selected run %s under task %s. Your next message will continue that exact run.", shortRunID(run.ID), shortTaskID(task.ID)), nil
 		}
 		// Same reference grammar as /task: list ordinal (/tasks card order),
 		// full id, or the short card-displayed prefix — the id the /tasks card
 		// shows MUST round-trip through /resume.
-		task, userErr, err := d.resolveTaskReference(ctx, identity, parts[1])
+		task, userErr, err := d.resolveTaskReference(ctx, identity, parts[1], req.Channel)
 		if err != nil {
 			return true, "", err
 		}
@@ -135,6 +176,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// continuation cue. Consumed by resolveTask; after that, plain new
 		// messages fall back to the pre-label guess again. /resume of an
 		// ARCHIVED label deliberately reopens it (resolveTask honors the pin).
+		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, "")
 		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, task.ID)
 		// State the workspace binding explicitly: the client's status bar keeps
 		// showing its launch cwd until the next agent turn, so without this
@@ -143,14 +185,14 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/task" || strings.HasPrefix(lower, "/task "):
 		// /task <id> detail + subcommands (runs|rename|archive). "/task status"
 		// is an alias of /status and is claimed by the case above.
-		reply, err := d.taskCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
+		reply, err := d.taskCommandReply(ctx, identity, strings.Fields(trimmed)[1:], req.Channel)
 		return true, reply, err
 	case lower == "/tasks" || strings.HasPrefix(lower, "/tasks ") || lower == "tasks" || strings.Contains(lower, "任务列表"):
 		variant := ""
 		if strings.HasPrefix(lower, "/tasks ") {
 			variant = strings.TrimSpace(strings.TrimPrefix(lower, "/tasks"))
 		}
-		reply, err := d.tasksOverviewReply(ctx, identity, variant)
+		reply, err := d.tasksOverviewReply(ctx, identity, variant, req.Channel)
 		return true, reply, err
 	case lower == "/queue" || strings.HasPrefix(lower, "/queue "):
 		arg := strings.TrimSpace(trimmed[len("/queue"):])

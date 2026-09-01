@@ -61,7 +61,7 @@ func TestDispatchPartitionScoping(t *testing.T) {
 	agent := kernel.NewAgent(memory.NewMemoryManager(nil), disp, nil, "test", 1, 1, nil)
 	daemon := &Server{
 		Control:         store,
-		Gateway:         router.NewGateway(nil, nil, agent, nil),
+		Gateway:         router.NewGateway(agent, nil),
 		DefaultTenantID: "default",
 	}
 
@@ -123,7 +123,7 @@ func TestDispatchSkillManageUsesDaemonConfiguredStorage(t *testing.T) {
 	disp.InjectMiddleware(tools.SkillStorageMiddleware(storage))
 	agent := kernel.NewAgent(memory.NewMemoryManager(nil), disp, nil, "test", 1, 1, nil)
 	daemon := &Server{
-		Control: store, Gateway: router.NewGateway(nil, nil, agent, nil),
+		Control: store, Gateway: router.NewGateway(agent, nil),
 		DefaultTenantID: "default", SkillStorage: storage,
 	}
 	body, _ := json.Marshal(api.DispatchRequest{
@@ -180,7 +180,7 @@ func TestDispatchSkillManageMutationsUseAuthenticatedManagementScope(t *testing.
 	disp := tools.NewDispatcherWithRegistry(reg)
 	agent := kernel.NewAgent(memory.NewMemoryManager(nil), disp, nil, "test", 1, 1, nil)
 	daemon := &Server{
-		Control: store, Gateway: router.NewGateway(nil, nil, agent, nil), DefaultTenantID: "default",
+		Control: store, Gateway: router.NewGateway(agent, nil), DefaultTenantID: "default",
 	}
 	dispatch := func(action string, args map[string]interface{}) string {
 		t.Helper()

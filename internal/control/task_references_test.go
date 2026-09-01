@@ -29,13 +29,27 @@ func TestTaskReferenceEvidencePromotesAndConflictAbstains(t *testing.T) {
 		t.Fatalf("first evidence = %+v, %v", ref, err)
 	}
 	write.RunID = "run-2"
+	// Run support alone never activates a reference (simplification P2): it
+	// stays a candidate search hint with its support recorded.
 	ref, err = store.UpsertTaskReference(ctx, write)
-	if err != nil || ref.Status != TaskReferenceActive || ref.SupportCount != 2 {
+	if err != nil || ref.Status != TaskReferenceCandidate || ref.SupportCount != 2 {
 		t.Fatalf("second evidence = %+v, %v", ref, err)
 	}
 	matches, err := store.FindTaskReferenceMatches(ctx, identity.TenantID, identity.PersonID, "继续客户门户升级", 10)
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("unconfirmed candidate must not match, matches=%+v err=%v", matches, err)
+	}
+	// An explicit user confirmation is the only activation path.
+	if _, err := store.UpsertTaskReference(ctx, TaskReferenceWrite{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: first.ID,
+		Class: TaskReferenceLiteral, Value: "客户门户升级", Status: TaskReferenceActive,
+		UserConfirmed: true, Provenance: "user_control", SourceRef: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	matches, err = store.FindTaskReferenceMatches(ctx, identity.TenantID, identity.PersonID, "继续客户门户升级", 10)
 	if err != nil || len(matches) != 1 || matches[0].Task.ID != first.ID {
-		t.Fatalf("active matches = %+v, %v", matches, err)
+		t.Fatalf("confirmed reference must match = %+v, %v", matches, err)
 	}
 
 	second, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Second work"})

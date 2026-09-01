@@ -1,0 +1,44 @@
+id: timeline_run_candidates
+title: "ambiguous continuation returns deterministic run candidates without a model"
+suite: timeline
+# Simplification P2 acceptance (docs/task-run-memory-simplification.zh-CN.md
+# §13): two unfinished runs and a vague "继续" must produce a deterministic,
+# model-free candidate list — no run starts, no model is consulted, and the
+# person picks by restating or /resume. Fully deterministic: no cassette.
+model_required: false
+workspace: isolated
+channel: cli
+
+setup:
+  task:
+    title: "gcp 生产发布"
+    parked_runs:
+      - input: "gcp 生产发布，先不要执行，等我确认"
+        status: waiting_user
+      - input: "开始执行"
+        status: interrupted
+
+turns:
+  - input: "继续"
+
+expect:
+  status: waiting_user
+  http_status: 200
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains:
+    - "I found several possible continuations."
+    - "Reply with a number, or use /choose"
+  must_not_contain:
+    - "<tool>"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+
+assert_state:
+  - on: events
+    type: continuation.candidates
+    count_gte: 1

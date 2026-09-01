@@ -1,0 +1,25 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "",
+    "ReasoningContent": "",
+    "Phase": "",
+    "ToolCalls": [
+      {
+        "ID": "call_00_8HxEqNxsmvrAe6BiCZu24065",
+        "Function": "resolve_continuity",
+        "Args": "{\"action\": \"observe\", \"certainty\": \"clear\", \"target_task_id\": \"{{SELFMIND_VCR_TASK_1}}\", \"target_run_id\": \"{{SELFMIND_VCR_RUN_1}}\", \"reason\": \"The user is asking about the progress/status of the RUQX-767 release task (\\\"进展怎么样\\\" = \\\"how is the progress\\\"). This is a status/progress question, which is an OBSERVE action even though the run is resumable. The user wants to know what happened, not to continue or steer the work.\", \"evidence\": [\"user asks about progress of RUQX-767 release task\", \"status/progress questions are observe type\", \"run is interrupted but exists with task matching RUQX-767 release\"], \"observe_kind\": \"progress\", \"delivery_action\": \"keep\", \"alternative_run_ids\": []}"
+      }
+    ],
+    "Usage": {
+      "input_tokens": 765,
+      "output_tokens": 333,
+      "cache_read_input_tokens": 640,
+      "cache_miss_input_tokens": 125,
+      "cache_creation_input_tokens": 0,
+      "reasoning_output_tokens": 0,
+      "cache_usage_reported": true
+    },
+    "FinishReason": "tool_calls"
+  }
+}

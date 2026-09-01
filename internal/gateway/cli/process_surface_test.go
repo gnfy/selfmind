@@ -43,7 +43,7 @@ func TestProcessSurfaceGroupsToolsUnderActionNarration(t *testing.T) {
 }
 
 func TestTUIRoutesNarrationAndToolsThroughProcessSurface(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 24
 
@@ -73,7 +73,7 @@ func TestTUIRoutesNarrationAndToolsThroughProcessSurface(t *testing.T) {
 }
 
 func TestTUIToolCompletionPreservesProcessGroup(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 24
 
@@ -132,7 +132,7 @@ func TestProcessSurfaceUnknownPhasePreviewResolvesAtBoundary(t *testing.T) {
 }
 
 func TestTUIUnknownPhasePreviewBecomesOneFinalAnswer(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 24
 
@@ -205,7 +205,7 @@ func TestProcessSurfaceBoundsFrameWithoutLosingActionAnchor(t *testing.T) {
 }
 
 func TestTUIProcessBudgetKeepsComposerAndStatusVisible(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 12
 	model.activePlanJSON = `{"plan":[{"step":"Inspect configuration","status":"in_progress"},{"step":"Verify deployment","status":"pending"}]}`

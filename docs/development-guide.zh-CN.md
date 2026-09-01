@@ -339,7 +339,9 @@ dispatcher := tools.NewDispatcherWithRegistry(registry)
 
 ### Agent 并发
 
-一个 `Agent` 实例目前用 `runMu` 串行执行，因为它只拥有一个 `EventChannel`。如果 gateway 后续需要真正并行的 active runs，应为每个 run 创建独立 agent，或先引入 per-run event sink，再移除这个锁。
+一个 `Agent` 实例仍用 `runMu` 串行执行，但 gateway 事件流不再改写共享的 `Agent.EventChannel`。Gateway 路径必须用 `kernel.WithEventChannel(ctx, ch)` 安装 per-run event sink，再通过 `router.RunAgentWithEvents` 消费产生的流事件。
+
+不要在 gateway、IM 或未来 Web 代码里临时替换 per-run event sink。需要真正并行 active runs 的 gateway 路径应为每个 run 构建独立 agent 实例，或在保持 per-run event sink 契约的前提下引入 worker pool。
 
 `syncTurn` 使用有界后台队列，不再每轮 assistant 响应都创建无上限 goroutine。高频对话下宁愿丢弃旧的 sync 快照，也不要堆积大量 memory-sync worker。
 

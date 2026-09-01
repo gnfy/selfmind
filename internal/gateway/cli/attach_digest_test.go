@@ -17,7 +17,7 @@ import (
 )
 
 func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	c.SetClientMode(true)
 	c.SetStartupDigest(&api.DigestResponse{
 		FinishedTasks:  []api.DigestTask{{ID: "t1", Title: "Ship the report", Status: "completed"}, {ID: "t2", Title: "Fix the build", Status: "done"}},
@@ -89,7 +89,7 @@ func TestStartupDigestLabelsOlderUnresolvedWorkWithoutAwayClaim(t *testing.T) {
 }
 
 func TestStartupDigestEmptyRendersNothing(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	c.SetClientMode(true)
 	c.SetStartupDigest(&api.DigestResponse{SinceUnix: 1751600000})
 	model := c.model
@@ -107,7 +107,7 @@ func TestStartupDigestEmptyRendersNothing(t *testing.T) {
 // announce the attach, (2) flip the running-state flags so the composer
 // behaves as if a run is active, and (3) start the run watcher.
 func TestStartupDigestAttachesToActiveRun(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	c.SetClientMode(true)
 	watcherStarted := make(chan struct{})
 	var watchedRunID string
@@ -168,7 +168,7 @@ func TestStartupDigestAttachesToActiveRun(t *testing.T) {
 }
 
 func TestAttachedRunDoneReportsOutcome(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	model := c.model
 	model.watchingRun = true
 	model.watchedRunID = "r9"
@@ -185,7 +185,7 @@ func TestAttachedRunDoneReportsOutcome(t *testing.T) {
 }
 
 func TestStaleAttachedRunDoneDoesNotStopCurrentWatcher(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	model := c.model
 	model.watchingRun = true
 	model.watchedRunID = "r2"

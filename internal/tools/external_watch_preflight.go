@@ -31,6 +31,7 @@ import (
 const preflightMaxTimeout = 120 * time.Second
 
 type externalWatchPreflightPatterns struct {
+	Adapter         string
 	Success         string
 	Failure         string
 	Target          string
@@ -123,6 +124,20 @@ func preflightExternalWatchPatterns(
 		return "", fmt.Errorf(
 			"watch not registered: its first check output shows a check-definition failure. Detail: %s\n%s",
 			truncatePreflight(output), errorClassHints[class])
+	}
+	if strings.TrimSpace(patterns.Adapter) != "" {
+		state, err := ClassifyExternalWatchObservation(patterns.Adapter, output)
+		if err != nil {
+			return "", fmt.Errorf("watch not registered: typed observation adapter rejected the first result: %w", err)
+		}
+		switch state {
+		case ExternalWatchObservationSucceeded:
+			return preflightObservedSuccess(output), nil
+		case ExternalWatchObservationFailed:
+			return "", preflightObservedFailure(output)
+		case ExternalWatchObservationPending:
+			return "", nil
+		}
 	}
 
 	// V2 terminal failures are authoritative and evaluated before success or a

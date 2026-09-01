@@ -72,7 +72,7 @@ func TestReadToolTargetIsVisuallySubordinateToActionNarration(t *testing.T) {
 }
 
 func TestFinalizeLiveStreamStoresAssistantPhase(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.commitLiveStream("I will inspect it.")
 	if !model.finalizeLiveStream("", llm.AssistantPhaseCommentary) {
 		t.Fatal("expected live stream to finalize")
@@ -87,7 +87,7 @@ func TestFinalizeLiveStreamStoresAssistantPhase(t *testing.T) {
 }
 
 func TestStreamPhaseChangeFinalizesPendingCommentary(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.updateInner(MsgStream{Content: "I will inspect it.", Phase: llm.AssistantPhaseCommentary})
 	if preview := strings.TrimSpace(ansi.Strip(model.renderActiveBlock(80))); preview != "› I will inspect it." {
 		t.Fatalf("commentary preview = %q", preview)

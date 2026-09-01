@@ -11,7 +11,7 @@ import (
 )
 
 func TestTokenEventUpdatesRunTokensMidRun(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.totalTokens = 1000
 
 	updated, _ := model.Update(MsgTokens{Run: 250})

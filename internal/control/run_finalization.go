@@ -32,15 +32,6 @@ type RunFinalization struct {
 	AnalyzerVersion    int
 	MaintenancePayload string
 	Event              Event
-	ResolvedBlockerIDs []string
-	// PreserveTaskCard keeps a weakly attached run from rewriting an existing
-	// task's stable summary and next steps. The run, handoff, events, and
-	// maintenance proposal are still materialized in full.
-	PreserveTaskCard bool
-	// PreservedTaskStatus is the task lifecycle observed before a weak
-	// pre-label run started. Weak attachment is display provenance, not
-	// authority to close or park an established task before post-run labeling.
-	PreservedTaskStatus string
 	// EffectKey identifies one logical side effect across retry runs. Ordinary
 	// turns leave it empty; durable watcher finalization uses its stable
 	// watch+verdict-revision key.
@@ -104,10 +95,10 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var personID, originalTaskStatus string
+	var personID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT person_id, status FROM tasks WHERE tenant_id = ? AND id = ?`, tenant, input.TaskID,
-	).Scan(&personID, &originalTaskStatus); err != nil {
+		`SELECT person_id FROM tasks WHERE tenant_id = ? AND id = ?`, tenant, input.TaskID,
+	).Scan(&personID); err != nil {
 		return nil, fmt.Errorf("load finalization task: %w", err)
 	}
 	if input.Identity.PersonID != "" && input.Identity.PersonID != personID {
@@ -127,15 +118,6 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 			duplicateEffect = true
 		}
 	}
-	if !duplicateEffect {
-		if err := resolveTaskBlockersTx(ctx, tx, tenant, input.TaskID, input.RunID, input.ResolvedBlockerIDs, now); err != nil {
-			return nil, fmt.Errorf("resolve task blockers: %w", err)
-		}
-		if err := ensureRunBlockerTx(ctx, tx, tenant, personID, input.TaskID, input.RunID,
-			input.TaskStatus, input.Summary, input.NextSteps, now); err != nil {
-			return nil, fmt.Errorf("record task blocker: %w", err)
-		}
-	}
 
 	result, err := tx.ExecContext(ctx,
 		`UPDATE task_runs SET status = ?, finished_at = ?, heartbeat_at = ?
@@ -153,24 +135,23 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 
 	taskStatus := input.TaskStatus
 	if !duplicateEffect {
+		// Every finalization commits the DERIVED task status (simplification
+		// P2): the reducer over pending human input, live runs, watches, and
+		// open blockers is the single lifecycle authority. The old weak-label
+		// deferral (park the status until the post-run labeler said KEEP) is
+		// gone with the labeler routing itself.
 		taskStatus, err = resolveFinalTaskStatusTx(ctx, tx, tenant, input.TaskID, input.RunID, input.TaskStatus)
 		if err != nil {
 			return nil, fmt.Errorf("reduce task status: %w", err)
 		}
-		if input.PreserveTaskCard {
-			taskStatus = strings.TrimSpace(input.PreservedTaskStatus)
-			if taskStatus == "" {
-				taskStatus = originalTaskStatus
-			}
-		}
 		result, err = tx.ExecContext(ctx,
 			`UPDATE tasks SET status = ?,
-		 current_summary = CASE WHEN ? THEN current_summary ELSE COALESCE(NULLIF(?, ''), current_summary) END,
-		 next_steps_json = CASE WHEN ? THEN next_steps_json ELSE ? END,
+		 current_summary = COALESCE(NULLIF(?, ''), current_summary),
+		 next_steps_json = ?,
 		 active_run_id = CASE WHEN active_run_id = ? THEN '' ELSE active_run_id END,
 		 archived_at = CASE WHEN ? = 'archived' THEN COALESCE(archived_at, ?) ELSE NULL END,
 		 last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-			taskStatus, input.PreserveTaskCard, input.Summary, input.PreserveTaskCard, string(nextJSON), input.RunID,
+			taskStatus, input.Summary, string(nextJSON), input.RunID,
 			taskStatus, now.Unix(), now.Unix(), now.Unix(), tenant, input.TaskID)
 		if err != nil {
 			return nil, fmt.Errorf("update task: %w", err)
@@ -216,9 +197,9 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if !duplicateEffect {
 		_, err = tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO task_handoffs
-		 (id, task_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			"handoff_run_"+input.RunID, input.TaskID, input.Handoff.Summary, string(doneJSON),
+		 (id, task_id, run_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			"handoff_run_"+input.RunID, input.TaskID, input.RunID, input.Handoff.Summary, string(doneJSON),
 			string(handoffNextJSON), string(filesJSON), input.Handoff.TestStatus, string(risksJSON), now.Unix())
 		if err != nil {
 			return nil, fmt.Errorf("save handoff: %w", err)
@@ -405,6 +386,14 @@ func resolveFinalTaskStatusTx(
 	tx *sql.Tx,
 	tenantID, taskID, finishingRunID, proposed string,
 ) (string, error) {
+	// Explicit user lifecycle controls must win over derived wait evidence.
+	// Otherwise /cancel and /task archive could be immediately undone by the
+	// very pending approval, clarification, or run they are intended to close.
+	switch strings.ToLower(strings.TrimSpace(proposed)) {
+	case "cancelled", "archived":
+		return proposed, nil
+	}
+
 	hasRows := func(query string, args ...interface{}) (bool, error) {
 		var found int
 		if err := tx.QueryRowContext(ctx, query, args...).Scan(&found); err != nil {
@@ -475,14 +464,53 @@ func resolveFinalTaskStatusTx(
 		return "waiting_finalization", nil
 	}
 
-	blockerStatus, err := openTaskBlockerStatusTx(ctx, tx, tenantID, taskID)
+	waitStatus, err := unresolvedRunStatusTx(ctx, tx, tenantID, taskID)
 	if err != nil {
 		return "", err
 	}
-	if blockerStatus != "" {
-		return blockerStatus, nil
+	if waitStatus != "" {
+		return waitStatus, nil
 	}
 	return proposed, nil
+}
+
+// unresolvedRunStatusTx derives the task's generic wait state from its
+// UNCLAIMED resumable runs (simplification §10.3): a run parked in
+// waiting_user / verification_partial / blocked / interrupted that no child
+// has claimed keeps the label in that state, strongest first. The legacy
+// task_blockers rows lost this authority — runs themselves are the source of
+// truth, and claiming a parent releases its wait atomically.
+func unresolvedRunStatusTx(ctx context.Context, tx *sql.Tx, tenantID, taskID string) (string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT status FROM task_runs
+		WHERE tenant_id = ? AND task_id = ?
+		  AND status IN `+resumableRunStatusSQL+`
+		  AND COALESCE(resumed_by_run_id, '') = ''
+		  AND NOT EXISTS (
+		      SELECT 1 FROM task_runs child
+		       WHERE child.tenant_id = task_runs.tenant_id
+		         AND child.parent_run_id = task_runs.id)`,
+		tenantID, taskID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	seen := map[string]bool{}
+	for rows.Next() {
+		var status string
+		if err := rows.Scan(&status); err != nil {
+			return "", err
+		}
+		seen[status] = true
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	for _, status := range []string{"waiting_user", "verification_partial", "blocked", "interrupted"} {
+		if seen[status] {
+			return status, nil
+		}
+	}
+	return "", nil
 }
 
 func outcomeFromTerminalPayload(payload json.RawMessage) json.RawMessage {

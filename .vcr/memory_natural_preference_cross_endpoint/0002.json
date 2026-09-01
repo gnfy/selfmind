@@ -1,0 +1,19 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "{\"memory_decisions\": [{\"target\": \"user\", \"decision\": \"ADD\", \"content\": \"回答时先给结论，再给依据（长期偏好）\"}]}",
+    "ReasoningContent": "",
+    "Phase": "",
+    "ToolCalls": [],
+    "Usage": {
+      "input_tokens": 322,
+      "output_tokens": 38,
+      "cache_read_input_tokens": 0,
+      "cache_miss_input_tokens": 322,
+      "cache_creation_input_tokens": 0,
+      "reasoning_output_tokens": 0,
+      "cache_usage_reported": true
+    },
+    "FinishReason": "stop"
+  }
+}

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -41,10 +42,14 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 				"target_pattern":           {Type: "string", Description: "V2 desired handoff state, such as PENDING_APPROVAL; when set, both terminal patterns are required because an external system may skip this state"},
 				"terminal_success_pattern": {Type: "string", Description: "V2 terminal success state; required with target_pattern so a skipped target can still finish successfully"},
 				"terminal_failure_pattern": {Type: "string", Description: "V2 terminal failure state; required with target_pattern and evaluated before success and target"},
+				"observation_adapter":      {Type: "string", Description: "V3 typed observation adapter; status_json.v1 expects JSON with status pending, succeeded, or failed", Enum: []string{ExternalWatchAdapterStatusJSON}},
 				"cwd":                      {Type: "string", Description: "Working directory within the active workspace", Default: "."},
 				"interval_seconds":         {Type: "integer", Description: "Seconds between checks (5-300)", Default: 30},
 				"timeout_seconds":          {Type: "integer", Description: "Maximum total watch duration in seconds (60-86400)", Default: 7200},
 				"command_timeout_seconds":  {Type: "integer", Description: "Maximum duration of one check (1-120 seconds)", Default: 30},
+				"wait_group":               {Type: "string", Description: "Optional run-local key shared by 2-8 independent watchers"},
+				"wait_group_mode":          {Type: "string", Description: "Aggregate completion rule for a wait group", Enum: []string{control.ExternalWatchGroupAll, control.ExternalWatchGroupAny}, Default: control.ExternalWatchGroupAll},
+				"wait_group_size":          {Type: "integer", Description: "Exact number of watchers in the group (2-8)"},
 			},
 			Required: []string{"command"},
 		},
@@ -58,6 +63,25 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 		},
 	}
 	return t
+}
+
+// ExternalWatchStaticValidationMiddleware rejects watcher specifications that
+// cannot possibly register before approval is requested. It performs no
+// external observation and consumes no network or credential capability; the
+// bounded real preflight remains inside Execute, after approval.
+func ExternalWatchStaticValidationMiddleware() Middleware {
+	return func(next ToolExecutor) ToolExecutor {
+		return func(args map[string]interface{}) (string, error) {
+			toolName, _ := args["_tool_name"].(string)
+			if !strings.EqualFold(strings.TrimSpace(toolName), "watch_external") {
+				return next(args)
+			}
+			if err := validateExternalWatchStatic(args); err != nil {
+				return "", err
+			}
+			return next(args)
+		}
+	}
 }
 
 func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error) {
@@ -74,38 +98,18 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	targetPattern := strings.TrimSpace(stringArg(args, "target_pattern"))
 	terminalSuccessPattern := strings.TrimSpace(stringArg(args, "terminal_success_pattern"))
 	terminalFailurePattern := strings.TrimSpace(stringArg(args, "terminal_failure_pattern"))
+	observationAdapter := strings.TrimSpace(stringArg(args, "observation_adapter"))
 	specVersion := 1
-	if targetPattern != "" || terminalSuccessPattern != "" || terminalFailurePattern != "" {
+	if observationAdapter != "" {
+		specVersion = 3
+	} else if targetPattern != "" || terminalSuccessPattern != "" || terminalFailurePattern != "" {
 		specVersion = 2
 	}
 	if command == "" {
 		return "", fmt.Errorf("command is required")
 	}
-	if err := validateExternalWatchObservation(args); err != nil {
+	if err := validateExternalWatchStatic(args); err != nil {
 		return "", err
-	}
-	if specVersion == 1 && successPattern == "" {
-		return "", fmt.Errorf("success_pattern is required for watch spec v1")
-	}
-	if err := control.ValidateExternalWatchSpec(control.ExternalWatch{
-		SpecVersion:            specVersion,
-		SuccessPattern:         successPattern,
-		TargetPattern:          targetPattern,
-		TerminalSuccessPattern: terminalSuccessPattern,
-		TerminalFailurePattern: terminalFailurePattern,
-	}); err != nil {
-		return "", err
-	}
-	for name, pattern := range map[string]string{
-		"success_pattern": successPattern, "failure_pattern": failurePattern,
-		"target_pattern": targetPattern, "terminal_success_pattern": terminalSuccessPattern,
-		"terminal_failure_pattern": terminalFailurePattern,
-	} {
-		if pattern != "" {
-			if _, err := regexp.Compile(pattern); err != nil {
-				return "", fmt.Errorf("invalid %s: %w", name, err)
-			}
-		}
 	}
 	interval := clampInt(intArg(args, "interval_seconds", 30), 5, 300)
 	totalTimeout := clampInt(intArg(args, "timeout_seconds", 7200), 60, 86400)
@@ -119,6 +123,9 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	if description == "" {
 		description = "External operation"
 	}
+	waitGroupKey := strings.TrimSpace(stringArg(args, "wait_group"))
+	waitGroupMode := strings.TrimSpace(stringArg(args, "wait_group_mode"))
+	waitGroupSize := intArg(args, "wait_group_size", 0)
 
 	// Preflight: run the frozen check ONCE, here, with this run's material.
 	//
@@ -131,7 +138,9 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	// It adds no approval surface: registration already passed approval, and the
 	// same command was going to run unattended seconds later.
 	patterns := externalWatchPreflightPatterns{Success: successPattern, Failure: failurePattern}
-	if specVersion >= 2 {
+	if specVersion >= 3 {
+		patterns = externalWatchPreflightPatterns{Adapter: observationAdapter}
+	} else if specVersion >= 2 {
 		patterns = externalWatchPreflightPatterns{
 			Target: targetPattern, TerminalSuccess: terminalSuccessPattern, TerminalFailure: terminalFailurePattern,
 		}
@@ -196,6 +205,15 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		}
 		binding.CapabilityBindings = append(binding.CapabilityBindings, bound)
 	}
+	waitGroupID := ""
+	if waitGroupKey != "" {
+		group, groupErr := t.store.ResolveOrCreateExternalWatchGroup(context.Background(), scope.TenantID, scope.PersonID,
+			scope.TaskID, scope.RunID, waitGroupKey, waitGroupMode, waitGroupSize)
+		if groupErr != nil {
+			return "", groupErr
+		}
+		waitGroupID = group.ID
+	}
 	watch, err := t.store.CreateExternalWatch(context.Background(), control.ExternalWatch{
 		TenantID:               scope.TenantID,
 		PersonID:               scope.PersonID,
@@ -212,10 +230,18 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		TargetPattern:          targetPattern,
 		TerminalSuccessPattern: terminalSuccessPattern,
 		TerminalFailurePattern: terminalFailurePattern,
-		IntervalSeconds:        interval,
-		CommandTimeoutSeconds:  commandTimeout,
-		TimeoutAt:              timeoutAt,
-		ExecutionBinding:       binding,
+		ObservationAdapter:     observationAdapter,
+		PreflightReceipt: control.ExternalWatchPreflightReceipt{
+			Version: 1, CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))),
+			EnvironmentGeneration: identity.Generation, Adapter: observationAdapter,
+			Target: firstNonEmptyPreflight(targetPattern, description), DeadlineUnix: timeoutAt.Unix(),
+			Capabilities: append([]string(nil), capabilities...),
+		},
+		WaitGroupID:           waitGroupID,
+		IntervalSeconds:       interval,
+		CommandTimeoutSeconds: commandTimeout,
+		TimeoutAt:             timeoutAt,
+		ExecutionBinding:      binding,
 
 		EnvironmentSnapshotID:  identity.ID,
 		EnvironmentGeneration:  identity.Generation,
@@ -271,6 +297,86 @@ func validateExternalWatchObservation(args map[string]interface{}) error {
 		return nil
 	}
 	return fmt.Errorf("watch not registered: command is not a proven read-only observation; use a supported status command or an operator-approved hash-pinned observation script")
+}
+
+func validateExternalWatchStatic(args map[string]interface{}) error {
+	command := strings.TrimSpace(stringArg(args, "command"))
+	if command == "" {
+		return invalidExternalWatchSpec(fmt.Errorf("command is required"))
+	}
+	if err := validateExternalWatchObservation(args); err != nil {
+		return newStableToolRecoveryError(
+			err,
+			"watch_observation_unsupported", "capability_unavailable",
+			"The durable watcher cannot prove this command is a read-only observation, so registration was not attempted.",
+			"Choose a genuinely different observation strategy; do not retry cosmetic command variants.",
+			"preparation", "different_strategy", "not_dispatched", false,
+			"one_shot_observation", "provider_native_wait", "local_process_handle", "hash_pinned_observation_script", "actionable_blocker",
+		)
+	}
+	successPattern := strings.TrimSpace(stringArg(args, "success_pattern"))
+	targetPattern := strings.TrimSpace(stringArg(args, "target_pattern"))
+	terminalSuccessPattern := strings.TrimSpace(stringArg(args, "terminal_success_pattern"))
+	terminalFailurePattern := strings.TrimSpace(stringArg(args, "terminal_failure_pattern"))
+	observationAdapter := strings.TrimSpace(stringArg(args, "observation_adapter"))
+	waitGroupKey := strings.TrimSpace(stringArg(args, "wait_group"))
+	waitGroupMode := strings.TrimSpace(stringArg(args, "wait_group_mode"))
+	waitGroupSize := intArg(args, "wait_group_size", 0)
+	specVersion := 1
+	if observationAdapter != "" {
+		specVersion = 3
+	} else if targetPattern != "" || terminalSuccessPattern != "" || terminalFailurePattern != "" {
+		specVersion = 2
+	}
+	if specVersion == 1 && successPattern == "" {
+		return invalidExternalWatchSpec(fmt.Errorf("success_pattern is required for watch spec v1"))
+	}
+	if waitGroupKey == "" && (waitGroupMode != "" || waitGroupSize != 0) {
+		return invalidExternalWatchSpec(fmt.Errorf("wait_group_mode and wait_group_size require wait_group"))
+	}
+	if waitGroupKey != "" {
+		if waitGroupMode != "" && waitGroupMode != control.ExternalWatchGroupAll && waitGroupMode != control.ExternalWatchGroupAny {
+			return invalidExternalWatchSpec(fmt.Errorf("wait_group_mode must be all or any"))
+		}
+		if waitGroupSize < 2 || waitGroupSize > 8 {
+			return invalidExternalWatchSpec(fmt.Errorf("wait_group_size must be between 2 and 8"))
+		}
+	}
+	if err := control.ValidateExternalWatchSpec(control.ExternalWatch{
+		SpecVersion:            specVersion,
+		ObservationAdapter:     observationAdapter,
+		SuccessPattern:         successPattern,
+		TargetPattern:          targetPattern,
+		TerminalSuccessPattern: terminalSuccessPattern,
+		TerminalFailurePattern: terminalFailurePattern,
+	}); err != nil {
+		return invalidExternalWatchSpec(err)
+	}
+	for name, pattern := range map[string]string{
+		"success_pattern":          successPattern,
+		"failure_pattern":          strings.TrimSpace(stringArg(args, "failure_pattern")),
+		"target_pattern":           targetPattern,
+		"terminal_success_pattern": terminalSuccessPattern,
+		"terminal_failure_pattern": terminalFailurePattern,
+	} {
+		if pattern == "" {
+			continue
+		}
+		if _, err := regexp.Compile(pattern); err != nil {
+			return invalidExternalWatchSpec(fmt.Errorf("invalid %s: %w", name, err))
+		}
+	}
+	return nil
+}
+
+func invalidExternalWatchSpec(err error) error {
+	return newStableToolRecoveryError(
+		err,
+		"watch_spec_invalid", "invalid_request",
+		"The durable watcher specification is invalid, so registration was not attempted.",
+		"Correct the watcher command or state patterns once before choosing another strategy.",
+		"preparation", "same_strategy_after_correction", "not_dispatched", false,
+	)
 }
 
 func externalWatchEffectiveCapabilities(args map[string]interface{}) []string {

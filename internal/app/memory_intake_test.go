@@ -44,10 +44,11 @@ func (p *capturingProviderStub) StreamChat(context.Context, llm.ChatRequest) (<-
 }
 
 // TestIntakeDecisionPolicy pins the deterministic policy layer of intake
-// (docs/memory-governance.zh-CN.md §3.4): the model proposes rulings against
-// OFFERED neighbors only; SUPERSEDE retires a belief in place, protected
-// (user-stated) facts degrade to CONFLICT, an invalid ref is ignored,
-// and REINFORCE bumps confidence without rewriting content.
+// after simplification P3 (preference-only person memory): the model proposes
+// rulings against OFFERED user-preference neighbors only; every
+// target="memory" decision is skipped deterministically regardless of its
+// verb; SUPERSEDE of a user-stated fact degrades to CONFLICT; an invalid ref
+// is ignored; REINFORCE bumps confidence without rewriting.
 func TestIntakeDecisionPolicy(t *testing.T) {
 	provider, err := memory.NewSQLiteProvider(t.TempDir())
 	if err != nil {
@@ -59,8 +60,8 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 
 	seed := []memory.Fact{
 		{ID: "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Target: "memory", Content: "Default model is gpt-4o", Source: memory.SourceFactExtractor, Scope: "global", Confidence: 0.65, LastVerifiedAt: time.Now()},
-		{ID: "22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Target: "memory", Content: "Repo uses Go modules", Source: memory.SourceFactExtractor, Scope: "global", Confidence: 0.65, LastVerifiedAt: time.Now()},
 		{ID: "33333333-cccc-4ccc-8ccc-cccccccccccc", Target: "user", Content: "User indents with tabs", Source: memory.SourceUser, Scope: "global", Confidence: 0.9, LastVerifiedAt: time.Now()},
+		{ID: "44444444-dddd-4ddd-8ddd-dddddddddddd", Target: "user", Content: "User prefers concise answers", Source: memory.SourceFactExtractor, Scope: "global", Confidence: 0.65, LastVerifiedAt: time.Now()},
 	}
 	for _, f := range seed {
 		if err := mem.AddFactMeta(ctx, "person", f); err != nil {
@@ -69,16 +70,16 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 	}
 
 	model := &capturingProviderStub{content: `{
-		"task_decision":"KEEP",
 		"memory_decisions":[
 			{"target":"memory","decision":"SUPERSEDE","ref":"11111111","content":"Default model is kimi-k2","confidence":0.99},
-			{"target":"memory","decision":"REINFORCE","ref":"22222222","confidence":0.95},
+			{"target":"memory","decision":"ADD","content":"Repo uses pnpm for builds","confidence":0.95},
 			{"target":"user","decision":"SUPERSEDE","ref":"33333333","content":"User indents with spaces","confidence":0.99},
-			{"target":"memory","decision":"REINFORCE","ref":"deadbeef","content":"A fact with an unknown reference","confidence":0.95}
+			{"target":"user","decision":"REINFORCE","ref":"44444444","confidence":0.95},
+			{"target":"user","decision":"REINFORCE","ref":"deadbeef","content":"A fact with an unknown reference","confidence":0.95}
 		]}`}
 	analyzer := &llmPostRunAnalyzer{provider: model, memory: mem}
 	req := httpapi.PostRunAnalysisRequest{
-		Prompt: "analyze", TurnText: "model config changed",
+		Prompt: "analyze", TurnText: "preferences changed",
 		TenantID: "tenant", PersonID: "person", WorkspaceID: "ws", TaskID: "task", RunID: "run",
 	}
 	analysis, err := analyzer.Analyze(ctx, req)
@@ -89,48 +90,44 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The model was offered the neighbors with short refs, as data.
-	if !strings.Contains(model.lastPrompt, "Existing nearby memories") || !strings.Contains(model.lastPrompt, "[11111111]") {
-		t.Fatalf("neighbor block missing from prompt:\n%s", model.lastPrompt)
+	// Only user-preference neighbors are offered; environment rows never are.
+	if !strings.Contains(model.lastPrompt, "Existing nearby memories") || !strings.Contains(model.lastPrompt, "[33333333]") {
+		t.Fatalf("user neighbor block missing from prompt:\n%s", model.lastPrompt)
+	}
+	if strings.Contains(model.lastPrompt, "[11111111]") {
+		t.Fatalf("environment rows must not be offered as neighbors:\n%s", model.lastPrompt)
 	}
 
+	// target="memory" decisions are skipped deterministically: the historical
+	// environment row is untouched and the proposed project fact never lands.
 	memFacts, _ := mem.GetFacts(ctx, "person", "memory")
-	byID := map[string]memory.Fact{}
-	byContent := map[string]memory.Fact{}
 	for _, f := range memFacts {
-		byID[f.ID] = f
-		byContent[f.Content] = f
+		if f.ID == "11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa" && f.Content != "Default model is gpt-4o" {
+			t.Fatalf("environment supersede must be skipped: %+v", f)
+		}
+		if f.Content == "Repo uses pnpm for builds" {
+			t.Fatal("environment ADD must be skipped")
+		}
 	}
 
-	// SUPERSEDE: belief keeps its id, content moves forward, old text gone.
-	if f, ok := byID["11111111-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]; !ok || f.Content != "Default model is kimi-k2" {
-		t.Fatalf("supersede must replace content in place: %+v", f)
-	}
-	if _, stale := byContent["Default model is gpt-4o"]; stale {
-		t.Fatal("superseded content must not remain active")
-	}
-
-	// REINFORCE: content untouched, confidence up.
-	if f := byID["22222222-bbbb-4bbb-8bbb-bbbbbbbbbbbb"]; f.Content != "Repo uses Go modules" || f.Confidence <= 0.65 {
-		t.Fatalf("reinforce must bump confidence without rewriting: %+v", f)
-	}
-
-	// Invalid refs are maintenance mistakes, not evidence for a new belief.
-	if _, ok := byContent["A fact with an unknown reference"]; ok {
-		t.Fatal("unknown ref must not create memory")
-	}
-
-	// Protected user-stated fact: SUPERSEDE degrades to CONFLICT — both kept.
+	// REINFORCE on a user preference: content untouched, confidence up.
 	userFacts, _ := mem.GetFacts(ctx, "person", "user")
 	var oldKept, newKept bool
 	for _, f := range userFacts {
+		if f.ID == "44444444-dddd-4ddd-8ddd-dddddddddddd" && (f.Content != "User prefers concise answers" || f.Confidence <= 0.65) {
+			t.Fatalf("reinforce must bump confidence without rewriting: %+v", f)
+		}
 		if f.Content == "User indents with tabs" {
 			oldKept = true
 		}
 		if f.Content == "User indents with spaces" {
 			newKept = true
 		}
+		if f.Content == "A fact with an unknown reference" {
+			t.Fatal("unknown ref must not create memory")
+		}
 	}
+	// Protected user-stated fact: SUPERSEDE degrades to CONFLICT — both kept.
 	if !oldKept || !newKept {
 		t.Fatalf("protected supersede must keep both statements: old=%v new=%v %+v", oldKept, newKept, userFacts)
 	}
@@ -146,7 +143,10 @@ func TestResolveOfferedRefUsesIdentityAcrossTargetBuckets(t *testing.T) {
 
 // TestIntakeSupersedeConfidenceGate: an under-confident SUPERSEDE never
 // retires the old belief — it degrades to CONFLICT (both kept).
-func TestPostRunAnalyzerReinforcesCanonicalWithoutRecreatingLegacyFact(t *testing.T) {
+// The canonical row still reaches the analyzer prompt as a neighbor, but a
+// legacy user_facts array naming the same statement no longer reinforces or
+// recreates anything — legacy arrays are audited and ignored.
+func TestPostRunAnalyzerLegacyFactArraysDoNotTouchCanonical(t *testing.T) {
 	provider, err := memory.NewSQLiteProvider(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -198,14 +198,14 @@ func TestPostRunAnalyzerReinforcesCanonicalWithoutRecreatingLegacyFact(t *testin
 		t.Fatal(err)
 	}
 	if len(legacy) != 0 {
-		t.Fatalf("canonical reinforcement recreated legacy facts: %+v", legacy)
+		t.Fatalf("legacy fact arrays must not create legacy rows: %+v", legacy)
 	}
 	canonicals, err := store.ListCanonicalMemories(ctx, "person", memory.CanonicalFilter{Target: "user"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(canonicals) != 1 || canonicals[0].EvidenceCount < 2 {
-		t.Fatalf("canonical evidence was not reinforced: %+v", canonicals)
+	if len(canonicals) != 1 || canonicals[0].EvidenceCount != 1 {
+		t.Fatalf("ignored legacy arrays must leave canonical evidence untouched: %+v", canonicals)
 	}
 }
 
@@ -218,15 +218,14 @@ func TestIntakeSupersedeConfidenceGate(t *testing.T) {
 	mem := memory.NewMemoryManager(provider)
 	ctx := context.Background()
 	if err := mem.AddFactMeta(ctx, "tenant", memory.Fact{
-		ID: "44444444-dddd-4ddd-8ddd-dddddddddddd", Target: "memory",
-		Content: "Service listens on port 8080", Source: memory.SourceFactExtractor, Scope: "global", Confidence: 0.65,
+		ID: "44444444-dddd-4ddd-8ddd-dddddddddddd", Target: "user",
+		Content: "User prefers replies in English", Source: memory.SourceFactExtractor, Scope: "global", Confidence: 0.65,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	model := &capturingProviderStub{content: `{
-		"task_decision":"KEEP",
 		"memory_decisions":[
-			{"target":"memory","decision":"SUPERSEDE","ref":"44444444","content":"Service listens on port 9090","confidence":0.8}
+			{"target":"user","decision":"SUPERSEDE","ref":"44444444","content":"User prefers replies in Chinese","confidence":0.8}
 		]}`}
 	analyzer := &llmPostRunAnalyzer{provider: model, memory: mem}
 	req := httpapi.PostRunAnalysisRequest{
@@ -239,13 +238,13 @@ func TestIntakeSupersedeConfidenceGate(t *testing.T) {
 	if err := analyzer.Apply(ctx, req, analysis); err != nil {
 		t.Fatal(err)
 	}
-	facts, _ := mem.GetFacts(ctx, "tenant", "memory")
+	facts, _ := mem.GetFacts(ctx, "tenant", "user")
 	var old, updated bool
 	for _, f := range facts {
-		if f.Content == "Service listens on port 8080" {
+		if f.Content == "User prefers replies in English" {
 			old = true
 		}
-		if f.Content == "Service listens on port 9090" {
+		if f.Content == "User prefers replies in Chinese" {
 			updated = true
 		}
 	}
@@ -268,13 +267,12 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 	defer provider.Close()
 	mem := memory.NewMemoryManager(provider)
 	model := &capturingProviderStub{content: `{
-		"task_decision":"KEEP",
 		"memory_decisions":[
-			{"target":"memory","decision":"ADD","content":"RUQX-222 已执行并审批，当前状态 IN_PROGRESS / QUEUED","confidence":0.9,"durability":"durable"},
-			{"target":"memory","decision":"ADD","content":"RUQX-500 本次构建状态标记为 PREPARED_NOT_EXECUTED，尚未执行","confidence":0.9},
-			{"target":"memory","decision":"ADD","content":"release freeze active for launch week","confidence":0.9,"durability":"episodic"},
-			{"target":"memory","decision":"ADD","content":"lid-tm-tracking uses _COMMIT without _IMG_TAG","confidence":0.9,"durability":"durable","category":"release-rule"},
-			{"target":"memory","decision":"ADD","content":"cw2 profile lacks iam:ListRoles until the ticket lands","confidence":0.9,"durability":"time_bounded","valid_until":"2999-01-02T15:04:05Z"}
+			{"target":"user","decision":"ADD","content":"RUQX-222 已执行并审批，当前状态 IN_PROGRESS / QUEUED","confidence":0.9,"durability":"durable"},
+			{"target":"user","decision":"ADD","content":"RUQX-500 本次构建状态标记为 PREPARED_NOT_EXECUTED，尚未执行","confidence":0.9},
+			{"target":"user","decision":"ADD","content":"release freeze active for launch week","confidence":0.9,"durability":"episodic"},
+			{"target":"user","decision":"ADD","content":"用户偏好在发布说明里保留英文技术标识符","confidence":0.9,"durability":"durable","category":"preference"},
+			{"target":"user","decision":"ADD","content":"本周内先用英文回复（临时出差偏好）","confidence":0.9,"durability":"time_bounded","valid_until":"2999-01-02T15:04:05Z"}
 		]}`}
 	analyzer := &llmPostRunAnalyzer{provider: model, memory: mem}
 	req := httpapi.PostRunAnalysisRequest{
@@ -289,7 +287,7 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	facts, _ := mem.GetFacts(ctx, "person", "memory")
+	facts, _ := mem.GetFacts(ctx, "person", "user")
 	if len(facts) != 2 {
 		t.Fatalf("stored facts = %d (%+v), want durable + time_bounded", len(facts), facts)
 	}
@@ -310,17 +308,17 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 	var sawBounded, sawDurable bool
 	for _, c := range canonicals {
 		switch {
-		case strings.Contains(c.Content, "cw2 profile"):
+		case strings.Contains(c.Content, "本周内先用英文回复"):
 			sawBounded = true
 			if c.ValidUntil.IsZero() {
 				t.Fatalf("time_bounded canonical lost valid_until: %+v", c)
 			}
-		case strings.Contains(c.Content, "_COMMIT"):
+		case strings.Contains(c.Content, "保留英文技术标识符"):
 			sawDurable = true
 			if !c.ValidUntil.IsZero() {
 				t.Fatalf("durable canonical must not expire: %+v", c)
 			}
-			if c.Category != "release-rule" {
+			if c.Category != "preference" {
 				t.Fatalf("category lost: %+v", c)
 			}
 		case strings.Contains(c.Content, "IN_PROGRESS"):

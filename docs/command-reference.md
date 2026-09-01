@@ -81,7 +81,7 @@ selfmind send [--async] [--mode MODE] [--add-dir DIR]... <message>
 selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
-selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
+selfmind task <n|task_id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>]
 selfmind task <n|task_id> references|reference add <name>|reference remove <name>
 selfmind resume <n|task_id>
 selfmind workspaces
@@ -112,8 +112,12 @@ selfmind new [title]
   default view prioritizes active and attention-needed checks; a stable short
   watcher ID opens details or cancels only that check. Cancelling a watcher
   does not cancel the external operation.
-- `task` accepts either the displayed list number or a stable task ID.
-- `resume` reopens an archived task when necessary and starts the TUI on it.
+- `task` accepts either the displayed list number or a stable task ID. Numbers
+  resolve the exact most recently displayed open-task list on that endpoint,
+  even if background activity changes the live ranking afterward.
+- `task ... complete` marks work done without deleting its runs, events, or
+  artifacts; `task ... archive` hides obsolete or duplicate work. Both are
+  reversible with an explicit `resume`, which also reopens completed tasks.
 - `workspaces`, `ws`, and `workspace` share the workspace controls:
 
 ```text
@@ -362,10 +366,12 @@ Use the owner rows in the dry-run output together with
   should be used deliberately.
 - Destructive maintenance commands are dry-run by default and require the
   explicit apply/archive flag shown above.
-- `task-audit` reports parked tasks without durable blocker evidence. `--apply`
-  only backfills a blocker when the inactive task status exactly matches its
-  newest finished run; conflicting or mixed histories remain review-only, and
-  task/run statuses are never rewritten.
+- `task-audit` is the read-only Task/Run continuity audit: legacy resume edges
+  the upgrade backfill could not convert, illegal parent edges, ownerless
+  pending approvals/clarifications, and task status projections that disagree
+  with the derived reduction. `--apply` reconciles only projection mismatches
+  through the production reducer; every other finding stays human review, and
+  runs, edges, and memory are never rewritten.
 - `migrate-task-references` is dry-run by default. It imports a historical
   `task_runs.work_key` only when the exact reference occurs in that run's
   original user input. Inferred titles and summaries are reported and skipped;
@@ -386,7 +392,7 @@ before normal agent dispatch.
 /id
 /status
 /tasks [done|archived|all]
-/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>|references|reference add|remove <name>]
+/task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [memory|context|tasks|models|delivery|execution|tools]
@@ -399,8 +405,11 @@ before normal agent dispatch.
 /stop
 /cancel
 /notify <platform|auto|desk-first|phone-first>
-/new [title]
-/resume [n|task_id]  (bare = pick from recent tasks)
+/new [title] | /new --run <request>
+/resume [n|task_id|run_id]  (bare = pick from recent tasks)
+/choose <choice_id> <number>
+/remember <preference>
+/forget <text|ref>
 /workspace [n|id]  (bare = list; alias: /ws)
 /workspaces  (same as bare /workspace or /ws)
 ```
@@ -417,12 +426,23 @@ before normal agent dispatch.
   `smart`.
 - `/notify` chooses the bound IM destination for CLI-origin progress and final
   notifications.
+- `/new [title]` keeps its existing task-label behavior. `/new --run <request>`
+  is the deterministic escape hatch for sending unrelated work without a
+  continuity model decision.
+- `/choose <choice_id> <number>` answers a durable continuity question exactly,
+  including from another bound endpoint or after daemon restart. A bare number
+  is accepted only when the person has one recent pending continuity question.
 - `/watchers` is the same person-scoped, model-free view in CLI and IM. It
   shows checker/operation/verification phases plus finalization and notification
   state, while hiding raw commands, environment fingerprints, and credentials.
   The default and `all` views are numbered: use `/watchers 1` to inspect the
   first watcher or `/watchers cancel 1` to stop monitoring it. Cancelling a
   watcher does not cancel the external operation.
+- `/remember <preference>` saves an explicitly stated personal preference to
+  long-term memory (person memory is preference-only); it applies across every
+  endpoint. `/forget <text|ref>` forgets one — by its text, or by the ref
+  `/memory` shows; several matches return a numbered ref list. Transient
+  run/build state is refused with guidance.
 - `/task <id> references` lists the governed names and identifiers that may
   address that task. `/task <id> reference add <name>` confirms one immediately;
   `reference remove <name>` supersedes it. Automatically learned references

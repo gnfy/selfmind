@@ -235,8 +235,16 @@ func TestEvaluateCaseAcceptsGatewayRejectionBeforeTaskCreation(t *testing.T) {
 		t.Fatalf("expected rejection without task/run should pass: %+v", checks)
 	}
 
-	checks = EvaluateCase(c, RunSnapshot{HTTPStatus: 400, TaskIDs: []string{"task_leak"}, RunIDs: []string{"run_leak"}})
+	checks = EvaluateCase(c, RunSnapshot{HTTPStatus: 400, TaskIDs: []string{"task_leak"}, RunIDs: []string{"run_leak"}, CreatedRunIDs: []string{"run_leak"}})
 	if ChecksPassed(checks) {
 		t.Fatalf("rejection that created durable work must fail: %+v", checks)
+	}
+}
+
+func TestEvaluateCaseNoRunAllowsReturningSeededHistoricalRun(t *testing.T) {
+	c := &Case{Expect: Expectations{RequireNoRun: true}}
+	checks := EvaluateCase(c, RunSnapshot{RunIDs: []string{"run_seeded"}})
+	if !ChecksPassed(checks) {
+		t.Fatalf("historical run returned by a read-only interaction is not newly created: %+v", checks)
 	}
 }

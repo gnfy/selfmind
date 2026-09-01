@@ -1,0 +1,34 @@
+id: reliability_task_done_after_claiming_waiting_run
+title: "Claiming and completing a waiting run releases the task"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+
+# §10.3 acceptance: a run parked as waiting_user holds the task. The
+# confirmation turn is a continuation — it claims that run through the atomic
+# parent edge and completes on the SAME task; the reducer then derives "done"
+# because the parent is claimed and nothing else holds the task. This is the
+# waiting-turn cassette continuity-resume.yaml defers to.
+turns:
+  - input: >-
+      This task requires one user confirmation before completion. Finish this
+      run as waiting_user and state that confirmation is the only open input.
+  - input: >-
+      Confirmed. Continue the same task and complete it now.
+
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  require_same_task: true
+  max_duration_seconds: 180
+
+assert_state:
+  - { on: task, field: status, eq: "done" }
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

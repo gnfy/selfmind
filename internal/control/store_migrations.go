@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 6
+const CurrentControlSchemaVersion = 9
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -188,6 +188,209 @@ CREATE TABLE IF NOT EXISTS skill_attributions (
 );
 CREATE INDEX IF NOT EXISTS idx_skill_attributions_skill
 	ON skill_attributions(control_tenant_id, skill_key, observed_at);`)
+			return err
+		},
+	},
+	{
+		Version: 7,
+		Name:    "run-parent-edge",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// The forward continuation edge: child.parent_run_id -> parent.id is the only ownership
+			// authority; the legacy reverse resumed_by_run_id becomes read-only
+			// compatibility. Handoffs gain their formal run key, and queued rows
+			// carry structured reply/approval/clarification return metadata
+			// durably, including answers that arrive after a gateway restart.
+			for _, column := range []struct{ table, name, definition string }{
+				{"task_runs", "parent_run_id", "TEXT NOT NULL DEFAULT ''"},
+				{"task_handoffs", "run_id", "TEXT NOT NULL DEFAULT ''"},
+				{"task_queue", "reply_to_run_id", "TEXT NOT NULL DEFAULT ''"},
+				{"task_queue", "approval_id", "TEXT NOT NULL DEFAULT ''"},
+				{"task_queue", "clarify_id", "TEXT NOT NULL DEFAULT ''"},
+			} {
+				if err := ensureMigrationColumn(ctx, db, column.table, column.name, column.definition); err != nil {
+					return err
+				}
+			}
+			// Run ids are globally unique, so (tenant_id, parent_run_id) fully
+			// enforces "at most one child per parent" — adding person/task keys
+			// would only weaken the constraint. Parent/child agreement on
+			// tenant, person, task, and resumable state is validated by the
+			// child-creation transaction (no foreign keys exist).
+			if _, err := db.ExecContext(ctx, `
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_runs_parent_once
+	ON task_runs(tenant_id, parent_run_id) WHERE parent_run_id <> '';
+CREATE INDEX IF NOT EXISTS idx_task_handoffs_run
+	ON task_handoffs(run_id) WHERE run_id <> '';`); err != nil {
+				return err
+			}
+			// Backfill 1: the production finalizer always keyed handoffs
+			// "handoff_run_<run_id>", so the formal column recovers losslessly
+			// from the primary key. Rows under any other id stay empty (audit).
+			if _, err := db.ExecContext(ctx,
+				`UPDATE task_handoffs SET run_id = substr(id, 13)
+				  WHERE run_id = '' AND id LIKE 'handoff_run_%'`); err != nil {
+				return err
+			}
+			// Backfill 2: convert exact legacy reverse edges
+			// (parent.resumed_by_run_id = child.id) into the forward edge, but
+			// only same-tenant/person/task relationships with exactly one
+			// claiming parent. Conflicting, missing, or cross-boundary history
+			// is never guessed — it stays visible to the read-only audit.
+			// (Expected to be near-empty: live data shows zero legacy edges.)
+			_, err := db.ExecContext(ctx, `
+UPDATE task_runs SET parent_run_id = (
+	SELECT p.id FROM task_runs p
+	 WHERE p.tenant_id = task_runs.tenant_id
+	   AND p.task_id = task_runs.task_id
+	   AND p.person_id = task_runs.person_id
+	   AND p.resumed_by_run_id = task_runs.id
+)
+WHERE parent_run_id = ''
+  AND (SELECT COUNT(*) FROM task_runs p
+	    WHERE p.tenant_id = task_runs.tenant_id
+	      AND p.task_id = task_runs.task_id
+	      AND p.person_id = task_runs.person_id
+	      AND p.resumed_by_run_id = task_runs.id) = 1`)
+			return err
+		},
+	},
+	{
+		Version: 8,
+		Name:    "turn-continuity-resolution",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// A continuity choice exists before a child run, so it cannot reuse
+			// run-bound clarify_requests. The request snapshot is short-lived and
+			// person-partitioned; it lets a reply on another bound endpoint resume
+			// the original message without parsing the rendered candidate list.
+			// Resolution events are a separate control-plane audit surface because
+			// OBSERVE and CLARIFY deliberately create no task or run.
+			_, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS pending_turn_choices (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	account_id TEXT NOT NULL DEFAULT '',
+	channel TEXT NOT NULL DEFAULT '',
+	resolution_id TEXT NOT NULL DEFAULT '',
+	request_json TEXT NOT NULL,
+	options_json TEXT NOT NULL DEFAULT '[]',
+	status TEXT NOT NULL DEFAULT 'pending',
+	chosen_key TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	claimed_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pending_turn_choices_person
+	ON pending_turn_choices(tenant_id, person_id, status, expires_at, created_at);
+CREATE TABLE IF NOT EXISTS turn_resolution_events (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	account_id TEXT NOT NULL DEFAULT '',
+	channel TEXT NOT NULL DEFAULT '',
+	input_hash TEXT NOT NULL DEFAULT '',
+	mode TEXT NOT NULL DEFAULT '',
+	decision TEXT NOT NULL DEFAULT '',
+	certainty TEXT NOT NULL DEFAULT '',
+	target_task_id TEXT NOT NULL DEFAULT '',
+	target_run_id TEXT NOT NULL DEFAULT '',
+	candidate_ids_json TEXT NOT NULL DEFAULT '[]',
+	evidence_json TEXT NOT NULL DEFAULT '[]',
+	provider TEXT NOT NULL DEFAULT '',
+	model TEXT NOT NULL DEFAULT '',
+	latency_ms INTEGER NOT NULL DEFAULT 0,
+	error_class TEXT NOT NULL DEFAULT '',
+	correction_of TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_turn_resolution_events_person
+	ON turn_resolution_events(tenant_id, person_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_turn_resolution_events_target
+	ON turn_resolution_events(tenant_id, target_run_id, created_at)
+	WHERE target_run_id <> '';`)
+			return err
+		},
+	},
+	{
+		Version: 9,
+		Name:    "run-recovery-contract",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Historical runs stay capability-inert (version 0). Only runs created
+			// by a v9-aware binary opt into the durable plan/effect/checkpoint
+			// contract, so an upgrade never changes the meaning of old rows.
+			for _, column := range []struct{ table, name, definition string }{
+				{"task_runs", "recovery_contract_version", "INTEGER NOT NULL DEFAULT 0"},
+				{"tool_ledger", "effect_id", "TEXT NOT NULL DEFAULT ''"},
+				{"tool_ledger", "plan_version", "INTEGER NOT NULL DEFAULT 0"},
+				{"tool_ledger", "plan_step_id", "TEXT NOT NULL DEFAULT ''"},
+				{"tool_ledger", "strategy", "TEXT NOT NULL DEFAULT ''"},
+				{"tool_ledger", "effect_class", "TEXT NOT NULL DEFAULT ''"},
+				{"tool_ledger", "environment_generation", "INTEGER NOT NULL DEFAULT 0"},
+				{"tool_ledger", "result_ref", "TEXT NOT NULL DEFAULT ''"},
+				{"tool_ledger", "verification_state", "TEXT NOT NULL DEFAULT ''"},
+				{"loop_checkpoints", "contract_version", "INTEGER NOT NULL DEFAULT 0"},
+				{"loop_checkpoints", "recovery_json", "TEXT NOT NULL DEFAULT '{}'"},
+				{"external_watches", "observation_adapter", "TEXT NOT NULL DEFAULT ''"},
+				{"external_watches", "preflight_receipt_json", "TEXT NOT NULL DEFAULT '{}'"},
+				{"external_watches", "wait_group_id", "TEXT NOT NULL DEFAULT ''"},
+			} {
+				if err := ensureMigrationColumn(ctx, db, column.table, column.name, column.definition); err != nil {
+					return err
+				}
+			}
+			_, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS run_plan_versions (
+	run_id TEXT NOT NULL,
+	tenant_id TEXT NOT NULL,
+	version INTEGER NOT NULL,
+	explanation TEXT NOT NULL DEFAULT '',
+	content_hash TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (run_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_run_plan_versions_latest
+	ON run_plan_versions(tenant_id, run_id, version DESC);
+CREATE TABLE IF NOT EXISTS run_plan_steps (
+	run_id TEXT NOT NULL,
+	tenant_id TEXT NOT NULL,
+	plan_version INTEGER NOT NULL,
+	step_id TEXT NOT NULL,
+	sequence INTEGER NOT NULL,
+	step_text TEXT NOT NULL,
+	status TEXT NOT NULL,
+	success_criteria TEXT NOT NULL DEFAULT '',
+	verification_required INTEGER NOT NULL DEFAULT 0,
+	related_task_id TEXT NOT NULL DEFAULT '',
+	work_unit_id TEXT NOT NULL DEFAULT '',
+	work_unit_boundary INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (run_id, plan_version, step_id),
+	UNIQUE (run_id, plan_version, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_run_plan_steps_latest
+	ON run_plan_steps(tenant_id, run_id, plan_version DESC, sequence);
+CREATE INDEX IF NOT EXISTS idx_tool_ledger_effect
+	ON tool_ledger(tenant_id, effect_id) WHERE effect_id <> '';
+CREATE INDEX IF NOT EXISTS idx_tool_ledger_plan_step
+	ON tool_ledger(tenant_id, run_id, plan_step_id) WHERE plan_step_id <> '';
+CREATE TABLE IF NOT EXISTS external_watch_groups (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	run_id TEXT NOT NULL,
+	group_key TEXT NOT NULL,
+	mode TEXT NOT NULL,
+	expected_count INTEGER NOT NULL,
+	status TEXT NOT NULL DEFAULT 'pending',
+	winner_watch_id TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	finished_at INTEGER NOT NULL DEFAULT 0,
+	UNIQUE (tenant_id, run_id, group_key)
+);
+CREATE INDEX IF NOT EXISTS idx_external_watch_groups_pending
+	ON external_watch_groups(tenant_id, person_id, status, created_at);`)
 			return err
 		},
 	},

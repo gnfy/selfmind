@@ -120,6 +120,30 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 	if commandErr != nil {
 		errText = tools.RedactSensitive(commandErr.Error())
 	}
+	if watch.SpecVersion >= 3 && commandErr == nil && result.ExitCode == 0 {
+		state, adapterErr := tools.ClassifyExternalWatchObservation(watch.ObservationAdapter, output)
+		if adapterErr != nil {
+			d.parkExternalWatch(ctx, watch, watchCheckVerdict{
+				Action: watchCheckPark, Layer: "observation", Reason: watchReasonInvalidCheck,
+				Detail: adapterErr.Error(),
+			}, "check_definition", output, adapterErr.Error())
+			return
+		}
+		switch state {
+		case tools.ExternalWatchObservationSucceeded:
+			_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+				control.WatchCheckerOK, control.WatchOperationSucceeded, control.WatchVerificationPassed)
+			d.completeExternalWatch(ctx, watch, control.ExternalWatchSucceeded, output, "")
+			return
+		case tools.ExternalWatchObservationFailed:
+			_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+				control.WatchCheckerOK, control.WatchOperationFailed, control.WatchVerificationNotRequired)
+			d.completeExternalWatch(ctx, watch, control.ExternalWatchFailed, output, "")
+			return
+		case tools.ExternalWatchObservationPending:
+			// Continue into the ordinary deadline/checkpoint path below.
+		}
+	}
 
 	// A v2 terminal operation marker is authoritative even when a LATER
 	// verification command in the same script fails. Preserve that operation
@@ -480,6 +504,23 @@ func classifyStoredExternalWatchOutput(watch control.ExternalWatch) string {
 // a "success" printed by a check that itself failed is self-contradictory
 // evidence, and accepting it would let a broken check close a release.
 func classifyExternalWatchOutput(watch control.ExternalWatch, output string, exitCode int) string {
+	if watch.SpecVersion >= 3 {
+		if exitCode != 0 {
+			return ""
+		}
+		state, err := tools.ClassifyExternalWatchObservation(watch.ObservationAdapter, output)
+		if err != nil {
+			return ""
+		}
+		switch state {
+		case tools.ExternalWatchObservationSucceeded:
+			return control.ExternalWatchSucceeded
+		case tools.ExternalWatchObservationFailed:
+			return control.ExternalWatchFailed
+		default:
+			return ""
+		}
+	}
 	if watch.SpecVersion >= 2 {
 		if watch.TerminalFailurePattern != "" && matchesExternalWatchPattern(watch.TerminalFailurePattern, output) {
 			return control.ExternalWatchFailed
@@ -523,6 +564,31 @@ func (d *Server) completeExternalWatch(ctx context.Context, watch control.Extern
 	// once the watch reaches a terminal state.
 	if err := executionenv.CleanupLeaseScratch(watch.ID); err != nil {
 		log.Debug("external watch scratch cleanup failed", "watch_id", watch.ID, "error", err)
+	}
+	if strings.TrimSpace(watch.WaitGroupID) != "" {
+		group, groupErr := d.Control.ResolveExternalWatchGroup(ctx, watch.TenantID, watch.WaitGroupID, watch.ID)
+		if groupErr != nil {
+			log.Warn("external watch group resolution failed", "watch_id", watch.ID, "group_id", watch.WaitGroupID, "error", groupErr)
+			return
+		}
+		if !group.Terminal || !group.Won {
+			return
+		}
+		status = group.Status
+		watch.Status = status
+		watch.Description = fmt.Sprintf("wait group %s (%s)", group.Group.GroupKey, group.Group.Mode)
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID: watch.TaskID, RunID: watch.RunID, Type: "external_watch.group_resolved",
+			Visibility: "task", Channel: watch.Channel,
+			Payload: mustJSON(map[string]interface{}{
+				"group_id": group.Group.ID, "group_key": group.Group.GroupKey,
+				"mode": group.Group.Mode, "status": status, "winner_watch_id": watch.ID,
+			}),
+			IdempotencyKey: "external-watch-group-resolved:" + group.Group.ID,
+		})
+		if status == control.ExternalWatchFailed && strings.TrimSpace(lastError) == "" {
+			lastError = "the aggregate wait-group condition could not be satisfied"
+		}
 	}
 	d.finalizeExternalWatch(ctx, watch, status, output, lastError)
 }

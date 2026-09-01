@@ -12,8 +12,11 @@ import (
 )
 
 func TestWatchersControlCommandListsDetailsAndCancels(t *testing.T) {
-	server, store, identity, task, _ := newApprovalTestServer(t)
+	server, store, identity, task, approval := newApprovalTestServer(t)
 	ctx := context.Background()
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "waiting_external", "waiting", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -67,6 +70,47 @@ func TestWatchersControlCommandListsDetailsAndCancels(t *testing.T) {
 	})
 	if status != 200 || resp.Accepted || !strings.Contains(resp.Content, "Watchers") {
 		t.Fatalf("message response = %+v status=%d", resp, status)
+	}
+}
+
+func TestExternalWatchGroupEmitsOneAggregateFinalization(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "wait for two independent checks")
+	if err != nil {
+		t.Fatal(err)
+	}
+	group, err := store.ResolveOrCreateExternalWatchGroup(ctx, identity.TenantID, identity.PersonID,
+		task.ID, run.ID, "release-checks", control.ExternalWatchGroupAll, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	makeWatch := func(command string) control.ExternalWatch {
+		watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
+			TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+			Channel: "cli", Description: command, CWD: t.TempDir(), Command: command,
+			SuccessPattern: "DONE", WaitGroupID: group.ID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return *watch
+	}
+	first, second := makeWatch("first"), makeWatch("second")
+	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{PersonID: identity.PersonID, RunID: "foreground"}) {
+		t.Fatal("failed to hold foreground slot")
+	}
+	defer daemon.coordinator().endActive(identity.PersonID)
+
+	daemon.completeExternalWatch(ctx, first, control.ExternalWatchSucceeded, "DONE", "")
+	queued, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(queued) != 0 {
+		t.Fatalf("group finalized early: %+v err=%v", queued, err)
+	}
+	daemon.completeExternalWatch(ctx, second, control.ExternalWatchSucceeded, "DONE", "")
+	queued, err = store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(queued) != 1 || !strings.Contains(queued[0].Content, "wait group release-checks (all)") {
+		t.Fatalf("aggregate finalization=%+v err=%v", queued, err)
 	}
 }
 

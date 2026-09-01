@@ -230,8 +230,10 @@ Gateway 状态公开有效路由快照的不含秘密哈希和分离的 readines
 只负责用户 agent 工作；每个后台角色分别保留 readiness。某个无关覆盖不可用时，维护
 角色仍可通过已验证的 auxiliary fallback floor 继续。尤其是显式 `semantic_recall` 失败
 时，turn-start expansion 会降级为确定性的词法召回，不会回退到 auxiliary，也不会停放
-其它维护。超时、限流和网络类瞬时故障按有界退避重试；鉴权、模型不存在及配置错误等待
-人工修复。成功的有界探测会持久化恢复状态并恢复正常角色工作，不会一次性倾倒积压。
+其它维护。超时、限流和网络类瞬时故障按有界退避重试；第一次实时瞬时故障保持安静，
+重试仍失败时只提示一次并列出实际 provider/model，恢复后只提示一次对应的恢复消息。
+鉴权、模型不存在及配置错误仍会立即显示并等待人工修复。成功的有界探测会持久化恢复
+状态并恢复正常角色工作，不会一次性倾倒积压。
 聚合的后台 readiness 仍表示所有已启用角色的摘要。Background 失败或被关闭不会让已验证的 Main 下线：状态会显示后台 degraded/disabled，
 前台队列继续执行。缺少前台 readiness 时，无模型控制命令仍然可用，但所有新的 agent
 消息只会持久化入队。取消预览并恢复前台 readiness 后，停放队列会立即按原顺序唤醒。显式恢复会先等待持有失败候选项
@@ -261,6 +263,13 @@ Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级
 合并、模型契约探针和审批判定都会显式请求关闭推理并限制输出；维护 provider 链在
 实际派发时再次执行同一约束。因此，即使用户把辅助模型设为 `high` 或 `xhigh`，
 日常治理也不会按该档位放大成本，前台任务的推理设置则保持不变。
+
+自然语言工作连续性是 `fast_classifier` 在前台的唯一有界用途。它只从显式角色覆盖或
+`models.auxiliary` 解析，绝不会通过 fallback 链借用 `coding_agent`；每次请求都设置
+`reasoning_effort: none`，输出最多 512 token，并让最多一次重试共享六秒总时限。
+provider 只会看到 gateway 生成的有界 run 卡片。模型输出只是建议：gateway 会在执行
+查看、指导或恢复前重新校验 person/task/run 与当前状态。`continuity.mode: shadow`
+只记录判断，`safe` 是发布默认值，`full` 还允许明确的历史恢复，`off` 关闭该模型入口。
 
 `user_identity_field: auto` 在 OpenAI-compatible 请求中映射为 `user_id`，在
 Anthropic Messages 中映射为 `metadata.user_id`。值是从认证身份派生的稳定匿名 ID，

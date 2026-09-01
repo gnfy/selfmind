@@ -149,7 +149,6 @@ func SplitRuntimePromptSections(content string) []PromptSection {
 			strings.HasPrefix(trimmed, "# DURABLE TASK CONTEXT"),
 			strings.HasPrefix(trimmed, "## Current Summary"),
 			strings.HasPrefix(trimmed, "## Next Steps"),
-			strings.HasPrefix(trimmed, "## Open Blockers"),
 			strings.HasPrefix(trimmed, "## Latest Handoff"):
 			category = "runtime"
 		}

@@ -11,10 +11,11 @@ turns:
   - input: "先给一个优化 SelfMind CLI 交互体验的三步方案，不要改代码。"
   - input: "可以，继续。"
 
+# P2: turn 1 completes, so the follow-up owns its own root task; answer
+# continuity flows through the spine (content checks below).
 expect:
   status: completed
-  require_same_task: true
-  require_continuation: true
+  require_task_switch: true
   must_not_contain:
     - "不知道你要继续什么"
   max_duration_seconds: 360

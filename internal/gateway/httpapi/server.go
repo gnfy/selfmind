@@ -20,6 +20,7 @@ import (
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
@@ -90,6 +91,14 @@ type Server struct {
 	// eval, or no cheap model) makes smart mode degrade to a human ask — never an
 	// auto-approval.
 	ApprovalJudge tools.ApprovalJudge
+	// ContinuityResolver is the bounded fast-role inference seam that chooses
+	// among gateway-issued work candidates. It never executes or authorizes an
+	// action; ProcessMessage validates and applies its typed decision.
+	ContinuityResolver ContinuityResolver
+	// ContinuityMode is one of shadow/safe/full/off. Empty is safe when a
+	// resolver is installed and preserves legacy behavior in minimal tests where
+	// no resolver exists.
+	ContinuityMode string
 	// Recall is the automatic semantic-recall engine (Work Timeline P2): at
 	// turn start the context selector attaches bounded "possibly related prior
 	// work" slices from the FTS session index and task label cards to the
@@ -105,12 +114,12 @@ type Server struct {
 	// work spine. See task_governance.go.
 	TaskGovernance TaskGovernanceOptions
 	// PostRunAnalyzer performs at most one cheap-model maintenance pass after
-	// an eligible run: task-label hygiene plus durable fact extraction. Nil
-	// keeps the pre-label and skips automatic learning without affecting the
-	// completed user turn.
+	// an eligible run: explicit preference decisions plus Task Reference search
+	// hints. It never routes tasks. Nil skips automatic learning without
+	// affecting the completed user turn.
 	PostRunAnalyzer PostRunAnalyzer
 	// PostRunMaintenance controls the daemon-owned debounce/batch window for
-	// post-run label and memory governance. It never delays run finalization.
+	// post-run preference/reference governance. It never delays run finalization.
 	PostRunMaintenance PostRunMaintenanceOptions
 	// SelfEvolution profiles completed runs and records bounded read-only
 	// batching observations. Runtime advice requires separately verified
@@ -120,6 +129,10 @@ type Server struct {
 	// (docs/memory-governance.zh-CN.md §4). Nil disables governance entirely;
 	// the loop is started by the gateway runner via StartMemoryGovernance.
 	MemoryConsolidator MemoryConsolidator
+	// Memory backs the cross-endpoint explicit memory commands
+	// (/remember, /forget). Nil leaves the commands answering that memory is
+	// unavailable; nothing else consults it here.
+	Memory *memory.MemoryManager
 	// AttachmentsDir is the person-partitioned store for message attachments
 	// (e.g. TUI clipboard-pasted images). importAttachments copies inbound
 	// attachment files here (<AttachmentsDir>/<personID>/<runID>/NN-name) and
@@ -148,6 +161,14 @@ type Server struct {
 
 	runs     *RunCoordinator
 	runsOnce sync.Once
+	// turnResolutionLocks serialize the bounded pre-run continuity decision for
+	// one person without introducing a durable cross-process business lock. A
+	// fixed stripe set avoids an unbounded person-keyed mutex map.
+	turnResolutionLocks [64]sync.Mutex
+	// taskLists remembers the exact numbered open-task cards most recently
+	// rendered on each endpoint. Ordinal commands resolve this snapshot instead
+	// of re-sorting mutable task rows after the person has already seen them.
+	taskLists taskListSnapshotRegistry
 
 	// presence is the in-memory endpoint-attachment registry (presence.go).
 	// Lazily built like the coordinator so every Server construction path
@@ -162,20 +183,25 @@ type Server struct {
 }
 
 type activeRun struct {
-	TenantID       string
-	PersonID       string
-	TaskID         string
-	RunID          string
-	QueueID        string
-	Channel        string
-	Platform       string
-	PlatformUserID string
-	WorkspaceID    string
-	ApprovalMode   string
-	ExecutionRoots []executionenv.RootBinding
-	Summary        string
-	StartedAt      time.Time
-	Cancel         context.CancelFunc
+	TenantID               string
+	PersonID               string
+	TaskID                 string
+	RunID                  string
+	QueueID                string
+	Channel                string
+	Platform               string
+	PlatformUserID         string
+	DeliveryOverride       bool
+	DeliveryPlatform       string
+	DeliveryPlatformUserID string
+	DeliveryChannel        string
+	WorkspaceID            string
+	ApprovalMode           string
+	Origin                 string
+	ExecutionRoots         []executionenv.RootBinding
+	Summary                string
+	StartedAt              time.Time
+	Cancel                 context.CancelFunc
 	// Interrupt supplies an infrastructure cause distinct from an explicit
 	// user cancellation. Gateway restarts are resumable and must never turn a
 	// task into a user-cancelled terminal state.
@@ -341,12 +367,35 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			d.Delivery.CatchUpRecoverable(cctx, tenantID, personID, platform, platformUserID, channel)
 		}(identity.TenantID, identity.PersonID, req.Platform, identity.PlatformUserID, req.Channel)
 	}
+	// Explicit continuity controls are typed before the general command path:
+	// /new <request> becomes a forced root turn, while /choose (or platform
+	// choice metadata) restores the original pre-run request and exact target.
+	// Identity is resolved again on this endpoint; stored prose is never parsed.
+	if rewritten, handled, response := d.rewriteExplicitContinuityControl(ctx, identity, req); handled {
+		return *response, statusForMessageResponse(*response)
+	} else {
+		req = rewritten
+	}
+	if response := d.claimedTurnChoiceResponse(ctx, identity, req); response != nil {
+		return *response, statusForMessageResponse(*response)
+	}
 
 	if handled, content, err := d.tryHandleControlCommand(ctx, identity, req); handled {
 		if err != nil {
 			return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
 		}
 		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
+	}
+	// A bare number is a continuity answer only when exactly one recent
+	// person-wide choice is pending. Approval and run-clarification answers ran
+	// first above and retain their existing priority.
+	if rewritten, handled, response := d.rewriteBareTurnChoice(ctx, identity, req); handled {
+		return *response, statusForMessageResponse(*response)
+	} else {
+		req = rewritten
+	}
+	if response := d.claimedTurnChoiceResponse(ctx, identity, req); response != nil {
+		return *response, statusForMessageResponse(*response)
 	}
 	// A command-SHAPED message that no control command claimed is a mistyped
 	// COMMAND, not conversation or new work. Reject it here so it can never be
@@ -366,6 +415,9 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	if d.IsDraining() {
 		if d.isModelChangeDrain() {
 			intent := d.classifyIntent(ctx, req.Content, req.Channel)
+			if req.ForceNew {
+				intent = forcedNewIntent()
+			}
 			coord := d.coordinator()
 			workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
 			if workspaceErr != nil {
@@ -400,6 +452,9 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
 		}
 		intent := router.NewIntentClassifier().ClassifyDetailed(req.Content)
+		if req.ForceNew {
+			intent = forcedNewIntent()
+		}
 		if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
 			intent.Intent = router.IntentContinue
 		}
@@ -410,7 +465,8 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
 		}
-		if intent.Intent == router.IntentContinue {
+		exactActiveReply := strings.TrimSpace(req.ReplyToRunID) != "" && strings.TrimSpace(req.ReplyToRunID) == running.RunID
+		if (intent.Intent == router.IntentContinue || exactActiveReply) && isUserOriginTurn(ctx, req) {
 			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
 				return resp, http.StatusOK
 			}
@@ -422,17 +478,34 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
 	}
 
-	intent := d.classifyIntent(ctx, req.Content, req.Channel)
+	continuity := d.resolveNaturalContinuity(ctx, identity, req)
+	if continuity.Response != nil {
+		return *continuity.Response, statusForMessageResponse(*continuity.Response)
+	}
+	req = continuity.Request
+	intent := continuity.Intent
+	if !continuity.Resolved {
+		intent = d.classifyIntent(ctx, req.Content, req.Channel)
+		if req.ForceNew {
+			intent = forcedNewIntent()
+		}
+	}
 	if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
-		if task, _ := d.resolveContinueTask(ctx, identity); task != nil {
-			intent = router.IntentResult{
-				Intent:           router.IntentContinue,
-				Confidence:       0.84,
-				Reason:           "affirmative reply with existing task context",
-				Signals:          []string{"continue.affirmative_with_context"},
-				ShouldCreateTask: true,
-				ShouldUseTools:   true,
-				Source:           "httpapi",
+		// A bare acceptance upgrades to a continuation only when the person
+		// actually has a pending run to accept — the run-level check replaces
+		// the old current-task pointer (simplification P2: the pointer is a UI
+		// projection, never continuation authority).
+		if d.Control != nil {
+			if runs, _ := d.Control.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 1); len(runs) > 0 {
+				intent = router.IntentResult{
+					Intent:           router.IntentContinue,
+					Confidence:       0.84,
+					Reason:           "affirmative reply with pending resumable work",
+					Signals:          []string{"continue.affirmative_with_context"},
+					ShouldCreateTask: true,
+					ShouldUseTools:   true,
+					Source:           "httpapi",
+				}
 			}
 		}
 	}
@@ -462,7 +535,8 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		// in the running task (docs/identity-continuity.md "Runtime attachment
 		// model"). Genuinely new work still enqueues (G1+G2), never rejected as
 		// "busy".
-		if intent.Intent == router.IntentContinue {
+		exactActiveReply := strings.TrimSpace(req.ReplyToRunID) != "" && strings.TrimSpace(req.ReplyToRunID) == running.RunID
+		if (intent.Intent == router.IntentContinue || exactActiveReply) && isUserOriginTurn(ctx, req) {
 			if req.AdditionalRootsRequested && !sameCLIAdditionalRoots(req.ExecutionRoots, running.ExecutionRoots) {
 				message := "Cannot change --add-dir roots while a run is active. Start a new run after the current run finishes."
 				return api.MessageResponse{
@@ -524,6 +598,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		PlatformUserID: req.PlatformUserID,
 		WorkspaceID:    req.WorkspaceID,
 		ApprovalMode:   req.ApprovalMode,
+		Origin:         runOrigin(runCtx, req),
 		ExecutionRoots: executionenv.CloneRootBindings(req.ExecutionRoots),
 		QueueID:        req.QueueID,
 		Summary:        truncate(req.Content, 240),
@@ -554,6 +629,21 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		coord.deliverAsyncResult(context.Background(), identity, req, resp)
 	}
 	return resp, status
+}
+
+func statusForMessageResponse(resp api.MessageResponse) int {
+	if strings.TrimSpace(resp.Error) != "" {
+		return http.StatusInternalServerError
+	}
+	return http.StatusOK
+}
+
+func forcedNewIntent() router.IntentResult {
+	return router.IntentResult{
+		Intent: router.IntentTask, Confidence: 1, Reason: "explicit /new request",
+		Signals: []string{"control.new"}, ShouldCreateTask: true, ShouldUseTools: true,
+		Source: "control",
+	}
 }
 
 func (d *Server) isModelChangeDrain() bool {
@@ -692,6 +782,11 @@ type taskAttach struct {
 	matchedSurfaceForms []string
 	candidateTaskIDs    []string
 	candidateTaskHints  []string
+	// parentRunID is structured parent evidence resolved at attach time (a
+	// platform reply or an approval's origin run). It names the ONLY run this
+	// turn may continue; ambiguity resolution is skipped for it, and a named
+	// run that is terminal or already claimed simply yields no parent.
+	parentRunID string
 }
 
 type attachContextMode string
@@ -717,9 +812,7 @@ type attachPolicy struct {
 	ContextMode              attachContextMode
 	ExecutionWorkspaceSource attachWorkspaceSource
 	UpdateCurrentTask        bool
-	PreserveTaskLifecycle    bool
 	ClaimsPriorRuns          bool
-	CommitLifecycleOnKeep    bool
 }
 
 type taskAttachReason string
@@ -732,10 +825,29 @@ const (
 	taskAttachResumePin         taskAttachReason = "resume_pin"
 	taskAttachReferenceMention  taskAttachReason = "reference_mention"
 	taskAttachReferenceContinue taskAttachReason = "reference_continuation"
+	// taskAttachApprovalResume binds a daemon-originated approval continuation
+	// to the parked approval's origin run — a structured edge, never prose.
+	taskAttachApprovalResume taskAttachReason = "approval_resume"
+	// taskAttachClarifyResume binds an answered parked clarification to the
+	// exact run that asked it. The answer may arrive on any endpoint after a
+	// restart, so queue text and task recency are never sufficient authority.
+	taskAttachClarifyResume taskAttachReason = "clarify_resume"
+	// taskAttachReplyToRun binds a platform-proven reply (threaded IM message,
+	// explicit client reply metadata) to the exact run it answers.
+	taskAttachReplyToRun taskAttachReason = "reply_to_run"
 )
 
 func (a taskAttach) claimsPriorRuns() bool {
 	return a.resolvedPolicy().ClaimsPriorRuns
+}
+
+func (a taskAttach) selectsPriorRun() bool {
+	switch a.reason {
+	case taskAttachContinuation, taskAttachExplicitTaskID, taskAttachResumePin:
+		return true
+	default:
+		return false
+	}
 }
 
 func (a taskAttach) allowsTaskSkillBinding() bool {
@@ -758,21 +870,23 @@ func (a taskAttach) resolvedPolicy() attachPolicy {
 
 func policyForTaskAttach(reason taskAttachReason, created, preLabel bool) attachPolicy {
 	switch reason {
-	case taskAttachContinuation:
+	case taskAttachContinuation, taskAttachApprovalResume, taskAttachClarifyResume, taskAttachReplyToRun:
 		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true, ClaimsPriorRuns: true}
-	case taskAttachReferenceContinue:
-		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: true, PreserveTaskLifecycle: true, CommitLifecycleOnKeep: true}
-	case taskAttachReferenceMention:
-		return attachPolicy{ContextMode: attachContextBounded, ExecutionWorkspaceSource: attachWorkspaceRequest, PreserveTaskLifecycle: true}
+	case taskAttachReferenceContinue, taskAttachReferenceMention:
+		// Legacy reasons kept only so durable maintenance payloads recorded
+		// before simplification P2 still resolve a policy. References no
+		// longer route, load full context, or move the current-task pointer.
+		return attachPolicy{ContextMode: attachContextBounded, ExecutionWorkspaceSource: attachWorkspaceRequest}
 	case taskAttachExplicitTaskID, taskAttachResumePin:
-		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true}
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true, ClaimsPriorRuns: true}
 	case taskAttachCurrentPreLabel:
-		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, PreserveTaskLifecycle: true, CommitLifecycleOnKeep: true}
+		// Legacy reason (pre-P2 sticky pre-label); replay compatibility only.
+		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest}
 	case taskAttachNewLabel:
 		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: true}
 	default:
 		if preLabel {
-			return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: created, PreserveTaskLifecycle: !created, CommitLifecycleOnKeep: !created}
+			return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: created}
 		}
 		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true}
 	}

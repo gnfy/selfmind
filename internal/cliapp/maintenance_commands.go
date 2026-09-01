@@ -31,6 +31,9 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 	if len(a.args) >= 3 && a.args[2] == "memory-dedup" {
 		return true, a.runMaintenanceMemoryDedup(a.args[3:])
 	}
+	if len(a.args) >= 3 && a.args[2] == "memory-archive-environment" {
+		return true, a.runMaintenanceMemoryArchiveEnvironment(a.args[3:])
+	}
 	if len(a.args) >= 3 && a.args[2] == "task-audit" {
 		return true, a.runMaintenanceTaskAudit(a.args[3:])
 	}
@@ -48,6 +51,7 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 		fmt.Fprintln(a.stderr, "       selfmind maintenance prune-skill-candidate-refs [--apply] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]")
+		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-archive-environment [--apply] [--partition P] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]")

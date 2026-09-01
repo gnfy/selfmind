@@ -1,0 +1,84 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "你",
+      "phase": "final_answer"
+    },
+    {
+      "content": "偏",
+      "phase": "final_answer"
+    },
+    {
+      "content": "好",
+      "phase": "final_answer"
+    },
+    {
+      "content": "我",
+      "phase": "final_answer"
+    },
+    {
+      "content": "回复",
+      "phase": "final_answer"
+    },
+    {
+      "content": "时",
+      "phase": "final_answer"
+    },
+    {
+      "content": "永",
+      "phase": "final_answer"
+    },
+    {
+      "content": "远",
+      "phase": "final_answer"
+    },
+    {
+      "content": "先",
+      "phase": "final_answer"
+    },
+    {
+      "content": "给",
+      "phase": "final_answer"
+    },
+    {
+      "content": "结",
+      "phase": "final_answer"
+    },
+    {
+      "content": "论",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，再",
+      "phase": "final_answer"
+    },
+    {
+      "content": "给",
+      "phase": "final_answer"
+    },
+    {
+      "content": "论",
+      "phase": "final_answer"
+    },
+    {
+      "content": "据",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "usage": {
+        "input_tokens": 6938,
+        "output_tokens": 21,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 6938,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

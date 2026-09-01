@@ -248,10 +248,6 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 			now, r.tenantID, r.taskID, r.runID); err != nil {
 			return 0, err
 		}
-		if err := ensureRunBlockerTx(ctx, tx, r.tenantID, r.personID, r.taskID, r.runID,
-			"interrupted", "Interrupted by gateway restart.", []string{"Resume this work from the last durable evidence."}, time.Unix(now, 0)); err != nil {
-			return 0, err
-		}
 	}
 	// Orphaned-task repair: the run pass above only flips a task whose
 	// active_run_id still points at the dead run. Historic finalization bugs
@@ -261,7 +257,7 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	// "running" forever in /tasks. The tx sees the run flips above, so any
 	// task still 'running' here truly has zero live runs (excluded registry
 	// runs keep status 'running' and protect their tasks). 'interrupted' is
-	// deliberately non-terminal: resolveContinueTask still offers these tasks
+	// deliberately non-terminal: the continuation ladder still offers these runs
 	// for `继续` / `/resume`.
 	orphanRows, err := tx.QueryContext(ctx,
 		`SELECT id, tenant_id FROM tasks

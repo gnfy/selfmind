@@ -1,0 +1,68 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Confirmation",
+      "phase": "final_answer"
+    },
+    {
+      "content": " received",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " The",
+      "phase": "final_answer"
+    },
+    {
+      "content": " run",
+      "phase": "final_answer"
+    },
+    {
+      "content": " is",
+      "phase": "final_answer"
+    },
+    {
+      "content": " complete",
+      "phase": "final_answer"
+    },
+    {
+      "content": " with",
+      "phase": "final_answer"
+    },
+    {
+      "content": " no",
+      "phase": "final_answer"
+    },
+    {
+      "content": " remaining",
+      "phase": "final_answer"
+    },
+    {
+      "content": " open",
+      "phase": "final_answer"
+    },
+    {
+      "content": " inputs",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "usage": {
+        "input_tokens": 7660,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 7660,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

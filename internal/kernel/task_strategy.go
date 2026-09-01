@@ -94,6 +94,9 @@ type TaskStrategy struct {
 	// Populated by the gateway (tools.ExecSandboxPromptNote); kernel stays free
 	// of tool-package dependencies.
 	ExecSandboxNote string
+	// VerificationOnly exposes observation and lifecycle tools only. It is a
+	// trusted recovery contract, never a natural-language classification.
+	VerificationOnly bool
 }
 
 // ToolBudgetPolicy is the configurable envelope around the evidence-gated
@@ -359,6 +362,9 @@ func (s TaskStrategy) SystemPromptNote() string {
 	if s.ToolMode == ToolModeNone {
 		sb.WriteString("Answer directly. Do not call tools for this turn.\n")
 	} else {
+		if s.VerificationOnly {
+			sb.WriteString("This is a verification-only recovery turn. Observe current state and resolve uncertainty; do not mutate files, processes, services, or external systems. If read-only evidence cannot determine the result, finish with an actionable blocker.\n")
+		}
 		sb.WriteString("All non-command user input has been routed to the agent. Do not assume a short message is casual; use the conversation, task, workspace, and resume context to decide what to do.\n")
 		sb.WriteString("When the user replies with a brief acceptance or continuation such as ok, yes, continue, proceed, or equivalent wording, inspect the previous assistant/task context and continue the proposed work if that is what the user approved.\n")
 		sb.WriteString("You decide whether tools are useful. Prefer a direct answer for pure questions and small snippets when no local or external state is needed.\n")

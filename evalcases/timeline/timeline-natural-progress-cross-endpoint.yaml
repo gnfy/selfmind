@@ -1,0 +1,33 @@
+id: timeline_natural_progress_cross_endpoint
+title: "natural-language IM progress resolves CLI work without starting a run"
+require_cassette: true
+suite: timeline
+workspace: isolated
+channel: cli
+continuity_mode: safe
+
+setup:
+  task:
+    title: "RUQX-767 production release"
+    parked_runs:
+      - input: "release PHP services for RUQX-767 from CLI"
+        status: interrupted
+
+turns:
+  - input: "刚才 RUQX-767 的发布任务进展怎么样？"
+    channel: weixin
+
+expect:
+  status: completed
+  http_status: 200
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains:
+    - "RUQX-767 production release"
+    - "interrupted"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true

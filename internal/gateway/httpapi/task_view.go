@@ -21,9 +21,9 @@ import (
 // (detail, runs, rename, archive). Shared by every endpoint via
 // tryHandleControlCommand — IM gets the same short cards.
 
-const taskUsage = "Usage: /task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>|references|reference add|remove <name>]"
+const taskUsage = "Usage: /task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]"
 
-const tasksTrailingHint = "Reply to continue the current task, /resume <id> to switch, /task <id> for detail."
+const tasksTrailingHint = "Use /resume <number> to continue, /task <number> complete to mark done, or /task <number> archive to hide. IDs also work."
 
 // taskCardView is the batched per-person data every card draws from, fetched
 // once per /tasks render (grouped queries, never per-task round trips).
@@ -42,7 +42,7 @@ type taskCardView struct {
 // "done" (terminal, non-archived), "archived", "all". Any other suffix is a
 // keyword search across all tasks, e.g. /tasks game. A variant may also carry a
 // query: /tasks done report, /tasks archived tank, /tasks search pgsql.
-func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.IdentityContext, variant string) (string, error) {
+func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.IdentityContext, variant string, channels ...string) (string, error) {
 	args := parseTasksArgs(variant)
 	viewName := args.view
 	if viewName == "" {
@@ -90,6 +90,9 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 		} else {
 			sb.WriteString("Open tasks:\n")
 			tasks = groupTasksByWorkKey(tasks)
+			if args.page == 1 {
+				d.taskLists.remember(identity, firstString(channels), tasks, time.Now())
+			}
 			for i, task := range tasks {
 				index := 0
 				if args.page == 1 {
@@ -100,6 +103,9 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 			if page.HasMore() {
 				sb.WriteString(fmt.Sprintf("\n... and %d more open - use /tasks open --page %d or /tasks search <keyword>", page.Total-offset-len(tasks), args.page+1))
 			}
+		}
+		if len(tasks) == 0 && args.page == 1 {
+			d.taskLists.remember(identity, firstString(channels), nil, time.Now())
 		}
 		donePage, _ := d.Control.QueryTasks(ctx, identity.TenantID, identity.PersonID, control.TaskQuery{View: "done", WorkspaceID: args.workspace, Limit: 1})
 		archivedPage, _ := d.Control.QueryTasks(ctx, identity.TenantID, identity.PersonID, control.TaskQuery{View: "archived", WorkspaceID: args.workspace, Limit: 1})
@@ -486,11 +492,11 @@ func fileBasename(path string) string {
 }
 
 // taskCommandReply handles /task <id> [runs|rename <name>|archive].
-func (d *Server) taskCommandReply(ctx context.Context, identity *control.IdentityContext, args []string) (string, error) {
+func (d *Server) taskCommandReply(ctx context.Context, identity *control.IdentityContext, args []string, channels ...string) (string, error) {
 	if len(args) == 0 {
 		return taskUsage, nil
 	}
-	task, userErr, err := d.resolveTaskReference(ctx, identity, args[0])
+	task, userErr, err := d.resolveTaskReference(ctx, identity, args[0], channels...)
 	if err != nil {
 		return "", err
 	}
@@ -603,7 +609,7 @@ func (d *Server) taskCommandReply(ctx context.Context, identity *control.Identit
 		if len(args) < 3 {
 			return "Usage: /task <src> merge <dst> — moves all of src's runs/history into dst and archives src.", nil
 		}
-		target, targetErr, err := d.resolveTaskReference(ctx, identity, args[2])
+		target, targetErr, err := d.resolveTaskReference(ctx, identity, args[2], channels...)
 		if err != nil {
 			return "", err
 		}
@@ -634,22 +640,53 @@ func (d *Server) taskCommandReply(ctx context.Context, identity *control.Identit
 		})
 		return fmt.Sprintf("Merged %s into %s: %d run(s) moved, source archived.\nContinue with /resume %s.",
 			textutil.Truncate(toOneLine(task.Title), 40), textutil.Truncate(toOneLine(target.Title), 40), moved, shortTaskID(target.ID)), nil
+	case "complete":
+		if active := d.coordinator().currentActive(identity.PersonID); active != nil && active.TaskID == task.ID {
+			return "This task has a run executing right now. Use /stop and wait for it to finish before marking the task complete.", nil
+		}
+		result, err := d.Control.CompleteTaskByUser(ctx, identity.TenantID, identity.PersonID, task.ID)
+		if err != nil {
+			if err == control.ErrTaskHasLiveWork {
+				return "This task still has running or externally monitored work. Stop the run or cancel its watcher before marking it complete.", nil
+			}
+			return "", err
+		}
+		if !result.Changed {
+			return "Task is already complete.", nil
+		}
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID: task.ID, Type: "task.completed", Visibility: "task",
+			Payload: mustJSON(map[string]interface{}{
+				"source": "user", "expired_approvals": result.ExpiredApprovals,
+				"expired_clarifications": result.ExpiredClarifications,
+				"cancelled_queue_rows":   result.CancelledQueueRows,
+			}),
+		})
+		return fmt.Sprintf("Completed task: %s (%s). /resume %s reopens it.",
+			textutil.Truncate(toOneLine(task.Title), 48), shortTaskID(task.ID), shortTaskID(task.ID)), nil
 	case "archive":
 		if archivedTaskStatus(task.Status) {
 			return "Task is already archived.", nil
 		}
-		// Archived is terminal for continuation and hidden from open lists,
-		// label cards, and the pre-label guess; only an explicit /resume <id>
-		// reopens it. Keep the existing summary (empty summary is preserved by
-		// UpdateTaskStatus's COALESCE).
-		if err := d.Control.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "archived", "", nil); err != nil {
+		if active := d.coordinator().currentActive(identity.PersonID); active != nil && active.TaskID == task.ID {
+			return "This task has a run executing right now. Use /stop and wait for it to finish before archiving the task.", nil
+		}
+		result, err := d.Control.ArchiveTaskByUser(ctx, identity.TenantID, identity.PersonID, task.ID)
+		if err != nil {
+			if err == control.ErrTaskHasLiveWork {
+				return "This task still has running or externally monitored work. Stop the run or cancel its watcher before archiving it.", nil
+			}
 			return "", err
 		}
 		_, _ = d.Control.AppendEvent(ctx, control.Event{
 			TaskID:     task.ID,
 			Type:       "task.archived",
 			Visibility: "task",
-			Payload:    mustJSON(map[string]string{"reason": "archived by user"}),
+			Payload: mustJSON(map[string]interface{}{
+				"reason": "archived by user", "expired_approvals": result.ExpiredApprovals,
+				"expired_clarifications": result.ExpiredClarifications,
+				"cancelled_queue_rows":   result.CancelledQueueRows,
+			}),
 		})
 		return fmt.Sprintf("Archived task: %s (%s). /resume %s reopens it.",
 			textutil.Truncate(toOneLine(task.Title), 48), shortTaskID(task.ID), shortTaskID(task.ID)), nil
@@ -714,89 +751,58 @@ func (d *Server) taskDetailReply(ctx context.Context, identity *control.Identity
 	return strings.TrimSpace(sb.String()), nil
 }
 
-// listTasksForDisplay fetches the person's tasks in the stable display order
-// every task list renders in. The store already orders by updated_at DESC;
-// the id tiebreak here makes ties deterministic so the numbered cards and
-// ordinal resolution can never disagree within one snapshot.
+// listTasksForDisplay fetches the default ranked open cards. It is only the
+// fallback for an ordinal used without a recent endpoint snapshot; ordinary
+// /tasks -> /task or /resume flows resolve the exact rendered snapshot.
 func (d *Server) listTasksForDisplay(ctx context.Context, identity *control.IdentityContext) ([]control.Task, error) {
-	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 100)
+	page, err := d.Control.QueryTasks(ctx, identity.TenantID, identity.PersonID, control.TaskQuery{
+		View: "open", Limit: d.TaskGovernance.listLimit(),
+	})
 	if err != nil {
 		return nil, err
 	}
-	sortTasksForDisplay(tasks)
-	return tasks, nil
-}
-
-func (d *Server) limitOpenTaskCards(tasks []control.Task) []control.Task {
-	limit := d.TaskGovernance.listLimit()
-	if len(tasks) <= limit {
-		return tasks
-	}
-	return tasks[:limit]
-}
-
-// sortTasksForDisplay orders tasks newest-first (updated_at DESC, id ASC as
-// tiebreaker). This is the card order of the /tasks views and therefore the
-// order ordinal references (/task 1, /resume 1) resolve against; both sides
-// must use it or numbers would pick the wrong task (same display-order =
-// resolution-order contract as sortApprovalsForDisplay).
-func sortTasksForDisplay(tasks []control.Task) {
-	sort.SliceStable(tasks, func(i, j int) bool {
-		if tasks[i].Pinned != tasks[j].Pinned {
-			return tasks[i].Pinned
-		}
-		if !tasks[i].UpdatedAt.Equal(tasks[j].UpdatedAt) {
-			return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt)
-		}
-		return tasks[i].ID < tasks[j].ID
-	})
-}
-
-// splitTasksForDisplay partitions display-ordered tasks into open / done /
-// archived, preserving order. The open slice IS the numbered card list of the
-// default /tasks view, so it is also the list task ordinals resolve against.
-func splitTasksForDisplay(tasks []control.Task) (open, done, archived []control.Task) {
-	for _, t := range tasks {
-		switch {
-		case archivedTaskStatus(t.Status):
-			archived = append(archived, t)
-		case terminalTaskStatus(t.Status):
-			done = append(done, t)
-		default:
-			open = append(open, t)
-		}
-	}
-	return open, done, archived
+	return groupTasksByWorkKey(page.Tasks), nil
 }
 
 // resolveTaskReference resolves a user-supplied task reference for control
 // commands, mirroring the approval resolver contract (approval_resolver.go):
 // a bare number is a LIST ORDINAL against the numbered cards of the default
-// /tasks view (open tasks, display order = resolution order — both sides go
-// through listTasksForDisplay/splitTasksForDisplay), and anything else is a
-// full id or unique short prefix (findTaskByRef; the card-displayed
+// /tasks view, and anything else is a full id or unique short prefix
+// (findTaskByRef; the card-displayed
 // task_xxxxxxxx form round-trips). Shared by /task and /resume so the same
 // reference means the same task on every surface.
 //
 // The middle return is a user-facing sentence (safe to send verbatim on any
 // channel) for reference mistakes; the error return is reserved for storage
 // failures.
-func (d *Server) resolveTaskReference(ctx context.Context, identity *control.IdentityContext, ref string) (*control.Task, string, error) {
+func (d *Server) resolveTaskReference(ctx context.Context, identity *control.IdentityContext, ref string, channels ...string) (*control.Task, string, error) {
 	ref = strings.TrimSpace(ref)
 	if ordinal, convErr := strconv.Atoi(ref); convErr == nil {
+		if taskID, count, found := d.taskLists.resolve(identity, firstString(channels), ordinal, time.Now()); found {
+			if taskID == "" {
+				return nil, fmt.Sprintf("No task number %d in the last list; it showed %d (run /tasks to refresh).", ordinal, count), nil
+			}
+			task, err := d.findTaskByRef(ctx, identity, taskID)
+			if err != nil {
+				return nil, "", err
+			}
+			if task == nil {
+				return nil, "That numbered task is no longer available. Run /tasks to refresh the list.", nil
+			}
+			return task, "", nil
+		}
 		tasks, err := d.listTasksForDisplay(ctx, identity)
 		if err != nil {
 			return nil, "", err
 		}
-		open, _, _ := splitTasksForDisplay(tasks)
-		open = d.limitOpenTaskCards(open)
-		if len(open) == 0 {
+		if len(tasks) == 0 {
 			return nil, "No open tasks to number; see /tasks.", nil
 		}
-		if ordinal < 1 || ordinal > len(open) {
-			return nil, fmt.Sprintf("No open task number %d; %d open (see /tasks).", ordinal, len(open)), nil
+		if ordinal < 1 || ordinal > len(tasks) {
+			return nil, fmt.Sprintf("No open task number %d; %d shown (see /tasks).", ordinal, len(tasks)), nil
 		}
-		return &open[ordinal-1], "", nil
+		d.taskLists.remember(identity, firstString(channels), tasks, time.Now())
+		return &tasks[ordinal-1], "", nil
 	}
 	task, err := d.findTaskByRef(ctx, identity, ref)
 	if err != nil {

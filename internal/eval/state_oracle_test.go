@@ -28,9 +28,9 @@ func sampleWorld(t *testing.T) WorldState {
 			{Type: "tool.completed", Payload: json.RawMessage(`{"tool":"terminal"}`)},
 			{Type: "run.finished"},
 		},
-		Artifacts: []control.Artifact{{TaskID: "t1", Kind: "file", Name: "game.html", URI: "game.html"}},
-		Approvals: []control.ApprovalRequest{},
-		Facts:     map[string][]memory.Fact{"user": {{Target: "user", Content: "prefers vanilla JS"}}},
+		Artifacts:     []control.Artifact{{TaskID: "t1", Kind: "file", Name: "game.html", URI: "game.html"}},
+		Approvals:     []control.ApprovalRequest{},
+		Facts:         map[string][]memory.Fact{"user": {{Target: "user", Content: "prefers vanilla JS"}}},
 		WorkspaceRoot: root,
 	}
 }

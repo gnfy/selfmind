@@ -16,6 +16,11 @@ type stableToolError struct {
 	category     string
 	safeMessage  string
 	recoveryHint string
+	failurePhase string
+	retryability string
+	effectState  string
+	stateChanged bool
+	alternatives []string
 }
 
 func (e *stableToolError) Error() string             { return e.cause.Error() }
@@ -24,6 +29,13 @@ func (e *stableToolError) ToolErrorCode() string     { return e.code }
 func (e *stableToolError) ToolErrorCategory() string { return e.category }
 func (e *stableToolError) ModelSafeMessage() string  { return e.safeMessage }
 func (e *stableToolError) ToolRecoveryHint() string  { return e.recoveryHint }
+func (e *stableToolError) ToolFailurePhase() string  { return e.failurePhase }
+func (e *stableToolError) ToolRetryability() string  { return e.retryability }
+func (e *stableToolError) ToolEffectState() string   { return e.effectState }
+func (e *stableToolError) ToolStateChanged() bool    { return e.stateChanged }
+func (e *stableToolError) ToolAlternatives() []string {
+	return append([]string(nil), e.alternatives...)
+}
 
 func newStableToolError(cause error, code, category, safeMessage, recoveryHint string) error {
 	if cause == nil {
@@ -35,6 +47,30 @@ func newStableToolError(cause error, code, category, safeMessage, recoveryHint s
 		category:     strings.TrimSpace(category),
 		safeMessage:  strings.TrimSpace(safeMessage),
 		recoveryHint: strings.TrimSpace(recoveryHint),
+	}
+}
+
+func newStableToolRecoveryError(
+	cause error,
+	code, category, safeMessage, recoveryHint string,
+	failurePhase, retryability, effectState string,
+	stateChanged bool,
+	alternatives ...string,
+) error {
+	if cause == nil {
+		return nil
+	}
+	return &stableToolError{
+		cause:        cause,
+		code:         strings.TrimSpace(code),
+		category:     strings.TrimSpace(category),
+		safeMessage:  strings.TrimSpace(safeMessage),
+		recoveryHint: strings.TrimSpace(recoveryHint),
+		failurePhase: strings.TrimSpace(failurePhase),
+		retryability: strings.TrimSpace(retryability),
+		effectState:  strings.TrimSpace(effectState),
+		stateChanged: stateChanged,
+		alternatives: append([]string(nil), alternatives...),
 	}
 }
 

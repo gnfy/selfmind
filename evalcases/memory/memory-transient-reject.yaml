@@ -1,0 +1,34 @@
+id: memory_transient_reject
+title: "transient run state never enters long-term memory, even explicitly"
+suite: memory
+# Simplification P3 acceptance (docs/task-run-memory-simplification.zh-CN.md
+# §12 P3): build status and temporary task state are never written as
+# preferences. The explicit /remember path refuses deterministically with
+# guidance — no model involved.
+model_required: false
+workspace: isolated
+channel: cli
+
+turns:
+  - input: "/remember Build ID: cw-prod:0d4a9e81 has been created"
+
+expect:
+  status: completed
+  http_status: 200
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains:
+    - "transient"
+  must_not_contain:
+    - "Remembered:"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+
+assert_state:
+  - on: memory
+    target: user
+    count_lte: 0

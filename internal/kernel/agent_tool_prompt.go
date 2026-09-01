@@ -51,7 +51,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 			sb.WriteString("Use tool_search when you need a registered capability that is not currently active. A result activates matching deferred tools for later calls in this run.\n")
 		}
 		if names["watch_external"] {
-			sb.WriteString("When an external operation will outlive one short check, register watch_external with explicit success and failure conditions instead of polling. Registration hands the run off as waiting_external; do not continue foreground work afterward.\n")
+			sb.WriteString("Do not repeatedly poll external state in the model loop. When watch_external supports a proven read-only observation, it can hand the run off as waiting_external. If preparation says the watcher is unsupported, use the returned alternatives to choose a genuinely different strategy—such as one bounded observation, a provider-native wait, or an existing local process handle—and park with an actionable blocker when none is available.\n")
 			if names["finish_run"] {
 				sb.WriteString("After watch_external registration, do not call finish_run.\n")
 			}

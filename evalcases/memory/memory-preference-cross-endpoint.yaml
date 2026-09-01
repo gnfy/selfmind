@@ -1,0 +1,37 @@
+id: memory_preference_cross_endpoint
+title: "an explicit preference saved on one endpoint is recalled on another"
+suite: memory
+# Simplification P3 acceptance: the person states a preference once (CLI,
+# via the deterministic /remember path) and a turn on ANOTHER channel sees it
+# in its prompt and can restate it. The cassette is mandatory; re-record with:
+#   SELFMIND_EVAL_VCR=record selfmind eval run evalcases/memory/memory-preference-cross-endpoint.yaml --live
+require_cassette: true
+workspace: isolated
+channel: cli
+
+turns:
+  - input: "/remember 回复时永远先给结论，再给论据"
+    channel: cli
+  - input: "只用一句话告诉我：你记住的我的回复偏好是什么？不要看文件，不要用工具。"
+    channel: weixin
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 300
+  contains:
+    - "结论"
+  must_not_contain:
+    - "没有记住"
+    - "<tool>"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+
+assert_state:
+  - on: memory
+    target: user
+    contains: "先给结论"
+    count_gte: 1

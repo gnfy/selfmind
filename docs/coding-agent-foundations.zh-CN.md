@@ -29,6 +29,24 @@ gateway 路由或主 agent loop 中增加语言特判。
 6. 把工具错误当作证据，分析环境并调整，不盲目更换命令重复尝试；
 7. 汇报修改内容、验证证据和剩余风险。
 
+运行时会在提示词之外执行同一套恢复纪律。工具尝试会关联当前持久 plan step、
+目标、策略和环境。诊断证据产生后允许一次输入有变化的修正；完全相同的重试、
+同策略的第三个表面变体，或未知 effect 后再次变更状态，都会在分发前被拒绝。
+此时 Agent 必须先观察当前状态、选择真正不同的策略，或以可执行的阻塞说明结束。
+只有当用户、仓库约束或变更本身确实要求可执行验证时，plan step 才设置
+`verification_required`；可选验证仍可汇报，但不会让纯检查任务无法完成。
+
+新 Run 会启用版本化恢复契约。若 daemon 或 Provider 中断且尚未产生外部 effect，
+系统可以幂等地排入一个精确指向 parent Run 的 child Run；若已分发 effect 但结果不确定，
+则进入 verification-only 恢复：只暴露可信的只读工具，并在分发边界拒绝 mutation。
+审批、澄清和 external watch 仍由各自专用恢复路径负责；历史 Run 不会因为二进制升级而
+自动获得执行能力。尚未开始的自动恢复优先级低于用户新提交的前台工作。
+
+长时间外部等待使用冻结的持久 observation 契约，而不是由模型反复轮询。成功预检会
+记录命令哈希、环境 generation、类型化 observation adapter、目标、截止时间和能力。
+adapter 只返回 `pending`、`succeeded` 或 `failed`，Provider 语法留在 tools 层。
+同一 Run 内的 `all`/`any` 等待组只产生一个聚合结论，并且最多触发一个 finalization Run。
+
 完成状态必须由证据决定：
 
 - `completed`：工作完成且相关验证通过；若没有可执行验证，需要明确说明；

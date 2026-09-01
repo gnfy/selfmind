@@ -131,3 +131,71 @@ func truncateAuditLine(content string) string {
 	}
 	return content
 }
+
+// runMaintenanceMemoryArchiveEnvironment retires the pre-P3 environment half
+// of person memory: person memory is preference-only now
+// (docs/task-run-memory-simplification.zh-CN.md P3), so historical ACTIVE
+// target="memory" canonical rows stop serving prompts by moving to `archived`
+// (reversible; nothing is deleted, and pinned or user-confirmed rows are
+// never touched). Dry-run by default.
+func (a *App) runMaintenanceMemoryArchiveEnvironment(args []string) int {
+	fs := flag.NewFlagSet("selfmind maintenance memory-archive-environment", flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	apply := fs.Bool("apply", false, "archive the listed rows (default: report only)")
+	partition := fs.String("partition", "", "single partition to process (e.g. person_<id> or default); empty scans default + person_* partitions")
+	dataDir := fs.String("data-dir", "", "memory data directory (default: the configured storage data dir)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	dir := strings.TrimSpace(*dataDir)
+	if dir == "" {
+		dir = a.gatewayDataDir()
+	}
+	provider, err := memory.NewSQLiteProvider(dir)
+	if err != nil {
+		fmt.Fprintf(a.stderr, "memory-archive-environment: cannot open memory provider: %v\n", err)
+		return 1
+	}
+	defer provider.Close()
+
+	partitions := []string{strings.TrimSpace(*partition)}
+	if partitions[0] == "" {
+		partitions = listMemoryAuditPartitions(dir)
+	}
+	found, protected, archived := 0, 0, 0
+	for _, part := range partitions {
+		rows, err := provider.ListCanonicalMemories(a.ctx, part, memory.CanonicalFilter{Target: "memory"})
+		if err != nil {
+			fmt.Fprintf(a.stderr, "memory-archive-environment: %s: %v\n", part, err)
+			continue
+		}
+		for _, row := range rows {
+			if row.Status != memory.CanonicalActive {
+				continue
+			}
+			if row.Pinned || row.UserConfirmed {
+				protected++
+				continue
+			}
+			found++
+			preview := row.Content
+			if len([]rune(preview)) > 90 {
+				preview = string([]rune(preview)[:90]) + "…"
+			}
+			fmt.Fprintf(a.stdout, "%s %s [%s] %s\n", part, row.ID[:8], row.Scope, preview)
+			if *apply {
+				if err := provider.SetCanonicalStatus(a.ctx, part, row.ID, memory.CanonicalArchived, "maintenance"); err != nil {
+					fmt.Fprintf(a.stderr, "memory-archive-environment: archive %s: %v\n", row.ID, err)
+					continue
+				}
+				archived++
+			}
+		}
+	}
+	if *apply {
+		fmt.Fprintf(a.stdout, "Archived %d environment memory row(s); %d protected (pinned/user-confirmed) left untouched.\n", archived, protected)
+	} else {
+		fmt.Fprintf(a.stdout, "Dry run: %d environment memory row(s) would be archived; %d protected (pinned/user-confirmed) untouched. Re-run with --apply.\n", found, protected)
+	}
+	return 0
+}

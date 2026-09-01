@@ -337,6 +337,13 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	}
 	semanticHealth := httpapi.NewSemanticRecallHealth(httpapi.SemanticRecallHealthOptions{
 		Expander: semanticExpander, Initial: semanticReadiness,
+		RouteLabel: func() string {
+			role, _, ok := cfg.ResolveAuxiliaryRole("semantic_recall")
+			if !ok {
+				return ""
+			}
+			return strings.Trim(strings.TrimSpace(role.Provider)+"/"+strings.TrimSpace(role.Model), "/")
+		}(),
 		Probe: func(probeCtx context.Context) modelchange.ProbeResult {
 			results := app.ValidateModelChange(probeCtx, cfg, []modelchange.Route{modelchange.RouteSemanticRecall})
 			for _, result := range results {
@@ -407,6 +414,11 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.
 		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID),
+		// Natural-language continuity is a bounded, advisory fast_classifier
+		// decision. The gateway owns candidates, validates current state, and
+		// remains the only component allowed to create, steer, or resume a run.
+		ContinuityResolver: app.NewConfiguredContinuityResolver(mem, cfg, defaultTenantID),
+		ContinuityMode:     cfg.Continuity.EffectiveMode(),
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
 		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, prompts, controlStore),
@@ -429,6 +441,8 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// Structured session APIs for thin clients (/v1/sessions): the daemon
 		// session index, person-partitioned (ACTIVE PLAN P0-3).
 		Sessions: mem,
+		// Cross-endpoint explicit memory commands (/remember, /forget).
+		Memory: mem,
 		// Spool root for over-budget tool outputs (execution-quality W1); must
 		// match the tool_output_view base dir wired in app.InitTools (both
 		// derive from the same resolved data dir).
@@ -441,7 +455,6 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
 	maintenanceDebounce, maintenanceMaxWait, maintenanceBatchMax := cfg.Tasks.MaintenanceBatchPolicy()
 	gatewayAPI.TaskGovernance = httpapi.TaskGovernanceOptions{
-		InboxEnabled:              cfg.Tasks.InboxEnabled,
 		DefaultListLimit:          cfg.Tasks.ListLimit(),
 		AutoArchiveDoneAfter:      doneAfter,
 		AutoArchiveCancelledAfter: cancelledAfter,

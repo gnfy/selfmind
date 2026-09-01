@@ -115,7 +115,7 @@ func newDetachedRunServer(t *testing.T, provider *slowLLMProvider) (*Server, *co
 	agent := kernel.NewAgent(memory.NewMemoryManager(nil), stubToolBackend{}, provider, "test agent", 1, 1, nil)
 	// nil intent llmProvider: intent stays rule-based so the blocking provider
 	// is only reached by the actual agent turn.
-	gw := router.NewGateway(nil, nil, agent, nil)
+	gw := router.NewGateway(agent, nil)
 	daemon := &Server{Control: store, Gateway: gw, DefaultTenantID: "default"}
 	sender := &syncedSender{}
 	daemon.Delivery = delivery.NewService(store, sender, delivery.Options{})

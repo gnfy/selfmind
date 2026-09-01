@@ -44,10 +44,10 @@ func parkEmptyTask(t *testing.T, daemon *Server, title string) *control.Task {
 	return parked
 }
 
-// TestOrdinaryMessageReusesOpenCurrentLabel: with an open current label, an
-// ordinary message runs under the SAME label (new run) — the pre-label default
-// — instead of spawning a context-less task per message.
-func TestOrdinaryMessageReusesOpenCurrentLabel(t *testing.T) {
+// TestOrdinaryMessageOwnsFreshRootTask pins the simplification-P2 inversion of
+// the old pre-label default: an ordinary message never attaches to the open
+// current label — it owns a fresh root task, and the open label is untouched.
+func TestOrdinaryMessageOwnsFreshRootTask(t *testing.T) {
 	provider := newSlowLLMProvider("making progress on the requested work")
 	provider.releaseNow()
 	daemon, store, _ := newDetachedRunServer(t, provider)
@@ -62,16 +62,14 @@ func TestOrdinaryMessageReusesOpenCurrentLabel(t *testing.T) {
 	if status != 200 || resp.Task == nil {
 		t.Fatalf("agent turn failed: status=%d resp=%+v", status, resp)
 	}
-	if resp.Task.ID != parked.ID {
-		t.Fatalf("ordinary message should pre-label onto the open current label %s, got %s", parked.ID, resp.Task.ID)
+	if resp.Task.ID == parked.ID {
+		t.Fatalf("ordinary message must own a fresh root task, not the current label %s", parked.ID)
 	}
-	runs, err := store.ListTaskRuns(ctx, parked.TenantID, parked.ID, 10)
-	if err != nil || len(runs) != 1 {
-		t.Fatalf("want 1 run on the pre-labeled task, got %d (%v)", len(runs), err)
+	if runs, err := store.ListTaskRuns(ctx, parked.TenantID, parked.ID, 10); err != nil || len(runs) != 0 {
+		t.Fatalf("the open current label must stay untouched, got %d runs (%v)", len(runs), err)
 	}
-	tasks, _ := store.ListTasks(ctx, parked.TenantID, parked.PersonID, 20)
-	if len(tasks) != 1 {
-		t.Fatalf("no second task should exist, got %d: %+v", len(tasks), tasks)
+	if runs, err := store.ListTaskRuns(ctx, resp.Task.TenantID, resp.Task.ID, 10); err != nil || len(runs) != 1 {
+		t.Fatalf("want 1 run on the fresh task, got %d (%v)", len(runs), err)
 	}
 }
 
@@ -126,15 +124,23 @@ func TestOrdinaryMessageWithArchivedCurrentCreatesNewLabel(t *testing.T) {
 	}
 }
 
-// TestContinuationCueAttachesToParkedTask: "继续" is explicit continuation
-// evidence — deterministic attach, unchanged by P3.
-func TestContinuationCueAttachesToParkedTask(t *testing.T) {
+// TestContinuationCueAttachesToParkedRun: "继续" is explicit continuation
+// evidence — it continues the unique unclaimed resumable RUN (the §5.3 ladder)
+// and claims it as the new run's parent.
+func TestContinuationCueAttachesToParkedRun(t *testing.T) {
 	provider := newSlowLLMProvider("continuing where we left off")
 	provider.releaseNow()
-	daemon, _, _ := newDetachedRunServer(t, provider)
+	daemon, store, _ := newDetachedRunServer(t, provider)
 	ctx := context.Background()
 
 	parked := parkEmptyTask(t, daemon, "resume me")
+	waiting, err := store.StartRun(ctx, parked, "cli", "prepare the release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, parked.TenantID, waiting.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
 
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "继续",
@@ -144,6 +150,9 @@ func TestContinuationCueAttachesToParkedTask(t *testing.T) {
 	}
 	if resp.Task.ID != parked.ID {
 		t.Fatalf("continuation created task %s; want attach to %s", resp.Task.ID, parked.ID)
+	}
+	if resp.Run == nil || resp.Run.ParentRunID != waiting.ID {
+		t.Fatalf("continuation must claim the waiting run as parent: %+v", resp.Run)
 	}
 }
 
@@ -218,13 +227,43 @@ func TestResumePinReopensArchivedTask(t *testing.T) {
 	}
 }
 
-// TestAsyncExplicitWorkspacePreLabelHarmless is the rewritten live-bug
-// regression: an async request with an EXPLICIT workspace now pre-labels onto
-// the unrelated open current task BY DESIGN — and that is harmless: the open
-// label's own (absent) workspace binding is not mutated by the guess, the
-// execution workspace follows the request (workspaceForTask unit contract),
-// and the post-run labeler can re-point the run.
-func TestAsyncExplicitWorkspacePreLabelHarmless(t *testing.T) {
+func TestResumePinReopensCompletedTask(t *testing.T) {
+	provider := newSlowLLMProvider("making progress on the requested work")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+
+	completed := parkEmptyTask(t, daemon, "completed work")
+	closed, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/task " + completed.ID + " complete",
+	})
+	if !strings.Contains(closed.Content, "Completed task") {
+		t.Fatalf("completion failed: %+v", closed)
+	}
+
+	resumed, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/resume " + completed.ID,
+	})
+	if !strings.Contains(resumed.Content, "Resumed task") {
+		t.Fatalf("/resume of a completed task must work: %+v", resumed)
+	}
+	next, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "add one more follow-up",
+	})
+	if next.Task == nil || next.Task.ID != completed.ID {
+		t.Fatalf("message after /resume did not attach to the completed task: %+v", next.Task)
+	}
+	after, _ := store.GetTask(ctx, completed.TenantID, completed.ID)
+	if after == nil || terminalTaskStatus(after.Status) {
+		t.Fatalf("resumed completed task should be open again, got %+v", after)
+	}
+}
+
+// TestAsyncExplicitWorkspaceOwnsFreshTask is the rewritten live-bug
+// regression: an async request with an EXPLICIT workspace owns its own root
+// task (simplification P2) — the unrelated open current label is untouched,
+// and the fresh task carries the request workspace.
+func TestAsyncExplicitWorkspaceOwnsFreshTask(t *testing.T) {
 	provider := newSlowLLMProvider("making progress on the requested work")
 	provider.releaseNow()
 	daemon, store, _ := newDetachedRunServer(t, provider)
@@ -249,11 +288,26 @@ func TestAsyncExplicitWorkspacePreLabelHarmless(t *testing.T) {
 		t.Fatalf("async dispatch not accepted: %+v", resp)
 	}
 
-	// The async run lands on the open current label (pre-label).
+	// The async run lands on its OWN fresh task; the parked label stays empty.
+	var freshTaskID string
 	waitUntil(t, 5*time.Second, func() bool {
-		runs, _ := store.ListTaskRuns(ctx, parked.TenantID, parked.ID, 10)
-		return len(runs) == 1
-	}, "async run never landed on the pre-labeled task")
+		tasks, _ := store.ListTasks(ctx, parked.TenantID, parked.PersonID, 20)
+		for _, task := range tasks {
+			if task.ID == parked.ID {
+				continue
+			}
+			runs, _ := store.ListTaskRuns(ctx, parked.TenantID, task.ID, 10)
+			if len(runs) == 1 {
+				freshTaskID = task.ID
+				return true
+			}
+		}
+		return false
+	}, "async run never landed on its own fresh task")
+	_ = freshTaskID
+	if runs, _ := store.ListTaskRuns(ctx, parked.TenantID, parked.ID, 10); len(runs) != 0 {
+		t.Fatalf("the open current label must stay untouched, got %d runs", len(runs))
+	}
 	waitUntil(t, 5*time.Second, func() bool {
 		runs, _ := store.ListRunningRuns(ctx, parked.TenantID, []string{parked.PersonID})
 		return len(runs) == 0
@@ -268,11 +322,10 @@ func TestAsyncExplicitWorkspacePreLabelHarmless(t *testing.T) {
 	}
 }
 
-// TestDrainedQueueItemPreLabelsOntoOpenTask: a queued item drained after the
-// active run finishes is an ordinary message — it takes the same pre-label
-// default (the now-parked open label) instead of spawning its own task, and
-// the queue/busy path itself is untouched.
-func TestDrainedQueueItemPreLabelsOntoOpenTask(t *testing.T) {
+// TestDrainedQueueItemOwnsFreshRootTask: a queued item drained after the
+// active run finishes is an ordinary message — it owns its own root task
+// (simplification P2), and the queue/busy path itself is untouched.
+func TestDrainedQueueItemOwnsFreshRootTask(t *testing.T) {
 	provider := newSlowLLMProvider("making progress on the requested work")
 	daemon, store, _ := newDetachedRunServer(t, provider)
 	ctx := context.Background()
@@ -292,12 +345,17 @@ func TestDrainedQueueItemPreLabelsOntoOpenTask(t *testing.T) {
 	}, "queued item was never drained")
 	waitUntil(t, 5*time.Second, func() bool {
 		tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
-		if len(tasks) != 1 {
+		if len(tasks) != 2 {
 			return false
 		}
-		runs, _ := store.ListTaskRuns(ctx, identity.TenantID, tasks[0].ID, 10)
-		return len(runs) == 2
-	}, "drained item did not become a second run on the open label")
+		for _, task := range tasks {
+			runs, _ := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
+			if len(runs) != 1 {
+				return false
+			}
+		}
+		return true
+	}, "drained item did not own a fresh root task")
 	waitUntil(t, 5*time.Second, func() bool {
 		runs, _ := store.ListRunningRuns(ctx, identity.TenantID, []string{identity.PersonID})
 		return len(runs) == 0

@@ -66,7 +66,7 @@ selfmind send [--async] [--mode MODE] [--add-dir DIR]... <message>
 selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
-selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
+selfmind task <n|task_id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>]
 selfmind task <n|task_id> references|reference add <name>|reference remove <name>
 selfmind resume <n|task_id>
 selfmind workspaces
@@ -94,8 +94,11 @@ selfmind new [title]
   workspace。运行中的 turn 不能改变附加目录集合；需要不同目录时应新开 run。
   若消息正文要原样包含 `--add-dir`，请先写 `--`。
 - `tasks` 默认列出开放工作，也可以按状态或关键词过滤。
-- `task` 支持列表序号或稳定 task ID。
-- `resume` 必要时会重新打开已归档任务，并在该任务上启动 TUI。
+- `task` 支持列表序号或稳定 task ID。序号绑定当前端点最近展示的那份开放任务
+  列表；即使后台活动随后改变实时排序，也不会指向另一个任务。
+- `task ... complete` 把工作标记为完成，但不会删除 run、事件或产物；
+  `task ... archive` 用于隐藏作废或重复工作。两者都可通过显式 `resume`
+  重新打开，已完成任务同样支持恢复。
 - `workspaces`、`ws` 和 `workspace` 共用以下工作区操作：
 
 ```text
@@ -297,9 +300,10 @@ database 来自同一份已加载配置；如果用 `--root` 指向另一棵资�
 然后再次预览以验证结果为空。应结合 dry-run 输出中的 owner 行与
 `selfmind doctor --verbose` 复核；不要直接在 SQLite 中删除 candidate ref。
 
-- `task-audit` 默认只读，列出缺少持久 blocker 证据的暂停任务。只有任务当前无
-  active run，且状态与最新已结束 run 完全一致时，`--apply` 才补写 blocker；
-  历史混杂或状态冲突只报告，不修改 task/run 状态。
+- `task-audit` 是只读的 Task/Run 连续性审计：升级回填未能转换的旧 resume 边、
+  非法 parent 边、失去归属的待处理 approval/clarify，以及与推导结果不一致的
+  任务状态投影。`--apply` 只通过生产 reducer 修复投影不一致；其余发现一律
+  人工复核，绝不改写 run、边或记忆。
 - `migrate-task-references` 默认只做 dry-run。只有历史 `work_key` 的完整表面
   形式确实出现在该 run 的原始用户输入中时才允许迁移；从标题或摘要推断出的
   值只报告并跳过。`--apply` 可重复执行，且不会赋予工作区或执行权限。
@@ -322,7 +326,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /id
 /status
 /tasks [done|archived|all]
-/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>|references|reference add|remove <name>]
+/task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [memory|context|tasks|models|delivery|execution|tools]
@@ -335,8 +339,11 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /stop
 /cancel
 /notify <platform|auto|desk-first|phone-first>
-/new [title]
-/resume [n|task_id]  (bare = pick from recent tasks)
+/new [title] | /new --run <request>
+/resume [n|task_id|run_id]  (bare = pick from recent tasks)
+/choose <choice_id> <number>
+/remember <preference>
+/forget <text|ref>
 /workspace [n|id]  (bare = list; alias: /ws)
 /workspaces  (same as bare /workspace or /ws)
 ```
@@ -346,8 +353,17 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用
   `/watchers 1` 查看第一条 watcher，使用 `/watchers cancel 1` 停止监控。
   取消 watcher 不会取消外部操作。
+- `/new [title]` 保留现有的 task 标签行为；`/new --run <request>` 是确定性的
+  新工作入口，不经过连续性模型判断。
+- `/choose <choice_id> <number>` 精确回答一个持久化的连续性问题，可从另一个
+  已绑定端点或 daemon 重启后回答。只有该 person 最近恰好有一个待答问题时，
+  才会把裸数字当作选择。
 - `/notify <platform|auto>` 选择首选 IM 目标；`desk-first` 让新审批先留在
   已附着的 TUI，并在 T1 后补推，`phone-first` 则立即同步到 IM。
+- `/remember <preference>` 把用户明确表达的个人偏好写入长期记忆（个人记忆
+  只存偏好），跨所有端点生效；`/forget <text|ref>` 按文本或 `/memory` 显示的
+  ref 遗忘一条，多条匹配时返回带 ref 的编号列表。临时运行/构建状态会被拒绝
+  并给出指引。
 - `/task <id> references` 查看可用于定位该任务的受治理名称和标识；
   `reference add <名称>` 由用户直接确认，`reference remove <名称>` 停用它。
   自动学习的 reference 需要不同 run 的原始用户文本重复支持；冲突时系统不会猜测。

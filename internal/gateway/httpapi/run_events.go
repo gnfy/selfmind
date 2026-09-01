@@ -106,6 +106,18 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		LogicalKey: strings.TrimSpace(req.EffectKey),
 	}
 	accepted := false
+	if active := c.currentActive(identity.PersonID); active != nil && active.RunID == base.RunID && active.DeliveryOverride {
+		base.Platform = active.DeliveryPlatform
+		base.PlatformUserID = active.DeliveryPlatformUserID
+		base.Channel = active.DeliveryChannel
+		accepted, _ = c.srv.Delivery.EnqueueAndTryAccepted(ctx, base)
+		if accepted && req.EffectKey != "" && c.srv.Control != nil {
+			if err := c.srv.Control.MarkEffectDeliveryEnqueued(ctx, identity.TenantID, req.EffectKey); err != nil {
+				return false
+			}
+		}
+		return accepted
+	}
 	// Platform-only check: TUI channels are session UUIDs, not "cli".
 	if req.Platform == "cli" {
 		// A terminal has no push surface for a fire-and-forget run, so the
@@ -327,7 +339,8 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		eventType = classifyLearningReviewEvent(event.Content)
 	case "plan.updated":
 		eventType = "plan.updated"
-		if plan := workUnitPlanFromPayload(event.Payload); run != nil && len(plan) > 0 {
+		_, durablyProjected := event.Payload["plan_version"]
+		if plan := workUnitPlanFromPayload(event.Payload); !durablyProjected && run != nil && len(plan) > 0 {
 			if units, err := c.srv.Control.SyncRunWorkUnits(ctx, task.TenantID, run.ID, plan); err != nil {
 				log.Warn("work-unit plan projection failed", "run_id", run.ID, "error", err)
 			} else {

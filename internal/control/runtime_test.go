@@ -173,9 +173,14 @@ func TestMarkInterruptedRunsRepairsOrphanedRunningTask(t *testing.T) {
 		t.Fatalf("FinishRun: %v", err)
 	}
 	// ...but the task written back to 'running' (what old binaries did when the
-	// outcome said "more work planned").
-	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "running", "midway", nil); err != nil {
-		t.Fatalf("UpdateTaskStatus: %v", err)
+	// outcome said "more work planned"). Use raw fixture setup because the
+	// current UpdateTaskStatus path now rejects this corruption through the
+	// durable lifecycle reducer.
+	if _, err := store.db.ExecContext(ctx,
+		`UPDATE tasks SET status = 'running', current_summary = 'midway' WHERE tenant_id = ? AND id = ?`,
+		identity.TenantID, task.ID,
+	); err != nil {
+		t.Fatalf("seed legacy orphan: %v", err)
 	}
 
 	count, err := store.MarkInterruptedRuns(ctx, 0)

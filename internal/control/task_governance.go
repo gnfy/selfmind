@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -46,45 +44,9 @@ func (t Task) IsInbox() bool {
 	return normalizeTaskKind(t.Kind) == TaskKindInbox
 }
 
-// EnsureInboxTask returns the hidden, archived inbox label for one
-// person/workspace. Inbox is an operational sink for casual or diagnostic
-// runs: it preserves runs/events for audit without polluting /tasks or recall.
-// It never becomes current_task and cannot capture a later turn.
-func (s *Store) EnsureInboxTask(ctx context.Context, tenantID, personID, workspaceID string) (*Task, error) {
-	tenantID = normalizeTenant(tenantID)
-	personID = strings.TrimSpace(personID)
-	workspaceID = strings.TrimSpace(workspaceID)
-	if personID == "" {
-		return nil, fmt.Errorf("person id is required")
-	}
-	now := time.Now().Unix()
-	id := "task_" + uuid.NewString()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO tasks
-		 (id, tenant_id, person_id, workspace_id, title, status, kind, visibility,
-		  pinned, last_channel, archived_at, last_activity_at, created_at, updated_at)
-		 VALUES (?, ?, ?, NULLIF(?, ''), 'Inbox', 'archived', 'inbox', 'hidden',
-		  0, 'system', ?, ?, ?, ?)`,
-		id, tenantID, personID, workspaceID, now, now, now, now)
-	if err != nil {
-		return nil, err
-	}
-	var taskID string
-	err = s.db.QueryRowContext(ctx,
-		`SELECT id FROM tasks
-		 WHERE tenant_id = ? AND person_id = ? AND kind = 'inbox'
-		   AND COALESCE(workspace_id, '') = ?
-		 ORDER BY created_at ASC LIMIT 1`,
-		tenantID, personID, workspaceID).Scan(&taskID)
-	if err != nil {
-		return nil, err
-	}
-	return s.GetTask(ctx, tenantID, taskID)
-}
-
 // ClearCurrentTaskIf removes a stale pointer only when it still targets the
-// supplied label. This is used after moving a new placeholder run to Inbox;
-// it cannot erase a newer explicit /resume selection that raced the cleanup.
+// supplied label; it cannot erase a newer explicit /resume selection that
+// raced the cleanup.
 func (s *Store) ClearCurrentTaskIf(ctx context.Context, tenantID, personID, taskID string) error {
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM current_task WHERE tenant_id = ? AND person_id = ? AND task_id = ?`,
@@ -274,6 +236,7 @@ func (s *Store) QueryTasks(ctx context.Context, tenantID, personID string, q Tas
 	where.WriteString(` WHERE tasks.tenant_id = ? AND tasks.person_id = ?
 		AND COALESCE(tasks.visibility, 'visible') != 'hidden'`)
 	args := []any{normalizeTenant(tenantID), strings.TrimSpace(personID)}
+	rankOpenView := false
 	if status := strings.TrimSpace(q.Status); status != "" {
 		where.WriteString(` AND tasks.status = ?`)
 		args = append(args, status)
@@ -281,6 +244,7 @@ func (s *Store) QueryTasks(ctx context.Context, tenantID, personID string, q Tas
 		switch view {
 		case "open":
 			where.WriteString(` AND tasks.status NOT IN ('done', 'completed', 'cancelled', 'failed', 'archived')`)
+			rankOpenView = true
 		case "done":
 			where.WriteString(` AND tasks.status IN ('done', 'completed', 'cancelled', 'failed')`)
 		case "archived":
@@ -315,6 +279,32 @@ func (s *Store) QueryTasks(ctx context.Context, tenantID, personID string, q Tas
 		return TaskPage{}, err
 	}
 	selectArgs := append(append([]any(nil), args...), q.Limit, q.Offset)
+	// Display priority is a DERIVED projection (simplification P2 §7.2): with
+	// every root run owning its own task, the default open list would otherwise
+	// fill with one-shot Q&A rows. Pinned work leads, then work waiting on the
+	// person (unclaimed resumable runs / pending approvals / pending questions),
+	// then real work lines (several runs, artifacts, or recorded next steps),
+	// then plain recency. Ranking never changes retention, search, or
+	// continuity — the other views keep pure recency.
+	orderBy := ` ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC, id ASC`
+	if rankOpenView {
+		orderBy = ` ORDER BY COALESCE(pinned, 0) DESC,
+		 (EXISTS (SELECT 1 FROM task_runs w
+		          WHERE w.tenant_id = tasks.tenant_id AND w.task_id = tasks.id
+		            AND w.status IN ` + resumableRunStatusSQL + `
+		            AND COALESCE(w.resumed_by_run_id, '') = ''
+		            AND NOT EXISTS (SELECT 1 FROM task_runs c
+		                 WHERE c.tenant_id = w.tenant_id AND c.parent_run_id = w.id))
+		  OR EXISTS (SELECT 1 FROM approval_requests ap
+		          WHERE ap.tenant_id = tasks.tenant_id AND ap.task_id = tasks.id AND ap.status = 'pending')
+		  OR EXISTS (SELECT 1 FROM clarify_requests cl
+		          WHERE cl.tenant_id = tasks.tenant_id AND cl.task_id = tasks.id AND cl.status = 'pending')) DESC,
+		 ((SELECT COUNT(*) FROM task_runs r
+		   WHERE r.tenant_id = tasks.tenant_id AND r.task_id = tasks.id) > 1
+		  OR EXISTS (SELECT 1 FROM task_artifacts ar WHERE ar.task_id = tasks.id)
+		  OR COALESCE(tasks.next_steps_json, '[]') NOT IN ('[]', 'null', '')) DESC,
+		 updated_at DESC, id ASC`
+	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(workspace_id, ''), title, status,
 		        COALESCE(kind, 'work'), COALESCE(visibility, 'visible'), COALESCE(pinned, 0),
@@ -322,8 +312,7 @@ func (s *Store) QueryTasks(ctx context.Context, tenantID, personID string, q Tas
 		        COALESCE(blocked_reason, ''), COALESCE(active_run_id, ''),
 		        COALESCE(last_channel, ''), archived_at,
 		        COALESCE(last_activity_at, updated_at), created_at, updated_at
-		 FROM tasks`+where.String()+`
-		 ORDER BY COALESCE(pinned, 0) DESC, updated_at DESC, id ASC
+		 FROM tasks`+where.String()+orderBy+`
 		 LIMIT ? OFFSET ?`, selectArgs...)
 	if err != nil {
 		return TaskPage{}, err

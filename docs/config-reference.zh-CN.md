@@ -227,8 +227,6 @@ exec_sandbox:
 
 ```yaml
 memory:
-  auto_extract_interval: 5       # 最多每 N 轮抽取一次持久事实
-  auto_extract_min_chars: 80     # 跳过过短的轮次
   semantic_recall: true          # 每轮附带相关的历史工作片段
   use_memory_fence: true         # 把召回记忆包装成不可信的背景数据
   governance:
@@ -392,7 +390,7 @@ delegation:           # 多智能体子任务；留空则用默认模型策略
   max_iterations: 50
 ```
 
-## 10. 意图路由（高级，很少改）
+## 10. 意图与工作续接（高级）
 
 ```yaml
 intent:
@@ -400,9 +398,19 @@ intent:
   thresholds:
     direct: 0.8
     ask: 0.55
+continuity:
+  mode: "safe"         # shadow | safe | full | off
 ```
 
 普通语言永远会到达 agent；这些旋钮只调显式命令和续接检测。大多数用户用默认即可。
+
+`continuity.mode` 控制 `fast_classifier` 对历史 run 卡片的有界判断。`shadow`
+只记录判断而保留旧的确定性路径；`safe`（默认）可直接执行只读进度查询、新工作
+判断和对当前活动 run 的明确指导，但恢复历史 run 前仍要求用户选择；`full` 还可
+执行明确的历史恢复；`off` 关闭这次模型调用。无论哪种模式，显式 ID、回复元数据、
+`/resume`、`/choose`、`/new --run` 和独立的“继续”控制都保持确定性。该调用使用
+`models.roles.fast_classifier` 覆盖或 `models.auxiliary`，关闭 thinking，并共享
+六秒总时限。
 
 ## 11. MCP 服务器
 

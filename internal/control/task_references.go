@@ -413,7 +413,7 @@ func reconcileTaskReferenceValueWith(ctx context.Context, db taskReferenceQueryE
 			return err
 		}
 		bindings = append(bindings, b)
-		if b.confirmed != 0 || b.support >= 2 {
+		if b.confirmed != 0 {
 			qualifiedTasks[b.task] = struct{}{}
 		}
 	}
@@ -421,11 +421,17 @@ func reconcileTaskReferenceValueWith(ctx context.Context, db taskReferenceQueryE
 		return err
 	}
 	for _, b := range bindings {
+		// Automatic promotion is frozen (simplification P2): references are
+		// aliases and search hints, so only an explicit user confirmation may
+		// activate one. Run-count support keeps a reference at candidate — a
+		// useful recall signal — and its old negative-evidence loop died with
+		// the post-run MOVE routing, so self-promotion would have had no
+		// correction path left.
 		status := TaskReferenceCandidate
 		if b.current == TaskReferenceShadow && b.support == 0 && b.confirmed == 0 {
 			status = TaskReferenceShadow
 		}
-		if b.confirmed != 0 || b.support >= 2 {
+		if b.confirmed != 0 {
 			status = TaskReferenceActive
 		}
 		if len(qualifiedTasks) > 1 {

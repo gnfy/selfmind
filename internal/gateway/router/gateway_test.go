@@ -27,30 +27,8 @@ func (p *intentLLMProvider) StreamChat(ctx context.Context, req llm.ChatRequest)
 	return ch, nil
 }
 
-func TestIsTaskDoneConservative(t *testing.T) {
-	tests := []struct {
-		name     string
-		response string
-		want     bool
-	}{
-		{name: "clear done", response: "Task completed successfully.", want: true},
-		{name: "clear chinese done", response: "\u5904\u7406\u5b8c\u6210", want: true},
-		{name: "plain success wording", response: "The success criteria are listed below.", want: false},
-		{name: "not done", response: "Not done yet; remaining work is listed below.", want: false},
-		{name: "chinese not done", response: "\u672a\u5b8c\u6210\uff0c\u9700\u8981\u7ee7\u7eed", want: false},
-		{name: "blocked", response: "Blocked: need approval before continuing.", want: false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isTaskDone(tt.response); got != tt.want {
-				t.Fatalf("isTaskDone() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestModelStatusReplyUsesConfiguredRuntimeLabel(t *testing.T) {
-	gw := NewGateway(nil, nil, nil, nil)
+	gw := NewGateway(nil, nil)
 	gw.SetModelDisplay("kimi-coding", "kimi-for-coding")
 
 	resp := gw.ModelStatusReply()
@@ -99,20 +77,11 @@ func TestIntentClassifierKeepsExplicitRoutes(t *testing.T) {
 }
 
 func TestIntentLLMDoesNotOverrideAgentFirstDefault(t *testing.T) {
-	gw := NewGateway(nil, nil, nil, &intentLLMProvider{content: `{"intent":"casual","confidence":0.99,"reason":"chat"}`})
+	gw := NewGateway(nil, &intentLLMProvider{content: `{"intent":"casual","confidence":0.99,"reason":"chat"}`})
 	gw.SetIntentClassifier(NewIntentClassifierWithRules(IntentRuleConfig{Mode: "llm"}))
 
 	result := gw.ClassifyIntentWithContext(context.Background(), "maybe later", "cli")
 	if result.Intent != IntentTask || result.Source != "rules" {
 		t.Fatalf("intent result = %+v", result)
-	}
-}
-
-func TestModelStatusQuestionHelperIsNotUsedForIdentity(t *testing.T) {
-	if isModelStatusQuestion("\u4f60\u662f\u8c01\uff1f") {
-		t.Fatalf("identity question should not be a model-status helper match")
-	}
-	if !isModelStatusQuestion("which model are you using?") {
-		t.Fatalf("model question should match helper")
 	}
 }

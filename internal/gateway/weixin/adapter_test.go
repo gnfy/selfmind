@@ -141,10 +141,13 @@ func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 
 	err = adapter.processMessage(ctx, map[string]interface{}{
 		"msg": map[string]interface{}{
-			"msg_id":        "m1",
-			"from_user_id":  "wx-user",
-			"to_user_id":    "wx-account",
-			"context_token": "ctx-token",
+			"msg_id":          "m1",
+			"from_user_id":    "wx-user",
+			"to_user_id":      "wx-account",
+			"context_token":   "ctx-token",
+			"reply_to_run_id": "run_parent",
+			"approval_id":     "apr_parent",
+			"clarify_id":      "clarify_parent",
 			"item_list": []interface{}{
 				map[string]interface{}{
 					"type": itemText,
@@ -163,6 +166,9 @@ func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 	}
 	if got.TenantID != "default" {
 		t.Fatalf("tenant = %q", got.TenantID)
+	}
+	if got.ReplyToRunID != "run_parent" || got.ApprovalID != "apr_parent" || got.ClarifyID != "clarify_parent" {
+		t.Fatalf("structured return metadata = %+v", got)
 	}
 	if sentMessages != 1 {
 		t.Fatalf("sent messages = %d", sentMessages)

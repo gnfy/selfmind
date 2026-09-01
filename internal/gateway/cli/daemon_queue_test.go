@@ -11,7 +11,7 @@ import (
 )
 
 func TestQueuedTurnTransitionsThroughDaemonLifecycle(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	input := "check the release and merge the PR"
 
 	model.localRequestActive = true
@@ -66,7 +66,7 @@ func TestQueuedTurnTransitionsThroughDaemonLifecycle(t *testing.T) {
 }
 
 func TestDaemonFinishWithoutObservedStartDoesNotChangeStatus(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.runStatus = "ready"
 
 	updated, _ := model.Update(MsgDaemonRunFinished{
@@ -81,7 +81,7 @@ func TestDaemonFinishWithoutObservedStartDoesNotChangeStatus(t *testing.T) {
 }
 
 func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	updated, _ := model.Update(MsgWatcherCompleted{
 		WatchID:    "watch_123",
@@ -124,7 +124,7 @@ func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
 // replays the whole background transcript, so only its start notice and its
 // recorded outcome may reach this terminal.
 func TestWatcherFinalizationRunRendersResultNotProcess(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	const runID = "run_finalize"
 	ref := func(eventID string) uiEventRef {
 		return uiEventRef{Source: eventSourceDaemon, RunID: runID, EventID: eventID}
@@ -197,7 +197,7 @@ func TestWatcherFinalizationRunRendersResultNotProcess(t *testing.T) {
 // has no boundary the person already saw, so it stays silent until it has
 // something to report.
 func TestCronRunRendersResultWithoutStartNoticeOrProcess(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	const runID = "run_cron"
 	ref := func(eventID string) uiEventRef {
 		return uiEventRef{Source: eventSourceDaemon, RunID: runID, EventID: eventID}
@@ -252,7 +252,7 @@ func TestCronRunRendersResultWithoutStartNoticeOrProcess(t *testing.T) {
 // The suppression is scoped to the background run id: an ordinary daemon run
 // that starts afterwards still streams its progress to this terminal.
 func TestForegroundRunStillStreamsAfterBackgroundRun(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.markBackgroundRun("run_finalize", "watch_123", "watch")
 
 	updated, _ := model.Update(MsgDaemonRunStarted{
@@ -275,7 +275,7 @@ func TestForegroundRunStillStreamsAfterBackgroundRun(t *testing.T) {
 }
 
 func TestOlderSynchronousReplyDoesNotClearNewerDaemonRun(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.localRequestActive = true
 	model.localRequestInput = "first"
 	model.daemonRunActive = true

@@ -32,7 +32,7 @@ func TestToolSemanticActionColors(t *testing.T) {
 }
 
 func TestAgentDoneEmptyResponseShowsError(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	updated, _ := model.Update(MsgAgentDone{})
 	got := updated.(*uiModel)
@@ -52,7 +52,7 @@ func TestAgentDoneEmptyResponseShowsError(t *testing.T) {
 }
 
 func TestModelManagerRejectsOlderDaemonProtocol(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	status := modelchange.Status{}
 
 	updated, _ := model.Update(MsgModelManagerOpen{Response: api.ModelChangeResponse{
@@ -73,7 +73,7 @@ func TestModelManagerRejectsOlderDaemonProtocol(t *testing.T) {
 }
 
 func TestAgentDoneDoesNotDuplicateStreamedResponse(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.messages = append(model.messages, ChatMessage{
 		Role:      "assistant",
 		Content:   "streamed answer",
@@ -95,7 +95,7 @@ func TestAgentDoneDoesNotDuplicateStreamedResponse(t *testing.T) {
 }
 
 func TestStreamShowsPartialLineWithoutCommittingHistory(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 20
 
@@ -111,7 +111,7 @@ func TestStreamShowsPartialLineWithoutCommittingHistory(t *testing.T) {
 }
 
 func TestStreamKeepsCompleteAndPartialLinesOutOfHistory(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 20
 
@@ -127,7 +127,7 @@ func TestStreamKeepsCompleteAndPartialLinesOutOfHistory(t *testing.T) {
 }
 
 func TestAgentDoneFinalizesLiveStreamOnce(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	updated, _ := model.Update(MsgStream{Content: "streamed answer\n"})
 	model = updated.(*uiModel)
@@ -146,7 +146,7 @@ func TestAgentDoneFinalizesLiveStreamOnce(t *testing.T) {
 }
 
 func TestToolStartFinalizesLiveStreamBeforeToolCell(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	updated, _ := model.Update(MsgStream{Content: "I will inspect it.\n"})
 	model = updated.(*uiModel)
@@ -165,7 +165,7 @@ func TestToolStartFinalizesLiveStreamBeforeToolCell(t *testing.T) {
 }
 
 func TestAgentDoneErrorKeepsPartialResponse(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	updated, _ := model.Update(MsgAgentDone{Response: "partial answer", Err: io.ErrUnexpectedEOF})
 	got := updated.(*uiModel)
@@ -185,7 +185,7 @@ func TestAgentDoneErrorKeepsPartialResponse(t *testing.T) {
 }
 
 func TestWorkingTickReschedulesWhileThinking(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.thinking = true
 	model.thinkingStart = time.Now()
 
@@ -198,7 +198,7 @@ func TestWorkingTickReschedulesWhileThinking(t *testing.T) {
 }
 
 func TestAgentActivityReplacesGenericWorkingText(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 20
 
@@ -217,7 +217,7 @@ func TestAgentActivityReplacesGenericWorkingText(t *testing.T) {
 }
 
 func TestThinkingIndicatorRendersInActiveRegion(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 100
 	model.height = 24
 	model.messages = append(model.messages, ChatMessage{
@@ -232,7 +232,7 @@ func TestThinkingIndicatorRendersInActiveRegion(t *testing.T) {
 }
 
 func TestModelWaitSpinnerHasOneTenFPSTickChain(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	if got := model.spinner.Spinner.FPS; got != 100*time.Millisecond {
 		t.Fatalf("spinner FPS interval = %s, want 100ms", got)
 	}
@@ -269,8 +269,36 @@ func TestModelWaitSpinnerHasOneTenFPSTickChain(t *testing.T) {
 	}
 }
 
+func TestThinkingPhaseStartsSpinnerBeforeFirstModelWaitHeartbeat(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.width = 80
+	model.height = 20
+
+	updated, first := model.Update(MsgAgentActivity{
+		Phase: "thinking", Content: "Reading tool results and deciding the next step",
+	})
+	model = updated.(*uiModel)
+	if first == nil || !model.waitingForModel {
+		t.Fatal("thinking phase did not start the waiting animation immediately")
+	}
+	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "Reading tool results and deciding the next step") {
+		t.Fatalf("thinking phase was not rendered: %q", view)
+	}
+
+	updated, repeated := model.Update(MsgAgentActivity{
+		Phase: modelWaitPhase, Content: "Waiting for the model to decide after tool results (2s)",
+	})
+	model = updated.(*uiModel)
+	if repeated != nil {
+		t.Fatal("thinking -> model_wait started a parallel spinner tick chain")
+	}
+	if !model.waitingForModel || model.activityText != "Waiting for the model to decide after tool results" {
+		t.Fatalf("model_wait did not refresh the active chain: waiting=%t activity=%q", model.waitingForModel, model.activityText)
+	}
+}
+
 func TestToolStartClearsGenericActivityIndicator(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.thinking = true
 	model.activityText = "Thinking about the request"
 
@@ -310,7 +338,7 @@ func TestRunningToolMessageShowsConciseProgress(t *testing.T) {
 }
 
 func TestGenericToolHeartbeatDoesNotBecomeNotification(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	updated, _ := model.Update(MsgToolStart{
 		ToolName:   "terminal",
 		ToolCallID: "call-terminal",
@@ -334,7 +362,7 @@ func TestGenericToolHeartbeatDoesNotBecomeNotification(t *testing.T) {
 }
 
 func TestToolDoneMatchesStartedToolByCallID(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	updated, _ := model.Update(MsgToolStart{
 		ToolName:   "read_file",
 		ToolCallID: "call-a",
@@ -369,7 +397,7 @@ func TestToolDoneMatchesStartedToolByCallID(t *testing.T) {
 }
 
 func TestToolStartRejectsAnonymousMutableRow(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.thinking = true
 	model.activityText = "Thinking"
 
@@ -385,7 +413,7 @@ func TestToolStartRejectsAnonymousMutableRow(t *testing.T) {
 }
 
 func TestOrphanToolCompletionGetsStandaloneHistoryCell(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.runStatus = "working"
 	model.daemonRunActive = true
 	model.daemonRunID = "run-current"
@@ -421,7 +449,7 @@ func TestOrphanToolCompletionGetsStandaloneHistoryCell(t *testing.T) {
 }
 
 func TestLateCompletionFromDifferentRunDoesNotBecomeOrphan(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.runStatus = "working"
 	model.daemonRunActive = true
 	model.daemonRunID = "run-current"
@@ -441,7 +469,7 @@ func TestLateCompletionFromDifferentRunDoesNotBecomeOrphan(t *testing.T) {
 }
 
 func TestToolOutputMatchesActiveToolByCallID(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-a"})
 	model = updated.(*uiModel)
 	updated, _ = model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-b"})
@@ -460,7 +488,7 @@ func TestToolOutputMatchesActiveToolByCallID(t *testing.T) {
 }
 
 func TestUnmatchedToolOutputDoesNotCreateAnonymousRow(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	updated, _ := model.Update(MsgToolOutput{ToolName: "terminal", ToolCallID: "missing", Content: "late output"})
 	model = updated.(*uiModel)
@@ -471,7 +499,7 @@ func TestUnmatchedToolOutputDoesNotCreateAnonymousRow(t *testing.T) {
 }
 
 func TestActiveToolOutputIsBounded(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-a"})
 	model = updated.(*uiModel)
 	for _, line := range []string{"one", "two", "three", "four"} {
@@ -485,7 +513,7 @@ func TestActiveToolOutputIsBounded(t *testing.T) {
 }
 
 func TestAgentDoneCommitsUnfinishedToolRowsAsInterrupted(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-a"})
 	model = updated.(*uiModel)
 	updated, _ = model.Update(MsgToolOutput{ToolName: "terminal", ToolCallID: "call-a", Content: "still running"})
@@ -511,7 +539,7 @@ func TestAgentDoneCommitsUnfinishedToolRowsAsInterrupted(t *testing.T) {
 }
 
 func TestLateToolEventsAreIgnoredAfterAgentDone(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	updated, _ := model.Update(MsgAgentDone{Response: "Finished."})
 	model = updated.(*uiModel)
 
@@ -563,7 +591,7 @@ func TestPatchToolMessageSummarizesStructuredJSON(t *testing.T) {
 }
 
 func TestStatusLineShowsTotalElapsedWhileToolRuns(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.runStatus = "working"
 	model.localRequestActive = true
 	model.thinkingStart = time.Now().Add(-3 * time.Second)
@@ -580,14 +608,14 @@ func TestStatusLineShowsTotalElapsedWhileToolRuns(t *testing.T) {
 
 func TestStatusLineAlwaysShowsEffectiveApprovalMode(t *testing.T) {
 	// Explicit session override wins.
-	explicit := NewController(nil, nil, nil, "").model
+	explicit := NewController("", "", nil, "").model
 	explicit.approvalMode = "auto-edit"
 	if line := stripANSI(explicit.statusLine()); !strings.Contains(line, "mode:auto-edit") {
 		t.Fatalf("status line should show explicit mode: %q", line)
 	}
 
 	// No override → the persisted mode learned from the digest is shown.
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	c.SetClientMode(true) // clears approvalMode → defers to persisted
 	c.SetPersistedApprovalMode("smart")
 	if line := stripANSI(c.model.statusLine()); !strings.Contains(line, "mode:smart") {
@@ -595,7 +623,7 @@ func TestStatusLineAlwaysShowsEffectiveApprovalMode(t *testing.T) {
 	}
 
 	// Unknown (client mode, digest gave nothing) → on-request fallback.
-	unknown := NewController(nil, nil, nil, "")
+	unknown := NewController("", "", nil, "")
 	unknown.SetClientMode(true)
 	if line := stripANSI(unknown.model.statusLine()); !strings.Contains(line, "mode:smart") {
 		t.Fatalf("status line should fall back to smart: %q", line)
@@ -617,7 +645,7 @@ func TestAssistantMessageRendersWithFinalGutter(t *testing.T) {
 }
 
 func TestComposerGapKeepsProgressAwayFromInput(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 100
 	model.height = 24
 
@@ -687,7 +715,7 @@ func TestForwardedPlanEventRendersChecklist(t *testing.T) {
 		t.Fatalf("planJSONFromEvent returned empty for a populated plan")
 	}
 
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	updated, _ := model.Update(MsgToolStart{ToolName: "update_plan", ToolCallID: "call-plan"})
 	model = updated.(*uiModel)
 	updated, _ = model.Update(MsgToolDone{ToolName: "update_plan", ToolCallID: "call-plan", Result: planJSON})
@@ -876,7 +904,7 @@ func TestHistoryContentRendersUnboundedDiff(t *testing.T) {
 		p.WriteString("+line\n")
 	}
 	p.WriteString("*** End Patch")
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 100
 	model.messages = []ChatMessage{{
 		Role: "tool", ToolName: "patch",
@@ -894,7 +922,7 @@ func TestHistoryContentRendersUnboundedDiff(t *testing.T) {
 }
 
 func TestTrimHistoryWindowEvictsCommittedPrefix(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.messages = make([]ChatMessage, maxHistoryWindow+50)
 	for i := range model.messages {
 		model.messages[i] = ChatMessage{Role: "assistant", Content: "x", Committed: true}
@@ -917,7 +945,7 @@ func TestTrimHistoryWindowEvictsCommittedPrefix(t *testing.T) {
 }
 
 func TestHandleCopyLastSelectsAssistant(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.handleCopyLast()
 	if model.statusMsg != "No response to copy yet." {
 		t.Fatalf("empty history should report nothing to copy: %q", model.statusMsg)
@@ -942,7 +970,7 @@ func TestHandleCopyLastSelectsAssistant(t *testing.T) {
 // the first submit. With the fix (queue + flush as tea.Println Cmds) the loop
 // keeps running, so p.Quit() is honored and Run returns within the timeout.
 func TestHybridSubmitDoesNotDeadlock(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	c.SetMessageProcessor(func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
 		return api.MessageResponse{Content: "stub answer"}, 200
 	})
@@ -977,7 +1005,7 @@ func TestHybridSubmitDoesNotDeadlock(t *testing.T) {
 }
 
 func TestHybridCommitsStartupCardToScrollbackOnce(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	model.updateInner(tea.WindowSizeMsg{Width: 100, Height: 30})
 	if !model.startupCommitted {
@@ -994,8 +1022,23 @@ func TestHybridCommitsStartupCardToScrollbackOnce(t *testing.T) {
 	}
 }
 
+// Inline terminal output can be physically rewrapped by the terminal before
+// Bubble Tea receives the new dimensions. A subsequent resize therefore needs
+// an explicit clean redraw of the mutable region; otherwise the renderer moves
+// by the old logical row count and leaves duplicated composer/status rows.
+func TestHybridResizeRequestsCleanActiveRegionRedraw(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.width, model.height = 100, 30
+	model.startupCommitted = true
+
+	_, cmd := model.updateInner(tea.WindowSizeMsg{Width: 70, Height: 20})
+	if cmd == nil {
+		t.Fatal("subsequent terminal resize did not request a clean active-region redraw")
+	}
+}
+
 func TestOnboardingStartupCardShowsModelPairWorkspaceAndFirstTask(t *testing.T) {
-	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-primary", nil, "")
+	controller := NewController("codex-cli", "gpt-primary", nil, "")
 	controller.SetOnboardingContext(OnboardingContext{
 		BackgroundModel: "openai/gpt-background",
 		WorkspaceID:     "ws-1", WorkspaceName: "project", WorkspacePath: "/work/project",
@@ -1009,8 +1052,45 @@ func TestOnboardingStartupCardShowsModelPairWorkspaceAndFirstTask(t *testing.T) 
 	}
 }
 
+func TestStartupCardExplainsRoutesAndShowsOnlyExplicitRoleOverrides(t *testing.T) {
+	controller := NewController("codex-cli", "gpt-5.6-sol", nil, "")
+	controller.model.modelManagerStatus = components.ModelManagerStatus{
+		PrimaryProvider: "codex-cli", PrimaryModel: "gpt-5.6-sol", PrimaryReasoning: "high",
+		BackgroundProvider: "deepseek", BackgroundModel: "deepseek-v4-flash", BackgroundReasoning: "high",
+		BackgroundEnabled: true,
+		RoleOverrides: map[string]components.ModelManagerSubmission{
+			"semantic_recall": {Route: "semantic_recall", Provider: "deepseek", Model: "deepseek-v4-flash"},
+		},
+	}
+
+	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(100), "\n"))
+	for _, expected := range []string{
+		"MAIN", "gpt-5.6-sol · codex-cli · high",
+		"Handles requests, planning, tool use, and final answers.",
+		"BACKGROUND", "deepseek-v4-flash · deepseek · high",
+		"Default for maintenance and roles without an explicit override.",
+		"ROLES", "semantic_recall · deepseek-v4-flash · deepseek",
+		"Expands recall queries to find relevant memory and work history.",
+	} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("startup card missing %q:\n%s", expected, rendered)
+		}
+	}
+	if strings.Contains(rendered, "fast_classifier") {
+		t.Fatalf("inherited role should not be repeated in startup card:\n%s", rendered)
+	}
+}
+
+func TestEveryManagedRoleHasStartupDescription(t *testing.T) {
+	for _, role := range modelchange.ManagedRoleRoutes() {
+		if description := startupRoleDescription(string(role)); strings.TrimSpace(description) == "" {
+			t.Errorf("managed role %q has no startup description", role)
+		}
+	}
+}
+
 func TestStartupCardUsesOpenFullWidthLayout(t *testing.T) {
-	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-primary", nil, "")
+	controller := NewController("codex-cli", "gpt-primary", nil, "")
 	controller.SetOnboardingContext(OnboardingContext{
 		BackgroundModel: "openai/gpt-background",
 		WorkspaceID:     "ws-1", WorkspaceName: "project", WorkspacePath: "/work/project",
@@ -1038,7 +1118,7 @@ func TestStartupCardUsesOpenFullWidthLayout(t *testing.T) {
 }
 
 func TestStartupCardWrapsLongValuesWithoutTruncatingThem(t *testing.T) {
-	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "provider/model-with-a-long-identity", nil, "")
+	controller := NewController("codex-cli", "provider/model-with-a-long-identity", nil, "")
 	controller.SetOnboardingContext(OnboardingContext{
 		BackgroundModel: "provider/background-model-with-a-long-identity",
 		WorkspaceID:     "ws-1", WorkspaceName: "project",
@@ -1062,7 +1142,7 @@ func TestStartupCardWrapsLongValuesWithoutTruncatingThem(t *testing.T) {
 }
 
 func TestHelpExplainsImageClipboardShortcut(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	plain := stripANSI(model.renderHelpContent(100))
 	for _, expected := range []string{"Ctrl+V", "/paste-image", "local clipboard"} {
 		if !strings.Contains(plain, expected) {
@@ -1072,7 +1152,7 @@ func TestHelpExplainsImageClipboardShortcut(t *testing.T) {
 }
 
 func TestHelpUsesTerminalReliableMultilineShortcut(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	plain := stripANSI(model.renderHelpContent(100))
 	if !strings.Contains(plain, "Ctrl+J") || !strings.Contains(plain, "Insert a newline") {
 		t.Fatalf("help missing reliable multiline shortcut:\n%s", plain)
@@ -1083,7 +1163,7 @@ func TestHelpUsesTerminalReliableMultilineShortcut(t *testing.T) {
 }
 
 func TestFirstSuccessfulOnboardingTaskIsRecordedOnce(t *testing.T) {
-	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-primary", nil, "")
+	controller := NewController("codex-cli", "gpt-primary", nil, "")
 	calls := 0
 	controller.SetOnboardingContext(OnboardingContext{
 		FirstTaskPending: true,
@@ -1127,7 +1207,7 @@ func TestWriteFileCellRendersDiff(t *testing.T) {
 }
 
 func TestHybridCommitMarksMessageImmutable(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.messages = []ChatMessage{{Role: "user", Content: "hello"}}
 
@@ -1139,7 +1219,7 @@ func TestHybridCommitMarksMessageImmutable(t *testing.T) {
 }
 
 func TestHybridActiveBlockShowsOnlyUncommitted(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.messages = []ChatMessage{
 		{Role: "assistant", Content: "committed answer", Committed: true},
@@ -1163,7 +1243,7 @@ func TestHybridActiveBlockShowsOnlyUncommitted(t *testing.T) {
 }
 
 func TestHybridViewDoesNotReRenderCommittedHistory(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 24
 	model.messages = []ChatMessage{{Role: "user", Content: "scrolled-away message", Committed: true}}
@@ -1175,7 +1255,7 @@ func TestHybridViewDoesNotReRenderCommittedHistory(t *testing.T) {
 }
 
 func TestNotificationBarStylesGuidanceDistinctly(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 
 	model.setStatusNotice(noticeGuidance, "Sent to the running task as guidance.")
 	guidance := model.notificationBar(80)
@@ -1212,7 +1292,7 @@ func TestNotificationBarStylesGuidanceDistinctly(t *testing.T) {
 }
 
 func TestStatusNoticeClearDoesNotEraseNewerNotice(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	oldID := model.setStatusNotice(noticeSuccess, "first")
 	newID := model.setStatusNotice(noticeWarning, "second")
 
@@ -1228,7 +1308,7 @@ func TestStatusNoticeClearDoesNotEraseNewerNotice(t *testing.T) {
 // the daemon, so mid-run input must go through the steer function (gateway
 // API), never the process-local channel the daemon cannot read.
 func TestClientModeSteerForwardsToDaemon(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.clientMode = true
 	model.thinking = true
 	model.steerCh = make(chan string, 1) // local channel must stay untouched
@@ -1261,7 +1341,7 @@ func TestClientModeSteerForwardsToDaemon(t *testing.T) {
 // full buffer, transport error) must surface in the transcript — mid-run input
 // must never look accepted when it was dropped.
 func TestClientModeSteerErrorShowsHonestNotice(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.clientMode = true
 	model.thinking = true
 	model.steerFn = func(text string) error {
@@ -1285,7 +1365,7 @@ func TestClientModeSteerErrorShowsHonestNotice(t *testing.T) {
 // in-process behavior is unchanged — guidance lands on steerCh for the local
 // agent loop to drain.
 func TestInProcessSteerStillUsesLocalChannel(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.thinking = true
 	model.steerCh = make(chan string, 1)
 
@@ -1304,7 +1384,7 @@ func TestInProcessSteerStillUsesLocalChannel(t *testing.T) {
 }
 
 func TestDisplayModelNameShowsProviderAndModel(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.providerName = "kimi-coding"
 	model.modelName = "kimi-for-coding"
 
@@ -1314,7 +1394,7 @@ func TestDisplayModelNameShowsProviderAndModel(t *testing.T) {
 }
 
 func TestModelChangeReceiptKeepsRunningModelUntilObservedApplied(t *testing.T) {
-	model := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-old", nil, "").model
+	model := NewController("codex-cli", "gpt-old", nil, "").model
 	model.modelChangeObserver = func(context.Context, string) (ModelChangeObservation, error) {
 		return ModelChangeObservation{}, nil
 	}
@@ -1337,7 +1417,7 @@ func TestModelChangeReceiptKeepsRunningModelUntilObservedApplied(t *testing.T) {
 }
 
 func TestModelRestartOfflinePreservesDraftInsteadOfPosting(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.modelGatewayOffline = true
 	model.modelChangePhase = modelchange.StatusRestarting
 	model.editor.SetValue("inspect the workspace")
@@ -1352,7 +1432,7 @@ func TestModelRestartOfflinePreservesDraftInsteadOfPosting(t *testing.T) {
 }
 
 func TestModelChangeSlowWarningIsShownOnlyOnce(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.modelChangeObserver = func(context.Context, string) (ModelChangeObservation, error) {
 		return ModelChangeObservation{}, nil
 	}
@@ -1383,7 +1463,7 @@ func TestFormatUsageUnknownLimit(t *testing.T) {
 
 func TestControllerUsesResolvedContextLength(t *testing.T) {
 	cfg := testKimiConfig()
-	model := NewController(nil, nil, cfg, "").model
+	model := NewController("", "", cfg, "").model
 
 	if model.tokenLimit != 262144 {
 		t.Fatalf("tokenLimit = %d, want Kimi context length", model.tokenLimit)
@@ -1394,7 +1474,7 @@ func TestControllerUsesResolvedContextLength(t *testing.T) {
 }
 
 func TestCursorBlinkTickTogglesComposerCursor(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.cursorVisible = true
 
 	updated, cmd := model.Update(MsgCursorBlinkTick(time.Now()))
@@ -1409,7 +1489,7 @@ func TestCursorBlinkTickTogglesComposerCursor(t *testing.T) {
 }
 
 func TestSelectionActionBarIsNotRendered(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 24
 
@@ -1421,7 +1501,7 @@ func TestSelectionActionBarIsNotRendered(t *testing.T) {
 }
 
 func TestControllerHistoryKeepsArrowOwnershipForRecalledSlashCommand(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	model.editor.SeedHistory([]string{"ordinary question", "/model"}, 1024)
 
 	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
@@ -1471,7 +1551,7 @@ func TestTUIGatewayControlCommandsRouteToDaemon(t *testing.T) {
 		{"/workspace ws_1", "/workspace ws_1"},
 		{"/workspaces", "/workspaces"},
 	} {
-		model := NewController(nil, nil, nil, "").model
+		model := NewController("", "", nil, "").model
 		var got string
 		model.messageProcessor = func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
 			got = req.Content
@@ -1505,7 +1585,7 @@ func testKimiConfig() *config.Config {
 // /workspace 2 → /resume …) rendered as disembodied replies (observed live:
 // "我在cli里面输入的内容,好像也看不到了").
 func TestSlashCommandEchoesUserInputBeforeReply(t *testing.T) {
-	c := NewController(nil, nil, nil, "")
+	c := NewController("", "", nil, "")
 	model := c.model
 	c.SetClientMode(true)
 	c.SetMessageProcessor(func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
@@ -1549,7 +1629,7 @@ func TestSlashCommandEchoesUserInputBeforeReply(t *testing.T) {
 // TestSkillSlashDoesNotDoubleEchoInput: the skill-invocation fallback used to
 // echo the raw input itself; now handleCommand owns the single echo.
 func TestSkillSlashDoesNotDoubleEchoInput(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
+	model := NewController("", "", nil, "").model
 	_ = model.handleCommand("/definitely-not-a-command-xyz")
 	count := 0
 	for _, msg := range model.messages {

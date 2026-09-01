@@ -93,10 +93,11 @@ func TestStuckRunSweeperRecoversStaleRunsButSkipsActive(t *testing.T) {
 	}
 }
 
-// TestResolveContinueTaskOffersInterruptedTask pins the resumability contract
-// for recovered tasks: 'interrupted' (and the between-turns 'in_progress') are
-// non-terminal, so `继续` / `/resume` keep offering them after recovery.
-func TestResolveContinueTaskOffersInterruptedTask(t *testing.T) {
+// TestContinuationLadderOffersInterruptedRun pins the resumability contract
+// for recovered work: 'interrupted' (and the between-turns 'in_progress') are
+// non-terminal, so `继续` / `/resume` keep offering the parked run after
+// recovery — via the person-wide run ladder, not any task pointer.
+func TestContinuationLadderOffersInterruptedRun(t *testing.T) {
 	for _, status := range []string{"interrupted", "in_progress"} {
 		if terminalTaskStatus(status) {
 			t.Fatalf("%q must be non-terminal so recovered tasks stay resumable", status)
@@ -119,31 +120,27 @@ func TestResolveContinueTaskOffersInterruptedTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task: %v", err)
 	}
+	run, err := store.StartRun(ctx, task, "cli", "interrupted work")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "interrupted"); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
 	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "interrupted", "Interrupted by gateway restart.", nil); err != nil {
 		t.Fatalf("UpdateTaskStatus: %v", err)
 	}
 
-	daemon := &Server{Control: store, DefaultTenantID: "default"}
-
-	// Current-task pointer path (the pointer still targets the task).
-	got, err := daemon.resolveContinueTask(ctx, identity)
-	if err != nil {
-		t.Fatalf("resolveContinueTask: %v", err)
-	}
-	if got == nil || got.ID != task.ID {
-		t.Fatalf("interrupted task not offered via current pointer, got %+v", got)
-	}
-
-	// List-scan path (pointer dangling): the interrupted task must still be
-	// picked as the most recent non-terminal task.
+	// The continuation ladder (simplification P2) offers the interrupted RUN
+	// person-wide — the current-task pointer no longer matters, dangling or not.
 	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, "task_missing"); err != nil {
 		t.Fatalf("SetCurrentTask: %v", err)
 	}
-	got, err = daemon.resolveContinueTask(ctx, identity)
+	candidates, err := store.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 5)
 	if err != nil {
-		t.Fatalf("resolveContinueTask: %v", err)
+		t.Fatalf("ListUnresolvedRunsForPerson: %v", err)
 	}
-	if got == nil || got.ID != task.ID {
-		t.Fatalf("interrupted task not offered via list scan, got %+v", got)
+	if len(candidates) != 1 || candidates[0].ID != run.ID {
+		t.Fatalf("interrupted run not offered to continuation, got %+v", candidates)
 	}
 }

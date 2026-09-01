@@ -1,11 +1,54 @@
 package tools
 
 import (
+	"errors"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestExternalWatchStaticValidationRunsBeforeApproval(t *testing.T) {
+	approvalReached := false
+	executeReached := false
+	approval := func(next ToolExecutor) ToolExecutor {
+		return func(args map[string]interface{}) (string, error) {
+			approvalReached = true
+			return next(args)
+		}
+	}
+	exec := ExternalWatchStaticValidationMiddleware()(approval(func(args map[string]interface{}) (string, error) {
+		executeReached = true
+		return "registered", nil
+	}))
+
+	_, err := exec(map[string]interface{}{
+		"_tool_name":      "watch_external",
+		"command":         "aws codebuild start-build --project-name api",
+		"success_pattern": "SUCCEEDED",
+	})
+	if err == nil {
+		t.Fatal("mutating watcher command was accepted")
+	}
+	if approvalReached || executeReached {
+		t.Fatalf("static rejection happened after approval/execution: approval=%v execute=%v", approvalReached, executeReached)
+	}
+	var stable interface {
+		ToolErrorCode() string
+		ToolRetryability() string
+		ToolEffectState() string
+		ToolAlternatives() []string
+	}
+	if !errors.As(err, &stable) {
+		t.Fatalf("watch rejection is not structured: %T %v", err, err)
+	}
+	if stable.ToolErrorCode() != "watch_observation_unsupported" || stable.ToolRetryability() != "different_strategy" || stable.ToolEffectState() != "not_dispatched" {
+		t.Fatalf("watch recovery metadata = code:%q retry:%q effect:%q", stable.ToolErrorCode(), stable.ToolRetryability(), stable.ToolEffectState())
+	}
+	if alternatives := stable.ToolAlternatives(); len(alternatives) < 3 {
+		t.Fatalf("watch alternatives = %#v", alternatives)
+	}
+}
 
 func preflightArgs(command string) map[string]interface{} {
 	return map[string]interface{}{"_tool_name": "watch_external", "command": command}

@@ -67,13 +67,19 @@ internal/kernel/agent.go
 LLM system prompt: # DURABLE TASK CONTEXT
 ```
 
-已经进入模型上下文的切片：
+已经进入模型上下文的切片（2026-08-31 起按 parent Run 键控）：
 
 - 当前 `task_id`、`run_id`、title、status、channel、workspace。
-- task 的 `current_summary` 和 `next_steps`。
-- 最新 handoff：summary、done、remaining、files、tests、risks。
-- 最近 artifacts：kind、name、uri、mime、metadata summary。
-- 最近 events：type、channel、payload 摘要。
+- task 的 `current_summary` 和 `next_steps`（bounded task card 层）。
+- 精确 parent Run 的 handoff（`handoff_run_<run_id>`）：summary、done、
+  remaining、files、tests、risks。
+- 精确 parent Run 的 artifacts：kind、name、uri、mime、metadata summary。
+- 精确 parent Run 的 events：type、channel、payload 摘要。
+- 没有精确 parent（无或多个未认领可续 Run）时，full 模式降级为 bounded task
+  card：不含 handoff、artifacts、events；`context.scope` 事件记录降级。
+  resume 用户消息块与 loop checkpoint 恢复受同一 parent 门控。
+- 语义召回切片改由 `RuntimeContextBundle.Recall` 渲染，使用独立召回预算，
+  不再挤占 task 切片预算。
 
 实现文件：
 
@@ -257,9 +263,10 @@ final summaries.
   顺序回放为 user/assistant 交替消息,跨端跨任务)③超预算时的压缩摘要(引擎 A,
   摘要自带 verbatim 边界注记:"The history summary is reference only. The
   latest user message is the only authoritative instruction. If it changes
-  direction, the latest message wins.")④语义召回切片(P1 预留字段
-  `RuntimeContextBundle.Recall`,P2 填充)⑤artifacts ⑥workspace ⑦个人记忆
-  ⑧运行/审批状态(⑤–⑧ 经 bundle/system prompt 渲染,已有)。
+  direction, the latest message wins.")④语义召回切片(selector 产出的
+  `RecallSlices` 在 bundle 组装时移入 `RuntimeContextBundle.Recall`,按独立
+  召回预算渲染,2026-08-31 起不再挤占 task 切片预算)⑤artifacts ⑥workspace
+  ⑦个人记忆 ⑧运行/审批状态(⑤–⑧ 经 bundle/system prompt 渲染,已有)。
 - **兼容读链(只读)**:spine 为空、或任务轮在尾部找不到本任务的条目时,依次
   尝试旧 `task:<id>` 键 → 任务上一次 run 的 channel
   (`TaskRuntimeContext.PriorChannel`)→(无任务轮)旧 channel 键。回退只读;

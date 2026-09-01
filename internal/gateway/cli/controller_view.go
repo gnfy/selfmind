@@ -69,6 +69,12 @@ func (m *uiModel) processRowBudget(width int) int {
 		reserved += lipgloss.Height(hint)
 	}
 	available := m.height - reserved
+	// The plan and a tall Composer may consume the measured process budget, but
+	// a provider-owned wait must still retain one activity row. At that boundary
+	// tool/process rows yield to the spinner instead of making the run look idle.
+	if available < 1 && m.waitingForModel && m.approvalPrompt == nil {
+		return 1
+	}
 	if available < 0 {
 		return 0
 	}
@@ -224,7 +230,7 @@ func (m *uiModel) renderHelpContent(width int) string {
 	}
 
 	lines = append(lines, "", section.Render("Slash commands:"))
-	for _, cmd := range slashCommandMetas {
+	for _, cmd := range slashHelpMetas() {
 		lines = append(lines, renderHelpRow(cmd.Usage, cmd.Description, cmdStyle, descStyle, width))
 	}
 

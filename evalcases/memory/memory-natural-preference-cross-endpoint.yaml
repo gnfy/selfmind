@@ -1,0 +1,40 @@
+id: memory_natural_preference_cross_endpoint
+title: "a short natural preference is learned and recalled across endpoints"
+suite: memory
+require_cassette: true
+workspace: isolated
+channel: cli
+
+# Preference-only P3 acceptance: the first turn uses ordinary language rather
+# than /remember. The explicit wait drains the asynchronous post-run analyzer
+# through its production path before the second endpoint asks for recall.
+turns:
+  - input: "以后回答我时先给结论，再给依据。这是长期偏好。请只确认，不要调用工具；偏好会由后台处理。"
+    channel: cli
+    wait_for_maintenance: true
+  - input: "只用一句话告诉我：我的回复偏好是什么？不要看文件，不要使用工具。"
+    channel: weixin
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 300
+  contains:
+    - "结论"
+  must_not_contain:
+    - "没有记住"
+    - "<tool>"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+
+assert_state:
+  - on: memory
+    target: user
+    contains: "先给结论"
+    count_gte: 1
+  - on: memory
+    target: user
+    not_contains: "不要调用工具"

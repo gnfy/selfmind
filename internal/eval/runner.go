@@ -230,11 +230,22 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			return nil, err
 		}
 	}
+	existingRunIDs := map[string]bool{}
+	if identity != nil {
+		existingRuns, err := h.controlStore.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 100)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot seeded runs: %w", err)
+		}
+		for _, run := range existingRuns {
+			existingRunIDs[run.RunID] = true
+		}
+	}
 
 	start := time.Now()
 	rec.StartCase(c, h.provider, h.model, workspace)
 	var taskIDs []string
 	var runIDs []string
+	var createdRunIDs []string
 	var inputTokens, outputTokens int
 	var lastStatus string
 	var lastOutcome string
@@ -260,10 +271,18 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			return nil, fmt.Errorf("wipe stale cassettes for %s: %w", c.ID, err)
 		}
 	}
+	// Per-turn run ids, indexed by turn, so a later turn's reply_to_turn can
+	// resolve to the exact run that earlier turn started (a turn that starts
+	// no run — queued, candidates, control command — leaves its slot empty).
+	turnRunIDs := make([]string, len(c.Turns))
 	for i, turn := range c.Turns {
 		turnStart := time.Now()
 		channel := firstNonEmpty(turn.Channel, c.Channel, "cli")
 		rec.StartTurn(i, turn.Input, channel)
+		replyToRunID := ""
+		if turn.ReplyToTurn > 0 && turn.ReplyToTurn <= i {
+			replyToRunID = turnRunIDs[turn.ReplyToTurn-1]
+		}
 		observer := rec.ObserveStreamEvent
 		if opts.ProgressWriter != nil {
 			observer = func(event llm.StreamEvent) {
@@ -287,6 +306,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			DisplayName:           "SelfMind Eval",
 			Channel:               channel,
 			Content:               turn.Input,
+			ReplyToRunID:          replyToRunID,
+			ApprovalID:            turn.ApprovalID,
+			ClarifyID:             turn.ClarifyID,
 			ClientCWD:             workspace,
 			ClientAdditionalRoots: append([]string{}, turn.AdditionalRoots...),
 			WorkspaceID:           workspaceID,
@@ -296,6 +318,13 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			ApprovalMode: string(tools.ApprovalFullAuto),
 		})
 		cancelTurn()
+		if turn.WaitForMaintenance {
+			maintenanceCtx, cancelMaintenance := context.WithTimeout(
+				evalTurnVCRContext(ctx, c.ID, workspace), turnBudget(c, opts),
+			)
+			h.server.RunMaintenancePass(maintenanceCtx)
+			cancelMaintenance()
+		}
 		if resp.Identity != nil && resp.Identity.PersonID != "" {
 			seenPersons[resp.Identity.PersonID] = true
 		}
@@ -304,6 +333,11 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		}
 		if resp.Run != nil {
 			runIDs = append(runIDs, resp.Run.ID)
+			if !existingRunIDs[resp.Run.ID] {
+				createdRunIDs = append(createdRunIDs, resp.Run.ID)
+				existingRunIDs[resp.Run.ID] = true
+			}
+			turnRunIDs[i] = resp.Run.ID
 		}
 		if resp.Outcome != nil {
 			lastOutcome = resp.Outcome.Status
@@ -334,6 +368,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	snap := rec.Snapshot()
 	snap.TaskIDs = taskIDs
 	snap.RunIDs = runIDs
+	snap.CreatedRunIDs = createdRunIDs
 	snap.HTTPStatus = lastHTTPStatus
 	snap.Workspace = observedRunWorkspace(ctx, h.controlStore, h.tenantID, runIDs)
 	snap.ExpectedWorkspace = workspace
@@ -659,6 +694,9 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// Automatic semantic recall (Work Timeline P2): eval runs the same
 		// selector path as real input — no eval-only shortcut around recall.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID, evalPrompts), recallOptions...),
+		// Cross-endpoint explicit memory commands (/remember, /forget) use the
+		// same production path in eval.
+		Memory: mem,
 		// Tool-output spool (execution-quality W1): same derivation as the
 		// daemon runner, so eval exercises the artifact + read-back flow
 		// inside its isolated data dir.
@@ -667,6 +705,30 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// eval case with attachments exercises the production import + scope
 		// path inside the isolated data dir.
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
+	}
+	if c.ContinuityMode != "" {
+		server.ContinuityMode = c.ContinuityMode
+		server.ContinuityResolver = appcore.NewConfiguredContinuityResolver(mem, cfg, tenantID)
+		if c.ContinuityMode != "off" && server.ContinuityResolver == nil {
+			return nil, fmt.Errorf("eval case %s requires fast_classifier continuity, but no auxiliary/role route is configured", c.ID)
+		}
+	}
+	if caseNeedsPostRunMaintenance(c) {
+		server.PostRunAnalyzer = appcore.NewConfiguredPostRunAnalyzer(mem, cfg, tenantID, evalPrompts, controlStore)
+		server.PostRunMaintenance = httpapi.PostRunMaintenanceOptions{
+			Debounce: -1, MaxWait: -1, BatchMaxRuns: 10,
+		}
+		if server.PostRunAnalyzer == nil {
+			appcore.StopCron(gwDeps.CronScheduler)
+			if mcpManager != nil {
+				_ = mcpManager.Close()
+			}
+			_ = controlStore.Close()
+			if mem != nil {
+				_ = mem.Close()
+			}
+			return nil, fmt.Errorf("eval case %s requires post-run maintenance, but no memory_extract route is configured", c.ID)
+		}
 	}
 	harness := &runtimeHarness{
 		cfg:          cfg,
@@ -687,6 +749,18 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// surface and change which notification paths its runs take.
 	server.Delivery = newEvalDeliveryService(c, harness)
 	return harness, nil
+}
+
+func caseNeedsPostRunMaintenance(c *Case) bool {
+	if c == nil {
+		return false
+	}
+	for _, turn := range c.Turns {
+		if turn.WaitForMaintenance {
+			return true
+		}
+	}
+	return false
 }
 
 // newEvalModelChangeService keeps model readiness under the same throwaway

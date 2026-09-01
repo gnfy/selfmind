@@ -36,6 +36,8 @@ func normalizeQueueClass(class string) string {
 	switch strings.ToLower(strings.TrimSpace(class)) {
 	case QueueClassFinalization:
 		return QueueClassFinalization
+	case QueueClassRecovery:
+		return QueueClassRecovery
 	case QueueClassBackground:
 		return QueueClassBackground
 	case QueueClassCron:
@@ -49,6 +51,8 @@ func queuePriorityForClass(class string) int {
 	switch normalizeQueueClass(class) {
 	case QueueClassFinalization:
 		return QueuePriorityFinalization
+	case QueueClassRecovery:
+		return QueuePriorityRecovery
 	case QueueClassBackground:
 		return QueuePriorityBackground
 	case QueueClassCron:
@@ -61,13 +65,17 @@ func queuePriorityForClass(class string) int {
 const (
 	QueueClassForeground   = "foreground"
 	QueueClassFinalization = "finalization"
-	QueueClassBackground   = "background"
-	QueueClassCron         = "cron"
+	// QueueClassRecovery is daemon-created foreground-agent work. It stays
+	// below person-authored input, but above ordinary maintenance and cron.
+	QueueClassRecovery   = "recovery"
+	QueueClassBackground = "background"
+	QueueClassCron       = "cron"
 )
 
 const (
 	QueuePriorityForeground   = 100
 	QueuePriorityFinalization = 80
+	QueuePriorityRecovery     = 60
 	QueuePriorityBackground   = 50
 	QueuePriorityCron         = 20
 )
@@ -94,6 +102,12 @@ type QueuedTask struct {
 	// system-originated finalization work such as external-watch closure).
 	// Empty for ordinary inbound messages, which resolve their task normally.
 	TaskID string `json:"task_id,omitempty"`
+	// ReplyToRunID preserves reply metadata across the durable queue: a message
+	// that arrived as a platform reply to a specific run keeps that exact
+	// binding when it is queued behind an active run and drained later.
+	ReplyToRunID string `json:"reply_to_run_id,omitempty"`
+	ApprovalID   string `json:"approval_id,omitempty"`
+	ClarifyID    string `json:"clarify_id,omitempty"`
 	// RunID is filled after StartRun succeeds. It lets recovery distinguish a
 	// queue row whose run durably finalized from one that only reached the
 	// queue-level done marker before a crash.
@@ -142,13 +156,13 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	if q.NotBefore.IsZero() {
 		notBefore = 0
 	}
-	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, idempotency_key, class, priority, not_before, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if q.IdempotencyKey != "" {
 		query += ` ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`
 	}
 	result, err := s.db.ExecContext(ctx, query,
-		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, rootsJSON, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, rootsJSON, q.TaskID, q.ReplyToRunID, q.ApprovalID, q.ClarifyID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -184,9 +198,9 @@ func scanQueuedTask(rows interface {
 	var created, notBefore, leaseUntil int64
 	var rootsJSON string
 	if err := rows.Scan(&q.ID, &q.TenantID, &q.PersonID, &q.Channel, &q.Platform, &q.PlatformUserID,
-		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &rootsJSON, &q.TaskID, &q.RunID, &q.IdempotencyKey,
-		&q.Class, &q.Priority, &notBefore, &q.Status, &q.Restarts, &q.ClaimToken, &leaseUntil,
-		&q.AttemptGeneration, &created); err != nil {
+		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &rootsJSON, &q.TaskID, &q.RunID, &q.ReplyToRunID, &q.ApprovalID, &q.ClarifyID,
+		&q.IdempotencyKey, &q.Class, &q.Priority, &notBefore, &q.Status, &q.Restarts, &q.ClaimToken,
+		&leaseUntil, &q.AttemptGeneration, &created); err != nil {
 		return QueuedTask{}, err
 	}
 	q.CreatedAt = time.Unix(created, 0)
@@ -204,7 +218,7 @@ func scanQueuedTask(rows interface {
 
 const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESCE(platform_user_id, ''),
 	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), COALESCE(task_id, ''),
-	COALESCE(run_id, ''), COALESCE(idempotency_key, ''), COALESCE(class, 'foreground'),
+	COALESCE(run_id, ''), COALESCE(reply_to_run_id, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), COALESCE(idempotency_key, ''), COALESCE(class, 'foreground'),
 	COALESCE(priority, 100), COALESCE(not_before, 0), status, COALESCE(restarts, 0),
 	COALESCE(claim_token, ''), COALESCE(lease_until, 0), COALESCE(attempt_generation, 0), created_at`
 
@@ -628,7 +642,8 @@ func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int
 	res, err := tx.ExecContext(ctx,
 		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1,
 			claim_token = '', lease_until = 0
-		 WHERE status = ? AND restarts < ?`,
+		 WHERE status = ? AND restarts < ?
+		   AND idempotency_key NOT LIKE 'run-recovery:%'`,
 		QueueStatusQueued, QueueStatusStarted, maxQueueRestarts)
 	if err != nil {
 		return 0, 0, err

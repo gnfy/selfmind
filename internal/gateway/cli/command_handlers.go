@@ -32,10 +32,7 @@ func (m *uiModel) dispatch(tool string, args map[string]interface{}) (string, er
 		}
 		return m.toolDispatchFn(tool, scoped)
 	}
-	if m.agent != nil && m.agent.Dispatcher() != nil {
-		return m.agent.Dispatcher().Dispatch(tool, args)
-	}
-	return "", fmt.Errorf("no agent or daemon available to run %s", tool)
+	return "", fmt.Errorf("no daemon available to run %s", tool)
 }
 
 func (m *uiModel) handleCommand(input string) tea.Cmd {
@@ -171,13 +168,6 @@ func (m *uiModel) handleStatus() tea.Cmd {
 			} else if strings.TrimSpace(resp.Content) != "" {
 				status += "\n### Task Status\n\n" + resp.Content + "\n"
 			}
-		} else if m.gateway != nil {
-			t, err := m.gateway.GetCurrentTaskInfo(context.Background(), m.tenantID)
-			if err == nil && t != nil {
-				status += fmt.Sprintf("- **Current Task**: [%d] %s\n", t.ID, t.Title)
-			} else {
-				status += "- **Current Task**: None\n"
-			}
 		}
 
 		registry := tools.GetProcessRegistryForTenant(m.tenantID)
@@ -199,40 +189,17 @@ func (m *uiModel) handleStatus() tea.Cmd {
 
 func (m *uiModel) handleTasks(args []string) tea.Cmd {
 	return func() tea.Msg {
-		if m.messageProcessor != nil {
-			// Relay variants (/tasks done|archived|all) to the gateway, which
-			// owns the aggregated view.
-			content := strings.TrimSpace("/tasks " + strings.Join(args, " "))
-			resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest(content))
-			if resp.Error != "" {
-				return MsgAgentDone{Response: fmt.Sprintf("Error fetching tasks: %s", resp.Error)}
-			}
-			return MsgAgentDone{Response: resp.Content}
+		if m.messageProcessor == nil {
+			return MsgAgentDone{Response: "Gateway not connected, cannot list tasks."}
 		}
-		if m.gateway == nil {
-			return MsgAgentDone{Response: "Gateway not initialized, cannot list tasks."}
+		// Relay variants (/tasks done|archived|all) to the gateway, which
+		// owns the aggregated view.
+		content := strings.TrimSpace("/tasks " + strings.Join(args, " "))
+		resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest(content))
+		if resp.Error != "" {
+			return MsgAgentDone{Response: fmt.Sprintf("Error fetching tasks: %s", resp.Error)}
 		}
-		tasks, err := m.gateway.ListTasks(context.Background(), m.tenantID)
-		if err != nil {
-			return MsgAgentDone{Response: fmt.Sprintf("Error fetching tasks: %v", err)}
-		}
-		if len(tasks) == 0 {
-			return MsgAgentDone{Response: "No tasks found."}
-		}
-		var sb strings.Builder
-		sb.WriteString("## Global Tasks\n\n")
-		for _, t := range tasks {
-			status := "⏳"
-			if t.Status == "done" {
-				status = "✅"
-			}
-			if t.Status == "cancelled" {
-				status = "❌"
-			}
-			sb.WriteString(fmt.Sprintf("%s [%d] %s (Created: %s)\n",
-				status, t.ID, t.Title, t.CreatedAt.Format("01-02 15:04")))
-		}
-		return MsgAgentDone{Response: sb.String()}
+		return MsgAgentDone{Response: resp.Content}
 	}
 }
 

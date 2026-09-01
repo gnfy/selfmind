@@ -14,7 +14,7 @@ import (
 )
 
 func TestClientRequestOmitsModeUntilExplicitlySet(t *testing.T) {
-	c := NewControllerWithGateway(nil, nil, nil, "", "", nil, "default")
+	c := NewController("", "", nil, "default")
 	m := c.model
 	if m.approvalMode != "" {
 		t.Fatalf("fresh session must leave the approval mode unset, got %q", m.approvalMode)

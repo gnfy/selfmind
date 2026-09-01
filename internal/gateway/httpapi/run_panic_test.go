@@ -46,7 +46,7 @@ func TestAsyncRunPanicIsRecovered(t *testing.T) {
 	t.Cleanup(func() { store.Close() })
 
 	agent := kernel.NewAgent(memory.NewMemoryManager(nil), stubToolBackend{}, panicLLMProvider{}, "test agent", 1, 1, nil)
-	gw := router.NewGateway(nil, nil, agent, nil)
+	gw := router.NewGateway(agent, nil)
 	daemon := &Server{Control: store, Gateway: gw, DefaultTenantID: "default"}
 	sender := &syncedSender{}
 	daemon.Delivery = delivery.NewService(store, sender, delivery.Options{})

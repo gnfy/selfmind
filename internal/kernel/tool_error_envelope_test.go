@@ -17,6 +17,31 @@ func (e stubStableFailure) ToolErrorCategory() string { return e.category }
 func (e stubStableFailure) ModelSafeMessage() string  { return e.safe }
 func (e stubStableFailure) ToolRecoveryHint() string  { return e.hint }
 
+type stubRecoveryFailure struct{ stubStableFailure }
+
+func (stubRecoveryFailure) ToolFailurePhase() string { return "preparation" }
+func (stubRecoveryFailure) ToolRetryability() string { return "different_strategy" }
+func (stubRecoveryFailure) ToolEffectState() string  { return "not_dispatched" }
+func (stubRecoveryFailure) ToolStateChanged() bool   { return false }
+func (stubRecoveryFailure) ToolAlternatives() []string {
+	return []string{"one_shot_observation", "provider_native_wait"}
+}
+
+func TestToolErrorEnvelopeCarriesRecoveryContract(t *testing.T) {
+	err := stubRecoveryFailure{stubStableFailure{
+		code:     "watch_observation_unsupported",
+		category: "capability_unavailable", safe: "The durable watcher cannot prove this command read-only.",
+		hint: "Choose another observation strategy.",
+	}}
+	env := packageToolError("watch_external", err)
+	if env.FailurePhase != "preparation" || env.Retryability != "different_strategy" || env.EffectState != "not_dispatched" || env.StateChanged {
+		t.Fatalf("recovery envelope = %+v", env)
+	}
+	if len(env.Alternatives) != 2 || !strings.Contains(env.ModelContent, "provider_native_wait") {
+		t.Fatalf("recovery alternatives missing from model content: %+v", env)
+	}
+}
+
 // TestUnwrappedStorageErrorIsRedactedAtTheBoundary pins A-13: the typed envelope
 // is opt-in per call site, so an unwrapped internal-storage error used to reach
 // the model verbatim. The raw cause must survive in the capture surface.

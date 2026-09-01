@@ -52,7 +52,9 @@ func TestMigrateLegacyTaskReferencesRequiresExactUserEvidenceAndIsIdempotent(t *
 	if err != nil || len(refs) != 1 {
 		t.Fatalf("refs=%+v err=%v", refs, err)
 	}
-	if refs[0].RawValue != "RUQX-500" || refs[0].SupportCount != 2 || refs[0].Status != TaskReferenceActive {
+	// Imported run support keeps the reference at candidate (search hint):
+	// auto-promotion is frozen by simplification P2.
+	if refs[0].RawValue != "RUQX-500" || refs[0].SupportCount != 2 || refs[0].Status != TaskReferenceCandidate {
 		t.Fatalf("migrated reference = %+v", refs[0])
 	}
 

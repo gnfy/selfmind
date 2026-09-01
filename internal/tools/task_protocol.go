@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"selfmind/internal/kernel"
 )
 
 type planProjectionSinkContextKey struct{}
@@ -25,22 +27,53 @@ type PlanWorkUnitIdentity struct {
 	SkillCatalog string `json:"skill_catalog,omitempty"`
 }
 
+type PlanProjectionResult struct {
+	Plan      PlanState              `json:"plan"`
+	Version   int                    `json:"version"`
+	Changed   bool                   `json:"changed"`
+	WorkUnits []PlanWorkUnitIdentity `json:"work_units,omitempty"`
+}
+
+// RunPlanProjection is the deep persistence seam for plan versioning,
+// work-unit attribution, and completion validation. Production uses the
+// control-backed adapter; focused tool tests may use an in-memory adapter.
+type RunPlanProjection interface {
+	Project(context.Context, PlanState) (PlanProjectionResult, error)
+	ValidateCompletion(context.Context) error
+}
+
 type PlanProjectionSink func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error)
+
+type legacyPlanProjection struct{ sink PlanProjectionSink }
+
+func (l legacyPlanProjection) Project(ctx context.Context, state PlanState) (PlanProjectionResult, error) {
+	units, err := l.sink(ctx, state.Plan)
+	return PlanProjectionResult{Plan: state, Changed: true, WorkUnits: units}, err
+}
+
+func (legacyPlanProjection) ValidateCompletion(context.Context) error { return nil }
 
 func WithPlanProjectionSink(ctx context.Context, sink PlanProjectionSink) context.Context {
 	if ctx == nil || sink == nil {
 		return ctx
 	}
-	return context.WithValue(ctx, planProjectionSinkContextKey{}, sink)
+	return context.WithValue(ctx, planProjectionSinkContextKey{}, RunPlanProjection(legacyPlanProjection{sink: sink}))
 }
 
-func planProjectionSinkFromArgs(args map[string]interface{}) PlanProjectionSink {
+func WithRunPlanProjection(ctx context.Context, projection RunPlanProjection) context.Context {
+	if ctx == nil || projection == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, planProjectionSinkContextKey{}, projection)
+}
+
+func runPlanProjectionFromArgs(args map[string]interface{}) RunPlanProjection {
 	ctx := ContextFromArgs(args)
 	if ctx == nil {
 		return nil
 	}
-	sink, _ := ctx.Value(planProjectionSinkContextKey{}).(PlanProjectionSink)
-	return sink
+	projection, _ := ctx.Value(planProjectionSinkContextKey{}).(RunPlanProjection)
+	return projection
 }
 
 type PlanTool struct {
@@ -60,11 +93,14 @@ type PlanState struct {
 }
 
 type PlanStep struct {
-	Step          string `json:"step"`
-	Status        string `json:"status"`
-	RelatedTaskID string `json:"related_task_id,omitempty"`
-	WorkUnitID    string `json:"work_unit_id,omitempty"`
-	WorkUnit      bool   `json:"work_unit,omitempty"`
+	StepID               string `json:"step_id,omitempty"`
+	Step                 string `json:"step"`
+	Status               string `json:"status"`
+	SuccessCriteria      string `json:"success_criteria,omitempty"`
+	VerificationRequired bool   `json:"verification_required,omitempty"`
+	RelatedTaskID        string `json:"related_task_id,omitempty"`
+	WorkUnitID           string `json:"work_unit_id,omitempty"`
+	WorkUnit             bool   `json:"work_unit,omitempty"`
 }
 
 func NewPlanStore() *PlanStore {
@@ -99,6 +135,10 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 						Items: &PropertyDef{
 							Type: "object",
 							Properties: map[string]PropertyDef{
+								"step_id": {
+									Type:        "string",
+									Description: "Stable step id returned by an earlier update_plan result. Echo it when updating or reordering that step; never invent one.",
+								},
 								"step": {
 									Type:        "string",
 									Description: "A concise task step.",
@@ -107,6 +147,15 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 									Type:        "string",
 									Description: "One of pending, in_progress, completed, cancelled.",
 									Enum:        []string{"pending", "in_progress", "completed", "cancelled"},
+								},
+								"success_criteria": {
+									Type:        "string",
+									Description: "Optional observable condition that proves this step is complete.",
+								},
+								"verification_required": {
+									Type:        "boolean",
+									Description: "True only when this step cannot be considered complete without executable verification evidence required by the user, repository instructions, or the nature of the change.",
+									Default:     false,
 								},
 								"related_task_id": {
 									Type:        "string",
@@ -166,10 +215,26 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		Explanation: taskStringArg(args, "explanation"),
 		Plan:        steps,
 	}
+	changed := true
+	planVersion := 0
 	var workUnits []PlanWorkUnitIdentity
-	if sink := planProjectionSinkFromArgs(args); sink != nil {
-		workUnits, err = sink(ContextFromArgs(args), steps)
+	projection := runPlanProjectionFromArgs(args)
+	if projection != nil {
+		projected, projectionErr := projection.Project(ContextFromArgs(args), state)
+		err = projectionErr
 		if err != nil {
+			var staleStep interface{ CurrentPlanStepIDs() []string }
+			if errors.As(err, &staleStep) {
+				current := staleStep.CurrentPlanStepIDs()
+				safeMessage := "The supplied step_id is stale for the current run."
+				if len(current) > 0 {
+					safeMessage += " Current step_id values: " + strings.Join(current, ", ") + "."
+				} else {
+					safeMessage += " Omit step_id so this run can create its first durable plan snapshot."
+				}
+				return "", newStableToolError(err, "stale_plan_step", "stale_precondition", safeMessage,
+					"Replace the stale id with the matching server-issued id, or omit it only for a genuinely new step.")
+			}
 			var stale interface{ CurrentWorkUnitIDs() []string }
 			if errors.As(err, &stale) {
 				current := stale.CurrentWorkUnitIDs()
@@ -189,11 +254,26 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			}
 			return "", err
 		}
+		state = projected.Plan
+		steps = state.Plan
+		changed = projected.Changed
+		planVersion = projected.Version
+		workUnits = projected.WorkUnits
+		currentStepID := ""
+		for _, step := range steps {
+			if step.Status == "in_progress" {
+				currentStepID = step.StepID
+				break
+			}
+		}
+		kernel.UpdateRunExecutionPlan(ContextFromArgs(args), planVersion, currentStepID)
 	}
-	changed := true
 	if t.store != nil {
 		key := planKey(args)
-		changed = t.store.Set(key, state)
+		localChanged := t.store.Set(key, state)
+		if projection == nil {
+			changed = localChanged
+		}
 		resolved := true
 		for _, step := range steps {
 			if step.Status != "completed" && step.Status != "cancelled" {
@@ -207,9 +287,10 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	data, _ := json.Marshal(struct {
 		PlanState
-		Changed   bool                   `json:"changed"`
-		WorkUnits []PlanWorkUnitIdentity `json:"work_units,omitempty"`
-	}{PlanState: state, Changed: changed, WorkUnits: workUnits})
+		Changed     bool                   `json:"changed"`
+		PlanVersion int                    `json:"plan_version,omitempty"`
+		WorkUnits   []PlanWorkUnitIdentity `json:"work_units,omitempty"`
+	}{PlanState: state, Changed: changed, PlanVersion: planVersion, WorkUnits: workUnits})
 	return string(data), nil
 }
 
@@ -267,7 +348,7 @@ func samePlanSteps(a, b []PlanStep) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].RelatedTaskID != b[i].RelatedTaskID ||
+		if a[i].StepID != b[i].StepID || a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].SuccessCriteria != b[i].SuccessCriteria || a[i].VerificationRequired != b[i].VerificationRequired || a[i].RelatedTaskID != b[i].RelatedTaskID ||
 			a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
 			return false
 		}
@@ -285,11 +366,14 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 				return nil, fmt.Errorf("plan items must be objects")
 			}
 			steps = append(steps, PlanStep{
-				Step:          fmt.Sprintf("%v", obj["step"]),
-				Status:        fmt.Sprintf("%v", obj["status"]),
-				RelatedTaskID: taskStringArg(obj, "related_task_id"),
-				WorkUnitID:    taskStringArg(obj, "work_unit_id"),
-				WorkUnit:      taskBoolArg(obj, "work_unit"),
+				StepID:               taskStringArg(obj, "step_id"),
+				Step:                 fmt.Sprintf("%v", obj["step"]),
+				Status:               fmt.Sprintf("%v", obj["status"]),
+				SuccessCriteria:      taskStringArg(obj, "success_criteria"),
+				VerificationRequired: taskBoolArg(obj, "verification_required"),
+				RelatedTaskID:        taskStringArg(obj, "related_task_id"),
+				WorkUnitID:           taskStringArg(obj, "work_unit_id"),
+				WorkUnit:             taskBoolArg(obj, "work_unit"),
 			})
 		}
 		return steps, nil
@@ -320,6 +404,19 @@ type FinishRunTool struct {
 	store *PlanStore
 }
 
+var finishRunStatuses = []string{
+	"done", "blocked", "failed", "running", "waiting_external", "waiting_user", "needs_approval",
+}
+
+func validFinishRunStatus(status string) bool {
+	for _, allowed := range finishRunStatuses {
+		if status == allowed {
+			return true
+		}
+	}
+	return false
+}
+
 func NewFinishRunTool() *FinishRunTool {
 	return NewFinishRunToolWithStore(nil)
 }
@@ -333,9 +430,12 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 				Type: "object",
 				Properties: map[string]PropertyDef{
 					"status": {
-						Type:        "string",
-						Description: "Task status.",
-						Enum:        []string{"done", "blocked", "failed", "running", "waiting_external", "waiting_user", "needs_approval"},
+						Type: "string",
+						// User-owned lifecycle states such as cancelled and archived
+						// deliberately do not belong here. They are available only
+						// through explicit gateway controls, never a model tool call.
+						Description: "Task status. Cancellation and archival are user controls and are not valid finish_run outcomes.",
+						Enum:        append([]string(nil), finishRunStatuses...),
 					},
 					"summary": {
 						Type:        "string",
@@ -370,11 +470,6 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 						Type:        "boolean",
 						Description: "Whether user approval is needed.",
 					},
-					"resolved_blocker_ids": {
-						Type:        "array",
-						Description: "Exact open blocker IDs resolved by this run. Include only blockers whose stated condition this run actually satisfied.",
-						Items:       &PropertyDef{Type: "string"},
-					},
 				},
 				Required: []string{"status", "summary"},
 			},
@@ -392,6 +487,9 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 	if status == "" {
 		status = "done"
 	}
+	if !validFinishRunStatus(status) {
+		return "", fmt.Errorf("status must be one of %s", strings.Join(finishRunStatuses, ", "))
+	}
 	if status == "needs_approval" {
 		status = "blocked"
 		args["need_approve"] = true
@@ -401,7 +499,13 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("summary is required")
 	}
 	key := planKey(args)
-	if status == "done" && t.store != nil {
+	projection := runPlanProjectionFromArgs(args)
+	if status == "done" && projection != nil {
+		if err := projection.ValidateCompletion(ContextFromArgs(args)); err != nil {
+			return "", err
+		}
+	}
+	if status == "done" && projection == nil && t.store != nil {
 		if plan, ok := t.store.Get(key); ok {
 			var unresolved []string
 			for _, step := range plan.Plan {
@@ -415,15 +519,14 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 		}
 	}
 	out := map[string]interface{}{
-		"status":               status,
-		"summary":              summary,
-		"done":                 taskStringSliceArg(args, "done"),
-		"next_steps":           taskStringSliceArg(args, "next_steps"),
-		"files":                taskStringSliceArg(args, "files"),
-		"tests":                taskStringSliceArg(args, "tests"),
-		"risks":                taskStringSliceArg(args, "risks"),
-		"need_approve":         taskBoolArg(args, "need_approve"),
-		"resolved_blocker_ids": taskStringSliceArg(args, "resolved_blocker_ids"),
+		"status":       status,
+		"summary":      summary,
+		"done":         taskStringSliceArg(args, "done"),
+		"next_steps":   taskStringSliceArg(args, "next_steps"),
+		"files":        taskStringSliceArg(args, "files"),
+		"tests":        taskStringSliceArg(args, "tests"),
+		"risks":        taskStringSliceArg(args, "risks"),
+		"need_approve": taskBoolArg(args, "need_approve"),
 	}
 	if reason := finishRunCompletionReason(status); reason != "" {
 		out["completion_reason"] = reason

@@ -1,4 +1,4 @@
 {
   "method": "completion",
-  "completion": "external watch durable registration preflight check status polling deployment monitor"
+  "completion": "deployment-status release-status watch_external selfmind-no-such-release-cli status.txt"
 }

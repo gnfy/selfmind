@@ -44,56 +44,42 @@ func aggregateDirectResponse(resp *router.HandleResponse) (string, llm.UsageStat
 
 // resumePinKey is the person_settings key holding the one-shot "attach the
 // next agent-bound message to this task" marker written by /resume. It is
-// person-scoped (like resolveContinueTask) and consumed by the first message
+// person-scoped and consumed by the first message
 // that reaches resolveTask, so a stale /resume can never capture unrelated new
 // work later.
-const resumePinKey = "resume_pin_task"
+const (
+	resumePinKey    = "resume_pin_task"
+	resumeRunPinKey = "resume_pin_run"
+)
 
 // consumeResumePin returns the task pinned by an explicit /resume and clears
 // the pin in the same step (one-shot). A missing, foreign, or unreadable task
 // yields nil so the caller falls through to new-task creation.
-func (d *Server) consumeResumePin(ctx context.Context, identity *control.IdentityContext) *control.Task {
+func (d *Server) consumeResumePin(ctx context.Context, identity *control.IdentityContext) (*control.Task, string, error) {
 	if d == nil || d.Control == nil || identity == nil {
-		return nil
+		return nil, "", nil
 	}
 	taskID, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey)
-	if err != nil || strings.TrimSpace(taskID) == "" {
-		return nil
+	if err != nil {
+		return nil, "", err
 	}
+	if strings.TrimSpace(taskID) == "" {
+		return nil, "", nil
+	}
+	runID, runErr := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey)
 	_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, "")
+	_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, "")
+	if runErr != nil {
+		return nil, "", runErr
+	}
 	task, err := d.Control.GetTask(ctx, identity.TenantID, taskID)
-	if err != nil || task == nil || task.PersonID != identity.PersonID {
-		return nil
-	}
-	return task
-}
-
-func (d *Server) resolveContinueTask(ctx context.Context, identity *control.IdentityContext) (*control.Task, error) {
-	if d == nil || d.Control == nil || identity == nil {
-		return nil, nil
-	}
-	// An archived label is deliberately shelved: `继续` must never resurrect it
-	// implicitly (only an explicit /resume <id> can — see resolveTask's pin).
-	current, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if current != nil && current.IsVisible() && !current.IsInbox() && !archivedTaskStatus(current.Status) {
-		return current, nil
+	if task == nil || task.PersonID != identity.PersonID {
+		return nil, "", fmt.Errorf("resume target is no longer available")
 	}
-	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 10)
-	if err != nil {
-		return nil, err
-	}
-	for _, task := range tasks {
-		if !terminalTaskStatus(task.Status) {
-			return &task, nil
-		}
-	}
-	if len(tasks) == 1 && !archivedTaskStatus(tasks[0].Status) {
-		return &tasks[0], nil
-	}
-	return nil, nil
+	return task, strings.TrimSpace(runID), nil
 }
 
 // terminalTaskStatus reports whether a task status ends its life for implicit
@@ -110,11 +96,22 @@ func terminalTaskStatus(status string) bool {
 	}
 }
 
-// archivedTaskStatus isolates the one terminal status a person may explicitly
-// resurrect via /resume (a deliberate act, unlike done/cancelled/failed which
-// stay closed).
+// archivedTaskStatus isolates the archived projection for callers that need to
+// distinguish it from completed work.
 func archivedTaskStatus(status string) bool {
 	return strings.EqualFold(strings.TrimSpace(status), "archived")
+}
+
+// resumableTaskStatus names terminal label states that explicit person
+// authority may reopen. Cancellation and failure remain closed because they
+// represent a negative execution outcome rather than ordinary label hygiene.
+func resumableTaskStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "done", "completed", "archived":
+		return true
+	default:
+		return false
+	}
 }
 
 func looksLikeAffirmativeContinuation(input string) bool {
@@ -132,33 +129,22 @@ func looksLikeAffirmativeContinuation(input string) bool {
 	}
 }
 
-func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, intent router.IntentResult, explicitResume bool, workKey, input string) string {
-	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || (!explicitResume && intent.Intent != router.IntentContinue) {
+// withResumeContext prepends the parent run's durable state to a deliberate
+// continuation's user message. Run-scoped by P0: without an exact resolved
+// parent it returns the input unchanged — the spine tail and the bounded task
+// card are the only background then. The ownership claim itself happens
+// atomically inside child-run creation (StartRunOptions.ParentRunID); this
+// function only assembles context and never writes ownership.
+func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, parent *control.Run, intent router.IntentResult, explicitResume bool, input string) string {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || parent == nil || (!explicitResume && intent.Intent != router.IntentContinue) {
+		return input
+	}
+	if parent.TaskID != task.ID {
 		return input
 	}
 	store := c.srv.Control
-	runID := ""
-	resumedRuns := int64(0)
-	if run != nil {
-		runID = run.ID
-		resumedRuns, _ = store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, run.ID)
-	}
-	handoff, _ := store.LatestHandoff(ctx, task.ID)
-	events, _ := store.ListTaskEvents(ctx, task.ID, 8)
-	_, _ = store.AppendEvent(ctx, control.Event{
-		TaskID:     task.ID,
-		RunID:      runID,
-		Type:       "run.resumed",
-		Visibility: "task",
-		Channel:    task.LastChannel,
-		Payload: mustJSON(map[string]interface{}{
-			"reason":            intent.Reason,
-			"confidence":        intent.Confidence,
-			"resumes_task_runs": resumedRuns > 0,
-			"resumed_run_count": resumedRuns,
-			"work_key":          strings.ToUpper(strings.TrimSpace(workKey)),
-		}),
-	})
+	handoff, _ := store.RunHandoff(ctx, identity.TenantID, identity.PersonID, parent.ID)
+	events, _ := store.ListRunEvents(ctx, identity.TenantID, identity.PersonID, task.ID, parent.ID, 8)
 	if handoff == nil && len(events) == 0 {
 		return input
 	}
@@ -191,17 +177,17 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 	// what was built; surfacing the exact paths stops the continuation from
 	// re-listing the directory and editing the wrong file (observed live: a
 	// resumed game-build task rediscovered and overwrote an unrelated .html).
-	if files := c.resumeChangedFiles(ctx, task, handoff, 10); len(files) > 0 {
+	if files := c.resumeChangedFiles(ctx, task, parent, handoff, 10); len(files) > 0 {
 		sb.WriteString("files_this_task_created_or_changed:\n")
 		for _, f := range files {
 			fmt.Fprintf(&sb, "- %s\n", f)
 		}
 		sb.WriteString("Edit these existing files directly to continue; do not re-search the workspace or recreate them unless the user asks for a fresh start.\n")
 	}
-	// Spooled large tool outputs from earlier runs of this task (W1): the
-	// continuation can read any byte range by reference instead of re-running
-	// the commands that produced them.
-	if artifacts, err := store.ListTaskArtifacts(ctx, task.ID, 20); err == nil {
+	// Spooled large tool outputs from the parent run (W1): the continuation can
+	// read any byte range by reference instead of re-running the commands that
+	// produced them.
+	if artifacts, err := store.ListRunArtifacts(ctx, identity.TenantID, identity.PersonID, task.ID, parent.ID, 20); err == nil {
 		listed := 0
 		for _, artifact := range artifacts {
 			if artifact.Kind != "tool_output" || listed >= 5 {
@@ -236,9 +222,9 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 			sb.WriteString("\n")
 		}
 	}
-	// Re-inject the live plan (with per-step status) so a resumed task continues
-	// from the right step instead of losing its in-progress plan.
-	if plan := c.srv.latestPlanForTask(ctx, task.ID); len(plan) > 0 {
+	// Re-inject the parent run's live plan (with per-step status) so a resumed
+	// task continues from the right step instead of losing its in-progress plan.
+	if plan := c.srv.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, parent.ID); len(plan) > 0 {
 		sb.WriteString("current_plan:\n")
 		for _, step := range plan {
 			status := strings.TrimSpace(step.Status)
@@ -254,10 +240,10 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 	return sb.String()
 }
 
-// resumeChangedFiles returns up to `limit` distinct file paths this task has
+// resumeChangedFiles returns up to `limit` distinct file paths the parent run
 // already created or edited, most-authoritative first: the handoff's changed
-// files (when a run finalized), then paths recovered from the task's
-// file-mutating tool events (the only source when a run was interrupted before
+// files (when the run finalized), then paths recovered from that run's
+// file-mutating tool events (the only source when it was interrupted before
 // finalization). Bounded and derived — it never injects raw event rows into the
 // prompt, staying inside the resume-context contract (docs/context-lifecycle).
 // withUncertainToolWarning injects the task's uncertain side-effect ledger
@@ -286,8 +272,8 @@ func (c *RunCoordinator) withUncertainToolWarning(ctx context.Context, identity 
 	return strings.TrimSpace(sb.String()) + "\n\n" + input
 }
 
-func (c *RunCoordinator) resumeChangedFiles(ctx context.Context, task *control.Task, handoff *control.Handoff, limit int) []string {
-	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil || limit <= 0 {
+func (c *RunCoordinator) resumeChangedFiles(ctx context.Context, task *control.Task, parent *control.Run, handoff *control.Handoff, limit int) []string {
+	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil || parent == nil || limit <= 0 {
 		return nil
 	}
 	seen := map[string]bool{}
@@ -305,10 +291,10 @@ func (c *RunCoordinator) resumeChangedFiles(ctx context.Context, task *control.T
 			add(f)
 		}
 	}
-	// ListTaskEvents is newest-first; scan a bounded window for file-mutating
+	// ListRunEvents is newest-first; scan a bounded window for file-mutating
 	// tool calls. tool.started args carry the exact target path (write_file) or
 	// the V4A patch text (patch); tool.completed result headers are a backup.
-	events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 80)
+	events, _ := c.srv.Control.ListRunEvents(ctx, task.TenantID, task.PersonID, task.ID, parent.ID, 80)
 	for _, ev := range events {
 		if len(out) >= limit {
 			break

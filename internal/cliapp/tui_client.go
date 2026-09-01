@@ -64,10 +64,7 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 		}
 	}
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
-	// nil agent/gateway: the run path uses the message processor (the daemon),
-	// and client mode gates agent-backed slash commands so nothing dereferences
-	// the absent in-process agent.
-	ctrl := tui.NewControllerWithGateway(nil, nil, nil, displayProvider, displayModel, cfg, tenantID)
+	ctrl := tui.NewController(displayProvider, displayModel, cfg, tenantID)
 	ctrl.SetModelManagerOnly(a.modelManagerOnly)
 	if state := a.onboarding; state != nil {
 		auxiliary := cfg.EffectiveAuxiliary()

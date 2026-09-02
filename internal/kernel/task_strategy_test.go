@@ -225,6 +225,17 @@ func TestUpdatePlanLifecycleCapSupportsMeaningfulProgress(t *testing.T) {
 	}
 }
 
+func TestWorkSelectLifecycleCapAllowsOneAuditedCorrection(t *testing.T) {
+	if got := lifecycleToolCap("work_select"); got != 2 {
+		t.Fatalf("work_select lifecycle cap = %d, want proposal plus one correction", got)
+	}
+	calls := []llm.ToolCall{{Function: "work_select"}, {Function: "work_select"}, {Function: "work_select"}}
+	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{})
+	if len(got) != 2 || dropped != 1 {
+		t.Fatalf("len(got)=%d dropped=%d, want 2 and 1", len(got), dropped)
+	}
+}
+
 func TestUnresolvedPlanStepsFromToolCall(t *testing.T) {
 	call := llm.ToolCall{Function: "update_plan", Args: `{"plan":[{"step":"inspect","status":"completed"},{"step":"verify","status":"in_progress"},{"step":"optional cleanup","status":"cancelled"}]}`}
 	got, ok := unresolvedPlanStepsFromToolCall(call)

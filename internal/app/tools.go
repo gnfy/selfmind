@@ -54,6 +54,11 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	})
 	if controlStore != nil {
 		disp.RegisterTool(tools.NewExternalWatchToolWithPlanStore(controlStore, planStore))
+		disp.RegisterTool(tools.NewQueueUserInputTool(controlStore))
+		disp.RegisterTool(tools.NewSetDeliveryTargetTool(controlStore))
+		disp.RegisterTool(tools.NewWorkSearchTool(controlStore))
+		disp.RegisterTool(tools.NewWorkInspectTool(controlStore))
+		disp.RegisterTool(tools.NewWorkSelectTool(controlStore))
 	}
 	// Read-back for spooled large tool outputs (W1): the base dir must match
 	// the gateway sink's spool dir, both derived from the same resolved data

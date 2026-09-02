@@ -264,12 +264,13 @@ Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级
 实际派发时再次执行同一约束。因此，即使用户把辅助模型设为 `high` 或 `xhigh`，
 日常治理也不会按该档位放大成本，前台任务的推理设置则保持不变。
 
-自然语言工作连续性是 `fast_classifier` 在前台的唯一有界用途。它只从显式角色覆盖或
-`models.auxiliary` 解析，绝不会通过 fallback 链借用 `coding_agent`；每次请求都设置
-`reasoning_effort: none`，输出最多 512 token，并让最多一次重试共享六秒总时限。
-provider 只会看到 gateway 生成的有界 run 卡片。模型输出只是建议：gateway 会在执行
-查看、指导或恢复前重新校验 person/task/run 与当前状态。`continuity.mode: shadow`
-只记录判断，`safe` 是发布默认值，`full` 还允许明确的历史恢复，`off` 关闭该模型入口。
+自然语言工作连续性使用正常配置的 Main 回合，不使用 `fast_classifier`、辅助模型
+路由或第二次 run 外模型调用。活动期间的用户输入会在安全检查点交给同一个 Main；
+空闲回合可以通过正常工具协议调用有界且按 person 隔离的 `work_search`、
+`work_inspect` 和建议性的 `work_select`。任何关系在提交前仍由 gateway 重新校验
+person/task/run 与执行边界。可选的 `semantic_recall` 查询扩展保持独立、有界且
+fail-open。`fast_classifier` 仍可独立用于审批判定等已记录的低成本策略工作，但没有
+工作连续性权限。
 
 `user_identity_field: auto` 在 OpenAI-compatible 请求中映射为 `user_id`，在
 Anthropic Messages 中映射为 `metadata.user_id`。值是从认证身份派生的稳定匿名 ID，

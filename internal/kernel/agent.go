@@ -1122,7 +1122,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// running into the conversation before the next model call, so the agent
 		// adjusts course in-flight instead of the input being rejected or lost.
 		for _, guidance := range drainSteering(steerCh) {
-			messages = append(messages, llm.Message{Role: "user", Content: guidance.Content})
+			messages = append(messages, llm.Message{Role: "user", Content: steeringContentForMain(guidance)})
 			history.Steps = append(history.Steps, "user added guidance mid-turn")
 			EmitAgentEvent(eventCh, AgentEvent{
 				Type: "agent.steering",
@@ -2548,6 +2548,11 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	if a.backend != nil {
 		defs := filterToolDefinitions(ctx, a.backend.GetToolDefinitions(), strategy)
 		if len(defs) > 0 {
+			if a.primaryForegroundPromptProfile() {
+				if continuity := workContinuityGuidanceForDefinitions(defs); continuity != "" {
+					addVolatile("tools", continuity)
+				}
+			}
 			// Durable learning is a primary-agent responsibility and names only
 			// surfaces actually available in this turn.
 			if a.primaryForegroundPromptProfile() {

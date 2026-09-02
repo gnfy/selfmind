@@ -171,7 +171,7 @@ func actionToolBudgetReached(strategy TaskStrategy, actionToolsUsed int) bool {
 }
 
 func lifecycleToolNames() []string {
-	return []string{"update_plan", "finish_run"}
+	return []string{"update_plan", "finish_run", "queue_user_input", "work_select"}
 }
 
 func lifecycleToolCap(name string) int {
@@ -183,6 +183,17 @@ func lifecycleToolCap(name string) int {
 		return 8
 	case "finish_run":
 		return 1
+	case "queue_user_input":
+		// The steering buffer itself is bounded. A small independent-work cap
+		// prevents a confused model from turning one Run into an unbounded queue
+		// producer while still allowing every accepted live input in the buffer
+		// to be separated.
+		return 4
+	case "work_select":
+		// The second call is reserved for an audited correction after live user
+		// steering. The tool itself accepts it only before material effects and
+		// preserves the first proposal as history; further churn is capped.
+		return 2
 	default:
 		return 0
 	}
@@ -226,7 +237,7 @@ func finishRunStatusFromToolCall(call llm.ToolCall) (string, bool) {
 
 func isLifecycleToolName(name string) bool {
 	switch strings.TrimSpace(name) {
-	case "update_plan", "finish_run":
+	case "update_plan", "finish_run", "queue_user_input", "work_select":
 		return true
 	default:
 		return false
@@ -256,14 +267,23 @@ func normalizeToolCallIDs(calls []llm.ToolCall, iteration int) []llm.ToolCall {
 	return out
 }
 
-// isolateWorkUnitBoundaryCall makes update_plan a batch boundary. A provider
-// may emit update_plan and later tool calls in one assistant response, but the
-// later calls belong to the newly projected work unit and must not execute
-// with the old unit's Skill/tool activation state. The loop executes only the
-// boundary call and asks the model to re-issue still-needed calls next turn.
+// isolateWorkUnitBoundaryCall makes control-plane work boundaries exclusive.
+// queue_user_input wins over update_plan so independent work cannot mutate the
+// current plan or execute a sibling tool before it is durably separated.
+// update_plan keeps its existing work-unit boundary semantics.
 func isolateWorkUnitBoundaryCall(calls []llm.ToolCall) ([]llm.ToolCall, int) {
 	if len(calls) < 2 {
 		return calls, 0
+	}
+	for _, call := range calls {
+		if strings.TrimSpace(call.Function) == "queue_user_input" {
+			return []llm.ToolCall{call}, len(calls) - 1
+		}
+	}
+	for _, call := range calls {
+		if strings.TrimSpace(call.Function) == "work_select" {
+			return []llm.ToolCall{call}, len(calls) - 1
+		}
 	}
 	for _, call := range calls {
 		if strings.TrimSpace(call.Function) == "update_plan" {
@@ -783,7 +803,7 @@ func toolSupportsParallel(name string, backend AgentBackend) bool {
 func parallelSafeTool(name string) bool {
 	switch name {
 	case "read_file", "cat", "ls_r", "list_files", "search_files", "grep",
-		"web_search", "web_extract", "session_search", "get_current_time",
+		"web_search", "web_extract", "session_search", "work_search", "work_inspect", "get_current_time",
 		"process_list", "process_poll", "tool_output_view":
 		return true
 	default:

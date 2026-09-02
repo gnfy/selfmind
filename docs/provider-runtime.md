@@ -318,16 +318,15 @@ at dispatch. A user-selected `high` or `xhigh` auxiliary profile therefore
 does not multiply routine governance cost, while foreground reasoning remains
 unchanged.
 
-Natural-language work continuity is the one bounded foreground use of
-`fast_classifier`. It resolves from an explicit role override or
-`models.auxiliary`, never from a fallback chain to `coding_agent`; each request
-sets `reasoning_effort: none`, caps output at 512 tokens, and shares one
-six-second deadline across at most one retry. The provider sees only bounded
-gateway-issued run cards. Its output is advisory: the gateway validates the
-selected person/task/run and current state before any observe, steer, or resume
-action. `continuity.mode: shadow` records decisions only; `safe` is the release
-default; `full` additionally permits clear historical resume; `off` disables
-the model seam.
+Natural-language work continuity uses the normal configured Main turn, not
+`fast_classifier`, the auxiliary route, or a second run-external model call.
+Active user input is delivered to that turn at a safe checkpoint. An idle turn
+may use the normal tool protocol for bounded, person-scoped `work_search`,
+`work_inspect`, and advisory `work_select`; the gateway still validates every
+selected person/task/run and execution boundary before committing anything.
+Optional `semantic_recall` query expansion remains independently bounded and
+fail-open. `fast_classifier` remains available for separately documented cheap
+policy work such as approval triage, but it has no work-continuity authority.
 
 `user_identity_field: auto` maps to `user_id` for OpenAI-compatible requests
 and `metadata.user_id` for Anthropic Messages. The value is a stable opaque

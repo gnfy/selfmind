@@ -308,7 +308,7 @@ func TestNewRuntimeHarnessCredentiallessReplayBuildsAuxiliaryRoles(t *testing.T)
 		t.Skip("boots the full gateway harness")
 	}
 	_, cfgPath := writeRunnerFixtures(t)
-	c := writeRunnerCase(t, "credentialless_replay_roles", "continuity_mode: safe\n")
+	c := writeRunnerCase(t, "credentialless_replay_roles", "")
 	c.Turns[0].WaitForMaintenance = true
 	root, err := makeEvalTempRoot(c.ID)
 	if err != nil {
@@ -321,11 +321,28 @@ func TestNewRuntimeHarnessCredentiallessReplayBuildsAuxiliaryRoles(t *testing.T)
 		t.Fatalf("newRuntimeHarness: %v", err)
 	}
 	defer harness.Close()
-	if harness.server.ContinuityResolver == nil {
-		t.Fatal("offline replay did not configure fast_classifier")
-	}
 	if harness.server.PostRunAnalyzer == nil {
 		t.Fatal("offline replay did not configure memory_extract")
+	}
+}
+
+func TestRegisterDaemonOwnedEvalToolsIncludesWorkContinuityBroker(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	dispatcher := tools.NewDispatcherWithRegistry(tools.NewRegistry())
+	registerDaemonOwnedEvalTools(dispatcher, store)
+
+	available := make(map[string]bool)
+	for _, name := range dispatcher.ListTools() {
+		available[name] = true
+	}
+	for _, name := range []string{"queue_user_input", "work_search", "work_inspect", "work_select"} {
+		if !available[name] {
+			t.Fatalf("eval harness omitted production continuity tool %q: %v", name, dispatcher.ListTools())
+		}
 	}
 }
 

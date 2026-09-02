@@ -721,7 +721,7 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 		PlatformUserID: "local",
 		Channel:        "cli",
 		ClientCWD:      t.TempDir(),
-		Content:        "inspect current project",
+		Content:        "continue",
 	}
 	if _, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		t.Fatal(err)

@@ -8,14 +8,12 @@ The north-star cases are marked `require_cassette: true`, so they run even in
 the fast local profile. Their cassettes are committed; `selfmind selfcheck`
 fails if any recording is missing or invalid.
 
-`continuity-task-attach.yaml` was rewritten for the Work Timeline P3
-pre-label semantics (2026-07-06): an ordinary follow-up now runs under the
-open current label BY DESIGN, so the case no longer asserts
-`require_task_switch` — it pins that both turns complete cleanly on the
-message path. Its cassette is committed and sequence-keyed, so it survived
-the semantics change. Deterministic coverage lives in
-`internal/gateway/httpapi/task_attach_test.go` and
-`internal/gateway/httpapi/run_labeler_test.go`.
+`continuity-task-attach.yaml` covers explicit continuation semantics. Ordinary
+new language owns a fresh root task; prior work is related only by structured
+edges or by the normal in-Run Main path through `work_search`, `work_inspect`,
+and `work_select`. Deterministic coverage lives in
+`internal/gateway/httpapi/task_attach_test.go`, `turn_choices_test.go`, and
+`work_selection_test.go`.
 
 ## Re-recording after intentional behavior changes
 
@@ -66,3 +64,11 @@ forbids it): delete that case's `.vcr/<case-id>/` directory and re-record.
   Go coverage: `httpapi/steer_active_run_test.go`,
   `httpapi/handlers_steer_test.go`, and `httpapi/queue_test.go`
   (`TestContinuationDoesNotQueue`).
+- Fresh natural-language queries near older work are covered by
+  `timeline/timeline-natural-new-work-not-captured.yaml`. Natural-language IM
+  progress over CLI work is covered by
+  `timeline/timeline-natural-progress-cross-endpoint.yaml`, which records the
+  normal Main `work_search` → `work_inspect` → `work_select(observe)` path.
+  Active overlapping turns remain real-gateway Go integration tests because
+  the sequential eval runner cannot create a live steer window without a test
+  shortcut.

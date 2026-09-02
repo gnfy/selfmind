@@ -12,9 +12,9 @@
 
 **The source of truth for context is a person-level continuous work timeline
 (the "spine"); `task` keeps its name but is demoted from a context boundary to
-a work label/view; per-turn context is assembled by a ContextComposer; and one
-bounded continuity resolver may interpret a natural-language operation against
-gateway-issued run cards before a run starts.**
+a work label/view; per-turn context is assembled by a ContextComposer; and
+natural-language continuity is interpreted by Main inside an accountable Run
+using bounded work-history tools.**
 
 ## Why: three failures of ownership-by-guessing (evolution history)
 
@@ -39,11 +39,11 @@ Future agents: do NOT re-introduce any of these. Each was observed live.
    context* — a pre-agent classifier of exactly the kind this repo bans, with
    an irreducible error rate, whose failures silently corrupt execution
    context. Confidence thresholds, audit tables, and confirmation prompts are
-   patches over that inversion, not a cure. The later continuity resolver is a
-   narrower exception: the gateway first retrieves bounded run cards from the
-   person work spine, the model classifies the requested operation rather than
-   inventing a task/context query, and the gateway revalidates the selected run
-   before any state change.
+   patches over that inversion, not a cure. A later bounded continuity resolver
+   narrowed the input to gateway-issued Run cards, but still paid for a second
+   Main understanding pass outside a Run. The current Main-turn design keeps
+   its useful typed validation boundary while moving interpretation into the
+   normal audited turn; the old resolver is rollback-only compatibility.
 
 The common root cause: using recency/pointers/ingress classification as a
 proxy for "which work does this belong to", when the only reliable judge is
@@ -55,9 +55,10 @@ spine-first:  message → load spine context → agent acts (asks if ambiguous)
               → run gets labeled afterwards
 ```
 
-A recall miss is recoverable in-conversation (the agent asks, searches, or
-reads the workspace). The continuity resolver therefore fails closed to a
-durable choice and never silently guesses a parent run.
+A recall miss is recoverable in-conversation: Main can use the complete local
+structured work index, ask the user, or inspect the workspace. Optional
+semantic expansion never authorizes a parent and never blocks the foreground
+turn.
 
 ## Architecture
 
@@ -92,13 +93,14 @@ unfinished run under that label.
   itself claim unfinished runs. Only a structured reply edge, a deterministic
   standalone continuation control, a claimed durable choice, or a validated
   continuity RESUME decision creates a durable ownership edge.
-- A deliberate continuation owns exactly one predecessor. The gateway builds
-  person-scoped candidate cards from active/unclaimed runs, exact references,
-  the full local FTS work history, and a five-run recent fallback; it enriches
-  at most eight cards with bounded handoff/plan/activity state. In `safe` mode a
-  historical RESUME remains a durable human choice; `full` may apply a clear
-  RESUME. Ambiguous, timed-out, malformed, stale, or unavailable decisions show
-  at most three candidates plus "This is new work" and create no run.
+- A deliberate continuation owns exactly one predecessor. Structured reply
+  edges and standalone controls resolve that predecessor deterministically.
+  Natural language is interpreted by Main inside a Run: `work_search` returns
+  bounded cards from complete retained structured history, `work_inspect`
+  reads one exact Run, and `work_select` records an advisory relationship. The
+  gateway revalidates the exact target and creates a correctly scoped transfer
+  child. A missing, stale, foreign, or already-claimed target never becomes a
+  guessed parent.
 - The parent run is resolved READ-ONLY before the child run is created
   (`resolveParentRun`), and every context channel — the selector slice, the
   resume block, and loop-checkpoint restore — consumes that one answer.
@@ -259,39 +261,27 @@ authoritative instruction. If it changes direction, the latest message wins."*
 ### Ingress continuity authority
 
 ```
-message → control-command filter (unchanged)
+message → control-command filter
   → structured return edge (approval / clarification origin run / platform reply_to_run_id)
   → /new --run, /choose, task_id, /resume pin, and standalone continue controls
       remain deterministic
   → daemon-originated turn → never consult continuity inference
-  → retrieve person-scoped run cards (structural + exact reference + full-history FTS + recent)
-      no candidates → ordinary new work
-      candidates → fast_classifier, ≤6 seconds, thinking disabled, one bounded retry
-        OBSERVE → deterministic read-only progress snapshot; no task/run
-        STEER → only the revalidated currently active run
-        RESUME → only a revalidated unclaimed resumable run
-        NEW → fresh root task (spine still carries context)
-        CLARIFY/error/stale → durable choice; no task/run
+  → active Run?
+      yes → persist steer → acknowledge with structured status
+              → same Main consumes at a safe checkpoint
+                   related → apply to current work/plan
+                   independent → queue fresh work
+                   exact other work → queue exact-parent continuation
+      no → create one fresh audited Main Run
+              → bounded spine/recall context
+              → optional work_search → work_inspect → work_select
+              → gateway validates OBSERVE/RESUME relationship
 ```
 
-- This is the single allowed ingress inference seam. It classifies an operation
-  over gateway-issued cards; it does not issue SQL, select prompt rows, choose a
-  workspace/permission, or parse prose to mutate lifecycle state. Candidate
-  fields are quoted untrusted data. The gateway checks person ownership,
-  candidate membership, task/run agreement, current run status, and active-run
-  identity again after inference and relies on the atomic parent claim at child
-  creation as the final race backstop.
-- `continuity.mode` is `shadow`, `safe` (default), `full`, or `off`. Shadow only
-  records content-free decision evidence. Safe applies OBSERVE, NEW, and clear
-  active STEER but asks before historical RESUME. Full additionally applies a
-  clear historical RESUME. Off retains deterministic controls without the
-  resolver.
-- The only compound decision is OBSERVE+NEW: the deterministic prior-run status
-  becomes a bounded prompt-only data block for a fresh root turn while channel
-  history and run audit retain the original user message. No other action
-  combination is accepted. `delivery_action=move_to_current` is honored only
-  for an exact active run and the authenticated current IM endpoint; it changes
-  that run's final-result destination, never authority or an arbitrary account.
+- There is no model call before an idle Run is created. `work_search` and
+  `work_inspect` are read-only, bounded, and person-scoped; `work_select` writes
+  an advisory typed proposal only. The gateway alone may commit queue, parent,
+  workspace, approval, or delivery state.
 - Pending choices are person-partitioned and single-use (schema v8). A bare
   number is accepted only when exactly one choice was created in the last 30
   minutes; `/choose <choice_id> <number>` or platform `choice_id` metadata stays
@@ -306,6 +296,47 @@ message → control-command filter (unchanged)
 - Content ambiguity inside a selected run remains the coding agent's job. Cron,
   watch, approval, and other daemon-originated turns never steer or disambiguate
   from text.
+
+### Main-turn rollout status
+
+The active plan changes where understanding happens without changing who owns
+authority. Its core flow is now the default:
+
+```text
+explicit controls / structured replies / daemon-origin gate
+  -> active Run: persist user input -> acknowledge with status
+       -> the same Main consumes it at a safe checkpoint
+          -> related: update current work
+          -> independent or uncertain: durable separate queue item
+  -> idle: create an ordinary audited Main Run
+       -> bounded spine tail + structured hints
+       -> optional work_search / work_inspect
+       -> gateway validates NEW / OBSERVE / RESUME
+```
+
+- There is no continuity model call before the idle Run is created. Candidate
+  hints help Main start cheaply but never impose a recent-history limit.
+- `work_search` uses complete retained structured/FTS history;
+  `semantic_recall` may expand a query but failure never blocks local search or
+  the foreground turn. `work_inspect` returns bounded run-scoped evidence, not
+  raw cross-endpoint transcripts.
+- Validated continuation currently uses a structured transfer and creates the
+  correctly scoped exact-parent child for every domain; a Run's execution
+  domain never changes in place. The direct same-domain claim-update remains a
+  plan item rather than a current capability.
+- Active natural-language input is durable steer on both CLI and IM. It does
+  not cancel an in-flight tool. Main may update the current plan only for
+  related input; independent or uncertain input is queued without changing the
+  plan.
+- A progress question receives an immediate deterministic status at its source
+  endpoint. Final delivery remains with the origin unless the user explicitly
+  requests a validated bound-endpoint override.
+- A wrong implicit RESUME may be audited and retargeted only before any material
+  effect boundary. Afterwards the agent stops expansion, reports evidence, and
+  asks; history is never erased to simulate a rollback.
+
+Pre-effect audited retarget, explicit delivery override, and final deletion of
+the compatibility resolver remain open in the active plan.
 
 ### Run completion versus label lifecycle
 

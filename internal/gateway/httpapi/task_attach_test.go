@@ -332,7 +332,7 @@ func TestDrainedQueueItemOwnsFreshRootTask(t *testing.T) {
 	identity := startBlockedRun(t, daemon, provider)
 
 	daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "the queued unrelated task",
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/new --run the queued unrelated task",
 	})
 	if n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); n != 1 {
 		t.Fatalf("precondition: queued count = %d; want 1", n)

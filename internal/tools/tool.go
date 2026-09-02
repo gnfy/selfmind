@@ -259,7 +259,7 @@ func defaultRiskLevel(name string) ToolRiskLevel {
 	switch name {
 	case "terminal", "verify", "execute_command", "watch_external", "write_file", "patch", "skill_manage":
 		return ToolRiskHigh
-	case "update_plan", "finish_run", "tool_search", "session_search", "web_search", "web_extract":
+	case "update_plan", "finish_run", "tool_search", "session_search", "work_search", "work_inspect", "web_search", "web_extract":
 		return ToolRiskLow
 	default:
 		return ToolRiskMedium
@@ -282,7 +282,7 @@ func defaultToolCategory(name string) string {
 func isDefaultParallelSafe(name string) bool {
 	switch name {
 	case "read_file", "cat", "ls_r", "list_files", "search_files", "grep",
-		"web_search", "web_extract", "session_search", "get_current_time",
+		"web_search", "web_extract", "session_search", "work_search", "work_inspect", "get_current_time",
 		"process_list", "process_poll", "tool_search":
 		return true
 	default:

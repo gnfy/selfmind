@@ -70,9 +70,10 @@ func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.I
 	}
 }
 
-// enqueueBehindActive stores a new task behind the person's active run and
-// returns an honest, conversational acceptance. "N ahead" counts the running
-// task (1) plus items already queued before this one.
+// enqueueBehindActive stores deferred work behind the person's active run and
+// returns an honest, conversational acceptance. Most rows become new root
+// work; a row with an exact ReplyToRunID resumes that historical parent when
+// drained. "N ahead" counts the running task (1) plus earlier queued rows.
 func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
 	if d == nil || d.Control == nil || identity == nil {
 		return api.MessageResponse{Identity: identity, Error: "queue is not available", Turn: messageTurn("failed", "", "", "", "", "queue is not available")}

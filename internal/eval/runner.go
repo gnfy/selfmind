@@ -661,10 +661,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// The eval harness creates the control store after the core tool set. Add
 	// daemon-owned tools here so reliability cases exercise the production
 	// registration path instead of silently running with a smaller tool set.
-	disp.RegisterTool(tools.NewExternalWatchTool(controlStore))
-	disp.RegisterTool(tools.NewSkillSelectTool(controlStore))
-	disp.RegisterTool(tools.NewSkillFallbackTool(controlStore))
-	disp.RegisterTool(tools.NewSkillLifecycleManageTool(controlStore))
+	registerDaemonOwnedEvalTools(disp, controlStore)
 	skillStorage, err := appcore.ResolveSkillStorage(cfg)
 	if err != nil {
 		appcore.StopCron(gwDeps.CronScheduler)
@@ -707,13 +704,6 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// path inside the isolated data dir.
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
-	if c.ContinuityMode != "" {
-		server.ContinuityMode = c.ContinuityMode
-		server.ContinuityResolver = appcore.NewConfiguredContinuityResolver(mem, cfg, tenantID)
-		if c.ContinuityMode != "off" && server.ContinuityResolver == nil {
-			return nil, fmt.Errorf("eval case %s requires fast_classifier continuity, but no auxiliary/role route is configured", c.ID)
-		}
-	}
 	if caseNeedsPostRunMaintenance(c) {
 		server.PostRunAnalyzer = appcore.NewConfiguredPostRunAnalyzer(mem, cfg, tenantID, evalPrompts, controlStore)
 		server.PostRunMaintenance = httpapi.PostRunMaintenanceOptions{
@@ -750,6 +740,21 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// surface and change which notification paths its runs take.
 	server.Delivery = newEvalDeliveryService(c, harness)
 	return harness, nil
+}
+
+func registerDaemonOwnedEvalTools(disp *tools.Dispatcher, store *control.Store) {
+	if disp == nil || store == nil {
+		return
+	}
+	disp.RegisterTool(tools.NewExternalWatchTool(store))
+	disp.RegisterTool(tools.NewQueueUserInputTool(store))
+	disp.RegisterTool(tools.NewSetDeliveryTargetTool(store))
+	disp.RegisterTool(tools.NewWorkSearchTool(store))
+	disp.RegisterTool(tools.NewWorkInspectTool(store))
+	disp.RegisterTool(tools.NewWorkSelectTool(store))
+	disp.RegisterTool(tools.NewSkillSelectTool(store))
+	disp.RegisterTool(tools.NewSkillFallbackTool(store))
+	disp.RegisterTool(tools.NewSkillLifecycleManageTool(store))
 }
 
 func caseNeedsPostRunMaintenance(c *Case) bool {

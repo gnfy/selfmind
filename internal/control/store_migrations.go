@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 9
+const CurrentControlSchemaVersion = 10
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -391,6 +391,31 @@ CREATE TABLE IF NOT EXISTS external_watch_groups (
 );
 CREATE INDEX IF NOT EXISTS idx_external_watch_groups_pending
 	ON external_watch_groups(tenant_id, person_id, status, created_at);`)
+			return err
+		},
+	},
+	{
+		Version: 10,
+		Name:    "run-delivery-override",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Overrides are opt-in rows created only from an authenticated,
+			// server-issued steering input. Historical runs gain no capability.
+			_, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS run_delivery_overrides (
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	run_id TEXT NOT NULL,
+	platform TEXT NOT NULL,
+	platform_user_id TEXT NOT NULL,
+	channel TEXT NOT NULL,
+	source_steering_id TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY (tenant_id, run_id),
+	UNIQUE (tenant_id, source_steering_id)
+);
+CREATE INDEX IF NOT EXISTS idx_run_delivery_overrides_person
+	ON run_delivery_overrides(tenant_id, person_id, updated_at);`)
 			return err
 		},
 	},

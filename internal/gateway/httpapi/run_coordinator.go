@@ -103,27 +103,6 @@ func (c *RunCoordinator) currentActive(personID string) *activeRun {
 	return &copy
 }
 
-// setActiveDeliveryOverride moves only the final-result destination of the
-// exact active run to the authenticated endpoint that asked. It cannot name an
-// arbitrary account, and a CLI has no push sender so it is not a valid target.
-func (c *RunCoordinator) setActiveDeliveryOverride(personID, runID string, req api.MessageRequest) bool {
-	if c == nil || c.srv == nil || c.srv.Delivery == nil || strings.EqualFold(strings.TrimSpace(req.Platform), "cli") ||
-		!c.srv.Delivery.SupportsPlatform(req.Platform) {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	active := c.active[personID]
-	if active == nil || strings.TrimSpace(active.RunID) == "" || active.RunID != strings.TrimSpace(runID) {
-		return false
-	}
-	active.DeliveryOverride = true
-	active.DeliveryPlatform = strings.TrimSpace(req.Platform)
-	active.DeliveryPlatformUserID = strings.TrimSpace(req.PlatformUserID)
-	active.DeliveryChannel = strings.TrimSpace(req.Channel)
-	return active.DeliveryPlatform != "" && active.DeliveryPlatformUserID != "" && active.DeliveryChannel != ""
-}
-
 func (c *RunCoordinator) stopActive(personID string) *activeRun {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -544,12 +523,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode, parent))
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, parent, intent)
-	promptInput := req.Content
-	if continuity := strings.TrimSpace(req.ContinuityContext); continuity != "" {
-		promptInput = "[SelfMind read-only related-work status]\n" + continuity +
-			"\n[/SelfMind read-only related-work status]\n\n[Current user request]\n" + req.Content
-	}
-	agentInput := c.withGatewayContext(promptInput, identity, task, workspace, req.ExecutionRoots, req.Attachments)
+	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.ExecutionRoots, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, parent, intent, attach.claimsPriorRuns(), agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
 	// (crash-orphaned) side-effect tool calls must verify before repeating
@@ -587,6 +561,28 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// stuck in `running` forever. WithoutCancel keeps ctx values (observers,
 	// scopes) while guaranteeing the terminal state lands in control.db.
 	finCtx := context.WithoutCancel(ctx)
+	selection, selectionErr := c.commitWorkSelection(finCtx, identity, req, task, run)
+	if selectionErr != nil {
+		selection = &workSelectionCommit{
+			Rejected: true,
+			Notice:   "I found related historical work, but the gateway could not validate a safe continuation. Nothing was attached or started: " + tools.RedactSensitive(selectionErr.Error()),
+		}
+	}
+	if selection != nil {
+		if selection.Rejected {
+			content = selection.Notice
+		} else if selection.Action == "resume" && strings.TrimSpace(selection.Notice) != "" && !strings.Contains(content, selection.Notice) {
+			content = strings.TrimSpace(content)
+			if content != "" {
+				content += "\n\n"
+			}
+			content += selection.Notice
+		}
+		if selection.Direct && selection.Task != nil {
+			task = selection.Task
+			c.updateActive(identity.PersonID, task, run)
+		}
+	}
 	outcome := buildRunOutcome(content)
 	structuredOutcome := false
 	if structured, ok := c.latestStructuredRunOutcome(finCtx, task.ID, run.ID); ok {
@@ -598,6 +594,13 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	outcome = reconcileTurnCompletion(outcome, eventSummary.Completion(), structuredOutcome)
 	outcome = reconcileMissingFinalResponse(outcome, structuredOutcome, hasFinalContent)
+	if selection != nil && selection.Rejected {
+		outcome.Status = "waiting_user"
+		outcome.CompletionReason = "work_selection_rejected"
+		outcome.Resumable = true
+		outcome.Summary = selection.Notice
+		outcome.NextSteps = appendUnique(outcome.NextSteps, "Confirm whether to continue the historical work separately.", 8)
+	}
 	if !hasFinalContent && structuredOutcome && strings.TrimSpace(outcome.Summary) != "" {
 		// finish_run is a durable structured result. When a provider ends the
 		// stream without separate prose, expose that result instead of storing
@@ -658,6 +661,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	recordFinalizeErr("materialize run finalization", c.materializeRunFinalization(finCtx, identity, task, run, taskStatus,
 		replay.WorkspaceID, replay.UserInput, req.Channel, content, outcome, replay.Attach, handoff, terminalEvent))
+	if selection != nil && !selection.Rejected && !selection.Direct {
+		recordFinalizeErr("project work interaction", d.Control.ProjectInteractionTask(finCtx, identity.TenantID, identity.PersonID, task.ID, run.ID))
+	}
 	c.recordRecallOutputOverlap(finCtx, task, run, req.Channel, content)
 	c.recordOutcomeArtifacts(finCtx, task, run, req.Channel, outcome.Files)
 	if len(finalizeErrs) > 0 {
@@ -768,11 +774,11 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		// after endActive frees the per-person slot — chaining the next queued
 		// item into its own async run once this one is truly done.
 		defer c.drainQueue(identity)
-		// Unconsumed steering outlives the run as durable queued work pinned
-		// to the task (P0-A). Runs BEFORE drainQueue (LIFO) so the deferral is
-		// visible to that very drain.
-		defer c.deferUnconsumedSteering(identity, active)
 		defer c.endActive(identity.PersonID)
+		// Register after endActive so LIFO executes this first: acknowledged
+		// input is durable in the next-turn queue before the active slot becomes
+		// visible as idle to another endpoint.
+		defer c.deferUnconsumedSteering(identity, active)
 		defer runCancel()
 		defer stopProgressNotices()
 		// Panic firewall: async runs (IM, queue drain, cron, detached CLI) have

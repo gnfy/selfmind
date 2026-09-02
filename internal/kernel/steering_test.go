@@ -75,3 +75,35 @@ func TestSteeringInjectedIntoConversation(t *testing.T) {
 		t.Fatalf("steered guidance was not injected into the conversation: %+v", provider.requests[0].Messages)
 	}
 }
+
+func TestDurableSteeringLetsMainSeparateIndependentWork(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	backend := &mockBackend{}
+	provider := &recordingLLMProvider{}
+	agent := NewAgent(mem, backend, provider, "helpful", 1, 1, nil)
+
+	steer := make(chan SteeringInput, 1)
+	steer <- SteeringInput{ID: "steer-server-issued", Content: "prepare an unrelated weekly report", ContentHash: "hash-1"}
+	ctx := WithSteeringInputs(context.Background(), steer)
+
+	if _, _, err := agent.RunConversation(ctx, "u", "cli", "finish the release"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if len(provider.requests) == 0 {
+		t.Fatal("provider received no requests")
+	}
+	for _, message := range provider.requests[0].Messages {
+		if message.Role != "user" || !strings.Contains(message.Content, "weekly report") {
+			continue
+		}
+		if !strings.Contains(message.Content, "[SelfMind live user input]") ||
+			!strings.Contains(message.Content, "steer-server-issued") ||
+			!strings.Contains(message.Content, "queue_user_input") ||
+			!strings.Contains(message.Content, "set_delivery_target") ||
+			!strings.Contains(message.Content, "work_select again") {
+			t.Fatalf("durable steering block = %q", message.Content)
+		}
+		return
+	}
+	t.Fatalf("durable steering was not delivered to Main: %+v", provider.requests[0].Messages)
+}

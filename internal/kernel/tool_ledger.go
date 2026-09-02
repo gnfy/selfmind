@@ -39,14 +39,14 @@ const (
 // verification.
 var readOnlyLedgerTools = map[string]struct{}{
 	"read_file": {}, "cat": {}, "ls_r": {}, "list_files": {}, "search_files": {},
-	"grep": {}, "web_search": {}, "web_extract": {}, "session_search": {},
+	"grep": {}, "web_search": {}, "web_extract": {}, "session_search": {}, "work_search": {}, "work_inspect": {},
 	"get_current_time": {}, "process_list": {}, "process_poll": {}, "tool_output_view": {},
 	"skill_view": {}, "skills_list": {},
 }
 
 // idempotentLedgerTools mutate local state but converge on replay.
 var idempotentLedgerTools = map[string]struct{}{
-	"update_plan": {}, "finish_run": {}, "write_file": {}, "patch": {}, "edit": {},
+	"update_plan": {}, "finish_run": {}, "queue_user_input": {}, "work_select": {}, "write_file": {}, "patch": {}, "edit": {},
 }
 
 // ClassifyToolRetry grades a tool. The default is the SAFEST assumption
@@ -127,7 +127,7 @@ func ToolResultReference(raw string, ok bool) string {
 
 func ToolExecutionStrategy(name string, retryClass ToolRetryClass) string {
 	switch strings.TrimSpace(name) {
-	case "update_plan", "finish_run", "clarify":
+	case "update_plan", "finish_run", "queue_user_input", "work_select", "clarify":
 		return "interact"
 	case "verify":
 		return "verify"

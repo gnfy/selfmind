@@ -44,6 +44,7 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 
 - [Daily-Driver Runtime Closure](plans/daily-driver-closure.md) - paused, en
 - [External Skill Package Adoption](plans/external-skill-packages.md) - paused, en
+- [Main-Turn Work Continuity](plans/main-turn-work-continuity.md) - active, en
 
 ## Reference
 

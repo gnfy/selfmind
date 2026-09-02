@@ -342,7 +342,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	// References and the current-task pointer no longer route anything
 	// (simplification P2): references are search hints, current_task is a UI
 	// projection.
-	if intent.Intent == router.IntentContinue {
+	if intent.Intent == router.IntentContinue && isDeterministicContinuationInput(req.Content) {
 		task, attach, err := c.resolveContinuationByRuns(ctx, identity, req, inputWorkKey)
 		if err != nil || task != nil {
 			return task, attach, err

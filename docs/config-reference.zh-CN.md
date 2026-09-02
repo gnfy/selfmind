@@ -403,19 +403,15 @@ intent:
   thresholds:
     direct: 0.8
     ask: 0.55
-continuity:
-  mode: "safe"         # shadow | safe | full | off
 ```
 
-普通语言永远会到达 agent；这些旋钮只调显式命令和续接检测。大多数用户用默认即可。
-
-`continuity.mode` 控制 `fast_classifier` 对历史 run 卡片的有界判断。`shadow`
-只记录判断而保留旧的确定性路径；`safe`（默认）可直接执行只读进度查询、新工作
-判断和对当前活动 run 的明确指导，但恢复历史 run 前仍要求用户选择；`full` 还可
-执行明确的历史恢复；`off` 关闭这次模型调用。无论哪种模式，显式 ID、回复元数据、
-`/resume`、`/choose`、`/new --run` 和独立的“继续”控制都保持确定性。该调用使用
-`models.roles.fast_classifier` 覆盖或 `models.auxiliary`，关闭 thinking，并共享
-六秒总时限。
+普通语言永远会到达 agent。这些旋钮只调显式命令和独立续接线索的检测；大多数用户
+使用默认值即可。空闲时的自然语言会直接启动一个可审计的 Main Run，活动任务期间
+的自然语言则会持久化 steer 给正在运行的 Main。显式 ID、回复元数据、`/resume`、
+`/choose`、`/new --run` 和独立的“继续”控制仍保持确定性。Main 可在回合内使用按
+person 隔离的 `work_search` 与 `work_inspect` 渐进查询历史，并通过 `work_select`
+记录一个供 gateway 重新校验的精确 Run 关系建议。`fast_classifier` 没有工作连续性
+权限，也不存在连续性模型或超时配置。
 
 ## 11. MCP 服务器
 

@@ -132,7 +132,7 @@ func TestSoleWaitingRunContinuationReconcilesWithoutAnalyzer(t *testing.T) {
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "send", Content: "continue the only open work", Async: true,
+		Platform: "cli", PlatformUserID: "local", Channel: "send", Content: "continue", Async: true,
 	})
 	if status != http.StatusOK || !resp.Accepted {
 		t.Fatalf("async accept failed: status=%d resp=%+v", status, resp)

@@ -225,7 +225,7 @@ func hashString(value string) string {
 
 func idempotentTool(name string) bool {
 	switch name {
-	case "read_file", "list_files", "ls_r", "search_files", "grep", "session_search",
+	case "read_file", "list_files", "ls_r", "search_files", "grep", "session_search", "work_search", "work_inspect",
 		"web_search", "web_extract", "get_current_time", "process_list", "process_poll":
 		return true
 	default:

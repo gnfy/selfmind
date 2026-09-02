@@ -42,6 +42,11 @@ func TestApplicationToolCatalogHasNoPerSkillSchemasAndStaysWithinBudget(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, name := range []string{"queue_user_input", "set_delivery_target", "work_search", "work_inspect", "work_select"} {
+		if !hasTool(dispatcher, name) {
+			t.Fatalf("application tool catalog missing %s", name)
+		}
+	}
 	agent := kernel.NewAgent(nil, dispatcher, &judgeCaptureProvider{}, "test", 1, 1, nil)
 	preview := agent.ProviderToolCatalogPreview(context.Background())
 	if !preview.Valid() {

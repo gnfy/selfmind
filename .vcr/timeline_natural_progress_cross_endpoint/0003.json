@@ -1,0 +1,29 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run work_select",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_jyDTBQtIbnYEcf9REqLZc4Jd",
+          "Function": "work_select",
+          "Args": "{\"action\":\"observe\",\"run_id\":\"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 8186,
+        "output_tokens": 46,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8186,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

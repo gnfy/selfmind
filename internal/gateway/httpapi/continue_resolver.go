@@ -129,6 +129,10 @@ func looksLikeAffirmativeContinuation(input string) bool {
 	}
 }
 
+func isDeterministicContinuationInput(input string) bool {
+	return isStandaloneContinueControl(input) || looksLikeAffirmativeContinuation(input)
+}
+
 // withResumeContext prepends the parent run's durable state to a deliberate
 // continuation's user message. Run-scoped by P0: without an exact resolved
 // parent it returns the input unchanged — the spine tail and the bounded task

@@ -111,7 +111,7 @@ func TestCLIAsyncResultRoutesToPreferredIM(t *testing.T) {
 	}
 }
 
-func TestExplicitContinuityDeliveryMoveTargetsCurrentBoundIM(t *testing.T) {
+func TestDurableDeliveryOverrideSurvivesCoordinatorRestart(t *testing.T) {
 	daemon, store, identity, task, _ := newApprovalTestServer(t)
 	ctx := context.Background()
 	run, err := store.StartRun(ctx, task, "cli", "long release")
@@ -121,19 +121,20 @@ func TestExplicitContinuityDeliveryMoveTargetsCurrentBoundIM(t *testing.T) {
 	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wx-current", "Current IM"); err != nil {
 		t.Fatal(err)
 	}
+	steering, err := store.AcceptSteering(ctx, control.SteeringMessage{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Platform: "weixin", PlatformUserID: "wx-current", Channel: "wx-chat", Content: "send the final result here",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetRunDeliveryOverrideFromSteering(ctx, identity.TenantID, identity.PersonID, run.ID, steering.ID); err != nil {
+		t.Fatal(err)
+	}
 	recorder := &recordingSender{}
 	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
-	coord := daemon.coordinator()
-	if ok := coord.beginActive(identity.PersonID, &activeRun{TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID}); !ok {
-		t.Fatal("could not register active run")
-	}
-	defer coord.endActive(identity.PersonID)
-	if !coord.setActiveDeliveryOverride(identity.PersonID, run.ID, api.MessageRequest{
-		Platform: "weixin", PlatformUserID: "wx-current", Channel: "wx-chat",
-	}) {
-		t.Fatal("delivery override was not accepted")
-	}
-	if !coord.deliverAsyncResult(ctx, identity, api.MessageRequest{Platform: "cli", Channel: "cli"}, api.MessageResponse{
+	// No active-run registry entry: this is the state after a daemon restart.
+	if !daemon.coordinator().deliverAsyncResult(ctx, identity, api.MessageRequest{Platform: "cli", Channel: "cli"}, api.MessageResponse{
 		Task: task, Run: run, Content: "release finished",
 	}) {
 		t.Fatal("delivery was not accepted")

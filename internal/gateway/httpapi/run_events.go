@@ -106,17 +106,20 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		LogicalKey: strings.TrimSpace(req.EffectKey),
 	}
 	accepted := false
-	if active := c.currentActive(identity.PersonID); active != nil && active.RunID == base.RunID && active.DeliveryOverride {
-		base.Platform = active.DeliveryPlatform
-		base.PlatformUserID = active.DeliveryPlatformUserID
-		base.Channel = active.DeliveryChannel
-		accepted, _ = c.srv.Delivery.EnqueueAndTryAccepted(ctx, base)
-		if accepted && req.EffectKey != "" && c.srv.Control != nil {
-			if err := c.srv.Control.MarkEffectDeliveryEnqueued(ctx, identity.TenantID, req.EffectKey); err != nil {
-				return false
+	if c.srv.Control != nil && base.RunID != "" {
+		target, err := c.srv.Control.RunDeliveryOverride(ctx, identity.TenantID, identity.PersonID, base.RunID)
+		if err == nil && target != nil && c.srv.Delivery.SupportsPlatform(target.Platform) {
+			base.Platform = target.Platform
+			base.PlatformUserID = target.PlatformUserID
+			base.Channel = target.Channel
+			accepted, _ = c.srv.Delivery.EnqueueAndTryAccepted(ctx, base)
+			if accepted && req.EffectKey != "" {
+				if err := c.srv.Control.MarkEffectDeliveryEnqueued(ctx, identity.TenantID, req.EffectKey); err != nil {
+					return false
+				}
 			}
+			return accepted
 		}
-		return accepted
 	}
 	// Platform-only check: TUI channels are session UUIDs, not "cli".
 	if req.Platform == "cli" {

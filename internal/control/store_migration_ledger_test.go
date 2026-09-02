@@ -154,6 +154,33 @@ func TestVersionNineMigrationAddsCapabilityInertRecoveryContract(t *testing.T) {
 	}
 }
 
+func TestVersionTenMigrationAddsCapabilityInertDeliveryOverride(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var migration *schemaMigration
+	for index := range orderedMigrations {
+		if orderedMigrations[index].Version == 10 {
+			migration = &orderedMigrations[index]
+		}
+	}
+	if migration == nil {
+		t.Fatal("v10 migration is missing")
+	}
+	if err := migration.Apply(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='run_delivery_overrides'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("run_delivery_overrides count=%d err=%v", count, err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM run_delivery_overrides`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("historical override rows=%d err=%v", count, err)
+	}
+}
+
 // TestOrderedMigrationsCoverCurrentSchemaVersion pins the declaration itself:
 // the steps stay sorted, carry unique versions, and the highest one is the
 // version this binary claims to support. Without this, adding a table to

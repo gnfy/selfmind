@@ -32,7 +32,7 @@ setup:
         status: waiting_user
 
 turns:
-  - input: "继续这个任务。按已经绑定的流程读取 release.txt，告诉我精确版本号；不要修改文件。"
+  - input: "继续"
     channel: weixin
 
 expect:

@@ -245,10 +245,6 @@ type MessageRequest struct {
 	// choice. In particular, "observe" must finish on the read-only progress
 	// path instead of accidentally creating a continuation run.
 	ContinuityAction string `json:"-"`
-	// ContinuityContext is bounded gateway-derived prior-work state for the one
-	// supported OBSERVE+NEW compound turn. It is prompt-only: the original user
-	// message remains unchanged in channel history and run audit.
-	ContinuityContext string `json:"-"`
 	// ContinuityResolutionID links a durable human choice to the advisory model
 	// decision it corrected. It is control-plane metadata, never a wire input.
 	ContinuityResolutionID string `json:"-"`

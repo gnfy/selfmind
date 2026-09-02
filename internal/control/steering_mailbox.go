@@ -191,8 +191,10 @@ func (s *Store) ListUnconsumedSteering(ctx context.Context, tenantID, runID stri
 }
 
 // DeferSteering re-homes an unconsumed row into the durable task queue so the
-// guidance survives run completion or a daemon restart as ordinary queued
-// work pinned to its task. The queue's idempotency key (steering:<id>) makes
+// guidance survives run completion or a daemon restart as ordinary next-turn
+// input. It is deliberately not pinned to the finished task: Main never saw
+// this input, so no component may pre-decide whether it was related. The
+// queue's idempotency key (steering:<id>) makes
 // crash-replay of this hand-off converge on one row; the mailbox row flips to
 // deferred only after the enqueue succeeded.
 func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
@@ -212,7 +214,6 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 		ApprovalMode:   m.ApprovalMode,
 		WorkspaceID:    m.WorkspaceID,
 		ExecutionRoots: executionRoots,
-		TaskID:         m.TaskID,
 		IdempotencyKey: "steering:" + m.ID,
 		Class:          QueueClassForeground,
 	}); err != nil {
@@ -223,6 +224,140 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 		SteeringDeferred, time.Now().Unix(), normalizeTenant(m.TenantID), m.ID,
 		SteeringAccepted, SteeringClaimed)
 	return err
+}
+
+// QueueSteeringAsIndependent moves one exact Main-consumed live input into a
+// fresh foreground queue item. It intentionally drops TaskID/ReplyToRunID: Main
+// has classified this input as independent of the active objective, so the
+// drained turn must resolve a new root instead of inheriting active ownership.
+// The stable queue key makes a provider retry or crash replay converge on one
+// row. accepted/claimed are allowed because the event consumer that records
+// run.steering_consumed may lag the model tool call by a few milliseconds.
+func (s *Store) QueueSteeringAsIndependent(ctx context.Context, tenantID, personID, runID, steeringID string) (*QueuedTask, error) {
+	return s.queueSteeringAsWork(ctx, tenantID, personID, runID, steeringID, "")
+}
+
+// QueueSteeringAsContinuation moves one exact Main-consumed input into the
+// queue with a validated historical parent. The parent domain, not the active
+// Run or source endpoint, owns the eventual child's task/workspace/roots.
+func (s *Store) QueueSteeringAsContinuation(ctx context.Context, tenantID, personID, runID, steeringID, parentRunID string) (*QueuedTask, error) {
+	if strings.TrimSpace(parentRunID) == "" {
+		return nil, fmt.Errorf("parent run id is required")
+	}
+	return s.queueSteeringAsWork(ctx, tenantID, personID, runID, steeringID, parentRunID)
+}
+
+func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, runID, steeringID, parentRunID string) (*QueuedTask, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("control store is unavailable")
+	}
+	tenantID = normalizeTenant(tenantID)
+	personID = strings.TrimSpace(personID)
+	runID = strings.TrimSpace(runID)
+	steeringID = strings.TrimSpace(steeringID)
+	if personID == "" || runID == "" || steeringID == "" {
+		return nil, fmt.Errorf("person id, run id, and input id are required")
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(task_id, ''),
+		COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
+		COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
+		content, content_hash, status, created_at, updated_at
+		FROM steering_mailbox WHERE tenant_id = ? AND id = ?`, tenantID, steeringID)
+	m, err := scanSteering(row)
+	if err != nil {
+		return nil, fmt.Errorf("load live input: %w", err)
+	}
+	if m.PersonID != personID || m.RunID != runID {
+		return nil, fmt.Errorf("live input does not belong to this run")
+	}
+	queueKey := "steering-independent:" + m.ID
+	if strings.TrimSpace(parentRunID) != "" {
+		queueKey = "steering-continuation:" + m.ID + ":" + strings.TrimSpace(parentRunID)
+	}
+	if m.Status == SteeringDeferred {
+		// A retry of this exact tool call returns the row it already created.
+		// A generic steering:<id> finalization/boot deferral is different: Main
+		// never classified that input, so creating another independent row would
+		// duplicate user work.
+		queued, err := s.GetQueuedByIdempotencyKey(ctx, tenantID, queueKey)
+		if err != nil {
+			return nil, err
+		}
+		if queued != nil {
+			return queued, nil
+		}
+		return nil, fmt.Errorf("live input was already transferred as next-turn work")
+	}
+	switch m.Status {
+	case SteeringAccepted, SteeringClaimed, SteeringConsumed:
+	default:
+		return nil, fmt.Errorf("live input is no longer queueable")
+	}
+	var executionRoots []executionenv.RootBinding
+	workspaceID := m.WorkspaceID
+	taskID := ""
+	replyToRunID := ""
+	if active, err := s.GetRun(ctx, tenantID, runID); err != nil {
+		return nil, err
+	} else if active == nil || active.PersonID != personID {
+		return nil, fmt.Errorf("active run is no longer available")
+	} else {
+		executionRoots = executionenv.CloneRootBindings(active.ExecutionRoots)
+	}
+	if strings.TrimSpace(parentRunID) != "" {
+		parent, err := s.GetRun(ctx, tenantID, parentRunID)
+		if err != nil {
+			return nil, err
+		}
+		if parent == nil || parent.PersonID != personID {
+			return nil, fmt.Errorf("continuation parent is unavailable for the current person")
+		}
+		resumable, err := s.ListUnresolvedRuns(ctx, tenantID, personID, parent.TaskID, 20)
+		if err != nil {
+			return nil, err
+		}
+		found := false
+		for _, candidate := range resumable {
+			if candidate.ID == parent.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("continuation parent is no longer resumable")
+		}
+		taskID = parent.TaskID
+		replyToRunID = parent.ID
+		workspaceID = parent.WorkspaceID
+		executionRoots = executionenv.CloneRootBindings(parent.ExecutionRoots)
+	}
+	queued, err := s.EnqueueQueued(ctx, QueuedTask{
+		TenantID:       tenantID,
+		PersonID:       personID,
+		Channel:        m.Channel,
+		Platform:       m.Platform,
+		PlatformUserID: m.PlatformUserID,
+		Content:        m.Content,
+		ApprovalMode:   m.ApprovalMode,
+		WorkspaceID:    workspaceID,
+		ExecutionRoots: executionRoots,
+		TaskID:         taskID,
+		ReplyToRunID:   replyToRunID,
+		IdempotencyKey: queueKey,
+		Class:          QueueClassForeground,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE steering_mailbox
+		SET status = ?, updated_at = ?
+		WHERE tenant_id = ? AND id = ? AND person_id = ? AND run_id = ?
+		  AND status IN (?, ?, ?)`,
+		SteeringDeferred, time.Now().Unix(), tenantID, m.ID, personID, runID,
+		SteeringAccepted, SteeringClaimed, SteeringConsumed); err != nil {
+		return nil, err
+	}
+	return queued, nil
 }
 
 // RecoverSteeringAtBoot defers every live row whose run died with the previous

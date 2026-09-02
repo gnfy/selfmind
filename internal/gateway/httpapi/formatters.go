@@ -280,7 +280,11 @@ func formatSteeredIntoRun(active *activeRun) string {
 	if title == "" {
 		title = "the running task"
 	}
-	return fmt.Sprintf("Added your guidance to %s. It will pick this up at the next step.", textutil.Truncate(toOneLine(title), 60))
+	elapsed := time.Since(active.StartedAt).Round(time.Second)
+	if active.StartedAt.IsZero() || elapsed < 0 {
+		elapsed = 0
+	}
+	return fmt.Sprintf("Added your guidance to %s.\n- status: running\n- elapsed: %s\n\nIt will pick this up at the next safe step.", textutil.Truncate(toOneLine(title), 60), elapsed)
 }
 
 func formatActiveRunStatus(active *activeRun) *api.ActiveRunStatus {

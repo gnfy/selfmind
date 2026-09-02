@@ -138,12 +138,13 @@ daemon must not expose that directory as a product runtime Skill.
 
 - A task is a reversible work label, not a context boundary. Explicit task ids,
   `/resume`, structured reply edges, and standalone continuation controls remain
-  deterministic. The one allowed ingress inference seam is the bounded
-  `fast_classifier` continuity resolver: it sees gateway-issued person-scoped
-  run cards, never raw transcripts or tool output; it recommends NEW, OBSERVE,
-  STEER, RESUME, or CLARIFY; and the gateway revalidates every target before
-  acting. Do not add a second classifier or let model output select permissions,
-  workspaces, task labels, or context rows directly.
+  deterministic. User-originated natural language is Main-owned inside an
+  accountable Run: when work is active it is durably steered for Main to apply
+  or queue, and when idle it starts an ordinary turn with bounded work-history
+  tools. Daemon-originated text never steers work. Do not add a run-external LLM
+  continuity classifier or let model output select permissions, workspaces,
+  task labels, context rows, or execution scope directly. `fast_classifier` is
+  not a continuity authority.
 - Continuity comes from the person-level work spine: one slim user/final-answer
   entry per agent turn plus touched paths and source. Tool intermediates and
   system prompts remain in run events.

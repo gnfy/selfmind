@@ -38,26 +38,48 @@ func startBlockedRun(t *testing.T, daemon *Server, provider *slowLLMProvider) *c
 	return identity
 }
 
-func TestNewWorkQueuesWhenBusy(t *testing.T) {
+func TestNaturalLanguageSteersActiveRunIntoMain(t *testing.T) {
 	provider := newSlowLLMProvider("done")
+	defer provider.releaseNow()
 	daemon, store, _ := newDetachedRunServer(t, provider)
 	ctx := context.Background()
 	identity := startBlockedRun(t, daemon, provider)
-
 	resp, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "a second unrelated task",
 	})
-	if resp.Turn == nil || resp.Turn.Status != "queued" {
-		t.Fatalf("second message turn = %+v; want status=queued", resp.Turn)
+	if resp.Turn == nil || resp.Turn.Status != "accepted" {
+		t.Fatalf("second message turn = %+v; want status=accepted", resp.Turn)
 	}
 	if !resp.Accepted {
-		t.Fatalf("queued message should be accepted")
+		t.Fatalf("steered message should be accepted")
 	}
-	if !strings.Contains(resp.Content, "Queued behind the running task") {
-		t.Fatalf("queued reply = %q; want the honest acceptance line", resp.Content)
+	if !strings.Contains(resp.Content, "Added your guidance") {
+		t.Fatalf("steer reply = %q; want the immediate active-run acknowledgement", resp.Content)
 	}
-	if n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); n != 1 {
-		t.Fatalf("queued count = %d; want 1", n)
+	if !strings.Contains(resp.Content, "running") || !strings.Contains(resp.Content, "elapsed") {
+		t.Fatalf("steer reply lacks immediate status card: %q", resp.Content)
+	}
+	if n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); n != 0 {
+		t.Fatalf("queued count = %d; Main has not classified the input as independent yet", n)
+	}
+}
+
+func TestIdleNaturalLanguageStartsOneMainRunWithoutExternalAdmission(t *testing.T) {
+	provider := newSlowLLMProvider("done")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedContinuityHistory(t, store, identity, "interrupted")
+
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "check RUQX-767 and decide what to do",
+	})
+	if status != http.StatusOK || resp.Run == nil {
+		t.Fatalf("idle Main turn: status=%d response=%+v", status, resp)
 	}
 }
 
@@ -86,6 +108,62 @@ func TestContinuationDoesNotQueue(t *testing.T) {
 	}
 }
 
+func TestAcceptedSteeringSurvivesSyncRunFinalizationRace(t *testing.T) {
+	provider := newSlowLLMProvider("done")
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type turnResult struct {
+		resp api.MessageResponse
+	}
+	finished := make(chan turnResult, 1)
+	go func() {
+		resp, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
+			Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "finish the active release",
+		})
+		finished <- turnResult{resp: resp}
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active run never reached Main")
+	}
+
+	steered, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "also prepare the independent weekly report",
+	})
+	if !steered.Accepted || steered.Turn == nil || steered.Turn.Status != "accepted" {
+		t.Fatalf("steering was not accepted before finalization: %+v", steered)
+	}
+	provider.releaseNow()
+	select {
+	case result := <-finished:
+		if result.resp.Error != "" {
+			t.Fatalf("active run failed: %+v", result.resp)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("active run did not finish")
+	}
+
+	waitUntil(t, 5*time.Second, func() bool {
+		tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 10)
+		return len(tasks) == 2
+	}, "accepted steering disappeared when the sync run finalized before consuming it")
+	tasks, err := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.Title == "also prepare the independent weekly report" {
+			return
+		}
+	}
+	t.Fatalf("deferred input did not become next-turn work: %+v", tasks)
+}
+
 func TestDrainAutoStartsNextQueued(t *testing.T) {
 	provider := newSlowLLMProvider("done")
 	daemon, store, _ := newDetachedRunServer(t, provider)
@@ -94,7 +172,7 @@ func TestDrainAutoStartsNextQueued(t *testing.T) {
 
 	// Queue a second task behind the running one.
 	daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "the queued task",
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/new --run the queued task",
 	})
 	if n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); n != 1 {
 		t.Fatalf("precondition: queued count = %d; want 1", n)
@@ -242,7 +320,7 @@ func TestDrainedItemMarkedDoneNotRequeued(t *testing.T) {
 
 	// Queue a second task behind the running one, capture its row id.
 	daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "the queued task",
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/new --run the queued task",
 	})
 	queued, _ := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	if len(queued) != 1 {
@@ -318,7 +396,7 @@ func TestStopThenDrain(t *testing.T) {
 	identity := startBlockedRun(t, daemon, provider)
 
 	daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "task behind the stopped one",
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/new --run task behind the stopped one",
 	})
 	if n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); n != 1 {
 		t.Fatalf("precondition queued count = %d; want 1", n)

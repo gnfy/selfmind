@@ -119,9 +119,6 @@ intent:
     direct: 0.8
     ask: 0.55
 
-continuity:
-  mode: "safe" # shadow | safe | full | off
-
 cron:
   enabled: true
 
@@ -225,7 +222,6 @@ type Config struct {
 	Tasks            TaskConfig                  `mapstructure:"tasks" yaml:"tasks,omitempty"`
 	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
 	Intent           IntentConfig                `mapstructure:"intent" yaml:"intent,omitempty"`
-	Continuity       ContinuityConfig            `mapstructure:"continuity" yaml:"continuity,omitempty"`
 	Web              WebConfig                   `mapstructure:"web" yaml:"web,omitempty"`
 	ExecSandbox      ExecSandboxConfig           `mapstructure:"exec_sandbox" yaml:"exec_sandbox,omitempty"`
 	History          HistoryConfig               `mapstructure:"history" yaml:"history,omitempty"`
@@ -286,23 +282,6 @@ type IntentConfig struct {
 type IntentThresholdsConfig struct {
 	Direct float64 `mapstructure:"direct" yaml:"direct,omitempty"`
 	Ask    float64 `mapstructure:"ask" yaml:"ask,omitempty"`
-}
-
-// ContinuityConfig controls the single pre-run continuity authority. Safe is
-// the release default: read-only observation and unambiguous active steering
-// may execute, while historical resume remains an explicit human choice until
-// shadow evidence supports full mode.
-type ContinuityConfig struct {
-	Mode string `mapstructure:"mode" yaml:"mode,omitempty"`
-}
-
-func (c ContinuityConfig) EffectiveMode() string {
-	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
-	case "shadow", "safe", "full", "off":
-		return strings.ToLower(strings.TrimSpace(c.Mode))
-	default:
-		return "safe"
-	}
 }
 
 type EditorConfig struct {
@@ -1166,7 +1145,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intent.mode", "hybrid")
 	v.SetDefault("intent.thresholds.direct", 0.8)
 	v.SetDefault("intent.thresholds.ask", 0.55)
-	v.SetDefault("continuity.mode", "safe")
 	v.SetDefault("gateway.automatic_run_recovery", true)
 	v.SetDefault("gateway.pending_notify_after", "15m")
 	v.SetDefault("gateway.outbound_retention", "336h")

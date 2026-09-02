@@ -103,7 +103,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: a99bf130dcdb7075
+    source_hash: 62bf7cf97eee5354
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -224,6 +224,14 @@ documents:
     language: en
     approved_by: project-owner
     review_by: 2026-09-25
+  - path: docs/plans/main-turn-work-continuity.md
+    title: Main-Turn Work Continuity
+    class: plan
+    owner: maintainers
+    state: active
+    language: en
+    approved_by: project-owner
+    review_by: 2026-09-09
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference
@@ -237,7 +245,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: c07280a5e3df615e
+    source_hash: 914cba440bfbac47
   - path: docs/skill-learning-and-repair.md
     title: Skill Learning, Automatic Promotion, and Repair
     class: decision

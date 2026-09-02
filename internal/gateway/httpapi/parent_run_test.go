@@ -92,6 +92,7 @@ func TestDaemonOriginCueNeverSteersActiveRun(t *testing.T) {
 	if ok := coord.beginActive(identity.PersonID, &activeRun{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
 		Channel: "cli", Summary: "long build", StartedAt: time.Now(),
+		Steer: make(chan kernel.SteeringInput, 1),
 	}); !ok {
 		t.Fatal("failed to register the active run")
 	}

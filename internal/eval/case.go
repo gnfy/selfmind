@@ -12,18 +12,14 @@ import (
 )
 
 type Case struct {
-	ID        string `yaml:"id" json:"id"`
-	Title     string `yaml:"title" json:"title,omitempty"`
-	Suite     string `yaml:"suite" json:"suite,omitempty"`
-	Workspace string `yaml:"workspace" json:"workspace,omitempty"`
-	Provider  string `yaml:"provider" json:"provider,omitempty"`
-	Model     string `yaml:"model" json:"model,omitempty"`
-	Channel   string `yaml:"channel" json:"channel,omitempty"`
-	// ContinuityMode opts a case into the production fast-classifier ingress
-	// seam. It is explicit so existing cassette call counts stay stable while
-	// continuity-specific cases exercise shadow/safe/full behavior.
-	ContinuityMode string `yaml:"continuity_mode,omitempty" json:"continuity_mode,omitempty"`
-	RecordContent  bool   `yaml:"record_content" json:"record_content,omitempty"`
+	ID            string `yaml:"id" json:"id"`
+	Title         string `yaml:"title" json:"title,omitempty"`
+	Suite         string `yaml:"suite" json:"suite,omitempty"`
+	Workspace     string `yaml:"workspace" json:"workspace,omitempty"`
+	Provider      string `yaml:"provider" json:"provider,omitempty"`
+	Model         string `yaml:"model" json:"model,omitempty"`
+	Channel       string `yaml:"channel" json:"channel,omitempty"`
+	RecordContent bool   `yaml:"record_content" json:"record_content,omitempty"`
 	// ModelRequired distinguishes agent-backed scenarios from deterministic
 	// gateway/control-plane scenarios. It defaults to true. A false value lets
 	// selfcheck execute the case strictly offline without a VCR cassette; if the
@@ -190,14 +186,6 @@ func (c *Case) normalize() error {
 	}
 	if strings.TrimSpace(c.Channel) == "" {
 		c.Channel = "cli"
-	}
-	c.ContinuityMode = strings.ToLower(strings.TrimSpace(c.ContinuityMode))
-	if c.ContinuityMode != "" {
-		switch c.ContinuityMode {
-		case "shadow", "safe", "full", "off":
-		default:
-			return fmt.Errorf("continuity_mode must be shadow, safe, full, or off")
-		}
 	}
 	for i := range c.Turns {
 		c.Turns[i].Input = strings.TrimSpace(c.Turns[i].Input)

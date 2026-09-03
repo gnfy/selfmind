@@ -42,6 +42,25 @@ func TestToolErrorEnvelopeCarriesRecoveryContract(t *testing.T) {
 	}
 }
 
+func TestToolCompletionEventKeepsModelDiagnosticsOutOfUserError(t *testing.T) {
+	env := packageToolError("terminal", errors.New("command timed out after 120 seconds"))
+	events := make(chan string, 1)
+	emitToolEndEventWithDuration(events, "terminal", "call-timeout", env, 120, errors.New("timeout"))
+	event, ok := DecodeAgentEvent(<-events)
+	if !ok {
+		t.Fatal("tool completion was not encoded as an agent event")
+	}
+	if strings.Contains(event.Error, "SelfMind diagnostic instruction") || strings.Contains(event.Error, "error_class:") {
+		t.Fatalf("user event leaked model-only diagnostics: %q", event.Error)
+	}
+	if !strings.Contains(event.Error, "timed out after 120 seconds") {
+		t.Fatalf("user event lost the actionable failure: %q", event.Error)
+	}
+	if !strings.Contains(env.ModelContent, "SelfMind diagnostic instruction") {
+		t.Fatalf("model surface lost recovery guidance: %q", env.ModelContent)
+	}
+}
+
 // TestUnwrappedStorageErrorIsRedactedAtTheBoundary pins A-13: the typed envelope
 // is opt-in per call site, so an unwrapped internal-storage error used to reach
 // the model verbatim. The raw cause must survive in the capture surface.

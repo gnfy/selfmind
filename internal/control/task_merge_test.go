@@ -32,8 +32,8 @@ func mergeTask(t *testing.T, store *Store, identity *IdentityContext, title stri
 }
 
 // TestMergeTasksMovesEverythingAndArchivesSource: runs, events, artifacts,
-// handoffs, and the current-task pointer all follow the merge; the source is
-// archived, never deleted.
+// handoffs all follow the merge; the source is archived, never deleted, and
+// no implicit current-work pointer is created.
 func TestMergeTasksMovesEverythingAndArchivesSource(t *testing.T) {
 	store, identity := newMergeHarness(t)
 	ctx := context.Background()
@@ -51,9 +51,6 @@ func TestMergeTasksMovesEverythingAndArchivesSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.SaveArtifact(ctx, Artifact{TaskID: src.ID, RunID: run.ID, Kind: "tool_output", URI: "/tmp/x.txt"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, src.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.UpsertTaskReference(ctx, TaskReferenceWrite{
@@ -92,12 +89,12 @@ func TestMergeTasksMovesEverythingAndArchivesSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srcAfter.ArchivedAt == nil || srcAfter.Status != "archived" {
-		t.Fatalf("source must be archived, got status=%s archived=%v", srcAfter.Status, srcAfter.ArchivedAt)
+	if srcAfter.ArchivedAt == nil || srcAfter.Visibility != ThreadVisibilityArchived {
+		t.Fatalf("source must be archived, got visibility=%s archived=%v", srcAfter.Visibility, srcAfter.ArchivedAt)
 	}
 	current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if current == nil || current.ID != dst.ID {
-		t.Fatalf("current-task pointer must follow to dst: %+v", current)
+	if current != nil {
+		t.Fatalf("merge created implicit current work: %+v", current)
 	}
 	refs, err := store.ListTaskReferencesForTask(ctx, identity.TenantID, identity.PersonID, dst.ID, 10)
 	if err != nil {

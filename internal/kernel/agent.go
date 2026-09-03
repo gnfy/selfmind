@@ -635,7 +635,7 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 			ToolCallID:      toolCallID,
 			DurationSeconds: duration,
 			ToolResult:      result.Preview,
-			Error:           result.ModelContent,
+			Error:           result.DisplayError,
 			Payload:         metadataPayload(payload),
 		})
 	} else {

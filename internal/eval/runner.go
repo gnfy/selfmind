@@ -225,10 +225,13 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			_ = h.controlStore.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID)
 		}
 	}
+	var seededTaskID string
 	if c.Setup != nil {
-		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, firstNonEmpty(c.Channel, "cli"), c.Setup); err != nil {
+		seeded, err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, firstNonEmpty(c.Channel, "cli"), c.Setup)
+		if err != nil {
 			return nil, err
 		}
+		seededTaskID = seeded
 	}
 	existingRunIDs := map[string]bool{}
 	if identity != nil {
@@ -396,7 +399,13 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 				subjectTaskID = cur.ID
 			}
 		}
-		world := CollectWorldState(ctx, h.controlStore, h.mem, identity, subjectTaskID, workspace)
+		if subjectTaskID == "" {
+			// A deterministic reply (candidates, control commands) returns no
+			// Task; the Thread the case seeded is then the only sensible subject
+			// for durable-event assertions.
+			subjectTaskID = seededTaskID
+		}
+		world := CollectWorldState(ctx, h.controlStore, h.mem, identity, subjectTaskID, lastNonEmpty(runIDs), workspace)
 		checks = append(checks, EvaluateStatePredicates(c.AssertState, world)...)
 	}
 

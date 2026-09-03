@@ -410,7 +410,7 @@ func TestInstalledGatewaySmokeCoversCoreLifecycle(t *testing.T) {
 		"mktemp -d", "trap cleanup", "gateway start", "gateway restart --drain",
 		"gateway stop", `assert_state "${stopped_status}" "stopped"`,
 		`run_selfmind status`, `run_selfmind tasks`, `${data_dir}/control.db`,
-		"No active task.", "No open tasks.",
+		"No active task.", "Nothing needs attention.",
 	} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("installed gateway smoke is missing %q", required)

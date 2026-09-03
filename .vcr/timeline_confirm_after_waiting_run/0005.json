@@ -1,0 +1,624 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "已",
+      "phase": "final_answer"
+    },
+    {
+      "content": "确认",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。本",
+      "phase": "final_answer"
+    },
+    {
+      "content": "次",
+      "phase": "final_answer"
+    },
+    {
+      "content": "不会",
+      "phase": "final_answer"
+    },
+    {
+      "content": "执行",
+      "phase": "final_answer"
+    },
+    {
+      "content": "任何",
+      "phase": "final_answer"
+    },
+    {
+      "content": "命",
+      "phase": "final_answer"
+    },
+    {
+      "content": "令",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，也",
+      "phase": "final_answer"
+    },
+    {
+      "content": "不会",
+      "phase": "final_answer"
+    },
+    {
+      "content": "改",
+      "phase": "final_answer"
+    },
+    {
+      "content": "动",
+      "phase": "final_answer"
+    },
+    {
+      "content": "生产",
+      "phase": "final_answer"
+    },
+    {
+      "content": "环境",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "计划",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "步骤",
+      "phase": "final_answer"
+    },
+    {
+      "content": "：\n\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "1",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 再",
+      "phase": "final_answer"
+    },
+    {
+      "content": "次",
+      "phase": "final_answer"
+    },
+    {
+      "content": "核",
+      "phase": "final_answer"
+    },
+    {
+      "content": "对",
+      "phase": "final_answer"
+    },
+    {
+      "content": "生产",
+      "phase": "final_answer"
+    },
+    {
+      "content": "目标",
+      "phase": "final_answer"
+    },
+    {
+      "content": "服务",
+      "phase": "final_answer"
+    },
+    {
+      "content": "：",
+      "phase": "final_answer"
+    },
+    {
+      "content": "`",
+      "phase": "final_answer"
+    },
+    {
+      "content": "cw",
+      "phase": "final_answer"
+    },
+    {
+      "content": "2",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-se",
+      "phase": "final_answer"
+    },
+    {
+      "content": "o",
+      "phase": "final_answer"
+    },
+    {
+      "content": "ant",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-ai",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-prod",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-api",
+      "phase": "final_answer"
+    },
+    {
+      "content": "`",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "2",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 核",
+      "phase": "final_answer"
+    },
+    {
+      "content": "对",
+      "phase": "final_answer"
+    },
+    {
+      "content": "待",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "版本",
+      "phase": "final_answer"
+    },
+    {
+      "content": "：",
+      "phase": "final_answer"
+    },
+    {
+      "content": "`",
+      "phase": "final_answer"
+    },
+    {
+      "content": "v",
+      "phase": "final_answer"
+    },
+    {
+      "content": "202",
+      "phase": "final_answer"
+    },
+    {
+      "content": "609",
+      "phase": "final_answer"
+    },
+    {
+      "content": "021",
+      "phase": "final_answer"
+    },
+    {
+      "content": "531",
+      "phase": "final_answer"
+    },
+    {
+      "content": "17",
+      "phase": "final_answer"
+    },
+    {
+      "content": "`",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "3",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 将",
+      "phase": "final_answer"
+    },
+    {
+      "content": "该",
+      "phase": "final_answer"
+    },
+    {
+      "content": "版本",
+      "phase": "final_answer"
+    },
+    {
+      "content": "部署",
+      "phase": "final_answer"
+    },
+    {
+      "content": "到",
+      "phase": "final_answer"
+    },
+    {
+      "content": " AWS",
+      "phase": "final_answer"
+    },
+    {
+      "content": " ",
+      "phase": "final_answer"
+    },
+    {
+      "content": "生产",
+      "phase": "final_answer"
+    },
+    {
+      "content": "服务",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "4",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 等",
+      "phase": "final_answer"
+    },
+    {
+      "content": "待",
+      "phase": "final_answer"
+    },
+    {
+      "content": " AWS",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 完",
+      "phase": "final_answer"
+    },
+    {
+      "content": "成",
+      "phase": "final_answer"
+    },
+    {
+      "content": "滚",
+      "phase": "final_answer"
+    },
+    {
+      "content": "动",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "并",
+      "phase": "final_answer"
+    },
+    {
+      "content": "观察",
+      "phase": "final_answer"
+    },
+    {
+      "content": "服务",
+      "phase": "final_answer"
+    },
+    {
+      "content": "状态",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "5",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 检",
+      "phase": "final_answer"
+    },
+    {
+      "content": "查",
+      "phase": "final_answer"
+    },
+    {
+      "content": "实例",
+      "phase": "final_answer"
+    },
+    {
+      "content": "健康",
+      "phase": "final_answer"
+    },
+    {
+      "content": "状态",
+      "phase": "final_answer"
+    },
+    {
+      "content": "、",
+      "phase": "final_answer"
+    },
+    {
+      "content": "部署",
+      "phase": "final_answer"
+    },
+    {
+      "content": "事件",
+      "phase": "final_answer"
+    },
+    {
+      "content": "和",
+      "phase": "final_answer"
+    },
+    {
+      "content": "应用",
+      "phase": "final_answer"
+    },
+    {
+      "content": "健康",
+      "phase": "final_answer"
+    },
+    {
+      "content": "接口",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "6",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 确",
+      "phase": "final_answer"
+    },
+    {
+      "content": "认",
+      "phase": "final_answer"
+    },
+    {
+      "content": "新",
+      "phase": "final_answer"
+    },
+    {
+      "content": "版本",
+      "phase": "final_answer"
+    },
+    {
+      "content": "正常",
+      "phase": "final_answer"
+    },
+    {
+      "content": "承",
+      "phase": "final_answer"
+    },
+    {
+      "content": "接",
+      "phase": "final_answer"
+    },
+    {
+      "content": "流",
+      "phase": "final_answer"
+    },
+    {
+      "content": "量",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，无",
+      "phase": "final_answer"
+    },
+    {
+      "content": "异常",
+      "phase": "final_answer"
+    },
+    {
+      "content": "日志",
+      "phase": "final_answer"
+    },
+    {
+      "content": "或",
+      "phase": "final_answer"
+    },
+    {
+      "content": "错误",
+      "phase": "final_answer"
+    },
+    {
+      "content": "率",
+      "phase": "final_answer"
+    },
+    {
+      "content": "上",
+      "phase": "final_answer"
+    },
+    {
+      "content": "升",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "7",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 若",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "失败",
+      "phase": "final_answer"
+    },
+    {
+      "content": "或",
+      "phase": "final_answer"
+    },
+    {
+      "content": "健康",
+      "phase": "final_answer"
+    },
+    {
+      "content": "检查",
+      "phase": "final_answer"
+    },
+    {
+      "content": "异常",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，",
+      "phase": "final_answer"
+    },
+    {
+      "content": "停止",
+      "phase": "final_answer"
+    },
+    {
+      "content": "推进",
+      "phase": "final_answer"
+    },
+    {
+      "content": "并",
+      "phase": "final_answer"
+    },
+    {
+      "content": "回",
+      "phase": "final_answer"
+    },
+    {
+      "content": "滚",
+      "phase": "final_answer"
+    },
+    {
+      "content": "至",
+      "phase": "final_answer"
+    },
+    {
+      "content": "上一",
+      "phase": "final_answer"
+    },
+    {
+      "content": "稳定",
+      "phase": "final_answer"
+    },
+    {
+      "content": "版本",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "以上",
+      "phase": "final_answer"
+    },
+    {
+      "content": "仅",
+      "phase": "final_answer"
+    },
+    {
+      "content": "为",
+      "phase": "final_answer"
+    },
+    {
+      "content": "步骤",
+      "phase": "final_answer"
+    },
+    {
+      "content": "复",
+      "phase": "final_answer"
+    },
+    {
+      "content": "述",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，",
+      "phase": "final_answer"
+    },
+    {
+      "content": "未",
+      "phase": "final_answer"
+    },
+    {
+      "content": "实际",
+      "phase": "final_answer"
+    },
+    {
+      "content": "执行",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "usage": {
+        "input_tokens": 8925,
+        "output_tokens": 314,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8925,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

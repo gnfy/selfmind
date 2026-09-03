@@ -482,11 +482,9 @@ func TestUnknownSlashCommandIsRejectedNotQueued(t *testing.T) {
 	}
 }
 
-// TestStopCancelsStuckTaskWhenNoRun covers the live gap: a task stuck
-// non-terminal with no active run (e.g. created but never executed) must be
-// cancellable via /stop's no-run fallback (and /cancel), instead of sitting
-// in /tasks forever ("No active run to stop" with no way to clear it).
-func TestStopCancelsStuckTaskWhenNoRun(t *testing.T) {
+// TestStopDoesNotInventExecutionForAThreadWithoutRuns pins the Thread/Run
+// boundary: /stop controls execution, not a retained display group.
+func TestStopDoesNotInventExecutionForAThreadWithoutRuns(t *testing.T) {
 	daemon, store, identity, _, _ := newApprovalTestServer(t)
 	ctx := context.Background()
 
@@ -500,27 +498,22 @@ func TestStopCancelsStuckTaskWhenNoRun(t *testing.T) {
 	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "in_progress", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
-		t.Fatal(err)
-	}
 
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: identity.Platform, PlatformUserID: identity.PlatformUserID, Content: "/stop",
 	})
-	if status != http.StatusOK || !strings.Contains(resp.Content, "cancelled the current task") {
+	if status != http.StatusOK || !strings.Contains(resp.Content, "No active run to stop") {
 		t.Fatalf("stop no-run fallback: status=%d content=%q", status, resp.Content)
 	}
-	got, _ := store.GetTask(ctx, identity.TenantID, task.ID)
-	if got == nil || got.Status != "cancelled" {
-		t.Fatalf("task should be cancelled, got %+v", got)
-	}
-
-	// A second /stop with the task already terminal is a clean no-op message.
+	// A second /stop remains a clean no-op and the retained Thread survives.
 	resp, _ = daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: identity.Platform, PlatformUserID: identity.PlatformUserID, Content: "/stop",
 	})
-	if !strings.Contains(resp.Content, "already cancelled") && !strings.Contains(resp.Content, "no current task") {
-		t.Fatalf("second stop should report terminal/none, got %q", resp.Content)
+	if !strings.Contains(resp.Content, "No active run to stop") {
+		t.Fatalf("second stop should remain a no-op, got %q", resp.Content)
+	}
+	if got, _ := store.GetTask(ctx, identity.TenantID, task.ID); got == nil {
+		t.Fatal("/stop deleted a retained thread")
 	}
 }
 

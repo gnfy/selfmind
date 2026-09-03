@@ -6,8 +6,15 @@ channel: cli
 model_required: false
 
 # Control-only task-governance flow. No model or cassette is required.
+setup:
+  task:
+    title: "long-lived task governance check"
+    parked_runs:
+      - input: "wait for governance check"
+        status: waiting_user
+
 turns:
-  - input: "/new long-lived task governance check"
+  - input: "/tasks"
   - input: "/task 1 pin"
   - input: "/tasks"
   - input: "/task 1 unpin"

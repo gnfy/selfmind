@@ -38,7 +38,7 @@ func (s *Store) SetRunDeliveryOverrideFromSteering(ctx context.Context, tenantID
 	}
 	defer tx.Rollback()
 	var runPerson, runStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT person_id, status FROM task_runs WHERE tenant_id = ? AND id = ?`, tenantID, runID).Scan(&runPerson, &runStatus); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT person_id, status FROM runs WHERE tenant_id = ? AND id = ?`, tenantID, runID).Scan(&runPerson, &runStatus); err != nil {
 		return nil, fmt.Errorf("load active run: %w", err)
 	}
 	if runPerson != personID || runStatus != "running" {

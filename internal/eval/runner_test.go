@@ -599,7 +599,8 @@ func TestFinalizeLeftoverRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task: %v", err)
 	}
-	if _, err := store.StartRun(ctx, task, "cli", "input"); err != nil {
+	run, err := store.StartRun(ctx, task, "cli", "input")
+	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -614,12 +615,21 @@ func TestFinalizeLeftoverRuns(t *testing.T) {
 	if len(left) != 0 {
 		t.Fatalf("run should be terminal after finalize, got %+v", left)
 	}
+	// The Run is the execution authority: it must be interrupted. The thread's
+	// derived status settles because an evidence-free leftover is not Attention.
+	forcedRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil || forcedRun == nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if forcedRun.Status != "interrupted" {
+		t.Fatalf("run should be interrupted, got %q", forcedRun.Status)
+	}
 	got, err := store.GetTask(ctx, identity.TenantID, task.ID)
 	if err != nil || got == nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.Status != "interrupted" {
-		t.Fatalf("task should be interrupted, got %q", got.Status)
+	if got.Status == "running" {
+		t.Fatalf("task must not stay running after forced finalization, got %q", got.Status)
 	}
 }
 

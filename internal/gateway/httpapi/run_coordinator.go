@@ -256,13 +256,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusConflict
 		}
 	}
-	// Keep the per-person current_task pointer on the task this run actually
-	// attached to. Channel-scoped resolution (and async sends in particular)
-	// can pick a task that differs from the pointer; without this sync,
-	// /status on every endpoint keeps reporting an unrelated old task.
-	if attach.resolvedPolicy().UpdateCurrentTask {
-		c.syncCurrentTask(ctx, identity, task)
-	}
 	workspace, workspaceErr := c.workspaceForTask(ctx, identity, task, req, attach)
 	if workspaceErr != nil {
 		return api.MessageResponse{Identity: identity, Task: task, Error: workspaceErr.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", workspaceErr.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
@@ -333,6 +326,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	defer stopHeartbeat()
 	c.updateActive(identity.PersonID, task, run)
 	startedPayload := map[string]string{"input": truncate(req.Content, 500)}
+	if queueID := strings.TrimSpace(req.QueueID); queueID != "" {
+		startedPayload["queue_id"] = queueID
+	}
 	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {
 		startedPayload["watch_id"] = watchID
 		startedPayload["task_status"] = "running"
@@ -370,6 +366,27 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 				"work_key":      strings.ToUpper(strings.TrimSpace(attach.workKey)),
 			}),
 		})
+		// Restore the parent's plan before Main starts. This is durable child
+		// state, not a display-only echo: completion checks and later resume paths
+		// must see the same unresolved steps as the TUI checklist.
+		if inherited, inheritErr := c.inheritParentRunPlan(ctx, identity, task, run); inheritErr != nil {
+			log.Warn("parent run plan inheritance failed", "parent_run_id", run.ParentRunID, "run_id", run.ID, "error", inheritErr)
+		} else if inherited != nil {
+			_, _ = d.Control.AppendEvent(ctx, control.Event{
+				TaskID:     task.ID,
+				RunID:      run.ID,
+				Type:       "plan.updated",
+				Visibility: "task",
+				Channel:    req.Channel,
+				Payload: mustJSON(map[string]interface{}{
+					"plan":          inherited.Plan.Steps,
+					"explanation":   "Plan inherited from the continued run",
+					"plan_version":  inherited.Plan.Version,
+					"source":        "parent_run",
+					"parent_run_id": run.ParentRunID,
+				}),
+			})
+		}
 	}
 	c.recordTaskResolution(ctx, identity, run, req, task, attach, task.ID, "pending", false)
 	if attach.workKey != "" {
@@ -561,6 +578,10 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// stuck in `running` forever. WithoutCancel keeps ctx values (observers,
 	// scopes) while guaranteeing the terminal state lands in control.db.
 	finCtx := context.WithoutCancel(ctx)
+	// A non-streaming provider never passes through the per-event refresh, so
+	// re-read the run once more: a same-domain direct claim made by work_select
+	// moved it onto the parent's thread and finalization must follow.
+	c.refreshDirectContinuation(finCtx, task, run)
 	selection, selectionErr := c.commitWorkSelection(finCtx, identity, req, task, run)
 	if selectionErr != nil {
 		selection = &workSelectionCommit{
@@ -577,10 +598,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 				content += "\n\n"
 			}
 			content += selection.Notice
-		}
-		if selection.Direct && selection.Task != nil {
-			task = selection.Task
-			c.updateActive(identity.PersonID, task, run)
 		}
 	}
 	outcome := buildRunOutcome(content)
@@ -686,23 +703,47 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	turnStatus := turnStatusForOutcome(outcome)
 	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn(turnStatus, taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}
+	if selection != nil && !selection.Rejected {
+		out.Turn.QueueID = strings.TrimSpace(selection.QueueID)
+	}
 	return out, http.StatusOK
 }
 
-// syncCurrentTask moves the per-person current_task pointer to the task a run
-// resolved, reusing the same SetCurrentTask mechanism as the /new and /resume
-// control commands (never a second pointer). Best-effort and write-avoiding:
-// it only writes when the pointer actually differs, and a pointer-read error
-// falls through to the write so the pointer converges rather than staying
-// stale.
-func (c *RunCoordinator) syncCurrentTask(ctx context.Context, identity *control.IdentityContext, task *control.Task) {
-	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil {
-		return
+func (c *RunCoordinator) inheritParentRunPlan(ctx context.Context, identity *control.IdentityContext, task *control.Task, child *control.Run) (*control.RunPlanProjection, error) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || child == nil || strings.TrimSpace(child.ParentRunID) == "" {
+		return nil, nil
 	}
-	if current, err := c.srv.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil && current != nil && current.ID == task.ID {
-		return
+	parent, err := c.srv.Control.LatestRunPlan(ctx, identity.TenantID, child.ParentRunID)
+	if err != nil {
+		return nil, err
 	}
-	_ = c.srv.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID)
+	steps := make([]control.RunPlanStepInput, 0)
+	explanation := "Plan inherited from the continued run"
+	if parent != nil && len(parent.Steps) > 0 {
+		explanation = parent.Explanation
+		for _, step := range parent.Steps {
+			steps = append(steps, control.RunPlanStepInput{
+				Step: step.Step, Status: step.Status, SuccessCriteria: step.SuccessCriteria,
+				VerificationRequired: step.VerificationRequired, RelatedTaskID: step.RelatedTaskID,
+				WorkUnit: step.WorkUnit,
+			})
+		}
+	} else {
+		// Runs created before the durable recovery contract may only have the
+		// historical plan.updated snapshot. Import that bounded snapshot once
+		// into the child rather than keeping two plan authorities thereafter.
+		for _, step := range c.srv.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, child.ParentRunID) {
+			steps = append(steps, control.RunPlanStepInput{Step: step.Step, Status: step.Status})
+		}
+	}
+	if len(steps) == 0 {
+		return nil, nil
+	}
+	projection, err := c.srv.Control.SyncRunPlan(ctx, identity.TenantID, child.ID, explanation, steps)
+	if err != nil {
+		return nil, err
+	}
+	return &projection, nil
 }
 
 // Origins of a run the daemon started on the person's behalf. A turn the

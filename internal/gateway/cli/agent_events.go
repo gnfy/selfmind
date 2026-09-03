@@ -185,13 +185,18 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 		if isHiddenLifecycleTool(event.ToolName) {
 			return
 		}
+		effectState := ""
+		if event.Payload != nil {
+			effectState, _ = event.Payload["effect_state"].(string)
+		}
 		m.program.Send(MsgToolDone{
-			ToolName:   event.ToolName,
-			ToolCallID: event.ToolCallID,
-			Result:     event.ToolResult,
-			Err:        event.Err,
-			Duration:   event.DurationSeconds,
-			Event:      ref,
+			ToolName:    event.ToolName,
+			ToolCallID:  event.ToolCallID,
+			Result:      event.ToolResult,
+			Err:         event.Err,
+			EffectState: strings.TrimSpace(effectState),
+			Duration:    event.DurationSeconds,
+			Event:       ref,
 		})
 	case "plan.updated":
 		// A plan is mutable run state, not immutable terminal history. Replace the

@@ -35,7 +35,7 @@ func (s *Store) AutomaticRunRecoveryDecisionForRun(ctx context.Context, tenantID
 	tenantID = normalizeTenant(tenantID)
 	var status string
 	var contractVersion int
-	if err := s.db.QueryRowContext(ctx, `SELECT status, recovery_contract_version FROM task_runs WHERE tenant_id=? AND id=?`,
+	if err := s.db.QueryRowContext(ctx, `SELECT status, recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`,
 		tenantID, runID).Scan(&status, &contractVersion); err != nil {
 		if err == sql.ErrNoRows {
 			return decision, nil
@@ -52,7 +52,7 @@ func (s *Store) AutomaticRunRecoveryDecisionForRun(ctx context.Context, tenantID
 	}
 
 	var childCount int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_runs WHERE tenant_id=? AND parent_run_id=?`, tenantID, runID).Scan(&childCount); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE tenant_id=? AND parent_run_id=?`, tenantID, runID).Scan(&childCount); err != nil {
 		return decision, err
 	}
 	if childCount > 0 {

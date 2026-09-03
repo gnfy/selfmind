@@ -81,7 +81,7 @@ func TestAutomaticRunRecoveryDecisionDoesNotStealSpecialistOrHistoricalRuns(t *t
 	}
 
 	store2, identity2, task2, run2 := newRecoveryFixture(t)
-	if _, err := store2.db.Exec(`UPDATE task_runs SET recovery_contract_version=0 WHERE id=?`, run2.ID); err != nil {
+	if _, err := store2.db.Exec(`UPDATE runs SET recovery_contract_version=0 WHERE id=?`, run2.ID); err != nil {
 		t.Fatal(err)
 	}
 	interruptForAutomaticRecoveryTest(t, store2, identity2, task2, run2)

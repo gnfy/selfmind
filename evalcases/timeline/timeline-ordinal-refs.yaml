@@ -5,13 +5,16 @@ workspace: "."
 channel: cli
 model_required: false
 
-# Control-command turns only — no model calls, so this case runs offline
-# without a cassette. The number printed by the /tasks card must resolve the
-# same task through /task <n> and /resume <n> (display order = resolution
-# order, same contract as approval ordinals), and the /resume reply must state
-# the workspace binding so the user can tell the resume worked.
+# Control-command turns only. The number printed by Attention must resolve the
+# same exact Run through /task <n> and /resume <n>.
+setup:
+  task:
+    title: "ordinal reference check"
+    parked_runs:
+      - input: "wait for exact resume"
+        status: waiting_user
+
 turns:
-  - input: "/new ordinal reference check"
   - input: "/tasks"
   - input: "/task 1"
   - input: "/resume 1"
@@ -21,10 +24,10 @@ expect:
   max_tool_calls: 0
   max_duration_seconds: 60
   contains:
-    - "Open tasks:"
+    - "Needs attention:"
     - "Task: ordinal reference check"
-    - "Resumed task: ordinal reference check"
-    - "your next message"
+    - "Selected run"
+    - "Your next message"
 
 checks:
   no_mojibake: true

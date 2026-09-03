@@ -51,6 +51,11 @@ func TestGatewayShutdownInterruptsAndRequeuesInsteadOfCancelling(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The run was mid-work when the gateway stopped: a durable plan is the
+	// evidence that keeps its interruption visible as resumable Attention.
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "finalize release", []control.RunPlanStepInput{{Step: "stage the release", Status: "completed"}, {Step: "finalize the release", Status: "in_progress"}}); err != nil {
+		t.Fatal(err)
+	}
 	runCtx, interrupt := context.WithCancelCause(context.Background())
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{

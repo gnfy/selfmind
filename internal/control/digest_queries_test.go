@@ -62,7 +62,7 @@ func TestListTaskRunTransitionsSinceUsesRunClock(t *testing.T) {
 		{interrupted.run, since.Add(3 * time.Minute)},
 		{oldFinished.run, since.Add(-time.Minute)},
 	} {
-		if _, err := store.db.ExecContext(ctx, `UPDATE task_runs SET finished_at = ? WHERE id = ?`, item.when.Unix(), item.run.ID); err != nil {
+		if _, err := store.db.ExecContext(ctx, `UPDATE runs SET finished_at = ? WHERE id = ?`, item.when.Unix(), item.run.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -99,7 +99,7 @@ func TestListTaskRunTransitionsSinceUsesRunClock(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE task_runs SET finished_at = ? WHERE id = ?`, since.Add(4*time.Minute).Unix(), retry.ID); err != nil {
+	if _, err := store.db.ExecContext(ctx, `UPDATE runs SET finished_at = ? WHERE id = ?`, since.Add(4*time.Minute).Unix(), retry.ID); err != nil {
 		t.Fatal(err)
 	}
 	got, err = store.ListTaskRunTransitionsSince(ctx, identity.TenantID, identity.PersonID, []string{"done", "interrupted"}, since, 10)
@@ -149,7 +149,19 @@ func TestListTasksByStatusReturnsCurrentUnresolvedState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "interrupted", "older interruption", nil); err != nil {
+	run, err := store.StartRun(ctx, task, "cli", "older interruption")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An interruption is unresolved state only when the run carried real work;
+	// a durable plan is that evidence.
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "parse resumes", []RunPlanStepInput{{Step: "read the resume", Status: "completed"}, {Step: "parse the resume", Status: "in_progress"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: run.ID, TaskID: task.ID,
+		RunStatus: "interrupted", Summary: "older interruption",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := store.ListTasksByStatus(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted"}, 10)

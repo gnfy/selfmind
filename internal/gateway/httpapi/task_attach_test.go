@@ -21,9 +21,8 @@ import (
 	"selfmind/internal/gateway/api"
 )
 
-// parkEmptyTask creates a /new-created, never-run task that is the person's
-// current task — under P3 this is the OPEN label ordinary messages pre-label
-// onto (the pre-fix "capture bug" precondition, now harmless by design).
+// parkEmptyTask creates a /new-created, never-run Thread. It deliberately does
+// not become implicit current work; tests use the returned explicit id.
 func parkEmptyTask(t *testing.T, daemon *Server, title string) *control.Task {
 	t.Helper()
 	ctx := context.Background()
@@ -37,11 +36,17 @@ func parkEmptyTask(t *testing.T, daemon *Server, title string) *control.Task {
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}
-	parked, err := daemon.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if err != nil || parked == nil {
-		t.Fatalf("current task after /new: %v %v", parked, err)
+	matches, err := daemon.Control.SearchTasks(ctx, identity.TenantID, identity.PersonID, title, 10)
+	if err != nil {
+		t.Fatalf("created thread lookup after /new: %+v %v", matches, err)
 	}
-	return parked
+	for i := range matches {
+		if matches[i].Title == title {
+			return &matches[i]
+		}
+	}
+	t.Fatalf("created thread %q not found after /new: %+v", title, matches)
+	return nil
 }
 
 // TestOrdinaryMessageOwnsFreshRootTask pins the simplification-P2 inversion of
@@ -109,7 +114,7 @@ func TestOrdinaryMessageWithArchivedCurrentCreatesNewLabel(t *testing.T) {
 	aresp, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/task " + parked.ID + " archive",
 	})
-	if !strings.Contains(aresp.Content, "Archived task") {
+	if !strings.Contains(aresp.Content, "Archived thread") {
 		t.Fatalf("archive failed: %+v", aresp)
 	}
 
@@ -138,6 +143,14 @@ func TestContinuationCueAttachesToParkedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The parked run left a durable plan; the continuation must inherit it as
+	// durable child state, not merely replay a display event.
+	if _, err := store.SyncRunPlan(ctx, parked.TenantID, waiting.ID, "release safely", []control.RunPlanStepInput{
+		{Step: "build the image", Status: "completed"},
+		{Step: "deploy to production", Status: "in_progress"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.FinishRun(ctx, parked.TenantID, waiting.ID, "waiting_user"); err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +166,30 @@ func TestContinuationCueAttachesToParkedRun(t *testing.T) {
 	}
 	if resp.Run == nil || resp.Run.ParentRunID != waiting.ID {
 		t.Fatalf("continuation must claim the waiting run as parent: %+v", resp.Run)
+	}
+	events, err := store.ListRunEvents(ctx, parked.TenantID, parked.PersonID, parked.ID, resp.Run.ID, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := false
+	for _, event := range events {
+		if event.Type != "plan.updated" {
+			continue
+		}
+		payload := string(event.Payload)
+		if strings.Contains(payload, `"source":"parent_run"`) && strings.Contains(payload, "deploy to production") {
+			restored = true
+		}
+	}
+	if !restored {
+		t.Fatalf("continuation did not restore the parent's plan for the client; events=%+v", events)
+	}
+	childPlan, err := store.LatestRunPlan(ctx, parked.TenantID, resp.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childPlan == nil || len(childPlan.Steps) != 2 || childPlan.Steps[1].Step != "deploy to production" || childPlan.Steps[1].Status != "in_progress" {
+		t.Fatalf("continuation did not inherit durable plan state: %+v", childPlan)
 	}
 }
 
@@ -194,6 +231,13 @@ func TestResumePinReopensArchivedTask(t *testing.T) {
 	ctx := context.Background()
 
 	parked := parkEmptyTask(t, daemon, "archived work")
+	parent, err := store.StartRun(ctx, parked, "cli", "unfinished archived work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, parked.TenantID, parent.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
 	daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/task " + parked.ID + " archive",
 	})
@@ -210,7 +254,7 @@ func TestResumePinReopensArchivedTask(t *testing.T) {
 	rresp, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/resume " + parked.ID,
 	})
-	if !strings.Contains(rresp.Content, "Resumed task") {
+	if !strings.Contains(rresp.Content, "Selected run") {
 		t.Fatalf("/resume of an archived task must work: %+v", rresp)
 	}
 	second, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
@@ -222,7 +266,7 @@ func TestResumePinReopensArchivedTask(t *testing.T) {
 	// The run moved it out of archived (a run flips status via StartRun +
 	// finalization), so it is open again.
 	after, _ := store.GetTask(ctx, parked.TenantID, parked.ID)
-	if after == nil || archivedTaskStatus(after.Status) {
+	if after == nil || after.Visibility != control.ThreadVisibilityListed {
 		t.Fatalf("resumed task should have left archived, got %+v", after)
 	}
 }
@@ -234,17 +278,24 @@ func TestResumePinReopensCompletedTask(t *testing.T) {
 	ctx := context.Background()
 
 	completed := parkEmptyTask(t, daemon, "completed work")
+	parent, err := store.StartRun(ctx, completed, "cli", "waiting follow-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, completed.TenantID, parent.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
 	closed, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/task " + completed.ID + " complete",
 	})
-	if !strings.Contains(closed.Content, "Completed task") {
+	if !strings.Contains(closed.Content, "Dismissed current attention") {
 		t.Fatalf("completion failed: %+v", closed)
 	}
 
 	resumed, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/resume " + completed.ID,
 	})
-	if !strings.Contains(resumed.Content, "Resumed task") {
+	if !strings.Contains(resumed.Content, "Selected run") {
 		t.Fatalf("/resume of a completed task must work: %+v", resumed)
 	}
 	next, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
@@ -254,8 +305,8 @@ func TestResumePinReopensCompletedTask(t *testing.T) {
 		t.Fatalf("message after /resume did not attach to the completed task: %+v", next.Task)
 	}
 	after, _ := store.GetTask(ctx, completed.TenantID, completed.ID)
-	if after == nil || terminalTaskStatus(after.Status) {
-		t.Fatalf("resumed completed task should be open again, got %+v", after)
+	if after == nil || after.Visibility != control.ThreadVisibilityListed {
+		t.Fatalf("resumed thread should be listed again, got %+v", after)
 	}
 }
 

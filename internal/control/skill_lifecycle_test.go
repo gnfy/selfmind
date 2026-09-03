@@ -25,7 +25,7 @@ func TestSkillLifecycleSeparatesWorkUnitsFallbackAndTaskAffinity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskB, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Task B", Channel: "cli", KeepCurrent: true})
+	taskB, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Task B", Channel: "cli"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestWorkUnitStableIDsSurvivePlanReordering(t *testing.T) {
 	defer store.Close()
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "reorder", "Reorder")
 	taskA, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "A", Channel: "cli"})
-	taskB, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "B", Channel: "cli", KeepCurrent: true})
+	taskB, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "B", Channel: "cli"})
 	run, _ := store.StartRun(ctx, taskA, "cli", "A and B")
 	units, err := store.SyncRunWorkUnits(ctx, identity.TenantID, run.ID, []WorkUnitPlanInput{
 		{GoalDigest: "handle A", PlanStatus: "in_progress", RelatedTaskID: taskA.ID},

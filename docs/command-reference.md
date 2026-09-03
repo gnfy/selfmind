@@ -83,7 +83,7 @@ selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>]
 selfmind task <n|task_id> references|reference add <name>|reference remove <name>
-selfmind resume <n|task_id>
+selfmind resume <n|task_id|run_id>
 selfmind workspaces
 selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 selfmind approvals
@@ -107,17 +107,28 @@ selfmind new [title]
   workspace. A running turn cannot change its additional-root set; start a new
   run to use a different set. Use `--` before message text that literally
   contains `--add-dir`.
-- `tasks` lists open work by default; a status or keyword narrows the result.
+- `tasks` lists current Attention by default: running Runs, pending approvals
+  and clarifications, live watchers, and unclaimed resumable Runs that are
+  still the latest Run of their Thread (an `interrupted` Run appears only when
+  it left work evidence). Same-channel items rank first. Settled, archived,
+  all-history, and keyword views inspect Threads without reopening them.
 - `watchers` lists durable external checks without invoking a model. The
   default view prioritizes active and attention-needed checks; a stable short
   watcher ID opens details or cancels only that check. Cancelling a watcher
   does not cancel the external operation.
-- `task` accepts either the displayed list number or a stable task ID. Numbers
-  resolve the exact most recently displayed open-task list on that endpoint,
-  even if background activity changes the live ranking afterward.
-- `task ... complete` marks work done without deleting its runs, events, or
-  artifacts; `task ... archive` hides obsolete or duplicate work. Both are
-  reversible with an explicit `resume`, which also reopens completed tasks.
+- `task` accepts either the displayed list number or a stable Thread-compatible
+  task ID. Numbers resolve the exact most recently displayed snapshot on that
+  endpoint, even if background activity changes the live ranking afterward.
+- `task ... complete` dismisses the exact Run's Attention without changing Run
+  history. It refuses while that Run still has a pending approval, a pending
+  clarification, or a live watcher: answer, reject, or cancel the object
+  instead. `task ... archive` hides the Thread from ordinary presentation.
+  Explicit `resume` can still continue a resumable Run and reopen an archived
+  Thread.
+- `resume` accepts the displayed list number, a stable Thread-compatible task
+  id, or a full run id. A number resolves the exact Run from the snapshot the
+  endpoint last displayed; a Thread id is accepted only when the Thread has
+  exactly one unresolved Run.
 - `workspaces`, `ws`, and `workspace` share the workspace controls:
 
 ```text
@@ -147,7 +158,9 @@ selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspac
   is read-only; otherwise put the allowed argument prefix after `--`.
 - `approve` and `reject` accept a pending approval token when more than one
   request is waiting.
-- `stop` cancels the active run. `new` creates a fresh visible task.
+- `stop` cancels the active run; with no active run it dismisses only the exact
+  pinned Run and refuses while that Run still has a pending approval,
+  clarification, or live watcher. `new` creates a fresh visible task.
 
 ## Configuration, models, and channels
 
@@ -313,7 +326,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|reset-work-history|restore-control] ...
 ```
 
 ```text
@@ -334,6 +347,7 @@ selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir D
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
+selfmind maintenance reset-work-history [--apply] [--data-dir DIR]
 selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 ```
 
@@ -366,17 +380,29 @@ Use the owner rows in the dry-run output together with
   should be used deliberately.
 - Destructive maintenance commands are dry-run by default and require the
   explicit apply/archive flag shown above.
-- `task-audit` is the read-only Task/Run continuity audit: legacy resume edges
-  the upgrade backfill could not convert, illegal parent edges, ownerless
-  pending approvals/clarifications, and task status projections that disagree
-  with the derived reduction. `--apply` reconciles only projection mismatches
-  through the production reducer; every other finding stays human review, and
-  runs, edges, and memory are never rewritten.
+- `task-audit` is the read-only Thread/Run continuity audit: legacy resume
+  edges the upgrade backfill could not convert, illegal parent edges, and
+  ownerless pending approvals/clarifications. `--apply` is retained as a
+  compatibility no-op; execution history is never rewritten by the audit.
 - `migrate-task-references` is dry-run by default. It imports a historical
   `task_runs.work_key` only when the exact reference occurs in that run's
   original user input. Inferred titles and summaries are reported and skipped;
   `--apply` is idempotent and never changes workspace or execution authority.
-- `restore-control` is the explicit recovery path for a migration backup under
+- `reset-work-history` is dry-run by default and reports only aggregate counts.
+  Apply mode requires the gateway to be stopped, refuses running Runs, live
+  watchers, and started queue rows, creates a verified SQLite backup, then
+  removes Thread/Run history and dependent control rows for the configured
+  tenant. Published Skill packages are preserved, but in-flight Skill learning
+  evidence is removed: workflow observations, workflow profiles, skill
+  candidate refs, attributions, run skill activations, and task skill bindings;
+  failure guards and candidate evidence snapshots keep their frozen content and
+  lose only references to removed Runs and observations. Memory sessions keyed
+  to removed Threads and run provenance on preferences are cleared in every
+  on-disk memory partition, while the preferences themselves stay. Identity,
+  accounts, workspaces, person settings, memory preferences, grants, and
+  provider state are preserved.
+- `restore-control` is the explicit recovery path for a migration or
+  work-history-reset backup under
   the selected data directory's `backups/` folder. Stop the gateway first. It
   requires `--yes`, verifies the SQLite snapshot before replacement, and keeps
   the failed database beside the restored `control.db` for diagnosis.
@@ -391,7 +417,7 @@ before normal agent dispatch.
 /model
 /id
 /status
-/tasks [done|archived|all]
+/tasks [open|done|archived|all|search <keyword>] [--workspace <id>] [--page <n>]
 /task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
@@ -401,12 +427,12 @@ before normal agent dispatch.
 /approvals [grants|revoke <n>]
 /approve <n|id|all> [run]
 /reject <n|id|all>
-/mode [mode]
+/mode [on-request|read-only|auto-edit|full-auto|smart]
 /stop
 /cancel
-/notify <platform|auto|desk-first|phone-first>
+/notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
-/resume [n|task_id|run_id]  (bare = pick from recent tasks)
+/resume [n|task_id|run_id]  (bare = list Attention)
 /choose <choice_id> <number>
 /remember <preference>
 /forget <text|ref>
@@ -417,7 +443,8 @@ before normal agent dispatch.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.
-- `/notify <platform|auto>` selects the preferred IM destination.
+- `/notify <platform|auto>` selects the preferred IM destination, and
+  `/notify <on|off>` turns detached notifications on or off.
   `/notify desk-first` keeps young CLI-origin approvals in the attached TUI and
   escalates after T1; `/notify phone-first` mirrors them to IM immediately.
 - `/approvals grants` and `/approvals revoke <n>` remain available for viewing
@@ -429,6 +456,14 @@ before normal agent dispatch.
 - `/new [title]` keeps its existing task-label behavior. `/new --run <request>`
   is the deterministic escape hatch for sending unrelated work without a
   continuity model decision.
+- `/tasks` renders current Attention. `/resume` accepts a list number, a Thread
+  id that has exactly one unresolved Run, or a full run id. `/task <n> complete`
+  dismisses that exact Run and refuses while it still has a pending approval,
+  a pending clarification, or a live watcher. Task cards and the compatibility
+  `Task.status` field on the wire carry the derived vocabulary `active`,
+  `needs_attention`, `monitoring`, or `resumable` for Attention, `done` for
+  settled listed work, and `archived` for archived Threads; the value is
+  computed from Runs and pending control objects and never stored.
 - `/choose <choice_id> <number>` answers a durable continuity question exactly,
   including from another bound endpoint or after daemon restart. A bare number
   is accepted only when the person has one recent pending continuity question.

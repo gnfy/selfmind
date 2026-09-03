@@ -932,9 +932,6 @@ func TestResolveTaskTreatsUnregisteredWorkKeyAsMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, old.ID); err != nil {
-		t.Fatal(err)
-	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
@@ -1337,7 +1334,7 @@ func TestTaskEventsEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local&task_id="+task.ID, nil)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1380,7 +1377,7 @@ func TestTaskEventsStreamEndpoint(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events/stream?platform=cli&platform_user_id=local&once=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events/stream?platform=cli&platform_user_id=local&once=true&task_id="+task.ID, nil)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1421,7 +1418,7 @@ func TestTaskArtifactsEndpoint(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/artifacts?platform=cli&platform_user_id=local", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/artifacts?platform=cli&platform_user_id=local&task_id="+task.ID, nil)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

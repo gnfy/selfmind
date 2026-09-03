@@ -348,11 +348,11 @@ func (s *Store) BindTaskSkill(ctx context.Context, input BindTaskSkillInput) (*T
 	}
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO task_skill_bindings
-		(identity_tenant_id, person_id, task_id, control_tenant_id, workspace_id, skill_key,
+		(identity_tenant_id, person_id, thread_id, control_tenant_id, workspace_id, skill_key,
 		 skill_name, state, binding_source, bound_from_run_id, last_resolved_version_hash,
 		 suspended_reason, created_at, updated_at)
 		VALUES(?,?,?,?,?,?,?,'active',?,?,?,'',?,?)
-		ON CONFLICT(identity_tenant_id, person_id, task_id) DO UPDATE SET
+		ON CONFLICT(identity_tenant_id, person_id, thread_id) DO UPDATE SET
 		 control_tenant_id=excluded.control_tenant_id, workspace_id=excluded.workspace_id,
 		 skill_key=excluded.skill_key, skill_name=excluded.skill_name, state='active',
 		 binding_source=excluded.binding_source, bound_from_run_id=excluded.bound_from_run_id,
@@ -366,10 +366,10 @@ func (s *Store) BindTaskSkill(ctx context.Context, input BindTaskSkillInput) (*T
 }
 
 func (s *Store) GetTaskSkillBinding(ctx context.Context, tenantID, personID, taskID string) (*TaskSkillBinding, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT identity_tenant_id, person_id, task_id, control_tenant_id,
+	row := s.db.QueryRowContext(ctx, `SELECT identity_tenant_id, person_id, thread_id, control_tenant_id,
 		workspace_id, skill_key, skill_name, state, binding_source, bound_from_run_id,
 		last_resolved_version_hash, suspended_reason, created_at, updated_at
-		FROM task_skill_bindings WHERE identity_tenant_id=? AND person_id=? AND task_id=?`,
+		FROM task_skill_bindings WHERE identity_tenant_id=? AND person_id=? AND thread_id=?`,
 		normalizeTenant(tenantID), personID, taskID)
 	var binding TaskSkillBinding
 	var created, updated int64
@@ -414,7 +414,7 @@ func (s *Store) SetTaskSkillBindingState(ctx context.Context, tenantID, personID
 		return fmt.Errorf("invalid task skill binding state %q", state)
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE task_skill_bindings SET state=?, suspended_reason=?, updated_at=?
-		WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, state, strings.TrimSpace(reason),
+		WHERE identity_tenant_id=? AND person_id=? AND thread_id=?`, state, strings.TrimSpace(reason),
 		time.Now().Unix(), normalizeTenant(tenantID), personID, taskID)
 	if err != nil {
 		return err
@@ -427,7 +427,7 @@ func (s *Store) SetTaskSkillBindingState(ctx context.Context, tenantID, personID
 
 func (s *Store) RecordTaskSkillBindingResolved(ctx context.Context, tenantID, personID, taskID, versionHash string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE task_skill_bindings SET last_resolved_version_hash=?,
-		suspended_reason='', state='active', updated_at=? WHERE identity_tenant_id=? AND person_id=? AND task_id=?`,
+		suspended_reason='', state='active', updated_at=? WHERE identity_tenant_id=? AND person_id=? AND thread_id=?`,
 		strings.TrimSpace(versionHash), time.Now().Unix(), normalizeTenant(tenantID), personID, taskID)
 	return err
 }
@@ -504,7 +504,7 @@ func finalizeRunSkillLifecycleTx(ctx context.Context, tx *sql.Tx, input RunFinal
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO task_skill_bindings
-			(identity_tenant_id, person_id, task_id, control_tenant_id, workspace_id,
+			(identity_tenant_id, person_id, thread_id, control_tenant_id, workspace_id,
 			 skill_key, skill_name, state, binding_source, bound_from_run_id,
 			 last_resolved_version_hash, suspended_reason, created_at, updated_at)
 			VALUES(?,?,?,?,?,?,?,'active','successful_run',?,?,'',?,?)`,

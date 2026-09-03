@@ -156,7 +156,7 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	if q.NotBefore.IsZero() {
 		notBefore = 0
 	}
-	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at)
+	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if q.IdempotencyKey != "" {
 		query += ` ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`
@@ -217,7 +217,7 @@ func scanQueuedTask(rows interface {
 }
 
 const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESCE(platform_user_id, ''),
-	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), COALESCE(task_id, ''),
+	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), COALESCE(thread_id, ''),
 	COALESCE(run_id, ''), COALESCE(reply_to_run_id, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), COALESCE(idempotency_key, ''), COALESCE(class, 'foreground'),
 	COALESCE(priority, 100), COALESCE(not_before, 0), status, COALESCE(restarts, 0),
 	COALESCE(claim_token, ''), COALESCE(lease_until, 0), COALESCE(attempt_generation, 0), created_at`

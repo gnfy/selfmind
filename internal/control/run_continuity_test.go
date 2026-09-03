@@ -100,7 +100,7 @@ func TestAtomicParentClaimSingleWinnerAndLegacyBlockerHygiene(t *testing.T) {
 		t.Helper()
 		var count int
 		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_blockers
-			WHERE tenant_id = ? AND task_id = ? AND status = 'open'`,
+			WHERE tenant_id = ? AND thread_id = ? AND status = 'open'`,
 			identity.TenantID, task.ID).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +112,7 @@ func TestAtomicParentClaimSingleWinnerAndLegacyBlockerHygiene(t *testing.T) {
 	// Seed one open row the way a pre-simplification daemon left it; the claim
 	// must settle it (legacy hygiene via resolveOriginRunBlockersTx).
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO task_blockers
-		(id, tenant_id, person_id, task_id, origin_run_id, kind, status, detail_json, created_at)
+		(id, tenant_id, person_id, thread_id, origin_run_id, kind, status, detail_json, created_at)
 		VALUES ('blocker_legacy', ?, ?, ?, ?, 'run_interrupted', 'open', '{}', 1)`,
 		identity.TenantID, identity.PersonID, task.ID, parent.ID); err != nil {
 		t.Fatal(err)
@@ -218,7 +218,7 @@ func TestConcurrentParentClaimAcrossConnections(t *testing.T) {
 	}
 	var children int
 	if err := storeA.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM task_runs WHERE tenant_id = ? AND parent_run_id = ?`,
+		`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND parent_run_id = ?`,
 		identity.TenantID, parent.ID).Scan(&children); err != nil {
 		t.Fatal(err)
 	}
@@ -248,81 +248,6 @@ func TestRunHandoffReadsFinalizationKey(t *testing.T) {
 		t.Fatalf("missing handoff must be nil, got %+v err=%v", missing, err)
 	}
 	_ = identity
-}
-
-// TestRunParentEdgeMigrationBackfill exercises the v7 backfills against
-// legacy-shaped rows: the reverse resumed_by edge converts to the forward
-// parent edge only for exact single-parent relationships, and handoff run
-// keys recover from the deterministic finalization primary key. The Apply
-// function is idempotent, so re-running it against a current-schema store is
-// exactly the released upgrade path minus the version ledger.
-func TestRunParentEdgeMigrationBackfill(t *testing.T) {
-	store, identity, task := continuityFixture(t)
-	ctx := context.Background()
-	mk := func(input string) *Run {
-		run, err := store.StartRun(ctx, task, "cli", input)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return run
-	}
-	parent := mk("legacy parent")
-	child := mk("legacy child")
-	orphanA := mk("conflict parent A")
-	orphanB := mk("conflict parent B")
-	contested := mk("contested child")
-	// Legacy reverse edges written the pre-v7 way (raw SQL: the writer no
-	// longer exists in code).
-	for _, edge := range []struct{ parentID, childID string }{
-		{parent.ID, child.ID},
-		{orphanA.ID, contested.ID},
-		{orphanB.ID, contested.ID},
-	} {
-		if _, err := store.db.ExecContext(ctx,
-			`UPDATE task_runs SET resumed_by_run_id = ? WHERE id = ?`,
-			edge.childID, edge.parentID); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// A legacy handoff row keyed only by the deterministic primary key.
-	if _, err := store.db.ExecContext(ctx,
-		`INSERT INTO task_handoffs (id, task_id, run_id, summary, created_at)
-		 VALUES (?, ?, '', 'legacy summary', 1)`,
-		"handoff_run_"+parent.ID, task.ID); err != nil {
-		t.Fatal(err)
-	}
-
-	var v7 schemaMigration
-	for _, migration := range orderedMigrations {
-		if migration.Version == 7 {
-			v7 = migration
-		}
-	}
-	if v7.Apply == nil {
-		t.Fatal("v7 migration not registered")
-	}
-	if err := v7.Apply(ctx, store.db); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.GetRun(ctx, identity.TenantID, child.ID)
-	if err != nil || got == nil {
-		t.Fatalf("child: %+v err=%v", got, err)
-	}
-	if got.ParentRunID != parent.ID {
-		t.Fatalf("exact legacy edge must backfill: parent=%q want %s", got.ParentRunID, parent.ID)
-	}
-	disputed, err := store.GetRun(ctx, identity.TenantID, contested.ID)
-	if err != nil || disputed == nil {
-		t.Fatalf("contested: %+v err=%v", disputed, err)
-	}
-	if disputed.ParentRunID != "" {
-		t.Fatalf("a child claimed by two legacy parents must stay unfilled for audit, got %q", disputed.ParentRunID)
-	}
-	handoff, err := store.RunHandoff(ctx, identity.TenantID, identity.PersonID, parent.ID)
-	if err != nil || handoff == nil || handoff.Summary != "legacy summary" {
-		t.Fatalf("handoff run key must backfill from the primary key: %+v err=%v", handoff, err)
-	}
 }
 
 func TestIncompleteLoopCheckpointForRunIsRunExact(t *testing.T) {

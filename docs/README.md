@@ -21,6 +21,7 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 - [Separate Model and Runtime Readiness](adr/0001-separate-model-and-runtime-readiness.md) - current, en
 - [Verify Managed Gateway Ownership](adr/0002-verify-managed-gateway-ownership.md) - current, en
 - [Consume External Skill Packages](adr/0003-consume-external-skill-packages.md) - current, en
+- [Separate Thread History from Run State](adr/0004-separate-thread-history-from-run-state.md) - current, en
 - [Execution Concurrency Design](execution-concurrency-plan.md) - paused, zh-CN
 - [Fast Path for Verified Read-Only Evidence](fast-path-readonly-evidence.md) - current, en
 - [Skill Learning, Automatic Promotion, and Repair](skill-learning-and-repair.md) - current, en
@@ -44,7 +45,8 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 
 - [Daily-Driver Runtime Closure](plans/daily-driver-closure.md) - paused, en
 - [External Skill Package Adoption](plans/external-skill-packages.md) - paused, en
-- [Main-Turn Work Continuity](plans/main-turn-work-continuity.md) - active, en
+- [Main-Turn Work Continuity](plans/main-turn-work-continuity.md) - paused, en
+- [Thread 化工作历史重构方案](plans/threaded-work-history-redesign.zh-CN.md) - active, zh-CN
 
 ## Reference
 

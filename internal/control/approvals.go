@@ -128,7 +128,7 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 	return funnel, nil
 }
 
-const approvalSelectColumns = `id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
+const approvalSelectColumns = `id, tenant_id, person_id, COALESCE(thread_id, ''), COALESCE(run_id, ''), action_type,
 	COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
 	COALESCE(decision_scope, ''), COALESCE(decision_id, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''),
 	COALESCE(decision_recorded_at, 0),
@@ -155,18 +155,35 @@ func (s *Store) CreateApprovalRequest(ctx context.Context, req ApprovalRequest) 
 	if req.ID == "" {
 		req.ID = "apr_" + uuid.NewString()
 	}
+	// The run is the authority for thread membership: a scope frozen before a
+	// direct continuation claim still names the interaction placeholder.
+	if threadID := s.threadIDForRun(ctx, req.TenantID, req.RunID); threadID != "" {
+		req.TaskID = threadID
+	}
 	now := time.Now()
 	req.CreatedAt = now
 	req.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO approval_requests
-		   (id, tenant_id, person_id, task_id, run_id, action_type, payload_json, status, requested_channel, approved_channel,
+		   (id, tenant_id, person_id, thread_id, run_id, action_type, payload_json, status, requested_channel, approved_channel,
 		    waiter_state, authorization_fingerprint, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		req.ID, req.TenantID, req.PersonID, req.TaskID, req.RunID, req.ActionType, string(req.Payload), req.Status,
 		req.RequestedChannel, req.ApprovedChannel, req.WaiterState, req.AuthorizationFingerprint,
-		req.CreatedAt.Unix(), req.UpdatedAt.Unix())
-	if err != nil {
+		req.CreatedAt.Unix(), req.UpdatedAt.Unix()); err != nil {
+		return nil, err
+	}
+	// A pending approval is durable work evidence: list the Run's Thread now
+	// rather than only at finalization.
+	if err := promoteThreadForControlObjectTx(ctx, tx, req.TenantID, req.RunID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &req, nil
@@ -321,7 +338,7 @@ func (s *Store) ParkOrphanedApprovals(ctx context.Context) ([]ApprovalRequest, e
 		 park_reason = CASE WHEN COALESCE(park_reason, '') = '' THEN 'approval waiter was lost during daemon recovery' ELSE park_reason END,
 		 updated_at = ?
 		 WHERE status = 'pending' AND COALESCE(waiter_state, 'live') = 'live' AND COALESCE(run_id, '') != ''
-		   AND NOT EXISTS (SELECT 1 FROM task_runs r WHERE r.id = approval_requests.run_id AND r.status = 'running')
+		   AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.id = approval_requests.run_id AND r.status = 'running')
 		 RETURNING `+approvalSelectColumns,
 		time.Now().Unix(), time.Now().Unix())
 	if err != nil {
@@ -376,7 +393,7 @@ func (s *Store) ClaimApprovalResumeAuthorization(ctx context.Context, tenantID, 
 		 claimed_by_run_id = ?, updated_at = ?
 		 WHERE id = (
 		   SELECT id FROM approval_requests
-		   WHERE tenant_id = ? AND person_id = ? AND task_id = ? AND status = 'approved'
+		   WHERE tenant_id = ? AND person_id = ? AND thread_id = ? AND status = 'approved'
 		     AND COALESCE(waiter_state, '') = 'parked' AND COALESCE(authorization_state, '') = 'available'
 		     AND COALESCE(authorization_fingerprint, '') = ?
 		     AND COALESCE(authorization_expires_at, 0) >= ?
@@ -436,7 +453,7 @@ func (s *Store) ListRecoverableApprovalDecisions(ctx context.Context, limit int)
 		   AND COALESCE(a.decision_recorded_at, 0) > 0
 		   AND COALESCE(a.waiter_state, 'live') = 'live' AND COALESCE(a.decision_claimed_at, 0) = 0
 		   AND COALESCE(a.run_id, '') != ''
-		   AND EXISTS (SELECT 1 FROM task_runs r WHERE r.id = a.run_id AND r.status = 'interrupted')
+		   AND EXISTS (SELECT 1 FROM runs r WHERE r.id = a.run_id AND r.status = 'interrupted')
 		 ORDER BY a.updated_at ASC, a.id ASC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -484,11 +501,11 @@ func (s *Store) EnqueueRecoveredApprovalContinuation(ctx context.Context, approv
 	var status string
 	if err := tx.QueryRowContext(ctx,
 		`SELECT status
-		 FROM approval_requests a WHERE a.tenant_id = ? AND a.id = ? AND a.person_id = ? AND a.task_id = ?
+		 FROM approval_requests a WHERE a.tenant_id = ? AND a.id = ? AND a.person_id = ? AND a.thread_id = ?
 		   AND COALESCE(a.resume_queue_id, '') = '' AND a.status IN ('approved', 'rejected')
 		   AND COALESCE(a.decision_recorded_at, 0) > 0
 		   AND COALESCE(a.waiter_state, 'live') = 'live' AND COALESCE(a.decision_claimed_at, 0) = 0
-		   AND EXISTS (SELECT 1 FROM task_runs r WHERE r.id = a.run_id AND r.status = 'interrupted')`,
+		   AND EXISTS (SELECT 1 FROM runs r WHERE r.id = a.run_id AND r.status = 'interrupted')`,
 		q.TenantID, approvalID, q.PersonID, q.TaskID).Scan(&status); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, false, nil
@@ -497,7 +514,7 @@ func (s *Store) EnqueueRecoveredApprovalContinuation(ctx context.Context, approv
 	}
 	notBefore := int64(0)
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, approval_id, idempotency_key, class, priority, not_before, status, created_at)
+		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, idempotency_key, class, priority, not_before, status, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
@@ -772,7 +789,7 @@ func (s *Store) RespondParkedApprovalAndEnqueue(ctx context.Context, tenantID, p
 	defer func() { _ = tx.Rollback() }()
 	var waiterState, currentStatus, owner, taskID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(waiter_state, 'live'), status, person_id, COALESCE(task_id, '')
+		`SELECT COALESCE(waiter_state, 'live'), status, person_id, COALESCE(thread_id, '')
 		 FROM approval_requests WHERE tenant_id = ? AND id = ?`, tenantID, approvalID,
 	).Scan(&waiterState, &currentStatus, &owner, &taskID); err != nil {
 		return nil, nil, err
@@ -785,7 +802,7 @@ func (s *Store) RespondParkedApprovalAndEnqueue(ctx context.Context, tenantID, p
 		notBefore = 0
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, approval_id, idempotency_key, class, priority, not_before, status, created_at)
+		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, idempotency_key, class, priority, not_before, status, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,

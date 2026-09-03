@@ -68,7 +68,7 @@ selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>]
 selfmind task <n|task_id> references|reference add <name>|reference remove <name>
-selfmind resume <n|task_id>
+selfmind resume <n|task_id|run_id>
 selfmind workspaces
 selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 selfmind approvals
@@ -93,12 +93,19 @@ selfmind new [title]
   的文件系统范围，不会授予 workspace 信任、绕过审批或沙箱，也不会修改持久
   workspace。运行中的 turn 不能改变附加目录集合；需要不同目录时应新开 run。
   若消息正文要原样包含 `--add-dir`，请先写 `--`。
-- `tasks` 默认列出开放工作，也可以按状态或关键词过滤。
-- `task` 支持列表序号或稳定 task ID。序号绑定当前端点最近展示的那份开放任务
-  列表；即使后台活动随后改变实时排序，也不会指向另一个任务。
-- `task ... complete` 把工作标记为完成，但不会删除 run、事件或产物；
-  `task ... archive` 用于隐藏作废或重复工作。两者都可通过显式 `resume`
-  重新打开，已完成任务同样支持恢复。
+- `tasks` 默认列出当前 Attention：运行中的 Run、待处理审批与澄清、活动
+  watcher，以及仍是所属 Thread 最新 Run 的未认领可恢复 Run（`interrupted`
+  的 Run 只有留下工作证据时才显示）。同 channel 的条目优先。settled、
+  archived、all 和关键词视图用来查看 Thread 历史，不会因此重新打开它。
+- `task` 支持列表序号或稳定的 Thread 兼容 task ID。序号绑定当前端点最近展示的
+  快照；即使后台活动随后改变实时排序，也不会指向另一个 Run。
+- `task ... complete` 只消除该精确 Run 的 Attention，不改写 Run 历史；若该 Run
+  仍有待处理审批、待处理澄清或活动 watcher 则拒绝执行——应先回答、拒绝或取消
+  这些对象。`task ... archive` 只从普通界面隐藏 Thread。显式 `resume` 仍可继续
+  可恢复 Run，并重新显示已归档 Thread。
+- `resume` 接受列表序号、稳定的 Thread 兼容 task id 或完整 run id。序号解析为
+  该端点最近展示快照中的精确 Run；Thread id 只在该 Thread 恰有一个未解决 Run
+  时被接受。
 - `workspaces`、`ws` 和 `workspace` 共用以下工作区操作：
 
 ```text
@@ -123,7 +130,8 @@ selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspac
   自动失效。只有确认所有参数都只读时才使用 `--all-args`，否则在 `--` 后给出允许的
   参数前缀。
 - 同时存在多个审批时，`approve` 和 `reject` 可接审批 token。
-- `stop` 取消活跃 run；`new` 创建新的可见任务。
+- `stop` 取消活跃 run；没有活跃 run 时只 dismiss 精确 pinned 的 Run，且在该 Run
+  仍有待处理审批、澄清或活动 watcher 时拒绝。`new` 创建新的可见任务。
 
 ## 配置、模型与渠道
 
@@ -257,7 +265,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|reset-work-history|restore-control] ...
 ```
 
 ```text
@@ -278,6 +286,7 @@ selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir D
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
+selfmind maintenance reset-work-history [--apply] [--data-dir DIR]
 selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 ```
 
@@ -300,14 +309,23 @@ database 来自同一份已加载配置；如果用 `--root` 指向另一棵资�
 然后再次预览以验证结果为空。应结合 dry-run 输出中的 owner 行与
 `selfmind doctor --verbose` 复核；不要直接在 SQLite 中删除 candidate ref。
 
-- `task-audit` 是只读的 Task/Run 连续性审计：升级回填未能转换的旧 resume 边、
-  非法 parent 边、失去归属的待处理 approval/clarify，以及与推导结果不一致的
-  任务状态投影。`--apply` 只通过生产 reducer 修复投影不一致；其余发现一律
-  人工复核，绝不改写 run、边或记忆。
+- `task-audit` 是只读的 Thread/Run 连续性审计：升级回填未能转换的旧 resume
+  边、非法 parent 边，以及失去归属的待处理 approval/clarify。`--apply` 仅作为
+  兼容参数保留，不会自动改写执行历史。
 - `migrate-task-references` 默认只做 dry-run。只有历史 `work_key` 的完整表面
   形式确实出现在该 run 的原始用户输入中时才允许迁移；从标题或摘要推断出的
   值只报告并跳过。`--apply` 可重复执行，且不会赋予工作区或执行权限。
-- `restore-control` 是恢复迁移备份的显式入口，备份必须位于所选数据目录的
+- `reset-work-history` 默认只做 dry-run，并且只显示汇总数量。应用模式要求先
+  停止 gateway；若存在运行中的 Run、活动 watcher 或已启动队列项则拒绝执行。
+  命令会先创建并校验 SQLite 备份，再清理当前 tenant 的 Thread/Run 历史及依赖
+  控制记录。已发布的 Skill 包保留，但进行中的 Skill 学习证据会被删除：
+  workflow observations、workflow profiles、skill candidate refs、attributions、
+  run skill activations 和 task skill bindings；failure guards 与候选证据快照
+  保留冻结内容，只清除对已删除 Run 和 observation 的引用。每个磁盘上的记忆
+  分区中，以已删除 Thread 为键的会话和偏好上的 run 来源引用会被清理，偏好
+  本身保留。身份、账号、工作区、个人设置、记忆偏好、授权和 provider 状态均
+  保留。
+- `restore-control` 是恢复迁移或工作历史重置备份的显式入口，备份必须位于所选数据目录的
   `backups/` 下。执行前先停止 gateway；命令要求 `--yes`，替换前会验证 SQLite
   快照，并把失败数据库保留在恢复后的 `control.db` 旁供诊断。
 
@@ -325,7 +343,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /model
 /id
 /status
-/tasks [done|archived|all]
+/tasks [open|done|archived|all|search <keyword>] [--workspace <id>] [--page <n>]
 /task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
@@ -335,12 +353,12 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /approvals [grants|revoke <n>]
 /approve <n|id|all> [run]
 /reject <n|id|all>
-/mode [mode]
+/mode [on-request|read-only|auto-edit|full-auto|smart]
 /stop
 /cancel
-/notify <platform|auto|desk-first|phone-first>
+/notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
-/resume [n|task_id|run_id]  (bare = pick from recent tasks)
+/resume [n|task_id|run_id]  (bare = list Attention)
 /choose <choice_id> <number>
 /remember <preference>
 /forget <text|ref>
@@ -355,11 +373,18 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   取消 watcher 不会取消外部操作。
 - `/new [title]` 保留现有的 task 标签行为；`/new --run <request>` 是确定性的
   新工作入口，不经过连续性模型判断。
+- `/tasks` 展示当前 Attention；`/resume` 接受列表序号、恰有一个未解决 Run 的
+  Thread id 或完整 run id；`/task <n> complete` 只 dismiss 该精确 Run，且在它仍有
+  待处理审批、待处理澄清或活动 watcher 时拒绝。Task card 与线上兼容字段
+  `Task.status` 使用派生词汇：Attention 为 `active`、`needs_attention`、
+  `monitoring` 或 `resumable`，已 settled 的 listed 工作为 `done`，已归档 Thread
+  为 `archived`；该值由 Run 和待处理控制对象计算得出，不会持久化。
 - `/choose <choice_id> <number>` 精确回答一个持久化的连续性问题，可从另一个
   已绑定端点或 daemon 重启后回答。只有该 person 最近恰好有一个待答问题时，
   才会把裸数字当作选择。
-- `/notify <platform|auto>` 选择首选 IM 目标；`desk-first` 让新审批先留在
-  已附着的 TUI，并在 T1 后补推，`phone-first` 则立即同步到 IM。
+- `/notify <platform|auto>` 选择首选 IM 目标，`/notify <on|off>` 开关脱离
+  会话时的通知；`desk-first` 让新审批先留在已附着的 TUI，并在 T1 后补推，
+  `phone-first` 则立即同步到 IM。
 - `/remember <preference>` 把用户明确表达的个人偏好写入长期记忆（个人记忆
   只存偏好），跨所有端点生效；`/forget <text|ref>` 按文本或 `/memory` 显示的
   ref 遗忘一条，多条匹配时返回带 ref 的编号列表。临时运行/构建状态会被拒绝

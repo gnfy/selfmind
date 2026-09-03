@@ -132,10 +132,19 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
    `work_select`. The gateway re-reads person ownership, resumability, scope,
    and effect boundaries before committing it. OBSERVE/reference interactions
    remain auditable but are projected out of ordinary task lists. A validated
-   same-domain RESUME atomically claims the exact parent for the interaction
-   Run; a different execution domain or checkpoint requirement transfers to a
-   correctly scoped exact-parent child. One pre-effect correction is retained
-   as an audit edge, while post-effect correction stops and asks. `semantic_recall`
+   RESUME whose target shares the interaction Run's execution domain (same
+   workspace, identical execution roots), has no unfinished loop checkpoint,
+   and arrives before the interaction has produced any effect is claimed
+   atomically at `work_select` time: the interaction Run is re-pointed onto the
+   parent's Thread, the parent's plan is restored as a durable `plan.updated`
+   event, and the parent's bounded resume context is returned to Main as the
+   tool result, so the work continues in the same turn (one Main Run, no
+   queue). A workspace, execution-root, or checkpoint mismatch still transfers
+   to a freshly created, correctly scoped exact-parent child after the
+   interpretation Run finishes, because execution scope never changes in
+   place. One pre-effect correction re-points a same-domain claim
+   (`RetargetInteractionContinuation`) and is retained as an audit edge, while
+   post-effect correction stops and asks. `semantic_recall`
    is optional search enrichment and may fail without blocking the turn;
    `fast_classifier` is not consulted. Exact IDs, structured reply edges, and
    standalone controls remain model-free.
@@ -180,8 +189,10 @@ explicit delivery override are the current default:
   `work_search` and `work_inspect` when more history is needed;
 - local structured/FTS search is the reliable base, while `semantic_recall` is
   optional query expansion and cannot block or authorize a continuation;
-- continuation atomically claims a same-domain interaction Run, while a scope
-  or checkpoint mismatch creates a correctly scoped exact-parent child;
+- a validated same-domain continuation is claimed in the same turn before any
+  effect and durably restores the parent's live plan; any other domain
+  transfers to a correctly scoped exact-parent child that inherits that plan
+  before Main starts;
 - active progress questions receive an immediate deterministic status at the
   asking endpoint, while the final result remains at the origin unless the user
   explicitly selects another bound endpoint through a server-issued steer.

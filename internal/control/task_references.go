@@ -299,7 +299,7 @@ func (s *Store) UpsertTaskReference(ctx context.Context, input TaskReferenceWrit
 		input.Provenance = "analyzer"
 	}
 	var taskWorkspace string
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(workspace_id, '') FROM tasks
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(workspace_id, '') FROM threads
 		WHERE tenant_id = ? AND person_id = ? AND id = ?`,
 		input.TenantID, input.PersonID, input.TaskID).Scan(&taskWorkspace); err != nil {
 		if err == sql.ErrNoRows {
@@ -314,9 +314,9 @@ func (s *Store) UpsertTaskReference(ctx context.Context, input TaskReferenceWrit
 	now := time.Now().Unix()
 	id := "tref_" + uuid.NewString()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO task_references
-		(id, tenant_id, person_id, task_id, workspace_id, class, raw_value, normalized_value, status, user_confirmed, created_at, updated_at)
+		(id, tenant_id, person_id, thread_id, workspace_id, class, raw_value, normalized_value, status, user_confirmed, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(tenant_id, person_id, normalized_value, task_id) DO UPDATE SET
+		ON CONFLICT(tenant_id, person_id, normalized_value, thread_id) DO UPDATE SET
 			workspace_id = CASE WHEN excluded.workspace_id != '' THEN excluded.workspace_id ELSE task_references.workspace_id END,
 			raw_value = CASE WHEN length(excluded.raw_value) < length(task_references.raw_value) THEN excluded.raw_value ELSE task_references.raw_value END,
 			user_confirmed = MAX(task_references.user_confirmed, excluded.user_confirmed),
@@ -348,13 +348,13 @@ func (s *Store) UpsertTaskReference(ctx context.Context, input TaskReferenceWrit
 }
 
 func (s *Store) getTaskReferenceByBinding(ctx context.Context, tenantID, personID, normalized, taskID string) (*TaskReference, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT r.id, r.tenant_id, r.person_id, r.task_id, r.workspace_id,
+	row := s.db.QueryRowContext(ctx, `SELECT r.id, r.tenant_id, r.person_id, r.thread_id, r.workspace_id,
 		r.class, r.raw_value, r.normalized_value, r.status, r.user_confirmed, r.created_at, r.updated_at,
 		(SELECT MAX(0,
 			COUNT(DISTINCT CASE WHEN e.provenance IN ('user_text', 'legacy_user_text') THEN NULLIF(e.run_id, '') END) -
 			COUNT(DISTINCT CASE WHEN e.provenance = 'corrected' THEN NULLIF(e.run_id, '') END))
 		 FROM task_reference_evidence e WHERE e.reference_id = r.id)
-		FROM task_references r WHERE r.tenant_id = ? AND r.person_id = ? AND r.normalized_value = ? AND r.task_id = ?`,
+		FROM task_references r WHERE r.tenant_id = ? AND r.person_id = ? AND r.normalized_value = ? AND r.thread_id = ?`,
 		normalizeTenant(tenantID), personID, normalized, taskID)
 	return scanTaskReference(row)
 }
@@ -390,7 +390,7 @@ func (s *Store) reconcileTaskReferenceValue(ctx context.Context, tenantID, perso
 }
 
 func reconcileTaskReferenceValueWith(ctx context.Context, db taskReferenceQueryExecer, tenantID, personID, normalized string) error {
-	rows, err := db.QueryContext(ctx, `SELECT r.id, r.task_id, r.status, r.user_confirmed,
+	rows, err := db.QueryContext(ctx, `SELECT r.id, r.thread_id, r.status, r.user_confirmed,
 		(SELECT MAX(0,
 			COUNT(DISTINCT CASE WHEN e.provenance IN ('user_text', 'legacy_user_text') THEN NULLIF(e.run_id, '') END) -
 			COUNT(DISTINCT CASE WHEN e.provenance = 'corrected' THEN NULLIF(e.run_id, '') END))
@@ -452,17 +452,22 @@ func (s *Store) FindTaskReferenceMatches(ctx context.Context, tenantID, personID
 	if normalizedInput == "" {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.tenant_id, r.person_id, r.task_id, r.workspace_id,
+	rows, err := s.db.QueryContext(ctx, `SELECT r.id, r.tenant_id, r.person_id, r.thread_id, r.workspace_id,
 		r.class, r.raw_value, r.normalized_value, r.status, r.user_confirmed, r.created_at, r.updated_at,
 		(SELECT MAX(0,
 			COUNT(DISTINCT CASE WHEN e.provenance IN ('user_text', 'legacy_user_text') THEN NULLIF(e.run_id, '') END) -
 			COUNT(DISTINCT CASE WHEN e.provenance = 'corrected' THEN NULLIF(e.run_id, '') END))
 		 FROM task_reference_evidence e WHERE e.reference_id = r.id),
-		t.workspace_id, t.title, t.status, COALESCE(t.kind, 'work'), COALESCE(t.visibility, 'visible'),
-		COALESCE(t.pinned, 0), COALESCE(t.current_summary, ''), COALESCE(t.next_steps_json, '[]'),
-		COALESCE(t.blocked_reason, ''), COALESCE(t.active_run_id, ''), COALESCE(t.last_channel, ''),
-		t.archived_at, COALESCE(t.last_activity_at, t.updated_at), t.created_at, t.updated_at
-		FROM task_references r JOIN tasks t ON t.tenant_id = r.tenant_id AND t.id = r.task_id
+		t.workspace_id, t.title,
+		`+threadDerivedStatusSQL(ThreadActivitySettled)+`,
+		COALESCE(t.kind, 'work'), COALESCE(t.visibility, 'listed'),
+		COALESCE(t.pinned, 0), COALESCE(t.summary, ''),
+		COALESCE((SELECT h.next_steps_json FROM task_handoffs h WHERE h.thread_id=t.id ORDER BY h.created_at DESC, h.id DESC LIMIT 1), '[]'),
+		'', COALESCE((SELECT rr.id FROM runs rr WHERE rr.tenant_id=t.tenant_id AND rr.thread_id=t.id AND rr.status='running' ORDER BY rr.started_at DESC, rr.id DESC LIMIT 1), ''),
+		COALESCE((SELECT rr.channel FROM runs rr WHERE rr.tenant_id=t.tenant_id AND rr.thread_id=t.id ORDER BY rr.started_at DESC, rr.id DESC LIMIT 1), ''),
+		CASE WHEN t.visibility='archived' THEN t.updated_at ELSE NULL END,
+		t.last_activity_at, t.created_at, t.updated_at
+		FROM task_references r JOIN threads t ON t.tenant_id = r.tenant_id AND t.id = r.thread_id
 		WHERE r.tenant_id = ? AND r.person_id = ? AND r.status = 'active'
 		ORDER BY r.user_confirmed DESC, r.updated_at DESC LIMIT 500`, normalizeTenant(tenantID), personID)
 	if err != nil {
@@ -519,22 +524,23 @@ func (s *Store) ListTaskReferenceCards(ctx context.Context, tenantID, personID s
 		limit = 200
 	}
 	args := []interface{}{normalizeTenant(tenantID), personID}
-	query := `SELECT r.id, r.tenant_id, r.person_id, r.task_id, r.workspace_id,
+	query := `SELECT r.id, r.tenant_id, r.person_id, r.thread_id, r.workspace_id,
 		r.class, r.raw_value, r.normalized_value, r.status, r.user_confirmed, r.created_at, r.updated_at,
 		(SELECT MAX(0,
 			COUNT(DISTINCT CASE WHEN e.provenance IN ('user_text', 'legacy_user_text') THEN NULLIF(e.run_id, '') END) -
 			COUNT(DISTINCT CASE WHEN e.provenance = 'corrected' THEN NULLIF(e.run_id, '') END))
 		 FROM task_reference_evidence e WHERE e.reference_id = r.id),
-		t.id, COALESCE(t.workspace_id, ''), t.title, t.status, COALESCE(t.current_summary, ''), t.updated_at,
+		t.id, COALESCE(t.workspace_id, ''), t.title,
+		` + threadDerivedStatusSQL(ThreadActivitySettled) + `,
+		COALESCE(t.summary, ''), t.updated_at,
 		COALESCE(h.summary, ''), COALESCE(h.changed_files_json, '[]')
 		FROM task_references r
-		JOIN tasks t ON t.tenant_id = r.tenant_id AND t.id = r.task_id
+		JOIN threads t ON t.tenant_id = r.tenant_id AND t.id = r.thread_id
 		LEFT JOIN task_handoffs h ON h.id = (
-			SELECT id FROM task_handoffs WHERE task_id = t.id ORDER BY created_at DESC, rowid DESC LIMIT 1
+			SELECT id FROM task_handoffs WHERE thread_id = t.id ORDER BY created_at DESC, rowid DESC LIMIT 1
 		)
 		WHERE r.tenant_id = ? AND r.person_id = ?
-		  AND COALESCE(t.visibility, 'visible') != 'hidden'
-		  AND t.status NOT IN ('archived', 'cancelled')`
+		  AND COALESCE(t.visibility, 'listed') != 'archived'`
 	if len(statuses) > 0 {
 		query += " AND r.status IN (" + strings.TrimRight(strings.Repeat("?,", len(statuses)), ",") + ")"
 		for _, status := range statuses {
@@ -576,7 +582,7 @@ func (s *Store) ListTaskReferences(ctx context.Context, tenantID, personID strin
 		limit = 200
 	}
 	args := []interface{}{normalizeTenant(tenantID), personID}
-	query := `SELECT r.id, r.tenant_id, r.person_id, r.task_id, r.workspace_id,
+	query := `SELECT r.id, r.tenant_id, r.person_id, r.thread_id, r.workspace_id,
 		r.class, r.raw_value, r.normalized_value, r.status, r.user_confirmed, r.created_at, r.updated_at,
 		(SELECT MAX(0,
 			COUNT(DISTINCT CASE WHEN e.provenance IN ('user_text', 'legacy_user_text') THEN NULLIF(e.run_id, '') END) -
@@ -636,7 +642,7 @@ func (s *Store) SupersedeTaskReference(ctx context.Context, tenantID, personID, 
 		return false, nil
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE task_references SET status = ?, updated_at = ?
-		WHERE tenant_id = ? AND person_id = ? AND task_id = ? AND normalized_value = ? AND status != ?`,
+		WHERE tenant_id = ? AND person_id = ? AND thread_id = ? AND normalized_value = ? AND status != ?`,
 		TaskReferenceSuperseded, time.Now().Unix(), normalizeTenant(tenantID), personID, taskID, normalized, TaskReferenceSuperseded)
 	if err != nil {
 		return false, err
@@ -702,7 +708,7 @@ func (s *Store) applyTaskReferenceCorrection(ctx context.Context, record TaskRes
 			continue
 		}
 		rows, err := s.db.QueryContext(ctx, `SELECT id FROM task_references
-			WHERE tenant_id = ? AND person_id = ? AND task_id = ? AND normalized_value = ?
+			WHERE tenant_id = ? AND person_id = ? AND thread_id = ? AND normalized_value = ?
 			  AND user_confirmed = 0 AND status != ?`, normalizeTenant(record.TenantID),
 			record.PersonID, record.SelectedTaskID, normalized, TaskReferenceSuperseded)
 		if err != nil {

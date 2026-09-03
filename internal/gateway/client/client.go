@@ -365,6 +365,7 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 			ToolCallID:      str(p["tool_call_id"]),
 			ToolResult:      str(p["result"]),
 			DurationSeconds: num(p["duration_seconds"]),
+			Payload:         p,
 		}
 		if errText := str(p["error"]); errText != "" {
 			se.Err = fmt.Errorf("%s", errText)

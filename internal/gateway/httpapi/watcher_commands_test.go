@@ -17,11 +17,16 @@ func TestWatchersControlCommandListsDetailsAndCancels(t *testing.T) {
 	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "waiting_external", "waiting", nil); err != nil {
+	run, err := store.StartRun(ctx, task, "cli", "wait for watcher")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_external"); err != nil {
 		t.Fatal(err)
 	}
 	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
 		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+		RunID:   run.ID,
 		Channel: "cli", Description: "RUQX build completion",
 		CWD: t.TempDir(), Command: "secret command must not render", SuccessPattern: "SUCCEEDED",
 		TimeoutAt: time.Now().Add(time.Hour),

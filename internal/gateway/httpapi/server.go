@@ -869,12 +869,11 @@ const (
 
 // attachPolicy keeps semantic task association separate from execution
 // authority. A weak label/reference may help the model find prior work, but it
-// cannot silently change filesystem roots, trust, credentials, the person's
-// current-task pointer, or ownership of unfinished runs.
+// cannot silently change filesystem roots, trust, credentials, or ownership
+// of unfinished runs.
 type attachPolicy struct {
 	ContextMode              attachContextMode
 	ExecutionWorkspaceSource attachWorkspaceSource
-	UpdateCurrentTask        bool
 	ClaimsPriorRuns          bool
 }
 
@@ -934,24 +933,24 @@ func (a taskAttach) resolvedPolicy() attachPolicy {
 func policyForTaskAttach(reason taskAttachReason, created, preLabel bool) attachPolicy {
 	switch reason {
 	case taskAttachContinuation, taskAttachApprovalResume, taskAttachClarifyResume, taskAttachReplyToRun:
-		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true, ClaimsPriorRuns: true}
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, ClaimsPriorRuns: true}
 	case taskAttachReferenceContinue, taskAttachReferenceMention:
 		// Legacy reasons kept only so durable maintenance payloads recorded
 		// before simplification P2 still resolve a policy. References no
 		// longer route, load full context, or move the current-task pointer.
 		return attachPolicy{ContextMode: attachContextBounded, ExecutionWorkspaceSource: attachWorkspaceRequest}
 	case taskAttachExplicitTaskID, taskAttachResumePin:
-		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true, ClaimsPriorRuns: true}
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, ClaimsPriorRuns: true}
 	case taskAttachCurrentPreLabel:
 		// Legacy reason (pre-P2 sticky pre-label); replay compatibility only.
 		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest}
 	case taskAttachNewLabel:
-		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: true}
+		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest}
 	default:
 		if preLabel {
-			return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: created}
+			return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest}
 		}
-		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true}
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask}
 	}
 }
 

@@ -26,14 +26,14 @@ type LatestRunOutcome struct {
 // task. It is one grouped query for /tasks rendering, never a per-card lookup.
 func (s *Store) LatestRunOutcomesByPerson(ctx context.Context, tenantID, personID string) (map[string]LatestRunOutcome, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.task_id, e.payload_json
+		`SELECT e.thread_id, e.payload_json
 		 FROM task_events e
-		 JOIN tasks t ON t.id = e.task_id
+		 JOIN threads t ON t.id = e.thread_id
 		 WHERE t.tenant_id = ? AND t.person_id = ?
 		   AND e.type IN ('run.finished', 'run.interrupted')
 		   AND e.rowid = (
 		     SELECT e2.rowid FROM task_events e2
-		     WHERE e2.task_id = e.task_id AND e2.type IN ('run.finished', 'run.interrupted')
+		     WHERE e2.thread_id = e.thread_id AND e2.type IN ('run.finished', 'run.interrupted')
 		     ORDER BY e2.created_at DESC, e2.rowid DESC LIMIT 1
 		   )`, normalizeTenant(tenantID), personID)
 	if err != nil {
@@ -74,7 +74,7 @@ func (s *Store) RenameTask(ctx context.Context, tenantID, taskID, title string) 
 		return fmt.Errorf("title is required")
 	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE tasks SET title = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+		`UPDATE threads SET title = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
 		title, time.Now().Unix(), normalizeTenant(tenantID), taskID)
 	if err != nil {
 		return err
@@ -90,9 +90,9 @@ func (s *Store) RenameTask(ctx context.Context, tenantID, taskID, title string) 
 // column.
 func (s *Store) RunCountsByPerson(ctx context.Context, tenantID, personID string) (map[string]int, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT task_id, COUNT(*) FROM task_runs
+		`SELECT thread_id, COUNT(*) FROM runs
 		 WHERE tenant_id = ? AND person_id = ?
-		 GROUP BY task_id`,
+		 GROUP BY thread_id`,
 		normalizeTenant(tenantID), personID)
 	if err != nil {
 		return nil, err
@@ -116,10 +116,10 @@ func (s *Store) RunCountsByPerson(ctx context.Context, tenantID, personID string
 // round trip.
 func (s *Store) LatestRunSummaries(ctx context.Context, tenantID, personID string) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT r.task_id, COALESCE(r.input_summary, '')
-		 FROM task_runs r
+		`SELECT r.thread_id, COALESCE(r.input_summary, '')
+		 FROM runs r
 		 WHERE r.tenant_id = ? AND r.person_id = ?
-		   AND r.id = (SELECT r2.id FROM task_runs r2 WHERE r2.task_id = r.task_id
+		   AND r.id = (SELECT r2.id FROM runs r2 WHERE r2.thread_id = r.thread_id
 		               ORDER BY r2.started_at DESC, r2.rowid DESC LIMIT 1)`,
 		normalizeTenant(tenantID), personID)
 	if err != nil {
@@ -142,11 +142,11 @@ func (s *Store) LatestRunSummaries(ctx context.Context, tenantID, personID strin
 // card "file:" line (the primary artifact) without a per-task LatestHandoff.
 func (s *Store) LatestHandoffFilesByPerson(ctx context.Context, tenantID, personID string) (map[string][]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT h.task_id, COALESCE(h.changed_files_json, '[]')
+		`SELECT h.thread_id, COALESCE(h.changed_files_json, '[]')
 		 FROM task_handoffs h
-		 JOIN tasks t ON t.id = h.task_id
+		 JOIN threads t ON t.id = h.thread_id
 		 WHERE t.tenant_id = ? AND t.person_id = ?
-		   AND h.id = (SELECT h2.id FROM task_handoffs h2 WHERE h2.task_id = h.task_id
+		   AND h.id = (SELECT h2.id FROM task_handoffs h2 WHERE h2.thread_id = h.thread_id
 		               ORDER BY h2.created_at DESC, h2.rowid DESC LIMIT 1)`,
 		normalizeTenant(tenantID), personID)
 	if err != nil {
@@ -175,10 +175,10 @@ func (s *Store) PendingCountsByTask(ctx context.Context, tenantID, personID stri
 	tenant := normalizeTenant(tenantID)
 	countByTask := func(table string) (map[string]int, error) {
 		rows, err := s.db.QueryContext(ctx,
-			`SELECT task_id, COUNT(*) FROM `+table+`
+			`SELECT thread_id, COUNT(*) FROM `+table+`
 			 WHERE tenant_id = ? AND person_id = ? AND status = 'pending'
-			   AND COALESCE(task_id, '') != ''
-			 GROUP BY task_id`,
+			   AND COALESCE(thread_id, '') != ''
+			 GROUP BY thread_id`,
 			tenant, personID)
 		if err != nil {
 			return nil, err
@@ -211,10 +211,10 @@ func (s *Store) ListTaskRuns(ctx context.Context, tenantID, taskID string, limit
 		limit = 10
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
+		`SELECT id, thread_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
 		        COALESCE(input_summary, ''), COALESCE(parent_run_id, ''), status, started_at, finished_at
-		 FROM task_runs
-		 WHERE tenant_id = ? AND task_id = ?
+		 FROM runs
+		 WHERE tenant_id = ? AND thread_id = ?
 		 ORDER BY started_at DESC, id DESC LIMIT ?`,
 		normalizeTenant(tenantID), taskID, limit)
 	if err != nil {
@@ -248,7 +248,7 @@ func (s *Store) SetRunWorkKey(ctx context.Context, tenantID, runID, workKey stri
 		return nil
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE task_runs SET work_key = ? WHERE tenant_id = ? AND id = ?`,
+		`UPDATE runs SET work_key = ? WHERE tenant_id = ? AND id = ?`,
 		strings.ToUpper(strings.TrimSpace(workKey)), normalizeTenant(tenantID), runID)
 	return err
 }
@@ -281,7 +281,7 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 	// Guard: the target label must exist and belong to the same tenant.
 	var targetPerson string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT person_id FROM tasks WHERE tenant_id = ? AND id = ?`,
+		`SELECT person_id FROM threads WHERE tenant_id = ? AND id = ?`,
 		tenant, toTaskID).Scan(&targetPerson); err != nil {
 		if err == sql.ErrNoRows {
 			return fmt.Errorf("target task not found: %s", toTaskID)
@@ -290,7 +290,7 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 	}
 
 	res, err := tx.ExecContext(ctx,
-		`UPDATE task_runs SET task_id = ? WHERE tenant_id = ? AND id = ?`,
+		`UPDATE runs SET thread_id = ? WHERE tenant_id = ? AND id = ?`,
 		toTaskID, tenant, runID)
 	if err != nil {
 		return err
@@ -299,17 +299,17 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 		return fmt.Errorf("run not found: %s", runID)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE task_events SET task_id = ? WHERE run_id = ?`,
+		`UPDATE task_events SET thread_id = ? WHERE run_id = ?`,
 		toTaskID, runID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE task_artifacts SET task_id = ? WHERE run_id = ?`,
+		`UPDATE task_artifacts SET thread_id = ? WHERE run_id = ?`,
 		toTaskID, runID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE loop_checkpoints SET task_id = ? WHERE run_id = ?`,
+		`UPDATE loop_checkpoints SET thread_id = ? WHERE run_id = ?`,
 		toTaskID, runID); err != nil {
 		return err
 	}
@@ -319,40 +319,30 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 	// the cleanup below may delete — and the prerequisite for any future
 	// mid-run relabel.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE approval_requests SET task_id = ? WHERE run_id = ?`,
+		`UPDATE approval_requests SET thread_id = ? WHERE run_id = ?`,
 		toTaskID, runID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE clarify_requests SET task_id = ? WHERE run_id = ?`,
+		`UPDATE clarify_requests SET thread_id = ? WHERE run_id = ?`,
 		toTaskID, runID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE task_blockers SET task_id = ? WHERE tenant_id = ? AND origin_run_id = ?`,
+		`UPDATE task_blockers SET thread_id = ? WHERE tenant_id = ? AND origin_run_id = ?`,
 		toTaskID, tenant, runID); err != nil {
 		return err
 	}
-	var targetStatus string
-	if err := tx.QueryRowContext(ctx,
-		`SELECT status FROM tasks WHERE tenant_id = ? AND id = ?`,
-		tenant, toTaskID).Scan(&targetStatus); err != nil {
-		return err
-	}
-	targetStatus, err = resolveFinalTaskStatusTx(ctx, tx, tenant, toTaskID, runID, targetStatus)
-	if err != nil {
-		return err
-	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE tasks SET status = ?, last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		targetStatus, now, now, tenant, toTaskID); err != nil {
+		`UPDATE threads SET kind = 'work', visibility = 'listed', last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+		now, now, tenant, toTaskID); err != nil {
 		return err
 	}
 
 	if cleanupFrom && fromTaskID != "" {
 		var remaining int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM task_runs WHERE tenant_id = ? AND task_id = ?`,
+			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND thread_id = ?`,
 			tenant, fromTaskID).Scan(&remaining); err != nil {
 			return err
 		}
@@ -360,19 +350,14 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 			// The placeholder's finalization handoff describes the moved run's
 			// work: fold it into the target before deleting the empty label.
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE task_handoffs SET task_id = ? WHERE task_id = ?`,
+				`UPDATE task_handoffs SET thread_id = ? WHERE thread_id = ?`,
 				toTaskID, fromTaskID); err != nil {
 				return err
 			}
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE current_task SET task_id = ?, updated_at = ? WHERE tenant_id = ? AND task_id = ?`,
-				toTaskID, now, tenant, fromTaskID); err != nil {
-				return err
-			}
-			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM tasks WHERE tenant_id = ? AND id = ?
+				`DELETE FROM threads WHERE tenant_id = ? AND id = ?
 				   AND NOT EXISTS (SELECT 1 FROM task_references r
-				                   WHERE r.tenant_id = tasks.tenant_id AND r.task_id = tasks.id)`,
+				                   WHERE r.tenant_id = threads.tenant_id AND r.thread_id = threads.id)`,
 				tenant, fromTaskID); err != nil {
 				return err
 			}
@@ -380,8 +365,8 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 			// Keep it as an archived audit handle rather than deleting the task and
 			// leaving orphaned identity evidence.
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE tasks SET status = 'archived', archived_at = ?, updated_at = ?
-				 WHERE tenant_id = ? AND id = ?`, now, now, tenant, fromTaskID); err != nil {
+				`UPDATE threads SET visibility = 'archived', updated_at = ?
+				 WHERE tenant_id = ? AND id = ?`, now, tenant, fromTaskID); err != nil {
 				return err
 			}
 		}

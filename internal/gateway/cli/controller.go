@@ -68,6 +68,7 @@ type ChatMessage struct {
 	ToolArgs       string  // Fix: add ToolArgs to store call arguments
 	Duration       float64 // Fix: add Duration for performance display
 	IsError        bool    // Fix: add IsError flag
+	IsSkipped      bool    // tool was refused before dispatch; warning, not execution failure
 	IsRunning      bool
 	RunningDetail  string
 	ProcessGroupID uint64     // action narration group; grouped tools render one level below it
@@ -149,12 +150,15 @@ type uiModel struct {
 	runStatus             string    // ready | queued | working | done | error | cancelled
 	queuedCount           int       // requests submitted by this TUI and accepted into the daemon queue
 	queuedInputs          []string  // local queue acknowledgements awaiting run.started
+	queuedRunIDs          []string  // exact queue acknowledgements awaiting run.started
 	localRequestActive    bool      // this TUI currently owns a synchronous POST
 	localRequestInput     string
 	daemonRunActive       bool // person-level daemon stream reports an executing run
 	daemonRunID           string
+	daemonRunQueueID      string
 	daemonRunStarted      time.Time
 	daemonRunAwaitingDone bool // final answer still arrives through MsgAgentDone
+	daemonRunOwned        bool // this terminal submitted the run (locally or via the queue): animate its activity
 	// backgroundRunID is the daemon run whose progress this terminal must NOT
 	// render: the daemon started it on the person's behalf (a watcher
 	// finalization, a cron fire). backgroundOrigin names that initiator and
@@ -1022,6 +1026,7 @@ type MsgSkillInvocationResolved struct {
 
 type MsgDaemonRunStarted struct {
 	RunID      string
+	QueueID    string
 	TaskID     string
 	WatchID    string
 	TaskStatus string
@@ -1069,12 +1074,13 @@ type MsgToolHeartbeat struct {
 }
 
 type MsgToolDone struct {
-	ToolName   string
-	ToolCallID string
-	Result     string
-	Err        error
-	Duration   float64
-	Event      uiEventRef
+	ToolName    string
+	ToolCallID  string
+	Result      string
+	Err         error
+	EffectState string
+	Duration    float64
+	Event       uiEventRef
 }
 
 // MsgPlanUpdated replaces the live plan shown above the composer. Plan events

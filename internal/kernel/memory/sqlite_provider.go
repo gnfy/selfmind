@@ -177,6 +177,44 @@ func (p *SQLiteProvider) worker() {
 					res = dbResult{err: tx.Commit()}
 				}
 
+			case "PurgeWorkHistoryReferences":
+				// A control work-history reset removed Threads and Runs. Sessions
+				// keyed to a Thread (`task:<id>`) and run provenance on facts and
+				// observations would otherwise cite rows that no longer exist.
+				// Preference content is untouched.
+				tx, err := db.Begin()
+				if err != nil {
+					res = dbResult{err: err}
+					break
+				}
+				var purge workHistoryPurge
+				err = tx.QueryRow(`SELECT COUNT(*) FROM sessions_fts WHERE session_id LIKE 'task:%'`).Scan(&purge.sessions)
+				if err == nil {
+					_, err = tx.Exec(`DELETE FROM sessions_fts WHERE session_id LIKE 'task:%'`)
+				}
+				if err == nil {
+					_, err = tx.Exec(`DELETE FROM session_messages WHERE session_id LIKE 'task:%'`)
+				}
+				for _, statement := range []string{
+					`UPDATE facts SET created_from_run = '' WHERE COALESCE(created_from_run, '') <> ''`,
+					`UPDATE memory_observations SET run_id = '' WHERE COALESCE(run_id, '') <> ''`,
+				} {
+					if err != nil {
+						break
+					}
+					var result sql.Result
+					if result, err = tx.Exec(statement); err == nil {
+						cleared, _ := result.RowsAffected()
+						purge.provenance += int(cleared)
+					}
+				}
+				if err != nil {
+					_ = tx.Rollback()
+					res = dbResult{err: err}
+					break
+				}
+				res = dbResult{val: purge, err: tx.Commit()}
+
 			case "SearchSessions":
 				query := op.args[1].(string)
 				limit := op.args[2].(int)
@@ -1061,6 +1099,27 @@ func (p *SQLiteProvider) IndexMessagesFromTrajectory(ctx context.Context, tenant
 	}
 	_, err := p.call("IndexSessionMessages", tenantID, sessionID, indexed)
 	return err
+}
+
+// workHistoryPurge is the worker-side PurgeWorkHistoryReferences result.
+type workHistoryPurge struct {
+	sessions   int
+	provenance int
+}
+
+// PurgeWorkHistoryReferences follows a control work-history reset for one
+// memory partition: it deletes sessions keyed to a removed Thread (`task:<id>`)
+// and clears the run provenance columns (facts.created_from_run and
+// memory_observations.run_id) so memory never cites Threads or Runs that no
+// longer exist. Preferences and their evidence content are untouched. It
+// returns the number of sessions removed and provenance rows cleared.
+func (p *SQLiteProvider) PurgeWorkHistoryReferences(ctx context.Context, tenantID string) (sessions, provenance int, err error) {
+	val, err := p.call("PurgeWorkHistoryReferences", tenantID)
+	if err != nil {
+		return 0, 0, err
+	}
+	purge, _ := val.(workHistoryPurge)
+	return purge.sessions, purge.provenance, nil
 }
 
 func (p *SQLiteProvider) AddFact(ctx context.Context, tenantID string, target, content string) error {

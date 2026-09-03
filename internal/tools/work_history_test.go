@@ -71,7 +71,7 @@ func TestWorkInspectReturnsBoundedRunStateWithoutRawEventContent(t *testing.T) {
 	if _, err := store.SaveArtifact(ctx, control.Artifact{TaskID: task.ID, RunID: run.ID, Kind: "file", Name: "release record", URI: "artifact://release-record"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SyncRunPlan(ctx, person.TenantID, run.ID, "release safely", []control.RunPlanStepInput{{Step: "verify deployment", Status: "in_progress"}}); err != nil {
+	if _, err := store.SyncRunPlan(ctx, person.TenantID, run.ID, "release safely", []control.RunPlanStepInput{{Step: "deploy", Status: "completed"}, {Step: "verify deployment", Status: "in_progress"}}); err != nil {
 		t.Fatal(err)
 	}
 

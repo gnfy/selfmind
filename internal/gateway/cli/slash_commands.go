@@ -20,49 +20,60 @@ type slashCommand struct {
 	Run func(*uiModel, []string) tea.Cmd
 }
 
+// slashCommandMetas is the TUI's display order and its local composer hints.
+// Usage and Description are NOT owned here: every command the shared
+// cross-endpoint catalog (internal/gateway/command) knows takes both from that
+// catalog through tuiSlashMeta, so the TUI never carries a second copy that
+// drifts from what the daemon accepts (it did: the TUI advertised
+// "/queue [clear]" and "/notify <platform|auto>" while the daemon had grown
+// "drop <n>" and "desk-first|phone-first"). Hint is the one-line composer
+// affordance the catalog does not carry, so it stays local.
 var slashCommandMetas = []slashCommandMeta{
-	{Name: "/help", Usage: "/help", Description: "Open this temporary help page", Hint: "show available commands"},
-	{Name: "/model", Usage: "/model", Description: "Open Main, Background, and optional role model settings", Hint: "manage model settings"},
-	{Name: "/status", Usage: "/status", Description: "Show runtime status and background processes", Hint: "show runtime, gateway, and model state"},
-	{Name: "/tasks", Usage: "/tasks [open|done|archived|all|search <text>] [--workspace <id>] [--page <n>]", Description: "List or search paged work labels", Hint: "view and manage gateway tasks"},
-	{Name: "/skills", Usage: "/skills [list|view|candidates|candidate|promote|reject|rollback|binding|bind|unbind|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Description: "Manage learned skills", Hint: "list, bind, review candidates, promote, or rollback skills"},
-	{Name: "/bundles", Usage: "/bundles [list|view|create|delete]", Description: "Manage skill bundles", Hint: "load multiple skills together"},
-	{Name: "/reload-skills", Usage: "/reload-skills", Description: "Reload skill tools from disk", Hint: "refresh skill commands"},
-	{Name: "/memory", Usage: "/memory [category|conflicts|search|show|correct|forget|pin|unpin|raw|history|undo]", Description: "Review and manage long-term memory", Hint: "review or manage saved memories"},
-	{Name: "/curator", Usage: "/curator [status|run|restore]", Description: "Review or run skill cleanup", Hint: "check learning cleanup status"},
-	{Name: "/checkpoint", Usage: "/checkpoint [list|save|load|delete] [name]", Description: "Manage workspace checkpoints", Hint: "save or inspect workspace checkpoints"},
-	{Name: "/migrate", Usage: "/migrate", Description: "Migrate skills from Hermes Agent", Hint: "run local storage migrations"},
-	{Name: "/clear", Usage: "/clear", Description: "Clear conversation history", Hint: "clear this conversation view"},
-	{Name: "/exit", Usage: "/exit", Description: "Exit SelfMind", Hint: "leave SelfMind"},
-	{Name: "/compact", Usage: "/compact", Description: "Compact older conversation history to free context", Hint: "summarize and shrink the transcript"},
-	{Name: "/paste-image", Usage: "/paste-image", Description: "Attach a local clipboard image; Ctrl+V is the shortcut (not available over SSH)", Hint: "attach a clipboard image (Ctrl+V shortcut)"},
-	{Name: "/mode", Usage: "/mode [on-request|read-only|auto-edit|full-auto|smart]", Description: "Show or set the approval mode", Hint: "choose what runs without asking"},
-	{Name: "/capture", Usage: "/capture [title]", Description: "Save the last turn as a replayable eval case", Hint: "turn this turn into a regression test"},
-	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},
-	{Name: "/queue", Usage: "/queue [clear]", Description: "List queued tasks, or drop all pending queued tasks", Hint: "view or clear queued work"},
-	{Name: "/watchers", Usage: "/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]", Description: "List, inspect, or cancel durable external watchers", Hint: "view or manage external watchers"},
-	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery|execution|tools]", Description: "Show runtime and subsystem diagnostics", Hint: "runs, queues, memory, context, tasks, models, delivery, execution, tools"},
-	{Name: "/report", Usage: "/report daily [--since 24h]", Description: "Show a model-free execution quality and cost report", Hint: "review recent execution quality and cost"},
-	{Name: "/search", Usage: "/search [current|query]", Description: "Review this conversation with full diffs (current), or search past working sessions (empty = recent sessions)", Hint: "review this conversation or find prior work"},
+	tuiSlashMeta("/help", "show available commands"),
+	tuiSlashMeta("/model", "manage model settings"),
+	tuiSlashMeta("/status", "show runtime, gateway, and model state"),
+	tuiSlashMeta("/tasks", "view current action and work history"),
+	tuiSlashMeta("/skills", "list, bind, review candidates, promote, or rollback skills"),
+	tuiSlashMeta("/bundles", "load multiple skills together"),
+	tuiSlashMeta("/reload-skills", "refresh skill commands"),
+	tuiSlashMeta("/memory", "review or manage saved memories"),
+	tuiSlashMeta("/curator", "check learning cleanup status"),
+	tuiSlashMeta("/checkpoint", "save or inspect workspace checkpoints"),
+	tuiSlashMeta("/migrate", "run local storage migrations"),
+	tuiSlashMeta("/clear", "clear this conversation view"),
+	tuiSlashMeta("/exit", "leave SelfMind"),
+	tuiSlashMeta("/compact", "summarize and shrink the transcript"),
+	tuiSlashMeta("/paste-image", "attach a clipboard image (Ctrl+V shortcut)"),
+	tuiSlashMeta("/mode", "choose what runs without asking"),
+	tuiSlashMeta("/capture", "turn this turn into a regression test"),
+	tuiSlashMeta("/copy", "copy the last response"),
+	tuiSlashMeta("/queue", "view or clear queued work"),
+	tuiSlashMeta("/watchers", "view or manage external watchers"),
+	tuiSlashMeta("/diag", "runs, queues, memory, context, tasks, models, delivery, execution, tools"),
+	tuiSlashMeta("/report", "review recent execution quality and cost"),
+	tuiSlashMeta("/search", "review this conversation or find prior work"),
 	// Gateway control commands the TUI relays to the daemon. Previously the TUI
 	// OMITTED these, so typing /approve fell through to the skill/unknown path
 	// and never reached the approve lifecycle. They now route through the shared
 	// control passthrough (see gatewayPassthroughCommands) so /approve means the
 	// same thing on every surface.
-	{Name: "/approvals", Usage: "/approvals [grants|revoke <n>]", Description: "Pending approvals; grants lists remembered classes", Hint: "list pending approvals or remembered classes"},
-	{Name: "/approve", Usage: "/approve <n|id|all> [run]", Description: "Approve a pending action", Hint: "approve once or for this run when offered"},
-	{Name: "/reject", Usage: "/reject <n|id|all>", Description: "Reject a pending action (or all of them)", Hint: "reject a pending action"},
-	{Name: "/stop", Usage: "/stop", Description: "Cancel the active run", Hint: "cancel the active run"},
-	{Name: "/cancel", Usage: "/cancel", Description: "Cancel the current task even if no run is active", Hint: "cancel the current task"},
-	{Name: "/id", Usage: "/id", Description: "Show your resolved account identity", Hint: "show your account identity"},
-	{Name: "/new", Usage: "/new [title]", Description: "Create a new task", Hint: "create a new task"},
-	{Name: "/resume", Usage: "/resume [n|task_id]", Description: "Pick a recent task to resume (bare), or resume one by number or id", Hint: "pick a task to resume"},
-	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|complete|archive|references|reference add|remove <name>]", Description: "Show, complete, archive, or manage a task", Hint: "inspect or manage one task"},
-	{Name: "/workspace", Usage: "/workspace [n|id]", Description: "List workspaces (bare) or select one by number/id", Hint: "list or select a workspace"},
+	tuiSlashMeta("/approvals", "list pending approvals or remembered classes"),
+	tuiSlashMeta("/approve", "approve once or for this run when offered"),
+	tuiSlashMeta("/reject", "reject a pending action"),
+	tuiSlashMeta("/stop", "cancel the active run"),
+	tuiSlashMeta("/cancel", "cancel the current task"),
+	tuiSlashMeta("/id", "show your account identity"),
+	registrySlashMeta("/new"),
+	registrySlashMeta("/resume"),
+	registrySlashMeta("/task"),
+	tuiSlashMeta("/workspace", "list or select a workspace"),
+	// /ws is an ALIAS: the catalog resolves it to the /workspace entry and holds
+	// no alias-specific usage or summary, so repeating that entry here would
+	// print the /workspace help row twice. This one row stays local.
 	{Name: "/ws", Usage: "/ws [n|id]", Description: "Short alias for /workspace (bare lists, arg selects)", Hint: "list or select a workspace"},
-	{Name: "/workspaces", Usage: "/workspaces", Description: "List workspaces (same as bare /workspace)", Hint: "list your workspaces"},
-	{Name: "/events", Usage: "/events", Description: "List recent events for the current task", Hint: "recent task events"},
-	{Name: "/notify", Usage: "/notify <platform|auto>", Description: "Choose where detached CLI notifications go", Hint: "set notify preference"},
+	tuiSlashMeta("/workspaces", "list your workspaces"),
+	tuiSlashMeta("/events", "recent task events"),
+	tuiSlashMeta("/notify", "set notify preference"),
 }
 
 // gatewayPassthroughCommands are derived from the cross-endpoint registry. The
@@ -235,6 +246,13 @@ func metaByName(name string) slashCommandMeta {
 			return meta
 		}
 	}
+	return registrySlashMeta(name)
+}
+
+// registrySlashMeta derives a command's presentation from the shared
+// cross-endpoint catalog (internal/gateway/command). Only the name survives
+// for a command the catalog does not know.
+func registrySlashMeta(name string) slashCommandMeta {
 	if entry, ok := command.Lookup(name); ok {
 		return slashCommandMeta{
 			Name:        name,
@@ -244,6 +262,14 @@ func metaByName(name string) slashCommandMeta {
 		}
 	}
 	return slashCommandMeta{Name: name}
+}
+
+// tuiSlashMeta is a catalog-derived command plus the TUI's own composer hint.
+// Only the hint is local; usage and description stay the shared catalog's.
+func tuiSlashMeta(name, hint string) slashCommandMeta {
+	meta := registrySlashMeta(name)
+	meta.Hint = hint
+	return meta
 }
 
 // allSlashCommands is the full command table: the hand-wired commands above

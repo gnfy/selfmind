@@ -38,8 +38,7 @@ func newRecoveryFixture(t *testing.T) (*Store, *IdentityContext, *Task, *Run) {
 }
 
 // TestMarkInterruptedRunsBootSweep is the boot-sweep contract: a leftover
-// 'running' run (stale by definition at boot, threshold 0) flips to
-// 'interrupted' together with its still-running task.
+// running Run becomes interrupted while pending human input remains durable.
 func TestMarkInterruptedRunsBootSweep(t *testing.T) {
 	ctx := context.Background()
 	store, identity, task, run := newRecoveryFixture(t)
@@ -65,12 +64,9 @@ func TestMarkInterruptedRunsBootSweep(t *testing.T) {
 	if len(left) != 0 {
 		t.Fatalf("running runs left after sweep: %+v", left)
 	}
-	got, err := store.GetTask(ctx, identity.TenantID, task.ID)
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if got.Status != "interrupted" || got.ActiveRunID != "" {
-		t.Fatalf("task after sweep = status %q active_run_id %q, want interrupted/empty", got.Status, got.ActiveRunID)
+	storedRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil || storedRun == nil || storedRun.Status != "interrupted" || storedRun.FinishedAt == nil {
+		t.Fatalf("run after sweep = %+v err=%v", storedRun, err)
 	}
 	events, err := store.ListTaskEvents(ctx, task.ID, 10)
 	if err != nil {
@@ -156,49 +152,6 @@ func TestMarkInterruptedRunsRespectsExcludeList(t *testing.T) {
 	}
 	if got.Status != "running" || got.ActiveRunID != run.ID {
 		t.Fatalf("excluded run's task must be untouched, got status %q active_run_id %q", got.Status, got.ActiveRunID)
-	}
-}
-
-// TestMarkInterruptedRunsRepairsOrphanedRunningTask reproduces the live-DB bug
-// behind F5: a task left 'running' with active_run_id already cleared and no
-// 'running' run at all (historic finalization wrote a non-terminal run status).
-// The old sweep's task flip was guarded by active_run_id = <dead run> and
-// skipped such tasks forever; the orphan repair must catch them.
-func TestMarkInterruptedRunsRepairsOrphanedRunningTask(t *testing.T) {
-	ctx := context.Background()
-	store, identity, task, run := newRecoveryFixture(t)
-
-	// Terminal run, cleared active_run_id...
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "interrupted"); err != nil {
-		t.Fatalf("FinishRun: %v", err)
-	}
-	// ...but the task written back to 'running' (what old binaries did when the
-	// outcome said "more work planned"). Use raw fixture setup because the
-	// current UpdateTaskStatus path now rejects this corruption through the
-	// durable lifecycle reducer.
-	if _, err := store.db.ExecContext(ctx,
-		`UPDATE tasks SET status = 'running', current_summary = 'midway' WHERE tenant_id = ? AND id = ?`,
-		identity.TenantID, task.ID,
-	); err != nil {
-		t.Fatalf("seed legacy orphan: %v", err)
-	}
-
-	count, err := store.MarkInterruptedRuns(ctx, 0)
-	if err != nil {
-		t.Fatalf("MarkInterruptedRuns: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("recovered = %d, want 1 orphaned task", count)
-	}
-	got, err := store.GetTask(ctx, identity.TenantID, task.ID)
-	if err != nil {
-		t.Fatalf("GetTask: %v", err)
-	}
-	if got.Status != "interrupted" || got.ActiveRunID != "" {
-		t.Fatalf("orphaned task = status %q active_run_id %q, want interrupted/empty", got.Status, got.ActiveRunID)
-	}
-	if got.CurrentSummary != "midway" {
-		t.Fatalf("orphan repair must not overwrite an existing summary, got %q", got.CurrentSummary)
 	}
 }
 

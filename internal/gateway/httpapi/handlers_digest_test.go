@@ -82,7 +82,7 @@ func TestDigestReportsAwayStateAndActiveRun(t *testing.T) {
 				t.Fatal(err)
 			}
 		default:
-			if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, "outcome of "+title, nil); err != nil {
+			if err := store.UpdateThreadSummary(ctx, identity.TenantID, task.ID, "outcome of "+title, nil); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -281,6 +281,8 @@ func TestDigestDoesNotRedateAnOldInterruptionDuringLifecycleReconcile(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The interruption left work evidence (next steps), which is what keeps an
+	// interrupted Run resumable Attention rather than settled history.
 	if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{
 		Identity:   *identity,
 		RunID:      run.ID,
@@ -288,6 +290,7 @@ func TestDigestDoesNotRedateAnOldInterruptionDuringLifecycleReconcile(t *testing
 		TaskID:     task.ID,
 		TaskStatus: "interrupted",
 		Summary:    "stopped before completion",
+		NextSteps:  []string{"finish the binary search implementation"},
 	}); err != nil {
 		t.Fatal(err)
 	}

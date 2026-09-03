@@ -6,13 +6,13 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-09-02
+**Snapshot:** 2026-09-03
 
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 63 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
+- Release corpus: 64 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
   declare `model_required: false`.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -37,7 +37,7 @@
 | Gate | State | Evidence still required |
 | --- | --- | --- |
 | Personal daily-driver | Partial | Continue real coding/operations use and close regressions from daily run reviews. |
-| Phase-1 continuity | Partial | CLI-to-IM approval has process-level presence, detached-immediate/T1 escalation, parked answerability, and daemon-restart continuation recovery. Natural language now reaches one audited Main path: active input durably steers; idle input can progressively search/inspect/select person-scoped work; same-domain continuation claims atomically, scope/checkpoint mismatches transfer exactly, and explicit bound-endpoint delivery overrides survive restart. Repeat the full live scenarios across real IM transports, restart, correction, and stranger isolation. |
+| Phase-1 continuity | Partial | CLI-to-IM approval has process-level presence, detached-immediate/T1 escalation, parked answerability, and daemon-restart continuation recovery. Natural language now reaches one audited Main path: active input durably steers; idle input can progressively search/inspect/select person-scoped work; a validated same-domain resume is claimed in the same turn before any effect (one Main Run, no queue) while a workspace, execution-root, or checkpoint mismatch transfers to a correctly scoped exact-parent child with its durable inherited plan established before Main starts, and explicit bound-endpoint delivery overrides survive restart. Repeat the full live scenarios across real IM transports, restart, correction, and stranger isolation. |
 | npm beta distribution | Partial | Clean tagged release through GitHub Actions plus install/update/daemon-restart verification on Linux and macOS. |
 | SaaS / enterprise | Deferred | No implementation until maintainers approve a dedicated strategy decision and its evidence gates. |
 
@@ -46,7 +46,7 @@
 | Area | State | Current boundary |
 | --- | --- | --- |
 | Daemon gateway | Done | CLI, IM, cron, and HTTP use one daemon-owned runtime, queue, auth manager, and control database. |
-| Identity and continuity | Done | Person identity spans bound endpoints; transcripts stay local; tasks, runs, approvals, handoffs, and memory are durable. |
+| Identity and continuity | Done | Person identity spans bound endpoints; transcripts stay local; Threads, Runs, approvals, handoffs, and memory are durable. |
 | Agent loop | Done | Native tools, structured outcomes, bounded elastic budgets, cancellation, retry classification, durable versioned Run plans, strategy-aware failure recovery, evidence-derived verification, and an operator-owned prompt workspace are implemented. New Runs use recovery contract v1: server-issued plan-step ids survive reorder/update, the control projection—not the in-memory UI cache—guards successful completion, tool effects correlate with plan/version/strategy/environment and hashed result evidence, and loop checkpoints reference that durable state. The injected recovery policy permits one diagnostic correction, refuses repeated/exhausted attempts before dispatch, requires observation after an unknown effect, and releases its guard only after new evidence or state; explicit `verification_required` steps cannot finish without evidence-derived passed verification. Eligible daemon/provider interruptions enqueue one exact-parent recovery child below new foreground work; uncertain effects enter verification-only mode, whose trusted read-only surface and dispatch guard prevent replayed mutation. Specialist waits retain ownership, recovery children do not recurse, and historical Runs remain capability-inert at version zero. Interruptions that cannot continue automatically expose one person-scoped handoff across immediate CLI/IM results, notifications, `/status`, `/task`, and HTTP with the original goal, plan state, uncertain effects, attempted strategies, unlock condition, and exact resume path; `gateway.automatic_run_recovery: false` stops both new scheduling and claim-time launch without discarding that evidence. Prompt files are startup-frozen, strictly validated, semantically hashed, revision-pinned for durable maintenance, and cannot remove locked quality/safety contracts; an invalid active workspace degrades visibly to the matching last-known-good snapshot or built-in defaults without taking CLI, IM, cron, and HTTP agent work offline. An always-on foreground delivery and evidence floor also covers tool-free direct answers. Tool guidance is derived from each role's actual capabilities; background review uses a bounded memory/session surface; delegated workers preserve scoped parent evidence without inheriting parent lifecycle or loop state; and compaction preserves verification, failed attempts, waits, identifiers, and files behind an untrusted-data fence. Legacy files migrate recoverably on edit, current revision caches self-repair, and restored historical revisions can explicitly resume paused work. |
 | Execution engine | Partial | Typed scopes, environment snapshots, sandbox policy, durable watcher execution, and tool profiles exist. Authenticated local CLI runs support repeatable, invocation-local `--add-dir` roots that are frozen across queue/recovery, included in scoped tools and project context, and conflict-scheduled by overlapping physical paths without changing workspace trust. Linux isolation is strongest; macOS uses approval-controlled host execution. |
 | Worker scheduling | Partial | Durable queue and worker-pool seams exist; personal edition intentionally defaults to one active run per person while multi-run ownership remains deferred. |
@@ -54,7 +54,7 @@
 | Provider cost visibility | Done | OpenAI-compatible and Responses cache usage is normalized; role/VCR wrappers preserve adapter request prefix/block fingerprints and report explicit unsupported states without storing prompt content; `/diag context` distinguishes total provider requests from prompt-only assembly, while `selfmind usage` and `selfmind report daily` provide paged local execution/token trends, schema share, and approval-continuation attribution. Provider pricing remains external. |
 | Context lifecycle | Done | Person work spine, bounded composer slices, project instructions, deterministic workspace-knowledge indexing, artifacts, recall, and compaction are integrated. |
 | Memory | Partial | Person memory is preference-only: cross-endpoint `/remember`/`/forget` are the deterministic primary intake, short natural-language preferences remain eligible for asynchronous analysis without language-specific keyword routing, the post-run analyzer (v4) judges explicitly stated preferences only, and the deterministic apply layer skips environment/project targets and audits (never applies) legacy flat fact arrays — replay-proof for frozen legacy proposals. The per-turn fact extractors and their `auto_extract_*` config keys are removed. Historical environment rows stay readable and archive reversibly via `selfmind maintenance memory-archive-environment`. Canonical governance, pin/correct/forget, transient filtering, FTS-safe lexical/CJK retrieval, JSON-fenced and narrowly bounded multilingual query expansion, access tracking, audits, output-overlap recall telemetry, and per-run intake disposition counts exist. Governance due state is durable per person, catches up overdue work after startup, retries foreground deferral promptly, distinguishes bounded partial progress from a complete scan, and exposes remaining backlog plus report age/scheduler reasons. These signals are diagnostic rather than proof of causal use; preference usefulness, reuse, and duplicate rates still need sustained measurement. |
-| Tasks | Partial | Every root run owns a fresh task and continuation authority is the atomically claimed `task_runs.parent_run_id` edge (schema v7, unique-index backed with cross-connection race evidence; legacy `resumed_by_run_id` is read-only). KEEP/MOVE/NEW/INBOX routing is removed; task status and summaries are derived projections; numbered task/resume commands bind endpoint-local snapshots while stable ids remain restart-safe. Explicit completion preserves history and is reversible through `/resume`. Task References are aliases/search hints, and `current_task` is display-only. Structured approval, clarification, and reply metadata remain durable and person-partitioned. Active natural language is durably steered to Main; idle language starts one audited Main Run with person-scoped `work_search`, `work_inspect`, and advisory `work_select`. Related active input may revise the plan; independent or exact historical input queues. Same-domain RESUME atomically moves the interaction onto the validated task/parent, while scope or checkpoint mismatch creates an exact-parent transfer child without switching execution authority. One pre-effect correction is auditable; post-effect retarget stops and asks. OBSERVE interactions stay auditable but hidden from ordinary task lists. Explicit `set_delivery_target` uses only bound server-issued steering input and persists through schema v10. `semantic_recall` is optional/fail-open, `fast_classifier` has no continuity authority, and the former run-external admission/configuration is deleted. Packed and daily-driver npm/launchd smoke is green; sustained real-IM evidence remains. Paging/search, pin/complete/archive/rename/merge, and retention remain. |
+| Work history | Partial | Schema v11 has one durable Thread aggregate and one Run execution authority: ordinary roots are retained as `interaction + unlisted`, work evidence (plans, side-effect tool rows, approvals/clarifications/watchers, parent edges, next steps) promotes in place while lifecycle and read-only tools never do, and Thread has no lifecycle status or `current_task` pointer. Attention is derived per exact Run from live execution, pending approval/clarification, watchers, and unclaimed resumable outcomes: only the latest Run of a Thread is resumable, `interrupted` counts only with work evidence, same-channel items rank first, and `/status`, the attach digest, task cards, and the compatibility `Task.status` vocabulary (`active|needs_attention|monitoring|resumable`, `done`, `archived`) read that one derivation. `/tasks` displays the projection; `/task <n> complete` and an idle `/stop` dismiss only the exact Run and refuse while a pending approval, clarification, or live watcher exists; explicit resume reverses dismissal or archive. Numbered commands bind endpoint-local snapshots while stable Run ids remain restart-safe; a Thread id resumes only one unambiguous unresolved Run. Search covers complete retained titles, Run inputs, handoffs, and paths, including unlisted and archived history. Structured reply edges and `runs.parent_run_id` remain person/scope validated and unique-index protected; a validated natural-language RESUME in the same execution domain is claimed atomically at `work_select` time with the parent's plan restored and its resume context returned to Main in the same turn, while a domain or checkpoint mismatch creates a correctly scoped transfer child with inherited durable plan before Main starts. Active natural language is steered, daemon text cannot steer, `semantic_recall` is optional/fail-open, and `fast_classifier` has no continuity authority. `reset-work-history` provides dry-run, live-work refusal, verified backup, and tenant-scoped cleanup that removes in-flight Skill learning evidence and Thread-keyed memory sessions while preserving identity, settings, memory preferences, provider state, grants, and published Skill packages; the v10-to-v11 upgrade keeps legacy kinds and maps hidden labels to unlisted under orphan and parent-edge invariants. Go/eval gates are implemented; sustained real CLI/IM and restart evidence remains. |
 | Background maintenance | Done | Debounced bounded batches, immutable replay jobs, restart-safe retry exhaustion, shared retry policy, stable semantic roles with a shared auxiliary floor, provider/contract circuit identity, diagnostics, migration tools, and dispatch-time reasoning/output bounds exist. Retryable connection failures also retain a credential-free network-route fingerprint, so direct/proxy and local-listener changes release delayed or exhausted learning jobs without replaying unrelated provider, prompt, or policy blocks. |
 | Skills | Partial | Runtime discovery uses a budgeted metadata catalog and server-issued candidate refs; provider catalogs contain no per-Skill tools. Model, slash, and binding paths converge on one immutable package activation with context-proportional main delivery, explicit section/resource paging, compaction protection, active/candidate/previous/quarantined versions, and Doctor receipt checks. Automatically learned Skills default to a control-managed logical-workspace root outside the repository and are not discoverable from another workspace. Externally authored packages are usable: read-only roots are enumerated by package manifest when one is declared and otherwise scanned recursively within a fixed depth and exclusion set, `~/.agents/skills` is a cross-vendor root below the writable user root, names qualify as `source:name` with the discovery path as last-resort disambiguator, a typed ambiguous name is refused rather than resolved by precedence, and an author's model-invocation opt-out keeps a Skill user-invocable only. Curator authorization uses the exact production delivery builder, paged legacy repairs are non-growing, bundles share one executing-agent budget, and `/skills stats` derives from durable activations/work-unit outcomes. The cassette-backed local-full release gate is green; sustained production and installed-binary/daemon evidence remain open. |
 | Safe self-evolution | Partial | Terminal work-unit observations, neutral parked waits, comparable cohorts, frozen curator package proposals, environment-bound failure guards, evidence snapshots, quarantine, and compatible-previous rollback checks exist. Ordinary workflow success is observation only and cannot increment shadow matches, revive degraded candidates, or enable `batch_read`; runtime advice requires a separately verified comparison contract that the current profiler does not create. Three independent, comparable, verified work units may publish a workspace-scoped Skill when their procedures use eligible built-in tools, without granting execution authority. Repairs combine declared and daemon-observed categories: deterministic interface drift may publish after one verified recovery, workspace-scoped stable preconditions after one, semantic drift after three independent recoveries, and not-applicable/transient evidence cannot auto-publish. Schema v5 persists dependency/environment fingerprints and last verification time for bounded review nominations. User-global widening and sustained real-workflow validation remain open. |
@@ -70,17 +70,22 @@ limitation. It does not mean the area should be redesigned from scratch.
 
 ## Highest-Value Next Work
 
-1. **Accumulate release evidence on the personal edition.** Use daily-driver
+1. **Validate Thread history through installed daily-driver use.** Exercise
+   unlisted direct answers, deterministic promotion, exact-Run Attention,
+   dismissal/reopen, cross-endpoint resume, daemon restart, and the backed-up
+   local history reset. Fix correctness defects before calling schema v11
+   released.
+2. **Accumulate release evidence on the personal edition.** Use daily-driver
    runs to measure successful completion, interruption/recovery, approval
    latency, watcher finalization, IM delivery, cache usage, and maintenance
    health. Include the cassette-backed Skill lifecycle suite, full selfcheck,
    and installed-binary/daemon verification before treating the presentation
    contract as released. Use `selfmind report daily` as the local baseline and
    fix observed correctness defects before speculative platform work.
-2. **Measure memory usefulness, not record count.** Track query-relevant
+3. **Measure memory usefulness, not record count.** Track query-relevant
    canonical recall, injection, reinforcement, supersession, duplicates, and
    user correction. Improve selection/write policy only from those traces.
-3. **Validate Skill lifecycle and safe evolution on repeated personal workflows.**
+4. **Validate Skill lifecycle and safe evolution on repeated personal workflows.**
    Confirm that task bindings reduce directory/context cost, work-unit Skill
    switches expire old bodies, comparable cohorts publish narrow procedures,
    ordinary write/Shell publication never bypasses execution policy, verified
@@ -89,7 +94,7 @@ limitation. It does not mean the area should be redesigned from scratch.
    still completes through ordinary planning. Collect evidence before building
    real Fast Path comparison/canary machinery; ordinary observations are not
    shadow evidence.
-4. **Prepare the next npm beta only after the full gate passes.** The release
+5. **Prepare the next npm beta only after the full gate passes.** The release
    needs a clean Action run, platform package smoke tests, fresh install,
    update, service restart, and rollback evidence.
 
@@ -128,16 +133,17 @@ limitation. It does not mean the area should be redesigned from scratch.
 
 ## Plan Lifecycle
 
-- Active plan: `docs/plans/main-turn-work-continuity.md`, approved by the
-  project owner for review on 2026-09-09. It replaces the temporary run-external
-  Main continuity admission with durable active-Run steer, one ordinary idle
-  Main turn, progressive work-history tools, and gateway-validated continuation
-  commits. All implementation batches are landed; the plan stays active for
-  installed-package and repeated real CLI/IM evidence through its review date.
-- Paused plans: `docs/plans/daily-driver-closure.md`, approved for review on
-  2026-09-11, and `docs/plans/external-skill-packages.md`, approved for review
-  on 2026-09-25. Neither scope is withdrawn; they resume when the active slot
-  frees.
+- Active plan: `docs/plans/threaded-work-history-redesign.zh-CN.md`, approved
+  by the project owner for review on 2026-09-16. It replaces the user-maintained
+  Task lifecycle with Thread history, Run-owned execution state, and derived
+  Attention without adding an ingress classifier or a second foreground model
+  call.
+- Paused plans: `docs/plans/main-turn-work-continuity.md`, approved for review
+  on 2026-09-09; `docs/plans/daily-driver-closure.md`, approved for review on
+  2026-09-11; and `docs/plans/external-skill-packages.md`, approved for review
+  on 2026-09-25. The continuity plan's remaining real CLI/IM evidence gates are
+  carried by the active Thread plan; the other scopes resume when the active
+  slot frees.
 - Historical plans remain discoverable through `docs/README.md` as archived
   records or decisions. They do not contribute priorities.
 - `docs/manifest.yaml` is the lifecycle registry. `selfmind docs check` enforces

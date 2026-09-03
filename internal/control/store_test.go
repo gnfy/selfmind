@@ -100,8 +100,8 @@ func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentTask failed: %v", err)
 	}
-	if currentTask == nil || currentTask.ID != task.ID || currentTask.CurrentSummary != "half done" {
-		t.Fatalf("current task mismatch: %+v", currentTask)
+	if currentTask != nil {
+		t.Fatalf("finished history must not become an implicit current task: %+v", currentTask)
 	}
 	handoff, err := store.LatestHandoff(ctx, task.ID)
 	if err != nil {
@@ -214,6 +214,11 @@ func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
 	}
 	run, err := store.StartRun(ctx, task, "telegram", "do work")
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Work was in flight: a durable plan keeps the later interruption visible
+	// as resumable state instead of settling an evidence-free run.
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "do work", []RunPlanStepInput{{Step: "prepare the work", Status: "completed"}, {Step: "do the work", Status: "in_progress"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.UpdateRunHeartbeat(ctx, identity.TenantID, run.ID); err != nil {
@@ -608,12 +613,12 @@ CREATE TABLE task_queue (
 	defer store.Close()
 
 	if _, err := store.db.ExecContext(ctx, `
-INSERT INTO task_events (id, cursor, task_id, type, visibility, idempotency_key, created_at)
+INSERT INTO task_events (id, cursor, thread_id, type, visibility, idempotency_key, created_at)
 VALUES ('event-1', 1, 'task-1', 'test', 'task', 'stable-key', 1);`); err != nil {
 		t.Fatalf("insert after migration: %v", err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
-INSERT INTO task_events (id, cursor, task_id, type, visibility, idempotency_key, created_at)
+INSERT INTO task_events (id, cursor, thread_id, type, visibility, idempotency_key, created_at)
 VALUES ('event-2', 2, 'task-1', 'test', 'task', 'stable-key', 2);`); err == nil {
 		t.Fatal("duplicate event idempotency key must be rejected after migration")
 	}
@@ -669,7 +674,7 @@ VALUES ('legacy-effect', 'tenant-a', 'task-a', 'run-a', 'test', 1);`); err != ni
 		t.Fatalf("legacy effect was not preserved: %v, %v", owned, err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
-INSERT INTO effect_receipts (effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+INSERT INTO effect_receipts (effect_key, tenant_id, thread_id, run_id, kind, delivery_enqueued, created_at)
 VALUES ('legacy-effect', 'tenant-b', 'task-b', 'run-b', 'test', 0, 2);`); err != nil {
 		t.Fatalf("tenant-scoped effect key was not enabled: %v", err)
 	}
@@ -780,11 +785,9 @@ func TestPersonSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCreateTaskStartsNonRunning pins the fix for the live phantom-running
-// bug: a freshly created task (e.g. via /new) must NOT be 'running' — nothing
-// is executing, and 'running' made the stuck-run sweeper flip it to
-// 'interrupted'. A real run sets 'running' via StartRun.
-func TestCreateTaskStartsNonRunning(t *testing.T) {
+// TestCreateThreadDoesNotCreateExecutionState pins the Thread/Run boundary: a
+// newly retained history group does not imply that anything is executing.
+func TestCreateThreadDoesNotCreateExecutionState(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
 	if err != nil {
@@ -799,19 +802,14 @@ func TestCreateTaskStartsNonRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Status == "running" {
-		t.Fatalf("a freshly created task must not be 'running' (nothing executes yet); got %q", task.Status)
+	if task.ActiveRunID != "" {
+		t.Fatalf("a freshly created thread has an active Run: %+v", task)
 	}
-	switch task.Status {
-	case "done", "completed", "cancelled", "failed":
-		t.Fatalf("a freshly created task must be non-terminal (resumable); got %q", task.Status)
-	}
-	// A boot/periodic sweep must NOT touch it (only status='running' rows).
+	// A boot/periodic sweep only inspects authoritative Run rows.
 	if n, err := store.MarkInterruptedRuns(ctx, 0); err != nil || n != 0 {
 		t.Fatalf("sweep should ignore a new task: n=%d err=%v", n, err)
 	}
-	got, _ := store.GetTask(ctx, id.TenantID, task.ID)
-	if got == nil || got.Status == "interrupted" {
-		t.Fatalf("new task must not become interrupted; got %+v", got)
+	if runs, err := store.ListTaskRuns(ctx, id.TenantID, task.ID, 10); err != nil || len(runs) != 0 {
+		t.Fatalf("new thread unexpectedly owns Runs: %+v err=%v", runs, err)
 	}
 }

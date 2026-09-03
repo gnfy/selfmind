@@ -1,22 +1,27 @@
 id: timeline_tasks_view
-title: "scenarios 6: /tasks aggregates open work; done work collapses"
+title: "derived Attention lists an exact resumable Run"
 suite: timeline
 workspace: "."
 channel: cli
 model_required: false
 
-# Scenario 6: control-command turns only — no model calls, so this case runs
-# offline without a cassette. /new opens a label; /tasks must render the
-# aggregated open-work view (not a flat per-message dump).
+# Control-command turns only: a waiting Run is actionable, while settled
+# history is absent from the default Attention view.
+setup:
+  task:
+    title: "时间线视图验证"
+    parked_runs:
+      - input: "执行验证并等待确认"
+        status: waiting_user
+
 turns:
-  - input: "/new 时间线视图验证"
   - input: "/tasks"
 
 expect:
   status: completed
   max_tool_calls: 0
   max_duration_seconds: 60
-  contains: ["Open tasks:", "时间线视图验证"]
+  contains: ["Needs attention:", "时间线视图验证", "resume: run_"]
 
 checks:
   no_mojibake: true

@@ -51,7 +51,7 @@ func TestCommitWorkSelectionQueuesExactContinuation(t *testing.T) {
 	}
 }
 
-func TestCommitWorkSelectionClaimsSameDomainInteractionDirectly(t *testing.T) {
+func TestCommitWorkSelectionQueuesSameDomainExactContinuation(t *testing.T) {
 	ctx := context.Background()
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
@@ -75,14 +75,15 @@ func TestCommitWorkSelectionClaimsSameDomainInteractionDirectly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if commit == nil || !commit.Direct || commit.QueueID != "" || commit.Task == nil || commit.Task.ID != targetTask.ID {
+	if commit == nil || commit.QueueID == "" || commit.Rejected {
 		t.Fatalf("commit = %+v", commit)
 	}
-	if interactionRun.TaskID != targetTask.ID || interactionRun.ParentRunID != targetRun.ID {
-		t.Fatalf("interaction run was not updated in place: %+v", interactionRun)
+	if interactionRun.TaskID != interactionTask.ID || interactionRun.ParentRunID != "" {
+		t.Fatalf("the completed interpretation run was mutated in place: %+v", interactionRun)
 	}
-	if placeholder, _ := store.GetTask(ctx, identity.TenantID, interactionTask.ID); placeholder != nil {
-		t.Fatalf("placeholder survived direct commit: %+v", placeholder)
+	queued, _ := store.GetQueued(ctx, identity.TenantID, commit.QueueID)
+	if queued == nil || queued.ReplyToRunID != targetRun.ID || queued.TaskID != targetTask.ID {
+		t.Fatalf("exact continuation queue row = %+v", queued)
 	}
 }
 
@@ -241,7 +242,7 @@ func TestNaturalProgressQuestionUsesReferenceInteractionWithoutClaimingTheRun(t 
 		t.Fatalf("observe response: status=%d resp=%+v", status, resp)
 	}
 	interaction, _ := store.GetTask(ctx, identity.TenantID, resp.Task.ID)
-	if interaction == nil || interaction.Kind != "interaction" || interaction.Visibility != "hidden" {
+	if interaction == nil || interaction.Kind != control.ThreadKindInteraction || interaction.Visibility != control.ThreadVisibilityUnlisted {
 		t.Fatalf("observe interaction = %+v", interaction)
 	}
 	if interaction.ID == targetTask.ID || resp.Run.ParentRunID != "" {
@@ -297,7 +298,7 @@ func TestIdleMainSelectionCommitsThroughNormalRunAndHidesInteractionLabel(t *tes
 		t.Fatalf("selected queue=%+v err=%v", queued, err)
 	}
 	interactionTask, _ := store.GetTask(ctx, identity.TenantID, resp.Task.ID)
-	if interactionTask == nil || interactionTask.Kind != "interaction" || interactionTask.Visibility != "hidden" {
+	if interactionTask == nil || interactionTask.Kind != control.ThreadKindInteraction || interactionTask.Visibility != control.ThreadVisibilityUnlisted {
 		t.Fatalf("interaction projection = %+v", interactionTask)
 	}
 	provider.release()
@@ -311,7 +312,10 @@ func TestIdleMainSelectionCommitsThroughNormalRunAndHidesInteractionLabel(t *tes
 	t.Fatalf("selected continuation stayed active after release")
 }
 
-func TestIdleMainSelectionDirectlyContinuesSameExecutionDomain(t *testing.T) {
+// A same-domain resume is claimed by work_select inside the interpretation
+// turn: the parent's plan is restored on the continuing run, nothing is
+// queued, and the whole continuation costs one Main run.
+func TestIdleMainSelectionContinuesSameDomainRunInTurn(t *testing.T) {
 	ctx := context.Background()
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
@@ -321,6 +325,12 @@ func TestIdleMainSelectionDirectlyContinuesSameExecutionDomain(t *testing.T) {
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	targetTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "old release", Channel: "cli"})
 	targetRun, _ := store.StartRun(ctx, targetTask, "cli", "old release")
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, targetRun.ID, "finish the release", []control.RunPlanStepInput{
+		{Step: "verify the build", Status: "completed"},
+		{Step: "promote the release", Status: "in_progress"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	_ = store.FinishRun(ctx, identity.TenantID, targetRun.ID, "interrupted")
 	provider := &workSelectionProvider{targetRunID: targetRun.ID, childStarted: make(chan struct{}), releaseChild: make(chan struct{})}
 	defer provider.release()
@@ -336,19 +346,40 @@ func TestIdleMainSelectionDirectlyContinuesSameExecutionDomain(t *testing.T) {
 	if status != 200 || resp.Run == nil || resp.Task == nil {
 		t.Fatalf("interaction response: status=%d resp=%+v", status, resp)
 	}
-	if resp.Task.ID != targetTask.ID || resp.Run.TaskID != targetTask.ID || resp.Run.ParentRunID != targetRun.ID {
-		t.Fatalf("direct continuation response = task:%+v run:%+v", resp.Task, resp.Run)
+	if resp.Task.ID != targetTask.ID || resp.Run.ParentRunID != targetRun.ID || (resp.Turn != nil && resp.Turn.QueueID != "") {
+		t.Fatalf("same-domain selection must continue the parent inside the interpretation run: task:%+v run:%+v turn:%+v", resp.Task, resp.Run, resp.Turn)
 	}
 	queued, _ := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
-	if len(queued) != 0 {
-		t.Fatalf("same-domain continuation unexpectedly queued: %+v", queued)
+	started, _ := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusStarted)
+	if len(queued)+len(started) != 0 {
+		t.Fatalf("a direct continuation must not queue a child: queued=%+v started=%+v", queued, started)
+	}
+	events, err := store.ListRunEvents(ctx, identity.TenantID, identity.PersonID, targetTask.ID, resp.Run.ID, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var committed, inherited bool
+	for _, event := range events {
+		switch event.Type {
+		case "work.selection_committed":
+			committed = strings.Contains(string(event.Payload), `"commit_mode":"direct"`)
+		case "plan.updated":
+			inherited = inherited || (strings.Contains(string(event.Payload), `"source":"parent_run"`) && strings.Contains(string(event.Payload), "promote the release"))
+		}
+	}
+	if !committed || !inherited {
+		t.Fatalf("direct continuation must record its commit and restore the parent plan: %+v", events)
+	}
+	if unresolved, _ := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, targetTask.ID, 10); len(unresolved) != 0 {
+		t.Fatalf("the parent must be claimed by the continuing run: %+v", unresolved)
 	}
 	provider.mu.Lock()
 	calls := provider.calls
 	provider.mu.Unlock()
 	if calls != 2 {
-		t.Fatalf("same-domain continuation used %d model calls, want one normal tool round-trip", calls)
+		t.Fatalf("same-domain continuation used %d model calls, want one interpretation turn that continues the work", calls)
 	}
+	provider.release()
 }
 
 func TestLiveCorrectionReplacesImplicitSelectionBeforeEffects(t *testing.T) {
@@ -405,12 +436,21 @@ func TestLiveCorrectionReplacesImplicitSelectionBeforeEffects(t *testing.T) {
 		if got.status != 200 || got.resp.Run == nil || got.resp.Task == nil {
 			t.Fatalf("corrected response: status=%d resp=%+v", got.status, got.resp)
 		}
-		if got.resp.Task.ID != correctTask.ID || got.resp.Run.ParentRunID != correct.ID {
+		// Both targets share the interaction's execution domain, so the first
+		// selection is claimed in place and the pre-effect correction moves the
+		// same run onto the corrected parent; nothing is queued.
+		if got.resp.Task.ID != correctTask.ID || got.resp.Run.ParentRunID != correct.ID || (got.resp.Turn != nil && got.resp.Turn.QueueID != "") {
 			provider.mu.Lock()
 			calls := provider.calls
 			provider.mu.Unlock()
 			events, _ := store.ListRunEvents(ctx, identity.TenantID, identity.PersonID, got.resp.Task.ID, got.resp.Run.ID, 20)
 			t.Fatalf("corrected continuation = task:%+v run:%+v calls=%d events=%+v content=%q", got.resp.Task, got.resp.Run, calls, events, got.resp.Content)
+		}
+		if queued, _ := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); len(queued) != 0 {
+			t.Fatalf("a corrected direct continuation must not queue work: %+v", queued)
+		}
+		if correctCandidates, _ := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, correctTask.ID, 10); len(correctCandidates) != 0 {
+			t.Fatalf("corrected parent must be claimed: %+v", correctCandidates)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("corrected interaction did not finish")

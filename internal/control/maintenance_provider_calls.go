@@ -69,7 +69,7 @@ func (s *Store) RecordMaintenanceProviderCall(ctx context.Context, call Maintena
 		call.CreatedAt = time.Now()
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO maintenance_provider_calls
-		(tenant_id, person_id, task_id, run_id, role, provider, model, route_id, candidate_index, status,
+		(tenant_id, person_id, thread_id, run_id, role, provider, model, route_id, candidate_index, status,
 		 trigger_class, finish_reason, error_class, input_tokens, output_tokens,
 		 cache_read_input_tokens, cache_miss_input_tokens, cache_creation_input_tokens,
 		 reasoning_output_tokens, cache_usage_reported, batch_size, latency_ms, created_at)

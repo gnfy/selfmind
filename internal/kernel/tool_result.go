@@ -38,6 +38,7 @@ const (
 type ToolResultEnvelope struct {
 	Raw                 string
 	Preview             string
+	DisplayError        string
 	ModelContent        string
 	ErrorCode           string
 	ErrorCategory       string
@@ -215,6 +216,7 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 	envelope := ToolResultEnvelope{
 		Raw:           msg,
 		Preview:       textutil.Truncate(msg, toolResultPreviewBytes),
+		DisplayError:  compactToolDisplayError(safeError, effectState),
 		ModelContent:  textutil.Truncate(modelContent, 4000),
 		ErrorCode:     code,
 		ErrorCategory: category,
@@ -235,6 +237,39 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 		envelope.DiagnosticTruncated = len(rawError) > 2048
 	}
 	return envelope
+}
+
+// compactToolDisplayError is the human-facing error surface. Structured
+// recovery metadata and diagnostic instructions belong in ModelContent and
+// durable event fields; repeating them in the transcript makes a recoverable
+// attempt look like a fatal application error.
+func compactToolDisplayError(message, effectState string) string {
+	message = textutil.CleanUTF8(message)
+	var lines []string
+	for _, line := range strings.Split(message, "\n") {
+		line = strings.TrimSpace(line)
+		lower := strings.ToLower(line)
+		if line == "" || strings.HasPrefix(lower, "error_code:") ||
+			strings.HasPrefix(lower, "error_class:") || strings.HasPrefix(lower, "failure_phase:") ||
+			strings.HasPrefix(lower, "retryability:") || strings.HasPrefix(lower, "effect_state:") ||
+			strings.HasPrefix(lower, "alternatives:") || strings.HasPrefix(lower, "selfmind diagnostic instruction:") ||
+			strings.HasPrefix(lower, "selfmind instruction:") {
+			continue
+		}
+		lines = append(lines, line)
+		if len(lines) == 2 {
+			break
+		}
+	}
+	brief := strings.Join(lines, " ")
+	if brief == "" {
+		brief = "The tool could not complete this attempt."
+	}
+	brief = textutil.Truncate(brief, toolResultPreviewBytes)
+	if strings.EqualFold(strings.TrimSpace(effectState), "not_dispatched") {
+		return "Skipped before execution: " + brief
+	}
+	return brief
 }
 
 // internalStorageErrorLeak recognizes unwrapped internal storage failures whose
@@ -316,6 +351,7 @@ func packageDispatchedToolFailureCtx(ctx context.Context, name, raw string, err 
 		// Preview is a user-facing surface, so it shows the tool's own output
 		// rather than the diagnostic capture that carries the raw cause.
 		Preview:             textutil.Truncate(outputExcerpt, toolResultPreviewBytes),
+		DisplayError:        errEnv.DisplayError,
 		ModelContent:        textutil.Truncate(modelContent, 6000),
 		ErrorCode:           errEnv.ErrorCode,
 		ErrorCategory:       errEnv.ErrorCategory,

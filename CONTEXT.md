@@ -57,3 +57,43 @@ _Avoid_: Process found, endpoint healthy
 The resumable workflow that establishes missing readiness without redoing a
 readiness stage already satisfied elsewhere.
 _Avoid_: Model configuration authority, one-shot setup wizard
+
+## Work History
+
+**Interaction**:
+One user request and its answer, retained as searchable history whether or not
+it represents ongoing work.
+_Avoid_: Task, memory
+
+**Conversation**:
+The endpoint-local transcript visible in one channel or client.
+_Avoid_: Thread, shared transcript, session
+
+**Run**:
+One accountable agent execution attempt and the sole owner of execution state.
+_Avoid_: Task status, thread status
+
+**Thread**:
+A reversible grouping of related Runs with a stable title and summary; it does
+not own execution state.
+_Avoid_: Task lifecycle, conversation
+
+**Work Thread**:
+A Thread promoted into the user's ordinary work list because it has durable
+ongoing-work evidence.
+_Avoid_: Every interaction, open task
+
+**Attention**:
+The work that currently needs the person or agent to act, derived from Runs and
+pending control objects rather than stored as a Thread status; only the latest
+Run of a Thread can be resumable Attention.
+_Avoid_: Task status, inbox
+
+**Work Evidence**:
+Durable proof that a Run did work: a plan, a non-lifecycle side-effect tool
+record, an approval, clarification, or watcher, a parent edge, or next steps.
+_Avoid_: Any tool call, lifecycle tool result, message length
+
+**Memory**:
+A stable person preference or correction that should influence future work.
+_Avoid_: Work history, transcript archive, project status

@@ -310,7 +310,10 @@ type TurnStatus struct {
 	BackgroundStatus string `json:"background_status,omitempty"`
 	TaskID           string `json:"task_id,omitempty"`
 	RunID            string `json:"run_id,omitempty"`
-	Message          string `json:"message,omitempty"`
+	// QueueID correlates a turn acknowledgement with the exact daemon Run that
+	// will later drain it. Clients must not infer ownership from message text.
+	QueueID string `json:"queue_id,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type ContextBudgetInfo struct {

@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -21,10 +20,12 @@ type workSelectionCommit struct {
 	Action   string
 	RunID    string
 	QueueID  string
-	Direct   bool
-	Task     *control.Task
 	Rejected bool
-	Notice   string
+	// Direct reports that work_select already claimed the parent inside the
+	// turn: the interaction run now lives on the parent's thread and did the
+	// work itself, so finalization must neither queue a child nor demote it.
+	Direct bool
+	Notice string
 }
 
 func (c *RunCoordinator) latestWorkSelection(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run) (*workSelectionProposal, error) {
@@ -72,6 +73,13 @@ func (c *RunCoordinator) commitWorkSelection(ctx context.Context, identity *cont
 	}
 	commit := &workSelectionCommit{Action: proposal.Action, RunID: target.ID}
 	if proposal.Action == "resume" {
+		// A same-domain resume is claimed by work_select while the turn runs
+		// (ClaimInteractionContinuation); the run already carries the parent
+		// edge and the commit event. Nothing is left to queue.
+		if strings.TrimSpace(run.ParentRunID) == target.ID {
+			commit.Direct = true
+			return commit, nil
+		}
 		blocked, reason, err := c.srv.Control.RunSelectionEffectBoundary(ctx, identity.TenantID, identity.PersonID, run.ID)
 		if err != nil {
 			return nil, err
@@ -84,27 +92,12 @@ func (c *RunCoordinator) commitWorkSelection(ctx context.Context, identity *cont
 			})
 			return commit, nil
 		}
-		claimed, claimErr := c.srv.Control.ClaimInteractionContinuation(ctx, identity.TenantID, identity.PersonID, run.ID, target.ID)
-		if claimErr == nil {
-			claimedTask, err := c.srv.Control.GetTask(ctx, identity.TenantID, claimed.TaskID)
-			if err != nil || claimedTask == nil {
-				if err == nil {
-					err = fmt.Errorf("claimed continuation task is unavailable")
-				}
-				return nil, err
-			}
-			*run = *claimed
-			commit.Direct = true
-			commit.Task = claimedTask
-			commit.Notice = "The historical work was validated and continued directly in the current execution domain."
-			c.appendWorkSelectionEvent(ctx, claimedTask, run, req.Channel, "work.selection_committed", map[string]interface{}{
-				"action": proposal.Action, "run_id": target.ID, "commit_mode": "direct",
-			})
-			return commit, nil
-		}
-		if !errors.Is(claimErr, control.ErrContinuationDomainMismatch) && !errors.Is(claimErr, control.ErrParentCheckpointRequired) {
-			return nil, claimErr
-		}
+		// Main interpreted this interaction before it had the selected Run's
+		// checkpoint and execution scope. Even when both Runs share a workspace,
+		// mutating the already-finished interaction Run would leave nobody to do
+		// the selected work. Always materialize a fresh exact-parent child: its
+		// scope is frozen correctly at creation and its plan/checkpoint can be
+		// restored before Main starts.
 		queued, err := c.srv.Control.EnqueueSelectedContinuation(ctx, identity.TenantID, identity.PersonID, run.ID, target.ID, control.QueuedTask{
 			Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
 			Content: req.Content, ApprovalMode: req.ApprovalMode,

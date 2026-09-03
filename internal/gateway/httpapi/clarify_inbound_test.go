@@ -395,9 +395,6 @@ func TestGatewayClarifyPreservesQuestionOnGatewayShutdown(t *testing.T) {
 func TestStatusShowsPendingClarify(t *testing.T) {
 	daemon, store, identity, task, run := newClarifyTestServer(t)
 	ctx := context.Background()
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
 		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
 		Question: "Which environment should I deploy to?", Channel: "cli",

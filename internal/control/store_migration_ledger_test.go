@@ -181,6 +181,85 @@ func TestVersionTenMigrationAddsCapabilityInertDeliveryOverride(t *testing.T) {
 	}
 }
 
+func TestVersionElevenMigrationReplacesTaskAggregateAndKeepsRunHistory(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`CREATE TABLE tasks (
+		id TEXT PRIMARY KEY,
+		tenant_id TEXT NOT NULL,
+		person_id TEXT NOT NULL,
+		workspace_id TEXT,
+		title TEXT NOT NULL,
+		status TEXT NOT NULL,
+		kind TEXT NOT NULL DEFAULT 'work',
+		visibility TEXT NOT NULL DEFAULT 'visible',
+		pinned INTEGER NOT NULL DEFAULT 0,
+		current_summary TEXT,
+		next_steps_json TEXT,
+		blocked_reason TEXT,
+		active_run_id TEXT,
+		last_channel TEXT,
+		archived_at INTEGER,
+		last_activity_at INTEGER,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL
+	);
+	CREATE TABLE current_task (tenant_id TEXT, person_id TEXT, task_id TEXT);
+	CREATE TABLE task_runs (
+		id TEXT PRIMARY KEY,
+		task_id TEXT NOT NULL,
+		tenant_id TEXT NOT NULL DEFAULT 'default',
+		person_id TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT '',
+		started_at INTEGER NOT NULL DEFAULT 0,
+		resumed_by_run_id TEXT NOT NULL DEFAULT ''
+	);
+	INSERT INTO tasks(id, tenant_id, person_id, title, status, current_summary, created_at, updated_at)
+		VALUES('task_legacy', 'default', 'person_a', 'legacy work', 'waiting_user', 'kept summary', 1, 2);
+	INSERT INTO task_runs(id, task_id, tenant_id, person_id, status, started_at)
+		VALUES('run_legacy', 'task_legacy', 'default', 'person_a', 'waiting_user', 2);`); err != nil {
+		t.Fatal(err)
+	}
+	var migration *schemaMigration
+	for index := range orderedMigrations {
+		if orderedMigrations[index].Version == 11 {
+			migration = &orderedMigrations[index]
+			break
+		}
+	}
+	if migration == nil {
+		t.Fatal("version 11 migration is missing")
+	}
+	if err := migration.Apply(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	for _, retired := range []string{"tasks", "task_runs", "current_task"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, retired).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("retired table %s count=%d err=%v", retired, count, err)
+		}
+	}
+	var dismissed int64
+	var dismissedBy string
+	var threadID string
+	if err := db.QueryRow(`SELECT thread_id, attention_dismissed_at, attention_dismissed_by FROM runs WHERE id='run_legacy'`).Scan(&threadID, &dismissed, &dismissedBy); err != nil {
+		t.Fatal(err)
+	}
+	if threadID != "task_legacy" || dismissed != 0 || dismissedBy != "" {
+		t.Fatalf("migrated run thread=%q attention at=%d by=%q", threadID, dismissed, dismissedBy)
+	}
+	var kind, visibility, summary string
+	if err := db.QueryRow(`SELECT kind, visibility, summary FROM threads WHERE id='task_legacy'`).Scan(&kind, &visibility, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if kind != ThreadKindWork || visibility != ThreadVisibilityListed || summary != "kept summary" {
+		t.Fatalf("migrated thread kind=%q visibility=%q summary=%q", kind, visibility, summary)
+	}
+}
+
 // TestOrderedMigrationsCoverCurrentSchemaVersion pins the declaration itself:
 // the steps stay sorted, carry unique versions, and the highest one is the
 // version this binary claims to support. Without this, adding a table to

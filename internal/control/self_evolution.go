@@ -194,7 +194,7 @@ func (s *Store) MaterializeWorkflowProfile(ctx context.Context, tenantID, runID 
 	skillsJSON, _ := json.Marshal(profile.SkillVersions)
 	toolsJSON, _ := json.Marshal(profile.ToolSequence)
 	result, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_profiles(
-		run_id, tenant_id, person_id, task_id, workspace_id, workflow_signature,
+		run_id, tenant_id, person_id, thread_id, workspace_id, workflow_signature,
 		skill_versions_json, plan_hash, tool_sequence_json, tool_calls, tool_failures,
 		provider_calls, duration_ms, input_tokens, output_tokens, billed_input_tokens,
 		outcome_status, verification_state, read_only, applied_candidate_id, created_at)

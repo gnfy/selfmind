@@ -89,7 +89,7 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 	defer tx.Rollback()
 
 	var contractVersion int
-	if err := tx.QueryRowContext(ctx, `SELECT recovery_contract_version FROM task_runs WHERE tenant_id=? AND id=?`, tenant, runID).Scan(&contractVersion); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).Scan(&contractVersion); err != nil {
 		return RunPlanProjection{}, err
 	}
 	if contractVersion < RunRecoveryContractVersion {
@@ -127,6 +127,9 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 
 	hash := hashRunPlanSteps(steps, stepWorkUnits)
 	if previous != nil && previous.ContentHash == hash {
+		if err := promoteThreadForRunTx(ctx, tx, tenant, runID); err != nil {
+			return RunPlanProjection{}, err
+		}
 		if err := tx.Commit(); err != nil {
 			return RunPlanProjection{}, err
 		}
@@ -149,6 +152,16 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
 			step.Step, step.Status, step.SuccessCriteria, boolInt(step.VerificationRequired), step.RelatedTaskID, stepWorkUnits[i],
 			boolInt(isRunPlanBoundary(steps, i)), now.Unix()); err != nil {
+			return RunPlanProjection{}, err
+		}
+	}
+	// A durable MULTI-STEP Plan is deterministic evidence that this interaction
+	// represents ongoing work; one snapshotted step is not, or a one-shot answer
+	// that records its lone step would enter the work list. Promotion is part of
+	// the same transaction as the plan snapshot, so the work list cannot miss
+	// committed planned work. runWorkEvidenceSQL applies the same step bound.
+	if len(steps) > 1 {
+		if err := promoteThreadForRunTx(ctx, tx, tenant, runID); err != nil {
 			return RunPlanProjection{}, err
 		}
 	}
@@ -358,7 +371,7 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 		return nil
 	}
 	var contractVersion int
-	if err := s.db.QueryRowContext(ctx, `SELECT recovery_contract_version FROM task_runs WHERE tenant_id=? AND id=?`, normalizeTenant(tenantID), runID).Scan(&contractVersion); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`, normalizeTenant(tenantID), runID).Scan(&contractVersion); err != nil {
 		return err
 	}
 	if contractVersion < RunRecoveryContractVersion {
@@ -409,7 +422,7 @@ func (s *Store) RunRecoveryState(ctx context.Context, tenantID, runID string) (R
 	if s == nil || s.db == nil || strings.TrimSpace(runID) == "" {
 		return snapshot, nil
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT recovery_contract_version FROM task_runs WHERE tenant_id=? AND id=?`,
+	if err := s.db.QueryRowContext(ctx, `SELECT recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`,
 		normalizeTenant(tenantID), runID).Scan(&snapshot.ContractVersion); err != nil {
 		return snapshot, err
 	}

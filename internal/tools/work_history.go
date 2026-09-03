@@ -23,17 +23,17 @@ func NewWorkSearchTool(store *control.Store) *WorkSearchTool {
 func (t *WorkSearchTool) Name() string { return "work_search" }
 
 func (t *WorkSearchTool) Description() string {
-	return "Search the current person's complete retained work history by literal terms. Returns bounded task and run cards, never raw channel transcripts."
+	return "Search the current person's retained work history, or explicitly list current attention. Returns bounded thread and run cards, never raw channel transcripts."
 }
 
 func (t *WorkSearchTool) Schema() ToolSchema {
 	return ToolSchema{
 		Type: "object",
 		Properties: map[string]PropertyDef{
-			"query": {Type: "string", Description: "Literal words, identifiers, file names, or work references to find."},
-			"limit": {Type: "integer", Description: "Maximum task cards, from 1 to 8. Default 5.", Default: 5},
+			"mode":  {Type: "string", Description: "history (default) searches by query; attention lists currently actionable or resumable work.", Enum: []string{"history", "attention"}, Default: "history"},
+			"query": {Type: "string", Description: "Words, identifiers, file names, or work references to find. Required in history mode; ignored in attention mode."},
+			"limit": {Type: "integer", Description: "Maximum thread cards, from 1 to 8. Default 5.", Default: 5},
 		},
-		Required: []string{"query"},
 	}
 }
 
@@ -54,14 +54,17 @@ type workRunCard struct {
 }
 
 type workTaskCard struct {
-	TaskID         string        `json:"task_id"`
-	Title          string        `json:"title"`
-	Status         string        `json:"status"`
-	WorkspaceID    string        `json:"workspace_id,omitempty"`
-	Summary        string        `json:"summary,omitempty"`
-	NextSteps      []string      `json:"next_steps,omitempty"`
-	LastActivityAt string        `json:"last_activity_at,omitempty"`
-	Runs           []workRunCard `json:"runs,omitempty"`
+	TaskID         string   `json:"task_id"`
+	Title          string   `json:"title"`
+	Status         string   `json:"status"`
+	WorkspaceID    string   `json:"workspace_id,omitempty"`
+	Summary        string   `json:"summary,omitempty"`
+	NextSteps      []string `json:"next_steps,omitempty"`
+	LastActivityAt string   `json:"last_activity_at,omitempty"`
+	// Evidence says why the card is here: an explicit Attention query or a
+	// literal retained-history match.
+	Evidence []string      `json:"evidence,omitempty"`
+	Runs     []workRunCard `json:"runs,omitempty"`
 }
 
 func (t *WorkSearchTool) Execute(args map[string]interface{}) (string, error) {
@@ -73,7 +76,14 @@ func (t *WorkSearchTool) Execute(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("authenticated run scope is required")
 	}
 	query := strings.TrimSpace(taskStringArg(args, "query"))
-	if query == "" {
+	mode := strings.ToLower(strings.TrimSpace(taskStringArg(args, "mode")))
+	if mode == "" {
+		mode = "history"
+	}
+	if mode != "history" && mode != "attention" {
+		return "", fmt.Errorf("mode must be history or attention")
+	}
+	if mode == "history" && query == "" {
 		return "", fmt.Errorf("query is required")
 	}
 	limit := intArg(args, "limit", 5)
@@ -84,28 +94,33 @@ func (t *WorkSearchTool) Execute(args map[string]interface{}) (string, error) {
 		limit = 8
 	}
 	ctx := ContextFromArgs(args)
-	tasks, err := t.store.SearchTasks(ctx, scope.ControlTenantID, scope.PersonID, query, limit)
-	if err != nil {
-		return "", err
-	}
-	cards := make([]workTaskCard, 0, len(tasks))
-	for _, task := range tasks {
-		// The current interaction title is derived from the user's query and is
-		// therefore a guaranteed false self-hit. It is not historical evidence.
-		if strings.TrimSpace(scope.TaskID) != "" && task.ID == scope.TaskID {
-			continue
-		}
+	cards := make([]workTaskCard, 0, limit)
+	buildCard := func(task control.Task, evidence, exactRunID string) (workTaskCard, error) {
 		card := workTaskCard{
 			TaskID: task.ID, Title: workBound(task.Title, 240), Status: task.Status,
 			WorkspaceID: task.WorkspaceID, Summary: workBound(task.CurrentSummary, 400),
 			NextSteps: boundedWorkStrings(task.NextSteps, 4, 240),
+			Evidence:  []string{evidence},
 		}
 		if !task.LastActivityAt.IsZero() {
 			card.LastActivityAt = task.LastActivityAt.UTC().Format(time.RFC3339)
 		}
-		runs, err := t.store.ListTaskRuns(ctx, scope.ControlTenantID, task.ID, 3)
-		if err != nil {
-			return "", err
+		var runs []control.Run
+		if strings.TrimSpace(exactRunID) != "" {
+			run, err := t.store.GetRun(ctx, scope.ControlTenantID, exactRunID)
+			if err != nil {
+				return workTaskCard{}, err
+			}
+			if run == nil || run.PersonID != scope.PersonID || run.TaskID != task.ID {
+				return workTaskCard{}, fmt.Errorf("attention run is no longer available")
+			}
+			runs = []control.Run{*run}
+		} else {
+			var err error
+			runs, err = t.store.ListTaskRuns(ctx, scope.ControlTenantID, task.ID, 3)
+			if err != nil {
+				return workTaskCard{}, err
+			}
 		}
 		for _, run := range runs {
 			if run.PersonID != scope.PersonID {
@@ -120,11 +135,66 @@ func (t *WorkSearchTool) Execute(args map[string]interface{}) (string, error) {
 			}
 			card.Runs = append(card.Runs, runCard)
 		}
+		return card, nil
+	}
+	add := func(task control.Task, evidence, exactRunID string) error {
+		// The current interaction title is derived from the user's query and is
+		// therefore a guaranteed false self-hit. It is not historical evidence.
+		if strings.TrimSpace(scope.TaskID) != "" && task.ID == scope.TaskID {
+			return nil
+		}
+		card, err := buildCard(task, evidence, exactRunID)
+		if err != nil {
+			return err
+		}
 		cards = append(cards, card)
+		return nil
+	}
+	if mode == "attention" {
+		// The run that asked for a confirmation is usually on the channel the
+		// confirmation arrives on, so this run's channel ranks first.
+		preferChannel := ""
+		if current, err := t.store.GetRun(ctx, scope.ControlTenantID, scope.RunID); err == nil && current != nil {
+			preferChannel = current.Channel
+		}
+		items, err := control.NewWorkTimeline(t.store).AttentionForChannel(ctx, scope.ControlTenantID, scope.PersonID, preferChannel, limit)
+		if err != nil {
+			return "", err
+		}
+		for _, item := range items {
+			task, err := t.store.GetTask(ctx, scope.ControlTenantID, item.Thread.ID)
+			if err != nil {
+				return "", err
+			}
+			if task == nil || task.PersonID != scope.PersonID {
+				continue
+			}
+			evidence := "attention"
+			if item.Activity == control.ThreadActivityResumable {
+				evidence = "unresolved_run"
+			}
+			task.Status = item.Activity
+			if strings.TrimSpace(item.RunSummary) != "" {
+				task.CurrentSummary = item.RunSummary
+			}
+			if err := add(*task, evidence, item.RunID); err != nil {
+				return "", err
+			}
+		}
+	} else {
+		tasks, err := t.store.SearchTasks(ctx, scope.ControlTenantID, scope.PersonID, query, limit)
+		if err != nil {
+			return "", err
+		}
+		for _, task := range tasks {
+			if err := add(task, "literal_match", ""); err != nil {
+				return "", err
+			}
+		}
 	}
 	encoded, _ := json.Marshal(map[string]interface{}{
-		"query": query, "count": len(cards), "results": cards,
-		"notice": "Structured work cards only; use work_inspect with an exact run_id for bounded details.",
+		"mode": mode, "query": query, "count": len(cards), "results": cards,
+		"notice": "Structured work cards only. History mode returns query matches; attention mode returns current control facts. Use work_inspect with an exact run_id for bounded details.",
 	})
 	return string(encoded), nil
 }

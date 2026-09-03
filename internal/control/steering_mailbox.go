@@ -78,7 +78,7 @@ func (s *Store) AcceptSteering(ctx context.Context, m SteeringMessage) (*Steerin
 	m.CreatedAt = now
 	m.UpdatedAt = now
 	_, err := s.db.ExecContext(ctx, `INSERT INTO steering_mailbox
-		(id, tenant_id, person_id, run_id, task_id, channel, platform, platform_user_id,
+		(id, tenant_id, person_id, run_id, thread_id, channel, platform, platform_user_id,
 		 workspace_id, approval_mode, content, content_hash, status, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.TenantID, m.PersonID, m.RunID, m.TaskID, m.Channel, m.Platform, m.PlatformUserID,
@@ -158,7 +158,7 @@ func (s *Store) ListUnconsumedSteering(ctx context.Context, tenantID, runID stri
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	query := `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(task_id, ''),
+	query := `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
 		COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
 		COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
 		content, content_hash, status, created_at, updated_at
@@ -258,7 +258,7 @@ func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, run
 	if personID == "" || runID == "" || steeringID == "" {
 		return nil, fmt.Errorf("person id, run id, and input id are required")
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(task_id, ''),
+	row := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
 		COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
 		COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
 		content, content_hash, status, created_at, updated_at

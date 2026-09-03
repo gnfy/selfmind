@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -93,14 +94,12 @@ func (d *Server) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 	if taskID == "" {
-		task, err := d.Control.CurrentTask(r.Context(), identity.TenantID, identity.PersonID)
+		subject, err := d.subjectThreadID(r.Context(), identity)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if task != nil {
-			taskID = task.ID
-		}
+		taskID = subject
 	}
 	if taskID == "" {
 		writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "events": []control.Event{}})
@@ -215,6 +214,43 @@ func (d *Server) handleTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "task": task, "artifacts": artifacts})
 }
 
+// subjectThreadID picks the Thread a subject-less events or diagnostics
+// request is about: the executing Run's Thread, else the explicit /resume
+// pin, else the top Attention item's Thread, else the Thread of the person's
+// most recent Run. This is presentation only, so a finished turn keeps its
+// activity visible until new work starts; it never becomes a continuation
+// authority.
+func (d *Server) subjectThreadID(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if d == nil || d.Control == nil || identity == nil {
+		return "", nil
+	}
+	if active := d.coordinator().currentActive(identity.PersonID); active != nil && strings.TrimSpace(active.TaskID) != "" {
+		return active.TaskID, nil
+	}
+	task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return "", err
+	}
+	if task != nil {
+		return task.ID, nil
+	}
+	attention, err := control.NewWorkTimeline(d.Control).Attention(ctx, identity.TenantID, identity.PersonID, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(attention) > 0 {
+		return attention[0].Thread.ID, nil
+	}
+	runs, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(runs) > 0 {
+		return runs[0].TaskID, nil
+	}
+	return "", nil
+}
+
 func (d *Server) taskFromEventsRequest(r *http.Request) (*control.IdentityContext, *control.Task, error) {
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
@@ -222,11 +258,13 @@ func (d *Server) taskFromEventsRequest(r *http.Request) (*control.IdentityContex
 	}
 	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 	if taskID == "" {
-		task, err := d.Control.CurrentTask(r.Context(), identity.TenantID, identity.PersonID)
+		taskID, err = d.subjectThreadID(r.Context(), identity)
 		if err != nil {
 			return identity, nil, err
 		}
-		return identity, task, nil
+		if taskID == "" {
+			return identity, nil, nil
+		}
 	}
 	task, err := d.Control.GetTask(r.Context(), identity.TenantID, taskID)
 	if err != nil {

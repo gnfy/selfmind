@@ -35,8 +35,8 @@ var ErrParentRunNotResumable = errors.New("parent run is not in a resumable stat
 func validateParentClaimTx(ctx context.Context, tx *sql.Tx, child *Run) error {
 	var taskID, personID, status, legacyClaim string
 	err := tx.QueryRowContext(ctx,
-		`SELECT task_id, person_id, status, COALESCE(resumed_by_run_id, '')
-		 FROM task_runs WHERE tenant_id = ? AND id = ?`,
+		`SELECT thread_id, person_id, status, COALESCE(resumed_by_run_id, '')
+		 FROM runs WHERE tenant_id = ? AND id = ?`,
 		child.TenantID, child.ParentRunID).
 		Scan(&taskID, &personID, &status, &legacyClaim)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -50,6 +50,21 @@ func validateParentClaimTx(ctx context.Context, tx *sql.Tx, child *Run) error {
 	}
 	switch status {
 	case "interrupted", "waiting_user", "verification_partial", "blocked":
+	case "waiting_external":
+		// A Run parked on a daemon watcher becomes claimable only once every
+		// watcher it registered has concluded: the watcher finalization is then
+		// the continuation that records the verdict as this Run's exact child.
+		// While a watcher is still live nothing may steal the Run from it.
+		var live int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM external_watches
+			 WHERE tenant_id = ? AND run_id = ? AND status IN ('pending', 'running')`,
+			child.TenantID, child.ParentRunID).Scan(&live); err != nil {
+			return err
+		}
+		if live > 0 {
+			return ErrParentRunNotResumable
+		}
 	default:
 		return ErrParentRunNotResumable
 	}
@@ -58,7 +73,7 @@ func validateParentClaimTx(ctx context.Context, tx *sql.Tx, child *Run) error {
 	}
 	var claimed int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM task_runs WHERE tenant_id = ? AND parent_run_id = ?`,
+		`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND parent_run_id = ?`,
 		child.TenantID, child.ParentRunID).Scan(&claimed); err != nil {
 		return err
 	}
@@ -80,17 +95,17 @@ func (s *Store) ListUnresolvedRuns(ctx context.Context, tenantID, personID, task
 		limit = 10
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''),
+		`SELECT id, thread_id, tenant_id, person_id, COALESCE(workspace_id, ''),
 		        COALESCE(execution_roots_json, '[]'), channel, COALESCE(input_summary, ''),
 		        COALESCE(work_key, ''), COALESCE(parent_run_id, ''), status, started_at, finished_at
-		 FROM task_runs
-			 WHERE tenant_id = ? AND person_id = ? AND task_id = ?
+		 FROM runs
+			 WHERE tenant_id = ? AND person_id = ? AND thread_id = ?
 		   AND status IN `+resumableRunStatusSQL+`
 		   AND COALESCE(resumed_by_run_id, '') = ''
 		   AND NOT EXISTS (
-		       SELECT 1 FROM task_runs child
-		        WHERE child.tenant_id = task_runs.tenant_id
-		          AND child.parent_run_id = task_runs.id)
+		       SELECT 1 FROM runs child
+		        WHERE child.tenant_id = runs.tenant_id
+		          AND child.parent_run_id = runs.id)
 		 ORDER BY started_at DESC, id DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, taskID, limit)
 	if err != nil {
@@ -126,27 +141,41 @@ func (s *Store) ListUnresolvedRuns(ctx context.Context, tenantID, personID, task
 // Hidden/archived labels are excluded — implicit continuation must not
 // resurrect deliberately shelved work.
 func (s *Store) ListUnresolvedRunsForPerson(ctx context.Context, tenantID, personID, channel string, limit int) ([]Run, error) {
+	return s.listUnresolvedRunsForPerson(ctx, tenantID, personID, channel, limit, false)
+}
+
+// ListExplicitlyResumableRunsForPerson is the lookup surface for a user who
+// supplied a Run reference. Unlike the implicit continuation ladder it keeps
+// dismissed and archived history addressable: presentation choices may quiet
+// work, but they never destroy an explicit continuation control.
+func (s *Store) ListExplicitlyResumableRunsForPerson(ctx context.Context, tenantID, personID string, limit int) ([]Run, error) {
+	return s.listUnresolvedRunsForPerson(ctx, tenantID, personID, "", limit, true)
+}
+
+func (s *Store) listUnresolvedRunsForPerson(ctx context.Context, tenantID, personID, channel string, limit int, explicit bool) ([]Run, error) {
 	if strings.TrimSpace(personID) == "" {
 		return nil, nil
 	}
-	if limit <= 0 || limit > 20 {
+	if limit <= 0 || limit > 200 {
 		limit = 10
 	}
-	query := `SELECT r.id, r.task_id, r.tenant_id, r.person_id, COALESCE(r.workspace_id, ''),
+	query := `SELECT r.id, r.thread_id, r.tenant_id, r.person_id, COALESCE(r.workspace_id, ''),
 		        COALESCE(r.execution_roots_json, '[]'), r.channel, COALESCE(r.input_summary, ''),
 		        COALESCE(r.work_key, ''), COALESCE(r.parent_run_id, ''), r.status, r.started_at, r.finished_at
-		 FROM task_runs r
-		 JOIN tasks t ON t.tenant_id = r.tenant_id AND t.id = r.task_id
+		 FROM runs r
+		 JOIN threads t ON t.tenant_id = r.tenant_id AND t.id = r.thread_id
 		 WHERE r.tenant_id = ? AND r.person_id = ?
 		   AND r.status IN ` + resumableRunStatusSQL + `
 		   AND COALESCE(r.resumed_by_run_id, '') = ''
 		   AND NOT EXISTS (
-		       SELECT 1 FROM task_runs child
+		       SELECT 1 FROM runs child
 		        WHERE child.tenant_id = r.tenant_id
-		          AND child.parent_run_id = r.id)
-		   AND COALESCE(t.visibility, 'visible') != 'hidden'
-		   AND t.status NOT IN ('done', 'completed', 'cancelled', 'failed', 'archived')`
+		          AND child.parent_run_id = r.id)`
 	args := []any{normalizeTenant(tenantID), strings.TrimSpace(personID)}
+	if !explicit {
+		query += ` AND COALESCE(r.attention_dismissed_at, 0) = 0
+		   AND COALESCE(t.visibility, 'visible') NOT IN ('hidden', 'archived')`
+	}
 	if strings.TrimSpace(channel) != "" {
 		query += ` AND r.channel = ?`
 		args = append(args, strings.TrimSpace(channel))
@@ -191,9 +220,9 @@ func (s *Store) RunHandoff(ctx context.Context, tenantID, personID, runID string
 	var doneJSON, nextJSON, filesJSON, risksJSON string
 	var created int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT h.id, h.task_id, COALESCE(h.run_id, ''), h.summary, COALESCE(h.done_items_json, '[]'), COALESCE(h.next_steps_json, '[]'),
+		`SELECT h.id, h.thread_id, COALESCE(h.run_id, ''), h.summary, COALESCE(h.done_items_json, '[]'), COALESCE(h.next_steps_json, '[]'),
 		        COALESCE(h.changed_files_json, '[]'), COALESCE(h.test_status, ''), COALESCE(h.risks_json, '[]'), h.created_at
-		 FROM task_handoffs h JOIN task_runs r ON r.id = h.run_id AND r.task_id = h.task_id
+		 FROM task_handoffs h JOIN runs r ON r.id = h.run_id AND r.thread_id = h.thread_id
 		 WHERE r.tenant_id = ? AND r.person_id = ? AND r.id = ? ORDER BY h.created_at DESC LIMIT 1`,
 		normalizeTenant(tenantID), personID, runID).
 		Scan(&h.ID, &h.TaskID, &h.RunID, &h.Summary, &doneJSON, &nextJSON, &filesJSON, &h.TestStatus, &risksJSON, &created)
@@ -222,10 +251,10 @@ func (s *Store) ListRunEvents(ctx context.Context, tenantID, personID, taskID, r
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.cursor, e.id, e.task_id, COALESCE(e.run_id, ''), e.type, e.visibility, COALESCE(e.channel, ''),
+		`SELECT e.cursor, e.id, e.thread_id, COALESCE(e.run_id, ''), e.type, e.visibility, COALESCE(e.channel, ''),
 		        COALESCE(e.payload_json, '{}'), e.created_at
-		 FROM task_events e JOIN task_runs r ON r.id = e.run_id AND r.task_id = e.task_id
-		 WHERE r.tenant_id = ? AND r.person_id = ? AND e.task_id = ? AND e.run_id = ?
+		 FROM task_events e JOIN runs r ON r.id = e.run_id AND r.thread_id = e.thread_id
+		 WHERE r.tenant_id = ? AND r.person_id = ? AND e.thread_id = ? AND e.run_id = ?
 		 ORDER BY e.cursor DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, taskID, runID, limit)
 	if err != nil {
@@ -256,10 +285,10 @@ func (s *Store) ListRunArtifacts(ctx context.Context, tenantID, personID, taskID
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT a.id, a.task_id, COALESCE(a.run_id, ''), a.kind, COALESCE(a.name, ''),
+		`SELECT a.id, a.thread_id, COALESCE(a.run_id, ''), a.kind, COALESCE(a.name, ''),
 		        a.uri, COALESCE(a.mime_type, ''), COALESCE(a.metadata_json, '{}'), a.created_at
-		 FROM task_artifacts a JOIN task_runs r ON r.id = a.run_id AND r.task_id = a.task_id
-		 WHERE r.tenant_id = ? AND r.person_id = ? AND a.task_id = ? AND a.run_id = ?
+		 FROM task_artifacts a JOIN runs r ON r.id = a.run_id AND r.thread_id = a.thread_id
+		 WHERE r.tenant_id = ? AND r.person_id = ? AND a.thread_id = ? AND a.run_id = ?
 		 ORDER BY a.created_at DESC, a.id DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, taskID, runID, limit)
 	if err != nil {

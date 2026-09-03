@@ -108,7 +108,7 @@ func TestApprovalTriageAuditPersistsStructuredEvidenceWithoutCommandText(t *test
 	}
 	var taskID, runID, toolName, risk, auth, route, policy, rationale string
 	var latency int64
-	err = store.db.QueryRowContext(context.Background(), `SELECT task_id, run_id, tool_name, risk_level,
+	err = store.db.QueryRowContext(context.Background(), `SELECT thread_id, run_id, tool_name, risk_level,
 		user_authorization, provider_route, latency_ms, policy_version, rationale
 		FROM approval_triage_events WHERE tenant_id = 'tenant' AND person_id = 'person'`).Scan(
 		&taskID, &runID, &toolName, &risk, &auth, &route, &latency, &policy, &rationale)

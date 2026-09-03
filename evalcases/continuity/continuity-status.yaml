@@ -1,32 +1,39 @@
 id: continuity_status
-title: "cross-endpoint continuity: /status from weixin sees the CLI task"
+title: "cross-endpoint continuity: /status from weixin sees the CLI run that is waiting"
 suite: continuity
-# Declared isolated because this case makes no tool calls: nothing here
-# reads the repository, and a workspace of "." would let one added tool
-# call silently make the cassette depend on the tree it was recorded in.
+# Declared isolated because this case touches no repository files: a workspace
+# of "." would let one added tool call silently make the cassette depend on the
+# tree it was recorded in.
 workspace: isolated
 channel: cli
 require_cassette: true
 
-# North-star scenario: turn 1 starts a task from the CLI (needs the model,
-# hence the cassette); turn 2 asks `/status` from the weixin channel. `/status`
-# is a pre-agent control command (zero model tokens), so its reply is fully
-# deterministic: the shared person must see the task started on the other
-# endpoint. Assertions pin the stable status-card markers, not model prose.
+# North-star scenario on the production path: turn 1 starts work from the CLI
+# (needs the model, hence the cassette) and parks waiting for the person's
+# decision; turn 2 asks `/status` from the weixin channel. `/status` is a
+# pre-agent control command (zero model tokens), so its reply is fully
+# deterministic: the shared person must see the waiting Run started on the
+# other endpoint. Under the Thread / Run / Attention model only work that still
+# needs the person is Attention, which is why turn 1 must park rather than
+# answer and finish. Assertions pin the stable status-card markers plus the
+# durable Run state, never model prose.
 turns:
-  - input: "帮我规划一个重构方案,先不要改代码。给 3 步方案,每步一句话,不要看本地文件。"
+  - input: "我要重构一个模块,但先不要改代码,也不要看本地文件。给我 3 步方案,每步一句话。给完方案后本回合就结束并等待我的决定:用 finish_run 把这次回合标记为 waiting_user,我还没决定先做哪一步。"
     channel: cli
   - input: "/status"
     channel: weixin
 
 expect:
+  # The asserted status is the LAST turn's: `/status` is a control command and
+  # always completes. That the CLI work itself parked is pinned by the card
+  # content below and by the durable Run state in assert_state.
   status: completed
-  max_tool_calls: 0
+  max_tool_calls: 2
   max_tool_errors: 2
   max_duration_seconds: 300
   contains:
     - "Task:"
-    - "Status:"
+    - "Status: waiting_user"
   must_not_contain:
     - "No active task."
     - "<tool>"
@@ -36,3 +43,8 @@ checks:
   no_raw_json_leak: true
   no_tool_xml_leak: true
   no_empty_response: true
+
+assert_state:
+  - on: run
+    field: status
+    eq: waiting_user

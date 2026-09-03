@@ -357,6 +357,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgAgentDone:
 		m.stopModelWait()
 		m.exitPromptActive = false
+		if msg.Turn != nil {
+			m.rememberQueuedRun(msg.Turn.QueueID)
+		}
 		if queuedTurn(msg.Turn) {
 			msg.Response = textutil.CleanUTF8(msg.Response)
 			m.localRequestActive = false
@@ -365,9 +368,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activityText = ""
 			m.steerCh = nil
 			m.cancelFn = nil
-			if input := strings.TrimSpace(msg.Input); input != "" {
-				m.queuedInputs = append(m.queuedInputs, input)
-				m.queuedCount++
+			if msg.Turn == nil || strings.TrimSpace(msg.Turn.QueueID) == "" {
+				input := strings.TrimSpace(msg.Input)
+				if input != "" {
+					m.queuedInputs = append(m.queuedInputs, input)
+					m.queuedCount++
+				}
 			}
 			m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer)
 			if m.daemonRunActive {
@@ -376,6 +382,22 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.runStatus = "queued"
 			}
 			return m, spinnerCmd
+		}
+		if acceptedTurn(msg.Turn) {
+			// The daemon steered this message into the live run. The local
+			// request is over, but the run is not: keep its tool cells, plan,
+			// and status; its own events continue to drive the animation.
+			m.thinking = false
+			m.activityText = ""
+			m.localRequestActive = false
+			m.localRequestInput = ""
+			m.steerCh = nil
+			m.cancelFn = nil
+			if m.daemonRunActive {
+				m.runStatus = "working"
+			}
+			noticeID := m.setStatusNotice(noticeGuidance, "Sent to the running task as guidance.")
+			return m, tea.Batch(spinnerCmd, clearStatusNoticeAfter(noticeID, 3*time.Second))
 		}
 		newerDaemonRun := m.daemonRunActive && msg.Turn != nil &&
 			strings.TrimSpace(msg.Turn.RunID) != "" &&
@@ -399,6 +421,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.localRequestInput = ""
 		if !newerDaemonRun {
 			m.daemonRunAwaitingDone = false
+			m.daemonRunOwned = false
 			m.clarifyMode = false
 			m.clarifyGateway = false
 			m.clarifyChoices = nil
@@ -438,17 +461,25 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		localMatch := m.localRequestActive && sameQueuedInput(m.localRequestInput, msg.Input)
-		queuedMatch := false
+		queuedMatch := m.consumeQueuedRun(msg.QueueID)
 		if !localMatch {
-			queuedMatch = m.consumeQueuedInput(msg.Input)
+			if !queuedMatch && strings.TrimSpace(msg.QueueID) == "" {
+				queuedMatch = m.consumeQueuedInput(msg.Input)
+			}
 		}
 		m.daemonRunActive = true
 		m.daemonRunID = msg.RunID
+		m.daemonRunQueueID = strings.TrimSpace(msg.QueueID)
 		m.daemonRunStarted = msg.Started
 		if m.daemonRunStarted.IsZero() {
 			m.daemonRunStarted = time.Now()
 		}
 		m.daemonRunAwaitingDone = localMatch
+		// A queued message the person typed here is their own work once it
+		// drains; only its final answer arrives differently (run.finished
+		// instead of a synchronous reply). Treating it as passive left the
+		// spinner dark for every queued turn.
+		m.daemonRunOwned = localMatch || queuedMatch
 		m.runStatus = "working"
 		m.runTokens = 0
 		m.activePlanJSON = ""
@@ -497,8 +528,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		awaitingSynchronousDone := m.daemonRunAwaitingDone
+		m.daemonRunOwned = false
 		m.daemonRunActive = false
 		m.daemonRunID = ""
+		m.daemonRunQueueID = ""
 		m.daemonRunStarted = time.Time{}
 		m.daemonRunAwaitingDone = false
 		if awaitingSynchronousDone {
@@ -674,7 +707,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg.Result = textutil.CleanUTF8(msg.Result)
 		m.applyProcessEffects(m.processState().Update(processEvent{
 			kind: processToolCompleted, toolName: msg.ToolName, toolCallID: msg.ToolCallID,
-			runID: msg.Event.RunID, result: msg.Result, err: msg.Err, duration: msg.Duration,
+			runID: msg.Event.RunID, result: msg.Result, err: msg.Err, effectState: msg.EffectState, duration: msg.Duration,
 			allowOrphan: m.currentToolEvent(msg.Event),
 		}))
 		if !m.processState().HasRunningTools() && !m.passiveDaemonEvent(msg.Event) {

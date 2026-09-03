@@ -1,0 +1,129 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "已",
+      "phase": "commentary"
+    },
+    {
+      "content": "找到",
+      "phase": "commentary"
+    },
+    {
+      "content": "唯一",
+      "phase": "commentary"
+    },
+    {
+      "content": "待",
+      "phase": "commentary"
+    },
+    {
+      "content": "确认",
+      "phase": "commentary"
+    },
+    {
+      "content": "项",
+      "phase": "commentary"
+    },
+    {
+      "content": "；",
+      "phase": "commentary"
+    },
+    {
+      "content": "我",
+      "phase": "commentary"
+    },
+    {
+      "content": "会",
+      "phase": "commentary"
+    },
+    {
+      "content": "读取",
+      "phase": "commentary"
+    },
+    {
+      "content": "其",
+      "phase": "commentary"
+    },
+    {
+      "content": "交",
+      "phase": "commentary"
+    },
+    {
+      "content": "接",
+      "phase": "commentary"
+    },
+    {
+      "content": "内容",
+      "phase": "commentary"
+    },
+    {
+      "content": "，",
+      "phase": "commentary"
+    },
+    {
+      "content": "确保",
+      "phase": "commentary"
+    },
+    {
+      "content": "只",
+      "phase": "commentary"
+    },
+    {
+      "content": "做",
+      "phase": "commentary"
+    },
+    {
+      "content": "获",
+      "phase": "commentary"
+    },
+    {
+      "content": "准",
+      "phase": "commentary"
+    },
+    {
+      "content": "范围",
+      "phase": "commentary"
+    },
+    {
+      "content": "内",
+      "phase": "commentary"
+    },
+    {
+      "content": "的",
+      "phase": "commentary"
+    },
+    {
+      "content": "动作",
+      "phase": "commentary"
+    },
+    {
+      "content": "。",
+      "phase": "commentary"
+    },
+    {
+      "content": "Preparing to run work_inspect",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_io1EDgxUFxmjNSq85OiNavR9",
+          "Function": "work_inspect",
+          "Args": "{\"run_id\":\"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 8114,
+        "output_tokens": 87,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8114,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

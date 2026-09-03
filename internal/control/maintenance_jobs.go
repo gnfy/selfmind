@@ -699,7 +699,7 @@ func (s *Store) ReplayRetryLimitedMaintenanceJobs(ctx context.Context, tenantID 
 		     AND mj.analyzer_version = (
 		       SELECT MAX(current.analyzer_version)
 		       FROM maintenance_jobs current
-		       JOIN task_runs current_run
+		       JOIN runs current_run
 		         ON current_run.tenant_id = current.tenant_id AND current_run.id = current.run_id
 		       WHERE current.tenant_id = mj.tenant_id
 		     )
@@ -819,7 +819,7 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 		 COALESCE(MIN(CASE WHEN mj.status IN (?, ?, ?, ?, ?) THEN mj.created_at ELSE NULL END), 0),
 		 COALESCE(MAX(CASE WHEN mj.status = ? THEN mj.updated_at ELSE NULL END), 0)
 		 FROM maintenance_jobs mj
-		 LEFT JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
+		 LEFT JOIN runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
 		 WHERE (mj.tenant_id = ? OR (r.id IS NULL AND mj.tenant_id = ?)) AND %s
 		   AND mj.analyzer_version = (
 		     SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
@@ -845,7 +845,7 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 	}
 	err = s.db.QueryRowContext(ctx, fmt.Sprintf(
 		`SELECT COALESCE(mj.last_error, '') FROM maintenance_jobs mj
-		 LEFT JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
+		 LEFT JOIN runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
 		 WHERE (mj.tenant_id = ? OR (r.id IS NULL AND mj.tenant_id = ?)) AND %s AND mj.status IN (?, ?, ?)
 		   AND mj.analyzer_version = (
 		     SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
@@ -864,7 +864,7 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 		pr.state, pr.failure_class, pr.consecutive_failures, pr.opened_at, pr.next_probe_at,
 		pr.probe_lease_until, pr.last_error, pr.last_request_id, pr.updated_at
 		FROM maintenance_jobs mj
-		LEFT JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
+		LEFT JOIN runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
 		JOIN provider_route_health pr ON pr.tenant_id = mj.tenant_id AND pr.route_id = mj.blocked_route_id
 		WHERE (mj.tenant_id = ? OR (r.id IS NULL AND mj.tenant_id = ?)) AND %s AND mj.status = ?
 		  AND mj.analyzer_version = (

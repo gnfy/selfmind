@@ -509,6 +509,11 @@ func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptSt
 
 	done := !msg.IsRunning && (msg.Content != "" || msg.Duration > 0)
 	action := toolAction(label, args, done)
+	if msg.IsSkipped {
+		action = replaceToolActionVerb(action, "Skipped")
+	} else if msg.IsError {
+		action = replaceToolActionVerb(action, "Failed")
+	}
 	isCmd := isCommandTool(label)
 	var sb strings.Builder
 	if !done {
@@ -551,7 +556,7 @@ func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptSt
 	}
 
 	// The red bullet conveys failure; duration stays visually subordinate.
-	sb.WriteString(toolHeaderLineWithStyles(label, action, false, msg.IsError, isCmd, msg.Duration, width, styles))
+	sb.WriteString(toolHeaderLineWithStyles(label, action, false, msg.IsError, isCmd && !msg.IsSkipped, msg.Duration, width, styles))
 	sb.WriteString("\n")
 	if !isCmd {
 		if result := toolResultLine(label, msg.Content, width-6); result != "" {
@@ -568,6 +573,18 @@ func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptSt
 		}
 	}
 	return sb.String()
+}
+
+func replaceToolActionVerb(action, verb string) string {
+	action = strings.TrimSpace(action)
+	if action == "" {
+		return verb + " tool"
+	}
+	_, rest, found := strings.Cut(action, " ")
+	if !found || strings.TrimSpace(rest) == "" {
+		return verb + " tool"
+	}
+	return verb + " " + rest
 }
 
 // renderCommandOutputBlock shows a bounded physical-row head/tail preview of

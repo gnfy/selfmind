@@ -80,8 +80,8 @@ func TestMaterializeRunFinalizationIsAtomicAndReplaySafe(t *testing.T) {
 		}
 	}
 	assertCount("task_events", "run_id = ? AND type = 'run.finished'", run.ID)
-	assertCount("channel_messages", "task_id = ? AND role = 'assistant'", task.ID)
-	assertCount("task_handoffs", "task_id = ?", task.ID)
+	assertCount("channel_messages", "thread_id = ? AND role = 'assistant'", task.ID)
+	assertCount("task_handoffs", "thread_id = ?", task.ID)
 	assertCount("maintenance_jobs", "run_id = ? AND analyzer_version = 2", run.ID)
 
 	storedRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
@@ -138,8 +138,8 @@ func TestMaterializeRunFinalizationRollsBackMismatchedTask(t *testing.T) {
 		t.Fatalf("run changed after rollback: %+v, %v", storedRun, getErr)
 	}
 	storedSecond, getErr := store.GetTask(ctx, identity.TenantID, second.ID)
-	if getErr != nil || storedSecond == nil || storedSecond.Status != "new" || storedSecond.CurrentSummary != "" {
-		t.Fatalf("task changed after rollback: %+v, %v", storedSecond, getErr)
+	if getErr != nil || storedSecond == nil || storedSecond.Title != "second" || storedSecond.CurrentSummary != "" {
+		t.Fatalf("thread changed after rollback: %+v, %v", storedSecond, getErr)
 	}
 	var sideEffects int
 	if err := store.db.QueryRowContext(ctx,
@@ -184,8 +184,8 @@ func TestMaterializeRunFinalizationSuppressesDuplicateLogicalEffect(t *testing.T
 		t.Fatal(err)
 	}
 	for table, query := range map[string]string{
-		"handoffs":    `SELECT COUNT(*) FROM task_handoffs WHERE task_id = ?`,
-		"messages":    `SELECT COUNT(*) FROM channel_messages WHERE task_id = ? AND role = 'assistant'`,
+		"handoffs":    `SELECT COUNT(*) FROM task_handoffs WHERE thread_id = ?`,
+		"messages":    `SELECT COUNT(*) FROM channel_messages WHERE thread_id = ? AND role = 'assistant'`,
 		"maintenance": `SELECT COUNT(*) FROM maintenance_jobs WHERE run_id IN (?, ?)`,
 		"receipt":     `SELECT COUNT(*) FROM effect_receipts WHERE effect_key = ?`,
 	} {
@@ -317,11 +317,12 @@ func TestMaterializeRunFinalizationSynthesizesOutcomeBeforeTerminal(t *testing.T
 	}
 }
 
-func TestMaterializeRunFinalizationReducesDurableTaskBlockers(t *testing.T) {
+func TestMaterializeRunFinalizationDerivesAttentionFromDurableControlFacts(t *testing.T) {
 	tests := []struct {
-		name   string
-		setup  func(context.Context, *Store, IdentityContext, Task, Run)
-		status string
+		name      string
+		setup     func(context.Context, *Store, IdentityContext, Task, Run)
+		activity  string
+		attention bool
 	}{
 		{
 			name: "pending approval",
@@ -333,7 +334,8 @@ func TestMaterializeRunFinalizationReducesDurableTaskBlockers(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			status: "waiting_user",
+			activity:  ThreadActivityNeedsAttention,
+			attention: true,
 		},
 		{
 			name: "pending external watch",
@@ -347,7 +349,8 @@ func TestMaterializeRunFinalizationReducesDurableTaskBlockers(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			status: "waiting_external",
+			activity:  ThreadActivityMonitoring,
+			attention: true,
 		},
 		{
 			name: "queued watch finalization",
@@ -360,7 +363,7 @@ func TestMaterializeRunFinalizationReducesDurableTaskBlockers(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			status: "waiting_finalization",
+			attention: false,
 		},
 	}
 
@@ -393,18 +396,22 @@ func TestMaterializeRunFinalizationReducesDurableTaskBlockers(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+			items, err := NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stored.Status != tt.status {
-				t.Fatalf("task status=%q want %q", stored.Status, tt.status)
+			if tt.attention {
+				if len(items) != 1 || items[0].RunID != run.ID || items[0].Activity != tt.activity {
+					t.Fatalf("attention=%+v want run %s activity %s", items, run.ID, tt.activity)
+				}
+			} else if len(items) != 0 {
+				t.Fatalf("queued follow-up is not current Attention: %+v", items)
 			}
 		})
 	}
 }
 
-func TestUpdateTaskStatusUsesReducerAndExplicitCancellationWins(t *testing.T) {
+func TestUpdateTaskStatusCannotRewriteDerivedAttention(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
 	if err != nil {
@@ -421,9 +428,18 @@ func TestUpdateTaskStatusUsesReducerAndExplicitCancellationWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Attention and the derived thread status are keyed by the exact run that
+	// asked: the pending approval belongs to a parked run of this thread.
+	run, err := store.StartRun(ctx, task, "cli", "needs approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
-		TaskID: task.ID, ActionType: "tool_call",
+		TaskID: task.ID, RunID: run.ID, ActionType: "tool_call",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -444,8 +460,8 @@ func TestUpdateTaskStatusUsesReducerAndExplicitCancellationWins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != "cancelled" {
-		t.Fatalf("task status=%q want cancelled", stored.Status)
+	if stored.Status != "waiting_user" {
+		t.Fatalf("legacy setter rewrote live approval state: status=%q", stored.Status)
 	}
 }
 
@@ -486,12 +502,22 @@ func TestMaterializeRunFinalizationPreservesUnresumedPriorRun(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The newer terminal run supersedes the older interruption for Attention
+	// and the derived thread status, but the prior run itself stays unresolved
+	// and explicitly claimable: nothing rewrote its history or ownership.
 	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != "interrupted" {
-		t.Fatalf("task status=%q want interrupted", stored.Status)
+	if stored.Status != "done" {
+		t.Fatalf("task status=%q want done (superseded by the newer run)", stored.Status)
+	}
+	unresolved, err := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unresolved) != 1 || unresolved[0].ID != prior.ID || unresolved[0].Status != "interrupted" {
+		t.Fatalf("prior run must remain unresolved and claimable: %+v", unresolved)
 	}
 }
 
@@ -532,12 +558,22 @@ func TestMaterializeRunFinalizationOnlyClaimReleasesUnresolvedRun(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
+	// The newer unrelated completion supersedes the parked run for Attention
+	// and the derived thread status, but it does not release the wait: the
+	// unclaimed verification_partial run stays claimable (§10.3).
 	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != "verification_partial" {
-		t.Fatalf("task status=%q, unclaimed run must keep verification_partial", stored.Status)
+	if stored.Status != "done" {
+		t.Fatalf("task status=%q want done (superseded by the newer run)", stored.Status)
+	}
+	unresolved, err := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unresolved) != 1 || unresolved[0].ID != prior.ID || unresolved[0].Status != "verification_partial" {
+		t.Fatalf("unclaimed run must stay claimable: %+v", unresolved)
 	}
 	// The CLAIMING child's completion releases the wait atomically.
 	claiming, err := store.StartRunWithOptions(ctx, task, "cli", "verified", StartRunOptions{ParentRunID: prior.ID})
@@ -557,13 +593,20 @@ func TestMaterializeRunFinalizationOnlyClaimReleasesUnresolvedRun(t *testing.T) 
 	if stored.Status != "done" {
 		t.Fatalf("task status=%q want done after the claim completed", stored.Status)
 	}
+	if released, _ := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 10); len(released) != 0 {
+		t.Fatalf("the exact claim must release the parked run: %+v", released)
+	}
 }
 
-func TestMaterializeRunFinalizationPrefersActiveLifecycleOverPriorInterruption(t *testing.T) {
+// TestMaterializeRunFinalizationKeepsEachAttentionRunExact pins that Attention
+// is per exact Run: a pending approval on an older Run and a watcher on the
+// newer Run stay separate items in one Thread. The older Run's own parked
+// state is superseded by the newer Run, so it no longer counts as resumable.
+func TestMaterializeRunFinalizationKeepsEachAttentionRunExact(t *testing.T) {
 	tests := []struct {
-		name   string
-		setup  func(context.Context, *Store, IdentityContext, Task, Run)
-		status string
+		name       string
+		setup      func(context.Context, *Store, IdentityContext, Task, Run)
+		activities map[string]int
 	}{
 		{
 			name: "external watch",
@@ -577,7 +620,7 @@ func TestMaterializeRunFinalizationPrefersActiveLifecycleOverPriorInterruption(t
 					t.Fatal(err)
 				}
 			},
-			status: "waiting_external",
+			activities: map[string]int{ThreadActivityNeedsAttention: 1, ThreadActivityMonitoring: 1},
 		},
 		{
 			name: "watch finalization",
@@ -590,7 +633,7 @@ func TestMaterializeRunFinalizationPrefersActiveLifecycleOverPriorInterruption(t
 					t.Fatal(err)
 				}
 			},
-			status: "waiting_finalization",
+			activities: map[string]int{ThreadActivityNeedsAttention: 1},
 		},
 	}
 
@@ -616,9 +659,16 @@ func TestMaterializeRunFinalizationPrefersActiveLifecycleOverPriorInterruption(t
 			if err != nil {
 				t.Fatal(err)
 			}
+			setRunStartedAtForTest(t, store, prior.ID, time.Now().Add(-2*time.Minute))
 			if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
 				Identity: *identity, RunID: prior.ID, RunStatus: "interrupted",
 				TaskID: task.ID, TaskStatus: "interrupted", Summary: "needs continuation",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+				TenantID: identity.TenantID, PersonID: identity.PersonID,
+				TaskID: task.ID, RunID: prior.ID, ActionType: "tool_call",
 			}); err != nil {
 				t.Fatal(err)
 			}
@@ -633,12 +683,26 @@ func TestMaterializeRunFinalizationPrefersActiveLifecycleOverPriorInterruption(t
 			}); err != nil {
 				t.Fatal(err)
 			}
-			stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+			items, err := NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if stored.Status != tt.status {
-				t.Fatalf("task status=%q want %q", stored.Status, tt.status)
+			got := map[string]int{}
+			byRun := map[string]string{}
+			for _, item := range items {
+				got[item.Activity]++
+				byRun[item.RunID] = item.Activity
+			}
+			if len(items) != lenMapCounts(tt.activities) {
+				t.Fatalf("attention=%+v want activities=%v", items, tt.activities)
+			}
+			for activity, count := range tt.activities {
+				if got[activity] != count {
+					t.Fatalf("attention=%+v want activities=%v", items, tt.activities)
+				}
+			}
+			if byRun[prior.ID] != ThreadActivityNeedsAttention {
+				t.Fatalf("older run's pending approval must stay its own item: %+v", items)
 			}
 		})
 	}
@@ -751,10 +815,10 @@ func TestWorkKeysNeverResolveRunOwnership(t *testing.T) {
 	}
 
 	var matchingOwner, unrelatedOwner string
-	if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM task_runs WHERE id = ?`, matching.ID).Scan(&matchingOwner); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM runs WHERE id = ?`, matching.ID).Scan(&matchingOwner); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM task_runs WHERE id = ?`, unrelated.ID).Scan(&unrelatedOwner); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM runs WHERE id = ?`, unrelated.ID).Scan(&unrelatedOwner); err != nil {
 		t.Fatal(err)
 	}
 	if matchingOwner != "" || unrelatedOwner != "" {
@@ -767,19 +831,31 @@ func TestWorkKeysNeverResolveRunOwnership(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	// Completing the keyed run neither claims nor erases the two ambiguous
+	// runs: both stay unresolved and unowned. The thread status itself is now
+	// derived from the latest run (settled), not from the older parks.
+	remaining, err := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != "interrupted" {
-		t.Fatalf("unrelated unfinished work was erased: task status=%q", stored.Status)
+	if len(remaining) != 2 {
+		t.Fatalf("unrelated unfinished work was erased: unresolved=%+v", remaining)
+	}
+	for _, id := range []string{matching.ID, unrelated.ID} {
+		var owner string
+		if err := store.db.QueryRowContext(ctx, `SELECT COALESCE(resumed_by_run_id, '') FROM runs WHERE id = ?`, id).Scan(&owner); err != nil {
+			t.Fatal(err)
+		}
+		if owner != "" {
+			t.Fatalf("run %s was claimed by a work-key completion: owner=%q", id, owner)
+		}
 	}
 }
 
 // TestSameKeyUnfinishedWorkSurvivesCompletion: even when every run shares one
-// display work key, completing a new run cannot close the label over the
-// other unfinished, unclaimed runs — final reduction keeps the strongest
-// remaining wait state.
+// display work key, completing a new run cannot claim or rewrite the other
+// unfinished runs. The newer completion supersedes their parked state as
+// current Attention, but each stays unclaimed and explicitly resumable.
 func TestSameKeyUnfinishedWorkSurvivesCompletion(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
@@ -799,7 +875,8 @@ func TestSameKeyUnfinishedWorkSurvivesCompletion(t *testing.T) {
 	}
 
 	var unfinished []*Run
-	for _, item := range []struct {
+	statuses := map[string]string{}
+	for i, item := range []struct {
 		summary string
 		status  string
 	}{
@@ -810,6 +887,7 @@ func TestSameKeyUnfinishedWorkSurvivesCompletion(t *testing.T) {
 		if startErr != nil {
 			t.Fatal(startErr)
 		}
+		setRunStartedAtForTest(t, store, run.ID, time.Now().Add(-time.Duration(3-i)*time.Minute))
 		if _, finishErr := store.MaterializeRunFinalization(ctx, RunFinalization{
 			Identity: *identity, RunID: run.ID, RunStatus: item.status,
 			TaskID: task.ID, TaskStatus: item.status, Summary: item.summary,
@@ -817,6 +895,7 @@ func TestSameKeyUnfinishedWorkSurvivesCompletion(t *testing.T) {
 			t.Fatal(finishErr)
 		}
 		unfinished = append(unfinished, run)
+		statuses[run.ID] = item.status
 	}
 
 	current, err := store.StartRunWithWorkKey(ctx, task, "cli", "continue RUQX-381", "RUQX-381")
@@ -825,7 +904,7 @@ func TestSameKeyUnfinishedWorkSurvivesCompletion(t *testing.T) {
 	}
 	for _, run := range unfinished {
 		var owner string
-		if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM task_runs WHERE id = ?`, run.ID).Scan(&owner); err != nil {
+		if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM runs WHERE id = ?`, run.ID).Scan(&owner); err != nil {
 			t.Fatal(err)
 		}
 		if owner != "" {
@@ -839,13 +918,37 @@ func TestSameKeyUnfinishedWorkSurvivesCompletion(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	for _, run := range unfinished {
+		stored, err := store.GetRun(ctx, identity.TenantID, run.ID)
+		if err != nil || stored == nil || stored.Status != statuses[run.ID] {
+			t.Fatalf("completion rewrote unfinished run %s: %+v err=%v", run.ID, stored, err)
+		}
+	}
+	unresolved, err := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Status != "waiting_user" {
-		t.Fatalf("same-key unfinished work was erased: task status=%q want waiting_user", stored.Status)
+	stillResumable := map[string]bool{}
+	for _, run := range unresolved {
+		stillResumable[run.ID] = true
 	}
+	for _, run := range unfinished {
+		if !stillResumable[run.ID] {
+			t.Fatalf("unfinished run %s lost explicit resumability: %+v", run.ID, unresolved)
+		}
+	}
+	items, err := NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("newer completion must supersede older parked runs as current Attention: %+v err=%v", items, err)
+	}
+}
+
+func lenMapCounts(values map[string]int) int {
+	total := 0
+	for _, count := range values {
+		total += count
+	}
+	return total
 }
 
 func TestStartRunWithWorkKeyIsAtomicAndReadable(t *testing.T) {

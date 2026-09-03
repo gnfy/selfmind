@@ -14,7 +14,7 @@ import (
 func resolveOriginRunBlockersTx(ctx context.Context, tx *sql.Tx, tenantID, taskID, originRunID, resolvedByRunID string) error {
 	_, err := tx.ExecContext(ctx, `UPDATE task_blockers
 		SET status = 'resolved', resolved_by_run_id = ?, resolved_at = ?
-		WHERE tenant_id = ? AND task_id = ? AND origin_run_id = ? AND status = 'open'`,
+		WHERE tenant_id = ? AND thread_id = ? AND origin_run_id = ? AND status = 'open'`,
 		resolvedByRunID, time.Now().Unix(), tenantID, taskID, originRunID)
 	return err
 }

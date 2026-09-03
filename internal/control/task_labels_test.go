@@ -90,8 +90,8 @@ func TestRunCountsAndListTaskRuns(t *testing.T) {
 
 // TestReassignRunMovesEverythingAndCleansPlaceholder: the run row, its events,
 // and its artifacts move in one transaction; the empty auto-created source is
-// deleted, its handoffs fold into the target, and a current_task pointer at
-// the source is repointed.
+// deleted and its handoffs fold into the target. Thread reassignment does not
+// create an implicit continuation pointer.
 func TestReassignRunMovesEverythingAndCleansPlaceholder(t *testing.T) {
 	store, identity := labelTestStore(t)
 	ctx := context.Background()
@@ -142,9 +142,8 @@ func TestReassignRunMovesEverythingAndCleansPlaceholder(t *testing.T) {
 	if ghost, _ := store.GetTask(ctx, identity.TenantID, placeholder.ID); ghost != nil {
 		t.Fatalf("empty placeholder should be deleted: %+v", ghost)
 	}
-	current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if current == nil || current.ID != target.ID {
-		t.Fatalf("current_task should repoint to the target: %+v", current)
+	if current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); current != nil {
+		t.Fatalf("reassignment created implicit current work: %+v", current)
 	}
 }
 

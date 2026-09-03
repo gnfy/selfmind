@@ -172,3 +172,82 @@ func fakeControlProcessor(seen *[]string, reply string) MessageProcessor {
 		return api.MessageResponse{Content: reply}, 0
 	}
 }
+
+// TestWorkHistorySlashMetasComeFromSharedCatalog guards the single command
+// catalog rule: the TUI's /new, /resume, and /task presentation is the gateway
+// registry's usage and summary, never a local copy that can drift from what
+// the daemon accepts.
+func TestWorkHistorySlashMetasComeFromSharedCatalog(t *testing.T) {
+	for _, name := range []string{"/new", "/resume", "/task"} {
+		entry, ok := commandcatalog.Lookup(name)
+		if !ok {
+			t.Fatalf("%s is missing from the shared catalog", name)
+		}
+		cmd, ok := slashCommandIndex[name]
+		if !ok {
+			t.Fatalf("%s is missing from the TUI command table", name)
+		}
+		if cmd.Usage != entry.Usage || cmd.Description != entry.Summary {
+			t.Errorf("%s TUI meta usage=%q description=%q drifted from catalog usage=%q summary=%q",
+				name, cmd.Usage, cmd.Description, entry.Usage, entry.Summary)
+		}
+		found := false
+		for _, meta := range slashHelpMetas() {
+			if meta.Name == name {
+				found = true
+				if meta.Usage != entry.Usage {
+					t.Errorf("%s help usage=%q, want catalog usage %q", name, meta.Usage, entry.Usage)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s is missing from the help page", name)
+		}
+	}
+}
+
+// TestSlashMetasMatchSharedCatalog is the drift guard for the one-catalog rule:
+// every TUI command the shared registry knows must render the registry's usage
+// and summary verbatim, on the help page and in the command table alike. Local
+// copies drifted before — the TUI advertised "/queue [clear]" while the daemon
+// accepted "/queue [drop <n>|clear]", and "/notify <platform|auto>" while the
+// daemon also accepted desk-first|phone-first — so a user reading TUI help was
+// told a command was narrower than it is. Aliases are exempt: the catalog
+// resolves an alias to its canonical entry and holds no alias-specific text.
+func TestSlashMetasMatchSharedCatalog(t *testing.T) {
+	check := func(surface string, metas []slashCommandMeta) {
+		for _, meta := range metas {
+			entry, ok := commandcatalog.Lookup(meta.Name)
+			if !ok {
+				continue // TUI-only command the shared catalog does not define
+			}
+			if entry.Name != meta.Name {
+				continue // alias row; the catalog defines only the canonical name
+			}
+			if meta.Usage != entry.Usage {
+				t.Errorf("%s: %s usage %q drifted from shared catalog usage %q",
+					surface, meta.Name, meta.Usage, entry.Usage)
+			}
+			if meta.Description != entry.Summary {
+				t.Errorf("%s: %s description %q drifted from shared catalog summary %q",
+					surface, meta.Name, meta.Description, entry.Summary)
+			}
+		}
+	}
+	help := slashHelpMetas()
+	check("help page", help)
+
+	table := make([]slashCommandMeta, 0, len(allSlashCommands))
+	for _, cmd := range allSlashCommands {
+		table = append(table, cmd.slashCommandMeta)
+	}
+	check("command table", table)
+
+	// A name that no longer resolves would render a blank help row rather than
+	// fail the comparison above.
+	for _, meta := range help {
+		if strings.TrimSpace(meta.Usage) == "" || strings.TrimSpace(meta.Description) == "" {
+			t.Errorf("help page: %s has no usage or description", meta.Name)
+		}
+	}
+}

@@ -496,7 +496,7 @@ func TestRequeueStartedQueuedSettlesMaterializedRunWithoutReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO effect_receipts
-		(effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+		(effect_key, tenant_id, thread_id, run_id, kind, delivery_enqueued, created_at)
 		VALUES (?, ?, ?, ?, 'run_finalization', 1, ?)`,
 		row.IdempotencyKey, identity.TenantID, task.ID, "run_materialized", time.Now().Unix()); err != nil {
 		t.Fatal(err)
@@ -538,7 +538,7 @@ func TestRequeueStartedQueuedReplaysUntilFinalResultIsDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO effect_receipts
-		(effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+		(effect_key, tenant_id, thread_id, run_id, kind, delivery_enqueued, created_at)
 		VALUES (?, ?, ?, ?, 'run_finalization', 0, ?)`,
 		row.IdempotencyKey, identity.TenantID, task.ID, "run_materialized", time.Now().Unix()); err != nil {
 		t.Fatal(err)
@@ -563,7 +563,7 @@ func TestEffectReceiptsAreTenantScoped(t *testing.T) {
 	defer store.Close()
 	for _, tenant := range []string{"tenant-a", "tenant-b"} {
 		if _, err := store.db.ExecContext(ctx, `INSERT INTO effect_receipts
-			(effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+			(effect_key, tenant_id, thread_id, run_id, kind, delivery_enqueued, created_at)
 			VALUES ('same-effect', ?, 'task', 'run', 'test', 0, ?)`, tenant, time.Now().Unix()); err != nil {
 			t.Fatalf("insert receipt for %s: %v", tenant, err)
 		}

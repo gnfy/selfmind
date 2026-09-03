@@ -234,7 +234,7 @@ func TestTasksDiagReplySmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Task diagnostics", "Labels: open 1", "Waiting: queued 0, pending approvals 0, pending questions 0", "Possibly stuck: none"} {
+	for _, want := range []string{"Task diagnostics", "Labels: open 0, terminal 1", "Waiting: queued 0, pending approvals 0, pending questions 0", "Possibly stuck: none"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q:\n%s", want, out)
 		}

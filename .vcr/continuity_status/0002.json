@@ -1,0 +1,316 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "1",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 梳",
+      "phase": "final_answer"
+    },
+    {
+      "content": "理",
+      "phase": "final_answer"
+    },
+    {
+      "content": "模块",
+      "phase": "final_answer"
+    },
+    {
+      "content": "职责",
+      "phase": "final_answer"
+    },
+    {
+      "content": "、",
+      "phase": "final_answer"
+    },
+    {
+      "content": "依",
+      "phase": "final_answer"
+    },
+    {
+      "content": "赖",
+      "phase": "final_answer"
+    },
+    {
+      "content": "关系",
+      "phase": "final_answer"
+    },
+    {
+      "content": "和",
+      "phase": "final_answer"
+    },
+    {
+      "content": "现",
+      "phase": "final_answer"
+    },
+    {
+      "content": "有",
+      "phase": "final_answer"
+    },
+    {
+      "content": "痛",
+      "phase": "final_answer"
+    },
+    {
+      "content": "点",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，",
+      "phase": "final_answer"
+    },
+    {
+      "content": "明确",
+      "phase": "final_answer"
+    },
+    {
+      "content": "本",
+      "phase": "final_answer"
+    },
+    {
+      "content": "次",
+      "phase": "final_answer"
+    },
+    {
+      "content": "重",
+      "phase": "final_answer"
+    },
+    {
+      "content": "构",
+      "phase": "final_answer"
+    },
+    {
+      "content": "的",
+      "phase": "final_answer"
+    },
+    {
+      "content": "边",
+      "phase": "final_answer"
+    },
+    {
+      "content": "界",
+      "phase": "final_answer"
+    },
+    {
+      "content": "与",
+      "phase": "final_answer"
+    },
+    {
+      "content": "目标",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "content": "  \n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "2",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " ",
+      "phase": "final_answer"
+    },
+    {
+      "content": "设计",
+      "phase": "final_answer"
+    },
+    {
+      "content": "目标",
+      "phase": "final_answer"
+    },
+    {
+      "content": "结构",
+      "phase": "final_answer"
+    },
+    {
+      "content": "、",
+      "phase": "final_answer"
+    },
+    {
+      "content": "接口",
+      "phase": "final_answer"
+    },
+    {
+      "content": "兼",
+      "phase": "final_answer"
+    },
+    {
+      "content": "容",
+      "phase": "final_answer"
+    },
+    {
+      "content": "策略",
+      "phase": "final_answer"
+    },
+    {
+      "content": "和",
+      "phase": "final_answer"
+    },
+    {
+      "content": "可",
+      "phase": "final_answer"
+    },
+    {
+      "content": "分",
+      "phase": "final_answer"
+    },
+    {
+      "content": "阶段",
+      "phase": "final_answer"
+    },
+    {
+      "content": "回",
+      "phase": "final_answer"
+    },
+    {
+      "content": "退",
+      "phase": "final_answer"
+    },
+    {
+      "content": "的",
+      "phase": "final_answer"
+    },
+    {
+      "content": "迁",
+      "phase": "final_answer"
+    },
+    {
+      "content": "移",
+      "phase": "final_answer"
+    },
+    {
+      "content": "方案",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "content": "  \n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "3",
+      "phase": "final_answer"
+    },
+    {
+      "content": ".",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 按",
+      "phase": "final_answer"
+    },
+    {
+      "content": "小",
+      "phase": "final_answer"
+    },
+    {
+      "content": "步",
+      "phase": "final_answer"
+    },
+    {
+      "content": "提交",
+      "phase": "final_answer"
+    },
+    {
+      "content": "实施",
+      "phase": "final_answer"
+    },
+    {
+      "content": "重",
+      "phase": "final_answer"
+    },
+    {
+      "content": "构",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，并",
+      "phase": "final_answer"
+    },
+    {
+      "content": "通过",
+      "phase": "final_answer"
+    },
+    {
+      "content": "测试",
+      "phase": "final_answer"
+    },
+    {
+      "content": "、",
+      "phase": "final_answer"
+    },
+    {
+      "content": "静",
+      "phase": "final_answer"
+    },
+    {
+      "content": "态",
+      "phase": "final_answer"
+    },
+    {
+      "content": "检查",
+      "phase": "final_answer"
+    },
+    {
+      "content": "和",
+      "phase": "final_answer"
+    },
+    {
+      "content": "行为",
+      "phase": "final_answer"
+    },
+    {
+      "content": "对",
+      "phase": "final_answer"
+    },
+    {
+      "content": "比",
+      "phase": "final_answer"
+    },
+    {
+      "content": "逐",
+      "phase": "final_answer"
+    },
+    {
+      "content": "步",
+      "phase": "final_answer"
+    },
+    {
+      "content": "验证",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "usage": {
+        "input_tokens": 8001,
+        "output_tokens": 121,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8001,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

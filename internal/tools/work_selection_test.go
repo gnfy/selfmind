@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel"
 )
 
@@ -24,7 +25,12 @@ func TestWorkSelectRecordsTypedPersonScopedProposal(t *testing.T) {
 	correctRun, _ := store.StartRun(ctx, correctTask, "cli", "correct target work")
 	_ = store.FinishRun(ctx, person.TenantID, correctRun.ID, "interrupted")
 	interactionTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "progress question", Channel: "weixin"})
-	interactionRun, _ := store.StartRun(ctx, interactionTask, "weixin", "how is target going")
+	// The interaction runs in another execution domain, so a resume stays a
+	// typed proposal for the gateway's transfer commit instead of being
+	// claimed in place.
+	interactionRun, _ := store.StartRunWithOptions(ctx, interactionTask, "weixin", "how is target going", control.StartRunOptions{
+		ExecutionRoots: []executionenv.RootBinding{{Path: "/weixin-scope", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace}},
+	})
 
 	tool := NewWorkSelectTool(store)
 	result, err := tool.Execute(map[string]interface{}{

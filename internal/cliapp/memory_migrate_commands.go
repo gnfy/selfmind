@@ -233,14 +233,14 @@ func loadRunPersonMap(ctx context.Context, controlPath string) (map[string]strin
 		return nil, fmt.Errorf("open control.db: %w", err)
 	}
 	defer db.Close()
-	ok, err := tableExists(ctx, db, "main", "task_runs")
+	ok, err := tableExists(ctx, db, "main", "runs")
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
 		return map[string]string{}, nil
 	}
-	rows, err := db.QueryContext(ctx, `SELECT id, COALESCE(person_id, '') FROM task_runs`)
+	rows, err := db.QueryContext(ctx, `SELECT id, COALESCE(person_id, '') FROM runs`)
 	if err != nil {
 		return nil, fmt.Errorf("read task_runs: %w", err)
 	}

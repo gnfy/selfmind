@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,14 +13,9 @@ import (
 	"selfmind/internal/gateway/api"
 )
 
-// TestAsyncRunMovesCurrentTaskPointer covers the live-use regression where a
-// `selfmind send --async` run left the person's current_task pointer on a task
-// the run did not resolve, making the async run invisible to /status. Under
-// the pre-label semantics (Work Timeline P3) an ordinary async send reuses the
-// person's open current label, so the pointer must stay on that label and the
-// label must visibly carry the run (last_channel + status move off 'new') —
-// the run is never orphaned on an invisible task.
-func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
+// TestAsyncRunOwnsFreshInteractionThread covers the no-current-pointer model:
+// an ordinary async send owns a fresh root and cannot capture unrelated work.
+func TestAsyncRunOwnsFreshInteractionThread(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
 	store, err := control.OpenStore(t.TempDir())
@@ -50,13 +46,6 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, currentTask.ID); err != nil {
-		t.Fatal(err)
-	}
-	if current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); current == nil || current.ID != currentTask.ID {
-		t.Fatalf("test setup: current task = %+v, want %s", current, currentTask.ID)
-	}
-
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform:       "cli",
@@ -75,30 +64,35 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 	var freshID string
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		tasks, err := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
+		matches, err := control.NewWorkTimeline(store).Search(ctx, identity.TenantID, identity.PersonID, "background refactor", 10)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, task := range tasks {
-			if task.ID != currentTask.ID && task.LastChannel == "send" {
-				freshID = task.ID
+		for _, thread := range matches {
+			if thread.ID != currentTask.ID {
+				freshID = thread.ID
 			}
 		}
 		if freshID != "" {
-			break
+			runs, err := store.ListTaskRuns(ctx, identity.TenantID, freshID, 10)
+			if err == nil && len(runs) == 1 {
+				break
+			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("async run never became visible on its own task: got %+v", tasks)
+			t.Fatalf("async Run never appeared under fresh Thread %s", freshID)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	after, err := store.GetTask(ctx, identity.TenantID, currentTask.ID)
-	if err != nil || after == nil || after.Status != currentTask.Status || after.LastChannel != "cli" {
+	if err != nil || after == nil || after.Title != currentTask.Title {
 		t.Fatalf("the unrelated current label must stay untouched: %+v err=%v", after, err)
 	}
-	current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if current == nil || current.ID != freshID {
-		t.Fatalf("pointer should follow the run's own task %s; got %+v", freshID, current)
+	if runs, err := store.ListTaskRuns(ctx, identity.TenantID, currentTask.ID, 10); err != nil || len(runs) != 0 {
+		t.Fatalf("the unrelated Thread captured execution: %+v err=%v", runs, err)
+	}
+	if current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); current != nil && current.ID == currentTask.ID {
+		t.Fatalf("unrelated work became an implicit continuation authority: %+v", current)
 	}
 }
 
@@ -139,18 +133,17 @@ func TestSoleWaitingRunContinuationReconcilesWithoutAnalyzer(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+		runs, err := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// This fixture deliberately has no agent gateway, so its run ends failed.
-		// The assertion is that the deterministic sole label receives that real
-		// lifecycle even though no post-run analyzer exists.
-		if stored != nil && stored.LastChannel == "send" && stored.Status == "failed" {
-			break
+		for _, candidate := range runs {
+			if candidate.ParentRunID == waiting.ID && candidate.Status == "failed" {
+				return
+			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("sole weak label did not reconcile deterministically: %+v", stored)
+			t.Fatalf("sole continuation did not record a failed child Run: %+v", runs)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -178,15 +171,6 @@ func TestStatusPrefersActiveRunTask(t *testing.T) {
 		PersonID: identity.PersonID,
 		Title:    "Async running task",
 		Channel:  "send",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	pointerTask, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
-		Title:    "Pointer resting task",
-		Channel:  "cli",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -235,8 +219,8 @@ func TestStatusPrefersActiveRunTask(t *testing.T) {
 
 	daemon.coordinator().endActive(identity.PersonID)
 	reply = statusReply()
-	if !strings.Contains(reply, "Task: "+pointerTask.Title) {
-		t.Fatalf("status after run = %q, want pointer task %q", reply, pointerTask.Title)
+	if !strings.Contains(reply, "Task: "+activeTask.Title) {
+		t.Fatalf("status after registry release should still derive the running Run: %q", reply)
 	}
 }
 
@@ -246,7 +230,17 @@ func TestStatusPrefersActiveRunTask(t *testing.T) {
 func TestStatusSurfacesPendingApproval(t *testing.T) {
 	daemon, store, identity, task, _ := newApprovalTestServer(t)
 	ctx := context.Background()
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
+	run, err := store.StartRun(ctx, task, "cli", "await approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		ActionType: "terminal", Payload: []byte(`{"command":"rm -rf build"}`),
+	}); err != nil {
 		t.Fatal(err)
 	}
 	reply, err := daemon.statusReply(ctx, identity)
@@ -257,5 +251,134 @@ func TestStatusSurfacesPendingApproval(t *testing.T) {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("status card missing %q:\n%s", want, reply)
 		}
+	}
+}
+
+// TestTaskEventsEndpointDerivesSubjectFromAttention: a subject-less events poll
+// after a turn parked follows the top Attention item instead of returning an
+// empty list, so a finished turn's activity stays visible to the TUI.
+func TestTaskEventsEndpointDerivesSubjectFromAttention(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	t.Setenv("SELF_DAEMON_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Parked work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "park after one tool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "tool.started", Payload: mustJSON(map[string]string{"tool": "read_file"})}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+
+	subject, err := daemon.subjectThreadID(ctx, identity)
+	if err != nil || subject != task.ID {
+		t.Fatalf("subject = %q, %v; want attention thread %s", subject, err, task.ID)
+	}
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Task   *control.Task   `json:"task"`
+		Events []control.Event `json:"events"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Task == nil || payload.Task.ID != task.ID || len(payload.Events) == 0 {
+		t.Fatalf("subject-less events poll = %+v", payload)
+	}
+	// /diag reads the same subject for its recent-activity section.
+	diag, err := daemon.diagReply(ctx, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(diag, "Recent activity:") {
+		t.Fatalf("/diag lost recent activity after the turn parked:\n%s", diag)
+	}
+
+	// With the Attention dismissed, the most recent Run still names the subject.
+	if ok, err := control.NewWorkTimeline(store).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, task.ID, run.ID); err != nil || !ok {
+		t.Fatalf("dismiss = %v, %v", ok, err)
+	}
+	if subject, err := daemon.subjectThreadID(ctx, identity); err != nil || subject != task.ID {
+		t.Fatalf("subject after dismissal = %q, %v; want most recent run's thread", subject, err)
+	}
+}
+
+// Pending input is person-scoped, so an approval or question raised by another
+// Thread still belongs on the status card — but it must name its own Thread, or
+// it reads as if it came from the work the card describes.
+func TestStatusNamesPendingInputFromAnotherThread(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	// The card describes the executing Run of this Thread.
+	running, err := store.StartRun(ctx, task, "cli", "current work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "gcp 生产发布", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRun, err := store.StartRun(ctx, other, "cli", "release gcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, otherRun.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: other.ID, RunID: otherRun.ID,
+		ActionType: "terminal", Payload: []byte(`{"tool":"terminal","args":{"command":"gcloud deploy"},"reason":"production release"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: other.ID, RunID: otherRun.ID,
+		Question: "which region?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+		RunID: running.ID, Channel: "cli", StartedAt: time.Now(),
+	}) {
+		t.Fatal("active run registration failed")
+	}
+	defer daemon.coordinator().endActive(identity.PersonID)
+
+	reply, err := daemon.statusReply(ctx, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"gcloud deploy", "which region?", "(task: gcp 生产发布)"} {
+		if !strings.Contains(reply, want) {
+			t.Fatalf("status card missing %q:\n%s", want, reply)
+		}
+	}
+	if strings.Count(reply, "(task: gcp 生产发布)") != 2 {
+		t.Fatalf("both the approval and the question must name their own thread:\n%s", reply)
 	}
 }

@@ -279,6 +279,11 @@ substrate). Document results in this file.
   unmatched output is ignored, while an identified completion with no tracked
   start gets its own finalized history cell instead of being guessed onto a
   different running call. Committed cells are never mutated by later events.
+- Tool failures have separate model and human surfaces. Main receives typed
+  category, recovery hint, and diagnostic instructions; the transcript gets a
+  bounded cause only. A `not_dispatched` refusal is a dim `Skipped` row rather
+  than a red execution failure, while a command that actually ran and failed
+  remains visibly failed.
 - Active command output is a bounded three-line tail. A terminal run state
   (`done`, `error`, or `cancelled`) finalizes every unfinished tool cell as an
   interrupted error before committing it. Only an intentional spectator detach
@@ -331,6 +336,10 @@ substrate). Document results in this file.
   complete successfully, all steps must be resolved; an unresolved plan is
   repaired through the agent loop or leaves the run resumable rather than
   falsely complete.
+- An exact-parent continuation copies the parent's latest durable plan into the
+  child before Main starts and emits that child snapshot immediately. Plan
+  state therefore survives multi-turn transfer instead of depending on a
+  display-only replay event.
 
 ### H2b - Physical-row-safe structured tool cells
 
@@ -365,11 +374,15 @@ substrate). Document results in this file.
   that exact run instead of every event associated with the person.
 - Startup digest headings distinguish event time from current state: terminal
   runs completed after the last presence appear under `While you were away`,
-  while older unresolved task blockers appear under `Still needs attention`.
+  while older Runs that still derive Attention appear under
+  `Still needs attention`.
   Maintenance-only task-card updates never re-date a terminal run.
 - Every forwarded event retains its durable event id/cursor, live sequence,
   task id, and run id. The reducer deduplicates replayed events and accepts
   watcher events only while their run is still the run being watched.
+- Queue acknowledgements and `run.started` share an opaque `queue_id`. The TUI
+  uses that exact correlation to own a drained or transferred Run's spinner;
+  equal or truncated input text is never treated as ownership evidence.
 - Submitting a new prompt is an ordering barrier: the old assistant fragment
   is committed first, the old watcher is detached, and only then is the new
   user cell committed. Late events from the detached run are discarded.

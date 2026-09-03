@@ -99,7 +99,9 @@ func workContinuityGuidanceForDefinitions(defs []map[string]interface{}) string 
 	guidance := `# Work Continuity
 - Treat small prior-work hints as evidence, never as a forced attachment. A similar recent task does not make the current request a continuation.
 - When the user naturally refers to older work and the supplied evidence is insufficient, use work_search across retained structured history, then work_inspect only the exact run candidates needed.
+- work_search has two modes. mode "history" (default) searches retained work by your query. mode "attention" lists this person's currently actionable or resumable runs regardless of wording. A bare confirmation, approval, or continuation ("确认执行", "go ahead", "继续刚才的") with no literal reference calls work_search with mode "attention" first: the run that asked for that confirmation is usually the top card from this channel.
 - After the evidence supports one exact relationship, call work_select with observe for a status/result question or resume for deliberate continuation. Do not call it for ordinary new work.
+- When work_select reports commit_mode "direct", this turn has become the selected run: use the returned resume context, do the remaining work now, keep completed steps when you call update_plan, and finish with the real result. When it reports that the continuation will be queued, acknowledge briefly and finish this turn without doing the target's work here.
 - Keep ordinary new work as new work. Do not ask the user to choose from history merely because related cards exist.
 - work_search and work_inspect are read-only. work_select records a typed proposal for gateway validation; it never grants workspace, parent-run, approval, or delivery authority by itself.`
 	if available["set_delivery_target"] {

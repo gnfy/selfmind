@@ -83,7 +83,6 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 
 	now := time.Now()
-	nextJSON, _ := json.Marshal(input.NextSteps)
 	doneJSON, _ := json.Marshal(input.Handoff.DoneItems)
 	handoffNextJSON, _ := json.Marshal(input.Handoff.NextSteps)
 	filesJSON, _ := json.Marshal(input.Handoff.ChangedFiles)
@@ -97,7 +96,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 
 	var personID string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT person_id FROM tasks WHERE tenant_id = ? AND id = ?`, tenant, input.TaskID,
+		`SELECT person_id FROM threads WHERE tenant_id = ? AND id = ?`, tenant, input.TaskID,
 	).Scan(&personID); err != nil {
 		return nil, fmt.Errorf("load finalization task: %w", err)
 	}
@@ -108,7 +107,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if input.EffectKey != "" {
 		result, err := tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO effect_receipts
-			 (effect_key, tenant_id, task_id, run_id, kind, created_at)
+			 (effect_key, tenant_id, thread_id, run_id, kind, created_at)
 			 VALUES (?, ?, ?, ?, 'run_finalization', ?)`,
 			input.EffectKey, tenant, input.TaskID, input.RunID, now.Unix())
 		if err != nil {
@@ -120,8 +119,8 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 
 	result, err := tx.ExecContext(ctx,
-		`UPDATE task_runs SET status = ?, finished_at = ?, heartbeat_at = ?
-		 WHERE tenant_id = ? AND id = ? AND task_id = ?`,
+		`UPDATE runs SET status = ?, finished_at = ?, heartbeat_at = ?
+		 WHERE tenant_id = ? AND id = ? AND thread_id = ?`,
 		input.RunStatus, now.Unix(), now.Unix(), tenant, input.RunID, input.TaskID)
 	if err != nil {
 		return nil, fmt.Errorf("finish run: %w", err)
@@ -133,26 +132,11 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		return nil, fmt.Errorf("finalize skill lifecycle: %w", err)
 	}
 
-	taskStatus := input.TaskStatus
 	if !duplicateEffect {
-		// Every finalization commits the DERIVED task status (simplification
-		// P2): the reducer over pending human input, live runs, watches, and
-		// open blockers is the single lifecycle authority. The old weak-label
-		// deferral (park the status until the post-run labeler said KEEP) is
-		// gone with the labeler routing itself.
-		taskStatus, err = resolveFinalTaskStatusTx(ctx, tx, tenant, input.TaskID, input.RunID, input.TaskStatus)
-		if err != nil {
-			return nil, fmt.Errorf("reduce task status: %w", err)
-		}
 		result, err = tx.ExecContext(ctx,
-			`UPDATE tasks SET status = ?,
-		 current_summary = COALESCE(NULLIF(?, ''), current_summary),
-		 next_steps_json = ?,
-		 active_run_id = CASE WHEN active_run_id = ? THEN '' ELSE active_run_id END,
-		 archived_at = CASE WHEN ? = 'archived' THEN COALESCE(archived_at, ?) ELSE NULL END,
+			`UPDATE threads SET summary = COALESCE(NULLIF(?, ''), summary),
 		 last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-			taskStatus, input.Summary, string(nextJSON), input.RunID,
-			taskStatus, now.Unix(), now.Unix(), now.Unix(), tenant, input.TaskID)
+			input.Summary, now.Unix(), now.Unix(), tenant, input.TaskID)
 		if err != nil {
 			return nil, fmt.Errorf("update task: %w", err)
 		}
@@ -161,10 +145,16 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		}
 	} else {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE tasks SET active_run_id = CASE WHEN active_run_id = ? THEN '' ELSE active_run_id END,
-			 last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-			input.RunID, now.Unix(), now.Unix(), tenant, input.TaskID); err != nil {
+			`UPDATE threads SET last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+			now.Unix(), now.Unix(), tenant, input.TaskID); err != nil {
 			return nil, fmt.Errorf("settle duplicate finalization run: %w", err)
+		}
+	}
+	if promote, err := shouldPromoteThreadAtFinalization(ctx, tx, input); err != nil {
+		return nil, fmt.Errorf("derive thread promotion: %w", err)
+	} else if promote {
+		if err := promoteThreadForRunTx(ctx, tx, tenant, input.RunID); err != nil {
+			return nil, fmt.Errorf("promote work thread: %w", err)
 		}
 	}
 
@@ -177,7 +167,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if !duplicateEffect && strings.TrimSpace(input.AssistantContent) != "" {
 		_, err = tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO channel_messages
-			 (id, tenant_id, person_id, account_id, channel, task_id, role, content, created_at)
+			 (id, tenant_id, person_id, account_id, channel, thread_id, role, content, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, 'assistant', ?, ?)`,
 			"msg_run_"+input.RunID+"_assistant", tenant, personID, input.Identity.AccountID,
 			normalizeName(input.Channel, input.Identity.Platform), input.TaskID, input.AssistantContent, now.Unix())
@@ -197,7 +187,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if !duplicateEffect {
 		_, err = tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO task_handoffs
-		 (id, task_id, run_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at)
+		 (id, thread_id, run_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			"handoff_run_"+input.RunID, input.TaskID, input.RunID, input.Handoff.Summary, string(doneJSON),
 			string(handoffNextJSON), string(filesJSON), input.Handoff.TestStatus, string(risksJSON), now.Unix())
@@ -247,7 +237,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 			}
 			result, err := tx.ExecContext(ctx,
 				`INSERT INTO task_events
-				 (id, cursor, task_id, run_id, type, visibility, channel, payload_json, idempotency_key, created_at)
+				 (id, cursor, thread_id, run_id, type, visibility, channel, payload_json, idempotency_key, created_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 				 ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '' DO NOTHING`,
 				event.ID, event.Cursor, event.TaskID, event.RunID, event.Type, event.Visibility,
@@ -272,7 +262,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 	result, err = tx.ExecContext(ctx,
 		`INSERT INTO task_events
-		 (id, cursor, task_id, run_id, type, visibility, channel, payload_json, idempotency_key, created_at)
+		 (id, cursor, thread_id, run_id, type, visibility, channel, payload_json, idempotency_key, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '' DO NOTHING`,
 		input.Event.ID, input.Event.Cursor, input.TaskID, input.RunID, input.Event.Type,
@@ -304,27 +294,18 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 // resolved so a guessed label cannot be closed by mistake.
 func (s *Store) ReconcileTaskAfterRun(ctx context.Context, tenantID, taskID, runID, proposed string) error {
 	tenant := normalizeTenant(tenantID)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	status, err := resolveFinalTaskStatusTx(ctx, tx, tenant, taskID, runID, proposed)
-	if err != nil {
-		return err
-	}
 	now := time.Now().Unix()
-	result, err := tx.ExecContext(ctx,
-		`UPDATE tasks SET status = ?, last_activity_at = ?, updated_at = ?
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE threads SET last_activity_at = ?, updated_at = ?
 		 WHERE tenant_id = ? AND id = ?`,
-		status, now, now, tenant, taskID)
+		now, now, tenant, taskID)
 	if err != nil {
 		return err
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
 		return fmt.Errorf("reconcile task affected %d rows", n)
 	}
-	return tx.Commit()
+	return nil
 }
 
 // EffectOwnedByRun reports whether runID won a logical effect claim. Delivery
@@ -375,142 +356,6 @@ func (s *Store) EffectDeliveryEnqueued(ctx context.Context, tenantID, effectKey 
 		return false, nil
 	}
 	return value != 0, err
-}
-
-// resolveFinalTaskStatusTx derives the task state from durable blockers before
-// applying the run's proposed terminal status. This prevents a late run from
-// overwriting a task that still has another active run, a pending user gate,
-// an external watch, or a queued watcher finalization.
-func resolveFinalTaskStatusTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	tenantID, taskID, finishingRunID, proposed string,
-) (string, error) {
-	// Explicit user lifecycle controls must win over derived wait evidence.
-	// Otherwise /cancel and /task archive could be immediately undone by the
-	// very pending approval, clarification, or run they are intended to close.
-	switch strings.ToLower(strings.TrimSpace(proposed)) {
-	case "cancelled", "archived":
-		return proposed, nil
-	}
-
-	hasRows := func(query string, args ...interface{}) (bool, error) {
-		var found int
-		if err := tx.QueryRowContext(ctx, query, args...).Scan(&found); err != nil {
-			return false, err
-		}
-		return found != 0, nil
-	}
-
-	pendingUser, err := hasRows(
-		`SELECT EXISTS(
-			SELECT 1 FROM approval_requests
-			WHERE tenant_id = ? AND task_id = ? AND status = 'pending'
-			UNION ALL
-			SELECT 1 FROM clarify_requests
-			WHERE tenant_id = ? AND task_id = ? AND status = 'pending'
-		)`,
-		tenantID, taskID, tenantID, taskID,
-	)
-	if err != nil {
-		return "", err
-	}
-	if pendingUser {
-		return "waiting_user", nil
-	}
-
-	activeRun, err := hasRows(
-		`SELECT EXISTS(
-			SELECT 1 FROM task_runs
-			WHERE tenant_id = ? AND task_id = ? AND id <> ? AND status = 'running'
-		)`,
-		tenantID, taskID, finishingRunID,
-	)
-	if err != nil {
-		return "", err
-	}
-	if activeRun {
-		return "in_progress", nil
-	}
-
-	waitingExternal, err := hasRows(
-		`SELECT EXISTS(
-			SELECT 1 FROM external_watches
-			WHERE tenant_id = ? AND task_id = ? AND status IN ('pending', 'running')
-		)`,
-		tenantID, taskID,
-	)
-	if err != nil {
-		return "", err
-	}
-	if waitingExternal {
-		return "waiting_external", nil
-	}
-
-	waitingFinalization, err := hasRows(
-		`SELECT EXISTS(
-			SELECT 1 FROM task_queue
-			WHERE tenant_id = ? AND task_id = ?
-			  AND status IN ('queued', 'started')
-			  AND idempotency_key LIKE 'external-watch:%:finalization'
-			  AND (COALESCE(run_id, '') = '' OR run_id <> ?)
-		)`,
-		tenantID, taskID, finishingRunID,
-	)
-	if err != nil {
-		return "", err
-	}
-	if waitingFinalization {
-		return "waiting_finalization", nil
-	}
-
-	waitStatus, err := unresolvedRunStatusTx(ctx, tx, tenantID, taskID)
-	if err != nil {
-		return "", err
-	}
-	if waitStatus != "" {
-		return waitStatus, nil
-	}
-	return proposed, nil
-}
-
-// unresolvedRunStatusTx derives the task's generic wait state from its
-// UNCLAIMED resumable runs (simplification §10.3): a run parked in
-// waiting_user / verification_partial / blocked / interrupted that no child
-// has claimed keeps the label in that state, strongest first. The legacy
-// task_blockers rows lost this authority — runs themselves are the source of
-// truth, and claiming a parent releases its wait atomically.
-func unresolvedRunStatusTx(ctx context.Context, tx *sql.Tx, tenantID, taskID string) (string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT status FROM task_runs
-		WHERE tenant_id = ? AND task_id = ?
-		  AND status IN `+resumableRunStatusSQL+`
-		  AND COALESCE(resumed_by_run_id, '') = ''
-		  AND NOT EXISTS (
-		      SELECT 1 FROM task_runs child
-		       WHERE child.tenant_id = task_runs.tenant_id
-		         AND child.parent_run_id = task_runs.id)`,
-		tenantID, taskID)
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-	seen := map[string]bool{}
-	for rows.Next() {
-		var status string
-		if err := rows.Scan(&status); err != nil {
-			return "", err
-		}
-		seen[status] = true
-	}
-	if err := rows.Err(); err != nil {
-		return "", err
-	}
-	for _, status := range []string{"waiting_user", "verification_partial", "blocked", "interrupted"} {
-		if seen[status] {
-			return status, nil
-		}
-	}
-	return "", nil
 }
 
 func outcomeFromTerminalPayload(payload json.RawMessage) json.RawMessage {

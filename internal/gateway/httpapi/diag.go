@@ -364,11 +364,12 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 	}
 
-	// Recent events for the current task (fall back to the person's current
-	// task pointer when no run is active).
+	// Recent events for the current subject: the active run's thread, else the
+	// resume pin, the top Attention item, or the most recent run, so a finished
+	// turn keeps its activity diagnosable instead of vanishing.
 	if currentTaskID == "" {
-		if task, _ := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); task != nil {
-			currentTaskID = task.ID
+		if subject, err := d.subjectThreadID(ctx, identity); err == nil {
+			currentTaskID = subject
 		}
 	}
 	if currentTaskID != "" {

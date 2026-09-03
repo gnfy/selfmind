@@ -181,7 +181,9 @@ func TestBoundedTaskContextOmitsEventAndCompatibilityHistory(t *testing.T) {
 	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "in_progress", "bounded summary", []string{"bounded next"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveHandoff(ctx, control.Handoff{TaskID: task.ID, Summary: "bounded handoff"}); err != nil {
+	if _, err := store.SaveHandoff(ctx, control.Handoff{
+		TaskID: task.ID, Summary: "bounded handoff", NextSteps: []string{"bounded next"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "tool.completed", Payload: mustJSON(map[string]string{"result": "must stay out"})}); err != nil {

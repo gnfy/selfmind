@@ -51,6 +51,15 @@ func (c *RunCoordinator) resolveParentRun(ctx context.Context, identity *control
 // and approval bindings are exact, so the task's other unresolved runs are
 // irrelevant. A named run that is terminal or already claimed fails closed;
 // it never degrades to a root turn on the bounded task card.
+//
+// The one exception is a Run parked on a daemon watcher (waiting_external):
+// it is outside the resumable set, yet its watcher finalization must continue
+// it as an exact child. Once every watcher it registered has concluded and no
+// continuation claimed it, it is the exact parent (validateParentClaimTx
+// admits the same case). Once its finalization has claimed it, a binding that
+// still names it points at finished system work rather than a person's open
+// question, so it continues the Thread's current resolution instead of
+// failing closed.
 func (c *RunCoordinator) resolveExplicitParent(ctx context.Context, identity *control.IdentityContext, task *control.Task, runID string) (parentRunResolution, error) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || strings.TrimSpace(runID) == "" {
 		return parentRunResolution{}, fmt.Errorf("explicit parent run is unavailable")
@@ -64,7 +73,58 @@ func (c *RunCoordinator) resolveExplicitParent(ctx context.Context, identity *co
 			return parentRunResolution{candidates: []control.Run{run}}, nil
 		}
 	}
+	run, err := c.srv.Control.GetRun(ctx, identity.TenantID, runID)
+	if err != nil {
+		return parentRunResolution{}, fmt.Errorf("load explicit parent run: %w", err)
+	}
+	if run != nil && run.PersonID == identity.PersonID && run.TaskID == task.ID && strings.EqualFold(run.Status, "waiting_external") {
+		claimed, err := c.watcherRunClaimed(ctx, identity, task, run.ID)
+		if err != nil {
+			return parentRunResolution{}, err
+		}
+		if claimed {
+			return c.resolveParentRun(ctx, identity, task)
+		}
+		live, err := c.watcherRunHasLiveWatch(ctx, identity, run.ID)
+		if err != nil {
+			return parentRunResolution{}, err
+		}
+		if !live {
+			return parentRunResolution{candidates: []control.Run{*run}}, nil
+		}
+	}
 	return parentRunResolution{}, fmt.Errorf("continuation parent %s is no longer resumable", shortRunID(runID))
+}
+
+// watcherRunClaimed reports whether a child Run of this task already continues
+// runID on the forward edge validateParentClaimTx enforces. The claim itself
+// stays atomic inside run creation; this is the read-only pre-check.
+func (c *RunCoordinator) watcherRunClaimed(ctx context.Context, identity *control.IdentityContext, task *control.Task, runID string) (bool, error) {
+	children, err := c.srv.Control.ListTaskRuns(ctx, identity.TenantID, task.ID, 50)
+	if err != nil {
+		return false, fmt.Errorf("list watcher continuations: %w", err)
+	}
+	for _, child := range children {
+		if child.ParentRunID == runID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// watcherRunHasLiveWatch reports whether any pending or running watcher still
+// belongs to runID; while one does, nothing may claim the Run away from it.
+func (c *RunCoordinator) watcherRunHasLiveWatch(ctx context.Context, identity *control.IdentityContext, runID string) (bool, error) {
+	active, err := c.srv.Control.ListExternalWatchesForPerson(ctx, identity.TenantID, identity.PersonID, control.ExternalWatchListActive, 50, 0)
+	if err != nil {
+		return false, fmt.Errorf("list live watchers: %w", err)
+	}
+	for _, watch := range active {
+		if watch.RunID == runID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // parentCandidatesResponse answers an ambiguous continuation deterministically:
@@ -209,7 +269,7 @@ func (d *Server) resolveUnresolvedRunReference(ctx context.Context, identity *co
 	if d == nil || d.Control == nil || identity == nil || ref == "" {
 		return nil, "", nil
 	}
-	runs, err := d.Control.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 20)
+	runs, err := d.Control.ListExplicitlyResumableRunsForPerson(ctx, identity.TenantID, identity.PersonID, 200)
 	if err != nil {
 		return nil, "", err
 	}

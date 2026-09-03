@@ -2,8 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +23,17 @@ import (
 
 const taskUsage = "Usage: /task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]"
 
-const tasksTrailingHint = "Use /resume <number> to continue, /task <number> complete to mark done, or /task <number> archive to hide. IDs also work."
+const tasksTrailingHint = "Use /resume <number> to continue the exact run, /task <number> complete to dismiss its current attention, or /task <number> archive to hide its thread. IDs also work."
+
+// tasksAttentionPageLimit bounds ONE rendered /tasks page: the number of cards
+// a single render draws. It is not a bound on the person's open work — later
+// pages are fetched from the database, and the total comes from the timeline.
+const tasksAttentionPageLimit = 100
+
+// tasksAttentionScanLimit bounds the one ranked Attention read a --workspace
+// filter pages in memory, because the workspace is not part of the ranked
+// Attention query.
+const tasksAttentionScanLimit = 500
 
 // taskCardView is the batched per-person data every card draws from, fetched
 // once per /tasks render (grouped queries, never per-task round trips).
@@ -36,6 +46,33 @@ type taskCardView struct {
 	questions    map[string]int                      // task_id -> pending clarify questions
 	dupes        map[string]string                   // task_id -> suggested duplicate-of task id (W3)
 	outcomes     map[string]control.LatestRunOutcome // task_id -> newest terminal reason
+	resumeRuns   map[string]string                   // task_id -> exact run shown by Attention
+	runStatuses  map[string]string                   // run_id -> that Attention run's own status
+}
+
+// explicitResumeRunStatus reports whether a Run parked in this status is
+// continued by an explicit /resume. Monitoring (waiting_external) and
+// executing (running) Runs are Attention too, but nothing about them is the
+// person's to resume, so their cards carry no resume line.
+func explicitResumeRunStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "interrupted", "waiting_user", api.RunStatusVerificationPartial, "blocked":
+		return true
+	}
+	return false
+}
+
+// attentionDismissalRefusal maps the control store's dismissal refusals to the
+// sentence the person sees. Both are decisions, not failures: the person must
+// stop the run, or answer, reject, or cancel the control object first.
+func attentionDismissalRefusal(err error) (string, bool) {
+	switch {
+	case errors.Is(err, control.ErrAttentionPendingControl):
+		return "This run still has a pending approval, clarification, or watcher. Answer, reject, or cancel it first; attention is not dismissed.", true
+	case errors.Is(err, control.ErrTaskHasLiveWork):
+		return "This thread has a run executing right now. Use /stop and wait for it to finish before dismissing its attention.", true
+	}
+	return "", false
 }
 
 // tasksOverviewReply renders /tasks and its variants: ""/"open" (open work),
@@ -52,18 +89,37 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	if limit <= 0 {
 		limit = d.TaskGovernance.listLimit()
 	}
-	if limit > 200 {
-		limit = 200
+	if limit > tasksAttentionPageLimit {
+		limit = tasksAttentionPageLimit
 	}
 	offset := (args.page - 1) * limit
-	page, err := d.Control.QueryTasks(ctx, identity.TenantID, identity.PersonID, control.TaskQuery{
-		View: viewName, WorkspaceID: args.workspace, Keyword: args.query, Limit: limit, Offset: offset,
-	})
+	var page control.TaskPage
+	var attention []control.AttentionItem
+	var err error
+	if viewName == "open" && !args.search {
+		// Fetch exactly the page this render draws, ranked with the requesting
+		// channel first, plus the person's true Attention total.
+		var total int
+		attention, total, err = d.openAttentionPage(ctx, identity, args.workspace, firstString(channels), limit, offset)
+		if err == nil {
+			page = taskPageFromAttention(attention, total, limit, offset)
+		}
+	} else {
+		page, err = d.Control.QueryTasks(ctx, identity.TenantID, identity.PersonID, control.TaskQuery{
+			View: viewName, WorkspaceID: args.workspace, Keyword: args.query, Limit: limit, Offset: offset,
+		})
+	}
 	if err != nil {
 		return "", err
 	}
 	tasks := page.Tasks
 	view := taskCardView{}
+	view.resumeRuns = make(map[string]string)
+	view.runStatuses = make(map[string]string)
+	for _, item := range attention {
+		view.resumeRuns[item.Thread.ID] = item.RunID
+		view.runStatuses[item.RunID] = item.RunStatus
+	}
 	if active := d.coordinator().currentActive(identity.PersonID); active != nil {
 		view.activeTaskID = active.TaskID
 	}
@@ -86,22 +142,18 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	case "", "open":
 		var sb strings.Builder
 		if len(tasks) == 0 {
-			sb.WriteString("No open tasks.")
+			sb.WriteString("Nothing needs attention.")
 		} else {
-			sb.WriteString("Open tasks:\n")
-			tasks = groupTasksByWorkKey(tasks)
-			if args.page == 1 {
-				d.taskLists.remember(identity, firstString(channels), tasks, time.Now())
-			}
+			sb.WriteString("Needs attention:\n")
+			// Ordinals belong to the page actually drawn, on every page: the
+			// snapshot is what /task <n> and /resume <n> resolve against, so a
+			// later page's numbers must name its own exact runs.
+			d.taskLists.rememberAttention(identity, firstString(channels), attention, time.Now())
 			for i, task := range tasks {
-				index := 0
-				if args.page == 1 {
-					index = i + 1
-				}
-				sb.WriteString("\n" + renderTaskCard(index, task, view) + "\n")
+				sb.WriteString("\n" + renderTaskCard(i+1, task, view) + "\n")
 			}
 			if page.HasMore() {
-				sb.WriteString(fmt.Sprintf("\n... and %d more open - use /tasks open --page %d or /tasks search <keyword>", page.Total-offset-len(tasks), args.page+1))
+				sb.WriteString(fmt.Sprintf("\n... and %d more - use /tasks open --page %d or /tasks search <keyword>", page.Total-offset-len(tasks), args.page+1))
 			}
 		}
 		if len(tasks) == 0 && args.page == 1 {
@@ -128,6 +180,59 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	default:
 		return "Usage: /tasks [open|done|archived|all|search <keyword>|<keyword>]", nil
 	}
+}
+
+// openAttentionPage returns exactly the Attention items one /tasks page renders
+// plus the person's true Attention total. Without a workspace filter both come
+// from the database, so work past one page stays reachable and countable; a
+// workspace is not part of the ranked Attention query, so that variant ranks
+// one bounded read and pages the filtered items.
+func (d *Server) openAttentionPage(ctx context.Context, identity *control.IdentityContext, workspace, preferChannel string, limit, offset int) ([]control.AttentionItem, int, error) {
+	timeline := control.NewWorkTimeline(d.Control)
+	if workspace == "" {
+		return timeline.AttentionPage(ctx, identity.TenantID, identity.PersonID, preferChannel, limit, offset)
+	}
+	scanned, err := timeline.AttentionForChannel(ctx, identity.TenantID, identity.PersonID, preferChannel, tasksAttentionScanLimit)
+	if err != nil {
+		return nil, 0, err
+	}
+	filtered := scanned[:0]
+	for _, item := range scanned {
+		if item.Thread.WorkspaceID == workspace {
+			filtered = append(filtered, item)
+		}
+	}
+	return attentionPage(filtered, limit, offset), len(filtered), nil
+}
+
+func attentionPage(items []control.AttentionItem, limit, offset int) []control.AttentionItem {
+	if offset >= len(items) {
+		return nil
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
+}
+
+// taskPageFromAttention projects one fetched Attention page as task cards.
+// total is the person's Attention count, not the length of items, so HasMore
+// and the "... and N more" hint describe everything that needs attention.
+func taskPageFromAttention(items []control.AttentionItem, total, limit, offset int) control.TaskPage {
+	page := control.TaskPage{Total: total, Limit: limit, Offset: offset}
+	for _, item := range items {
+		thread := item.Thread
+		page.Tasks = append(page.Tasks, control.Task{
+			ID: thread.ID, TenantID: thread.TenantID, PersonID: thread.PersonID,
+			WorkspaceID: thread.WorkspaceID, Title: thread.Title, Status: item.Activity,
+			Kind: thread.Kind, Visibility: thread.Visibility, Pinned: thread.Pinned,
+			ResumeRunID:    item.RunID,
+			CurrentSummary: firstNonEmpty(item.RunSummary, thread.Summary), CreatedAt: thread.CreatedAt,
+			UpdatedAt: thread.UpdatedAt, LastActivityAt: thread.LastActivityAt,
+		})
+	}
+	return page
 }
 
 type tasksArgs struct {
@@ -315,42 +420,6 @@ func taskSearchFields(t control.Task, view taskCardView) []string {
 	return fields
 }
 
-// groupTasksByWorkKey stably reorders open task cards so tasks sharing a
-// ticket key sit together (anchored at the first occurrence). Tasks without a
-// key keep their relative order. Purely presentational — same cards, adjacent.
-func groupTasksByWorkKey(tasks []control.Task) []control.Task {
-	if len(tasks) < 3 {
-		return tasks
-	}
-	anchor := map[string]int{}
-	for i, t := range tasks {
-		key := uniqueTaskWorkKey(t.Title)
-		if key == "" {
-			continue
-		}
-		if _, seen := anchor[key]; !seen {
-			anchor[key] = i
-		}
-	}
-	order := make([]int, len(tasks))
-	for i, t := range tasks {
-		order[i] = i
-		if key := uniqueTaskWorkKey(t.Title); key != "" {
-			order[i] = anchor[key]
-		}
-	}
-	indices := make([]int, len(tasks))
-	for i := range indices {
-		indices[i] = i
-	}
-	sort.SliceStable(indices, func(a, b int) bool { return order[indices[a]] < order[indices[b]] })
-	out := make([]control.Task, len(tasks))
-	for i, idx := range indices {
-		out[i] = tasks[idx]
-	}
-	return out
-}
-
 // taskCardStatus maps one label to the simplified card bracket:
 // running (live run) > done/cancelled/failed/archived verbatim > waiting
 // (pending approval/question, or blocked) > paused (open, nothing executing —
@@ -365,6 +434,12 @@ func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQues
 		return "verification"
 	case strings.EqualFold(strings.TrimSpace(t.Status), "interrupted"):
 		return "interrupted"
+	case strings.EqualFold(strings.TrimSpace(t.Status), control.ThreadActivityResumable):
+		return "resumable"
+	case strings.EqualFold(strings.TrimSpace(t.Status), control.ThreadActivityMonitoring):
+		return "monitoring"
+	case strings.EqualFold(strings.TrimSpace(t.Status), control.ThreadActivityNeedsAttention):
+		return "waiting"
 	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_finalization") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_user"):
 		return "waiting"
 	default:
@@ -385,7 +460,10 @@ func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQues
 // label shows "· interrupted" instead of the age.
 func renderTaskCard(index int, t control.Task, v taskCardView) string {
 	var sb strings.Builder
-	isActive := t.ID == v.activeTaskID
+	isActive := strings.EqualFold(strings.TrimSpace(t.Status), control.ThreadActivityActive)
+	if strings.TrimSpace(t.ResumeRunID) == "" {
+		isActive = t.ID == v.activeTaskID
+	}
 	status := taskCardStatus(t, isActive, v.approvals[t.ID], v.questions[t.ID])
 	if index > 0 {
 		fmt.Fprintf(&sb, "%d. [%s] %s\n", index, status, truncateRunes(toOneLine(t.Title), 50))
@@ -393,7 +471,13 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 		fmt.Fprintf(&sb, "- [%s] %s\n", status, truncateRunes(toOneLine(t.Title), 50))
 	}
 
-	last := strings.TrimSpace(v.lastRuns[t.ID])
+	last := ""
+	if strings.TrimSpace(t.ResumeRunID) != "" {
+		last = strings.TrimSpace(t.CurrentSummary)
+	}
+	if last == "" {
+		last = strings.TrimSpace(v.lastRuns[t.ID])
+	}
 	if last == "" {
 		last = strings.TrimSpace(t.CurrentSummary)
 	}
@@ -430,6 +514,15 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 	if other := v.dupes[t.ID]; other != "" {
 		fmt.Fprintf(&sb, "   possible duplicate of: %s (merge with /task %s merge %s)\n",
 			shortTaskID(other), shortTaskID(t.ID), shortTaskID(other))
+	}
+	runID := strings.TrimSpace(t.ResumeRunID)
+	if runID == "" {
+		runID = strings.TrimSpace(v.resumeRuns[t.ID])
+	}
+	// The exact run stays bound to the card's ordinal for /task <n> complete;
+	// the resume line is printed only for a run the person can /resume.
+	if runID != "" && explicitResumeRunStatus(v.runStatuses[runID]) {
+		fmt.Fprintf(&sb, "   resume: %s\n", shortRunID(runID))
 	}
 	fmt.Fprintf(&sb, "   runs: %d\n", v.runCounts[t.ID])
 	fmt.Fprintf(&sb, "   id: %s", cardTaskID(t.ID))
@@ -642,53 +735,62 @@ func (d *Server) taskCommandReply(ctx context.Context, identity *control.Identit
 			textutil.Truncate(toOneLine(task.Title), 40), textutil.Truncate(toOneLine(target.Title), 40), moved, shortTaskID(target.ID)), nil
 	case "complete":
 		if active := d.coordinator().currentActive(identity.PersonID); active != nil && active.TaskID == task.ID {
-			return "This task has a run executing right now. Use /stop and wait for it to finish before marking the task complete.", nil
+			return "This thread has a run executing right now. Use /stop and wait for it to finish before dismissing its attention.", nil
 		}
-		result, err := d.Control.CompleteTaskByUser(ctx, identity.TenantID, identity.PersonID, task.ID)
-		if err != nil {
-			if err == control.ErrTaskHasLiveWork {
-				return "This task still has running or externally monitored work. Stop the run or cancel its watcher before marking it complete.", nil
+		timeline := control.NewWorkTimeline(d.Control)
+		changed := 0
+		dismissedRunID := strings.TrimSpace(task.ResumeRunID)
+		if dismissedRunID != "" {
+			dismissed, err := timeline.DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, task.ID, dismissedRunID)
+			if err != nil {
+				if refusal, ok := attentionDismissalRefusal(err); ok {
+					return refusal, nil
+				}
+				return "", err
 			}
-			return "", err
+			if dismissed {
+				changed = 1
+			}
+		} else {
+			var err error
+			changed, err = timeline.DismissAttention(ctx, identity.TenantID, identity.PersonID, task.ID)
+			if err != nil {
+				if refusal, ok := attentionDismissalRefusal(err); ok {
+					return refusal, nil
+				}
+				return "", err
+			}
 		}
-		if !result.Changed {
-			return "Task is already complete.", nil
+		if changed == 0 {
+			return "This thread has no current attention to dismiss.", nil
 		}
 		_, _ = d.Control.AppendEvent(ctx, control.Event{
-			TaskID: task.ID, Type: "task.completed", Visibility: "task",
-			Payload: mustJSON(map[string]interface{}{
-				"source": "user", "expired_approvals": result.ExpiredApprovals,
-				"expired_clarifications": result.ExpiredClarifications,
-				"cancelled_queue_rows":   result.CancelledQueueRows,
-			}),
+			TaskID: task.ID, RunID: dismissedRunID, Type: "thread.attention_dismissed", Visibility: "task",
+			Payload: mustJSON(map[string]interface{}{"source": "user", "runs": changed, "run_id": dismissedRunID}),
 		})
-		return fmt.Sprintf("Completed task: %s (%s). /resume %s reopens it.",
+		if dismissedRunID != "" {
+			return fmt.Sprintf("Dismissed current attention for exact run %s in %s. History and pending control records were preserved; explicit /resume %s can still continue it.",
+				shortRunID(dismissedRunID), textutil.Truncate(toOneLine(task.Title), 48), shortRunID(dismissedRunID)), nil
+		}
+		return fmt.Sprintf("Dismissed current attention for: %s (%s). History and pending control records were preserved; explicit /resume %s can still continue it.",
 			textutil.Truncate(toOneLine(task.Title), 48), shortTaskID(task.ID), shortTaskID(task.ID)), nil
 	case "archive":
-		if archivedTaskStatus(task.Status) {
-			return "Task is already archived.", nil
+		if task.Visibility == control.TaskVisibilityArchived || archivedTaskStatus(task.Status) {
+			return "Thread is already archived.", nil
 		}
 		if active := d.coordinator().currentActive(identity.PersonID); active != nil && active.TaskID == task.ID {
 			return "This task has a run executing right now. Use /stop and wait for it to finish before archiving the task.", nil
 		}
-		result, err := d.Control.ArchiveTaskByUser(ctx, identity.TenantID, identity.PersonID, task.ID)
-		if err != nil {
-			if err == control.ErrTaskHasLiveWork {
-				return "This task still has running or externally monitored work. Stop the run or cancel its watcher before archiving it.", nil
-			}
+		if err := control.NewWorkTimeline(d.Control).Archive(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
 			return "", err
 		}
 		_, _ = d.Control.AppendEvent(ctx, control.Event{
 			TaskID:     task.ID,
 			Type:       "task.archived",
 			Visibility: "task",
-			Payload: mustJSON(map[string]interface{}{
-				"reason": "archived by user", "expired_approvals": result.ExpiredApprovals,
-				"expired_clarifications": result.ExpiredClarifications,
-				"cancelled_queue_rows":   result.CancelledQueueRows,
-			}),
+			Payload:    mustJSON(map[string]interface{}{"reason": "archived by user"}),
 		})
-		return fmt.Sprintf("Archived task: %s (%s). /resume %s reopens it.",
+		return fmt.Sprintf("Archived thread: %s (%s). History and control state were preserved; /resume %s can continue an exact resumable run.",
 			textutil.Truncate(toOneLine(task.Title), 48), shortTaskID(task.ID), shortTaskID(task.ID)), nil
 	default:
 		return taskUsage, nil
@@ -766,7 +868,7 @@ func (d *Server) listTasksForDisplay(ctx context.Context, identity *control.Iden
 	if err != nil {
 		return nil, err
 	}
-	return groupTasksByWorkKey(page.Tasks), nil
+	return page.Tasks, nil
 }
 
 // resolveTaskReference resolves a user-supplied task reference for control
@@ -783,7 +885,7 @@ func (d *Server) listTasksForDisplay(ctx context.Context, identity *control.Iden
 func (d *Server) resolveTaskReference(ctx context.Context, identity *control.IdentityContext, ref string, channels ...string) (*control.Task, string, error) {
 	ref = strings.TrimSpace(ref)
 	if ordinal, convErr := strconv.Atoi(ref); convErr == nil {
-		if taskID, count, found := d.taskLists.resolve(identity, firstString(channels), ordinal, time.Now()); found {
+		if taskID, runID, count, found := d.taskLists.resolveRun(identity, firstString(channels), ordinal, time.Now()); found {
 			if taskID == "" {
 				return nil, fmt.Sprintf("No task number %d in the last list; it showed %d (run /tasks to refresh).", ordinal, count), nil
 			}
@@ -794,6 +896,7 @@ func (d *Server) resolveTaskReference(ctx context.Context, identity *control.Ide
 			if task == nil {
 				return nil, "That numbered task is no longer available. Run /tasks to refresh the list.", nil
 			}
+			task.ResumeRunID = runID
 			return task, "", nil
 		}
 		tasks, err := d.listTasksForDisplay(ctx, identity)
@@ -801,10 +904,10 @@ func (d *Server) resolveTaskReference(ctx context.Context, identity *control.Ide
 			return nil, "", err
 		}
 		if len(tasks) == 0 {
-			return nil, "No open tasks to number; see /tasks.", nil
+			return nil, "Nothing currently needs attention; see /tasks or use a thread id.", nil
 		}
 		if ordinal < 1 || ordinal > len(tasks) {
-			return nil, fmt.Sprintf("No open task number %d; %d shown (see /tasks).", ordinal, len(tasks)), nil
+			return nil, fmt.Sprintf("No attention item number %d; %d shown (see /tasks).", ordinal, len(tasks)), nil
 		}
 		d.taskLists.remember(identity, firstString(channels), tasks, time.Now())
 		return &tasks[ordinal-1], "", nil
@@ -836,7 +939,7 @@ func (d *Server) findTaskByRef(ctx context.Context, identity *control.IdentityCo
 		return nil, err
 	}
 	if task != nil {
-		if task.PersonID != identity.PersonID || !task.IsVisible() {
+		if task.PersonID != identity.PersonID {
 			return nil, nil
 		}
 		return task, nil

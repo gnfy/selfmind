@@ -4,13 +4,31 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/tools"
 )
+
+func TestMemoryCommandsRefuseMissingSkillStorageWithoutTouchingHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	daemon, _, identity := newMemoryCommandServer(t)
+	daemon.SkillStorage = nil
+
+	_, err := daemon.handleRememberCommand(context.Background(), identity, "回复时先给结论")
+	if err == nil || !strings.Contains(err.Error(), "asset storage") {
+		t.Fatalf("missing SkillStorage must fail before memory mutation, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, ".selfmind")); !os.IsNotExist(statErr) {
+		t.Fatalf("memory command fell back to the user home: %v", statErr)
+	}
+}
 
 func newMemoryCommandServer(t *testing.T) (*Server, *memory.MemoryManager, *control.IdentityContext) {
 	t.Helper()
@@ -27,11 +45,15 @@ func newMemoryCommandServer(t *testing.T) (*Server, *memory.MemoryManager, *cont
 	}
 	t.Cleanup(func() { _ = provider.Close() })
 	mem := memory.NewMemoryManager(provider)
+	storage, err := tools.NewSkillStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "local", "Local User")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{Control: store, Memory: mem, DefaultTenantID: "default"}, mem, identity
+	return &Server{Control: store, Memory: mem, SkillStorage: storage, DefaultTenantID: "default"}, mem, identity
 }
 
 // TestRememberAndForgetAreCrossEndpointAndDeterministic pins the P3 explicit
@@ -39,6 +61,8 @@ func newMemoryCommandServer(t *testing.T) (*Server, *memory.MemoryManager, *cont
 // preference is readable from ANOTHER channel of the same person, and /forget
 // by text removes it from the read model immediately.
 func TestRememberAndForgetAreCrossEndpointAndDeterministic(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	daemon, mem, identity := newMemoryCommandServer(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 
@@ -90,6 +114,12 @@ func TestRememberAndForgetAreCrossEndpointAndDeterministic(t *testing.T) {
 	}
 	if len(legacy) != 0 {
 		t.Fatalf("forgotten preference remains in raw legacy storage: %+v", legacy)
+	}
+	if _, err := os.Stat(filepath.Join(daemon.SkillStorage.BaseDir(), identity.PersonID, "learning", "learning-log.jsonl")); err != nil {
+		t.Fatalf("memory audit was not written to injected asset storage: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".selfmind")); !os.IsNotExist(err) {
+		t.Fatalf("memory command leaked into HOME: %v", err)
 	}
 }
 

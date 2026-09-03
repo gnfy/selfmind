@@ -237,6 +237,7 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 			}
 			fmt.Fprintf(&sb, "- [%s] %s\n", status, oneLine(step.Step))
 		}
+		sb.WriteString("This plan is inherited from the continued run. For multi-step work, call update_plan with a complete snapshot that keeps the completed steps, then continue from the in-progress step.\n")
 	}
 	sb.WriteString("Continue from this state. Do not restart completed work unless the user asks for a restart.\n")
 	sb.WriteString("[/SelfMind resume context]\n\n")

@@ -18,7 +18,9 @@ model mutate control state directly.
 - Approver: project owner
 - Approved: 2026-09-02
 - Review date: 2026-09-09
-- Status: active
+- Status: paused — superseded at the domain-model level by
+  `threaded-work-history-redesign.zh-CN.md`; its remaining real-IM evidence
+  gates carry forward there.
 
 ## Intended outcome
 
@@ -94,13 +96,12 @@ model mutate control state directly.
 
 - Main proposes `NEW`, `OBSERVE`, or `RESUME` through a typed broker result.
   It does not write task, Run, workspace, queue, or delivery state.
-- Same-execution-domain RESUME may atomically claim the validated parent for
-  the current interaction Run. The transaction revalidates person, task, Run
-  state, execution domain, and unique parent ownership.
-- Cross-execution-domain RESUME, or a parent that requires loop-checkpoint
-  reconstruction, ends the interaction Run with a structured transfer outcome
-  and lets the gateway create a correctly scoped child. Execution scope never
-  changes in place.
+- RESUME ends the audited interpretation Run with a structured transfer and
+  creates a fresh exact-parent child in every execution domain. The child is
+  the only Run that claims the parent; its execution scope, checkpoint state,
+  and inherited durable plan are established before Main starts. The gateway
+  revalidates person, task, Run state, execution domain, and unique parent
+  ownership, and execution scope never changes in place.
 - An implicit wrong RESUME receives priority correction handling. Before any
   non-read-only effect, approval, clarification, watch, artifact, handoff, or
   outbound delivery, the gateway may perform an audited retarget. After that
@@ -278,10 +279,10 @@ Landed locally and enabled by default:
   they contain words such as "just now";
 - production-path eval cassettes cover both a fresh request beside old work and
   cross-endpoint natural-language progress through search/inspect/observe.
-- same-domain RESUME atomically retargets the interaction Run and task-owned
-  rows under the unique parent claim; scope/checkpoint mismatches retain the
-  exact-parent transfer path, and independent database connections prove only
-  one claimant wins;
+- every RESUME creates an exact-parent transfer child under the unique parent
+  claim, including same-domain work; the child durably inherits the parent's
+  plan before execution, and independent database connections prove only one
+  claimant wins;
 - one pre-effect `work_select` correction is retained with `correction_of`
   audit data, while the material-effect boundary rejects later retargeting;
 - `set_delivery_target` accepts only a server-issued steering input from a

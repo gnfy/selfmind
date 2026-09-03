@@ -146,7 +146,7 @@ type ExternalWatchPreflightReceipt struct {
 // missing one produces a scan/column mismatch at runtime rather than at build
 // time. Every reader now shares this list and scanExternalWatch.
 const externalWatchColumns = `id, tenant_id, person_id,
-	COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
+	COALESCE(workspace_id, ''), thread_id, COALESCE(run_id, ''), COALESCE(channel, ''),
 	description, cwd, command, success_pattern, failure_pattern,
 	COALESCE(spec_version, 1), COALESCE(target_pattern, ''),
 	COALESCE(terminal_success_pattern, ''), COALESCE(terminal_failure_pattern, ''),
@@ -184,6 +184,11 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		} else {
 			watch.SpecVersion = 1
 		}
+	}
+	// The run is the authority for thread membership: a tool scope frozen before
+	// a direct continuation claim still names the interaction placeholder.
+	if threadID := s.threadIDForRun(ctx, watch.TenantID, watch.RunID); threadID != "" {
+		watch.TaskID = threadID
 	}
 	if watch.PersonID == "" || watch.TaskID == "" || watch.CWD == "" || watch.Command == "" {
 		return nil, fmt.Errorf("person, task, cwd, and command are required")
@@ -226,8 +231,13 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 	watch.NextCheckAt = now
 	watch.CreatedAt = now
 	watch.UpdatedAt = now
-	_, err = s.db.ExecContext(ctx, `INSERT INTO external_watches (
-		id, tenant_id, person_id, workspace_id, task_id, run_id, channel,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO external_watches (
+		id, tenant_id, person_id, workspace_id, thread_id, run_id, channel,
 		description, cwd, command, success_pattern, failure_pattern,
 		spec_version, target_pattern, terminal_success_pattern, terminal_failure_pattern,
 		observation_adapter, preflight_receipt_json, wait_group_id, status,
@@ -245,8 +255,15 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		watch.NextCheckAt.Unix(),
 		watch.EnvironmentSnapshotID, watch.EnvironmentGeneration, watch.PrincipalFingerprint,
 		watch.EnvironmentFingerprint, watch.CredentialSourceHash, string(bindingJSON),
-		now.Unix(), now.Unix())
-	if err != nil {
+		now.Unix(), now.Unix()); err != nil {
+		return nil, err
+	}
+	// A live watcher is durable work evidence: list the Run's Thread now
+	// rather than only at finalization.
+	if err := promoteThreadForControlObjectTx(ctx, tx, watch.TenantID, watch.RunID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &watch, nil
@@ -425,9 +442,9 @@ func (s *Store) CancelExternalWatchForPerson(ctx context.Context, tenantID, pers
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var taskID string
-	if err := tx.QueryRowContext(ctx, `SELECT task_id FROM external_watches
-		WHERE tenant_id = ? AND person_id = ? AND id = ?`, tenantID, personID, id).Scan(&taskID); err != nil {
+	var taskID, runID string
+	if err := tx.QueryRowContext(ctx, `SELECT thread_id, run_id FROM external_watches
+		WHERE tenant_id = ? AND person_id = ? AND id = ?`, tenantID, personID, id).Scan(&taskID, &runID); err != nil {
 		if err == sql.ErrNoRows {
 			return false, nil
 		}
@@ -447,20 +464,62 @@ func (s *Store) CancelExternalWatchForPerson(ctx context.Context, tenantID, pers
 	if n != 1 {
 		return false, nil
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE tasks
-		SET status = 'waiting_user', blocked_reason = 'external watcher cancelled by user',
-			next_steps_json = '["Resume the task to continue or register a new watcher."]',
+	if _, err := tx.ExecContext(ctx, `UPDATE threads
+		SET summary = COALESCE(NULLIF(summary, ''), 'External watcher cancelled by user.'),
 			last_activity_at = ?, updated_at = ?
-		WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'waiting_external'
-			AND NOT EXISTS (SELECT 1 FROM external_watches
-				WHERE tenant_id = ? AND person_id = ? AND task_id = ? AND status IN ('pending', 'running'))`,
-		now, now, tenantID, personID, taskID, tenantID, personID, taskID); err != nil {
+		WHERE tenant_id = ? AND person_id = ? AND id = ?`,
+		now, now, tenantID, personID, taskID); err != nil {
 		return false, err
+	}
+	var active int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_watches
+		WHERE tenant_id = ? AND person_id = ? AND run_id = ? AND status IN (?, ?)`,
+		tenantID, personID, runID, ExternalWatchPending, ExternalWatchRunning).Scan(&active); err != nil {
+		return false, err
+	}
+	if active == 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE runs
+			SET status = 'waiting_user', attention_dismissed_at = 0, attention_dismissed_by = ''
+			WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'waiting_external'`,
+			tenantID, personID, runID); err != nil {
+			return false, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// MarkExternalWatchRunBlocked parks the Run that registered a watcher as
+// `blocked` once that watcher's finalization has exhausted recovery. The Run is
+// the execution truth Attention reads, so this is what makes an abandoned
+// finalization visible and resumable; the Thread summary alone is not. Only a
+// Run still parked as waiting_external with no live watcher left is changed:
+// a Run that moved on, or that another watcher still serves, is untouched.
+// The reason lands on the Run's last_error for diagnostics.
+func (s *Store) MarkExternalWatchRunBlocked(ctx context.Context, tenantID, runID, reason string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("control store is unavailable")
+	}
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return false, nil
+	}
+	now := time.Now().Unix()
+	result, err := s.db.ExecContext(ctx, `UPDATE runs
+		SET status = 'blocked', last_error = ?, heartbeat_at = ?,
+			attention_dismissed_at = 0, attention_dismissed_by = ''
+		WHERE tenant_id = ? AND id = ? AND status = 'waiting_external'
+		  AND NOT EXISTS (SELECT 1 FROM external_watches w
+		                  WHERE w.tenant_id = runs.tenant_id AND w.run_id = runs.id AND w.status IN (?, ?))`,
+		strings.TrimSpace(reason), now, normalizeTenant(tenantID), runID,
+		ExternalWatchPending, ExternalWatchRunning)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
 }
 
 // ListExternalWatchesFinishedSinceForPerson is the owner-scoped diagnostics

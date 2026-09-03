@@ -184,9 +184,15 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 
 	attention := []string{"Still needs attention:"}
 	if n := len(digest.UnresolvedTasks); n == 1 {
-		attention = append(attention, fmt.Sprintf("↻ 1 earlier task still needs attention: %s (use /resume to continue)", digestTitleList(digest.UnresolvedTasks)))
+		attention = append(attention, fmt.Sprintf("↻ 1 earlier run still needs attention: %s (use /resume to continue)", digestTitleList(digest.UnresolvedTasks)))
 	} else if n > 1 {
-		attention = append(attention, fmt.Sprintf("↻ %d earlier tasks still need attention: %s (use /resume to continue)", n, digestTitleList(digest.UnresolvedTasks)))
+		unit := "runs"
+		verb := "need"
+		if n == 1 {
+			unit = "run"
+			verb = "needs"
+		}
+		attention = append(attention, fmt.Sprintf("↻ %d earlier %s still %s attention: %s (use /resume to continue)", n, unit, verb, digestTitleList(digest.UnresolvedTasks)))
 	}
 	switch n := len(digest.PendingApprovals); {
 	case n == 1:

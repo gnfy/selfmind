@@ -2,108 +2,8 @@ package control
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
-	"sync"
 	"testing"
-
-	"selfmind/internal/executionenv"
 )
-
-func TestClaimInteractionContinuationMovesRunAndClaimsParentAtomically(t *testing.T) {
-	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
-	roots := []executionenv.RootBinding{{Path: "/workspace", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace}}
-	targetTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "target", Channel: "cli"})
-	parent, _ := store.StartRunWithOptions(ctx, targetTask, "cli", "target", StartRunOptions{ExecutionRoots: roots})
-	_ = store.FinishRun(ctx, identity.TenantID, parent.ID, "interrupted")
-	sourceTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "continue target", Channel: "cli"})
-	source, _ := store.StartRunWithOptions(ctx, sourceTask, "cli", "continue target", StartRunOptions{ExecutionRoots: roots})
-	_, _ = store.AppendEvent(ctx, Event{TaskID: sourceTask.ID, RunID: source.ID, Type: "work.selection", Visibility: "task"})
-
-	claimed, err := store.ClaimInteractionContinuation(ctx, identity.TenantID, identity.PersonID, source.ID, parent.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if claimed.TaskID != targetTask.ID || claimed.ParentRunID != parent.ID {
-		t.Fatalf("claimed run = %+v", claimed)
-	}
-	if placeholder, _ := store.GetTask(ctx, identity.TenantID, sourceTask.ID); placeholder != nil {
-		t.Fatalf("empty interaction placeholder survived: %+v", placeholder)
-	}
-	events, err := store.ListRunEvents(ctx, identity.TenantID, identity.PersonID, targetTask.ID, source.ID, 10)
-	if err != nil || len(events) != 1 || events[0].TaskID != targetTask.ID {
-		t.Fatalf("moved events = %+v err=%v", events, err)
-	}
-	refreshed, _ := store.GetTask(ctx, identity.TenantID, targetTask.ID)
-	if refreshed == nil || refreshed.ActiveRunID != source.ID || refreshed.Status != "running" {
-		t.Fatalf("target task projection = %+v", refreshed)
-	}
-}
-
-func TestClaimInteractionContinuationHasCrossConnectionSingleWinner(t *testing.T) {
-	ctx := context.Background()
-	dir := t.TempDir()
-	storeA, err := OpenStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer storeA.Close()
-	storeB, err := OpenStore(filepath.Clean(dir))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer storeB.Close()
-	identity, _ := storeA.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
-	targetTask, _ := storeA.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "target", Channel: "cli"})
-	parent, _ := storeA.StartRun(ctx, targetTask, "cli", "target")
-	_ = storeA.FinishRun(ctx, identity.TenantID, parent.ID, "interrupted")
-	makeSource := func(title string) *Run {
-		task, _ := storeA.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: title, Channel: "cli"})
-		run, _ := storeA.StartRun(ctx, task, "cli", title)
-		return run
-	}
-	sources := []*Run{makeSource("one"), makeSource("two")}
-	stores := []*Store{storeA, storeB}
-	type result struct {
-		run *Run
-		err error
-	}
-	results := make(chan result, 2)
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for i := range stores {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			<-start
-			run, err := stores[i].ClaimInteractionContinuation(ctx, identity.TenantID, identity.PersonID, sources[i].ID, parent.ID)
-			results <- result{run: run, err: err}
-		}(i)
-	}
-	close(start)
-	wg.Wait()
-	close(results)
-	winners, losers := 0, 0
-	for got := range results {
-		switch {
-		case got.err == nil && got.run != nil && got.run.ParentRunID == parent.ID:
-			winners++
-		case errors.Is(got.err, ErrParentRunClaimed):
-			losers++
-		default:
-			t.Fatalf("unexpected claim result: run=%+v err=%v", got.run, got.err)
-		}
-	}
-	if winners != 1 || losers != 1 {
-		t.Fatalf("winners=%d losers=%d", winners, losers)
-	}
-}
 
 func TestEnqueueSelectedContinuationFreezesParentDomain(t *testing.T) {
 	ctx := context.Background()
@@ -167,10 +67,10 @@ func TestProjectInteractionTaskHidesOnlySingleRunLabel(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := store.GetTask(ctx, identity.TenantID, task.ID)
-	if got == nil || got.Kind != "interaction" || got.Visibility != "hidden" {
+	if got == nil || got.Kind != ThreadKindInteraction || got.Visibility != ThreadVisibilityUnlisted {
 		t.Fatalf("interaction task = %+v", got)
 	}
-	if current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); current != nil && current.ID == task.ID {
-		t.Fatalf("hidden interaction remained current: %+v", current)
+	if current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); current == nil || current.ID != task.ID {
+		t.Fatalf("presentation projection must not hide an actively executing Run: %+v", current)
 	}
 }

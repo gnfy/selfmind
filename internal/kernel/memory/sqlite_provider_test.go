@@ -429,3 +429,69 @@ func TestAddMissingColumnsBackwardCompat(t *testing.T) {
 		t.Fatalf("legacy row = %q/%q/%v", content, source, confidence)
 	}
 }
+
+// TestSQLiteProvider_PurgeWorkHistoryReferences pins the memory side of a
+// control work-history reset: Thread-keyed sessions disappear, run provenance
+// is cleared on facts and observations, and ordinary sessions and preference
+// content survive. A second purge is a no-op.
+func TestSQLiteProvider_PurgeWorkHistoryReferences(t *testing.T) {
+	dir := t.TempDir()
+	p, err := NewSQLiteProvider(dir)
+	if err != nil {
+		t.Fatalf("NewSQLiteProvider: %v", err)
+	}
+	defer p.Close()
+	tenant := "person_reset"
+	taskTrajectory := []byte(`{"messages":[{"role":"user","content":"release checklist"},{"role":"assistant","content":"prepared"}]}`)
+	plainTrajectory := []byte(`{"messages":[{"role":"user","content":"plain chat about tabs"},{"role":"assistant","content":"noted"}]}`)
+	if err := p.IndexMessagesFromTrajectory(nil, tenant, "cli", "task:thread-1", taskTrajectory); err != nil {
+		t.Fatalf("index task session: %v", err)
+	}
+	if err := p.IndexMessagesFromTrajectory(nil, tenant, "cli", "session", plainTrajectory); err != nil {
+		t.Fatalf("index plain session: %v", err)
+	}
+	if err := p.AddFactMeta(nil, tenant, Fact{Target: "user", Content: "prefers tabs", Source: "user", Scope: "global", CreatedFromRun: "run-1"}); err != nil {
+		t.Fatalf("AddFactMeta: %v", err)
+	}
+	if err := p.AddFactMeta(nil, tenant, Fact{Target: "user", Content: "prefers short answers", Source: "user", Scope: "global"}); err != nil {
+		t.Fatalf("AddFactMeta: %v", err)
+	}
+	raw, err := sql.Open("sqlite", filepath.Join(dir, tenant, "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`INSERT INTO memory_observations(id, run_id, target, content, normalized_hash, created_at) VALUES ('obs-1', 'run-1', 'user', 'prefers tabs', 'h1', 1)`); err != nil {
+		t.Fatalf("seed observation: %v", err)
+	}
+
+	sessions, provenance, err := p.PurgeWorkHistoryReferences(nil, tenant)
+	if err != nil || sessions != 1 || provenance != 2 {
+		t.Fatalf("purge sessions=%d provenance=%d err=%v, want 1 session and 2 cleared references", sessions, provenance, err)
+	}
+	if hits, err := p.SearchSessions(tenant, "release", 5); err != nil || len(hits) != 0 {
+		t.Fatalf("task session still searchable: %+v err=%v", hits, err)
+	}
+	if recent, err := p.ListRecentSessions(tenant, 5); err != nil || len(recent) != 1 || recent[0].SessionID != "session" {
+		t.Fatalf("recent sessions after purge=%+v err=%v", recent, err)
+	}
+	if messages, err := p.GetSessionMessages(tenant, "task:thread-1", 1, 5); err != nil || len(messages) != 0 {
+		t.Fatalf("task session messages survived: %+v err=%v", messages, err)
+	}
+	facts, err := p.GetFacts(nil, tenant, "user")
+	if err != nil || len(facts) != 2 {
+		t.Fatalf("facts after purge=%+v err=%v", facts, err)
+	}
+	for _, fact := range facts {
+		if fact.CreatedFromRun != "" {
+			t.Fatalf("fact %q still cites run %q", fact.Content, fact.CreatedFromRun)
+		}
+	}
+	var runID string
+	if err := raw.QueryRow(`SELECT run_id FROM memory_observations WHERE id = 'obs-1'`).Scan(&runID); err != nil || runID != "" {
+		t.Fatalf("observation run_id=%q err=%v", runID, err)
+	}
+	if sessions, provenance, err := p.PurgeWorkHistoryReferences(nil, tenant); err != nil || sessions != 0 || provenance != 0 {
+		t.Fatalf("second purge sessions=%d provenance=%d err=%v, want a no-op", sessions, provenance, err)
+	}
+}

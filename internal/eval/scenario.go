@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/tools"
@@ -84,8 +85,8 @@ type SeedParkedRun struct {
 // applies whichever operators are set. This keeps YAML readable and Go parsing
 // trivial.
 type StatePredicate struct {
-	On     string `yaml:"on" json:"on"`                           // task|handoff|events|artifact|approval|run|file|memory
-	Field  string `yaml:"field,omitempty" json:"field,omitempty"` // task/handoff field
+	On     string `yaml:"on" json:"on"`                           // task|run|handoff|events|artifact|approval|file|memory
+	Field  string `yaml:"field,omitempty" json:"field,omitempty"` // task/run/handoff field
 	Path   string `yaml:"path,omitempty" json:"path,omitempty"`   // file
 	Target string `yaml:"target,omitempty" json:"target,omitempty"`
 	Type   string `yaml:"type,omitempty" json:"type,omitempty"`     // events
@@ -194,10 +195,15 @@ func applySkillSeeds(tenantID, skillsBaseDir string, seeds []SeedSkill) error {
 // applyStateSeeds seeds memory facts and an optional current task before the
 // first turn. Files are handled separately (they must land before the harness
 // starts using the workspace).
-func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot, channel string, setup *Setup) error {
+func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot, channel string, setup *Setup) (string, error) {
 	if setup == nil || identity == nil {
-		return nil
+		return "", nil
 	}
+	// seededTaskID is the Thread the setup created; the runner falls back to it
+	// as the state-assertion subject when a turn returns no Task (for example a
+	// deterministic candidates reply), so events appended on the seeded Thread
+	// remain assertable.
+	var seededTaskID string
 	for _, f := range setup.Memory {
 		target := strings.TrimSpace(f.Target)
 		if target == "" {
@@ -207,7 +213,7 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 		if mem != nil && content != "" && f.Canonical {
 			canonical, ok := mem.Canonical()
 			if !ok {
-				return fmt.Errorf("seed canonical memory: provider has no canonical store")
+				return "", fmt.Errorf("seed canonical memory: provider has no canonical store")
 			}
 			partition := strings.TrimSpace(identity.PersonID)
 			if partition == "" {
@@ -227,7 +233,7 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 				Category:    strings.TrimSpace(f.Category),
 				Confidence:  1,
 			}); err != nil {
-				return err
+				return "", err
 			}
 			continue
 		}
@@ -237,7 +243,7 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 				partition = identity.TenantID
 			}
 			if err := mem.AddFact(ctx, partition, target, f.Content); err != nil {
-				return err
+				return "", err
 			}
 		}
 	}
@@ -247,7 +253,7 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 		}
 		content := strings.TrimSpace(seed.Content)
 		if content == "" {
-			return fmt.Errorf("delivery seed %d has no content", i)
+			return "", fmt.Errorf("delivery seed %d has no content", i)
 		}
 		age := time.Duration(seed.AgeHours) * time.Hour
 		if seed.AgeHours <= 0 {
@@ -266,7 +272,7 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			Content:        content,
 			Kind:           "final_result",
 		}, age, firstNonEmpty(strings.TrimSpace(seed.Reason), "seeded stale IM session")); err != nil {
-			return fmt.Errorf("seed delivery %d: %w", i, err)
+			return "", fmt.Errorf("seed delivery %d: %w", i, err)
 		}
 	}
 	if setup.Task != nil && store != nil {
@@ -278,15 +284,22 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			Channel:     "eval",
 		})
 		if err != nil {
-			return err
+			return "", err
 		}
-		if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
-			return err
+		seededTaskID = task.ID
+		// A seeded historical run must sit in the same frozen execution domain a
+		// live turn in this workspace binds (workspace id plus root bindings);
+		// otherwise a same-domain direct continuation can never be exercised.
+		seedOptions := control.StartRunOptions{}
+		if strings.TrimSpace(workspaceID) != "" {
+			if ws, err := store.GetWorkspace(ctx, identity.TenantID, workspaceID); err == nil && ws != nil {
+				seedOptions.ExecutionRoots = httpapi.WorkspaceRootBindings(ws)
+			}
 		}
 		for i, parked := range setup.Task.ParkedRuns {
-			run, err := store.StartRun(ctx, task, channel, strings.TrimSpace(parked.Input))
+			run, err := store.StartRunWithOptions(ctx, task, channel, strings.TrimSpace(parked.Input), seedOptions)
 			if err != nil {
-				return fmt.Errorf("seed parked run %d: %w", i, err)
+				return "", fmt.Errorf("seed parked run %d: %w", i, err)
 			}
 			status := strings.TrimSpace(parked.Status)
 			if status == "" {
@@ -295,13 +308,26 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			switch status {
 			case "interrupted", "waiting_user", "verification_partial", "blocked":
 			default:
-				return fmt.Errorf("seed parked run %d: status %q is not resumable", i, status)
+				return "", fmt.Errorf("seed parked run %d: status %q is not resumable", i, status)
+			}
+			if status == "interrupted" {
+				// A seeded interruption stands for work that was underway when it
+				// was cut off. An evidence-free interruption is deliberately not
+				// Attention in production, so give the run the durable multi-step
+				// plan real interrupted work would carry.
+				goal := strings.TrimSpace(parked.Input)
+				if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, goal, []control.RunPlanStepInput{
+					{Step: "start: " + goal, Status: "completed"},
+					{Step: goal, Status: "in_progress"},
+				}); err != nil {
+					return "", fmt.Errorf("seed parked run %d plan: %w", i, err)
+				}
 			}
 			if err := store.FinishRun(ctx, identity.TenantID, run.ID, status); err != nil {
-				return fmt.Errorf("park seeded run %d: %w", i, err)
+				return "", fmt.Errorf("park seeded run %d: %w", i, err)
 			}
 			if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, "", nil); err != nil {
-				return fmt.Errorf("seed parked run %d task status: %w", i, err)
+				return "", fmt.Errorf("seed parked run %d task status: %w", i, err)
 			}
 		}
 		if skillName := kernel.SanitizeSkillName(setup.Task.DefaultSkill); strings.TrimSpace(setup.Task.DefaultSkill) != "" && skillName != "" {
@@ -309,7 +335,7 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			skillPath := filepath.Join(skillsRoot, skillName, "SKILL.md")
 			content, err := os.ReadFile(skillPath)
 			if err != nil {
-				return fmt.Errorf("seed default Skill %s: %w", skillName, err)
+				return "", fmt.Errorf("seed default Skill %s: %w", skillName, err)
 			}
 			digest := sha256.Sum256(content)
 			_, err = store.BindTaskSkill(ctx, control.BindTaskSkillInput{
@@ -321,9 +347,9 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 				VersionHash: fmt.Sprintf("%x", digest[:]),
 			})
 			if err != nil {
-				return fmt.Errorf("bind seeded default Skill %s: %w", skillName, err)
+				return "", fmt.Errorf("bind seeded default Skill %s: %w", skillName, err)
 			}
 		}
 	}
-	return nil
+	return seededTaskID, nil
 }

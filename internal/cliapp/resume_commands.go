@@ -15,7 +15,7 @@ func (a *App) extractTaskResumeCommand() (bool, int) {
 		return false, 0
 	}
 	if len(a.args) != 3 || strings.TrimSpace(a.args[2]) == "" {
-		fmt.Fprintln(a.stderr, "usage: selfmind resume <n|task_id>")
+		fmt.Fprintln(a.stderr, "usage: selfmind resume <n|task_id|run_id>")
 		return true, 2
 	}
 	a.resumeTaskRef = strings.TrimSpace(a.args[2])

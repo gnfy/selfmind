@@ -30,6 +30,12 @@ documents:
     owner: architecture
     state: current
     language: en
+  - path: docs/adr/0004-separate-thread-history-from-run-state.md
+    title: Separate Thread History from Run State
+    class: decision
+    owner: architecture
+    state: current
+    language: en
   - path: docs/agents/domain.md
     title: Domain Documentation for Engineering Skills
     class: guide
@@ -89,7 +95,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: f845a2b8ee121aa4
+    source_hash: 94bfc1a333bb6de7
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -228,10 +234,18 @@ documents:
     title: Main-Turn Work Continuity
     class: plan
     owner: maintainers
-    state: active
+    state: paused
     language: en
     approved_by: project-owner
     review_by: 2026-09-09
+  - path: docs/plans/threaded-work-history-redesign.zh-CN.md
+    title: Thread 化工作历史重构方案
+    class: plan
+    owner: maintainers
+    state: active
+    language: zh-CN
+    approved_by: project-owner
+    review_by: 2026-09-16
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference

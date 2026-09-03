@@ -31,7 +31,7 @@ func TestActivateSkillPackageKeepsModelSlashAndBindingDeliveryIdentical(t *testi
 	for index, source := range []string{"model", "slash", "task_binding"} {
 		task, err := store.CreateTask(ctx, control.TaskCreate{
 			TenantID: identity.TenantID, PersonID: identity.PersonID,
-			Title: "activate via " + source, Channel: "cli", KeepCurrent: index > 0,
+			Title: "activate via " + source, Channel: "cli",
 		})
 		if err != nil {
 			t.Fatal(err)

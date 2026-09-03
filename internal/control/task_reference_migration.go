@@ -44,10 +44,10 @@ func (s *Store) MigrateLegacyTaskReferences(ctx context.Context, tenantID string
 		return result, fmt.Errorf("limit must be between 1 and 100000")
 	}
 	tenantID = normalizeTenant(tenantID)
-	rows, err := s.db.QueryContext(ctx, `SELECT r.person_id, r.task_id, r.id,
+	rows, err := s.db.QueryContext(ctx, `SELECT r.person_id, r.thread_id, r.id,
 		COALESCE(r.workspace_id, ''), TRIM(COALESCE(r.work_key, '')), COALESCE(r.input_summary, '')
-		FROM task_runs r
-		JOIN tasks t ON t.tenant_id = r.tenant_id AND t.person_id = r.person_id AND t.id = r.task_id
+		FROM runs r
+		JOIN threads t ON t.tenant_id = r.tenant_id AND t.person_id = r.person_id AND t.id = r.thread_id
 		WHERE r.tenant_id = ? AND TRIM(COALESCE(r.work_key, '')) != ''
 		ORDER BY r.started_at ASC, r.id ASC LIMIT ?`, tenantID, limit)
 	if err != nil {
@@ -119,7 +119,7 @@ func (s *Store) hasTaskReferenceEvidence(ctx context.Context, tenantID, personID
 	err := s.db.QueryRowContext(ctx, `SELECT 1
 		FROM task_reference_evidence e
 		JOIN task_references r ON r.id = e.reference_id
-		WHERE r.tenant_id = ? AND r.person_id = ? AND r.task_id = ?
+		WHERE r.tenant_id = ? AND r.person_id = ? AND r.thread_id = ?
 		  AND r.normalized_value = ? AND e.evidence_hash = ? LIMIT 1`,
 		normalizeTenant(tenantID), strings.TrimSpace(personID), strings.TrimSpace(taskID),
 		NormalizeTaskReference(value), referenceEvidenceHash(value, provenance, sourceRef)).Scan(&found)

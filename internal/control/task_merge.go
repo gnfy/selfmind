@@ -33,10 +33,9 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 	// Both labels must exist, belong to the same person, and dst must be a
 	// live (non-archived) label — merging INTO an archived label would hide
 	// the moved history from every open view.
-	var srcPerson, dstPerson, dstWorkspace string
-	var dstArchived sql.NullInt64
+	var srcPerson, dstPerson, dstWorkspace, dstVisibility string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT person_id FROM tasks WHERE tenant_id = ? AND id = ?`,
+		`SELECT person_id FROM threads WHERE tenant_id = ? AND id = ?`,
 		tenant, srcID).Scan(&srcPerson); err != nil {
 		if err == sql.ErrNoRows {
 			return 0, fmt.Errorf("source task not found: %s", srcID)
@@ -44,8 +43,8 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 		return 0, err
 	}
 	if err := tx.QueryRowContext(ctx,
-		`SELECT person_id, COALESCE(workspace_id, ''), archived_at FROM tasks WHERE tenant_id = ? AND id = ?`,
-		tenant, dstID).Scan(&dstPerson, &dstWorkspace, &dstArchived); err != nil {
+		`SELECT person_id, COALESCE(workspace_id, ''), visibility FROM threads WHERE tenant_id = ? AND id = ?`,
+		tenant, dstID).Scan(&dstPerson, &dstWorkspace, &dstVisibility); err != nil {
 		if err == sql.ErrNoRows {
 			return 0, fmt.Errorf("target task not found: %s", dstID)
 		}
@@ -57,12 +56,12 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 	if srcPerson != dstPerson {
 		return 0, fmt.Errorf("both tasks must belong to the same person")
 	}
-	if dstArchived.Valid && dstArchived.Int64 > 0 {
+	if dstVisibility == ThreadVisibilityArchived {
 		return 0, fmt.Errorf("target task is archived; /resume it first or pick an open task")
 	}
 
 	res, err := tx.ExecContext(ctx,
-		`UPDATE task_runs SET task_id = ? WHERE tenant_id = ? AND task_id = ?`,
+		`UPDATE runs SET thread_id = ? WHERE tenant_id = ? AND thread_id = ?`,
 		dstID, tenant, srcID)
 	if err != nil {
 		return 0, err
@@ -70,11 +69,11 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 	moved64, _ := res.RowsAffected()
 	moved := int(moved64)
 	for _, stmt := range []string{
-		`UPDATE task_events SET task_id = ? WHERE task_id = ?`,
-		`UPDATE task_artifacts SET task_id = ? WHERE task_id = ?`,
-		`UPDATE task_handoffs SET task_id = ? WHERE task_id = ?`,
-		`UPDATE approval_requests SET task_id = ? WHERE task_id = ?`,
-		`UPDATE clarify_requests SET task_id = ? WHERE task_id = ?`,
+		`UPDATE task_events SET thread_id = ? WHERE thread_id = ?`,
+		`UPDATE task_artifacts SET thread_id = ? WHERE thread_id = ?`,
+		`UPDATE task_handoffs SET thread_id = ? WHERE thread_id = ?`,
+		`UPDATE approval_requests SET thread_id = ? WHERE thread_id = ?`,
+		`UPDATE clarify_requests SET thread_id = ? WHERE thread_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, dstID, srcID); err != nil {
 			return 0, err
@@ -86,7 +85,7 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 	// there. This stays in the merge transaction so a crash cannot make aliases
 	// disappear between the task and reference updates.
 	refRows, err := tx.QueryContext(ctx, `SELECT id, normalized_value, user_confirmed
-		FROM task_references WHERE tenant_id = ? AND person_id = ? AND task_id = ?`,
+		FROM task_references WHERE tenant_id = ? AND person_id = ? AND thread_id = ?`,
 		tenant, srcPerson, srcID)
 	if err != nil {
 		return 0, err
@@ -112,10 +111,10 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 		reconcileValues[ref.normalized] = struct{}{}
 		var targetRefID string
 		err := tx.QueryRowContext(ctx, `SELECT id FROM task_references
-			WHERE tenant_id = ? AND person_id = ? AND task_id = ? AND normalized_value = ?`,
+			WHERE tenant_id = ? AND person_id = ? AND thread_id = ? AND normalized_value = ?`,
 			tenant, srcPerson, dstID, ref.normalized).Scan(&targetRefID)
 		if err == sql.ErrNoRows {
-			if _, err := tx.ExecContext(ctx, `UPDATE task_references SET task_id = ?, workspace_id = ?, updated_at = ? WHERE id = ?`,
+			if _, err := tx.ExecContext(ctx, `UPDATE task_references SET thread_id = ?, workspace_id = ?, updated_at = ? WHERE id = ?`,
 				dstID, dstWorkspace, now, ref.id); err != nil {
 				return 0, err
 			}
@@ -161,7 +160,7 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 	loadBinding := func(taskID string) (*mergeBinding, error) {
 		var binding mergeBinding
 		err := tx.QueryRowContext(ctx, `SELECT skill_key, state FROM task_skill_bindings
-			WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, tenant, srcPerson, taskID).
+			WHERE identity_tenant_id=? AND person_id=? AND thread_id=?`, tenant, srcPerson, taskID).
 			Scan(&binding.skillKey, &binding.state)
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -183,12 +182,12 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 		if targetBinding == nil || targetBinding.state == TaskSkillBindingReleased {
 			if targetBinding != nil {
 				if _, err := tx.ExecContext(ctx, `DELETE FROM task_skill_bindings
-					WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, tenant, srcPerson, dstID); err != nil {
+					WHERE identity_tenant_id=? AND person_id=? AND thread_id=?`, tenant, srcPerson, dstID); err != nil {
 					return 0, err
 				}
 			}
-			if _, err := tx.ExecContext(ctx, `UPDATE task_skill_bindings SET task_id=?, updated_at=?
-				WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, dstID, now, tenant, srcPerson, srcID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE task_skill_bindings SET thread_id=?, updated_at=?
+				WHERE identity_tenant_id=? AND person_id=? AND thread_id=?`, dstID, now, tenant, srcPerson, srcID); err != nil {
 				return 0, err
 			}
 		} else {
@@ -197,28 +196,22 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 				reason = "released by task merge due to binding conflict; destination binding preserved"
 			}
 			if _, err := tx.ExecContext(ctx, `UPDATE task_skill_bindings SET state='released',
-				suspended_reason=?, updated_at=? WHERE identity_tenant_id=? AND person_id=? AND task_id=?`,
+				suspended_reason=?, updated_at=? WHERE identity_tenant_id=? AND person_id=? AND thread_id=?`,
 				reason, now, tenant, srcPerson, srcID); err != nil {
 				return 0, err
 			}
 		}
 	}
-	// A current-task pointer at src follows the work to dst.
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE current_task SET task_id = ?, updated_at = ? WHERE tenant_id = ? AND task_id = ?`,
-		dstID, now, tenant, srcID); err != nil {
-		return 0, err
-	}
 	// Archive src in place: title and metadata survive for audit; /tasks and
-	// recall exclude it. Status becomes terminal so recovery sweeps ignore it.
+	// recall exclude it. Run state remains untouched.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE tasks SET status = 'archived', archived_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		now, now, tenant, srcID); err != nil {
+		`UPDATE threads SET visibility = 'archived', updated_at = ? WHERE tenant_id = ? AND id = ?`,
+		now, tenant, srcID); err != nil {
 		return 0, err
 	}
 	// The merged-into label just gained activity.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE tasks SET last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+		`UPDATE threads SET last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
 		now, now, tenant, dstID); err != nil {
 		return 0, err
 	}
@@ -235,8 +228,8 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 // merged pair simply stops rendering, no cleanup pass needed.
 func (s *Store) ListDuplicateSuggestions(ctx context.Context, tenantID, personID string) (map[string]string, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.task_id, COALESCE(e.payload_json, '')
-		 FROM task_events e JOIN tasks t ON t.id = e.task_id
+		`SELECT e.thread_id, COALESCE(e.payload_json, '')
+		 FROM task_events e JOIN threads t ON t.id = e.thread_id
 		 WHERE e.type = 'task.duplicate_suggested'
 		   AND t.tenant_id = ? AND t.person_id = ?
 		 ORDER BY e.created_at ASC`,

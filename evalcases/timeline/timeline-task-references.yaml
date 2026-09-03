@@ -5,8 +5,15 @@ workspace: "."
 channel: cli
 model_required: false
 
+setup:
+  task:
+    title: "task reference governance check"
+    parked_runs:
+      - input: "wait for reference governance"
+        status: waiting_user
+
 turns:
-  - input: "/new task reference governance check"
+  - input: "/tasks"
   - input: "/task 1 reference add customer-portal"
   - input: "/task 1 references"
   - input: "/task 1 reference remove customer-portal"

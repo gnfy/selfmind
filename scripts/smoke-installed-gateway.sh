@@ -120,7 +120,7 @@ fi
 control_status="$(run_selfmind status)"
 grep -F "No active task." <<<"${control_status}" >/dev/null
 tasks_before_restart="$(run_selfmind tasks)"
-grep -F "No open tasks." <<<"${tasks_before_restart}" >/dev/null
+grep -F "Nothing needs attention." <<<"${tasks_before_restart}" >/dev/null
 
 run_selfmind gateway restart --drain
 second_status="$(wait_for_running)"
@@ -130,7 +130,7 @@ if [[ "${first_pid}" == "${second_pid}" ]]; then
   exit 1
 fi
 tasks_after_restart="$(run_selfmind tasks)"
-grep -F "No open tasks." <<<"${tasks_after_restart}" >/dev/null
+grep -F "Nothing needs attention." <<<"${tasks_after_restart}" >/dev/null
 
 run_selfmind gateway stop
 stopped_status="$(run_selfmind gateway status --json)"

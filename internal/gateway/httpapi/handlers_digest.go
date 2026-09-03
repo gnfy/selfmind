@@ -115,19 +115,25 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 		}
 	}
 
-	// A durable blocker can honestly keep a task interrupted long after its run
-	// ended. Preserve that useful state, but do not mislabel it as a new event in
-	// the away window. Fresh disruptions already have the stronger event line,
-	// so suppress them from the older-unresolved section.
-	unresolved, err := d.Control.ListTasksByStatus(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted", api.RunStatusVerificationPartial}, maxDigestTasks*2)
+	// Older unresolved work is the derived Attention set: parked Runs that are
+	// still resumable and Runs that still hold a pending approval or question.
+	// Executing and monitoring Runs have their own sections. Fresh disruptions
+	// already have the stronger event line, so they are suppressed here rather
+	// than mislabelled as a new event in the away window.
+	attention, err := control.NewWorkTimeline(d.Control).Attention(ctx, identity.TenantID, identity.PersonID, maxDigestTasks*2)
 	if err != nil {
 		return out, err
 	}
-	for _, task := range unresolved {
-		if _, recent := recentDisruptions[task.ID]; recent {
+	for _, item := range attention {
+		switch item.Activity {
+		case control.ThreadActivityResumable, control.ThreadActivityNeedsAttention:
+		default:
 			continue
 		}
-		out.UnresolvedTasks = append(out.UnresolvedTasks, digestTask(task))
+		if _, recent := recentDisruptions[item.Thread.ID]; recent {
+			continue
+		}
+		out.UnresolvedTasks = append(out.UnresolvedTasks, digestAttentionItem(item))
 		if len(out.UnresolvedTasks) == maxDigestTasks {
 			break
 		}
@@ -326,12 +332,14 @@ func (d *Server) latestActivityForTask(ctx context.Context, taskID string) strin
 	return ""
 }
 
-func digestTask(task control.Task) api.DigestTask {
+// digestAttentionItem renders one exact Attention Run as a digest task line.
+// Status is the Run's own parked status, the vocabulary /resume acts on.
+func digestAttentionItem(item control.AttentionItem) api.DigestTask {
 	return api.DigestTask{
-		ID:      task.ID,
-		Title:   task.Title,
-		Status:  task.Status,
-		Summary: truncate(toOneLine(task.CurrentSummary), digestSummaryChars),
+		ID:      item.Thread.ID,
+		Title:   item.Thread.Title,
+		Status:  item.RunStatus,
+		Summary: truncate(toOneLine(firstNonEmpty(item.Thread.Summary, item.RunSummary)), digestSummaryChars),
 	}
 }
 

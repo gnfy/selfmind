@@ -30,6 +30,15 @@ func dupeTask(t *testing.T, d *Server, identity *control.IdentityContext, title,
 	if err != nil {
 		t.Fatal(err)
 	}
+	run, err := d.Control.StartRun(context.Background(), task, "cli", title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Parked waiting for the person: open work that duplicate detection must
+	// still consider (an evidence-free interruption would settle instead).
+	if err := d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
 	return task
 }
 
@@ -73,14 +82,10 @@ func TestTaskMergeCommand(t *testing.T) {
 	ctx := context.Background()
 	src := dupeTask(t, d, identity, "tank game duplicate", "ws1")
 	dst := dupeTask(t, d, identity, "tank game", "ws1")
-	run, err := d.Control.StartRun(ctx, src, "cli", "build")
-	if err != nil {
-		t.Fatal(err)
+	runsBefore, err := d.Control.ListTaskRuns(ctx, identity.TenantID, src.ID, 10)
+	if err != nil || len(runsBefore) != 1 {
+		t.Fatalf("source seed runs=%+v err=%v", runsBefore, err)
 	}
-	if err := d.Control.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
-		t.Fatal(err)
-	}
-
 	reply, err := d.taskCommandReply(ctx, identity, []string{src.ID, "merge", dst.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -92,8 +97,8 @@ func TestTaskMergeCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srcAfter.Status != "archived" {
-		t.Fatalf("source must be archived: %s", srcAfter.Status)
+	if srcAfter.Visibility != control.ThreadVisibilityArchived {
+		t.Fatalf("source must be archived: %s", srcAfter.Visibility)
 	}
 	events, _ := d.Control.ListTaskEvents(ctx, dst.ID, 20)
 	var sawMerged bool

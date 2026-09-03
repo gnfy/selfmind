@@ -1,0 +1,29 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_giL6gDFoMjPsaDViasn1eyE5",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"done\",\"summary\":\"已按用户确认续接生产发布任务，仅复述计划，没有执行任何命令或变更生产环境。\",\"done\":[\"确认目标为 AWS 生产服务 `cw2-seoant-ai-prod-api`\",\"确认待发布版本为 `v20260902153117`\",\"遵守约定，仅说明发布流程而未实际执行\"],\"tests\":[],\"files\":[],\"risks\":[\"本次没有实施发布，因此生产环境仍保持原状\"]}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 8854,
+        "output_tokens": 380,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8854,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

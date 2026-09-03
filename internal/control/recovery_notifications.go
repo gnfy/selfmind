@@ -25,14 +25,14 @@ func (s *Store) ListPendingRecoveryNotifications(ctx context.Context, limit int)
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.id, t.tenant_id, t.person_id, e.task_id, COALESCE(e.run_id, ''),
+		`SELECT e.id, t.tenant_id, t.person_id, e.thread_id, COALESCE(e.run_id, ''),
 		        COALESCE(e.channel, ''), COALESCE(t.title, ''), COALESCE(e.payload_json, '')
 		 FROM task_events e
-		 JOIN tasks t ON t.id = e.task_id
+		 JOIN threads t ON t.id = e.thread_id
 		 WHERE e.type = 'run.interrupted'
 		   AND NOT EXISTS (
 		     SELECT 1 FROM task_events n
-		      WHERE n.task_id = e.task_id AND COALESCE(n.run_id, '') = COALESCE(e.run_id, '')
+		      WHERE n.thread_id = e.thread_id AND COALESCE(n.run_id, '') = COALESCE(e.run_id, '')
 		        AND n.type IN ('run.recovery_notified', 'run.recovery_scheduled')
 		   )
 		 ORDER BY e.cursor ASC LIMIT ?`, limit)

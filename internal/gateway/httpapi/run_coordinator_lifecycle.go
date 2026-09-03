@@ -426,6 +426,8 @@ func (c *RunCoordinator) createRootTask(ctx context.Context, identity *control.I
 		WorkspaceID: workspaceID,
 		Title:       titleFromInput(req.Content),
 		Channel:     req.Channel,
+		Kind:        control.TaskKindInteraction,
+		Visibility:  control.TaskVisibilityUnlisted,
 	})
 	return task, newTaskAttach(taskAttachNewLabel, "", true, true), err
 }

@@ -14,13 +14,12 @@ import (
 //
 // Read-only Task/Run continuity audit. Findings cover legacy resume edges the
 // v7 backfill could not convert, illegal parent edges, ownerless pending
-// approvals/clarifies, and task status projections that disagree with the
-// derived reduction. --apply reconciles ONLY projection mismatches through
-// the production reducer; every other finding stays human review.
+// approvals/clarifies. Thread has no aggregate execution status, so findings
+// are review-only; --apply is retained as a compatibility no-op.
 func (a *App) runMaintenanceTaskAudit(args []string) int {
 	fs := flag.NewFlagSet("selfmind maintenance task-audit", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
-	apply := fs.Bool("apply", false, "reconcile only projection-mismatch findings via the reducer")
+	apply := fs.Bool("apply", false, "compatibility flag; continuity findings are review-only")
 	limit := fs.Int("limit", 200, "maximum findings/tasks to inspect (1-1000)")
 	dataDir := fs.String("data-dir", "", "control data directory (default: the configured storage data dir)")
 	if err := fs.Parse(args); err != nil {
@@ -62,17 +61,10 @@ func (a *App) runMaintenanceTaskAudit(args []string) int {
 		}
 		fmt.Fprintf(a.stdout, "%s kind=%s task=%s run=%s %s\n",
 			label, finding.Kind, valueOrDash(finding.TaskID), valueOrDash(finding.RunID), finding.Detail)
-		if *apply && finding.SafeFix {
-			if applyErr := store.ReconcileTaskProjection(ctx, a.tenantID(), finding.TaskID); applyErr != nil {
-				fmt.Fprintf(a.stderr, "task-audit: apply %s: %v\n", finding.TaskID, applyErr)
-				return 1
-			}
-			applied++
-		}
 	}
 	fmt.Fprintf(a.stdout, "Scan result: reconcile %d, review %d, applied %d. Runs, edges, and memory were not changed.\n", safe, review, applied)
-	if !*apply && safe > 0 {
-		fmt.Fprintln(a.stdout, "Re-run with --apply to reconcile only the RECONCILE entries.")
+	if *apply {
+		fmt.Fprintln(a.stdout, "No automatic repairs were applied; Thread/Run integrity findings require explicit review.")
 	}
 	return 0
 }

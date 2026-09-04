@@ -165,14 +165,8 @@ func newFakeGrantStore() *fakeGrantStore { return &fakeGrantStore{granted: map[s
 
 func (f *fakeGrantStore) key(kind, scopeID, pk string) string { return kind + "|" + scopeID + "|" + pk }
 
-func (f *fakeGrantStore) IsApprovalGranted(ctx context.Context, tenantID, personID, taskID, patternKey string) (bool, error) {
-	if f.granted[f.key("person", personID, patternKey)] {
-		return true, nil
-	}
-	if taskID != "" && f.granted[f.key("task", taskID, patternKey)] {
-		return true, nil
-	}
-	return false, nil
+func (f *fakeGrantStore) IsApprovalGranted(ctx context.Context, tenantID, personID, patternKey string) (bool, error) {
+	return f.granted[f.key("person", personID, patternKey)], nil
 }
 
 func (f *fakeGrantStore) GrantApproval(ctx context.Context, scopeKind, tenantID, personID, scopeID, patternKey string, expiresAt time.Time) error {
@@ -180,9 +174,13 @@ func (f *fakeGrantStore) GrantApproval(ctx context.Context, scopeKind, tenantID,
 	return nil
 }
 
-// TestHistoricalTaskGrantRemainsReadable keeps existing ledgers compatible
-// after new prompts stop minting task-scoped authority.
-func TestHistoricalTaskGrantRemainsReadable(t *testing.T) {
+// TestTaskScopedGrantNeverSuppressesAnAsk pins the removal of Task as a
+// permission scope. A task-scoped ledger row is not authority: reuse across it
+// rested on the judgment that a set of runs is one piece of work, and that
+// judgment mis-groups unrelated runs, so the person must still be asked. A
+// person-scoped grant for the same class still suppresses the ask, which is
+// what "person plus operation category" means.
+func TestTaskScopedGrantNeverSuppressesAnAsk(t *testing.T) {
 	withExecSandboxPolicy(t, true, true, false)
 	store := newFakeGrantStore()
 	asks := 0
@@ -207,15 +205,16 @@ func TestHistoricalTaskGrantRemainsReadable(t *testing.T) {
 	store.granted[store.key("task", "task-1", pattern)] = true
 	cleanup := install("task-1")
 	run("chmod 777 a")
-	if asks != 0 {
-		t.Fatalf("historical task grant was not read; asks=%d", asks)
+	if asks != 1 {
+		t.Fatalf("a task-scoped row must not authorize; asks=%d", asks)
 	}
 	cleanup()
 
+	store.granted[store.key("person", "person-g", pattern)] = true
 	cleanup = install("task-2")
-	run("chmod 700 c")
+	run("chmod 777 a")
 	if asks != 1 {
-		t.Fatalf("task grant must NOT carry to a different task; asks=%d", asks)
+		t.Fatalf("a person grant must suppress the ask regardless of task; asks=%d", asks)
 	}
 	cleanup()
 }

@@ -15,12 +15,20 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 9
+const CurrentControlSchemaVersion = 13
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
 // orderedMigrations, so schema_migrations always describes what was applied.
 const schemaBaselineVersion = 1
+
+// threadedWorkHistorySchemaVersion is the version whose shape
+// hasThreadedWorkHistorySchema recognizes. It is pinned to that detector and
+// must NEVER be replaced by CurrentControlSchemaVersion: shape adoption may
+// only claim the steps it can actually see, and every step above it still has
+// to run. Tying it to "current" silently stamps future migrations as applied on
+// any database presenting this shape — which is every released v11 install.
+const threadedWorkHistorySchemaVersion = 11
 
 // schemaMigration is one ordered, idempotent step above the baseline. Steps run
 // lowest version first and each records its own ledger row, so a non-additive
@@ -394,6 +402,310 @@ CREATE INDEX IF NOT EXISTS idx_external_watch_groups_pending
 			return err
 		},
 	},
+	{
+		Version: 10,
+		Name:    "run-delivery-override",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Overrides are opt-in rows created only from an authenticated,
+			// server-issued steering input. Historical runs gain no capability.
+			_, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS run_delivery_overrides (
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	run_id TEXT NOT NULL,
+	platform TEXT NOT NULL,
+	platform_user_id TEXT NOT NULL,
+	channel TEXT NOT NULL,
+	source_steering_id TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY (tenant_id, run_id),
+	UNIQUE (tenant_id, source_steering_id)
+);
+CREATE INDEX IF NOT EXISTS idx_run_delivery_overrides_person
+	ON run_delivery_overrides(tenant_id, person_id, updated_at);`)
+			return err
+		},
+	},
+	{
+		Version: 11,
+		Name:    "threaded-work-history",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			return migrateThreadedWorkHistory(ctx, db)
+		},
+	},
+	{
+		Version: 12,
+		Name:    "resume-edge-naming",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			return migrateResumeEdgeNaming(ctx, db)
+		},
+	},
+	{
+		Version: 13,
+		Name:    "attention-dismissal-only",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			return migrateAttentionDismissalOnly(ctx, db)
+		},
+	},
+}
+
+// migrateResumeEdgeNaming renames the forward continuation edge so the column
+// says what it means: this run resumes that run. The edge itself is unchanged —
+// no row gains, loses, or redirects an edge — which is why the pre/post
+// invariant bucket must agree exactly across this step.
+//
+// The name it replaces, parent_run_id, invited two readings the edge never
+// carried: a topic hierarchy, and general causal descent. Both let "related"
+// share a code path with "resumes execution state". The legacy reverse pointer
+// resumed_by_run_id keeps its name; it stays read-only compatibility.
+// migrateAttentionDismissalOnly moves Thread-row visibility out of Attention.
+// Attention used to exclude runs whose Thread was hidden or archived and to
+// rank pinned Threads first, which made a display row an input to "what needs
+// me now". Both are now expressed on the Run: dismissal is the only hide.
+//
+// Archiving a Thread was, in effect, a bulk dismissal of its Attention, so the
+// upgrade performs exactly that bulk dismissal. Without it, removing the filter
+// would resurface work the person had already put away. Runs already dismissed
+// keep their original timestamp and actor.
+func migrateAttentionDismissalOnly(ctx context.Context, db *sql.DB) error {
+	for _, table := range []string{"threads", "runs"} {
+		exists, existsErr := firstExistingMigrationTable(ctx, db, table)
+		if existsErr != nil {
+			return existsErr
+		}
+		if exists == "" {
+			return nil
+		}
+	}
+	hasVisibility, err := migrationColumnExists(ctx, db, "threads", "visibility")
+	if err != nil || !hasVisibility {
+		return err
+	}
+	hasDismissal, err := migrationColumnExists(ctx, db, "runs", "attention_dismissed_at")
+	if err != nil || !hasDismissal {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `UPDATE runs
+		SET attention_dismissed_at = ?, attention_dismissed_by = 'retention'
+		WHERE COALESCE(attention_dismissed_at, 0) = 0
+		  AND thread_id IN (
+		    SELECT id FROM threads
+		     WHERE threads.tenant_id = runs.tenant_id
+		       AND COALESCE(visibility, 'visible') IN ('hidden', 'archived')
+		  )`, time.Now().Unix())
+	return err
+}
+
+func migrateResumeEdgeNaming(ctx context.Context, db *sql.DB) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	table := ""
+	for _, candidate := range []string{"runs", "task_runs"} {
+		exists, existsErr := migrationTableExistsTx(ctx, tx, candidate)
+		if existsErr != nil {
+			return existsErr
+		}
+		if exists {
+			table = candidate
+			break
+		}
+	}
+	if table == "" {
+		return tx.Commit()
+	}
+	if err = renameMigrationColumnTx(ctx, tx, table, "parent_run_id", "resumes_run_id"); err != nil {
+		return err
+	}
+	// SQLite rewrites the indexed column reference on RENAME COLUMN but keeps
+	// the index's own name, so the old name would outlive the column it
+	// describes. Recreate it under the new name; "at most one resume per
+	// target" is unchanged, and run ids are globally unique so (tenant_id,
+	// resumes_run_id) still fully enforces it.
+	if _, err = tx.ExecContext(ctx, `DROP INDEX IF EXISTS idx_task_runs_parent_once`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_resumes_once
+	ON `+table+`(tenant_id, resumes_run_id) WHERE resumes_run_id <> ''`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func migrateThreadedWorkHistory(ctx context.Context, db *sql.DB) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	// Build the new aggregate without any execution-lifecycle columns. Public
+	// upgrades retain every historical label: visible labels become listed
+	// history, hidden labels stay out of the ordinary list as unlisted, archived
+	// labels remain archived, and the legacy kind survives (the retired inbox
+	// kind is an interaction). Only roots created by v11-aware code start
+	// unlisted by default.
+	threadsExist, err := migrationTableExistsTx(ctx, tx, "threads")
+	if err != nil {
+		return err
+	}
+	if !threadsExist {
+		if _, err = tx.ExecContext(ctx, `CREATE TABLE threads_v11 (
+			id TEXT PRIMARY KEY,
+			tenant_id TEXT NOT NULL,
+			person_id TEXT NOT NULL,
+			workspace_id TEXT,
+			kind TEXT NOT NULL,
+			visibility TEXT NOT NULL,
+			title TEXT NOT NULL DEFAULT '',
+			summary TEXT NOT NULL DEFAULT '',
+			pinned INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL,
+			last_activity_at INTEGER NOT NULL
+		)`); err != nil {
+			return err
+		}
+		tasksExist, tableErr := migrationTableExistsTx(ctx, tx, "tasks")
+		if tableErr != nil {
+			return tableErr
+		}
+		if tasksExist {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO threads_v11 (
+				id, tenant_id, person_id, workspace_id, kind, visibility, title,
+				summary, pinned, created_at, updated_at, last_activity_at)
+			SELECT id, tenant_id, person_id, workspace_id,
+				CASE COALESCE(kind, 'work')
+					WHEN 'inbox' THEN 'interaction'
+					WHEN 'interaction' THEN 'interaction'
+					WHEN 'recurring' THEN 'recurring'
+					ELSE 'work' END,
+				CASE COALESCE(visibility, 'visible')
+					WHEN 'archived' THEN 'archived'
+					WHEN 'hidden' THEN 'unlisted'
+					ELSE 'listed' END,
+				title, COALESCE(current_summary, ''), COALESCE(pinned, 0),
+				created_at, updated_at, COALESCE(last_activity_at, updated_at)
+			FROM tasks`); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE threads_v11 RENAME TO threads`); err != nil {
+			return err
+		}
+	}
+
+	// Historical rows acquire no dismissal authority. The fields suppress only
+	// derived Attention and never rewrite Run execution status.
+	if exists, tableErr := migrationTableExistsTx(ctx, tx, "task_runs"); tableErr != nil {
+		return tableErr
+	} else if exists {
+		for _, column := range []struct{ name, definition string }{
+			{"attention_dismissed_at", "INTEGER NOT NULL DEFAULT 0"},
+			{"attention_dismissed_by", "TEXT NOT NULL DEFAULT ''"},
+		} {
+			if err = ensureMigrationColumnTx(ctx, tx, "task_runs", column.name, column.definition); err != nil {
+				return err
+			}
+		}
+		if err = renameMigrationColumnTx(ctx, tx, "task_runs", "task_id", "thread_id"); err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, `ALTER TABLE task_runs RENAME TO runs`); err != nil {
+			return err
+		}
+	}
+
+	// All subordinate records keep their existing table and record identity;
+	// only the aggregate reference changes its domain name.
+	for _, table := range []string{
+		"approval_requests", "approval_triage_events", "channel_messages",
+		"clarify_requests", "effect_receipts", "external_watch_groups",
+		"external_watches", "loop_checkpoints", "maintenance_provider_calls",
+		"notifications", "outbound_messages", "steering_mailbox", "task_artifacts",
+		"task_blockers", "task_events", "task_handoffs", "task_queue",
+		"task_references", "task_skill_bindings", "workflow_profiles",
+	} {
+		if err = renameMigrationColumnTx(ctx, tx, table, "task_id", "thread_id"); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `DROP TABLE IF EXISTS current_task; DROP TABLE IF EXISTS tasks;
+		CREATE INDEX IF NOT EXISTS idx_threads_owner
+			ON threads(tenant_id, person_id, visibility, last_activity_at);
+		CREATE INDEX IF NOT EXISTS idx_runs_thread_started
+			ON runs(tenant_id, thread_id, started_at);
+		CREATE INDEX IF NOT EXISTS idx_runs_person_status
+			ON runs(tenant_id, person_id, status, started_at);
+		CREATE INDEX IF NOT EXISTS idx_runs_attention
+			ON runs(tenant_id, person_id, status, attention_dismissed_at, started_at);`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func migrationTableExistsTx(ctx context.Context, tx *sql.Tx, table string) (bool, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count)
+	return count == 1, err
+}
+
+func migrationColumnExistsTx(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func ensureMigrationColumnTx(ctx context.Context, tx *sql.Tx, table, name, definition string) error {
+	found, err := migrationColumnExistsTx(ctx, tx, table, name)
+	if err != nil || found {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition)
+	return err
+}
+
+func renameMigrationColumnTx(ctx context.Context, tx *sql.Tx, table, oldName, newName string) error {
+	exists, err := migrationTableExistsTx(ctx, tx, table)
+	if err != nil || !exists {
+		return err
+	}
+	oldExists, err := migrationColumnExistsTx(ctx, tx, table, oldName)
+	if err != nil || !oldExists {
+		return err
+	}
+	newExists, err := migrationColumnExistsTx(ctx, tx, table, newName)
+	if err != nil || newExists {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `ALTER TABLE `+table+` RENAME COLUMN `+oldName+` TO `+newName)
+	return err
 }
 
 func ensureMigrationColumn(ctx context.Context, db *sql.DB, table, name, definition string) error {
@@ -492,11 +804,50 @@ func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath str
 		s.migrationBackup = backup
 	}
 
-	// Version 1 adopts the historical additive schema as a compatibility
-	// baseline. All subsequent durable changes must be explicit ordered
-	// migrations rather than more implicit OpenStore side effects.
-	if err := s.InitSchema(ctx); err != nil {
-		return migrationFailure(err, s.migrationBackup)
+	// A database already presenting the v11 Thread/Run shape must not run the
+	// legacy additive InitSchema: doing so would recreate tasks/task_runs beside
+	// threads/runs and manufacture a second aggregate source. So adopt the shape
+	// it unmistakably has — up to threadedWorkHistorySchemaVersion and no
+	// further — and then let the ordinary ordered loop below apply every step
+	// above it. Claiming the whole ledger here would stamp those steps as
+	// applied without running them.
+	modernShape, shapeErr := hasThreadedWorkHistorySchema(ctx, s.db)
+	if shapeErr != nil {
+		return migrationFailure(shapeErr, s.migrationBackup)
+	}
+	if modernShape {
+		// The schedule is the only pre-v11 object that older recovery tests and
+		// released installs may legitimately lack while already presenting the
+		// unmistakable Thread shape; its migration is fully idempotent.
+		if version < 2 {
+			if err := orderedMigrations[0].Apply(ctx, s.db); err != nil {
+				return migrationFailure(err, s.migrationBackup)
+			}
+		}
+		if err := ensureSchemaMigrationsTable(ctx, s.db); err != nil {
+			return migrationFailure(err, s.migrationBackup)
+		}
+		if err := recordSchemaMigration(ctx, s.db, schemaBaselineVersion, "legacy-baseline"); err != nil {
+			return migrationFailure(err, s.migrationBackup)
+		}
+		for _, migration := range orderedMigrations {
+			if migration.Version > threadedWorkHistorySchemaVersion {
+				break
+			}
+			if err := recordSchemaMigration(ctx, s.db, migration.Version, migration.Name); err != nil {
+				return migrationFailure(err, s.migrationBackup)
+			}
+		}
+		if version < threadedWorkHistorySchemaVersion {
+			version = threadedWorkHistorySchemaVersion
+		}
+	} else {
+		// Version 1 adopts the historical additive schema as a compatibility
+		// baseline. All subsequent durable changes must be explicit ordered
+		// migrations rather than more implicit OpenStore side effects.
+		if err := s.InitSchema(ctx); err != nil {
+			return migrationFailure(err, s.migrationBackup)
+		}
 	}
 	if err := ensureSchemaMigrationsTable(ctx, s.db); err != nil {
 		return migrationFailure(err, s.migrationBackup)
@@ -538,6 +889,33 @@ func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath str
 	}
 	s.schemaVersion = CurrentControlSchemaVersion
 	return nil
+}
+
+func hasThreadedWorkHistorySchema(ctx context.Context, db *sql.DB) (bool, error) {
+	for _, table := range []string{"threads", "runs"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count); err != nil {
+			return false, err
+		}
+		if count != 1 {
+			return false, nil
+		}
+	}
+	for _, retired := range []string{"tasks", "task_runs", "current_task"} {
+		var count int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, retired).Scan(&count); err != nil {
+			return false, err
+		}
+		if count != 0 {
+			return false, nil
+		}
+	}
+	var columns int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('runs')
+		WHERE name IN ('thread_id', 'attention_dismissed_at', 'attention_dismissed_by')`).Scan(&columns); err != nil {
+		return false, err
+	}
+	return columns == 3, nil
 }
 
 func recordSchemaMigration(ctx context.Context, db *sql.DB, version int, name string) error {
@@ -629,7 +1007,7 @@ func pruneControlBackups(dir, keepPath string, retain int) error {
 	return nil
 }
 
-// RestoreControlDatabase replaces control.db with one migration backup. The
+// RestoreControlDatabase replaces control.db with one SelfMind control backup. The
 // caller must stop the daemon and explicitly confirm the destructive restore.
 // The failed database and WAL sidecars are preserved beside it for diagnosis.
 func RestoreControlDatabase(ctx context.Context, dataDir, backupPath string) (failedPath string, err error) {
@@ -651,8 +1029,10 @@ func RestoreControlDatabase(ctx context.Context, dataDir, backupPath string) (fa
 	if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 		return "", fmt.Errorf("backup must be a file under %s", backupRoot)
 	}
-	if !strings.HasPrefix(filepath.Base(absBackup), "control-v") || !strings.HasSuffix(absBackup, ".db") {
-		return "", fmt.Errorf("backup name is not a SelfMind control migration snapshot")
+	base := filepath.Base(absBackup)
+	if (!strings.HasPrefix(base, "control-v") && !strings.HasPrefix(base, "control-before-work-history-reset-")) ||
+		!strings.HasSuffix(base, ".db") {
+		return "", fmt.Errorf("backup name is not a SelfMind control snapshot")
 	}
 	if ok, statErr := nonEmptyRegularFile(absBackup); statErr != nil || !ok {
 		if statErr != nil {
@@ -767,27 +1147,151 @@ func quickCheckDB(ctx context.Context, db *sql.DB) error {
 	return rows.Err()
 }
 
-type migrationInvariants map[string]map[string]int64
+// migrationInvariants is the safety snapshot compared before and after every
+// migration step: state buckets must match exactly, and no step may leave a
+// subordinate row pointing at an aggregate that no longer exists.
+type migrationInvariants struct {
+	stateCounts map[string]map[string]int64
+	// orphanRefs counts, per subordinate table, rows whose non-empty aggregate
+	// reference (task_id before v11, thread_id after) names no aggregate row.
+	// Pre-existing dangling history is tolerated so an upgrade cannot strand a
+	// person's database over old rows, but a step may never add to it.
+	orphanRefs map[string]int64
+}
+
+// aggregateReferenceTables are the subordinate tables whose aggregate
+// reference the v11 step renames from task_id to thread_id.
+var aggregateReferenceTables = []struct{ oldTable, newTable string }{
+	{"task_runs", "runs"},
+	{"task_events", "task_events"},
+	{"task_handoffs", "task_handoffs"},
+	{"task_artifacts", "task_artifacts"},
+	{"approval_requests", "approval_requests"},
+	{"clarify_requests", "clarify_requests"},
+	{"external_watches", "external_watches"},
+	{"task_queue", "task_queue"},
+}
 
 func captureMigrationInvariants(ctx context.Context, db *sql.DB) (migrationInvariants, error) {
-	out := make(migrationInvariants)
+	out := migrationInvariants{stateCounts: make(map[string]map[string]int64)}
 	for _, spec := range []struct {
-		table, state string
+		key, oldTable, newTable, state string
 	}{
-		{"approval_requests", "status"},
-		{"task_runs", "status"},
-		{"task_queue", "status"},
-		{"tasks", "status"},
+		{"approval_requests", "approval_requests", "approval_requests", "status"},
+		{"runs", "task_runs", "runs", "status"},
+		{"task_queue", "task_queue", "task_queue", "status"},
+		// Thread has deliberately dropped Task lifecycle status. Owner buckets
+		// preserve the safety invariant that the migration neither loses nor
+		// crosses a person's aggregate history.
+		{"threads", "tasks", "threads", "tenant_id || char(0) || person_id"},
+		// The forward continuation edge is the only ownership authority, so a
+		// step may neither drop nor invent one. The column exists from v7 on;
+		// older shapes have no edge bucket to compare. Its name is resolved at
+		// capture time rather than hardcoded: v12 renames it, and this check
+		// runs both before and after that step, so a fixed name would compare
+		// the edge against nothing on one side of its own migration.
+		{"run_resume_edges", "task_runs", "runs", ""},
 	} {
-		buckets, err := stateCountsIfTableExists(ctx, db, spec.table, spec.state)
+		table, err := firstExistingMigrationTable(ctx, db, spec.newTable, spec.oldTable)
+		if err != nil {
+			return migrationInvariants{}, err
+		}
+		if table == "" {
+			continue
+		}
+		state := spec.state
+		if spec.key == "run_resume_edges" {
+			column := ""
+			for _, candidate := range []string{"resumes_run_id", "parent_run_id"} {
+				hasEdge, existsErr := migrationColumnExists(ctx, db, table, candidate)
+				if existsErr != nil {
+					return migrationInvariants{}, existsErr
+				}
+				if hasEdge {
+					column = candidate
+					break
+				}
+			}
+			if column == "" {
+				continue
+			}
+			state = "CASE WHEN COALESCE(" + column + ", '') <> '' THEN 'linked' ELSE 'root' END"
+		}
+		buckets, err := stateCountsIfTableExists(ctx, db, table, state)
+		if err != nil {
+			return migrationInvariants{}, err
+		}
+		if buckets != nil {
+			out.stateCounts[spec.key] = buckets
+		}
+	}
+	orphans, err := captureAggregateOrphanRefs(ctx, db)
+	if err != nil {
+		return migrationInvariants{}, err
+	}
+	out.orphanRefs = orphans
+	return out, nil
+}
+
+func migrationColumnExists(ctx context.Context, db *sql.DB, table, column string) (bool, error) {
+	var count int
+	err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&count)
+	return count == 1, err
+}
+
+// captureAggregateOrphanRefs counts subordinate rows whose aggregate reference
+// names no existing tasks/threads row. An empty reference is not a reference:
+// queued new work, for example, has no Thread yet.
+func captureAggregateOrphanRefs(ctx context.Context, db *sql.DB) (map[string]int64, error) {
+	aggregate, err := firstExistingMigrationTable(ctx, db, "threads", "tasks")
+	if err != nil || aggregate == "" {
+		return nil, err
+	}
+	out := make(map[string]int64)
+	for _, spec := range aggregateReferenceTables {
+		table, err := firstExistingMigrationTable(ctx, db, spec.newTable, spec.oldTable)
 		if err != nil {
 			return nil, err
 		}
-		if buckets != nil {
-			out[spec.table] = buckets
+		if table == "" {
+			continue
 		}
+		column := ""
+		for _, candidate := range []string{"thread_id", "task_id"} {
+			exists, err := migrationColumnExists(ctx, db, table, candidate)
+			if err != nil {
+				return nil, err
+			}
+			if exists {
+				column = candidate
+				break
+			}
+		}
+		if column == "" {
+			continue
+		}
+		var count int64
+		if err := db.QueryRowContext(ctx, fmt.Sprintf(
+			`SELECT COUNT(*) FROM %s WHERE COALESCE(%s, '') <> '' AND %s NOT IN (SELECT id FROM %s)`,
+			table, column, column, aggregate)).Scan(&count); err != nil {
+			return nil, err
+		}
+		out[spec.newTable] = count
 	}
 	return out, nil
+}
+
+func firstExistingMigrationTable(ctx context.Context, db *sql.DB, names ...string) (string, error) {
+	for _, name := range names {
+		var exists int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, name).Scan(&exists); err != nil {
+			return "", err
+		}
+		if exists == 1 {
+			return name, nil
+		}
+	}
+	return "", nil
 }
 
 func stateCountsIfTableExists(ctx context.Context, db *sql.DB, table, stateColumn string) (map[string]int64, error) {
@@ -820,9 +1324,14 @@ func verifyMigrationInvariants(ctx context.Context, db *sql.DB, before migration
 	if err != nil {
 		return err
 	}
-	for table, want := range before {
-		if got := after[table]; !sameStateCounts(want, got) {
+	for table, want := range before.stateCounts {
+		if got := after.stateCounts[table]; !sameStateCounts(want, got) {
 			return fmt.Errorf("migration changed %s state counts: before=%s after=%s", table, formatStateCounts(want), formatStateCounts(got))
+		}
+	}
+	for table, want := range before.orphanRefs {
+		if got := after.orphanRefs[table]; got > want {
+			return fmt.Errorf("migration left %d %s row(s) referencing a missing thread (before=%d, after=%d)", got-want, table, want, got)
 		}
 	}
 	// A schema upgrade may expose historical decisions to new readers, but must

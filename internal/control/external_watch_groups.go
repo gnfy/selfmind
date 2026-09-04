@@ -54,7 +54,7 @@ func (s *Store) ResolveOrCreateExternalWatchGroup(ctx context.Context, tenantID,
 	now := time.Now().Unix()
 	id := "watchgroup_" + uuid.NewString()
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO external_watch_groups
-		(id, tenant_id, person_id, task_id, run_id, group_key, mode, expected_count, status, created_at, updated_at)
+		(id, tenant_id, person_id, thread_id, run_id, group_key, mode, expected_count, status, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
 		ON CONFLICT(tenant_id, run_id, group_key) DO NOTHING`,
 		id, tenantID, personID, taskID, runID, key, mode, expected, now, now); err != nil {
@@ -82,7 +82,7 @@ func (s *Store) ResolveOrCreateExternalWatchGroup(ctx context.Context, tenantID,
 
 func (s *Store) externalWatchGroupByKey(ctx context.Context, tenantID, runID, key string) (*ExternalWatchGroup, error) {
 	var group ExternalWatchGroup
-	err := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, task_id, run_id, group_key, mode,
+	err := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, thread_id, run_id, group_key, mode,
 		expected_count, status, COALESCE(winner_watch_id, '') FROM external_watch_groups
 		WHERE tenant_id=? AND run_id=? AND group_key=?`, tenantID, runID, key).Scan(
 		&group.ID, &group.TenantID, &group.PersonID, &group.TaskID, &group.RunID, &group.GroupKey,
@@ -105,7 +105,7 @@ func (s *Store) ResolveExternalWatchGroup(ctx context.Context, tenantID, groupID
 	}
 	defer tx.Rollback()
 	var group ExternalWatchGroup
-	if err := tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, task_id, run_id, group_key, mode,
+	if err := tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, thread_id, run_id, group_key, mode,
 		expected_count, status, COALESCE(winner_watch_id, '') FROM external_watch_groups
 		WHERE tenant_id=? AND id=?`, tenantID, groupID).Scan(
 		&group.ID, &group.TenantID, &group.PersonID, &group.TaskID, &group.RunID, &group.GroupKey,

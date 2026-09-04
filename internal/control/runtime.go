@@ -92,7 +92,7 @@ func (s *Store) LatestDeliveryEndpointState(ctx context.Context, tenantID, perso
 // the ordinary pending-state check before a retry can send them.
 func (s *Store) ListDeliveredApprovalRoutes(ctx context.Context, tenantID, personID, approvalID string) ([]Delivery, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
@@ -117,14 +117,14 @@ func (s *Store) ListDeliveredApprovalRoutes(ctx context.Context, tenantID, perso
 
 func (s *Store) UpdateRunHeartbeat(ctx context.Context, tenantID, runID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE task_runs SET heartbeat_at = ? WHERE tenant_id = ? AND id = ? AND status = 'running'`,
+		`UPDATE runs SET heartbeat_at = ? WHERE tenant_id = ? AND id = ? AND status = 'running'`,
 		time.Now().Unix(), normalizeTenant(tenantID), runID)
 	return err
 }
 
 func (s *Store) RequestRunCancel(ctx context.Context, tenantID, runID string) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE task_runs SET cancel_requested = 1 WHERE tenant_id = ? AND id = ?`,
+		`UPDATE runs SET cancel_requested = 1 WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID)
 	return err
 }
@@ -132,7 +132,7 @@ func (s *Store) RequestRunCancel(ctx context.Context, tenantID, runID string) er
 func (s *Store) RunCancelRequested(ctx context.Context, tenantID, runID string) (bool, error) {
 	var requested int
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(cancel_requested, 0) FROM task_runs WHERE tenant_id = ? AND id = ?`,
+		`SELECT COALESCE(cancel_requested, 0) FROM runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).Scan(&requested)
 	if err == sql.ErrNoRows {
 		return false, nil
@@ -146,8 +146,8 @@ func (s *Store) RunCancelRequested(ctx context.Context, tenantID, runID string) 
 // before the harness tears down (phantom `running` rows are what polluted real
 // control.db files before eval isolation).
 func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs []string) ([]Run, error) {
-	query := `SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at
-	          FROM task_runs WHERE tenant_id = ? AND status = 'running'`
+	query := `SELECT id, thread_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at
+	          FROM runs WHERE tenant_id = ? AND status = 'running'`
 	args := []any{normalizeTenant(tenantID)}
 	if len(personIDs) > 0 {
 		query += ` AND person_id IN (` + placeholders(len(personIDs)) + `)`
@@ -180,19 +180,14 @@ func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs 
 // passes the active-run registry so a live run whose heartbeat writer stalls
 // (e.g. SQLite contention) can never be killed from under the agent.
 //
-// After the run pass it repairs orphaned tasks: any task still 'running' with
-// zero 'running' runs left is flipped to 'interrupted' too, regardless of what
-// active_run_id points at. Invariant: after this sweep — and after every run
-// finalization path in the gateway — no task may remain 'running' without a
-// live run; task status 'running' means "a run is executing right now", never
-// "parked between turns". Returns the number of runs plus orphaned tasks
-// recovered.
+// Thread has no execution status, so recovery touches only the authoritative
+// Run rows. Returns the number of Runs recovered.
 func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration, exceptRunIDs ...string) (int, error) {
 	cutoff := time.Now().Add(-olderThan).Unix()
 	if olderThan <= 0 {
 		cutoff = time.Now().Unix()
 	}
-	query := `SELECT id, task_id, tenant_id, person_id FROM task_runs
+	query := `SELECT id, thread_id, tenant_id, person_id FROM runs
 		 WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) <= ?`
 	args := []any{cutoff}
 	if len(exceptRunIDs) > 0 {
@@ -222,9 +217,7 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 		return 0, err
 	}
 	now := time.Now().Unix()
-	// Apply all run + task status flips in a single transaction so a failure
-	// can't leave some runs marked interrupted while their tasks still point at
-	// a dead active_run_id.
+	// Apply all Run flips in one transaction.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -237,59 +230,9 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	}()
 	for _, r := range runs {
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE task_runs SET status = 'interrupted', finished_at = ?, last_error = 'gateway restarted before run finished'
+			`UPDATE runs SET status = 'interrupted', finished_at = ?, last_error = 'gateway restarted before run finished'
 			 WHERE tenant_id = ? AND id = ? AND status = 'running'`,
 			now, r.tenantID, r.runID); err != nil {
-			return 0, err
-		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tasks SET status = 'interrupted', active_run_id = '', current_summary = COALESCE(NULLIF(current_summary, ''), 'Interrupted by gateway restart.'), updated_at = ?
-			 WHERE tenant_id = ? AND id = ? AND active_run_id = ?`,
-			now, r.tenantID, r.taskID, r.runID); err != nil {
-			return 0, err
-		}
-	}
-	// Orphaned-task repair: the run pass above only flips a task whose
-	// active_run_id still points at the dead run. Historic finalization bugs
-	// (FinishRun writing a non-terminal run status while clearing
-	// active_run_id) and pre-task-sync sweeps left tasks 'running' with no
-	// 'running' run at all — those never matched the guard and looked
-	// "running" forever in /tasks. The tx sees the run flips above, so any
-	// task still 'running' here truly has zero live runs (excluded registry
-	// runs keep status 'running' and protect their tasks). 'interrupted' is
-	// deliberately non-terminal: the continuation ladder still offers these runs
-	// for `继续` / `/resume`.
-	orphanRows, err := tx.QueryContext(ctx,
-		`SELECT id, tenant_id FROM tasks
-		 WHERE status = 'running' AND NOT EXISTS (
-		   SELECT 1 FROM task_runs r WHERE r.task_id = tasks.id AND r.status = 'running'
-		 )`)
-	if err != nil {
-		return 0, err
-	}
-	type orphan struct {
-		taskID   string
-		tenantID string
-	}
-	var orphans []orphan
-	for orphanRows.Next() {
-		var o orphan
-		if err := orphanRows.Scan(&o.taskID, &o.tenantID); err != nil {
-			orphanRows.Close()
-			return 0, err
-		}
-		orphans = append(orphans, o)
-	}
-	if err := orphanRows.Err(); err != nil {
-		orphanRows.Close()
-		return 0, err
-	}
-	orphanRows.Close()
-	for _, o := range orphans {
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE tasks SET status = 'interrupted', active_run_id = '', current_summary = COALESCE(NULLIF(current_summary, ''), 'Interrupted: the gateway lost this task''s run before it finished.'), updated_at = ?
-			 WHERE tenant_id = ? AND id = ? AND status = 'running'`,
-			now, o.tenantID, o.taskID); err != nil {
 			return 0, err
 		}
 	}
@@ -321,16 +264,6 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 			log.Warn("failed to append run.interrupted event", "task_id", r.taskID, "run_id", r.runID, "error", err)
 		}
 	}
-	for _, o := range orphans {
-		if _, err := s.AppendEvent(ctx, Event{
-			TaskID:     o.taskID,
-			Type:       "task.interrupted",
-			Visibility: "task",
-			Payload:    json.RawMessage(`{"reason":"task was running with no live run"}`),
-		}); err != nil {
-			log.Warn("failed to append task.interrupted event", "task_id", o.taskID, "error", err)
-		}
-	}
 	// Approval hygiene rides the same sweep: a pending approval whose run died
 	// poisons later approvals (ambiguous bare y/n, ordinals hitting dead
 	// requests — observed live). Best-effort; the waiter's own timeout path is
@@ -355,7 +288,7 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	} else if expired > 0 {
 		log.Warn("expired orphaned pending clarifies", "count", expired)
 	}
-	return len(runs) + len(orphans), nil
+	return len(runs), nil
 }
 
 func (s *Store) ListTaskEvents(ctx context.Context, taskID string, limit int) ([]Event, error) {
@@ -366,9 +299,9 @@ func (s *Store) ListTaskEvents(ctx context.Context, taskID string, limit int) ([
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT cursor, id, task_id, COALESCE(run_id, ''), type, visibility, COALESCE(channel, ''),
+		`SELECT cursor, id, thread_id, COALESCE(run_id, ''), type, visibility, COALESCE(channel, ''),
 		        COALESCE(payload_json, '{}'), created_at
-		 FROM task_events WHERE task_id = ? ORDER BY cursor DESC LIMIT ?`,
+		 FROM task_events WHERE thread_id = ? ORDER BY cursor DESC LIMIT ?`,
 		taskID, limit)
 	if err != nil {
 		return nil, err
@@ -392,12 +325,21 @@ func (s *Store) ListTaskEvents(ctx context.Context, taskID string, limit int) ([
 // LatestPersonEventCursor returns the durable append cursor visible to one
 // person. The explicit daemon-wide sequence is never reused by cleanup or
 // VACUUM, so it is suitable for SSE Last-Event-ID across daemon restarts.
+// Event ownership is derived from the RUN, not the Thread. task_events carries
+// no tenant or person column, so ownership used to come from a JOIN on threads
+// — which made a display grouping decide whose events these are, and would make
+// a thread-less run's events ownerless. The run owns tenant and person
+// directly. The threads leg stays as a fallback for historical rows written
+// before events carried a run id; both legs are LEFT joins so neither can drop
+// an event that the other can attribute.
 func (s *Store) LatestPersonEventCursor(ctx context.Context, tenantID, personID string) (int64, error) {
 	var cursor int64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(e.cursor), 0)
-		 FROM task_events e JOIN tasks t ON t.id = e.task_id
-		 WHERE t.tenant_id = ? AND t.person_id = ?`,
+		 FROM task_events e
+		 LEFT JOIN runs r ON r.id = e.run_id
+		 LEFT JOIN threads t ON t.id = e.thread_id
+		 WHERE COALESCE(r.tenant_id, t.tenant_id) = ? AND COALESCE(r.person_id, t.person_id) = ?`,
 		normalizeTenant(tenantID), personID,
 	).Scan(&cursor)
 	return cursor, err
@@ -415,11 +357,14 @@ func (s *Store) ListPersonEventsAfter(ctx context.Context, tenantID, personID st
 		limit = 200
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.cursor, e.id, e.task_id, COALESCE(e.run_id, ''), e.type, e.visibility,
+		`SELECT e.cursor, e.id, e.thread_id, COALESCE(e.run_id, ''), e.type, e.visibility,
 		        COALESCE(e.channel, ''), COALESCE(e.payload_json, '{}'), e.created_at,
-		        t.tenant_id, t.person_id
-		 FROM task_events e JOIN tasks t ON t.id = e.task_id
-		 WHERE t.tenant_id = ? AND t.person_id = ? AND e.cursor > ?
+		        COALESCE(r.tenant_id, t.tenant_id), COALESCE(r.person_id, t.person_id)
+		 FROM task_events e
+		 LEFT JOIN runs r ON r.id = e.run_id
+		 LEFT JOIN threads t ON t.id = e.thread_id
+		 WHERE COALESCE(r.tenant_id, t.tenant_id) = ? AND COALESCE(r.person_id, t.person_id) = ?
+		   AND e.cursor > ?
 		 ORDER BY e.cursor ASC LIMIT ?`,
 		normalizeTenant(tenantID), personID, cursor, limit)
 	if err != nil {
@@ -478,7 +423,7 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 	d.UpdatedAt = now
 	result, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO outbound_messages
-		   (id, tenant_id, person_id, platform, platform_user_id, channel, task_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
+		   (id, tenant_id, person_id, platform, platform_user_id, channel, thread_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
 		    next_attempt_at, last_error, part_index, part_total, idempotency_key, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
@@ -532,7 +477,7 @@ func (s *Store) SeedAgedPendingSessionDelivery(ctx context.Context, d Delivery, 
 	d.CreatedAt, d.UpdatedAt, d.NextAttemptAt = stamped, stamped, stamped
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO outbound_messages
-		   (id, tenant_id, person_id, platform, platform_user_id, channel, task_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
+		   (id, tenant_id, person_id, platform, platform_user_id, channel, thread_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
 		    next_attempt_at, last_error, part_index, part_total, idempotency_key, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Kind, d.ApprovalID, d.Status,
@@ -557,7 +502,7 @@ func firstNonEmptyDelivery(values ...string) string {
 // otherwise status checks report sql.ErrNoRows and recovery loops forever.
 func (s *Store) DeliveryByIdempotencyKey(ctx context.Context, tenantID, key string) (*Delivery, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages WHERE tenant_id = ? AND idempotency_key = ?`,
@@ -611,7 +556,7 @@ func (s *Store) ListDueDeliveries(ctx context.Context, limit int) ([]Delivery, e
 	}
 	now := time.Now().Unix()
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
@@ -734,7 +679,7 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 		limit = 3
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
@@ -862,7 +807,7 @@ func (s *Store) ListUndeliveredOutbound(ctx context.Context, tenantID, personID 
 		limit = 5
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
@@ -923,7 +868,7 @@ func (s *Store) ListPendingSessionOutbound(ctx context.Context, tenantID, person
 		limit = 5
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
@@ -957,7 +902,7 @@ func (s *Store) ListStalePendingSessionFinalResults(ctx context.Context, tenantI
 		limit = 500
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
@@ -1063,7 +1008,7 @@ func (s *Store) FindPendingSessionDelivery(ctx context.Context, tenantID, person
 		return nil, fmt.Errorf("a delivery id prefix of at least 8 characters is required")
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
@@ -1138,11 +1083,11 @@ func (s *Store) ListUndeliveredTaskResults(ctx context.Context, tenantID, person
 		limit = 3
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
-		 WHERE tenant_id = ? AND person_id = ? AND task_id = ?
+		 WHERE tenant_id = ? AND person_id = ? AND thread_id = ?
 		   AND status IN ('sent_unconfirmed', 'pending_session', 'failed') AND updated_at >= ?
 		   AND COALESCE(kind, '') IN ('', 'final_result')
 		 ORDER BY updated_at DESC, created_at DESC LIMIT ?`,

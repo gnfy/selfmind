@@ -409,14 +409,32 @@ func TestInstalledGatewaySmokeCoversCoreLifecycle(t *testing.T) {
 	for _, required := range []string{
 		"mktemp -d", "trap cleanup", "gateway start", "gateway restart --drain",
 		"gateway stop", `assert_state "${stopped_status}" "stopped"`,
-		`run_selfmind status`, `run_selfmind tasks`, `${data_dir}/control.db`,
-		"No active task.", "No open tasks.",
+		`run_selfmind status`, `run_selfmind resume`, `${data_dir}/control.db`,
+		"No active task.", "Nothing needs attention.",
 	} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("installed gateway smoke is missing %q", required)
 		}
 	}
+	// This contract pinned the script's TEXT, so it stayed green when the
+	// command it names was retired and only CI caught the break. Assert the
+	// commands the script drives are still in the CLI's own surface.
+	root := requireFile(t, filepath.Join("..", "..", "internal", "cliapp", "root.go"))
+	for _, invoked := range []string{"status", "resume", "gateway"} {
+		if !strings.Contains(root, `"selfmind `+invoked) {
+			t.Fatalf("smoke drives %q, which no longer appears in the CLI usage surface", invoked)
+		}
+	}
 	if !strings.Contains(script, `HOME="${smoke_home}"`) || !strings.Contains(script, `data_dir: \"${data_dir}\"`) {
 		t.Fatal("installed gateway smoke must isolate both home and durable data")
 	}
+}
+
+func requireFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }

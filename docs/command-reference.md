@@ -80,16 +80,13 @@ All of these commands talk to the same gateway used by the TUI and IM channels.
 selfmind send [--async] [--mode MODE] [--add-dir DIR]... <message>
 selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-selfmind tasks [done|archived|all|<keyword>]
-selfmind task <n|task_id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>]
-selfmind task <n|task_id> references|reference add <name>|reference remove <name>
-selfmind resume <n|task_id>
-selfmind workspaces
-selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
+selfmind resume [n|run_id]
+selfmind search [query]
+selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|revoke] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
-selfmind stop
+selfmind stop [n|run_id]
 selfmind id
 selfmind new [title]
 ```
@@ -107,33 +104,48 @@ selfmind new [title]
   workspace. A running turn cannot change its additional-root set; start a new
   run to use a different set. Use `--` before message text that literally
   contains `--add-dir`.
-- `tasks` lists open work by default; a status or keyword narrows the result.
+- `tasks` lists current Attention by default: running Runs, pending approvals
+  and clarifications, live watchers, and unclaimed resumable Runs that are
+  still the latest Run of their Thread (an `interrupted` Run appears only when
+  it left work evidence). Same-channel items rank first. Settled, archived,
+  all-history, and keyword views inspect Threads without reopening them.
 - `watchers` lists durable external checks without invoking a model. The
   default view prioritizes active and attention-needed checks; a stable short
   watcher ID opens details or cancels only that check. Cancelling a watcher
   does not cancel the external operation.
-- `task` accepts either the displayed list number or a stable task ID. Numbers
-  resolve the exact most recently displayed open-task list on that endpoint,
-  even if background activity changes the live ranking afterward.
-- `task ... complete` marks work done without deleting its runs, events, or
-  artifacts; `task ... archive` hides obsolete or duplicate work. Both are
-  reversible with an explicit `resume`, which also reopens completed tasks.
-- `workspaces`, `ws`, and `workspace` share the workspace controls:
+- `task` accepts either the displayed list number or a stable Thread-compatible
+  task ID. Numbers resolve the exact most recently displayed snapshot on that
+  endpoint, even if background activity changes the live ranking afterward.
+- `task ... complete` dismisses the exact Run's Attention without changing Run
+  history. It refuses while that Run still has a pending approval, a pending
+  clarification, or a live watcher: answer, reject, or cancel the object
+  instead. `task ... archive` hides the Thread from ordinary presentation.
+  Explicit `resume` can still continue a resumable Run and reopen an archived
+  Thread.
+- `resume` accepts the displayed list number, a stable Thread-compatible task
+  id, or a full run id. A number resolves the exact Run from the snapshot the
+  endpoint last displayed; a Thread id is accepted only when the Thread has
+  exactly one unresolved Run.
+- `ws` is the whole workspace surface. There is no `workspace`, `workspaces`,
+  `ws list`, or `ws use` spelling: bare `ws` lists, and a bare number or id
+  selects.
 
 ```text
-selfmind workspaces
 selfmind ws
-selfmind ws list
 selfmind ws <n|workspace_id>
+selfmind ws default <n|workspace_id>
 selfmind ws add [path] [name...]
-selfmind ws use <workspace_id>
 selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
 selfmind ws revoke <capability> [workspace_id]
-selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 ```
+
+- Selecting a workspace applies to the current session only. `ws default` sets
+  the durable default that IM and scheduled work use, since those turns have no
+  directory of their own. A local CLI or TUI turn started inside a directory
+  keeps using that directory's workspace either way.
 
 - Only an authenticated local CLI can change workspace trust. Omitting the
   workspace ID targets the current workspace. `untrust` also revokes active
@@ -147,7 +159,9 @@ selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspac
   is read-only; otherwise put the allowed argument prefix after `--`.
 - `approve` and `reject` accept a pending approval token when more than one
   request is waiting.
-- `stop` cancels the active run. `new` creates a fresh visible task.
+- `stop` cancels the active run; with no active run it dismisses only the exact
+  pinned Run and refuses while that Run still has a pending approval,
+  clarification, or live watcher. `new` creates a fresh visible task.
 
 ## Configuration, models, and channels
 
@@ -313,7 +327,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|reset-work-history|restore-control] ...
 ```
 
 ```text
@@ -334,6 +348,7 @@ selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir D
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
+selfmind maintenance reset-work-history [--apply] [--data-dir DIR]
 selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 ```
 
@@ -366,17 +381,29 @@ Use the owner rows in the dry-run output together with
   should be used deliberately.
 - Destructive maintenance commands are dry-run by default and require the
   explicit apply/archive flag shown above.
-- `task-audit` is the read-only Task/Run continuity audit: legacy resume edges
-  the upgrade backfill could not convert, illegal parent edges, ownerless
-  pending approvals/clarifications, and task status projections that disagree
-  with the derived reduction. `--apply` reconciles only projection mismatches
-  through the production reducer; every other finding stays human review, and
-  runs, edges, and memory are never rewritten.
+- `task-audit` is the read-only Thread/Run continuity audit: legacy resume
+  edges the upgrade backfill could not convert, illegal parent edges, and
+  ownerless pending approvals/clarifications. `--apply` is retained as a
+  compatibility no-op; execution history is never rewritten by the audit.
 - `migrate-task-references` is dry-run by default. It imports a historical
   `task_runs.work_key` only when the exact reference occurs in that run's
   original user input. Inferred titles and summaries are reported and skipped;
   `--apply` is idempotent and never changes workspace or execution authority.
-- `restore-control` is the explicit recovery path for a migration backup under
+- `reset-work-history` is dry-run by default and reports only aggregate counts.
+  Apply mode requires the gateway to be stopped, refuses running Runs, live
+  watchers, and started queue rows, creates a verified SQLite backup, then
+  removes Thread/Run history and dependent control rows for the configured
+  tenant. Published Skill packages are preserved, but in-flight Skill learning
+  evidence is removed: workflow observations, workflow profiles, skill
+  candidate refs, attributions, run skill activations, and task skill bindings;
+  failure guards and candidate evidence snapshots keep their frozen content and
+  lose only references to removed Runs and observations. Memory sessions keyed
+  to removed Threads and run provenance on preferences are cleared in every
+  on-disk memory partition, while the preferences themselves stay. Identity,
+  accounts, workspaces, person settings, memory preferences, grants, and
+  provider state are preserved.
+- `restore-control` is the explicit recovery path for a migration or
+  work-history-reset backup under
   the selected data directory's `backups/` folder. Stop the gateway first. It
   requires `--yes`, verifies the SQLite snapshot before replacement, and keeps
   the failed database beside the restored `control.db` for diagnosis.
@@ -391,33 +418,32 @@ before normal agent dispatch.
 /model
 /id
 /status
-/tasks [done|archived|all]
-/task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/diag [memory|context|tasks|models|delivery|execution|tools]
+/diag [memory|context|models|delivery|execution|tools]
 /report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
 /approve <n|id|all> [run]
 /reject <n|id|all>
-/mode [mode]
-/stop
+/mode [on-request|read-only|auto-edit|full-auto|smart]
+/stop [n|run_id]
 /cancel
-/notify <platform|auto|desk-first|phone-first>
+/notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
-/resume [n|task_id|run_id]  (bare = pick from recent tasks)
+/resume [n|run_id]  (bare = list what needs attention)
 /choose <choice_id> <number>
 /remember <preference>
 /forget <text|ref>
-/workspace [n|id]  (bare = list; alias: /ws)
-/workspaces  (same as bare /workspace or /ws)
+/ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)
+/add-dir [path]  (bare = list this session's extra roots)
 ```
 
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.
-- `/notify <platform|auto>` selects the preferred IM destination.
+- `/notify <platform|auto>` selects the preferred IM destination, and
+  `/notify <on|off>` turns detached notifications on or off.
   `/notify desk-first` keeps young CLI-origin approvals in the attached TUI and
   escalates after T1; `/notify phone-first` mirrors them to IM immediately.
 - `/approvals grants` and `/approvals revoke <n>` remain available for viewing
@@ -429,6 +455,34 @@ before normal agent dispatch.
 - `/new [title]` keeps its existing task-label behavior. `/new --run <request>`
   is the deterministic escape hatch for sending unrelated work without a
   continuity model decision.
+- A bare `/resume` renders current Attention and is the numbered list every
+  ordinal resolves against. `/resume <n|run_id>` continues one Run exactly; a
+  Thread id is still accepted when it has exactly one unresolved Run. An idle
+  `/stop` dismisses that exact Run and refuses while it still has a pending
+  approval, a pending clarification, or a live watcher. `/stop <n|run_id>`
+  clears ONE listed item without running it — the exit a stale item otherwise
+  lacked, since retention never archives anything with pending human input and
+  pinning an item to dismiss it starts the work you were putting down. Naming
+  the executing Run routes to bare `/stop`, which cancels it. The compatibility
+  `Task.status` field on the wire carries the derived vocabulary `active`,
+  `needs_attention`, `monitoring`, or `resumable` for Attention, `done` for
+  settled listed work, and `archived` for archived Threads; the value is
+  computed from Runs and pending control objects and never stored.
+- `/search [query]` finds past working sessions on every endpoint, and a bare
+  `/search` lists recent ones. In the terminal, `/search current` is the local
+  full-fidelity view of the conversation in progress.
+- `/ws` separates the session from the person's durable default. A local session
+  belongs to the directory it was started in, and bare `/ws` creates that
+  workspace if the directory had none yet, so the listing always includes where
+  the session actually is. `/ws <n|id>` selects for THIS session only;
+  `/ws default <n|id>` moves the default that turns without a directory of their
+  own (IM, cron) use. They were one person-level value, so two terminals in
+  different projects each showed the other's choice as current while their own
+  work ran elsewhere.
+- An untrusted workspace may not use workspace Skills or remembered approval
+  observations. A session started in one asks about trust ONCE at startup:
+  `/ws trust` enables those capabilities, `/ws decline` keeps it untrusted and
+  stops asking. Ordinary file and command work is unaffected either way.
 - `/choose <choice_id> <number>` answers a durable continuity question exactly,
   including from another bound endpoint or after daemon restart. A bare number
   is accepted only when the person has one recent pending continuity question.
@@ -443,10 +497,6 @@ before normal agent dispatch.
   endpoint. `/forget <text|ref>` forgets one — by its text, or by the ref
   `/memory` shows; several matches return a numbered ref list. Transient
   run/build state is refused with guidance.
-- `/task <id> references` lists the governed names and identifiers that may
-  address that task. `/task <id> reference add <name>` confirms one immediately;
-  `reference remove <name>` supersedes it. Automatically learned references
-  require repeated user-text evidence, and conflicting references never route.
 - `/diag tools` reports the registration-time tool schema catalogue. Repaired
   and quarantined external tools are listed by name, issue class, and schema
   hash; raw schemas and values are never printed. Quarantined tools are not

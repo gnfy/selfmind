@@ -75,19 +75,58 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case spinner.TickMsg:
-		if !m.waitingForModel {
+		// animatingTurn is the ONE predicate: the progress row is visible exactly
+		// when the animation runs. Two conditions meant a row could be shown by
+		// one and starved by the other, freezing at whatever second the chain
+		// died — "Working (37s)" over a finished run, reported live. The chain
+		// spans the whole turn rather than the model wait alone, because a frame
+		// that stops moving during a long tool reads as a hang.
+		if !m.animatingTurn() {
+			m.spinnerRunning = false
 			return m, nil
 		}
 		m.spinner, spinnerCmd = m.spinner.Update(msg)
 		return m, spinnerCmd
 
 	case MsgWorkingTick:
-		if m.thinking || m.toolExecuting != "" || (m.daemonRunActive && !m.backgroundDaemonRunActive()) {
-			return m, workingTick()
+		if !m.animatingTurn() {
+			m.spinnerRunning = false
+			return m, nil
 		}
-		return m, nil
+		// The 1 Hz tick advances the elapsed counter and revives the animation if
+		// its chain ever died. Reviving here keeps a single owner: whatever killed
+		// it, the next second restores it, and spinnerRunning prevents a second.
+		if !m.spinnerRunning {
+			m.spinnerRunning = true
+			return m, tea.Batch(workingTick(), m.spinner.Tick)
+		}
+		return m, workingTick()
+
+	case MsgTerminalGone:
+		// The controlling terminal is gone. Quit rather than run on against it:
+		// the read loop already ended silently, so only timers are left and the
+		// session would otherwise live until the machine restarts.
+		m.quitting = true
+		return m, tea.Quit
+
+	case MsgTerminalLivenessTick:
+		return m, terminalLivenessTick()
 
 	case MsgCursorBlinkTick:
+		// Once the person has been away long enough that nobody is watching the
+		// caret, hold it steady and check back rarely instead of twice a
+		// second. Re-arming on one path keeps this self-healing: the next
+		// keystroke updates the input clock and the following tick returns to
+		// the normal rate on its own.
+		if time.Since(m.lastInputActivityAt) > cursorBlinkIdleAfter {
+			if !m.cursorVisible {
+				m.cursorVisible = true
+				if m.editor != nil {
+					m.editor.SetCursorVisible(true)
+				}
+			}
+			return m, idleCursorBlinkTick()
+		}
 		m.cursorVisible = !m.cursorVisible
 		if m.editor != nil {
 			m.editor.SetCursorVisible(m.cursorVisible)
@@ -357,6 +396,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgAgentDone:
 		m.stopModelWait()
 		m.exitPromptActive = false
+		if msg.Turn != nil {
+			m.rememberQueuedRun(msg.Turn.QueueID)
+		}
 		if queuedTurn(msg.Turn) {
 			msg.Response = textutil.CleanUTF8(msg.Response)
 			m.localRequestActive = false
@@ -365,9 +407,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.activityText = ""
 			m.steerCh = nil
 			m.cancelFn = nil
-			if input := strings.TrimSpace(msg.Input); input != "" {
-				m.queuedInputs = append(m.queuedInputs, input)
-				m.queuedCount++
+			if msg.Turn == nil || strings.TrimSpace(msg.Turn.QueueID) == "" {
+				input := strings.TrimSpace(msg.Input)
+				if input != "" {
+					m.queuedInputs = append(m.queuedInputs, input)
+					m.queuedCount++
+				}
 			}
 			m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer)
 			if m.daemonRunActive {
@@ -376,6 +421,22 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.runStatus = "queued"
 			}
 			return m, spinnerCmd
+		}
+		if acceptedTurn(msg.Turn) {
+			// The daemon steered this message into the live run. The local
+			// request is over, but the run is not: keep its tool cells, plan,
+			// and status; its own events continue to drive the animation.
+			m.thinking = false
+			m.activityText = ""
+			m.localRequestActive = false
+			m.localRequestInput = ""
+			m.steerCh = nil
+			m.cancelFn = nil
+			if m.daemonRunActive {
+				m.runStatus = "working"
+			}
+			noticeID := m.setStatusNotice(noticeGuidance, "Sent to the running task as guidance.")
+			return m, tea.Batch(spinnerCmd, clearStatusNoticeAfter(noticeID, 3*time.Second))
 		}
 		newerDaemonRun := m.daemonRunActive && msg.Turn != nil &&
 			strings.TrimSpace(msg.Turn.RunID) != "" &&
@@ -399,6 +460,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.localRequestInput = ""
 		if !newerDaemonRun {
 			m.daemonRunAwaitingDone = false
+			m.daemonRunOwned = false
 			m.clarifyMode = false
 			m.clarifyGateway = false
 			m.clarifyChoices = nil
@@ -438,17 +500,25 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		localMatch := m.localRequestActive && sameQueuedInput(m.localRequestInput, msg.Input)
-		queuedMatch := false
+		queuedMatch := m.consumeQueuedRun(msg.QueueID)
 		if !localMatch {
-			queuedMatch = m.consumeQueuedInput(msg.Input)
+			if !queuedMatch && strings.TrimSpace(msg.QueueID) == "" {
+				queuedMatch = m.consumeQueuedInput(msg.Input)
+			}
 		}
 		m.daemonRunActive = true
 		m.daemonRunID = msg.RunID
+		m.daemonRunQueueID = strings.TrimSpace(msg.QueueID)
 		m.daemonRunStarted = msg.Started
 		if m.daemonRunStarted.IsZero() {
 			m.daemonRunStarted = time.Now()
 		}
 		m.daemonRunAwaitingDone = localMatch
+		// A queued message the person typed here is their own work once it
+		// drains; only its final answer arrives differently (run.finished
+		// instead of a synchronous reply). Treating it as passive left the
+		// spinner dark for every queued turn.
+		m.daemonRunOwned = localMatch || queuedMatch
 		m.runStatus = "working"
 		m.runTokens = 0
 		m.activePlanJSON = ""
@@ -461,20 +531,15 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		watchID := strings.TrimSpace(msg.WatchID)
 		// The daemon started this run on the person's behalf, so it reports its
-		// result and not its process (markBackgroundRun). A watcher also opens
-		// with a notice, because it continues a boundary the person already
-		// saw; a bare background run stays silent until it has something to
-		// report — the status bar already shows the daemon is busy.
+		// result and not its process (markBackgroundRun). That includes a
+		// watcher finalization: "the daemon is busy finalizing this watcher" is
+		// live state the status bar already renders ("background watcher
+		// finalizing"), so it must not also become a permanent transcript line.
+		// One watcher lifecycle leaves exactly one notice — the terminal one.
 		if watchID != "" || strings.TrimSpace(msg.Origin) != "" {
 			m.markBackgroundRun(msg.RunID, watchID, msg.Origin)
 		}
-		if watchID != "" {
-			taskStatus := strings.TrimSpace(msg.TaskStatus)
-			if taskStatus == "" {
-				taskStatus = "running"
-			}
-			m.addMessage("notice", watcherStatusNotice(watchID, "finalizing", taskStatus))
-		} else if queuedMatch && strings.TrimSpace(msg.Origin) == "" {
+		if watchID == "" && queuedMatch && strings.TrimSpace(msg.Origin) == "" {
 			title := strings.TrimSpace(msg.Input)
 			if title == "" {
 				title = "queued task"
@@ -497,8 +562,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		awaitingSynchronousDone := m.daemonRunAwaitingDone
+		m.daemonRunOwned = false
 		m.daemonRunActive = false
 		m.daemonRunID = ""
+		m.daemonRunQueueID = ""
 		m.daemonRunStarted = time.Time{}
 		m.daemonRunAwaitingDone = false
 		if awaitingSynchronousDone {
@@ -674,7 +741,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg.Result = textutil.CleanUTF8(msg.Result)
 		m.applyProcessEffects(m.processState().Update(processEvent{
 			kind: processToolCompleted, toolName: msg.ToolName, toolCallID: msg.ToolCallID,
-			runID: msg.Event.RunID, result: msg.Result, err: msg.Err, duration: msg.Duration,
+			runID: msg.Event.RunID, result: msg.Result, err: msg.Err, effectState: msg.EffectState, duration: msg.Duration,
 			allowOrphan: m.currentToolEvent(msg.Event),
 		}))
 		if !m.processState().HasRunningTools() && !m.passiveDaemonEvent(msg.Event) {
@@ -738,7 +805,13 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.acceptEvent(msg.Event) {
 			return m, spinnerCmd
 		}
-		m.addMessage("notice", watcherStatusNotice(msg.WatchID, msg.Status, msg.TaskStatus))
+		// The observation reached a terminal state, but the outcome the person
+		// acts on is the finalization result that follows within seconds. This
+		// is therefore the transient half of the watcher's report: it stays on
+		// the status bar (no timer, so it is not lost while finalization is
+		// still pending) until the terminal notice replaces it in the
+		// transcript.
+		m.setStatusNotice(watcherNoticeKind(msg.Status), watcherStatusNotice(msg.WatchID, msg.Status, msg.TaskStatus))
 		return m, nil
 
 	case MsgClearStatus:

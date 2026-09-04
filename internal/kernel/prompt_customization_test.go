@@ -290,6 +290,19 @@ func TestPersistentLearningGuidanceMentionsOnlyAvailableSurfaces(t *testing.T) {
 	}
 }
 
+func TestWorkContinuityGuidanceRequiresScopedProgressiveInspection(t *testing.T) {
+	defs := []map[string]interface{}{{"name": "work_search"}, {"name": "work_inspect"}, {"name": "work_select"}}
+	guidance := workContinuityGuidanceForDefinitions(defs)
+	for _, required := range []string{"work_search", "work_inspect", "work_select", "evidence", "new work"} {
+		if !strings.Contains(guidance, required) {
+			t.Fatalf("continuity guidance missing %q: %s", required, guidance)
+		}
+	}
+	if got := workContinuityGuidanceForDefinitions([]map[string]interface{}{{"name": "session_search"}}); got != "" {
+		t.Fatalf("guidance invented unavailable work tools: %s", got)
+	}
+}
+
 func TestSetContextWindowPreservesPromptSnapshotForSummarizer(t *testing.T) {
 	snapshot := promptassets.Empty(filepath.Join(t.TempDir(), "prompts"))
 	agent := NewAgent(memory.NewMemoryManager(nil), promptToolBackend{}, &textOnlyProvider{}, "", 1, 1, nil)

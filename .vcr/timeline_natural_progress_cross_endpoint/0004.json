@@ -1,0 +1,404 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "RU",
+      "phase": "final_answer"
+    },
+    {
+      "content": "Q",
+      "phase": "final_answer"
+    },
+    {
+      "content": "X",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-",
+      "phase": "final_answer"
+    },
+    {
+      "content": "767",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 的",
+      "phase": "final_answer"
+    },
+    {
+      "content": "生产",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "任务",
+      "phase": "final_answer"
+    },
+    {
+      "content": "已",
+      "phase": "final_answer"
+    },
+    {
+      "content": "中",
+      "phase": "final_answer"
+    },
+    {
+      "content": "断",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，",
+      "phase": "final_answer"
+    },
+    {
+      "content": "尚",
+      "phase": "final_answer"
+    },
+    {
+      "content": "无",
+      "phase": "final_answer"
+    },
+    {
+      "content": "成功",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "记录",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。\n\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-",
+      "phase": "final_answer"
+    },
+    {
+      "content": " ",
+      "phase": "final_answer"
+    },
+    {
+      "content": "任务",
+      "phase": "final_answer"
+    },
+    {
+      "content": "状态",
+      "phase": "final_answer"
+    },
+    {
+      "content": "：",
+      "phase": "final_answer"
+    },
+    {
+      "content": "`",
+      "phase": "final_answer"
+    },
+    {
+      "content": "inter",
+      "phase": "final_answer"
+    },
+    {
+      "content": "rupted",
+      "phase": "final_answer"
+    },
+    {
+      "content": "`\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-",
+      "phase": "final_answer"
+    },
+    {
+      "content": " 中",
+      "phase": "final_answer"
+    },
+    {
+      "content": "断",
+      "phase": "final_answer"
+    },
+    {
+      "content": "时间",
+      "phase": "final_answer"
+    },
+    {
+      "content": "：",
+      "phase": "final_answer"
+    },
+    {
+      "content": "202",
+      "phase": "final_answer"
+    },
+    {
+      "content": "6",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-",
+      "phase": "final_answer"
+    },
+    {
+      "content": "09",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-",
+      "phase": "final_answer"
+    },
+    {
+      "content": "02",
+      "phase": "final_answer"
+    },
+    {
+      "content": " ",
+      "phase": "final_answer"
+    },
+    {
+      "content": "02",
+      "phase": "final_answer"
+    },
+    {
+      "content": ":",
+      "phase": "final_answer"
+    },
+    {
+      "content": "53",
+      "phase": "final_answer"
+    },
+    {
+      "content": " UTC",
+      "phase": "final_answer"
+    },
+    {
+      "content": "\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-",
+      "phase": "final_answer"
+    },
+    {
+      "content": " ",
+      "phase": "final_answer"
+    },
+    {
+      "content": "运行",
+      "phase": "final_answer"
+    },
+    {
+      "content": "记录",
+      "phase": "final_answer"
+    },
+    {
+      "content": "中",
+      "phase": "final_answer"
+    },
+    {
+      "content": "没有",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "步骤",
+      "phase": "final_answer"
+    },
+    {
+      "content": "、",
+      "phase": "final_answer"
+    },
+    {
+      "content": "产",
+      "phase": "final_answer"
+    },
+    {
+      "content": "物",
+      "phase": "final_answer"
+    },
+    {
+      "content": "或",
+      "phase": "final_answer"
+    },
+    {
+      "content": "验证",
+      "phase": "final_answer"
+    },
+    {
+      "content": "结果",
+      "phase": "final_answer"
+    },
+    {
+      "content": "\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "-",
+      "phase": "final_answer"
+    },
+    {
+      "content": " ",
+      "phase": "final_answer"
+    },
+    {
+      "content": "也",
+      "phase": "final_answer"
+    },
+    {
+      "content": "没有",
+      "phase": "final_answer"
+    },
+    {
+      "content": "留下",
+      "phase": "final_answer"
+    },
+    {
+      "content": "明确",
+      "phase": "final_answer"
+    },
+    {
+      "content": "的",
+      "phase": "final_answer"
+    },
+    {
+      "content": "中",
+      "phase": "final_answer"
+    },
+    {
+      "content": "断",
+      "phase": "final_answer"
+    },
+    {
+      "content": "原因",
+      "phase": "final_answer"
+    },
+    {
+      "content": "或",
+      "phase": "final_answer"
+    },
+    {
+      "content": "后",
+      "phase": "final_answer"
+    },
+    {
+      "content": "续",
+      "phase": "final_answer"
+    },
+    {
+      "content": "步骤",
+      "phase": "final_answer"
+    },
+    {
+      "content": "\n\n",
+      "phase": "final_answer"
+    },
+    {
+      "content": "因此",
+      "phase": "final_answer"
+    },
+    {
+      "content": "目前",
+      "phase": "final_answer"
+    },
+    {
+      "content": "只能",
+      "phase": "final_answer"
+    },
+    {
+      "content": "确认",
+      "phase": "final_answer"
+    },
+    {
+      "content": "：",
+      "phase": "final_answer"
+    },
+    {
+      "content": "任务",
+      "phase": "final_answer"
+    },
+    {
+      "content": "启动",
+      "phase": "final_answer"
+    },
+    {
+      "content": "后",
+      "phase": "final_answer"
+    },
+    {
+      "content": "很",
+      "phase": "final_answer"
+    },
+    {
+      "content": "快",
+      "phase": "final_answer"
+    },
+    {
+      "content": "中",
+      "phase": "final_answer"
+    },
+    {
+      "content": "断",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，",
+      "phase": "final_answer"
+    },
+    {
+      "content": "无法",
+      "phase": "final_answer"
+    },
+    {
+      "content": "判",
+      "phase": "final_answer"
+    },
+    {
+      "content": "定",
+      "phase": "final_answer"
+    },
+    {
+      "content": "任何",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "操作",
+      "phase": "final_answer"
+    },
+    {
+      "content": "已经",
+      "phase": "final_answer"
+    },
+    {
+      "content": "完成",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "usage": {
+        "input_tokens": 8219,
+        "output_tokens": 156,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8219,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

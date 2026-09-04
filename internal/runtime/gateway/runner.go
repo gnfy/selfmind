@@ -414,11 +414,6 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.
 		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID),
-		// Natural-language continuity is a bounded, advisory fast_classifier
-		// decision. The gateway owns candidates, validates current state, and
-		// remains the only component allowed to create, steer, or resume a run.
-		ContinuityResolver: app.NewConfiguredContinuityResolver(mem, cfg, defaultTenantID),
-		ContinuityMode:     cfg.Continuity.EffectiveMode(),
 		// Operational rollback keeps durable recovery evidence readable while
 		// preventing the daemon from creating automatic exact-parent children.
 		DisableAutomaticRunRecovery: !cfg.Gateway.AutomaticRunRecovery,

@@ -1,12 +1,4 @@
 {
-  "method": "chat",
-  "chat": {
-    "Content": "重构计划 代码重构 架构重构 改造方案 技术债整理",
-    "ToolCalls": null,
-    "Usage": {
-      "InputTokens": 269,
-      "OutputTokens": 208
-    },
-    "FinishReason": ""
-  }
+  "method": "completion",
+  "completion": "模块重构 三步方案 不改代码 finish_run waiting_user"
 }

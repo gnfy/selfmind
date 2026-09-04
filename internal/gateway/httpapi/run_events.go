@@ -106,17 +106,20 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		LogicalKey: strings.TrimSpace(req.EffectKey),
 	}
 	accepted := false
-	if active := c.currentActive(identity.PersonID); active != nil && active.RunID == base.RunID && active.DeliveryOverride {
-		base.Platform = active.DeliveryPlatform
-		base.PlatformUserID = active.DeliveryPlatformUserID
-		base.Channel = active.DeliveryChannel
-		accepted, _ = c.srv.Delivery.EnqueueAndTryAccepted(ctx, base)
-		if accepted && req.EffectKey != "" && c.srv.Control != nil {
-			if err := c.srv.Control.MarkEffectDeliveryEnqueued(ctx, identity.TenantID, req.EffectKey); err != nil {
-				return false
+	if c.srv.Control != nil && base.RunID != "" {
+		target, err := c.srv.Control.RunDeliveryOverride(ctx, identity.TenantID, identity.PersonID, base.RunID)
+		if err == nil && target != nil && c.srv.Delivery.SupportsPlatform(target.Platform) {
+			base.Platform = target.Platform
+			base.PlatformUserID = target.PlatformUserID
+			base.Channel = target.Channel
+			accepted, _ = c.srv.Delivery.EnqueueAndTryAccepted(ctx, base)
+			if accepted && req.EffectKey != "" {
+				if err := c.srv.Control.MarkEffectDeliveryEnqueued(ctx, identity.TenantID, req.EffectKey); err != nil {
+					return false
+				}
 			}
+			return accepted
 		}
-		return accepted
 	}
 	// Platform-only check: TUI channels are session UUIDs, not "cli".
 	if req.Platform == "cli" {
@@ -246,6 +249,9 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			}
 			summary.Observe(event)
 			c.recordStreamEvent(ctx, channel, task, run, event)
+			if event.EventType == "tool.completed" && event.ToolName == "work_select" {
+				c.refreshDirectContinuation(ctx, task, run)
+			}
 			if event.EventType == "stream" {
 				sawStream = true
 				if event.Phase != llm.AssistantPhaseUnspecified {
@@ -290,6 +296,28 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 		}
 	}
 	return summary.WithContent(finalContent.String()), usage, summary, hasFinalContent, nil
+}
+
+// refreshDirectContinuation re-reads the run after work_select. A same-domain
+// direct claim moves the running interaction onto the parent's thread in the
+// middle of the turn; every later event, projection, active-run card, and the
+// finalization must follow that thread, so the coordinator's pointers are
+// updated in place.
+func (c *RunCoordinator) refreshDirectContinuation(ctx context.Context, task *control.Task, run *control.Run) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil || run == nil {
+		return
+	}
+	fresh, err := c.srv.Control.GetRun(ctx, run.TenantID, run.ID)
+	if err != nil || fresh == nil || fresh.TaskID == task.ID {
+		return
+	}
+	thread, err := c.srv.Control.GetTask(ctx, run.TenantID, fresh.TaskID)
+	if err != nil || thread == nil {
+		return
+	}
+	*run = *fresh
+	*task = *thread
+	c.updateActive(run.PersonID, task, run)
 }
 
 func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {

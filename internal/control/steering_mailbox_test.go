@@ -45,8 +45,8 @@ func TestSteeringMailboxLifecycle(t *testing.T) {
 }
 
 // TestSteeringDeferralAndBootRecovery pins the crash-window healing: an
-// accepted-but-unconsumed row survives as durable queued work pinned to its
-// task, deferral is idempotent via the queue key, and acknowledged guidance
+// accepted-but-unconsumed row survives as durable next-turn work without a
+// guessed task edge, deferral is idempotent via the queue key, and acknowledged guidance
 // never disappears merely because the daemon was offline for a long time.
 func TestSteeringDeferralAndBootRecovery(t *testing.T) {
 	ctx := context.Background()
@@ -83,12 +83,13 @@ func TestSteeringDeferralAndBootRecovery(t *testing.T) {
 		t.Fatalf("recovery = deferred %d expired %d, want 2/0", deferred, expired)
 	}
 
-	// The deferred row became exactly one queued item pinned to the task.
+	// The deferred row became exactly one queued item. Main never saw it, so the
+	// queue must not guess that it belongs to the finished task.
 	queued, err := store.NextQueued(ctx, identity.TenantID, identity.PersonID)
 	if err != nil || queued == nil {
 		t.Fatalf("queued: %+v err=%v", queued, err)
 	}
-	if queued.TaskID != task.ID || queued.Content != "an instruction from last week" {
+	if queued.TaskID != "" || queued.Content != "an instruction from last week" {
 		t.Fatalf("queued row = %+v", queued)
 	}
 	if queued.IdempotencyKey != "steering:"+stale.ID || queued.Platform != "telegram" || queued.PlatformUserID != "tg-user" || queued.WorkspaceID != "ws-2" || queued.ApprovalMode != "read-only" {
@@ -115,6 +116,31 @@ func TestSteeringDeferralAndBootRecovery(t *testing.T) {
 		t.Fatalf("stale status = %q", staleStatus)
 	}
 	_ = fresh
+}
+
+func TestIndependentTransferCannotDuplicateFinalizationDeferral(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, run := newRecoveryFixture(t)
+	msg, err := store.AcceptSteering(ctx, SteeringMessage{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		RunID: run.ID, TaskID: task.ID, Content: "unseen input at finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeferSteering(ctx, *msg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.QueueSteeringAsIndependent(ctx, identity.TenantID, identity.PersonID, run.ID, msg.ID); err == nil {
+		t.Fatal("a generic finalization deferral must not be reclassified into a second queue row")
+	}
+	queued, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, QueueStatusQueued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 || queued[0].IdempotencyKey != "steering:"+msg.ID {
+		t.Fatalf("queued rows = %+v", queued)
+	}
 }
 
 func TestSteeringExactConsumptionWithDuplicateContent(t *testing.T) {

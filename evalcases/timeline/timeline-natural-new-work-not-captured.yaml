@@ -1,0 +1,35 @@
+id: timeline_natural_new_work_not_captured
+title: "a fresh GCP query is not captured by older release work"
+require_cassette: true
+suite: timeline
+workspace: isolated
+channel: cli
+
+setup:
+  task:
+    title: "gcp production release PHP www and resque"
+    parked_runs:
+      - input: "release PHP www and resque after approval"
+        status: waiting_user
+
+turns:
+  - input: >-
+      你看一下GCP最新的发布有哪些？只回答你理解到的查询目标，不要执行查询或调用工具。
+
+expect:
+  status: completed
+  http_status: 200
+  max_tool_calls: 0
+  max_duration_seconds: 90
+  must_not_contain:
+    - "Which one did you mean?"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+
+assert_state:
+  - on: task
+    field: title
+    contains: "你看一下GCP最新的发布"

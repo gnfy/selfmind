@@ -47,6 +47,61 @@ func TestStrategyRecoveryPolicyBlocksRepeatedAndCosmeticRetries(t *testing.T) {
 	}
 }
 
+// Shell commands carry their target in the command text. Two aws subcommands
+// are different targets, while an env prefix or an extra flag is the same
+// target — so a corrected command is a correction and a re-flagged one is a
+// cosmetic retry.
+func TestRecoveryTargetHashDerivesShellCommandTarget(t *testing.T) {
+	listBuilds := recoveryTargetHash(map[string]interface{}{
+		"command": `ids=$(aws codebuild list-builds-for-project --project-name api --query ids --output text)`,
+	})
+	listBuildsEnv := recoveryTargetHash(map[string]interface{}{
+		"command": `PROFILE=cw2 aws codebuild list-builds-for-project --sort-order DESCENDING --project-name api`,
+	})
+	batchGet := recoveryTargetHash(map[string]interface{}{
+		"command": `aws codebuild batch-get-builds --ids build-1`,
+	})
+	if listBuilds != listBuildsEnv {
+		t.Fatalf("env prefix and flag order must not change the target: %s vs %s", listBuilds, listBuildsEnv)
+	}
+	if listBuilds == batchGet {
+		t.Fatal("different subcommands must be different targets")
+	}
+	if got := shellCommandTarget(`cd /tmp && npm test`); got != "npm test" {
+		t.Fatalf("shell setup must not become the recovery target: %q", got)
+	}
+}
+
+// A guardrail or policy refusal never executed the tool. It must not consume
+// the one changed-input correction the policy promises (observed live: one
+// blocked preflight loop plus one real failure locked out the corrected
+// command as "strategy exhausted").
+func TestStrategyRecoveryPolicyIgnoresNotDispatchedRefusals(t *testing.T) {
+	policy := NewStrategyRecoveryPolicy()
+	blocked := RecoveryAttempt{
+		PlanVersion: 1, PlanStepID: "step-a", ToolName: "terminal",
+		InputSignature: "terminal\x00loop", TargetHash: "aws codebuild batch-get-builds", Strategy: "observe",
+	}
+	policy.RecordFailure(RecoveryFailure{Attempt: blocked, ErrorCode: "active_turn_polling", EffectState: "not_dispatched"})
+	real := blocked
+	real.InputSignature = "terminal\x00list-builds"
+	if err := policy.BeforeDispatch(real); err != nil {
+		t.Fatalf("refusal must not count against the target: %v", err)
+	}
+	policy.RecordFailure(RecoveryFailure{Attempt: real, FailureClass: "command_failed"})
+	corrected := real
+	corrected.InputSignature = "terminal\x00list-builds-fixed"
+	if err := policy.BeforeDispatch(corrected); err != nil {
+		t.Fatalf("the corrected command after one real failure was refused: %v", err)
+	}
+	policy.RecordFailure(RecoveryFailure{Attempt: corrected, FailureClass: "command_failed"})
+	third := real
+	third.InputSignature = "terminal\x00list-builds-third"
+	if err := policy.BeforeDispatch(third); err == nil || !recoveryErrorCode(err, "recovery_strategy_exhausted") {
+		t.Fatalf("two real failures on one target must exhaust the strategy: %v", err)
+	}
+}
+
 func TestStrategyRecoveryPolicyReleasesFailureAfterStateChange(t *testing.T) {
 	policy := NewStrategyRecoveryPolicy()
 	observe := RecoveryAttempt{PlanVersion: 1, PlanStepID: "step-a", ToolName: "read_file", InputSignature: "read", TargetHash: "file", Strategy: "observe"}

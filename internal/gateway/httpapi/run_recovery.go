@@ -137,10 +137,12 @@ func (d *Server) recoverApprovalContinuations(ctx context.Context, drain bool) i
 		channel := fallback(approval.ApprovedChannel, approval.RequestedChannel)
 		route := d.routeIdentityForPerson(ctx, approval.TenantID, approval.PersonID, channel, "", nil)
 		var executionRoots []executionenv.RootBinding
-		if sourceRun, runErr := d.Control.GetRun(ctx, approval.TenantID, approval.RunID); runErr != nil {
+		sourceRun, runErr := d.Control.GetRun(ctx, approval.TenantID, approval.RunID)
+		if runErr != nil {
 			log.Warn("gateway: recoverable approval run scope lookup failed", "approval_id", approval.ID, "run_id", approval.RunID, "error", runErr)
 			continue
-		} else if sourceRun != nil {
+		}
+		if sourceRun != nil {
 			executionRoots = executionenv.CloneRootBindings(sourceRun.ExecutionRoots)
 		}
 		queued, created, enqueueErr := d.Control.EnqueueRecoveredApprovalContinuation(ctx, approval.ID, control.QueuedTask{
@@ -150,7 +152,7 @@ func (d *Server) recoverApprovalContinuations(ctx context.Context, drain bool) i
 			PlatformUserID: route.PlatformUserID,
 			Channel:        fallback(channel, route.Platform),
 			Content:        parkedApprovalDecisionContent(approval.Status, approval.DecisionNote),
-			WorkspaceID:    task.WorkspaceID,
+			WorkspaceID:    recoveryWorkspaceID(sourceRun, task),
 			ExecutionRoots: executionRoots,
 			TaskID:         task.ID,
 			ApprovalID:     approval.ID,
@@ -222,10 +224,12 @@ func (d *Server) sweepRecoveryNotifications() {
 		identity := &control.IdentityContext{TenantID: item.TenantID, PersonID: item.PersonID, Platform: "cli"}
 		content := recoveryNotificationContent(item.Title,
 			d.recoveryHandoffForRun(ctx, item.TenantID, item.PersonID, item.RunID))
+		// liveSurfaceInformed=true: recovery's own notification is the signal, not
+		// a fallback for a live event that may have failed to land.
 		if d.coordinator().routePendingNotification(ctx, identity, item.Channel, delivery.Message{
 			TenantID: item.TenantID, PersonID: item.PersonID, TaskID: item.TaskID, RunID: item.RunID,
 			Content: content, Kind: "recovery",
-		}) {
+		}, true) {
 			if err := d.Control.MarkRecoveryNotificationSent(ctx, item); err != nil {
 				log.Warn("gateway: recovery notification marker failed", "run", item.RunID, "error", err)
 			}
@@ -336,4 +340,19 @@ func (d *Server) activeLeaseIDs() map[string]bool {
 		}
 	}
 	return active
+}
+
+// recoveryWorkspaceID resolves the workspace re-enqueued work must execute in.
+// The Run is the authority: execution roots already come from it, and taking
+// the workspace from the Task made a display-and-grouping row decide execution
+// scope. The Task fallback covers only rows created before runs carried the
+// scope, and it goes away with Task itself.
+func recoveryWorkspaceID(run *control.Run, task *control.Task) string {
+	if run != nil && strings.TrimSpace(run.WorkspaceID) != "" {
+		return run.WorkspaceID
+	}
+	if task != nil {
+		return task.WorkspaceID
+	}
+	return ""
 }

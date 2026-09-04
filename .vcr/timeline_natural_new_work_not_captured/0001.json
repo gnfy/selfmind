@@ -1,0 +1,152 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "查询",
+      "phase": "final_answer"
+    },
+    {
+      "content": "目标",
+      "phase": "final_answer"
+    },
+    {
+      "content": "：",
+      "phase": "final_answer"
+    },
+    {
+      "content": "查看",
+      "phase": "final_answer"
+    },
+    {
+      "content": "并",
+      "phase": "final_answer"
+    },
+    {
+      "content": "汇",
+      "phase": "final_answer"
+    },
+    {
+      "content": "总",
+      "phase": "final_answer"
+    },
+    {
+      "content": " Google",
+      "phase": "final_answer"
+    },
+    {
+      "content": " Cloud",
+      "phase": "final_answer"
+    },
+    {
+      "content": " Platform",
+      "phase": "final_answer"
+    },
+    {
+      "content": "（",
+      "phase": "final_answer"
+    },
+    {
+      "content": "G",
+      "phase": "final_answer"
+    },
+    {
+      "content": "CP",
+      "phase": "final_answer"
+    },
+    {
+      "content": "）",
+      "phase": "final_answer"
+    },
+    {
+      "content": "近期",
+      "phase": "final_answer"
+    },
+    {
+      "content": "最新",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布",
+      "phase": "final_answer"
+    },
+    {
+      "content": "的",
+      "phase": "final_answer"
+    },
+    {
+      "content": "产品",
+      "phase": "final_answer"
+    },
+    {
+      "content": "、",
+      "phase": "final_answer"
+    },
+    {
+      "content": "功能",
+      "phase": "final_answer"
+    },
+    {
+      "content": "与",
+      "phase": "final_answer"
+    },
+    {
+      "content": "重要",
+      "phase": "final_answer"
+    },
+    {
+      "content": "更新",
+      "phase": "final_answer"
+    },
+    {
+      "content": "，",
+      "phase": "final_answer"
+    },
+    {
+      "content": "包含",
+      "phase": "final_answer"
+    },
+    {
+      "content": "发布时间",
+      "phase": "final_answer"
+    },
+    {
+      "content": "、",
+      "phase": "final_answer"
+    },
+    {
+      "content": "涉及",
+      "phase": "final_answer"
+    },
+    {
+      "content": "服务",
+      "phase": "final_answer"
+    },
+    {
+      "content": "及",
+      "phase": "final_answer"
+    },
+    {
+      "content": "核心",
+      "phase": "final_answer"
+    },
+    {
+      "content": "变化",
+      "phase": "final_answer"
+    },
+    {
+      "content": "。",
+      "phase": "final_answer"
+    },
+    {
+      "usage": {
+        "input_tokens": 7196,
+        "output_tokens": 38,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 7196,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

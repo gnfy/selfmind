@@ -217,8 +217,8 @@ func (s *Store) ListUncertainToolEntriesForTask(ctx context.Context, tenantID, t
 	rows, err := s.db.QueryContext(ctx, `SELECT l.run_id, l.tool_call_id, l.tool_name, l.args_hash, l.retry_class,
 		l.effect_id, l.plan_version, l.plan_step_id, l.strategy, l.effect_class, l.environment_generation,
 		l.result_ref, l.verification_state, l.status, l.created_at, l.updated_at
-		FROM tool_ledger l JOIN task_runs r ON r.id = l.run_id AND r.tenant_id = l.tenant_id
-		WHERE l.tenant_id = ? AND r.task_id = ? AND l.status IN (?, ?) AND l.retry_class != ?
+		FROM tool_ledger l JOIN runs r ON r.id = l.run_id AND r.tenant_id = l.tenant_id
+		WHERE l.tenant_id = ? AND r.thread_id = ? AND l.status IN (?, ?) AND l.retry_class != ?
 		ORDER BY l.created_at ASC LIMIT ?`,
 		normalizeTenant(tenantID), taskID, ToolLedgerStarted, ToolLedgerDispatched, "read_only", limit)
 	if err != nil {

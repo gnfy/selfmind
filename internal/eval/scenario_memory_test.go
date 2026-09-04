@@ -31,7 +31,7 @@ func TestApplyStateSeedsStoresCanonicalMemoryInPersonPartition(t *testing.T) {
 		Canonical: true,
 	}}}
 
-	if err := applyStateSeeds(ctx, nil, manager, identity, "workspace", t.TempDir(), "cli", setup); err != nil {
+	if _, err := applyStateSeeds(ctx, nil, manager, identity, "workspace", t.TempDir(), "cli", setup); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,14 +78,14 @@ func TestApplyStateSeedsCanBindWorkspaceSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	setup := &Setup{Task: &SeedTask{Title: "release", DefaultSkill: "release-check"}}
-	if err := applyStateSeeds(ctx, store, nil, identity, "workspace-id", workspaceRoot, "cli", setup); err != nil {
+	if _, err := applyStateSeeds(ctx, store, nil, identity, "workspace-id", workspaceRoot, "cli", setup); err != nil {
 		t.Fatal(err)
 	}
-	task, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if err != nil || task == nil {
-		t.Fatalf("current task=%+v err=%v", task, err)
+	tasks, err := store.SearchTasks(ctx, identity.TenantID, identity.PersonID, "release", 10)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("seeded thread=%+v err=%v", tasks, err)
 	}
-	binding, err := store.GetTaskSkillBinding(ctx, identity.TenantID, identity.PersonID, task.ID)
+	binding, err := store.GetTaskSkillBinding(ctx, identity.TenantID, identity.PersonID, tasks[0].ID)
 	if err != nil || binding == nil || binding.SkillName != "release-check" || binding.State != control.TaskSkillBindingActive {
 		t.Fatalf("binding=%+v err=%v", binding, err)
 	}

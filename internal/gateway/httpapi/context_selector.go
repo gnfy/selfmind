@@ -35,7 +35,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		// Direct callers (tests, non-coordinator paths) resolve the parent here;
 		// runMessage resolves it once up front and passes it explicitly.
 		identity := &control.IdentityContext{TenantID: task.TenantID, PersonID: task.PersonID}
-		if resolved, err := c.resolveParentRun(ctx, identity, task); err == nil {
+		if resolved, err := c.resolveResumeTarget(ctx, identity, task); err == nil {
 			parent = resolved.exact()
 		}
 	}
@@ -71,7 +71,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 		Title:       task.Title,
 		Status:      task.Status,
 		Channel:     fallback(channel, task.LastChannel),
-		WorkspaceID: task.WorkspaceID,
+		WorkspaceID: recoveryWorkspaceID(run, task),
 	}
 	if includeTask {
 		selected.Summary = task.CurrentSummary
@@ -188,12 +188,17 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 		if workspace != nil && strings.TrimSpace(workspace.ID) != "" {
 			recallWorkspaceID = workspace.ID
 		}
+		excludeRunID := ""
+		if run != nil {
+			excludeRunID = run.ID
+		}
 		slices, stats := c.srv.Recall.SelectForWorkspace(
 			ctx,
 			task.TenantID,
 			task.PersonID,
 			recallWorkspaceID,
 			excludeTaskID,
+			excludeRunID,
 			userMessage,
 		)
 		selected.RecallSlices = slices
@@ -230,6 +235,48 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 	return selected
 }
 
+// workContinuityHints supplies Main with a small deterministic Attention view
+// before it interprets an otherwise new natural-language turn. This closes the
+// short-reply gap without an ingress classifier or an extra model call:
+// semantic recall may skip "确认执行", while the waiting Run card is still in
+// the normal Main context. The current interaction is excluded and every card
+// remains person-scoped and transcript-free.
+func (c *RunCoordinator) workContinuityHints(ctx context.Context, identity *control.IdentityContext, current *control.Run, channel string, limit int) []kernel.WorkContinuityHint {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || current == nil || limit <= 0 {
+		return nil
+	}
+	items, err := control.NewWorkTimeline(c.srv.Control).AttentionForChannel(
+		ctx, identity.TenantID, identity.PersonID, strings.TrimSpace(channel), limit+1,
+	)
+	if err != nil {
+		return nil
+	}
+	hints := make([]kernel.WorkContinuityHint, 0, min(limit, len(items)))
+	for _, item := range items {
+		if item.RunID == current.ID {
+			continue
+		}
+		run, err := c.srv.Control.GetRun(ctx, identity.TenantID, item.RunID)
+		if err != nil || run == nil || run.PersonID != identity.PersonID {
+			continue
+		}
+		card, ok := c.srv.continuityCandidateForRun(ctx, identity, *run, c.currentActive(identity.PersonID), 0, []string{"attention_hint"})
+		if !ok {
+			continue
+		}
+		hints = append(hints, kernel.WorkContinuityHint{
+			RunID: card.RunID, TaskID: card.TaskID, Title: card.Title, RunStatus: card.RunStatus,
+			Channel: card.Channel, Workspace: card.Workspace, InputSummary: card.InputSummary,
+			HandoffSummary: card.HandoffSummary, CurrentStep: card.CurrentStep,
+			NextSteps: append([]string(nil), card.NextSteps...),
+		})
+		if len(hints) == limit {
+			break
+		}
+	}
+	return hints
+}
+
 // appendContextScopeEvent records, per selector call, which context depth the
 // turn actually received: the requested attach mode, the effective mode after
 // the parent gate, and the parent run (if any). Redacted and structured — it
@@ -248,7 +295,7 @@ func (c *RunCoordinator) appendContextScopeEvent(ctx context.Context, task *cont
 		"mode":           string(effective),
 	}
 	if parent != nil {
-		payload["parent_run_id"] = parent.ID
+		payload["resumes_run_id"] = parent.ID
 	} else if requested == attachContextFull {
 		payload["downgraded"] = true
 	}

@@ -7,7 +7,57 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/kernel"
 )
+
+func TestWorkContinuityHintsSurfaceWaitingRunForShortReply(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "hint-user", "User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitingTask, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Release RUQX-818", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitingRun, err := store.StartRun(ctx, waitingTask, "cli", "Prepare two production builds and wait for confirmation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, waitingRun.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	interactionTask, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "确认执行", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interactionRun, err := store.StartRun(ctx, interactionTask, "cli", "确认执行")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := &Server{Control: store}
+	hints := server.coordinator().workContinuityHints(ctx, identity, interactionRun, "cli", 3)
+	if len(hints) != 1 || hints[0].RunID != waitingRun.ID {
+		t.Fatalf("short reply continuity hints=%+v, want waiting run %s", hints, waitingRun.ID)
+	}
+	selected := kernel.TaskRuntimeContext{TaskID: interactionTask.ID, RunID: interactionRun.ID, WorkContinuityHints: hints}
+	prompt := selected.Prompt(10000)
+	for _, want := range []string{"Work Continuity Hints", waitingRun.ID, "Release RUQX-818", "waiting_user", "work_select"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("continuity hint prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
 
 func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 	ctx := context.Background()
@@ -181,7 +231,9 @@ func TestBoundedTaskContextOmitsEventAndCompatibilityHistory(t *testing.T) {
 	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "in_progress", "bounded summary", []string{"bounded next"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SaveHandoff(ctx, control.Handoff{TaskID: task.ID, Summary: "bounded handoff"}); err != nil {
+	if _, err := store.SaveHandoff(ctx, control.Handoff{
+		TaskID: task.ID, Summary: "bounded handoff", NextSteps: []string{"bounded next"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "tool.completed", Payload: mustJSON(map[string]string{"result": "must stay out"})}); err != nil {

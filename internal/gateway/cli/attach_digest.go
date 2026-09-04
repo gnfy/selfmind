@@ -43,6 +43,28 @@ func (c *Controller) SetStartupDigest(digest *api.DigestResponse) {
 		return
 	}
 	c.model.startupDigest = digest
+	// The digest is where the session learns which workspace it is actually in,
+	// resolved from its own directory. Naming it on the startup card replaces a
+	// bare path that could not say whether the directory was even a workspace.
+	if digest != nil && digest.SessionWorkspace != nil {
+		c.model.sessionWorkspace = digest.SessionWorkspace
+	}
+}
+
+// untrustedWorkspaceNotice is the one-time trust question, or "" when there is
+// nothing to ask.
+//
+// It is a notice rather than a modal: trust is not urgent, nothing is blocked
+// without it, and a modal at startup would stand between the person and the
+// prompt they came to type at. Once they answer either way the daemon records
+// it and this stops appearing.
+func (m *uiModel) untrustedWorkspaceNotice() string {
+	ws := m.sessionWorkspace
+	if ws == nil || ws.Trusted || ws.TrustAsked {
+		return ""
+	}
+	return "This workspace is untrusted, so workspace Skills and remembered approval observations stay off. `/ws trust` enables them for " +
+		ws.Name + "; `/ws decline` keeps it untrusted and stops asking."
 }
 
 // SetRunWatcher installs the client-mode follower for a mid-flight daemon run
@@ -59,15 +81,32 @@ func (c *Controller) SetRunWatcher(fn RunWatcher) {
 // real width is known, and starts the run watcher when the digest reports a
 // mid-flight run. Returns nil when there is nothing to do.
 func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
-	if m.startupDigest == nil || m.digestShown || width <= 0 {
+	if m.digestShown || width <= 0 {
+		return nil
+	}
+	if m.startupDigest == nil && m.sessionWorkspace == nil {
 		return nil
 	}
 	m.digestShown = true
-	text := formatStartupDigest(m.startupDigest)
+	text := ""
+	if m.startupDigest != nil {
+		text = formatStartupDigest(m.startupDigest)
+	}
+	// The trust question rides the same one-shot render: startup is the only
+	// moment it can be asked once without becoming a nag.
+	if notice := m.untrustedWorkspaceNotice(); notice != "" {
+		if text != "" {
+			text += "\n"
+		}
+		text += notice
+	}
 	if text == "" {
 		return nil
 	}
 	m.addMessage("digest", text)
+	if m.startupDigest == nil {
+		return nil
+	}
 	for _, approval := range m.startupDigest.PendingApprovals {
 		request := approvalRequestFromDigest(approval)
 		if request.ID == "" || m.hasApprovalRequest(request.ID) {
@@ -79,10 +118,21 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 			m.armApprovalPrompt(request)
 		}
 	}
-	if m.startupDigest.ActiveRun != nil && m.clientMode && m.runWatcher != nil {
-		m.watchedRunID = strings.TrimSpace(m.startupDigest.ActiveRun.RunID)
-		m.watchedTaskTitle = strings.TrimSpace(m.startupDigest.ActiveRun.Title)
-		return m.attachToActiveRun()
+	if active := m.startupDigest.ActiveRun; active != nil {
+		// Restore the PINNED plan before the first live event arrives. Attaching
+		// answered "what is running" but not "how far along", and the next
+		// snapshot may be a long tool step away — so progress stayed invisible
+		// for exactly the runs where a person most wants to see it. This is
+		// independent of whether a live watcher can be attached: the plan is
+		// state the digest already carries, not something the stream provides.
+		if plan := strings.TrimSpace(active.PlanJSON); plan != "" {
+			m.activePlanJSON = plan
+		}
+		if m.clientMode && m.runWatcher != nil {
+			m.watchedRunID = strings.TrimSpace(active.RunID)
+			m.watchedTaskTitle = strings.TrimSpace(active.Title)
+			return m.attachToActiveRun()
+		}
 	}
 	return nil
 }
@@ -184,9 +234,15 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 
 	attention := []string{"Still needs attention:"}
 	if n := len(digest.UnresolvedTasks); n == 1 {
-		attention = append(attention, fmt.Sprintf("↻ 1 earlier task still needs attention: %s (use /resume to continue)", digestTitleList(digest.UnresolvedTasks)))
+		attention = append(attention, fmt.Sprintf("↻ 1 earlier run still needs attention: %s (use /resume to continue)", digestTitleList(digest.UnresolvedTasks)))
 	} else if n > 1 {
-		attention = append(attention, fmt.Sprintf("↻ %d earlier tasks still need attention: %s (use /resume to continue)", n, digestTitleList(digest.UnresolvedTasks)))
+		unit := "runs"
+		verb := "need"
+		if n == 1 {
+			unit = "run"
+			verb = "needs"
+		}
+		attention = append(attention, fmt.Sprintf("↻ %d earlier %s still %s attention: %s (use /resume to continue)", n, unit, verb, digestTitleList(digest.UnresolvedTasks)))
 	}
 	switch n := len(digest.PendingApprovals); {
 	case n == 1:

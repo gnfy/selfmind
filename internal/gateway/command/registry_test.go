@@ -11,11 +11,10 @@ func TestIsGatewayControlCoversPreviouslyOmittedCommands(t *testing.T) {
 	// must now detect them so IM adapters treat them as synchronous control.
 	control := []string{
 		"/queue", "/diag", "/mode", "/notify", "/help", "/model",
-		"/status", "/tasks", "/watchers", "/events", "/approvals", "/approve 1",
+		"/status", "/watchers", "/events", "/approvals", "/approve 1",
 		"/reject 2", "/stop", "/cancel", "/id", "/new title", "/resume tsk_1",
-		"/workspace ws_1", "/workspaces",
+		"/ws ws_1", "/search aurora",
 		"/QUEUE", "/Mode smart", // case-insensitive
-		"/task status", "/task tsk_1", // aliases
 	}
 	for _, c := range control {
 		if !IsGatewayControl(c) {
@@ -27,6 +26,10 @@ func TestIsGatewayControlCoversPreviouslyOmittedCommands(t *testing.T) {
 		"", "hello world", "run a long task",
 		"/copy", "/paste-image", "/skills list", "/memory", // Local-scope only
 		"/qwer", "/unknown", "status", "approve", // bare words are not slash control
+		// Retired. They must not resolve to anything, so an adapter treats them
+		// as unknown rather than as silent control.
+		"/tasks", "/task status", "/task tsk_1",
+		"/workspace", "/workspaces", "/workspace ws_1",
 	}
 	for _, c := range notControl {
 		if IsGatewayControl(c) {
@@ -86,7 +89,7 @@ func TestHelpTextListsEveryGatewayCommand(t *testing.T) {
 }
 
 func TestLocalCommandsNotGatewayRoutable(t *testing.T) {
-	local := []string{"/copy", "/paste-image", "/search", "/compact", "/clear",
+	local := []string{"/copy", "/paste-image", "/compact", "/clear",
 		"/exit", "/skills", "/bundles", "/memory", "/curator", "/checkpoint",
 		"/reload-skills", "/migrate", "/capture"}
 	for _, name := range local {
@@ -109,10 +112,10 @@ func TestLocalCommandsNotGatewayRoutable(t *testing.T) {
 // registry so help/suggest/async-hint cannot drift again.
 func TestKnownMatchesGatewayContract(t *testing.T) {
 	want := []string{
-		"/help", "/model", "/id", "/status", "/tasks", "/task", "/queue", "/watchers", "/diag",
+		"/help", "/model", "/id", "/status", "/queue", "/watchers", "/diag",
 		"/report", "/events", "/approvals", "/approve", "/reject", "/mode", "/stop",
-		"/cancel", "/notify", "/new", "/choose", "/resume", "/workspace", "/workspaces",
-		"/remember", "/forget",
+		"/cancel", "/notify", "/new", "/choose", "/resume", "/ws",
+		"/remember", "/forget", "/search",
 	}
 	got := Known()
 	sort.Strings(want)

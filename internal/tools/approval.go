@@ -138,12 +138,12 @@ type ToolApprovalHandler func(ctx context.Context, req ToolApprovalRequest) (Too
 // imported from the control plane — so internal/tools keeps no control
 // dependency; the gateway installs a control-backed implementation on the
 // ExecutionScope. IsApprovalGranted reports whether patternKey is already
-// approved for the person (any task) or for the given task; GrantApproval
+// approved for the person; GrantApproval
 // records a grant with scopeKind "task" (scopeID = task id) or "person"
 // (scopeID = person id). expiresAt bounds the grant; a zero value means no
 // deadline, which is only appropriate for a class already bounded by a
 // narrower scope.
 type ApprovalGrantStore interface {
-	IsApprovalGranted(ctx context.Context, tenantID, personID, taskID, patternKey string) (bool, error)
+	IsApprovalGranted(ctx context.Context, tenantID, personID, patternKey string) (bool, error)
 	GrantApproval(ctx context.Context, scopeKind, tenantID, personID, scopeID, patternKey string, expiresAt time.Time) error
 }

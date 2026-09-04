@@ -16,7 +16,7 @@ import (
 	"selfmind/internal/kernel/llm"
 )
 
-// planJSONFromEvent rebuilds the {"explanation", "plan":[{step,status}]} JSON
+// planJSONFromEvent rebuilds the bounded plan JSON
 // that renderPlanCell parses from a plan.updated stream event's payload. The
 // payload's "plan" value is a []kernel.PlanItem in the in-process router path
 // and a decoded []interface{} in the daemon-client path; json.Marshal handles
@@ -33,6 +33,14 @@ func planJSONFromEvent(event llm.StreamEvent) string {
 	payload := map[string]interface{}{"plan": plan}
 	if exp, ok := event.Payload["explanation"].(string); ok && strings.TrimSpace(exp) != "" {
 		payload["explanation"] = exp
+	}
+	// parent_run_id is the pre-v12 name of the resume edge. Historical run
+	// events keep it, so forwarding both keys is read-only compatibility, not a
+	// dual write: nothing emits the old key any more.
+	for _, key := range []string{"plan_version", "source", "resumes_run_id", "parent_run_id"} {
+		if value, ok := event.Payload[key]; ok {
+			payload[key] = value
+		}
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -185,13 +193,18 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 		if isHiddenLifecycleTool(event.ToolName) {
 			return
 		}
+		effectState := ""
+		if event.Payload != nil {
+			effectState, _ = event.Payload["effect_state"].(string)
+		}
 		m.program.Send(MsgToolDone{
-			ToolName:   event.ToolName,
-			ToolCallID: event.ToolCallID,
-			Result:     event.ToolResult,
-			Err:        event.Err,
-			Duration:   event.DurationSeconds,
-			Event:      ref,
+			ToolName:    event.ToolName,
+			ToolCallID:  event.ToolCallID,
+			Result:      event.ToolResult,
+			Err:         event.Err,
+			EffectState: strings.TrimSpace(effectState),
+			Duration:    event.DurationSeconds,
+			Event:       ref,
 		})
 	case "plan.updated":
 		// A plan is mutable run state, not immutable terminal history. Replace the

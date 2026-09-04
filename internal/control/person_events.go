@@ -46,10 +46,10 @@ func (s *Store) ListPersonEventsSincePage(ctx context.Context, tenantID, personI
 
 func (s *Store) listPersonEventsSincePage(ctx context.Context, tenantID, personID string, since time.Time, beforeCursor int64, limit int) ([]Event, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.cursor, e.id, e.task_id, COALESCE(e.run_id, ''), e.type, e.visibility,
+		`SELECT e.cursor, e.id, e.thread_id, COALESCE(e.run_id, ''), e.type, e.visibility,
 		        COALESCE(e.channel, ''), COALESCE(e.payload_json, '{}'), e.created_at,
 		        t.tenant_id, t.person_id
-		 FROM task_events e JOIN tasks t ON t.id = e.task_id
+		 FROM task_events e JOIN threads t ON t.id = e.thread_id
 		 WHERE t.tenant_id = ? AND t.person_id = ? AND e.created_at >= ?
 		   AND (? <= 0 OR e.cursor < ?)
 		 ORDER BY e.cursor DESC LIMIT ?`,

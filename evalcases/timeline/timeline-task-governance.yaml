@@ -1,25 +1,41 @@
 id: timeline_task_governance
-title: "task governance: pin state is visible and reversible"
+title: "attention ranks by activity; the retired task view is gone"
 suite: timeline
 workspace: "."
 channel: cli
 model_required: false
 
-# Control-only task-governance flow. No model or cassette is required.
+# retired-name-probe: intentional — this case INVOKES `/tasks` and `/task 1 pin`
+# to prove they are rejected. Without that marker the retired-name sweep would
+# read these turns as live callers left behind.
+#
+# Control-only. Pinning let a display field decide what needs the person now,
+# and the /tasks card view listed labels rather than runs. Both are removed:
+# the listing must come from Attention, and the retired commands must answer as
+# unknown rather than silently doing nothing.
+setup:
+  task:
+    title: "long-lived task governance check"
+    parked_runs:
+      - input: "wait for governance check"
+        status: waiting_user
+
 turns:
-  - input: "/new long-lived task governance check"
-  - input: "/task 1 pin"
+  - input: "/resume"
   - input: "/tasks"
-  - input: "/task 1 unpin"
+  - input: "/task 1 pin"
 
 expect:
   status: completed
   max_tool_calls: 0
   max_duration_seconds: 60
   contains:
-    - "Pinned task"
+    - "Needs attention:"
+    - "wait for governance check"
+    - "Unknown command"
+  must_not_contain:
     - "pinned: yes"
-    - "Unpinned task"
+    - "Pinned task"
 
 checks:
   no_mojibake: true

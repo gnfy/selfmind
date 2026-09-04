@@ -256,7 +256,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		}
 		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
 		attach := newTaskAttach(taskAttachApprovalResume, inputWorkKey, false, false)
-		attach.parentRunID = approval.RunID
+		attach.resumesRunID = approval.RunID
 		return task, attach, err
 	}
 	clarifyID := strings.TrimSpace(req.ClarifyID)
@@ -278,7 +278,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		}
 		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
 		attach := newTaskAttach(taskAttachClarifyResume, inputWorkKey, false, false)
-		attach.parentRunID = clarify.RunID
+		attach.resumesRunID = clarify.RunID
 		return task, attach, err
 	}
 	if replyRunID := strings.TrimSpace(req.ReplyToRunID); replyRunID != "" {
@@ -298,7 +298,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		}
 		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
 		attach := newTaskAttach(taskAttachReplyToRun, inputWorkKey, false, false)
-		attach.parentRunID = parent.ID
+		attach.resumesRunID = parent.ID
 		return task, attach, err
 	}
 	if req.ForceNew {
@@ -334,7 +334,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	if pinned != nil && (!terminalTaskStatus(pinned.Status) || resumableTaskStatus(pinned.Status)) {
 		task, err := c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
 		attach := newTaskAttach(taskAttachResumePin, inputWorkKey, false, false)
-		attach.parentRunID = pinnedRunID
+		attach.resumesRunID = pinnedRunID
 		return task, attach, err
 	}
 	// §5.3 steps 5–7: an explicit continuation cue continues the unique
@@ -342,7 +342,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	// References and the current-task pointer no longer route anything
 	// (simplification P2): references are search hints, current_task is a UI
 	// projection.
-	if intent.Intent == router.IntentContinue {
+	if intent.Intent == router.IntentContinue && isDeterministicContinuationInput(req.Content) {
 		task, attach, err := c.resolveContinuationByRuns(ctx, identity, req, inputWorkKey)
 		if err != nil || task != nil {
 			return task, attach, err
@@ -396,7 +396,7 @@ func (c *RunCoordinator) resolveContinuationByRuns(ctx context.Context, identity
 		}
 		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
 		attach := newTaskAttach(taskAttachContinuation, inputWorkKey, false, false)
-		attach.parentRunID = parent.ID
+		attach.resumesRunID = parent.ID
 		return task, attach, err
 	default:
 		if !isUserOriginTurn(ctx, req) {
@@ -426,6 +426,8 @@ func (c *RunCoordinator) createRootTask(ctx context.Context, identity *control.I
 		WorkspaceID: workspaceID,
 		Title:       titleFromInput(req.Content),
 		Channel:     req.Channel,
+		Kind:        control.TaskKindInteraction,
+		Visibility:  control.TaskVisibilityUnlisted,
 	})
 	return task, newTaskAttach(taskAttachNewLabel, "", true, true), err
 }
@@ -784,19 +786,19 @@ func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *contro
 			// Cannot durably record the question: fall back rather than hang.
 			return clarifyFallbackSentinel
 		}
-		if taskID != "" {
-			_, _ = store.AppendEvent(waitCtx, control.Event{
-				TaskID:     taskID,
-				RunID:      runID,
-				Type:       "clarify.requested",
-				Visibility: "task",
-				Channel:    reqChannel,
-				Payload:    mustJSON(map[string]interface{}{"clarify_id": clarify.ID, "question": question, "choices": choices}),
-			})
-		}
+		// No Task gate: the Run owns the event, and a question the person never
+		// sees parks the work forever.
+		liveSurfaceInformed := emitHumanWaitEvent(waitCtx, store, control.Event{
+			TaskID:     taskID,
+			RunID:      runID,
+			Type:       "clarify.requested",
+			Visibility: "task",
+			Channel:    reqChannel,
+			Payload:    mustJSON(map[string]interface{}{"clarify_id": clarify.ID, "question": question, "choices": choices}),
+		}, "clarify_id", clarify.ID)
 		resumeWatchdog := runpool.BeginPersonWait(runCtx, runpool.PhaseWaitingClarify)
 		defer resumeWatchdog()
-		c.notifyClarifyRequested(context.Background(), identity, taskID, runID, reqChannel, clarify)
+		c.notifyClarifyRequested(context.Background(), identity, taskID, runID, reqChannel, clarify, liveSurfaceInformed)
 
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -942,8 +944,8 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 			// No time left to ask. Creating a durable row plus a push
 			// notification for a request that would expire in the same breath
 			// is pure noise, so record it as a run event instead and park.
-			if taskID != "" {
-				_, _ = store.AppendEvent(context.WithoutCancel(ctx), control.Event{
+			{
+				_, eventErr := store.AppendEvent(context.WithoutCancel(ctx), control.Event{
 					TaskID:     taskID,
 					RunID:      runID,
 					Type:       "approval.skipped_no_budget",
@@ -955,6 +957,9 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 						"target": approvalActionTarget(req.ToolName, req.Args),
 					}),
 				})
+				if eventErr != nil {
+					log.Warn("failed to append approval.skipped_no_budget event", "run_id", runID, "tool", req.ToolName, "error", eventErr)
+				}
 			}
 			return tools.ToolApprovalDecision{
 				Approved: false,
@@ -1004,45 +1009,48 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		if err != nil {
 			return tools.ToolApprovalDecision{}, err
 		}
-		if taskID != "" {
-			_, _ = store.AppendEvent(waitCtx, control.Event{
-				TaskID:     taskID,
-				RunID:      runID,
-				Type:       "approval.requested",
-				Visibility: "task",
-				Channel:    fallback(channel, identity.Platform),
-				Payload: mustJSON(map[string]interface{}{
-					"approval_id": approval.ID,
-					"action_type": approval.ActionType,
-					"tool":        req.ToolName,
-					"reason":      req.Reason,
-					// Compact single-string object of the action (path/command)
-					// so one-line UI surfaces (the TUI approval panel) can show
-					// "tool → target" without decoding full args.
-					"target": approvalActionTarget(req.ToolName, req.Args),
-					"args":   persistentArgs,
-					// Decision context for the panel: where it runs, how big the
-					// change is, what a "remember this" would authorize, and
-					// whether automatic triage was even able to rule. The TUI
-					// builds its panel from this event, so anything absent here
-					// is invisible at decision time.
-					"environment":      req.Environment,
-					"cwd":              req.Cwd,
-					"change_summary":   req.ChangeSummary,
-					"grant_class":      req.GrantClass,
-					"run_grant_class":  req.RunGrantClass,
-					"containment":      req.Containment,
-					"triage_state":     req.TriageState,
-					"decision_policy":  req.DecisionPolicy,
-					"triage_rationale": req.TriageRationale,
-					"triage_risk":      req.TriageRisk,
-					"decisions":        decisions,
-				}),
-			})
-		}
+		// No Task gate, and the error is never discarded: this is the event every
+		// surface builds its approval panel from. Gating it on a Task meant a Run
+		// without one created the durable approval row, notified nobody, and left
+		// the TUI rendering "Running" over work that was actually waiting on a
+		// human — observed live on 2026-09-04, parked 8 minutes with no prompt.
+		liveSurfaceInformed := emitHumanWaitEvent(waitCtx, store, control.Event{
+			TaskID:     taskID,
+			RunID:      runID,
+			Type:       "approval.requested",
+			Visibility: "task",
+			Channel:    fallback(channel, identity.Platform),
+			Payload: mustJSON(map[string]interface{}{
+				"approval_id": approval.ID,
+				"action_type": approval.ActionType,
+				"tool":        req.ToolName,
+				"reason":      req.Reason,
+				// Compact single-string object of the action (path/command)
+				// so one-line UI surfaces (the TUI approval panel) can show
+				// "tool → target" without decoding full args.
+				"target": approvalActionTarget(req.ToolName, req.Args),
+				"args":   persistentArgs,
+				// Decision context for the panel: where it runs, how big the
+				// change is, what a "remember this" would authorize, and
+				// whether automatic triage was even able to rule. The TUI
+				// builds its panel from this event, so anything absent here
+				// is invisible at decision time.
+				"environment":      req.Environment,
+				"cwd":              req.Cwd,
+				"change_summary":   req.ChangeSummary,
+				"grant_class":      req.GrantClass,
+				"run_grant_class":  req.RunGrantClass,
+				"containment":      req.Containment,
+				"triage_state":     req.TriageState,
+				"decision_policy":  req.DecisionPolicy,
+				"triage_rationale": req.TriageRationale,
+				"triage_risk":      req.TriageRisk,
+				"decisions":        decisions,
+			}),
+		}, "approval_id", approval.ID)
 		resumeWatchdog := runpool.BeginPersonWait(ctx, runpool.PhaseWaitingApproval)
 		defer resumeWatchdog()
-		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval)
+		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval, liveSurfaceInformed)
 
 		// A resource deadline parks the request instead of invalidating it. An
 		// explicit run cancellation still expires it: /stop means stop, while an
@@ -1141,7 +1149,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 // to IM too was the double-notification bug) and otherwise go to the SINGLE
 // preferred IM endpoint, never a fan-out to every bound account. Failures are
 // swallowed: notification is a convenience, the approval row is the truth.
-func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, approval *control.ApprovalRequest) {
+func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, approval *control.ApprovalRequest, liveSurfaceInformed bool) {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || approval == nil {
 		return
 	}
@@ -1169,7 +1177,7 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 	if identity.Platform == "cli" && c.approvalSurface(ctx, identity) == "phone-first" {
 		delivered = c.deliverToPreferredIM(ctx, identity, base)
 	} else {
-		delivered = c.routePendingNotification(ctx, identity, channel, base)
+		delivered = c.routePendingNotification(ctx, identity, channel, base, liveSurfaceInformed)
 	}
 	if delivered && c.srv.Control != nil {
 		_ = c.srv.Control.MarkApprovalNotified(ctx, identity.TenantID, approval.ID)
@@ -1195,7 +1203,7 @@ func (c *RunCoordinator) approvalSurface(ctx context.Context, identity *control.
 // SINGLE preferred IM endpoint. Failures are swallowed: the clarify row is the
 // truth; the push is a convenience. A question survives the endpoint that raised
 // it closing exactly like an approval does.
-func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, clarify *control.ClarifyRequest) {
+func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, clarify *control.ClarifyRequest, liveSurfaceInformed bool) {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || clarify == nil {
 		return
 	}
@@ -1207,7 +1215,7 @@ func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *c
 		Content:  clarifyNotificationText(*clarify),
 		Kind:     delivery.KindClarify,
 	}
-	if c.routePendingNotification(ctx, identity, channel, base) && c.srv.Control != nil {
+	if c.routePendingNotification(ctx, identity, channel, base, liveSurfaceInformed) && c.srv.Control != nil {
 		_ = c.srv.Control.MarkClarifyNotified(ctx, identity.TenantID, clarify.ID)
 	}
 }
@@ -1224,7 +1232,7 @@ func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *c
 // The bool return reports confirmed delivery (so the caller can stamp
 // notified_at); a suppressed CLI-attached, pending-session, or unconfirmed push
 // returns false.
-func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity *control.IdentityContext, channel string, base delivery.Message) bool {
+func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity *control.IdentityContext, channel string, base delivery.Message, liveSurfaceInformed bool) bool {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil {
 		return false
 	}
@@ -1236,7 +1244,13 @@ func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity 
 		confirmed, _ := c.srv.Delivery.EnqueueAndTryConfirmed(ctx, msg)
 		return confirmed
 	}
-	if c.srv.presenceTracker().IsAttached(identity.PersonID, "cli") {
+	// Suppressing the push for an attached CLI is justified by the live TUI
+	// already showing this — a claim that is void when the live event could not
+	// be written. With both silenced, nobody was told through any channel and a
+	// production release sat parked behind a spinner for 21 minutes; the escrow
+	// sweep only escalates once the person detaches or the request ages out,
+	// which is no help to someone sitting there watching it.
+	if liveSurfaceInformed && c.srv.presenceTracker().IsAttached(identity.PersonID, "cli") {
 		return false
 	}
 	return c.deliverToPreferredIM(ctx, identity, base)

@@ -137,6 +137,21 @@ var errorClassRules = []errorClassRule{
 		},
 	},
 	{
+		// Before "auth": a CLI that rejects its own arguments never contacted a
+		// service, so the failure is local even when the usage text mentions
+		// profiles, roles, or MFA (observed live: `aws … exit status 252` was
+		// misread as an MFA denial and written into a release record).
+		class: "cli_usage",
+		substrings: []string{
+			"usage: aws",
+			"aws: error:",
+			"unknown options:",
+			"invalid choice:",
+			"the following arguments are required",
+			"unrecognized arguments:",
+		},
+	},
+	{
 		// Before "permission": ssh's "Permission denied (publickey)" is an
 		// auth failure, not a filesystem permission problem.
 		class: "auth",
@@ -258,6 +273,7 @@ var commandFailedExitPattern = regexp.MustCompile(`\bexit status [1-9][0-9]*\b`)
 // "cancelled by user", "denied", "blocked", "approval").
 var errorClassHints = map[string]string{
 	"syntax":                    "The shell rejected the command syntax; simplify quoting or run via bash -c.",
+	"cli_usage":                 "The CLI rejected the command locally (unknown option, invalid choice, or missing argument) before sending any request; this is not an authentication, permission, or MFA failure. Fix the arguments from the usage text and retry once.",
 	"auth":                      "Authentication or credentials failed; fix auth state first instead of repeating the same call.",
 	"credential_missing":        "No credential is present for this tool; complete its normal login on the host instead of retrying the same call.",
 	"credential_expired":        "The credential exists but is expired; refresh the session instead of re-running the same call.",

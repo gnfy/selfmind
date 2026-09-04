@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -40,33 +39,45 @@ func TestParkedApprovalAnswerQueuesContinuationAndOneShotAuthorization(t *testin
 	}
 
 	// A different regenerated action cannot consume the capability.
-	if _, _, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, identity.TenantID, identity.PersonID, task.ID, "run-resumed", "resume:v1:different"); err != nil || claimed {
+	if _, _, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, identity.TenantID, identity.PersonID, run.ID, "resume:v1:different"); err != nil || claimed {
 		t.Fatalf("mismatched action claimed=%v err=%v", claimed, err)
 	}
 	otherPerson, err := store.ResolveOrCreateAccount(ctx, identity.TenantID, "cli", "other-person", "Other Person")
 	if err != nil {
 		t.Fatal(err)
 	}
-	otherTask, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "other task", Channel: "cli"})
+	// An unrelated run must not consume it even with the exact fingerprint: the
+	// claim is keyed on the run lineage, not on a shared work grouping.
+	unrelated, err := store.StartRun(ctx, task, "cli", "unrelated work")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name, tenant, person, task string
+		name, tenant, person, run string
 	}{
-		{name: "tenant", tenant: "another-tenant", person: identity.PersonID, task: task.ID},
-		{name: "person", tenant: identity.TenantID, person: otherPerson.PersonID, task: task.ID},
-		{name: "task", tenant: identity.TenantID, person: identity.PersonID, task: otherTask.ID},
+		{name: "tenant", tenant: "another-tenant", person: identity.PersonID, run: run.ID},
+		{name: "person", tenant: identity.TenantID, person: otherPerson.PersonID, run: run.ID},
+		{name: "unrelated run", tenant: identity.TenantID, person: identity.PersonID, run: unrelated.ID},
+		{name: "unknown run", tenant: identity.TenantID, person: identity.PersonID, run: "run-does-not-exist"},
 	} {
-		if _, _, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, tc.tenant, tc.person, tc.task, "run-wrong-"+tc.name, "resume:v1:exact-action"); err != nil || claimed {
+		if _, _, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, tc.tenant, tc.person, tc.run, "resume:v1:exact-action"); err != nil || claimed {
 			t.Fatalf("mismatched %s claimed=%v err=%v", tc.name, claimed, err)
 		}
 	}
-	id, decisionID, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, identity.TenantID, identity.PersonID, task.ID, "run-resumed", "resume:v1:exact-action")
+	// The resuming run claims it: park the waiter, then start the run that
+	// resumes it, which is the production shape of answering a parked approval.
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	resumer, err := store.StartRunWithOptions(ctx, task, "cli", "resume the parked approval", StartRunOptions{ResumesRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, decisionID, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, identity.TenantID, identity.PersonID, resumer.ID, "resume:v1:exact-action")
 	if err != nil || !claimed || id != approval.ID || decisionID != "once" {
 		t.Fatalf("exact claim id=%q decision=%q claimed=%v err=%v", id, decisionID, claimed, err)
 	}
-	if _, _, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, identity.TenantID, identity.PersonID, task.ID, "run-another", "resume:v1:exact-action"); err != nil || claimed {
+	if _, _, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, identity.TenantID, identity.PersonID, resumer.ID, "resume:v1:exact-action"); err != nil || claimed {
 		t.Fatalf("one-shot capability reused: claimed=%v err=%v", claimed, err)
 	}
 }
@@ -94,6 +105,18 @@ func TestParkedApprovalResumeAuthorizationHasOneConcurrentWinner(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// One resuming run, several racing claimants: parallel tool calls in the
+	// same run can regenerate the same action, and exactly one may consume the
+	// one-shot capability. Distinct contender ids would not model this any more
+	// — only one run may resume a given run.
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	resumer, err := store.StartRunWithOptions(ctx, task, "cli", "resume concurrent approval", StartRunOptions{ResumesRunID: run.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	const contenders = 8
 	var wg sync.WaitGroup
 	winners := make(chan string, contenders)
@@ -103,7 +126,7 @@ func TestParkedApprovalResumeAuthorizationHasOneConcurrentWinner(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			id, _, _, claimed, claimErr := store.ClaimApprovalResumeAuthorization(ctx,
-				identity.TenantID, identity.PersonID, task.ID, fmt.Sprintf("run-contender-%d", i), "resume:v1:concurrent-action")
+				identity.TenantID, identity.PersonID, resumer.ID, "resume:v1:concurrent-action")
 			if claimErr != nil {
 				errors <- claimErr
 				return
@@ -219,7 +242,7 @@ func TestInterruptedRunDecisionRecoveryIsIdempotent(t *testing.T) {
 	if rows, err := store.ListRecoverableApprovalDecisions(ctx, 10); err != nil || len(rows) != 0 {
 		t.Fatalf("recoverable after repair=%+v err=%v", rows, err)
 	}
-	if _, _, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, identity.TenantID, identity.PersonID, task.ID, "run-resumed", "resume:v1:crash-window"); err != nil || !claimed {
+	if _, _, _, claimed, err := store.ClaimApprovalResumeAuthorization(ctx, identity.TenantID, identity.PersonID, run.ID, "resume:v1:crash-window"); err != nil || !claimed {
 		t.Fatalf("recovered authorization claimed=%v err=%v", claimed, err)
 	}
 }

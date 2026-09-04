@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -42,21 +43,6 @@ func TestDeleteEmptyTaskNeverDeletesHistory(t *testing.T) {
 		t.Fatalf("history task deleted=%v err=%v", deleted, err)
 	}
 
-	withReference, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "named placeholder"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.UpsertTaskReference(ctx, TaskReferenceWrite{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: withReference.ID,
-		Class: TaskReferenceLiteral, Value: "named-placeholder", UserConfirmed: true,
-		Provenance: "user_control", SourceRef: "test",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	deleted, err = store.DeleteEmptyTask(ctx, identity.TenantID, identity.PersonID, withReference.ID)
-	if err != nil || deleted {
-		t.Fatalf("user-governed reference must make a label durable: deleted=%v err=%v", deleted, err)
-	}
 }
 
 func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
@@ -70,42 +56,43 @@ func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	create := func(title, status string) *Task {
+	create := func(title, status string) (*Task, *Run) {
 		t.Helper()
 		task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: title})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, "", nil); err != nil {
+		run, err := store.StartRun(ctx, task, "cli", title)
+		if err != nil {
 			t.Fatal(err)
 		}
-		return task
+		if err := store.FinishRun(ctx, identity.TenantID, run.ID, status); err != nil {
+			t.Fatal(err)
+		}
+		return task, run
 	}
 
-	staleDone := create("stale done", "done")
-	pinned := create("pinned done", "done")
+	staleDone, _ := create("stale done", "done")
+	pinned, _ := create("pinned done", "done")
 	if err := store.SetTaskPinned(ctx, identity.TenantID, pinned.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	pending := create("cancelled with approval", "cancelled")
+	pending, pendingRun := create("cancelled with approval", "cancelled")
 	if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: pending.ID,
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: pending.ID, RunID: pendingRun.ID,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	open := create("still open", "interrupted")
-	unpinned := create("old work with recent governance change", "done")
+	open, _ := create("still open", "interrupted")
+	unpinned, _ := create("old work with recent governance change", "done")
 	old := time.Now().Add(-45 * 24 * time.Hour).Unix()
-	if _, err := store.db.ExecContext(ctx, `UPDATE tasks SET updated_at = ?, last_activity_at = ?`, old, old); err != nil {
+	if _, err := store.db.ExecContext(ctx, `UPDATE threads SET updated_at = ?, last_activity_at = ?`, old, old); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetTaskPinned(ctx, identity.TenantID, unpinned.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SetTaskPinned(ctx, identity.TenantID, unpinned.ID, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, staleDone.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,21 +107,18 @@ func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
 	if len(archived) != 2 || !archivedIDs[staleDone.ID] || !archivedIDs[unpinned.ID] {
 		t.Fatalf("archived=%+v, want stale done and recently unpinned old work", archived)
 	}
-	assertStatus := func(task *Task, want string) {
+	assertVisibility := func(task *Task, want string) {
 		t.Helper()
 		got, err := store.GetTask(ctx, identity.TenantID, task.ID)
-		if err != nil || got == nil || got.Status != want {
-			t.Fatalf("task %s status=%+v err=%v, want %s", task.Title, got, err, want)
+		if err != nil || got == nil || got.Visibility != want {
+			t.Fatalf("thread %s projection=%+v err=%v, want visibility %s", task.Title, got, err, want)
 		}
 	}
-	assertStatus(staleDone, "archived")
-	assertStatus(pinned, "done")
-	assertStatus(pending, "cancelled")
-	assertStatus(open, "interrupted")
-	assertStatus(unpinned, "archived")
-	if current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); current != nil {
-		t.Fatalf("auto-archived current pointer must be cleared: %+v", current)
-	}
+	assertVisibility(staleDone, ThreadVisibilityArchived)
+	assertVisibility(pinned, ThreadVisibilityListed)
+	assertVisibility(pending, ThreadVisibilityListed)
+	assertVisibility(open, ThreadVisibilityListed)
+	assertVisibility(unpinned, ThreadVisibilityArchived)
 }
 
 func TestSearchTasksFindsOlderCJKRunAndHandoff(t *testing.T) {
@@ -168,8 +152,8 @@ func TestSearchTasksFindsOlderCJKRunAndHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Push target outside the legacy /tasks 100-row window. Search must still
-	// query the complete visible history rather than filtering that window.
+	// Search must query complete retained history rather than a recent-card
+	// window, even after substantial newer noise.
 	for i := 0; i < 101; i++ {
 		if _, err := store.CreateTask(ctx, TaskCreate{
 			TenantID: identity.TenantID, PersonID: identity.PersonID, Title: fmt.Sprintf("noise %03d", i),
@@ -177,16 +161,6 @@ func TestSearchTasksFindsOlderCJKRunAndHandoff(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if recent, err := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 100); err != nil {
-		t.Fatal(err)
-	} else {
-		for _, task := range recent {
-			if task.ID == target.ID {
-				t.Fatal("test setup failed: target is still inside the recent 100-row window")
-			}
-		}
-	}
-
 	for _, query := range []string{"跳攻", "arcade-fury"} {
 		matches, err := store.SearchTasks(ctx, identity.TenantID, identity.PersonID, query, 20)
 		if err != nil {
@@ -218,13 +192,21 @@ func TestQueryTasksFiltersWorkspaceStatusKeywordAndPaginates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, title+" summary", nil); err != nil {
+		run, err := store.StartRun(ctx, task, "cli", title+" summary")
+		if err != nil {
 			t.Fatal(err)
+		}
+		if status != "in_progress" {
+			if err := store.FinishRun(ctx, identity.TenantID, run.ID, status); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return task
 	}
 	create("alpha API", "workspace_a", "in_progress")
-	create("alpha CLI", "workspace_a", "interrupted")
+	// A real park: an interrupted run without work evidence is no longer
+	// Attention, a waiting_user run always is.
+	create("alpha CLI", "workspace_a", "waiting_user")
 	create("alpha done", "workspace_a", "done")
 	create("beta API", "workspace_b", "in_progress")
 
@@ -245,5 +227,149 @@ func TestQueryTasksFiltersWorkspaceStatusKeywordAndPaginates(t *testing.T) {
 	}
 	if done.Total != 1 || len(done.Tasks) != 1 || done.Tasks[0].Title != "alpha done" {
 		t.Fatalf("done page=%+v", done)
+	}
+}
+
+// TestGetTaskStatusFollowsAttentionRules pins the compatibility Task.status
+// projection to the one Attention judge: an evidence-free interrupted run and
+// a dismissed run read as settled ('done'), an interrupted run with a plan
+// stays interrupted, and a pending approval reaches the Thread only through
+// its undismissed Run.
+func TestGetTaskStatusFollowsAttentionRules(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	park := func(title, status string) (*Task, *Run) {
+		t.Helper()
+		task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: title, Channel: "cli"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := store.StartRun(ctx, task, "cli", title)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return task, run
+	}
+	status := func(taskID string) string {
+		t.Helper()
+		got, err := store.GetTask(ctx, identity.TenantID, taskID)
+		if err != nil || got == nil {
+			t.Fatalf("GetTask(%s) = %+v, %v", taskID, got, err)
+		}
+		return got.Status
+	}
+
+	bare, bareRun := park("interrupted without evidence", "interrupted")
+	if err := store.FinishRun(ctx, identity.TenantID, bareRun.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(bare.ID); got != "done" {
+		t.Fatalf("evidence-free interrupted run projected %q, want settled 'done'", got)
+	}
+
+	planned, plannedRun := park("interrupted with plan", "interrupted")
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, plannedRun.ID, "seed", []RunPlanStepInput{{Step: "start", Status: "completed"}, {Step: "finish", Status: "in_progress"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, plannedRun.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(planned.ID); got != "interrupted" {
+		t.Fatalf("interrupted run with evidence projected %q", got)
+	}
+
+	dismissed, dismissedRun := park("dismissed park", "waiting_user")
+	if err := store.FinishRun(ctx, identity.TenantID, dismissedRun.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(dismissed.ID); got != "waiting_user" {
+		t.Fatalf("parked run projected %q before dismissal", got)
+	}
+	if ok, err := NewWorkTimeline(store).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, dismissed.ID, dismissedRun.ID); err != nil || !ok {
+		t.Fatalf("dismiss = %v, %v", ok, err)
+	}
+	if got := status(dismissed.ID); got != "done" {
+		t.Fatalf("dismissed run projected %q, want settled 'done'", got)
+	}
+
+	asked, askedRun := park("pending approval", "waiting_user")
+	if err := store.FinishRun(ctx, identity.TenantID, askedRun.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: asked.ID, RunID: askedRun.ID, ActionType: "tool_call",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := status(asked.ID); got != "waiting_user" {
+		t.Fatalf("pending approval projected %q", got)
+	}
+	if _, err := NewWorkTimeline(store).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, asked.ID, askedRun.ID); !errors.Is(err, ErrAttentionPendingControl) {
+		t.Fatalf("dismissal with a pending approval = %v, want ErrAttentionPendingControl", err)
+	}
+}
+
+// TestPinResumeSelectionIsAtomic covers the explicit /resume write: an archived
+// Thread is reopened and both pins land together, and an unknown Thread writes
+// nothing at all.
+func TestPinResumeSelectionIsAtomic(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "shelved work", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "shelved work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	if err := NewWorkTimeline(store).Archive(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.PinResumeSelection(ctx, identity.TenantID, identity.PersonID, "task_missing", run.ID); err == nil {
+		t.Fatal("pinning an unknown thread must fail")
+	}
+	for _, key := range []string{ResumePinThreadSettingKey, ResumePinRunSettingKey} {
+		if value, err := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, key); err != nil || value != "" {
+			t.Fatalf("failed pin wrote %s=%q err=%v", key, value, err)
+		}
+	}
+
+	if err := store.PinResumeSelection(ctx, identity.TenantID, identity.PersonID, task.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil || reopened == nil || reopened.Visibility != TaskVisibilityListed {
+		t.Fatalf("pinned thread = %+v, %v; want reopened", reopened, err)
+	}
+	if value, _ := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, ResumePinThreadSettingKey); value != task.ID {
+		t.Fatalf("thread pin = %q", value)
+	}
+	if value, _ := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, ResumePinRunSettingKey); value != run.ID {
+		t.Fatalf("run pin = %q", value)
+	}
+	current, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+	if err != nil || current == nil || current.ID != task.ID {
+		t.Fatalf("CurrentTask after pin = %+v, %v", current, err)
 	}
 }

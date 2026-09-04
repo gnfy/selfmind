@@ -97,12 +97,19 @@ stays canonical.
   active tool correlation, grouping, and immutable commit effects. It caps the
   process frame at ten rows (or the smaller measured terminal budget), keeps
   the composer/status visible, and shares one Dot spinner at 10 FPS. Exactly
-  one tick chain starts with the structured `thinking` phase and remains active
-  through `model_wait` heartbeats; Plan updates refresh in place without
-  creating an idle-looking gap. Tool execution, streamed output, Approval,
-  completion, and idle state stop it, while elapsed text refreshes once per
-  second. A waiting provider retains one measured activity row even when a Plan
-  and tall Composer consume the normal process budget. A final answer
+  one tick chain spans the whole animating turn — it starts with the structured
+  `thinking` phase and keeps its frame rate through `model_wait` heartbeats,
+  tool execution, and streamed output, because a frame that stops moving beside
+  an advancing counter reads as a hang rather than as work. Ownership is
+  single: re-entering a phase never starts a second chain, and the once-per-
+  second elapsed tick revives a chain that died. Row visibility and the ticks
+  that drive it share ONE predicate, so a visible progress row is always being
+  repainted; the alternative left rows frozen at whatever second the chain
+  ended. Approval, completion, and idle state stop both. The progress line is not part of the process budget at all: it owns a
+  reserved row below the Plan and above the Composer, so a Plan and tall
+  Composer can starve the process rows without moving it or costing it its
+  slot, and it animates through tool execution and the gaps between phases
+  rather than only during a provider wait. A final answer
   uses a dim `• ` gutter. Raw Markdown remains the `/copy` source. Full syntax
   highlighting and resize reflow of immutable scrollback remain deferred.
 - **Remaining (deferred follow-ups, not blocking default):**
@@ -120,10 +127,11 @@ Migrate the CLI/TUI from "app-owned full-viewport re-render" to a
   terminal owns scroll, selection, copy, and long-history performance — the
   things most prone to bugs and slowdown in an app-owned model.
 - **Active region → app-controlled** (bubbletea inline view): input, one
-  spinner, the bounded process surface (streaming narration plus running tool
-  evidence), transient menus, and a blocking Approval panel. Approval stays next
-  to the Composer, owns keyboard input, and temporarily preempts a pager without
-  hiding the active process, Plan, draft, or status context.
+  progress row in a fixed slot above the Composer, the bounded process surface
+  (streaming narration plus running tool evidence), transient menus, and a
+  blocking Approval panel. Approval stays next to the Composer, owns keyboard
+  input, and temporarily preempts a pager without hiding the active process,
+  Plan, draft, or status context.
 
 After guided setup, the startup identity band shows Main, Background, every
 explicit role-model override, and the logical workspace without exposing
@@ -238,8 +246,14 @@ substrate). Document results in this file.
 - `Start()` runs inline (no alt-screen) + no mouse capture when hybrid.
 - `history_commit.go`: `commit(*ChatMessage)` prints a finalized cell to
   scrollback via `Program.Println` and marks it `Committed` (immutable);
-  `renderActiveBlock` renders only `processSurface` plus the single spinner;
-  `viewActiveRegion` is the hybrid View.
+  `renderActiveBlock` renders only `processSurface`; `activityRow` is the one
+  progress line, rendered as its own reserved row below the Plan and above the
+  Composer so neither a growing process surface nor a growing Plan can move it
+  or squeeze it out; `viewActiveRegion` is the hybrid View. The row animates for
+  every live phase this terminal owns — provider wait, running tool, the gap
+  between phases, an outstanding synchronous request, an owned daemon run — and
+  names only what is known (`Working` when the stage is not established). A
+  blocking Approval owns the next action, so the row yields to the panel.
 - Commit-on-finalize wired: user/system/assistant via `addMessage` +
   `addErrorMessage`; tools via `MsgToolDone` (running tools show in the active
   region, commit on completion — folds in the core of H2). Merge-into-last
@@ -279,6 +293,11 @@ substrate). Document results in this file.
   unmatched output is ignored, while an identified completion with no tracked
   start gets its own finalized history cell instead of being guessed onto a
   different running call. Committed cells are never mutated by later events.
+- Tool failures have separate model and human surfaces. Main receives typed
+  category, recovery hint, and diagnostic instructions; the transcript gets a
+  bounded cause only. A `not_dispatched` refusal is a dim `Skipped` row rather
+  than a red execution failure, while a command that actually ran and failed
+  remains visibly failed.
 - Active command output is a bounded three-line tail. A terminal run state
   (`done`, `error`, or `cancelled`) finalizes every unfinished tool cell as an
   interrupted error before committing it. Only an intentional spectator detach
@@ -316,6 +335,14 @@ substrate). Document results in this file.
 
 - A plan is active run state, not an append-only transcript cell. The daemon's
   latest `plan.updated` snapshot replaces the previous snapshot in memory.
+- The heading distinguishes PROVENANCE, and nothing else: work planned in this
+  line of work renders as `Plan`, a snapshot inherited from the run being
+  resumed as `Resumed plan`. Revision count gets no word of its own — every
+  update is a complete snapshot, and `· done/total` already shows movement — so
+  one plan keeps one name for a whole turn instead of appearing to be several
+  different things. A first snapshot that already contains completed steps
+  therefore reads as late model planning, while an inherited partial plan reads
+  as deliberate continuation.
 - The active plan renders after normal transcript content and notifications,
   immediately above the composer. A blocking Approval retains the Plan state
   and renders below it rather than hiding it behind a separate surface. This
@@ -331,6 +358,10 @@ substrate). Document results in this file.
   complete successfully, all steps must be resolved; an unresolved plan is
   repaired through the agent loop or leaves the run resumable rather than
   falsely complete.
+- An exact-parent continuation copies the parent's latest durable plan into the
+  child before Main starts and emits that child snapshot immediately. Plan
+  state therefore survives multi-turn transfer instead of depending on a
+  display-only replay event.
 
 ### H2b - Physical-row-safe structured tool cells
 
@@ -365,11 +396,15 @@ substrate). Document results in this file.
   that exact run instead of every event associated with the person.
 - Startup digest headings distinguish event time from current state: terminal
   runs completed after the last presence appear under `While you were away`,
-  while older unresolved task blockers appear under `Still needs attention`.
+  while older Runs that still derive Attention appear under
+  `Still needs attention`.
   Maintenance-only task-card updates never re-date a terminal run.
 - Every forwarded event retains its durable event id/cursor, live sequence,
   task id, and run id. The reducer deduplicates replayed events and accepts
   watcher events only while their run is still the run being watched.
+- Queue acknowledgements and `run.started` share an opaque `queue_id`. The TUI
+  uses that exact correlation to own a drained or transferred Run's spinner;
+  equal or truncated input text is never treated as ownership evidence.
 - Submitting a new prompt is an ordering barrier: the old assistant fragment
   is committed first, the old watcher is detached, and only then is the new
   user cell committed. Late events from the detached run are discarded.
@@ -377,11 +412,15 @@ substrate). Document results in this file.
   roles. Lifecycle-only tools update control state without creating noisy
   transcript rows.
 - External watcher lifecycle uses the durable watcher id as its only display
-  identity. Completion renders one compact, transport-neutral status line
-  (`Watcher <id> | status: succeeded | task: waiting_finalization`), and the
-  system finalization run opens with
-  `Watcher <id> | status: finalizing | task: running` instead of exposing its
-  internal prompt. The
+  identity and leaves exactly one transcript cell per watch: the terminal
+  finalization result (`Watcher <id> | status: finalized | task: <run status>`
+  plus its bounded outcome summary), which keeps a blocked or `waiting_user`
+  outcome distinguishable from a completed one. The watch's own terminal
+  observation is transient status-bar state
+  (`Watcher <id> | status: succeeded | task: waiting_finalization`, or
+  `blocked_environment` when the check never observed the external state), and
+  the finalization run itself renders as `background watcher finalizing`
+  instead of exposing its internal prompt. The
   current user run is never interrupted; finalization still obeys the
   per-person durable queue.
 - Regression coverage: `event_identity_test.go`, `attach_digest_test.go`, and

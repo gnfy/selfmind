@@ -129,11 +129,15 @@ func looksLikeAffirmativeContinuation(input string) bool {
 	}
 }
 
+func isDeterministicContinuationInput(input string) bool {
+	return isStandaloneContinueControl(input) || looksLikeAffirmativeContinuation(input)
+}
+
 // withResumeContext prepends the parent run's durable state to a deliberate
 // continuation's user message. Run-scoped by P0: without an exact resolved
 // parent it returns the input unchanged — the spine tail and the bounded task
 // card are the only background then. The ownership claim itself happens
-// atomically inside child-run creation (StartRunOptions.ParentRunID); this
+// atomically inside child-run creation (StartRunOptions.ResumesRunID); this
 // function only assembles context and never writes ownership.
 func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, parent *control.Run, intent router.IntentResult, explicitResume bool, input string) string {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || parent == nil || (!explicitResume && intent.Intent != router.IntentContinue) {
@@ -233,6 +237,7 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 			}
 			fmt.Fprintf(&sb, "- [%s] %s\n", status, oneLine(step.Step))
 		}
+		sb.WriteString("This plan is inherited from the continued run. For multi-step work, call update_plan with a complete snapshot that keeps the completed steps, then continue from the in-progress step.\n")
 	}
 	sb.WriteString("Continue from this state. Do not restart completed work unless the user asks for a restart.\n")
 	sb.WriteString("[/SelfMind resume context]\n\n")

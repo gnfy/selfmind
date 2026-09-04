@@ -225,10 +225,13 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			_ = h.controlStore.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID)
 		}
 	}
+	var seededTaskID string
 	if c.Setup != nil {
-		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, firstNonEmpty(c.Channel, "cli"), c.Setup); err != nil {
+		seeded, err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, firstNonEmpty(c.Channel, "cli"), c.Setup)
+		if err != nil {
 			return nil, err
 		}
+		seededTaskID = seeded
 	}
 	existingRunIDs := map[string]bool{}
 	if identity != nil {
@@ -396,7 +399,13 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 				subjectTaskID = cur.ID
 			}
 		}
-		world := CollectWorldState(ctx, h.controlStore, h.mem, identity, subjectTaskID, workspace)
+		if subjectTaskID == "" {
+			// A deterministic reply (candidates, control commands) returns no
+			// Task; the Thread the case seeded is then the only sensible subject
+			// for durable-event assertions.
+			subjectTaskID = seededTaskID
+		}
+		world := CollectWorldState(ctx, h.controlStore, h.mem, identity, subjectTaskID, lastNonEmpty(runIDs), workspace)
 		checks = append(checks, EvaluateStatePredicates(c.AssertState, world)...)
 	}
 
@@ -661,10 +670,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// The eval harness creates the control store after the core tool set. Add
 	// daemon-owned tools here so reliability cases exercise the production
 	// registration path instead of silently running with a smaller tool set.
-	disp.RegisterTool(tools.NewExternalWatchTool(controlStore))
-	disp.RegisterTool(tools.NewSkillSelectTool(controlStore))
-	disp.RegisterTool(tools.NewSkillFallbackTool(controlStore))
-	disp.RegisterTool(tools.NewSkillLifecycleManageTool(controlStore))
+	registerDaemonOwnedEvalTools(disp, controlStore)
 	skillStorage, err := appcore.ResolveSkillStorage(cfg)
 	if err != nil {
 		appcore.StopCron(gwDeps.CronScheduler)
@@ -707,13 +713,6 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// path inside the isolated data dir.
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
-	if c.ContinuityMode != "" {
-		server.ContinuityMode = c.ContinuityMode
-		server.ContinuityResolver = appcore.NewConfiguredContinuityResolver(mem, cfg, tenantID)
-		if c.ContinuityMode != "off" && server.ContinuityResolver == nil {
-			return nil, fmt.Errorf("eval case %s requires fast_classifier continuity, but no auxiliary/role route is configured", c.ID)
-		}
-	}
 	if caseNeedsPostRunMaintenance(c) {
 		server.PostRunAnalyzer = appcore.NewConfiguredPostRunAnalyzer(mem, cfg, tenantID, evalPrompts, controlStore)
 		server.PostRunMaintenance = httpapi.PostRunMaintenanceOptions{
@@ -750,6 +749,21 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// surface and change which notification paths its runs take.
 	server.Delivery = newEvalDeliveryService(c, harness)
 	return harness, nil
+}
+
+func registerDaemonOwnedEvalTools(disp *tools.Dispatcher, store *control.Store) {
+	if disp == nil || store == nil {
+		return
+	}
+	disp.RegisterTool(tools.NewExternalWatchTool(store))
+	disp.RegisterTool(tools.NewQueueUserInputTool(store))
+	disp.RegisterTool(tools.NewSetDeliveryTargetTool(store))
+	disp.RegisterTool(tools.NewWorkSearchTool(store))
+	disp.RegisterTool(tools.NewWorkInspectTool(store))
+	disp.RegisterTool(tools.NewWorkSelectTool(store))
+	disp.RegisterTool(tools.NewSkillSelectTool(store))
+	disp.RegisterTool(tools.NewSkillFallbackTool(store))
+	disp.RegisterTool(tools.NewSkillLifecycleManageTool(store))
 }
 
 func caseNeedsPostRunMaintenance(c *Case) bool {

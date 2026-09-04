@@ -169,10 +169,13 @@ func (d *Server) cancelDisabledRecoveryQueue(ctx context.Context, identity *cont
 	}
 	route := d.routeIdentityForPerson(ctx, queued.TenantID, queued.PersonID, queued.Channel, queued.Platform, identity)
 	handoff := d.recoveryHandoffForRun(ctx, queued.TenantID, queued.PersonID, queued.ReplyToRunID)
+	// liveSurfaceInformed=true keeps recovery on its existing routing: this push
+	// IS the deduplicated recovery notification, not a fallback for a live event
+	// that may have failed.
 	if !d.coordinator().routePendingNotification(ctx, route, queued.Channel, delivery.Message{
 		TenantID: queued.TenantID, PersonID: queued.PersonID, TaskID: queued.TaskID, RunID: queued.ReplyToRunID,
 		Content: recoveryNotificationContent(title, handoff), Kind: "recovery",
-	}) {
+	}, true) {
 		return false
 	}
 	return d.Control.MarkQueued(ctx, queued.TenantID, queued.ID, control.QueueStatusCancelled) == nil

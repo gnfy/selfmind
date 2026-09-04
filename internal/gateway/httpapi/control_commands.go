@@ -54,15 +54,22 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/forget" || strings.HasPrefix(lower, "/forget "):
 		reply, err := d.handleForgetCommand(ctx, identity, strings.TrimSpace(trimmed[len("/forget"):]))
 		return true, reply, err
+	case strings.HasPrefix(lower, "/stop "):
+		// `/stop <n>` clears ONE attention item without running it. Dismissing
+		// used to require pinning the item first — `/resume <n>` then `/stop` —
+		// which starts the work you were trying to put down. Stale items
+		// therefore had no exit: automatic retention will not touch anything
+		// with pending human input, so `waiting_user` residue accumulated (nine
+		// items, six of them a day old, observed 2026-09-04).
+		parts := strings.Fields(trimmed)
+		if len(parts) < 2 {
+			return true, "Usage: /stop <n|run_id>  (bare /stop cancels the active run)", nil
+		}
+		return true, d.dismissAttentionByReference(ctx, identity, req.Channel, parts[1]), nil
 	case lower == "/stop":
 		active := d.coordinator().stopActive(identity.PersonID)
 		if active == nil {
-			// No live run — but a task can be stuck non-terminal
-			// (in_progress/blocked/running) with no run behind it (e.g. a run
-			// that finalized without terminalizing its task, or a task created
-			// but never executed). /stop should still let the user terminate
-			// it, otherwise it sits in /tasks forever with no way to clear it.
-			return true, d.cancelStuckCurrentTask(ctx, identity), nil
+			return true, d.dismissCurrentAttention(ctx, identity), nil
 		}
 		if active.RunID != "" {
 			_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, active.RunID)
@@ -90,9 +97,10 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		return true, reply, nil
 	case strings.HasPrefix(lower, "/cancel"):
-		// Explicit "terminate a stuck task" — same as /stop's no-run fallback,
-		// but a clearer verb for a task that is parked rather than running.
-		return true, d.cancelStuckCurrentTask(ctx, identity), nil
+		// With no live execution, cancel is the compatibility spelling for
+		// dismissing the one unambiguous Attention item. It never rewrites a
+		// historical Run outcome.
+		return true, d.dismissCurrentAttention(ctx, identity), nil
 	case strings.HasPrefix(lower, "/new"):
 		title := strings.TrimSpace(trimmed[len("/new"):])
 		if title == "" {
@@ -120,47 +128,35 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// restore and continue the original request. Reaching this branch means
 		// the invocation did not satisfy that typed contract.
 		return true, "Usage: /choose <choice_id> <number>", nil
-	case lower == "/task status" || lower == "/status":
+	case lower == "/status":
 		reply, err := d.statusReply(ctx, identity)
+		return true, reply, err
+	case lower == "/resume":
+		// Bare /resume IS the attention list. It used to relay to /tasks, which
+		// made "what can I continue" a Task listing and put the ordinal
+		// snapshot in a view about labels rather than about runs.
+		reply, err := d.attentionListReply(ctx, identity, req.Channel)
 		return true, reply, err
 	case strings.HasPrefix(lower, "/resume "):
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
-			return true, "Usage: /resume <n|task_id|run_id>", nil
+			return true, "Usage: /resume <n|run_id>  (bare /resume lists what needs attention)", nil
+		}
+		if ordinal, convErr := strconv.Atoi(parts[1]); convErr == nil {
+			_, runID, count, found := d.taskLists.resolveRun(identity, req.Channel, ordinal, time.Now())
+			if found {
+				if runID == "" {
+					return true, fmt.Sprintf("No resumable run number %d in the last list; it showed %d (run /resume to refresh).", ordinal, count), nil
+				}
+				return d.selectExactResumeRun(ctx, identity, runID)
+			}
 		}
 		if strings.HasPrefix(strings.ToLower(parts[1]), "run_") {
-			run, userErr, err := d.resolveUnresolvedRunReference(ctx, identity, parts[1])
-			if err != nil {
-				return true, "", err
-			}
-			if userErr != "" {
-				return true, userErr, nil
-			}
-			task, err := d.Control.GetTask(ctx, identity.TenantID, run.TaskID)
-			if err != nil || task == nil || task.PersonID != identity.PersonID {
-				if err != nil {
-					return true, "", err
-				}
-				return true, "Run not found or no longer resumable.", nil
-			}
-			// Write the run pin first. A crash before the task pin is harmless;
-			// writing only the task pin could otherwise silently lose the precise
-			// choice and fall back to task-level ambiguity.
-			if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, run.ID); err != nil {
-				return true, "", err
-			}
-			if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, task.ID); err != nil {
-				_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, "")
-				return true, "", err
-			}
-			if err := d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
-				return true, "", err
-			}
-			return true, fmt.Sprintf("Selected run %s under task %s. Your next message will continue that exact run.", shortRunID(run.ID), shortTaskID(task.ID)), nil
+			return d.selectExactResumeRun(ctx, identity, parts[1])
 		}
-		// Same reference grammar as /task: list ordinal (/tasks card order),
-		// full id, or the short card-displayed prefix — the id the /tasks card
-		// shows MUST round-trip through /resume.
+		// A bare number is a list ordinal against the last /resume listing;
+		// anything else is a full run id, or a thread id kept working for
+		// references copied out of older transcripts.
 		task, userErr, err := d.resolveTaskReference(ctx, identity, parts[1], req.Channel)
 		if err != nil {
 			return true, "", err
@@ -168,31 +164,20 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if userErr != "" {
 			return true, userErr, nil
 		}
-		if err := d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
+		runs, err := d.Control.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 20)
+		if err != nil {
 			return true, "", err
 		}
-		// One-shot pin: an explicit /resume IS continuation evidence, so the
-		// next agent-bound message attaches to this task even without a
-		// continuation cue. Consumed by resolveTask; after that, plain new
-		// messages fall back to the pre-label guess again. /resume of an
-		// ARCHIVED label deliberately reopens it (resolveTask honors the pin).
-		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, "")
-		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, task.ID)
-		// State the workspace binding explicitly: the client's status bar keeps
-		// showing its launch cwd until the next agent turn, so without this
-		// line a successful /resume reads as "didn't work" (observed live).
-		return true, "Resumed task: " + task.Title + " (" + task.ID + ")" + d.resumeWorkspaceNote(ctx, identity, task), nil
-	case lower == "/task" || strings.HasPrefix(lower, "/task "):
-		// /task <id> detail + subcommands (runs|rename|archive). "/task status"
-		// is an alias of /status and is claimed by the case above.
-		reply, err := d.taskCommandReply(ctx, identity, strings.Fields(trimmed)[1:], req.Channel)
-		return true, reply, err
-	case lower == "/tasks" || strings.HasPrefix(lower, "/tasks ") || lower == "tasks" || strings.Contains(lower, "任务列表"):
-		variant := ""
-		if strings.HasPrefix(lower, "/tasks ") {
-			variant = strings.TrimSpace(strings.TrimPrefix(lower, "/tasks"))
+		switch len(runs) {
+		case 0:
+			return true, "That thread has no exact resumable run. Use /search to find the work, then /resume <run_id>.", nil
+		case 1:
+			return d.selectExactResumeRun(ctx, identity, runs[0].ID)
+		default:
+			return true, fmt.Sprintf("That thread has %d resumable runs. Run /resume to list them, then /resume <run_id> to choose one exactly.", len(runs)), nil
 		}
-		reply, err := d.tasksOverviewReply(ctx, identity, variant, req.Channel)
+	case lower == "/search" || strings.HasPrefix(lower, "/search "):
+		reply, err := d.searchCommandReply(ctx, identity, strings.TrimSpace(trimmed[len("/search"):]))
 		return true, reply, err
 	case lower == "/queue" || strings.HasPrefix(lower, "/queue "):
 		arg := strings.TrimSpace(trimmed[len("/queue"):])
@@ -230,9 +215,6 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		return true, reply, err
 	case lower == "/diag context":
 		reply, err := d.contextDiagReply(ctx, identity)
-		return true, reply, err
-	case lower == "/diag tasks":
-		reply, err := d.tasksDiagReply(ctx, identity)
 		return true, reply, err
 	case lower == "/diag models":
 		reply, err := d.modelsDiagReply(ctx, identity)
@@ -272,13 +254,38 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		reply, err := d.dailyQualityReport(ctx, identity, window)
 		return true, reply, err
-	case strings.HasPrefix(lower, "/workspace ") || strings.HasPrefix(lower, "/ws "):
-		// Unified workspace verb: WITH an argument it selects; bare it lists
-		// (handled by the case below). "/ws" is the short alias and
-		// "/workspaces" the plural spelling — all three behave identically.
+	case strings.HasPrefix(lower, "/ws "):
+		// One workspace verb, the short one. It used to have two more spellings
+		// (/workspace and /workspaces) that behaved identically; three names for
+		// one thing is something to read, remember, and keep in sync.
 		parts := strings.Fields(req.Content)
 		if len(parts) < 2 {
-			return true, "Usage: /workspace <n|workspace_id>", nil
+			return true, "Usage: /ws <n|id> | /ws default <n|id> | /ws trust|untrust|decline", nil
+		}
+		switch strings.ToLower(parts[1]) {
+		case "trust", "untrust", "decline":
+			reply, err := d.workspaceTrustReply(ctx, identity, req, strings.ToLower(parts[1]))
+			return true, reply, err
+		case "default":
+			// The DURABLE default, used by turns that carry no directory of
+			// their own (IM, cron). Selecting a workspace for the session no
+			// longer changes it: two terminals in different projects were
+			// overwriting one person-level value, so each one's list showed the
+			// other's choice as current while its own work ran elsewhere.
+			if len(parts) < 3 {
+				return true, "Usage: /ws default <n|workspace_id>", nil
+			}
+			ws, userErr, err := d.resolveWorkspaceReference(ctx, identity, parts[2])
+			if err != nil {
+				return true, "", err
+			}
+			if userErr != "" {
+				return true, userErr, nil
+			}
+			if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
+				return true, "", err
+			}
+			return true, fmt.Sprintf("Default workspace for IM and scheduled work: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
 		}
 		ws, userErr, err := d.resolveWorkspaceReference(ctx, identity, parts[1])
 		if err != nil {
@@ -287,26 +294,44 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if userErr != "" {
 			return true, userErr, nil
 		}
-		if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
-			return true, "", err
-		}
 		if !isLocalCLIRequest(req) {
+			// An IM turn has no session of its own, so selecting there IS the
+			// durable default.
+			if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
+				return true, "", err
+			}
 			return true, formatWorkspaceSwitchForIM(ws), nil
 		}
-		return true, fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
-	case lower == "/workspaces" || lower == "/workspace" || lower == "/ws":
+		reply := fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath)
+		if note := sessionWorkspaceTrustNote(ws); note != "" {
+			reply += "\n" + note
+		}
+		return true, reply, nil
+	case lower == "/ws":
+		// Ensure the session's own directory is a workspace before listing:
+		// control commands run before the run pipeline would create it, so a
+		// fresh directory used to be missing from its own listing.
+		session := d.ensureSessionWorkspace(ctx, identity, req)
 		workspaces, err := d.listWorkspacesForDisplay(ctx, identity)
 		if err != nil {
 			return true, "", err
 		}
-		currentID := ""
+		defaultID := ""
 		if current, _ := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); current != nil {
-			currentID = current.ID
+			defaultID = current.ID
 		}
 		if !isLocalCLIRequest(req) {
-			return true, formatWorkspacesForIM(workspaces, currentID), nil
+			return true, formatWorkspacesForIM(workspaces, defaultID), nil
 		}
-		return true, formatWorkspaces(workspaces, currentID), nil
+		sessionID := ""
+		if session != nil {
+			sessionID = session.ID
+		}
+		reply := formatWorkspaces(workspaces, sessionID, defaultID)
+		if note := sessionWorkspaceTrustNote(session); note != "" {
+			reply += "\n\n" + note
+		}
+		return true, reply, nil
 	case lower == "/approvals" || strings.HasPrefix(lower, "/approvals "):
 		rest := strings.TrimSpace(trimmed[len("/approvals"):])
 		if rest != "" {
@@ -357,6 +382,30 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		return false, "", nil
 	}
+}
+
+func (d *Server) selectExactResumeRun(ctx context.Context, identity *control.IdentityContext, ref string) (bool, string, error) {
+	run, userErr, err := d.resolveUnresolvedRunReference(ctx, identity, ref)
+	if err != nil {
+		return true, "", err
+	}
+	if userErr != "" {
+		return true, userErr, nil
+	}
+	task, err := d.Control.GetTask(ctx, identity.TenantID, run.TaskID)
+	if err != nil || task == nil || task.PersonID != identity.PersonID {
+		if err != nil {
+			return true, "", err
+		}
+		return true, "Run not found or no longer resumable.", nil
+	}
+	// Reopening the thread and writing both pins is one control-store
+	// transaction: a crash can never leave a thread pin without its exact run.
+	if err := d.Control.PinResumeSelection(ctx, identity.TenantID, identity.PersonID, task.ID, run.ID); err != nil {
+		return true, "", err
+	}
+	return true, fmt.Sprintf("Selected run %s under thread %s. Your next message will continue that exact run.%s",
+		shortRunID(run.ID), shortTaskID(task.ID), d.resumeWorkspaceNote(ctx, identity, task)), nil
 }
 
 // notifyPreferenceReply handles /notify: show, set, or reset the person's
@@ -568,44 +617,155 @@ func approvalReasonIsDangerous(reason string) bool {
 	return !strings.Contains(reason, "requires approval in")
 }
 
-// statusReply builds the /status card shared by every channel's control-command
-// path. When the person has an active run, its task is what the user is
-// waiting on, so report it first (an async run may attach to a task the
-// current_task pointer has not caught up with yet); fall back to the
-// per-person current_task pointer otherwise. The card format itself
-// (formatTaskStatus, `Task:` / `Status:` markers) is a stable contract pinned
-// by the continuity eval suite — change it there, not here.
-// cancelStuckCurrentTask terminates the person's current task when it is stuck
-// in a non-terminal state with no live run (the /stop no-run fallback and the
-// /cancel command). It never touches a task that is already terminal. This is
-// the user-facing escape hatch for a task that recovery sweeps missed (created
-// but never run, or finalized without terminalizing).
-func (d *Server) cancelStuckCurrentTask(ctx context.Context, identity *control.IdentityContext) string {
+// dismissCurrentAttention is the /stop-without-a-run and /cancel compatibility
+// path. It only ever dismisses one exact Run: the pinned /resume Run when a run
+// pin exists, else the single unambiguous Attention item. A thread pin without
+// an exact Run dismisses nothing, because a Thread is history, not something
+// to stop. Run outcomes and pending control rows remain intact, and a Run that
+// still owns an approval, question, or watcher refuses.
+func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.IdentityContext) string {
 	if d == nil || d.Control == nil || identity == nil {
 		return "No active run to stop."
 	}
-	task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if err != nil || task == nil {
-		return "No active run to stop, and no current task to cancel."
+	timeline := control.NewWorkTimeline(d.Control)
+	runPin, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey)
+	if err != nil {
+		return "Could not inspect current attention: " + err.Error()
 	}
-	if terminalTaskStatus(task.Status) {
-		return "No active run to stop; the current task is already " + task.Status + "."
+	threadPin, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey)
+	if err != nil {
+		return "Could not inspect current attention: " + err.Error()
 	}
-	if err := d.Control.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "cancelled", "Cancelled by user.", nil); err != nil {
-		return "Could not cancel the task: " + err.Error()
+	clearPins := func() {
+		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, "")
+		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, "")
 	}
-	_, _ = d.Control.AppendEvent(ctx, control.Event{
-		TaskID:     task.ID,
-		Type:       "task.cancelled",
-		Visibility: "task",
-		Payload:    mustJSON(map[string]string{"reason": "user cancelled a stuck task"}),
-	})
-	return "No live run was executing, so I cancelled the current task: " + textutil.Truncate(toOneLine(task.Title), 60)
+	if runPin = strings.TrimSpace(runPin); runPin != "" {
+		run, err := d.Control.GetRun(ctx, identity.TenantID, runPin)
+		if err != nil {
+			return "Could not inspect current attention: " + err.Error()
+		}
+		if run == nil || run.PersonID != identity.PersonID {
+			clearPins()
+			return "No active run to stop. The pinned resume selection no longer exists, so the pin was cleared."
+		}
+		dismissed, err := timeline.DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID)
+		if err != nil {
+			if refusal, ok := attentionDismissalRefusal(err); ok {
+				return "No active run to stop. " + refusal
+			}
+			return "Could not dismiss attention: " + err.Error()
+		}
+		clearPins()
+		if !dismissed {
+			return fmt.Sprintf("No active run to stop. Pinned run %s is not current attention (already dismissed or superseded); the resume pin was cleared.", shortRunID(run.ID))
+		}
+		return d.reportDismissedAttentionRun(ctx, identity, run.TaskID, run.ID, "user dismissed the pinned resume run")
+	}
+	if strings.TrimSpace(threadPin) != "" {
+		return "No active run to stop. A thread is selected for /resume but no exact run is pinned, so nothing was dismissed; run /resume to see what needs attention."
+	}
+	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 2)
+	if err != nil {
+		return "Could not inspect current attention: " + err.Error()
+	}
+	switch len(attention) {
+	case 0:
+		return "No active run to stop, and nothing currently needs attention."
+	case 1:
+		item := attention[0]
+		dismissed, err := timeline.DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, item.Thread.ID, item.RunID)
+		if err != nil {
+			if refusal, ok := attentionDismissalRefusal(err); ok {
+				return "No active run to stop. " + refusal
+			}
+			return "Could not dismiss attention: " + err.Error()
+		}
+		if !dismissed {
+			return "No active run to stop, and nothing currently needs attention."
+		}
+		return d.reportDismissedAttentionRun(ctx, identity, item.Thread.ID, item.RunID, "user dismissed inactive attention")
+	default:
+		return "No active run. Several items need attention; run /resume to see them."
+	}
 }
 
+// dismissAttentionByReference resolves ONE attention item — a list ordinal from
+// the same snapshot `/resume` owns, or an exact run id — and dismisses it
+// without executing anything. Cancelling the active run stays the job of bare
+// `/stop`, so naming the running item here routes there instead of pretending a
+// live run can be put down without stopping it.
+func (d *Server) dismissAttentionByReference(ctx context.Context, identity *control.IdentityContext, channel, ref string) string {
+	if d == nil || d.Control == nil || identity == nil {
+		return "Could not dismiss attention: the control store is unavailable."
+	}
+	ref = strings.TrimSpace(ref)
+	runID := ""
+	if ordinal, convErr := strconv.Atoi(ref); convErr == nil {
+		_, resolved, count, found := d.taskLists.resolveRun(identity, channel, ordinal, time.Now())
+		if !found {
+			return fmt.Sprintf("No list to number %d against; run /resume first.", ordinal)
+		}
+		if resolved == "" {
+			return fmt.Sprintf("No item number %d in the last list; it showed %d (run /resume to refresh).", ordinal, count)
+		}
+		runID = resolved
+	} else if strings.HasPrefix(strings.ToLower(ref), "run_") {
+		runID = ref
+	} else {
+		return "Usage: /stop <n|run_id>  (bare /stop cancels the active run)"
+	}
+
+	run, err := d.Control.GetRun(ctx, identity.TenantID, runID)
+	if err != nil {
+		return "Could not dismiss attention: " + err.Error()
+	}
+	if run == nil || run.PersonID != identity.PersonID {
+		return "That run is not yours or no longer exists."
+	}
+	if active := d.coordinator().currentActive(identity.PersonID); active != nil && active.RunID == run.ID {
+		return fmt.Sprintf("Run %s is executing now; use /stop with no number to cancel it.", shortRunID(run.ID))
+	}
+	dismissed, err := control.NewWorkTimeline(d.Control).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID)
+	if err != nil {
+		if refusal, ok := attentionDismissalRefusal(err); ok {
+			return refusal
+		}
+		return "Could not dismiss attention: " + err.Error()
+	}
+	if !dismissed {
+		return fmt.Sprintf("Run %s is not current attention (already dismissed or superseded).", shortRunID(run.ID))
+	}
+	return d.reportDismissedAttentionRun(ctx, identity, run.TaskID, run.ID, "user dismissed an attention item by reference")
+}
+
+// reportDismissedAttentionRun records the exact-run dismissal and names it.
+func (d *Server) reportDismissedAttentionRun(ctx context.Context, identity *control.IdentityContext, threadID, runID, reason string) string {
+	_, _ = d.Control.AppendEvent(ctx, control.Event{
+		TaskID:     threadID,
+		RunID:      runID,
+		Type:       "attention.dismissed",
+		Visibility: "task",
+		Payload:    mustJSON(map[string]string{"reason": reason, "run_id": runID}),
+	})
+	title := shortTaskID(threadID)
+	if task, err := d.Control.GetTask(ctx, identity.TenantID, threadID); err == nil && task != nil && strings.TrimSpace(task.Title) != "" {
+		title = textutil.Truncate(toOneLine(task.Title), 60)
+	}
+	return fmt.Sprintf("No live run was executing. Dismissed current attention for exact run %s in %s. Explicit /resume %s can still continue it.",
+		shortRunID(runID), title, shortRunID(runID))
+}
+
+// statusReply builds the /status card shared by every channel. The active Run
+// wins; without one, an explicit resume pin then the highest derived Attention
+// item supplies the presentation Thread. Recency never invents a current item.
+// When the card is about one exact parked Run (a pinned or Attention Run), its
+// handoff and plan come from that Run, never from whichever Run in the Thread
+// happens to be newest.
 func (d *Server) statusReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
 	active := d.coordinator().currentActive(identity.PersonID)
 	var task *control.Task
+	exactRunID := ""
 	if active != nil && active.TaskID != "" {
 		// Best-effort lookup: a missing/errored row falls back to the pointer.
 		task, _ = d.Control.GetTask(ctx, identity.TenantID, active.TaskID)
@@ -616,12 +776,41 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		if err != nil {
 			return "", err
 		}
+		if task != nil && task.ActiveRunID == "" {
+			// CurrentTask without an executing Run is the explicit /resume pin;
+			// its exact Run pin names the parked Run the card describes.
+			if pinned, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey); err == nil {
+				if run, err := d.Control.GetRun(ctx, identity.TenantID, strings.TrimSpace(pinned)); err == nil && run != nil && run.TaskID == task.ID {
+					exactRunID = run.ID
+				}
+			}
+		}
+	}
+	if task == nil {
+		attention, err := control.NewWorkTimeline(d.Control).Attention(ctx, identity.TenantID, identity.PersonID, 1)
+		if err != nil {
+			return "", err
+		}
+		if len(attention) > 0 {
+			task, err = d.Control.GetTask(ctx, identity.TenantID, attention[0].Thread.ID)
+			if err != nil {
+				return "", err
+			}
+			exactRunID = attention[0].RunID
+		}
 	}
 	if task == nil {
 		return "No active task.", nil
 	}
-	handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
-	plan := d.latestPlanForTask(ctx, task.ID)
+	var handoff *control.Handoff
+	var plan []taskPlanStep
+	if exactRunID != "" {
+		handoff, _ = d.Control.RunHandoff(ctx, identity.TenantID, identity.PersonID, exactRunID)
+		plan = d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, exactRunID)
+	} else {
+		handoff, _ = d.Control.LatestHandoff(ctx, task.ID)
+		plan = d.latestPlanForTask(ctx, task.ID)
+	}
 	card := formatTaskStatus(task, handoff, active, plan)
 	if recovery := d.latestRecoveryHandoffForTask(ctx, identity, task.ID); recovery != nil {
 		card += "\n\n" + formatRecoveryHandoff(recovery)
@@ -634,10 +823,20 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		sortApprovalsForDisplay(pending)
 		waitAge := humanDuration(time.Since(pending[0].CreatedAt))
 		card += "\n⚠ Waiting for your approval — reply y or n:\n"
+		// Pending input is person-scoped: an approval raised by another Thread
+		// still blocks this person, so it belongs on the card. Name its Thread
+		// whenever it is not the one this card describes, or a foreign item
+		// reads as if it came from the work shown above.
 		titles := d.taskTitlesFor(ctx, identity.TenantID, pending)
+		foreignTitle := func(threadID string) string {
+			if strings.TrimSpace(threadID) == "" || threadID == task.ID {
+				return ""
+			}
+			return titles[threadID]
+		}
 		for i, approval := range pending {
 			if len(pending) == 1 {
-				card += approvalSummaryLine(approval, "") + "\n"
+				card += approvalSummaryLine(approval, foreignTitle(approval.TaskID)) + "\n"
 				break
 			}
 			card += fmt.Sprintf("%d. %s\n", i+1, approvalSummaryLine(approval, titles[approval.TaskID]))
@@ -651,12 +850,24 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 	if clarifies, err := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 5); err == nil && len(clarifies) > 0 {
 		waitAge := humanDuration(time.Since(clarifies[0].CreatedAt))
 		card += "\n⚠ Waiting for your answer — just reply with it:\n"
+		// Same rule as the approvals above: a question from another Thread is
+		// still the person's to answer, but it must say which work it belongs to.
+		clarifyLine := func(clarify control.ClarifyRequest) string {
+			line := clarifySummaryLine(clarify)
+			if strings.TrimSpace(clarify.TaskID) == "" || clarify.TaskID == task.ID {
+				return line
+			}
+			if other, err := d.Control.GetTask(ctx, identity.TenantID, clarify.TaskID); err == nil && other != nil && strings.TrimSpace(other.Title) != "" {
+				line += fmt.Sprintf(" (task: %s)", truncate(toOneLine(other.Title), 30))
+			}
+			return line
+		}
 		for i, clarify := range clarifies {
 			if len(clarifies) == 1 {
-				card += clarifySummaryLine(clarify) + "\n"
+				card += clarifyLine(clarify) + "\n"
 				break
 			}
-			card += fmt.Sprintf("%d. %s\n", i+1, clarifySummaryLine(clarify))
+			card += fmt.Sprintf("%d. %s\n", i+1, clarifyLine(clarify))
 		}
 		card = strings.Replace(card, "Waiting for your answer", fmt.Sprintf("Waiting for your answer (%s elapsed)", waitAge), 1)
 	}

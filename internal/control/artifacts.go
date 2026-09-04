@@ -28,7 +28,7 @@ func (s *Store) SaveArtifact(ctx context.Context, artifact Artifact) (*Artifact,
 	artifact.CreatedAt = time.Now()
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO task_artifacts
-		   (id, task_id, run_id, kind, name, uri, mime_type, metadata_json, created_at)
+		   (id, thread_id, run_id, kind, name, uri, mime_type, metadata_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		artifact.ID, artifact.TaskID, artifact.RunID, artifact.Kind, artifact.Name, artifact.URI,
 		artifact.MimeType, string(artifact.Metadata), artifact.CreatedAt.Unix())
@@ -46,9 +46,9 @@ func (s *Store) ListTaskArtifacts(ctx context.Context, taskID string, limit int)
 		limit = 100
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, COALESCE(run_id, ''), kind, COALESCE(name, ''),
+		`SELECT id, thread_id, COALESCE(run_id, ''), kind, COALESCE(name, ''),
 		        uri, COALESCE(mime_type, ''), COALESCE(metadata_json, '{}'), created_at
-		 FROM task_artifacts WHERE task_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`,
+		 FROM task_artifacts WHERE thread_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`,
 		taskID, limit)
 	if err != nil {
 		return nil, err

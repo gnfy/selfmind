@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 )
@@ -46,25 +45,26 @@ func TestExternalWatchManagementIsPersonScoped(t *testing.T) {
 func TestCancelExternalWatchParksOnlyAfterLastActiveWatch(t *testing.T) {
 	ctx := context.Background()
 	store, identity, task, run := newRecoveryFixture(t)
-	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "waiting_external", "waiting", nil); err != nil {
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_external"); err != nil {
 		t.Fatal(err)
 	}
 	first := createManagedWatch(t, store, identity, task, run, "first")
 	second := createManagedWatch(t, store, identity, task, run, "second")
+	timeline := NewWorkTimeline(store)
 
 	if cancelled, err := store.CancelExternalWatchForPerson(ctx, identity.TenantID, identity.PersonID, first.ID); err != nil || !cancelled {
 		t.Fatalf("first cancel = %v err=%v", cancelled, err)
 	}
-	current, err := store.GetTask(ctx, identity.TenantID, task.ID)
-	if err != nil || current.Status != "waiting_external" {
-		t.Fatalf("task after first cancel = %+v err=%v", current, err)
+	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil || len(attention) != 1 || attention[0].Activity != ThreadActivityMonitoring {
+		t.Fatalf("attention after first cancel = %+v err=%v", attention, err)
 	}
 	if cancelled, err := store.CancelExternalWatchForPerson(ctx, identity.TenantID, identity.PersonID, second.ID); err != nil || !cancelled {
 		t.Fatalf("second cancel = %v err=%v", cancelled, err)
 	}
-	current, err = store.GetTask(ctx, identity.TenantID, task.ID)
-	if err != nil || current.Status != "waiting_user" || !strings.Contains(current.BlockedReason, "watcher cancelled") {
-		t.Fatalf("task after last cancel = %+v err=%v", current, err)
+	attention, err = timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil || len(attention) != 1 || attention[0].Activity != ThreadActivityResumable || attention[0].RunID != run.ID {
+		t.Fatalf("cancelled watchers must leave the exact run resumable: %+v err=%v", attention, err)
 	}
 	stored, err := store.GetExternalWatch(ctx, identity.TenantID, second.ID)
 	if err != nil || stored == nil || stored.Status != ExternalWatchCancelled || !stored.Finalized || !stored.Notified {

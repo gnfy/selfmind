@@ -41,69 +41,85 @@ func TestWorkspaceOrdinalResolvesListedOrder(t *testing.T) {
 	}
 
 	// The rendered list and the resolver must agree on who number 2 is.
-	out := controlReply(t, daemon, "/workspaces")
+	out := controlReply(t, daemon, "/ws")
 	if !strings.Contains(out, "2. "+listed[1].Name+" ("+listed[1].ID+")") {
-		t.Fatalf("/workspaces numbering disagrees with display order:\n%s", out)
+		t.Fatalf("/ws numbering disagrees with display order:\n%s", out)
 	}
-	switched := controlReply(t, daemon, "/workspace 2")
+	switched := controlReply(t, daemon, "/ws 2")
 	if !strings.Contains(switched, "Current workspace: "+listed[1].Name) || !strings.Contains(switched, listed[1].ID) {
-		t.Fatalf("/workspace 2 selected the wrong workspace: %s", switched)
+		t.Fatalf("/ws 2 selected the wrong workspace: %s", switched)
 	}
-	current, err := store.CurrentWorkspace(context.Background(), identity.TenantID, identity.PersonID)
-	if err != nil || current == nil || current.ID != listed[1].ID {
-		t.Fatalf("current workspace not switched: %+v err=%v", current, err)
+	// Selecting for the session must NOT move the person's durable default:
+	// two terminals in different projects were overwriting one person-level
+	// value, so each one's list showed the other's choice as current while its
+	// own work ran elsewhere.
+	// Anchor the default somewhere else first, so "unchanged" is provable.
+	if err := store.SetCurrentWorkspace(context.Background(), identity.TenantID, identity.PersonID, listed[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _ = controlReply(t, daemon, "/ws 2"); true {
+		after, err := store.CurrentWorkspace(context.Background(), identity.TenantID, identity.PersonID)
+		if err != nil || after == nil || after.ID != listed[0].ID {
+			t.Fatalf("a session switch moved the durable default: %+v err=%v", after, err)
+		}
+	}
+
+	// The durable default has its own verb.
+	if out := controlReply(t, daemon, "/ws default 2"); !strings.Contains(out, "Default workspace") {
+		t.Fatalf("/ws default reply: %s", out)
+	}
+	after, err := store.CurrentWorkspace(context.Background(), identity.TenantID, identity.PersonID)
+	if err != nil || after == nil || after.ID != listed[1].ID {
+		t.Fatalf("default workspace not switched: %+v err=%v", after, err)
 	}
 
 	// Full ids keep working.
-	byID := controlReply(t, daemon, "/workspace "+listed[0].ID)
+	byID := controlReply(t, daemon, "/ws "+listed[0].ID)
 	if !strings.Contains(byID, "Current workspace: "+listed[0].Name) {
-		t.Fatalf("/workspace <id> broke: %s", byID)
+		t.Fatalf("/ws <id> broke: %s", byID)
 	}
 
 	// Out-of-range ordinal is a reference mistake pointing back at the list.
-	if out := controlReply(t, daemon, "/workspace 5"); !strings.Contains(out, "No workspace number 5; 2 listed") {
+	if out := controlReply(t, daemon, "/ws 5"); !strings.Contains(out, "No workspace number 5; 2 listed") {
 		t.Fatalf("out-of-range reply: %s", out)
 	}
-	if out := controlReply(t, daemon, "/workspace ws_nope"); !strings.Contains(out, "Workspace not found") {
+	if out := controlReply(t, daemon, "/ws ws_nope"); !strings.Contains(out, "Workspace not found") {
 		t.Fatalf("unknown id reply: %s", out)
 	}
 }
 
-// TestWorkspaceUnifiedVerbAndAlias: /workspace, /workspaces, and /ws behave
-// identically — bare lists, an argument selects. /ws is the short alias.
-func TestWorkspaceUnifiedVerbAndAlias(t *testing.T) {
+// TestWorkspaceHasExactlyOneVerb: /ws is the only workspace command. It used to
+// have three interchangeable spellings (/workspace, /workspaces, /ws); three
+// names for one thing is something to read, remember, and keep in sync, and the
+// retired spellings must answer as unknown rather than silently working.
+func TestWorkspaceHasExactlyOneVerb(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)
 	seedWorkspace(t, store, identity, "alpha")
 	seedWorkspace(t, store, identity, "beta")
 
-	// Bare forms all list, and list the same set.
-	list := controlReply(t, daemon, "/workspaces")
-	for _, bare := range []string{"/workspace", "/ws"} {
-		if got := controlReply(t, daemon, bare); got != list {
-			t.Fatalf("%q must list identically to /workspaces:\n got: %s\nwant: %s", bare, got, list)
+	list := controlReply(t, daemon, "/ws")
+	if !strings.Contains(list, "alpha") || !strings.Contains(list, "beta") {
+		t.Fatalf("bare /ws must list workspaces:\n%s", list)
+	}
+	for _, retired := range []string{"/workspace", "/workspaces", "/workspace 2"} {
+		if got := controlReply(t, daemon, retired); !strings.Contains(got, "Unknown command") {
+			t.Fatalf("%q must be retired, got: %s", retired, got)
 		}
 	}
 
-	// Resolve #2 against the actual display order (order = resolution order).
 	listed, err := daemon.listWorkspacesForDisplay(context.Background(), identity)
 	if err != nil || len(listed) != 2 {
 		t.Fatalf("want 2 workspaces: %v err=%v", listed, err)
 	}
-	second := listed[1]
-
-	// /ws <n> selects exactly like /workspace <n>, and sets current workspace.
 	switched := controlReply(t, daemon, "/ws 2")
-	if !strings.Contains(switched, "Current workspace: "+second.Name) || !strings.Contains(switched, second.ID) {
+	if !strings.Contains(switched, "Current workspace: "+listed[1].Name) {
 		t.Fatalf("/ws 2 selected the wrong workspace: %s", switched)
 	}
-	current, err := store.CurrentWorkspace(context.Background(), identity.TenantID, identity.PersonID)
-	if err != nil || current == nil || current.ID != second.ID {
-		t.Fatalf("/ws 2 did not switch current workspace: %+v err=%v", current, err)
-	}
-
-	// /ws <id> also selects.
-	if byID := controlReply(t, daemon, "/ws "+second.ID); !strings.Contains(byID, "Current workspace: "+second.Name) {
-		t.Fatalf("/ws <id> broke: %s", byID)
+	// The listing distinguishes the session from the durable default, so two
+	// terminals in different projects cannot present each other's choice as
+	// their own.
+	if out := controlReply(t, daemon, "/ws"); !strings.Contains(out, "← ") {
+		t.Fatalf("the listing must mark where this session is:\n%s", out)
 	}
 }
 

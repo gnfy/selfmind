@@ -101,9 +101,9 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
 `turn_choices.go`, and `continue_resolver.go`.
 
 > **Landed (2026-07-06, Work Timeline P1–P3; revised 2026-08-31):**
-> context ownership lives on the person-level work spine plus the parent-run
+> context ownership lives on the person-level work spine plus the resumed-run
 > slice; `task` is a work label, every root run owns a fresh one, and
-> `child.parent_run_id` is the only continuation authority.
+> `resumes_run_id` is the only continuation authority.
 > `docs/work-timeline.md` is the canonical description (mandatory reading
 > before changing this contract); the rules below are the live behavior.
 
@@ -120,23 +120,34 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
    asking run, the answer and its durable `clarify_id` queue edge commit in one
    transaction and the child claims that exact origin; terminal or already
    claimed origins are expired instead of falling back to another question.
-3. **Natural-language run resolution is agent-first and person-scoped.** The
-   gateway ranks active/unclaimed runs, exact Task References, full local FTS
-   work history, and a recent fallback, then sends at most eight bounded cards
-   to `fast_classifier`. The call has a six-second total deadline, disabled
-   thinking, and at most one retry inside that same budget. The typed result is
-   NEW, OBSERVE, STEER, RESUME, or CLARIFY. The gateway re-reads ownership and
-   status before applying it; timeout, provider failure, invalid JSON, stale
-   state, or a genuine tie creates no task/run and returns a durable choice.
-   OBSERVE returns deterministic run/handoff/plan progress without a model run.
-   The one supported compound result, OBSERVE+NEW, carries that deterministic
-   status as prompt-only data into a fresh turn without rewriting channel
-   history. An explicit request to send an active run's final result to the
-   current endpoint may retarget only that authenticated bound IM endpoint.
-   In default `safe` mode historical RESUME still requires the choice; `full`
-   mode may apply a clear revalidated RESUME. The chosen parent is claimed
-   ATOMICALLY inside child-run creation (`task_runs.parent_run_id`, unique
-   partial index; a lost race reports "already claimed" and creates nothing).
+3. **Natural-language run resolution is Main-owned and person-scoped.** While a
+   Run is active, user-originated CLI or IM language is persisted as steer and
+   acknowledged with current status before the same Main receives it at a safe
+   checkpoint. Main may apply related guidance to current work, queue an
+   independent request, or queue an exact historical continuation without
+   changing the active execution domain. While idle, ordinary language first
+   starts one normal audited Main Run. Main can search complete retained
+   structured history with `work_search`, inspect an exact Run with
+   `work_inspect`, and record an advisory OBSERVE/RESUME relationship with
+   `work_select`. The gateway re-reads person ownership, resumability, scope,
+   and effect boundaries before committing it. OBSERVE/reference interactions
+   remain auditable but are projected out of ordinary task lists. A validated
+   RESUME whose target shares the interaction Run's execution domain (same
+   workspace, identical execution roots), has no unfinished loop checkpoint,
+   and arrives before the interaction has produced any effect is claimed
+   atomically at `work_select` time: the interaction Run is re-pointed onto the
+   parent's Thread, the parent's plan is restored as a durable `plan.updated`
+   event, and the parent's bounded resume context is returned to Main as the
+   tool result, so the work continues in the same turn (one Main Run, no
+   queue). A workspace, execution-root, or checkpoint mismatch still transfers
+   to a freshly created, correctly scoped exact-parent child after the
+   interpretation Run finishes, because execution scope never changes in
+   place. One pre-effect correction re-points a same-domain claim
+   (`RetargetInteractionContinuation`) and is retained as an audit edge, while
+   post-effect correction stops and asks. `semantic_recall`
+   is optional search enrichment and may fail without blocking the turn;
+   `fast_classifier` is not consulted. Exact IDs, structured reply edges, and
+   standalone controls remain model-free.
 4. **Resume context injection** (`withResumeContext`): the turn is prefixed
    with a bounded `[SelfMind resume context]` block selected from the PARENT
    RUN — its finalization handoff, its events, its file manifest, its plan —
@@ -162,6 +173,31 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
    agent-bound message (a one-shot pin, consumed on use) and is the only way
    to reopen an ARCHIVED label (`/task <id> archive` shelves one)
    (`internal/gateway/httpapi` `resolveTask`).
+
+### Main-turn continuity implementation
+
+`docs/plans/main-turn-work-continuity.md` owns rule 3's implementation and
+operational evidence. Durable active steer, one idle Main turn, progressive
+work-history tools, OBSERVE projection, validated continuation commits, and
+explicit delivery override are the current default:
+
+- user-originated natural language durably steers an active Run on both CLI and
+  IM; the same Main decides whether to update current work or queue independent
+  work at a safe checkpoint;
+- idle natural language first creates an ordinary audited Main Run with a
+  bounded work-spine tail and structured hints, then uses person-scoped
+  `work_search` and `work_inspect` when more history is needed;
+- local structured/FTS search is the reliable base, while `semantic_recall` is
+  optional query expansion and cannot block or authorize a continuation;
+- a validated same-domain continuation is claimed in the same turn before any
+  effect and durably restores the parent's live plan; any other domain
+  transfers to a correctly scoped exact-parent child that inherits that plan
+  before Main starts;
+- active progress questions receive an immediate deterministic status at the
+  asking endpoint, while the final result remains at the origin unless the user
+  explicitly selects another bound endpoint through a server-issued steer.
+
+No adapter may infer these decisions independently of the gateway.
 
 Account binding: `POST /v1/accounts/bind` attaches a platform account to an
 existing person. `/id` shows the current tenant/person/account resolution.

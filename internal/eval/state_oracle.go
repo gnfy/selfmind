@@ -17,6 +17,7 @@ import (
 // the way it can game its own narration (control.db rows / real files / memory).
 type WorldState struct {
 	Task          *control.Task
+	Run           *control.Run
 	Handoff       *control.Handoff
 	Events        []control.Event
 	Artifacts     []control.Artifact
@@ -24,12 +25,13 @@ type WorldState struct {
 	Facts         map[string][]memory.Fact // keyed by target
 	WorkspaceRoot string
 	subjectTaskID string
+	subjectRunID  string
 }
 
 // CollectWorldState pulls the post-run state once so predicates evaluate
 // against an in-memory snapshot and can report the actual value on failure.
-func CollectWorldState(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, subjectTaskID, workspaceRoot string) WorldState {
-	w := WorldState{WorkspaceRoot: workspaceRoot, subjectTaskID: subjectTaskID, Facts: map[string][]memory.Fact{}}
+func CollectWorldState(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, subjectTaskID, subjectRunID, workspaceRoot string) WorldState {
+	w := WorldState{WorkspaceRoot: workspaceRoot, subjectTaskID: subjectTaskID, subjectRunID: subjectRunID, Facts: map[string][]memory.Fact{}}
 	if store == nil || identity == nil {
 		return w
 	}
@@ -38,6 +40,14 @@ func CollectWorldState(ctx context.Context, store *control.Store, mem *memory.Me
 		w.Handoff, _ = store.LatestHandoff(ctx, subjectTaskID)
 		w.Events, _ = store.ListTaskEvents(ctx, subjectTaskID, 200)
 		w.Artifacts, _ = store.ListTaskArtifacts(ctx, subjectTaskID, 50)
+	}
+	if subjectRunID != "" {
+		w.Run, _ = store.GetRun(ctx, identity.TenantID, subjectRunID)
+	} else if subjectTaskID != "" {
+		if runs, err := store.ListTaskRuns(ctx, identity.TenantID, subjectTaskID, 1); err == nil && len(runs) > 0 {
+			w.Run = &runs[0]
+			w.subjectRunID = runs[0].ID
+		}
 	}
 	w.Approvals, _ = store.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "", 50)
 	if mem != nil {
@@ -102,8 +112,10 @@ func dispatchPredicate(p StatePredicate, w WorldState) (bool, string) {
 	case "approval", "approvals":
 		return evalCount(p, countApprovals(w.Approvals, p.Status))
 	case "run":
-		// Run-level checks resolve against the subject task's status proxy.
-		return evalStringValue(p, taskStatusOrEmpty(w.Task))
+		if w.Run == nil {
+			return false, "no subject run found"
+		}
+		return evalFieldedObject(p, runStringFields(w.Run), nil)
 	case "file":
 		return evalFile(p, w.WorkspaceRoot)
 	case "memory":
@@ -123,6 +135,8 @@ func taskStringFields(t *control.Task) map[string]string {
 		"workspace_id":    t.WorkspaceID,
 		"last_channel":    t.LastChannel,
 		"title":           t.Title,
+		"kind":            t.Kind,
+		"visibility":      t.Visibility,
 	}
 }
 func taskListFields(t *control.Task) map[string][]string {
@@ -139,11 +153,14 @@ func handoffListFields(h *control.Handoff) map[string][]string {
 		"risks":         h.Risks,
 	}
 }
-func taskStatusOrEmpty(t *control.Task) string {
-	if t == nil {
-		return ""
+func runStringFields(r *control.Run) map[string]string {
+	return map[string]string{
+		"status":         r.Status,
+		"thread_id":      r.TaskID,
+		"resumes_run_id": r.ResumesRunID,
+		"workspace_id":   r.WorkspaceID,
+		"input_summary":  r.InputSummary,
 	}
-	return t.Status
 }
 
 // ---- evaluators ----

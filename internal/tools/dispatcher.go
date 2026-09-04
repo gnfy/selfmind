@@ -13,19 +13,66 @@ import (
 )
 
 const (
-	// Keep the automatic cohort inert until the active plan's seven-day
-	// fingerprint baseline is reviewed. Explicitly deferred tool metadata still
-	// exercises the activation protocol; enabling the cohort is a reviewed code
-	// release, not a hidden runtime or user configuration switch.
-	deferredExternalRolloutEnabled = false
+	// Enabling the cohort is a reviewed code release, not a hidden runtime or
+	// user configuration switch. What it may contain is bounded by
+	// deferredReviewedCohort's own rule: a category a human reviewed, never a
+	// guess about which tools happen to be cold.
+	deferredRolloutEnabled = true
 )
 
-// deferredExternalReviewedCohort is populated only from a reviewed seven-day
-// usage report. Name hashing is deterministic but is not evidence that a tool
-// is cold; keeping that old selector behind a false flag merely deferred a
+// deferredReviewedCohort is populated only from a reviewed seven-day usage
+// report. Name hashing is deterministic but is not evidence that a tool is
+// cold; keeping that old selector behind a false flag merely deferred a
 // production regression until someone enabled it. An empty allowlist means no
 // automatic deferral even if the rollout gate is accidentally flipped.
-var deferredExternalReviewedCohort = map[string]struct{}{}
+//
+// Origin is deliberately NOT a filter here. Built-in tools dominate the
+// catalogue's schema cost, so restricting deferral to external tools capped the
+// mechanism below the problem it exists to solve. Eligibility is instead the
+// same for every origin: the tool is currently direct, and a human reviewed
+// real usage evidence for it. An invalid or quarantined built-in still fails
+// startup, so deferral never becomes a way to hide a broken built-in.
+var deferredReviewedCohort = map[string]struct{}{
+	// Skill authoring and catalog management. Authoring a Skill is an occasional
+	// deliberate act, and the runtime does not discover Skills through these
+	// tools: the catalog is injected into the prompt on its own. Measured 5,679
+	// of 37,658 provider-facing schema bytes — the single largest block in the
+	// catalogue. skill_lifecycle_manage is absent on purpose: it is already
+	// hidden, so it never reaches the model surface and costs nothing here.
+	"skill_manage":  {},
+	"skill_bundle":  {},
+	"skill_catalog": {},
+	"skills_list":   {},
+	"skill_view":    {},
+
+	// Media. Structurally tied to an input type most turns never carry.
+	"text_to_speech": {},
+	"vision_analyze": {},
+
+	// Rare execution and coordination shapes. Ordinary work reaches the shell
+	// through terminal; these are separate modes, not fallbacks for it.
+	"execute_code":  {},
+	"delegate_task": {},
+	"process":       {},
+
+	// Web search only. web_extract stays direct: fetching a known URL is an
+	// ordinary follow-up, and it is the half that gets used.
+	"web_search": {},
+}
+
+// Deliberately NOT deferred, so the reasoning survives the next review:
+//
+//   - clarify, request_permissions: asking the person is a core capability and
+//     a safety valve. Rarity is the point, not evidence of coldness.
+//   - skill_select, skill_fallback, skill_invocation_resolve: the runtime Skill
+//     activation path, reached mid-turn.
+//   - tool_output_view: a large tool result tells the model to read it back
+//     immediately; a discovery round trip there is a dead end.
+//   - write_file: a core file operation that patch merely covers more often.
+//   - session_search, work_search, work_inspect, work_select: retrieval and
+//     continuity, which is how a turn finds the work it belongs to.
+//   - queue_user_input, set_delivery_target: steering, which arrives unbidden.
+//   - tool_search: the discovery path itself.
 
 // Registry 是全局工具注册表
 type Registry struct {
@@ -171,7 +218,7 @@ func (r *Registry) ToolDefinitions() []map[string]interface{} {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	exposures := r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)
+	exposures := r.effectiveToolExposuresLocked(deferredRolloutEnabled)
 	for _, name := range names {
 		compiled, ok := r.schemas[name]
 		if !ok || compiled.Report.Status == ToolSchemaQuarantined {
@@ -215,10 +262,10 @@ func (r *Registry) LookupToolExposure(name string) (ToolExposure, bool) {
 	}
 	// While the automatic cohort is code-gated off, a tool's own metadata is the
 	// whole answer, so the common path allocates nothing.
-	if !deferredExternalRolloutEnabled {
+	if !deferredRolloutEnabled {
 		return ToolMetadataFor(tool).Exposure, true
 	}
-	return r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)[name], true
+	return r.effectiveToolExposuresLocked(deferredRolloutEnabled)[name], true
 }
 
 // EffectiveToolExposure returns the catalogue policy seen by the model.
@@ -230,7 +277,7 @@ func (r *Registry) EffectiveToolExposure(name string) ToolExposure {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)[strings.TrimSpace(name)]
+	return r.effectiveToolExposuresLocked(deferredRolloutEnabled)[strings.TrimSpace(name)]
 }
 
 func (r *Registry) effectiveToolExposuresLocked(automaticCohort bool) map[string]ToolExposure {
@@ -242,9 +289,8 @@ func (r *Registry) effectiveToolExposuresLocked(automaticCohort bool) map[string
 	if !automaticCohort {
 		return exposures
 	}
-	for name := range deferredExternalReviewedCohort {
-		tool, ok := r.tools[name]
-		if !ok || exposures[name] != ToolExposureDirect || executionPolicyForTool(tool).Origin != ToolSchemaOriginExternal {
+	for name := range deferredReviewedCohort {
+		if _, ok := r.tools[name]; !ok || exposures[name] != ToolExposureDirect {
 			continue
 		}
 		exposures[name] = ToolExposureDeferred
@@ -283,7 +329,7 @@ func (r *Registry) ToolSchemaReport() []ToolSchemaReport {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	reports := make([]ToolSchemaReport, 0, len(r.schemas))
-	exposures := r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)
+	exposures := r.effectiveToolExposuresLocked(deferredRolloutEnabled)
 	for _, compiled := range r.schemas {
 		report := compiled.Report
 		report.Exposure = exposures[report.Name]

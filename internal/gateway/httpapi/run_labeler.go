@@ -191,7 +191,6 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 		EffectKey:          attach.effectKey,
 	})
 	if err == nil {
-		c.recordTaskResolution(ctx, identity, run, api.MessageRequest{Content: userInput}, task, attach, task.ID, "unverified", false)
 		if c.srv.SelfEvolution.Enabled {
 			if _, _, profileErr := c.srv.Control.MaterializeWorkflowProfile(context.WithoutCancel(ctx), identity.TenantID, run.ID, c.srv.SelfEvolution); profileErr != nil {
 				log.Warn("workflow profile materialization failed", "run_id", run.ID, "error", profileErr)
@@ -279,12 +278,11 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 	if d.PostRunAnalyzer == nil {
 		return nil
 	}
-	// Post-run maintenance is memory and reference-hint work only
-	// (simplification P2): task routing is gone — every root run owns its
-	// task and child runs inherit through the parent edge, so there is no
-	// wrong grouping left for a model to repair.
+	// Post-run maintenance is memory work only. Task routing is gone, and so
+	// are learned references: they existed to address a Task, so removing Task
+	// left them with no target — and they had never resolved one in practice.
 	durableEligible := postRunMemoryEligible(userInput, outcome)
-	if !durableEligible && !d.postRunReferenceEligible(ctx, identity, task, userInput) {
+	if !durableEligible {
 		_ = d.Control.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "run is not eligible for post-run maintenance")
 		return nil
 	}
@@ -305,23 +303,6 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 			PromptSnapshotHash: strings.TrimSpace(promptHash),
 		},
 	}
-}
-
-func (d *Server) postRunReferenceEligible(ctx context.Context, identity *control.IdentityContext, task *control.Task, userInput string) bool {
-	if d == nil || d.Control == nil || identity == nil || task == nil || strings.TrimSpace(userInput) == "" {
-		return false
-	}
-	refs, err := d.Control.ListTaskReferencesForTask(ctx, identity.TenantID, identity.PersonID, task.ID, 20)
-	if err != nil {
-		return false
-	}
-	for _, ref := range refs {
-		if (ref.Status == control.TaskReferenceCandidate || ref.Status == control.TaskReferenceActive) &&
-			control.TaskReferenceAppearsInText(userInput, ref.RawValue) {
-			return true
-		}
-	}
-	return false
 }
 
 func (d *Server) analyzeClaimedPostRun(ctx context.Context, prepared *preparedPostRunAnalysis) {
@@ -382,13 +363,6 @@ func (d *Server) applyClaimedPostRun(ctx context.Context, prepared *preparedPost
 			"analyzer_version":  postRunAnalyzerVersion,
 			"migration_context": "task routing removed by simplification P2",
 		})
-	}
-	if err := d.applyTaskReferenceProposals(ctx, prepared, analysis); err != nil {
-		// References improve future routing and recall, but they are not part of
-		// the completed run's label transaction. Retrying after MOVE/NEW already
-		// ran could duplicate display governance, so this optional projection is
-		// deliberately fail-open and remains visible in logs.
-		log.Warn("gateway: task reference projection failed; preserving completed maintenance result", "run", req.RunID, "error", err)
 	}
 	_ = d.Control.CompleteMaintenanceJob(ctx, req.TenantID, req.RunID, postRunAnalyzerVersion, analysisResultHash(analysis))
 }

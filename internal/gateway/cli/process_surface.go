@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -33,6 +32,7 @@ type processEvent struct {
 	result      string
 	detail      string
 	err         error
+	effectState string
 	duration    float64
 	allowOrphan bool
 	reason      string
@@ -197,10 +197,11 @@ func (s *processSurface) completeTool(event processEvent) processEffects {
 		orphan := ChatMessage{
 			Role: "tool", ToolName: toolName, ToolCallID: event.toolCallID,
 			RunID: event.runID, Content: event.result, Duration: event.duration,
-			IsError: event.err != nil, Timestamp: time.Now(),
+			IsError:   event.err != nil && event.effectState != "not_dispatched",
+			IsSkipped: event.err != nil && event.effectState == "not_dispatched", Timestamp: time.Now(),
 		}
 		if event.err != nil {
-			orphan.Content = fmt.Sprintf("%s error: %v", toolName, event.err)
+			orphan.Content = event.err.Error()
 		}
 		return processEffects{commits: []ChatMessage{orphan}}
 	}
@@ -214,13 +215,14 @@ func (s *processSurface) completeTool(event processEvent) processEffects {
 	tool.IsRunning = false
 	tool.RunningDetail = ""
 	if event.err != nil {
-		errText := fmt.Sprintf("%s error: %v", tool.ToolName, event.err)
+		errText := event.err.Error()
 		if existing := strings.TrimSpace(tool.Content); existing != "" {
 			tool.Content = existing + "\n" + errText
 		} else {
 			tool.Content = errText
 		}
-		tool.IsError = true
+		tool.IsSkipped = event.effectState == "not_dispatched"
+		tool.IsError = !tool.IsSkipped
 	} else {
 		if strings.TrimSpace(event.result) != "" {
 			tool.Content = event.result

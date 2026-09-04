@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
@@ -69,7 +70,35 @@ func (d *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	digest.SessionWorkspace = d.digestSessionWorkspace(r.Context(), identity, r.URL.Query().Get("cwd"))
 	writeJSON(w, http.StatusOK, digest)
+}
+
+// digestSessionWorkspace resolves the workspace this session runs in and
+// reports whether trust is still an open question.
+//
+// The startup handshake is the only place trust can be asked once: control
+// commands are handled before the run pipeline would create the directory's
+// workspace, so before this the workspace did not exist yet at startup and
+// nothing ever asked. A person who declines is recorded, so it is asked once
+// and then never again.
+func (d *Server) digestSessionWorkspace(ctx context.Context, identity *control.IdentityContext, cwd string) *api.DigestWorkspace {
+	if d == nil || d.Control == nil || identity == nil {
+		return nil
+	}
+	ws := d.ensureSessionWorkspace(ctx, identity, api.MessageRequest{
+		Platform: "cli", Channel: "cli", ClientCWD: cwd,
+	})
+	if ws == nil {
+		return nil
+	}
+	trusted := ws.TrustLevel == executionenv.TrustTrusted
+	return &api.DigestWorkspace{
+		ID: ws.ID, Name: ws.Name, Path: ws.LocalPath, Trusted: trusted,
+		// Trusting is itself an answer; declining is recorded as the source so
+		// a "no" is not mistaken for "not asked yet".
+		TrustAsked: trusted || ws.TrustSource == WorkspaceTrustDeclined,
+	}
 }
 
 // buildDigest assembles the bounded attach digest for the requesting account.
@@ -115,19 +144,25 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 		}
 	}
 
-	// A durable blocker can honestly keep a task interrupted long after its run
-	// ended. Preserve that useful state, but do not mislabel it as a new event in
-	// the away window. Fresh disruptions already have the stronger event line,
-	// so suppress them from the older-unresolved section.
-	unresolved, err := d.Control.ListTasksByStatus(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted", api.RunStatusVerificationPartial}, maxDigestTasks*2)
+	// Older unresolved work is the derived Attention set: parked Runs that are
+	// still resumable and Runs that still hold a pending approval or question.
+	// Executing and monitoring Runs have their own sections. Fresh disruptions
+	// already have the stronger event line, so they are suppressed here rather
+	// than mislabelled as a new event in the away window.
+	attention, err := control.NewWorkTimeline(d.Control).Attention(ctx, identity.TenantID, identity.PersonID, maxDigestTasks*2)
 	if err != nil {
 		return out, err
 	}
-	for _, task := range unresolved {
-		if _, recent := recentDisruptions[task.ID]; recent {
+	for _, item := range attention {
+		switch item.Activity {
+		case control.ThreadActivityResumable, control.ThreadActivityNeedsAttention:
+		default:
 			continue
 		}
-		out.UnresolvedTasks = append(out.UnresolvedTasks, digestTask(task))
+		if _, recent := recentDisruptions[item.Thread.ID]; recent {
+			continue
+		}
+		out.UnresolvedTasks = append(out.UnresolvedTasks, digestAttentionItem(item))
 		if len(out.UnresolvedTasks) == maxDigestTasks {
 			break
 		}
@@ -206,6 +241,7 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 			// recent progress event, so re-attach shows where the run stands,
 			// bounded to a glanceable few lines.
 			run.PlanSteps = digestPlanLines(d.latestPlanForTask(ctx, active.TaskID))
+			run.PlanJSON = d.latestPlanPayloadForTask(ctx, active.TaskID)
 			run.LatestActivity = d.latestActivityForTask(ctx, active.TaskID)
 		}
 		out.ActiveRun = run
@@ -326,12 +362,14 @@ func (d *Server) latestActivityForTask(ctx context.Context, taskID string) strin
 	return ""
 }
 
-func digestTask(task control.Task) api.DigestTask {
+// digestAttentionItem renders one exact Attention Run as a digest task line.
+// Status is the Run's own parked status, the vocabulary /resume acts on.
+func digestAttentionItem(item control.AttentionItem) api.DigestTask {
 	return api.DigestTask{
-		ID:      task.ID,
-		Title:   task.Title,
-		Status:  task.Status,
-		Summary: truncate(toOneLine(task.CurrentSummary), digestSummaryChars),
+		ID:      item.Thread.ID,
+		Title:   item.Thread.Title,
+		Status:  item.RunStatus,
+		Summary: truncate(toOneLine(firstNonEmpty(item.Thread.Summary, item.RunSummary)), digestSummaryChars),
 	}
 }
 

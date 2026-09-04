@@ -214,9 +214,13 @@ func TestSyncRunSurvivesClientDisconnect(t *testing.T) {
 		runs, err := store.ListRunningRuns(ctx, identity.TenantID, []string{identity.PersonID})
 		return err == nil && len(runs) == 0
 	}, "run did not reach a terminal status")
-	task, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+	threads, err := control.NewWorkTimeline(store).Search(ctx, identity.TenantID, identity.PersonID, "slow thing", 10)
+	if err != nil || len(threads) != 1 {
+		t.Fatalf("completed interaction history: %+v %v", threads, err)
+	}
+	task, err := store.GetTask(ctx, identity.TenantID, threads[0].ID)
 	if err != nil || task == nil {
-		t.Fatalf("current task: %v %v", task, err)
+		t.Fatalf("completed interaction projection: %+v %v", task, err)
 	}
 	switch task.Status {
 	case "interrupted", "cancelled", "failed", "blocked", "running":
@@ -309,12 +313,12 @@ func TestStopStillCancelsDetachedRun(t *testing.T) {
 	if got.resp.Turn == nil || got.resp.Turn.Status != "cancelled" {
 		t.Fatalf("turn = %+v, want cancelled", got.resp.Turn)
 	}
-	task, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if err != nil || task == nil {
-		t.Fatalf("current task: %v %v", task, err)
+	if got.resp.Run == nil {
+		t.Fatalf("cancelled response lost its Run: %+v", got.resp)
 	}
-	if task.Status != "cancelled" {
-		t.Fatalf("task status = %q, want cancelled", task.Status)
+	storedRun, err := store.GetRun(ctx, identity.TenantID, got.resp.Run.ID)
+	if err != nil || storedRun == nil || storedRun.Status != "cancelled" {
+		t.Fatalf("authoritative run = %+v err=%v, want cancelled", storedRun, err)
 	}
 	runs, err := store.ListRunningRuns(ctx, identity.TenantID, []string{identity.PersonID})
 	if err != nil || len(runs) != 0 {

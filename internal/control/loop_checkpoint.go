@@ -26,7 +26,7 @@ type LoopCheckpointRecord struct {
 func (s *Store) SaveLoopCheckpoint(ctx context.Context, record LoopCheckpointRecord) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx, `INSERT INTO loop_checkpoints
-		(run_id, tenant_id, person_id, task_id, contract_version, recovery_json, iteration, outcome, detail, snapshot_json, updated_at)
+		(run_id, tenant_id, person_id, thread_id, contract_version, recovery_json, iteration, outcome, detail, snapshot_json, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(run_id) DO UPDATE SET
 			contract_version = excluded.contract_version,
@@ -49,31 +49,11 @@ func (s *Store) IncompleteLoopCheckpointForRun(ctx context.Context, tenantID, ru
 	if runID == "" {
 		return nil, nil
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT tenant_id, person_id, task_id, run_id,
+	row := s.db.QueryRowContext(ctx, `SELECT tenant_id, person_id, thread_id, run_id,
 		contract_version, recovery_json, iteration, outcome, detail, snapshot_json, updated_at
 		FROM loop_checkpoints
 		WHERE tenant_id = ? AND run_id = ? AND outcome <> 'complete_turn'
 		LIMIT 1`, normalizeTenant(tenantID), runID)
-	var record LoopCheckpointRecord
-	var updated int64
-	if err := row.Scan(&record.TenantID, &record.PersonID, &record.TaskID, &record.RunID,
-		&record.ContractVersion, &record.Recovery, &record.Iteration, &record.Outcome, &record.Detail, &record.Snapshot, &updated); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-	record.UpdatedAt = time.Unix(updated, 0)
-	return &record, nil
-}
-
-func (s *Store) LatestIncompleteLoopCheckpoint(ctx context.Context, tenantID, taskID, excludeRunID string) (*LoopCheckpointRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT tenant_id, person_id, task_id, run_id,
-		contract_version, recovery_json, iteration, outcome, detail, snapshot_json, updated_at
-		FROM loop_checkpoints
-		WHERE tenant_id = ? AND task_id = ? AND run_id <> ?
-		  AND outcome <> 'complete_turn'
-		ORDER BY updated_at DESC, run_id DESC LIMIT 1`, normalizeTenant(tenantID), taskID, excludeRunID)
 	var record LoopCheckpointRecord
 	var updated int64
 	if err := row.Scan(&record.TenantID, &record.PersonID, &record.TaskID, &record.RunID,

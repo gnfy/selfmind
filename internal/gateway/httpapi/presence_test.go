@@ -86,7 +86,7 @@ func TestApprovalPushSkippedWhileCLIAttached(t *testing.T) {
 	// simulate the beat directly.
 	daemon.touchPresence(ctx, identity)
 
-	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval, true)
 
 	if len(recorder.messages) != 0 {
 		t.Fatalf("attached CLI must suppress the IM approval push; got %+v", recorder.messages)
@@ -95,7 +95,7 @@ func TestApprovalPushSkippedWhileCLIAttached(t *testing.T) {
 	// Once presence lapses (terminal closed / crashed), the same approval
 	// push goes out to the preferred IM endpoint.
 	daemon.presenceTracker().now = func() time.Time { return time.Now().Add(presenceTTL + time.Second) }
-	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval, true)
 	if len(recorder.messages) != 1 || recorder.messages[0].Platform != "weixin" {
 		t.Fatalf("detached CLI must push to the preferred IM endpoint; got %+v", recorder.messages)
 	}
@@ -130,7 +130,7 @@ func TestCLIOriginSingleTargetWithTwoBoundIM(t *testing.T) {
 	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
 
 	coord := daemon.coordinator()
-	coord.notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval)
+	coord.notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval, true)
 	if len(recorder.messages) != 1 {
 		t.Fatalf("exactly ONE endpoint must receive the push, got %+v", recorder.messages)
 	}
@@ -148,7 +148,7 @@ func TestCLIOriginSingleTargetWithTwoBoundIM(t *testing.T) {
 	daemon.presenceTracker().now = func() time.Time { return time.Now().Add(presenceTTL + time.Second) }
 
 	recorder.messages = nil
-	coord.notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval)
+	coord.notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval, true)
 	if len(recorder.messages) != 1 || recorder.messages[0].Platform != "weixin" || recorder.messages[0].PlatformUserID != "wxid_123" {
 		t.Fatalf("after /notify weixin the push must switch to weixin/wxid_123 only, got %+v", recorder.messages)
 	}

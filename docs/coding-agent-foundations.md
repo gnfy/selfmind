@@ -43,7 +43,12 @@ state, select a genuinely different strategy, or finish with an actionable
 blocker. A plan step sets `verification_required` only when executable evidence
 is actually required by the user, repository instructions, or the nature of
 the change; optional verification remains reportable without making direct
-inspection tasks impossible to finish.
+inspection tasks impossible to finish. Plan guidance is evidence-driven in the
+same way: after a Run completes several distinct, successful, non-read-only
+tool actions with no durable plan, its optional plan guidance is escalated to
+the required wording for the next model step. That escalation reads the Run's
+own tool evidence, never the request text, and it stays guidance — no plan is
+fabricated and no completion is blocked.
 
 New Runs opt into a versioned recovery contract. A daemon or provider
 interruption with no external effect may enqueue one idempotent exact-parent

@@ -1,5 +1,5 @@
 id: reliability_direct_answer_outcome
-title: "A direct answer completes its run without closing the reusable label"
+title: "A direct answer settles its Run and keeps the Interaction unlisted"
 suite: reliability
 workspace: isolated
 channel: cli
@@ -22,7 +22,9 @@ expect:
 
 assert_state:
   - { on: events, type: "run.outcome", payload_contains: '"status":"done"', count_gte: 1 }
-  - { on: task, field: status, eq: "in_progress" }
+  - { on: run, field: status, eq: "done" }
+  - { on: task, field: kind, eq: "interaction" }
+  - { on: task, field: visibility, eq: "unlisted" }
 
 checks:
   no_mojibake: true

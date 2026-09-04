@@ -31,13 +31,14 @@ func (d *Server) handleRememberCommand(ctx context.Context, identity *control.Id
 	if memory.ClassifyTransientContent(content) == memory.TransientConfirmed {
 		return "That looks like transient run/build state, which never enters long-term memory. Task progress lives in the task's runs and handoffs; if you really need it verbatim, /memory pin <text> stores it under your explicit authority.", nil
 	}
+	if d.SkillStorage == nil {
+		return "", fmt.Errorf("memory asset storage is unavailable")
+	}
 	args := map[string]interface{}{
 		"action": "remember", "target": "user", "content": content,
 		"_tenant_id": memoryPartition(identity),
 	}
-	if d.SkillStorage != nil {
-		args = tools.WithSkillStorage(args, d.SkillStorage)
-	}
+	args = tools.WithSkillStorage(args, d.SkillStorage)
 	if _, err := tools.NewMemoryTool(d.Memory).Execute(args); err != nil {
 		return "", fmt.Errorf("save preference: %w", err)
 	}
@@ -66,13 +67,14 @@ func (d *Server) handleForgetCommand(ctx context.Context, identity *control.Iden
 	case 0:
 		return "No remembered memory matches " + fmt.Sprintf("%q", textutil.Truncate(needle, 80)) + ". /memory lists what is stored.", nil
 	case 1:
+		if d.SkillStorage == nil {
+			return "", fmt.Errorf("memory asset storage is unavailable")
+		}
 		target := matches[0]
 		args := map[string]interface{}{
 			"action": "forget", "ref": target.ID, "_tenant_id": partition,
 		}
-		if d.SkillStorage != nil {
-			args = tools.WithSkillStorage(args, d.SkillStorage)
-		}
+		args = tools.WithSkillStorage(args, d.SkillStorage)
 		if _, err := tools.NewMemoryTool(d.Memory).Execute(args); err != nil {
 			return "", fmt.Errorf("forget memory: %w", err)
 		}

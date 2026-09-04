@@ -61,6 +61,12 @@ func (m *uiModel) processRowBudget(width int) int {
 	if plan := m.activePlanBlock(width); plan != "" {
 		reserved += lipgloss.Height(plan)
 	}
+	// The progress line has its own reserved slot above the composer, so tool
+	// and process rows are budgeted around it. Reserving it here is what stops
+	// a tall plan or Composer from squeezing the animation out of the layout.
+	if activity := m.activityRowBlock(width); activity != "" {
+		reserved += lipgloss.Height(activity)
+	}
 	if m.approvalPrompt != nil {
 		reserved += lipgloss.Height(m.approvalPrompt.View(width))
 	}
@@ -69,12 +75,6 @@ func (m *uiModel) processRowBudget(width int) int {
 		reserved += lipgloss.Height(hint)
 	}
 	available := m.height - reserved
-	// The plan and a tall Composer may consume the measured process budget, but
-	// a provider-owned wait must still retain one activity row. At that boundary
-	// tool/process rows yield to the spinner instead of making the run look idle.
-	if available < 1 && m.waitingForModel && m.approvalPrompt == nil {
-		return 1
-	}
 	if available < 0 {
 		return 0
 	}
@@ -101,8 +101,10 @@ func (m *uiModel) composerGapHeight() int {
 	}
 	// The live plan and approval prompt already provide a clear visual boundary
 	// above the composer. Adding the generic spacer here would push useful
-	// content upward and make a multi-step plan jump as it changes height.
-	if strings.TrimSpace(m.activePlanJSON) != "" || m.approvalPrompt != nil {
+	// content upward and make a multi-step plan jump as it changes height. The
+	// progress row carries its own trailing blank for the same reason, so a
+	// second spacer would double the gap while a turn is running.
+	if strings.TrimSpace(m.activePlanJSON) != "" || m.approvalPrompt != nil || m.activityRowBlock(m.width) != "" {
 		return 0
 	}
 	inputH := 1

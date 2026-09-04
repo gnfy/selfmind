@@ -237,6 +237,12 @@ func (s *Store) ClaimPendingTurnChoice(ctx context.Context, tenantID, personID, 
 	return choice, selected, nil
 }
 
+// rowScanner is the shared read shape for a single row, satisfied by both
+// *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...interface{}) error
+}
+
 func scanPendingTurnChoice(row rowScanner) (*PendingTurnChoice, error) {
 	var choice PendingTurnChoice
 	var optionsJSON string
@@ -255,6 +261,29 @@ func scanPendingTurnChoice(row rowScanner) (*PendingTurnChoice, error) {
 		choice.ClaimedAt = &at
 	}
 	return &choice, nil
+}
+
+// LatestPendingTurnChoiceForChannel returns the newest live clarification on
+// the same channel without claiming it. The gateway uses its bounded request
+// snapshot only to let Main understand a natural-language correction such as
+// "that's not what I meant". Raw channel transcripts are never read here.
+func (s *Store) LatestPendingTurnChoiceForChannel(ctx context.Context, tenantID, personID, channel string, now time.Time) (*PendingTurnChoice, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(personID) == "" {
+		return nil, nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, account_id, channel, resolution_id,
+		request_json, options_json, status, chosen_key, created_at, expires_at, claimed_at
+		FROM pending_turn_choices
+		WHERE tenant_id = ? AND person_id = ? AND channel = ? AND status = ? AND expires_at > ?
+		ORDER BY created_at DESC LIMIT 1`, normalizeTenant(tenantID), strings.TrimSpace(personID), strings.TrimSpace(channel), TurnChoicePending, now.Unix())
+	choice, err := scanPendingTurnChoice(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return choice, err
 }
 
 type TurnResolutionRecord struct {

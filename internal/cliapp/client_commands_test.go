@@ -129,14 +129,17 @@ func TestSendRejectsInvalidMode(t *testing.T) {
 	}
 }
 
-func TestTaskCommandUsesShortLivedGatewayRequest(t *testing.T) {
-	app, recorded, stdout, _ := newSendTestApp(t, []string{"selfmind", "task", "task_12345678", "runs"})
+// TestSearchCommandUsesShortLivedGatewayRequest: history search is a
+// short-lived CLI call now, not a terminal-only affordance, so `selfmind
+// search` reaches the same gateway command every endpoint uses.
+func TestSearchCommandUsesShortLivedGatewayRequest(t *testing.T) {
+	app, recorded, stdout, _ := newSendTestApp(t, []string{"selfmind", "search", "aurora gate"})
 
 	handled, code := app.runGatewayClientIfRequested()
 	if !handled || code != 0 {
 		t.Fatalf("handled = %v, code = %d", handled, code)
 	}
-	if recorded.Content != "/task task_12345678 runs" {
+	if recorded.Content != "/search aurora gate" {
 		t.Fatalf("content = %q", recorded.Content)
 	}
 	if strings.TrimSpace(stdout.String()) != "ok" {
@@ -217,16 +220,35 @@ func TestExtractTaskResumeCommand(t *testing.T) {
 	}
 }
 
-func TestExtractTaskResumeCommandRequiresRef(t *testing.T) {
+// TestBareResumeIsTheAttentionListing: a bare `selfmind resume` is not a usage
+// error. It is the listing of what needs the person — the surface that
+// replaced `selfmind tasks` — so the interactive-pin path must decline it and
+// let the short-lived client command answer.
+func TestBareResumeIsTheAttentionListing(t *testing.T) {
 	stderr := &bytes.Buffer{}
 	app := &App{args: []string{"selfmind", "resume"}, stderr: stderr}
+	if handled, code := app.extractTaskResumeCommand(); handled || code != 0 {
+		t.Fatalf("bare resume must not be claimed by the pin path: handled=%v code=%d", handled, code)
+	}
+	if strings.TrimSpace(stderr.String()) != "" {
+		t.Fatalf("bare resume must not print a usage error: %q", stderr.String())
+	}
 
-	handled, code := app.extractTaskResumeCommand()
-	if !handled || code != 2 {
+	app2, recorded, _, _ := newSendTestApp(t, []string{"selfmind", "resume"})
+	if handled, code := app2.runGatewayClientIfRequested(); !handled || code != 0 {
 		t.Fatalf("handled = %v, code = %d", handled, code)
 	}
-	if !strings.Contains(stderr.String(), "usage: selfmind resume") {
-		t.Fatalf("stderr = %q", stderr.String())
+	if recorded.Content != "/resume" {
+		t.Fatalf("content = %q", recorded.Content)
+	}
+
+	// A reference still pins the interactive session to one exact run.
+	app3 := &App{args: []string{"selfmind", "resume", "run_123"}, stderr: &bytes.Buffer{}}
+	if handled, code := app3.extractTaskResumeCommand(); !handled || code != 0 {
+		t.Fatalf("a reference must be claimed by the pin path: handled=%v code=%d", handled, code)
+	}
+	if app3.resumeTaskRef != "run_123" {
+		t.Fatalf("resume ref = %q", app3.resumeTaskRef)
 	}
 }
 

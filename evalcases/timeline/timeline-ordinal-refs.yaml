@@ -1,19 +1,23 @@
 id: timeline_ordinal_refs
-title: "ordinal references: /task <n> and /resume <n> follow the /tasks card order"
+title: "ordinal references: the number a listing printed resolves that exact Run"
 suite: timeline
 workspace: "."
 channel: cli
 model_required: false
 
-# Control-command turns only — no model calls, so this case runs offline
-# without a cassette. The number printed by the /tasks card must resolve the
-# same task through /task <n> and /resume <n> (display order = resolution
-# order, same contract as approval ordinals), and the /resume reply must state
-# the workspace binding so the user can tell the resume worked.
+# Control-command turns only. Bare /resume is the numbered listing, and the
+# number it printed must continue that exact Run. The ordinal snapshot used to
+# live in the /tasks render, which made "continue number 1" depend on a listing
+# about labels rather than about runs.
+setup:
+  task:
+    title: "ordinal reference check"
+    parked_runs:
+      - input: "wait for exact resume"
+        status: waiting_user
+
 turns:
-  - input: "/new ordinal reference check"
-  - input: "/tasks"
-  - input: "/task 1"
+  - input: "/resume"
   - input: "/resume 1"
 
 expect:
@@ -21,10 +25,12 @@ expect:
   max_tool_calls: 0
   max_duration_seconds: 60
   contains:
-    - "Open tasks:"
-    - "Task: ordinal reference check"
-    - "Resumed task: ordinal reference check"
-    - "your next message"
+    - "Needs attention:"
+    - "wait for exact resume"
+    - "Selected run"
+    - "Your next message"
+  must_not_contain:
+    - "Unknown command"
 
 checks:
   no_mojibake: true

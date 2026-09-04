@@ -66,6 +66,10 @@ func (d *Server) blockMaintenanceProviderJob(ctx context.Context, identity *cont
 		message += "\n\n" + reason
 	}
 	message += "\n\nRun /diag or selfmind doctor after updating the provider."
+	// liveSurfaceInformed=true keeps this provider-health push on its existing
+	// routing. It is not one of the human-wait events, so the new rule does not
+	// apply; whether an attached CLI should still be pushed here is a separate
+	// question from the approval/clarify visibility fix.
 	d.coordinator().routePendingNotification(ctx, identity, run.Channel, delivery.Message{
 		TenantID: identity.TenantID,
 		PersonID: identity.PersonID,
@@ -73,6 +77,6 @@ func (d *Server) blockMaintenanceProviderJob(ctx context.Context, identity *cont
 		RunID:    run.ID,
 		Content:  message,
 		Kind:     "maintenance_health",
-	})
+	}, true)
 	_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, maintenanceBlockedNoticeSetting, strconv.FormatInt(time.Now().Unix(), 10))
 }

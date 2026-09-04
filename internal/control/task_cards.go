@@ -30,25 +30,27 @@ type TaskCard struct {
 }
 
 // ListTaskCards returns the person's most recently updated task cards, newest
-// first, excluding archived/cancelled tasks (abandoned work should not haunt
-// recall). Read-only and bounded: one JOIN query, limit capped at 50.
+// first, excluding archived tasks (abandoned work should not haunt recall).
+// Status is the Attention-derived Thread projection ('settled' when nothing is
+// executing, pending, or resumable). Read-only and bounded: one JOIN query,
+// limit capped at 50.
 func (s *Store) ListTaskCards(ctx context.Context, tenantID, personID string, limit int) ([]TaskCard, error) {
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT t.id, COALESCE(t.workspace_id, ''), t.title, t.status,
-		        COALESCE(t.current_summary, ''), t.updated_at,
+		`SELECT t.id, COALESCE(t.workspace_id, ''), t.title,
+		        `+threadDerivedStatusSQL(ThreadActivitySettled)+`,
+		        COALESCE(t.summary, ''), t.updated_at,
 		        COALESCE(h.summary, ''), COALESCE(h.changed_files_json, '[]')
-		 FROM tasks t
+		 FROM threads t
 		 LEFT JOIN task_handoffs h ON h.id = (
 		     SELECT id FROM task_handoffs
-		     WHERE task_id = t.id
+		     WHERE thread_id = t.id
 		     ORDER BY created_at DESC, rowid DESC LIMIT 1
 		 )
 		 WHERE t.tenant_id = ? AND t.person_id = ?
-		   AND COALESCE(t.visibility, 'visible') != 'hidden'
-		   AND t.status NOT IN ('archived', 'cancelled')
+		   AND COALESCE(t.visibility, 'listed') != 'archived'
 		 ORDER BY t.updated_at DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, limit)
 	if err != nil {

@@ -51,7 +51,7 @@ func TestEscrowRepushesApprovalAfterCLIDetaches(t *testing.T) {
 	// Approval raised while the CLI is attached: the initial push is suppressed
 	// and notified_at stays empty.
 	daemon.touchPresence(ctx, identity)
-	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "session-uuid", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "session-uuid", approval, true)
 	if len(recorder.messages) != 0 {
 		t.Fatalf("attached CLI must suppress the initial push, got %+v", recorder.messages)
 	}
@@ -115,7 +115,7 @@ func TestPhoneFirstEscrowBypassesT1AfterNoDurableInitialAttempt(t *testing.T) {
 	// Model the narrow window where the phone-first request exists before a
 	// delivery service/route can create its durable outbox row.
 	daemon.Delivery = nil
-	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval, true)
 
 	recorder := &recordingSender{}
 	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
@@ -144,7 +144,7 @@ func TestPhoneFirstEscrowDoesNotBlindlyReplaySentUnconfirmed(t *testing.T) {
 	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
 	daemon.touchPresence(ctx, identity)
 
-	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval, true)
 	if len(recorder.messages) != 1 {
 		t.Fatalf("phone-first initial attempt = %d, want 1", len(recorder.messages))
 	}

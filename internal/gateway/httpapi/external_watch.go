@@ -660,8 +660,8 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 	watch.LastOutput = output
 	watch.LastError = lastError
 	summary, nextSteps := externalWatchOutcome(watch, status, output, lastError)
-	if err := d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps); err != nil {
-		log.Warn("external watch task update failed", "watch_id", watch.ID, "error", err)
+	if err := d.Control.UpdateThreadSummary(ctx, watch.TenantID, watch.TaskID, summary, nextSteps); err != nil {
+		log.Warn("external watch thread summary update failed", "watch_id", watch.ID, "error", err)
 		return
 	}
 	payload, _ := json.Marshal(map[string]interface{}{
@@ -684,6 +684,27 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 	}); err != nil {
 		log.Warn("external watch event append failed", "watch_id", watch.ID, "error", err)
 		return
+	}
+
+	// A watcher that concluded WITHOUT observing its target leaves the Run it
+	// handed off with nothing able to wake it: the watcher is terminal, so no
+	// monitoring signal remains, and `waiting_external` is not a resumable
+	// status, so the Run is in no Attention set either. Park it as blocked as
+	// soon as the verdict is durable rather than waiting for a finalization
+	// FAILURE: the finalization run queues behind the person's active work and
+	// can sit there for hours, and during that window the person's own work
+	// must still be visible as theirs to resolve. A successful verdict needs no
+	// park — its finalization reports the observed result — and a user
+	// cancellation is already re-parked as waiting_user by
+	// CancelExternalWatchForPerson.
+	switch status {
+	case control.ExternalWatchSucceeded, control.ExternalWatchCancelled:
+	default:
+		if parked, err := d.Control.MarkExternalWatchRunBlocked(ctx, watch.TenantID, watch.RunID, summary); err != nil {
+			log.Warn("external watch run park failed", "watch_id", watch.ID, "run_id", watch.RunID, "error", err)
+		} else if parked {
+			log.Info("external watch run parked as blocked", "watch_id", watch.ID, "run_id", watch.RunID, "status", status)
+		}
 	}
 
 	origin := d.externalWatchOriginIdentity(ctx, watch)
@@ -716,6 +737,8 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 		return
 	}
 	origin := d.externalWatchOriginIdentity(ctx, watch)
+	// liveSurfaceInformed=true: a watcher's own events reach the attached TUI on
+	// their normal path, so the established suppression still applies here.
 	handled := d.coordinator().routePendingNotification(ctx, origin, watch.Channel, delivery.Message{
 		TenantID: watch.TenantID,
 		PersonID: watch.PersonID,
@@ -723,7 +746,7 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 		RunID:    watch.RunID,
 		Content:  externalWatchNotice(watch, "waiting_finalization"),
 		Kind:     "external_watch",
-	})
+	}, true)
 	if !handled && origin != nil && origin.Platform == "cli" &&
 		d.presenceTracker().IsAttached(watch.PersonID, "cli") {
 		// external_watch.completed was committed before this method and is
@@ -790,6 +813,8 @@ func (d *Server) externalWatchOriginIdentity(ctx context.Context, watch control.
 // the ordinary task_queue path, so
 // it respects the one-active-run rule and boot recovery. Its stable
 // idempotency key makes crash-recovery replays converge on the same queue row.
+// The row replies to the watcher Run while that Run is still parked on its
+// watcher, so the drained finalization becomes that Run's exact child.
 func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch control.ExternalWatch, origin *control.IdentityContext, summary string) error {
 	content := externalWatchFinalizationContent(watch, summary)
 	_, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
@@ -800,6 +825,7 @@ func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch con
 		PlatformUserID: origin.PlatformUserID,
 		Content:        content,
 		TaskID:         watch.TaskID,
+		ReplyToRunID:   d.externalWatchFinalizationTarget(ctx, watch),
 		Class:          control.QueueClassFinalization,
 		// Stable per-verdict key: a crash-recovery replay of the SAME verdict
 		// is one row; a revised verdict earns one fresh finalization run.
@@ -810,6 +836,27 @@ func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch con
 	}
 	d.coordinator().drainQueue(origin)
 	return nil
+}
+
+// externalWatchFinalizationTarget names the watcher Run the finalization
+// continues as its exact child: the Run that registered the watch, while it is
+// still parked as waiting_external for this person and thread. The drain
+// claims it atomically (validateResumeClaimTx admits a waiting_external parent
+// once its watchers concluded). A Run that already moved on leaves the row
+// bound to the Thread only, so a stale exact binding can never make the
+// finalization unroutable.
+func (d *Server) externalWatchFinalizationTarget(ctx context.Context, watch control.ExternalWatch) string {
+	if strings.TrimSpace(watch.RunID) == "" {
+		return ""
+	}
+	run, err := d.Control.GetRun(ctx, watch.TenantID, watch.RunID)
+	if err != nil || run == nil || run.PersonID != watch.PersonID || run.TaskID != watch.TaskID {
+		return ""
+	}
+	if !strings.EqualFold(run.Status, "waiting_external") {
+		return ""
+	}
+	return run.ID
 }
 
 func externalWatchFinalizationContent(watch control.ExternalWatch, summary string) string {
@@ -898,10 +945,6 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 			}
 			continue
 		}
-		recoverableShutdownCancel := d.recoverableGatewayShutdownCancellation(ctx, task)
-		if terminalTaskStatus(task.Status) && !recoverableShutdownCancel {
-			continue
-		}
 		if active := d.coordinator().currentActive(watch.PersonID); active != nil && active.TaskID == watch.TaskID {
 			continue
 		}
@@ -922,12 +965,24 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 			log.Warn("external watch finalization queue lookup failed", "watch_id", watch.ID, "error", err)
 			continue
 		}
+		boundRunID := ""
+		if queued != nil {
+			boundRunID = queued.RunID
+		}
+		if d.externalWatchFinalizationSuppressedByUserCancellation(ctx, watch, boundRunID) {
+			continue
+		}
 		summary, nextSteps := externalWatchOutcome(watch, watch.Status, watch.LastOutput, watch.LastError)
 		origin := d.externalWatchOriginIdentity(ctx, watch)
-		if queued == nil {
-			if task.Status != "waiting_finalization" {
-				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
+		// The Thread summary is presentation; refresh it only when it drifted so
+		// a reconciliation pass does not churn the Thread's activity clock.
+		refreshSummary := func() {
+			if task.CurrentSummary != summary {
+				_ = d.Control.UpdateThreadSummary(ctx, watch.TenantID, watch.TaskID, summary, nextSteps)
 			}
+		}
+		if queued == nil {
+			refreshSummary()
 			if err := d.enqueueExternalWatchFinalization(ctx, watch, origin, summary); err != nil {
 				log.Warn("external watch missing finalization enqueue failed", "watch_id", watch.ID, "error", err)
 			}
@@ -947,9 +1002,7 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 
 		switch queued.Status {
 		case control.QueueStatusQueued:
-			if task.Status != "waiting_finalization" {
-				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
-			}
+			refreshSummary()
 			d.coordinator().drainQueue(origin)
 		case control.QueueStatusStarted:
 			materialized, err := d.Control.RunHasSuccessfulTerminalEvent(ctx, queued.RunID)
@@ -985,7 +1038,7 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 				continue
 			}
 			if requeued {
-				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
+				refreshSummary()
 				d.coordinator().drainQueue(origin)
 				continue
 			}
@@ -1005,7 +1058,7 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 				continue
 			}
 			if requeued {
-				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
+				refreshSummary()
 				d.coordinator().drainQueue(origin)
 				continue
 			}
@@ -1016,61 +1069,84 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 	}
 }
 
-// recoverableGatewayShutdownCancellation recognizes both the current durable
-// shutdown summary and the legacy two-write shape produced by older daemons:
-// stopAllActive first appended reason=gateway shutdown, then the unwinding run
-// overwrote the task summary with a generic cancellation. Only the newest
-// cancelled run is considered, so an older restart can never reopen a later
-// explicit user cancellation.
-func (d *Server) recoverableGatewayShutdownCancellation(ctx context.Context, task *control.Task) bool {
-	if task == nil || !strings.EqualFold(strings.TrimSpace(task.Status), "cancelled") {
-		return false
-	}
-	summary := strings.TrimSpace(task.CurrentSummary)
-	if strings.EqualFold(summary, "gateway shutdown") || strings.EqualFold(summary, "interrupted by gateway shutdown.") {
-		return true
-	}
-	events, err := d.Control.ListTaskEvents(ctx, task.ID, 80)
-	if err != nil {
-		log.Warn("external watch shutdown history lookup failed", "task_id", task.ID, "error", err)
-		return false
-	}
-	latestCancelledRun := ""
-	for _, event := range events {
-		if event.Type == "run.cancelled" && strings.TrimSpace(event.RunID) != "" {
-			latestCancelledRun = event.RunID
-			break
-		}
-	}
-	if latestCancelledRun == "" {
-		return false
-	}
-	for _, event := range events {
-		if event.Type != "run.cancelled" || event.RunID != latestCancelledRun {
-			continue
-		}
-		var payload struct {
-			Reason string `json:"reason"`
-		}
-		if json.Unmarshal(event.Payload, &payload) == nil && strings.EqualFold(strings.TrimSpace(payload.Reason), "gateway shutdown") {
+// externalWatchFinalizationSuppressedByUserCancellation prevents recovery from
+// reopening work the person explicitly cancelled. A Thread has no aggregate
+// execution status, and a cancellation of some unrelated Run in the same
+// Thread says nothing about this watcher, so the decision reads only the exact
+// Runs of this finalization: the watcher Run itself and the finalization Run
+// bound to its queue row. A gateway-shutdown cancellation is recoverable; any
+// other cancellation of those Runs is user authority and suppresses the retry.
+func (d *Server) externalWatchFinalizationSuppressedByUserCancellation(ctx context.Context, watch control.ExternalWatch, boundRunID string) bool {
+	for _, runID := range []string{watch.RunID, boundRunID} {
+		if d.runCancelledByUser(ctx, watch, runID) {
 			return true
 		}
 	}
 	return false
 }
 
+// runCancelledByUser reads one Run's own cancellation events. A run.cancelled
+// carrying the gateway-shutdown reason is a daemon restart, not a decision.
+func (d *Server) runCancelledByUser(ctx context.Context, watch control.ExternalWatch, runID string) bool {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return false
+	}
+	events, err := d.Control.ListRunEvents(ctx, watch.TenantID, watch.PersonID, watch.TaskID, runID, 80)
+	if err != nil {
+		log.Warn("external watch cancellation history lookup failed", "thread_id", watch.TaskID, "run_id", runID, "error", err)
+		return false
+	}
+	// Events arrive newest first, and the most recent cancellation that states
+	// a REASON describes this Run's current state. Reading past it would let an
+	// older gateway shutdown excuse a retry the person has since cancelled;
+	// a cancellation with no reason (the legacy "context canceled" shape) says
+	// nothing on its own, so it neither decides nor hides the entry behind it.
+	seenCancellation := false
+	for _, event := range events {
+		if event.Type != "run.cancelled" {
+			continue
+		}
+		seenCancellation = true
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(event.Payload, &payload) != nil {
+			continue
+		}
+		reason := strings.TrimSpace(payload.Reason)
+		if reason == "" {
+			continue
+		}
+		return !strings.EqualFold(reason, "gateway shutdown")
+	}
+	// An unexplained cancellation is treated as the person's: recovery may not
+	// reopen work when it cannot prove the stop was infrastructure.
+	return seenCancellation
+}
+
+// blockExternalWatchFinalization records that a watcher verdict exists but its
+// finalization could not be materialized. The watcher Run itself is parked as
+// blocked so Attention surfaces it as resumable work; the Thread summary and
+// the durable event carry the reason.
 func (d *Server) blockExternalWatchFinalization(ctx context.Context, watch control.ExternalWatch, queued *control.QueuedTask) {
 	reason := fmt.Sprintf("The external watch reached %s, but its finalization run did not complete after %d recovery attempts.", watch.Status, queued.Restarts)
 	next := []string{"Review the recorded watcher evidence and resume this task to finish its release record."}
 	if queued.Status == control.QueueStatusCancelled {
 		reason = fmt.Sprintf("The external watch reached %s, but its finalization run was cancelled.", watch.Status)
 	}
-	_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "blocked", reason, next)
+	_ = d.Control.UpdateThreadSummary(ctx, watch.TenantID, watch.TaskID, reason, next)
+	runBlocked, err := d.Control.MarkExternalWatchRunBlocked(ctx, watch.TenantID, watch.RunID, reason)
+	if err != nil {
+		log.Warn("external watch run block failed", "watch_id", watch.ID, "run_id", watch.RunID, "error", err)
+	}
 	payload, _ := json.Marshal(map[string]interface{}{
-		"watch_id": watch.ID,
-		"queue_id": queued.ID,
-		"status":   queued.Status,
-		"restarts": queued.Restarts,
+		"watch_id":    watch.ID,
+		"queue_id":    queued.ID,
+		"status":      queued.Status,
+		"restarts":    queued.Restarts,
+		"run_id":      watch.RunID,
+		"run_blocked": runBlocked,
 	})
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:         watch.TaskID,

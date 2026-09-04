@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -87,4 +88,23 @@ func drainSteering(ch steeringChannels) []SteeringInput {
 			return out
 		}
 	}
+}
+
+// steeringContentForMain keeps legacy embedders byte-compatible while giving
+// durable gateway input a server-issued handle. Main uses that handle only to
+// separate genuinely independent work through queue_user_input; related input
+// is applied normally to the current objective. The user's text remains a user
+// message and is never promoted into system authority.
+func steeringContentForMain(input SteeringInput) string {
+	content := strings.TrimSpace(input.Content)
+	if content == "" || strings.TrimSpace(input.ID) == "" {
+		return content
+	}
+	return fmt.Sprintf(`[SelfMind live user input]
+input_id: %s
+content:
+%s
+[/SelfMind live user input]
+
+Decide using the current Run context: if this input is related, incorporate it into the current work and plan. If it corrects a work_select proposal already made in this interaction, inspect the exact replacement and call work_select again before any material effect. If it is independent, call queue_user_input with this input_id before taking action on it; do not add independent work to the current plan. If it clearly continues another historical run, inspect that work and call queue_user_input with this input_id plus the exact resumes_run_id; never switch the active run in place. If it explicitly asks to send the final result to this endpoint and set_delivery_target is available, call set_delivery_target with this exact input_id; do not infer a delivery move from an ordinary progress question.`, strings.TrimSpace(input.ID), content)
 }

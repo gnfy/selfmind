@@ -172,7 +172,7 @@ func appendRunSteeredEvent(ctx context.Context, store *control.Store, active *ac
 }
 
 // deferUnconsumedSteering re-homes guidance the finished run never consumed
-// into the durable task queue (P0-A). Idempotent via the queue's
+// into the durable next-turn queue (P0-A). Idempotent via the queue's
 // steering:<id> keys; a crash between run end and this deferral is healed by
 // the boot-time mailbox recovery.
 func (c *RunCoordinator) deferUnconsumedSteering(identity *control.IdentityContext, active *activeRun) {

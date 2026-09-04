@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -102,6 +103,26 @@ func TestTUIToolCompletionPreservesProcessGroup(t *testing.T) {
 	rendered := ansi.Strip(renderCell(tool, 80))
 	if !strings.HasPrefix(rendered, "  • ") {
 		t.Fatalf("committed tool is not nested: %q", rendered)
+	}
+}
+
+func TestProcessSurfaceRendersNotDispatchedAsSkipped(t *testing.T) {
+	surface := newProcessSurface()
+	surface.Update(processEvent{kind: processToolStarted, toolName: "terminal", toolCallID: "call-1", toolArgs: `{"command":"gcloud builds describe build-1"}`})
+	effects := surface.Update(processEvent{
+		kind: processToolCompleted, toolName: "terminal", toolCallID: "call-1",
+		err: errors.New("Skipped repeated command; switching strategy."), effectState: "not_dispatched",
+	})
+	if len(effects.commits) != 1 {
+		t.Fatalf("commits=%+v", effects.commits)
+	}
+	tool := effects.commits[0]
+	if tool.IsError || !tool.IsSkipped {
+		t.Fatalf("not-dispatched tool must be a skipped warning, not an execution error: %+v", tool)
+	}
+	rendered := ansi.Strip(renderCell(tool, 100))
+	if strings.Contains(rendered, "terminal error:") || !strings.Contains(rendered, "Skipped") {
+		t.Fatalf("skipped rendering=%q", rendered)
 	}
 }
 
@@ -223,7 +244,7 @@ func TestTUIProcessBudgetKeepsComposerAndStatusVisible(t *testing.T) {
 	if height := lipgloss.Height(view); height > model.height {
 		t.Fatalf("active region height = %d, terminal height = %d:\n%s", height, model.height, view)
 	}
-	if !strings.Contains(view, "mode:") || !strings.Contains(view, "Updated plan") {
+	if !strings.Contains(view, "mode:") || !strings.Contains(view, "Plan ·") {
 		t.Fatalf("composer/status or plan was displaced:\n%s", view)
 	}
 }

@@ -18,7 +18,7 @@ import (
 )
 
 type ApprovalResumeAuthorizationStore interface {
-	ClaimApprovalResumeAuthorization(ctx context.Context, tenantID, personID, taskID, runID, fingerprint string) (approvalID, decisionID, grantKey string, claimed bool, err error)
+	ClaimApprovalResumeAuthorization(ctx context.Context, tenantID, personID, runID, fingerprint string) (approvalID, decisionID, grantKey string, claimed bool, err error)
 }
 
 func AuthMiddleware(mem interface {
@@ -598,7 +598,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			if !denyForcesHuman && !externalUnknown && hasScope && scope.ResumeAuthorizations != nil && resumeFingerprint != "" {
 				grantCtx := contextFromArgs(args)
 				approvalID, decisionID, grantKey, claimed, claimErr := scope.ResumeAuthorizations.ClaimApprovalResumeAuthorization(
-					grantCtx, scope.TenantID, scope.PersonID, scope.TaskID, scope.RunID, resumeFingerprint,
+					grantCtx, scope.TenantID, scope.PersonID, scope.RunID, resumeFingerprint,
 				)
 				if claimErr != nil {
 					return "", fmt.Errorf("claim parked approval authorization: %w", claimErr)
@@ -624,7 +624,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					if key == "" {
 						return false
 					}
-					granted, _ := scope.Grants.IsApprovalGranted(grantCtx, scope.TenantID, scope.PersonID, scope.TaskID, key)
+					granted, _ := scope.Grants.IsApprovalGranted(grantCtx, scope.TenantID, scope.PersonID, key)
 					return granted
 				}
 				switch {
@@ -645,7 +645,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// Layer 4 (H2): LLM triage, smart mode only. Sits ABOVE the human ask
 			// and BELOW the hard floor (hardline ops returned already) and the
 			// class-grant allowlist (a granted class returned already), so triage
-			// is asked at most once per class per task. Only a dangerous
+			// is asked at most once per class per run. Only a dangerous
 			// (non-hardline) op reaches here in smart mode. Fails SAFE: with no
 			// judge, or on ESCALATE / any error / timeout, we fall through to the
 			// human ask — never an auto-approval.
@@ -692,10 +692,14 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					}
 					switch verdict {
 					case TriageApprove:
-						// Record a TASK-scope class grant so the judge is consulted at
-						// most once per class per task, then proceed.
-						if scope.Grants != nil && patternKey != "" {
-							recordApprovalGrant(ctx, scope, "task", patternKey, approvalGrantExpiry("task", args))
+						// Record a RUN-scope class grant so the judge is consulted at
+						// most once per class per run, then proceed. Run scope is
+						// deliberate: a cheap judge's auto-approval controls cost, it
+						// does not mint durable authority. It used to write a durable
+						// task-scoped row, which outlived the run and rested on the
+						// judgment that a set of runs is one piece of work.
+						if patternKey != "" {
+							recordApprovalGrant(ctx, scope, "run", patternKey, time.Time{})
 						}
 						recordScopeTriage(scope, toolName, patternKey, TriageOutcomeApproved, assessment, triageLatency, nil)
 						clearTriageDenials(scope.RunID)
@@ -980,10 +984,6 @@ func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScop
 	case "run":
 		if scope.runGrants != nil {
 			scope.runGrants.add(patternKey)
-		}
-	case "task":
-		if scope.Grants != nil && scope.TaskID != "" {
-			_ = scope.Grants.GrantApproval(ctx, "task", scope.TenantID, scope.PersonID, scope.TaskID, patternKey, expiresAt)
 		}
 	case "person":
 		if scope.Grants != nil && scope.PersonID != "" {

@@ -210,33 +210,3 @@ func TestStuckTaskLines(t *testing.T) {
 		t.Fatalf("expected 3 lines oldest-first: %v", lines)
 	}
 }
-
-// TestTasksDiagReplySmoke: end-to-end render over a real (fresh) store — no
-// stuck work, zero waiting counters.
-func TestTasksDiagReplySmoke(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := t.Context()
-	identity, err := store.ResolveOrCreateAccount(ctx, "tenant", "cli", "local", "Tester")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "fresh work",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	d := &Server{Control: store, DefaultTenantID: identity.TenantID}
-	out, err := d.tasksDiagReply(ctx, identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"Task diagnostics", "Labels: open 1", "Waiting: queued 0, pending approvals 0, pending questions 0", "Possibly stuck: none"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("missing %q:\n%s", want, out)
-		}
-	}
-}

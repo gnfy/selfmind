@@ -43,7 +43,7 @@ func (s *Store) RecordApprovalTriageAudit(ctx context.Context, event ApprovalTri
 	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO approval_triage_events
-		 (tenant_id, person_id, task_id, run_id, tool_name, outcome, risk_level, user_authorization,
+		 (tenant_id, person_id, thread_id, run_id, tool_name, outcome, risk_level, user_authorization,
 		  grant_key, provider_route, latency_ms, error_class, policy_version, rationale, error, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		normalizeTenant(tenantID), personID, event.TaskID, event.RunID, event.ToolName, outcome,

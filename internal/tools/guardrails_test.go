@@ -57,6 +57,61 @@ func TestToolGuardrailsAllowFiniteRemoteStatusBatch(t *testing.T) {
 	}
 }
 
+// One bounded remote read per item of a dynamic list is a fan-out, not
+// polling. This exact shape was blocked live during a read-only release
+// preflight and cost the run its correction budget.
+func TestToolGuardrailsAllowDynamicListFanOut(t *testing.T) {
+	called := false
+	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+		called = true
+		return "SUCCEEDED", nil
+	})
+	result, err := exec(map[string]interface{}{
+		"_tool_name": "terminal",
+		"command":    `ids=$(aws codebuild list-builds-for-project --project-name api --query ids --output text); for id in $ids; do aws codebuild batch-get-builds --ids "$id"; done`,
+	})
+	if err != nil || result != "SUCCEEDED" || !called {
+		t.Fatalf("dynamic fan-out result=%q err=%v called=%v", result, err, called)
+	}
+}
+
+// The same dynamic loop with a sleep in its body is an active wait and stays
+// blocked; the refusal is typed as not dispatched so the recovery policy does
+// not count it as a failed strategy attempt.
+func TestToolGuardrailsBlockDynamicListPollingWithSleep(t *testing.T) {
+	called := false
+	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+		called = true
+		return "RUNNING", nil
+	})
+	_, err := exec(map[string]interface{}{
+		"_tool_name": "terminal",
+		"command":    `for id in $ids; do aws codebuild batch-get-builds --ids "$id"; sleep 20; done`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "watch_external") || called {
+		t.Fatalf("sleeping dynamic loop must be blocked before execution: err=%v called=%v", err, called)
+	}
+	typed, ok := err.(interface{ ToolEffectState() string })
+	if !ok || typed.ToolEffectState() != "not_dispatched" {
+		t.Fatalf("guardrail refusal must be typed not_dispatched: %T %v", err, err)
+	}
+}
+
+func TestToolGuardrailsBlockDetachedNestedShellPolling(t *testing.T) {
+	called := false
+	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+		called = true
+		return "started", nil
+	})
+	_, err := exec(map[string]interface{}{
+		"_tool_name": "terminal",
+		"command":    `nohup bash -c 'for i in $(seq 1 90); do aws codebuild batch-get-builds --ids build-1; sleep 15; done' >/tmp/build.log 2>&1 &`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "watch_external") || called {
+		t.Fatalf("detached nested polling must be blocked before execution: err=%v called=%v", err, called)
+	}
+}
+
 func TestToolGuardrailsBlockUnboundedCStyleRemotePolling(t *testing.T) {
 	called := false
 	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {

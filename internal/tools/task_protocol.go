@@ -19,7 +19,6 @@ type PlanWorkUnitIdentity struct {
 	Sequence       int    `json:"sequence"`
 	Goal           string `json:"goal"`
 	PlanStatus     string `json:"plan_status"`
-	RelatedTaskID  string `json:"related_task_id,omitempty"`
 	BoundSkillName string `json:"bound_skill_name,omitempty"`
 	// SkillCatalog is already rendered by the kernel's canonical byte/token
 	// allocator. Keeping it as one bounded string prevents update_plan from
@@ -98,7 +97,6 @@ type PlanStep struct {
 	Status               string `json:"status"`
 	SuccessCriteria      string `json:"success_criteria,omitempty"`
 	VerificationRequired bool   `json:"verification_required,omitempty"`
-	RelatedTaskID        string `json:"related_task_id,omitempty"`
 	WorkUnitID           string `json:"work_unit_id,omitempty"`
 	WorkUnit             bool   `json:"work_unit,omitempty"`
 }
@@ -156,10 +154,6 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 									Type:        "boolean",
 									Description: "True only when this step cannot be considered complete without executable verification evidence required by the user, repository instructions, or the nature of the change.",
 									Default:     false,
-								},
-								"related_task_id": {
-									Type:        "string",
-									Description: "Optional existing task id for an independent work unit. Use only when the user explicitly named that task or a deterministic task reference resolved it.",
 								},
 								"work_unit_id": {
 									Type:        "string",
@@ -348,7 +342,7 @@ func samePlanSteps(a, b []PlanStep) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].StepID != b[i].StepID || a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].SuccessCriteria != b[i].SuccessCriteria || a[i].VerificationRequired != b[i].VerificationRequired || a[i].RelatedTaskID != b[i].RelatedTaskID ||
+		if a[i].StepID != b[i].StepID || a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].SuccessCriteria != b[i].SuccessCriteria || a[i].VerificationRequired != b[i].VerificationRequired ||
 			a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
 			return false
 		}
@@ -371,7 +365,6 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 				Status:               fmt.Sprintf("%v", obj["status"]),
 				SuccessCriteria:      taskStringArg(obj, "success_criteria"),
 				VerificationRequired: taskBoolArg(obj, "verification_required"),
-				RelatedTaskID:        taskStringArg(obj, "related_task_id"),
 				WorkUnitID:           taskStringArg(obj, "work_unit_id"),
 				WorkUnit:             taskBoolArg(obj, "work_unit"),
 			})

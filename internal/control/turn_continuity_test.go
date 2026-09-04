@@ -87,6 +87,34 @@ func TestPendingTurnChoiceClaimIsSingleUse(t *testing.T) {
 	}
 }
 
+func TestLatestPendingTurnChoiceForChannelIsBoundedToPersonAndChannel(t *testing.T) {
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	now := time.Now()
+	created, err := store.CreatePendingTurnChoice(ctx, PendingTurnChoiceCreate{
+		TenantID: "default", PersonID: "person-a", Channel: "cli", RequestJSON: `{"content":"original"}`,
+		Options:   []TurnChoiceOption{{Key: "1", Label: "old", Action: "observe", TaskID: "task", RunID: "run"}, {Key: "2", Label: "new", Action: "new"}},
+		ExpiresAt: now.Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.LatestPendingTurnChoiceForChannel(ctx, "default", "person-a", "cli", now)
+	if err != nil || got == nil || got.ID != created.ID {
+		t.Fatalf("choice=%+v err=%v", got, err)
+	}
+	for _, query := range []struct{ person, channel string }{{"person-b", "cli"}, {"person-a", "weixin"}} {
+		got, err := store.LatestPendingTurnChoiceForChannel(ctx, "default", query.person, query.channel, now)
+		if err != nil || got != nil {
+			t.Fatalf("leaked choice to %s/%s: %+v err=%v", query.person, query.channel, got, err)
+		}
+	}
+}
+
 func TestPendingTurnChoiceClaimIsSingleUseAcrossStoreConnections(t *testing.T) {
 	dir := t.TempDir()
 	first, err := OpenStore(dir)

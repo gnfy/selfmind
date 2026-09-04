@@ -39,6 +39,11 @@ func TestStuckRunSweeperRecoversStaleRunsButSkipsActive(t *testing.T) {
 		if err != nil {
 			t.Fatalf("run: %v", err)
 		}
+		// Real work was in flight: a durable plan is the evidence that keeps a
+		// sweeper interruption visible as resumable Attention.
+		if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, title, []control.RunPlanStepInput{{Step: title + " (start)", Status: "completed"}, {Step: title, Status: "in_progress"}}); err != nil {
+			t.Fatalf("plan: %v", err)
+		}
 		return task, run
 	}
 	deadTask, _ := newTaskRun(deadIdentity, "orphaned by crash")
@@ -133,9 +138,6 @@ func TestContinuationLadderOffersInterruptedRun(t *testing.T) {
 
 	// The continuation ladder (simplification P2) offers the interrupted RUN
 	// person-wide — the current-task pointer no longer matters, dangling or not.
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, "task_missing"); err != nil {
-		t.Fatalf("SetCurrentTask: %v", err)
-	}
 	candidates, err := store.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 5)
 	if err != nil {
 		t.Fatalf("ListUnresolvedRunsForPerson: %v", err)

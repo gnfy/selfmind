@@ -14,7 +14,7 @@ import (
 func (a *App) runMaintenanceRestoreControl(args []string) int {
 	fs := flag.NewFlagSet("selfmind maintenance restore-control", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
-	backup := fs.String("backup", "", "migration backup under the data directory backups folder")
+	backup := fs.String("backup", "", "control backup under the data directory backups folder")
 	dataDir := fs.String("data-dir", "", "control data directory (default: configured data dir)")
 	yes := fs.Bool("yes", false, "confirm replacement of control.db while preserving the failed copy")
 	if err := fs.Parse(args); err != nil {

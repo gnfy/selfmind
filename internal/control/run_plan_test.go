@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -81,7 +82,7 @@ func TestAutomaticRunRecoveryDecisionDoesNotStealSpecialistOrHistoricalRuns(t *t
 	}
 
 	store2, identity2, task2, run2 := newRecoveryFixture(t)
-	if _, err := store2.db.Exec(`UPDATE task_runs SET recovery_contract_version=0 WHERE id=?`, run2.ID); err != nil {
+	if _, err := store2.db.Exec(`UPDATE runs SET recovery_contract_version=0 WHERE id=?`, run2.ID); err != nil {
 		t.Fatal(err)
 	}
 	interruptForAutomaticRecoveryTest(t, store2, identity2, task2, run2)
@@ -153,6 +154,27 @@ func TestRunPlanIssuesStableStepIDsAndVersionsCompleteSnapshots(t *testing.T) {
 	}
 	if versions != 3 {
 		t.Fatalf("plan versions=%d, want complete history of 3", versions)
+	}
+}
+
+func TestFirstRunPlanIgnoresUntrustedClientStepIDs(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+
+	projection, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "start", []RunPlanStepInput{
+		{StepID: "read-docs", Step: "Read repository instructions", Status: "completed"},
+		{StepID: "start-builds", Step: "Start the builds", Status: "in_progress"},
+	})
+	if err != nil {
+		t.Fatalf("first plan must normalize model-authored ids instead of rejecting the snapshot: %v", err)
+	}
+	if len(projection.Plan.Steps) != 2 {
+		t.Fatalf("first plan steps=%d, want 2", len(projection.Plan.Steps))
+	}
+	for _, step := range projection.Plan.Steps {
+		if !strings.HasPrefix(step.StepID, "step_") {
+			t.Fatalf("first plan retained untrusted client step id %q", step.StepID)
+		}
 	}
 }
 

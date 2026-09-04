@@ -24,7 +24,6 @@ import (
 type fakeLabeler struct {
 	mu      sync.Mutex
 	reply   string
-	refs    []TaskReferenceProposal
 	err     error
 	calls   int
 	prompts []string
@@ -36,7 +35,7 @@ func (f *fakeLabeler) Analyze(ctx context.Context, req PostRunAnalysisRequest) (
 	f.calls++
 	f.prompts = append(f.prompts, req.Prompt)
 	block := f.block
-	reply, refs, err := f.reply, append([]TaskReferenceProposal(nil), f.refs...), f.err
+	reply, err := f.reply, f.err
 	f.mu.Unlock()
 	if block != nil {
 		select {
@@ -45,7 +44,7 @@ func (f *fakeLabeler) Analyze(ctx context.Context, req PostRunAnalysisRequest) (
 			return PostRunAnalysis{}, ctx.Err()
 		}
 	}
-	return PostRunAnalysis{TaskDecision: reply, TaskReferences: refs}, err
+	return PostRunAnalysis{TaskDecision: reply}, err
 }
 
 func (f *fakeLabeler) callCount() int {
@@ -247,35 +246,6 @@ func TestLegacyFrozenTaskDecisionIsIgnored(t *testing.T) {
 	job, err := store.GetMaintenanceJob(context.Background(), resp.Task.TenantID, runs[0].ID, postRunAnalyzerVersion)
 	if err != nil || job == nil || job.Status != control.MaintenanceJobSucceeded {
 		t.Fatalf("job = %+v err=%v", job, err)
-	}
-}
-
-// TestPostRunReferencesStayCandidateWithoutConfirmation: reference proposals
-// remain candidate search hints regardless of run support — automatic
-// promotion is frozen (P2); only user confirmation activates a reference.
-func TestPostRunReferencesStayCandidateWithoutConfirmation(t *testing.T) {
-	provider := newSlowLLMProvider("completed customer portal work")
-	provider.releaseNow()
-	daemon, store, _ := newDetachedRunServer(t, provider)
-	daemon.PostRunAnalyzer = &fakeLabeler{refs: []TaskReferenceProposal{{
-		Class: control.TaskReferenceDescriptive, Value: "customer portal", Confidence: 0.9,
-	}}}
-	first := runOrdinaryTurn(t, daemon, durableTurnInput("the customer portal inspection"))
-	refs, err := store.ListTaskReferencesForTask(context.Background(), first.Task.TenantID, first.Task.PersonID, first.Task.ID, 10)
-	if err != nil || len(refs) != 1 || refs[0].Status != control.TaskReferenceCandidate {
-		t.Fatalf("first references=%+v err=%v", refs, err)
-	}
-	second, status := daemon.ProcessMessage(context.Background(), api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", TaskID: first.Task.ID,
-		Content: durableTurnInput("the customer portal follow-up"),
-	})
-	if status != 200 || second.Task == nil || second.Task.ID != first.Task.ID {
-		t.Fatalf("second turn failed: status=%d response=%+v", status, second)
-	}
-	drainPostRunMaintenance(daemon)
-	refs, err = store.ListTaskReferencesForTask(context.Background(), first.Task.TenantID, first.Task.PersonID, first.Task.ID, 10)
-	if err != nil || len(refs) != 1 || refs[0].Status != control.TaskReferenceCandidate || refs[0].SupportCount != 2 {
-		t.Fatalf("supported references must stay candidate: %+v err=%v", refs, err)
 	}
 }
 

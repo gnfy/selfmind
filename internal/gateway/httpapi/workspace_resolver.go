@@ -48,10 +48,10 @@ func (d *Server) resolveWorkspaceReference(ctx context.Context, identity *contro
 			return nil, "", err
 		}
 		if len(workspaces) == 0 {
-			return nil, "No workspaces registered; see /workspaces.", nil
+			return nil, "No workspaces registered; see /ws.", nil
 		}
 		if ordinal < 1 || ordinal > len(workspaces) {
-			return nil, fmt.Sprintf("No workspace number %d; %d listed (see /workspaces).", ordinal, len(workspaces)), nil
+			return nil, fmt.Sprintf("No workspace number %d; %d listed (see /ws).", ordinal, len(workspaces)), nil
 		}
 		return &workspaces[ordinal-1], "", nil
 	}
@@ -60,7 +60,7 @@ func (d *Server) resolveWorkspaceReference(ctx context.Context, identity *contro
 		return nil, "", err
 	}
 	if ws == nil || ws.OwnerPersonID != identity.PersonID {
-		return nil, "Workspace not found. Run /workspaces to list them.", nil
+		return nil, "Workspace not found. Run /ws to list them.", nil
 	}
 	return ws, "", nil
 }

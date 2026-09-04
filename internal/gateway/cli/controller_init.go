@@ -318,6 +318,8 @@ func (c *Controller) Start() {
 	// capture so the terminal owns selection/scroll.
 	p := tea.NewProgram(c.model)
 	c.model.program = p
+	stopHangupWatch := watchHangup(p)
+	defer stopHangupWatch()
 
 	// Wrap p.Run() in a recovered goroutine so panics print to stderr and restore alt screen
 	type result struct {

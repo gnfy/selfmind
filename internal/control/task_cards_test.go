@@ -41,7 +41,10 @@ func TestListTaskCards(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	mk("abandoned", "cancelled", "gone")
+	abandoned := mk("abandoned", "cancelled", "gone")
+	if err := NewWorkTimeline(store).Archive(ctx, identity.TenantID, identity.PersonID, abandoned.ID); err != nil {
+		t.Fatal(err)
+	}
 	mk("filed away", "archived", "gone")
 	other := mk("stock summary", "completed", "sent report")
 
@@ -50,7 +53,7 @@ func TestListTaskCards(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(cards) != 2 {
-		t.Fatalf("expected 2 cards (archived/cancelled excluded), got %d: %+v", len(cards), cards)
+		t.Fatalf("expected 2 cards (archived history excluded), got %d: %+v", len(cards), cards)
 	}
 	byID := map[string]TaskCard{}
 	for _, card := range cards {

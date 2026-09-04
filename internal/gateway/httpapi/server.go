@@ -91,14 +91,6 @@ type Server struct {
 	// eval, or no cheap model) makes smart mode degrade to a human ask — never an
 	// auto-approval.
 	ApprovalJudge tools.ApprovalJudge
-	// ContinuityResolver is the bounded fast-role inference seam that chooses
-	// among gateway-issued work candidates. It never executes or authorizes an
-	// action; ProcessMessage validates and applies its typed decision.
-	ContinuityResolver ContinuityResolver
-	// ContinuityMode is one of shadow/safe/full/off. Empty is safe when a
-	// resolver is installed and preserves legacy behavior in minimal tests where
-	// no resolver exists.
-	ContinuityMode string
 	// Recall is the automatic semantic-recall engine (Work Timeline P2): at
 	// turn start the context selector attaches bounded "possibly related prior
 	// work" slices from the FTS session index and task label cards to the
@@ -166,10 +158,6 @@ type Server struct {
 
 	runs     *RunCoordinator
 	runsOnce sync.Once
-	// turnResolutionLocks serialize the bounded pre-run continuity decision for
-	// one person without introducing a durable cross-process business lock. A
-	// fixed stripe set avoids an unbounded person-keyed mutex map.
-	turnResolutionLocks [64]sync.Mutex
 	// taskLists remembers the exact numbered open-task cards most recently
 	// rendered on each endpoint. Ordinal commands resolve this snapshot instead
 	// of re-sorting mutable task rows after the person has already seen them.
@@ -188,25 +176,21 @@ type Server struct {
 }
 
 type activeRun struct {
-	TenantID               string
-	PersonID               string
-	TaskID                 string
-	RunID                  string
-	QueueID                string
-	Channel                string
-	Platform               string
-	PlatformUserID         string
-	DeliveryOverride       bool
-	DeliveryPlatform       string
-	DeliveryPlatformUserID string
-	DeliveryChannel        string
-	WorkspaceID            string
-	ApprovalMode           string
-	Origin                 string
-	ExecutionRoots         []executionenv.RootBinding
-	Summary                string
-	StartedAt              time.Time
-	Cancel                 context.CancelFunc
+	TenantID       string
+	PersonID       string
+	TaskID         string
+	RunID          string
+	QueueID        string
+	Channel        string
+	Platform       string
+	PlatformUserID string
+	WorkspaceID    string
+	ApprovalMode   string
+	Origin         string
+	ExecutionRoots []executionenv.RootBinding
+	Summary        string
+	StartedAt      time.Time
+	Cancel         context.CancelFunc
 	// Interrupt supplies an infrastructure cause distinct from an explicit
 	// user cancellation. Gateway restarts are resumable and must never turn a
 	// task into a user-cancelled terminal state.
@@ -431,7 +415,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 				return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", rootsErr.Error())}, http.StatusBadRequest
 			}
-			if running := coord.currentActive(identity.PersonID); running != nil && intent.Intent == router.IntentContinue {
+			if running := coord.currentActive(identity.PersonID); running != nil && requestTargetsActiveRun(req, intent, running) {
 				if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
 					return resp, http.StatusOK
 				}
@@ -470,8 +454,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
 		}
-		exactActiveReply := strings.TrimSpace(req.ReplyToRunID) != "" && strings.TrimSpace(req.ReplyToRunID) == running.RunID
-		if (intent.Intent == router.IntentContinue || exactActiveReply) && isUserOriginTurn(ctx, req) {
+		if requestTargetsActiveRun(req, intent, running) && isUserOriginTurn(ctx, req) {
 			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
 				return resp, http.StatusOK
 			}
@@ -483,17 +466,43 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
 	}
 
-	continuity := d.resolveNaturalContinuity(ctx, identity, req)
-	if continuity.Response != nil {
-		return *continuity.Response, statusForMessageResponse(*continuity.Response)
-	}
-	req = continuity.Request
-	intent := continuity.Intent
-	if !continuity.Resolved {
-		intent = d.classifyIntent(ctx, req.Content, req.Channel)
-		if req.ForceNew {
-			intent = forcedNewIntent()
+	// Active user work is Main-owned. Persist ordinary natural-language input
+	// into the live Run before any general intent classification: the same Main
+	// that already has the execution context is
+	// the right place to decide whether the input refines current work or should
+	// become independent queued work. Explicit controls/edges and daemon-origin
+	// turns remain on their deterministic paths.
+	if running := d.coordinator().currentActive(identity.PersonID); running != nil &&
+		d.shouldSteerActiveNaturalInput(ctx, identity, req, running) {
+		coord := d.coordinator()
+		workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
+		if workspaceErr != nil {
+			return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "running", running.TaskID, running.RunID, workspaceErr.Error())}, http.StatusBadRequest
 		}
+		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
+			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "running", running.TaskID, running.RunID, rootsErr.Error())}, http.StatusBadRequest
+		}
+		if req.AdditionalRootsRequested && !sameCLIAdditionalRoots(req.ExecutionRoots, running.ExecutionRoots) {
+			message := "Cannot change --add-dir roots while a run is active. Start a new run after the current run finishes."
+			return api.MessageResponse{
+				Identity: identity,
+				Content:  message,
+				Accepted: false,
+				Turn:     messageTurn("failed", "running", "running", running.TaskID, running.RunID, message),
+			}, http.StatusConflict
+		}
+		if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
+			return resp, http.StatusOK
+		}
+		// Persistence or live-channel back-pressure prevented immediate delivery.
+		// The durable foreground queue is the lossless fallback; never acknowledge
+		// input that exists only in memory.
+		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
+	}
+
+	intent := d.classifyIntent(ctx, req.Content, req.Channel)
+	if req.ForceNew {
+		intent = forcedNewIntent()
 	}
 	if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
 		// A bare acceptance upgrades to a continuation only when the person
@@ -540,8 +549,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		// in the running task (docs/identity-continuity.md "Runtime attachment
 		// model"). Genuinely new work still enqueues (G1+G2), never rejected as
 		// "busy".
-		exactActiveReply := strings.TrimSpace(req.ReplyToRunID) != "" && strings.TrimSpace(req.ReplyToRunID) == running.RunID
-		if (intent.Intent == router.IntentContinue || exactActiveReply) && isUserOriginTurn(ctx, req) {
+		if requestTargetsActiveRun(req, intent, running) && isUserOriginTurn(ctx, req) {
 			if req.AdditionalRootsRequested && !sameCLIAdditionalRoots(req.ExecutionRoots, running.ExecutionRoots) {
 				message := "Cannot change --add-dir roots while a run is active. Start a new run after the current run finishes."
 				return api.MessageResponse{
@@ -595,7 +603,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// The steering channel is registered on the active run (so /v1/runs/steer
 	// can reach it) AND installed on the run ctx (so the agent loop drains it).
 	steerCh := make(chan kernel.SteeringInput, steerBufferSize)
-	if ok := coord.beginActive(identity.PersonID, &activeRun{
+	active := &activeRun{
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
 		Channel:        req.Channel,
@@ -611,13 +619,17 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		Cancel:         cancel,
 		Interrupt:      cancelCause,
 		Steer:          steerCh,
-	}); !ok {
+	}
+	if ok := coord.beginActive(identity.PersonID, active); !ok {
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK
 	}
-	// Free the per-person slot, then drain the queue: a queued item auto-starts
-	// as an async run once this sync run is done. drainQueue runs after endActive
-	// (defers are LIFO) and only launches when no run raced back in.
+	// Durably transfer guidance that lost the final-model-call race while the
+	// per-person slot is still held, then free the slot and drain. This ordering
+	// prevents a new submission from overtaking acknowledged input during the
+	// finalization boundary. The local pointer is the same object the coordinator
+	// updates with TaskID/RunID after StartRun.
 	defer func() {
+		coord.deferUnconsumedSteering(identity, active)
 		coord.endActive(identity.PersonID)
 		coord.drainQueue(identity)
 	}()
@@ -634,6 +646,52 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		coord.deliverAsyncResult(context.Background(), identity, req, resp)
 	}
 	return resp, status
+}
+
+// shouldSteerActiveNaturalInput separates deterministic ownership from
+// semantic interpretation. Ordinary user prose belongs to the live Main; an
+// explicit new/other-task/other-run request, a one-shot /resume pin, or a
+// daemon-originated turn must retain its existing control-plane path.
+func (d *Server) shouldSteerActiveNaturalInput(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, running *activeRun) bool {
+	if d == nil || d.Control == nil || identity == nil || running == nil || !isUserOriginTurn(ctx, req) || req.ForceNew {
+		return false
+	}
+	if taskID := strings.TrimSpace(req.TaskID); taskID != "" && taskID != running.TaskID {
+		return false
+	}
+	if replyRunID := strings.TrimSpace(req.ReplyToRunID); replyRunID != "" {
+		return replyRunID == running.RunID
+	}
+	switch strings.TrimSpace(req.ContinuityAction) {
+	case string(ContinuityResume), "new":
+		return false
+	}
+	// /resume pins the next agent-bound message. Do not let the generic active
+	// path steal that deterministic instruction; resolve/queue it exactly.
+	if pin, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey); err != nil || strings.TrimSpace(pin) != "" {
+		return false
+	}
+	return true
+}
+
+// requestTargetsActiveRun is the sole busy-path steering predicate. An exact
+// reply edge wins. A typed historical RESUME must stay queued for its own
+// parent instead of being redirected into whichever run happens to be active.
+func requestTargetsActiveRun(req api.MessageRequest, intent router.IntentResult, running *activeRun) bool {
+	if running == nil {
+		return false
+	}
+	if replyRunID := strings.TrimSpace(req.ReplyToRunID); replyRunID != "" {
+		return replyRunID == running.RunID
+	}
+	switch strings.TrimSpace(req.ContinuityAction) {
+	case string(ContinuityResume), "new":
+		return false
+	case string(ContinuitySteer):
+		return false // a typed steer always carries an exact run edge
+	default:
+		return intent.Intent == router.IntentContinue
+	}
 }
 
 func statusForMessageResponse(resp api.MessageResponse) int {
@@ -787,11 +845,11 @@ type taskAttach struct {
 	matchedSurfaceForms []string
 	candidateTaskIDs    []string
 	candidateTaskHints  []string
-	// parentRunID is structured parent evidence resolved at attach time (a
+	// resumesRunID is structured parent evidence resolved at attach time (a
 	// platform reply or an approval's origin run). It names the ONLY run this
 	// turn may continue; ambiguity resolution is skipped for it, and a named
 	// run that is terminal or already claimed simply yields no parent.
-	parentRunID string
+	resumesRunID string
 }
 
 type attachContextMode string
@@ -811,12 +869,11 @@ const (
 
 // attachPolicy keeps semantic task association separate from execution
 // authority. A weak label/reference may help the model find prior work, but it
-// cannot silently change filesystem roots, trust, credentials, the person's
-// current-task pointer, or ownership of unfinished runs.
+// cannot silently change filesystem roots, trust, credentials, or ownership
+// of unfinished runs.
 type attachPolicy struct {
 	ContextMode              attachContextMode
 	ExecutionWorkspaceSource attachWorkspaceSource
-	UpdateCurrentTask        bool
 	ClaimsPriorRuns          bool
 }
 
@@ -876,24 +933,24 @@ func (a taskAttach) resolvedPolicy() attachPolicy {
 func policyForTaskAttach(reason taskAttachReason, created, preLabel bool) attachPolicy {
 	switch reason {
 	case taskAttachContinuation, taskAttachApprovalResume, taskAttachClarifyResume, taskAttachReplyToRun:
-		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true, ClaimsPriorRuns: true}
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, ClaimsPriorRuns: true}
 	case taskAttachReferenceContinue, taskAttachReferenceMention:
 		// Legacy reasons kept only so durable maintenance payloads recorded
 		// before simplification P2 still resolve a policy. References no
 		// longer route, load full context, or move the current-task pointer.
 		return attachPolicy{ContextMode: attachContextBounded, ExecutionWorkspaceSource: attachWorkspaceRequest}
 	case taskAttachExplicitTaskID, taskAttachResumePin:
-		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true, ClaimsPriorRuns: true}
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, ClaimsPriorRuns: true}
 	case taskAttachCurrentPreLabel:
 		// Legacy reason (pre-P2 sticky pre-label); replay compatibility only.
 		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest}
 	case taskAttachNewLabel:
-		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: true}
+		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest}
 	default:
 		if preLabel {
-			return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: created}
+			return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest}
 		}
-		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true}
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask}
 	}
 }
 

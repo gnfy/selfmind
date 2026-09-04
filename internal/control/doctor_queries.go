@@ -48,9 +48,9 @@ func (s *Store) ListRecentRunsForPerson(ctx context.Context, tenantID, personID 
 		limit = 10
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT r.id, r.task_id, COALESCE(t.title, ''), r.status, COALESCE(r.channel, ''),
+		`SELECT r.id, r.thread_id, COALESCE(t.title, ''), r.status, COALESCE(r.channel, ''),
 		        COALESCE(r.last_error, ''), r.started_at, r.finished_at
-		 FROM task_runs r LEFT JOIN tasks t ON t.id = r.task_id
+		 FROM runs r LEFT JOIN threads t ON t.id = r.thread_id
 		 WHERE r.tenant_id = ? AND r.person_id = ?
 		 ORDER BY r.started_at DESC, r.id DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, limit)
@@ -110,13 +110,13 @@ func (s *Store) ListRecentErrors(ctx context.Context, tenantID, personID string,
 		limit = 10
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.type, e.created_at, e.task_id,
+		`SELECT e.type, e.created_at, e.thread_id,
 		        COALESCE(json_extract(e.payload_json,'$.tool'),''),
 		        COALESCE(json_extract(e.payload_json,'$.error'),''),
 		        COALESCE(json_extract(e.payload_json,'$.outcome.status'),''),
 		        COALESCE(json_extract(e.payload_json,'$.outcome.summary'),''),
 		        COALESCE(json_extract(e.payload_json,'$.errors'),'')
-		 FROM task_events e JOIN tasks t ON t.id = e.task_id
+		 FROM task_events e JOIN threads t ON t.id = e.thread_id
 		 WHERE t.tenant_id = ? AND t.person_id = ?
 		   AND (
 		     (e.type = 'tool.completed' AND TRIM(COALESCE(json_extract(e.payload_json,'$.error'),'')) <> '')
@@ -216,9 +216,9 @@ func (s *Store) ListRecentEventsForPerson(ctx context.Context, tenantID, personI
 		limit = 40
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT e.task_id, COALESCE(t.title, ''), e.type, COALESCE(e.channel, ''),
+		`SELECT e.thread_id, COALESCE(t.title, ''), e.type, COALESCE(e.channel, ''),
 		        COALESCE(e.payload_json, ''), e.created_at
-		 FROM task_events e JOIN tasks t ON t.id = e.task_id
+		 FROM task_events e JOIN threads t ON t.id = e.thread_id
 		 WHERE t.tenant_id = ? AND t.person_id = ?
 		 ORDER BY e.created_at DESC, e.id DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, limit)

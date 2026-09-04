@@ -1,0 +1,89 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "我",
+      "phase": "commentary"
+    },
+    {
+      "content": "先",
+      "phase": "commentary"
+    },
+    {
+      "content": "定位",
+      "phase": "commentary"
+    },
+    {
+      "content": "最近",
+      "phase": "commentary"
+    },
+    {
+      "content": "等待",
+      "phase": "commentary"
+    },
+    {
+      "content": "确认",
+      "phase": "commentary"
+    },
+    {
+      "content": "的",
+      "phase": "commentary"
+    },
+    {
+      "content": "工作",
+      "phase": "commentary"
+    },
+    {
+      "content": "，再",
+      "phase": "commentary"
+    },
+    {
+      "content": "按",
+      "phase": "commentary"
+    },
+    {
+      "content": "原",
+      "phase": "commentary"
+    },
+    {
+      "content": "计划",
+      "phase": "commentary"
+    },
+    {
+      "content": "继续",
+      "phase": "commentary"
+    },
+    {
+      "content": "执行",
+      "phase": "commentary"
+    },
+    {
+      "content": "。",
+      "phase": "commentary"
+    },
+    {
+      "content": "Preparing to run work_search",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_VppS3uvfWLKNl5dvof6i01DN",
+          "Function": "work_search",
+          "Args": "{\"mode\":\"attention\",\"limit\":5}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 7747,
+        "output_tokens": 60,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 7747,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

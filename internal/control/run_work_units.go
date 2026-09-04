@@ -88,7 +88,7 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 // from publishing only half of the execution structure.
 func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runID string, plan []WorkUnitPlanInput) ([]RunWorkUnit, error) {
 	var personID, workspaceID, primaryTaskID string
-	if err := tx.QueryRowContext(ctx, `SELECT person_id, COALESCE(workspace_id,''), task_id FROM task_runs WHERE tenant_id=? AND id=?`, tenant, runID).
+	if err := tx.QueryRowContext(ctx, `SELECT person_id, COALESCE(workspace_id,''), thread_id FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).
 		Scan(&personID, &workspaceID, &primaryTaskID); err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 		}
 		if item.RelatedTaskID != "" {
 			var owned int
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE tenant_id=? AND person_id=? AND id=?`, tenant, personID, item.RelatedTaskID).Scan(&owned); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM threads WHERE tenant_id=? AND person_id=? AND id=?`, tenant, personID, item.RelatedTaskID).Scan(&owned); err != nil {
 				return nil, err
 			}
 			if owned != 1 {

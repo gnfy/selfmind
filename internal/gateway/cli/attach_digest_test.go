@@ -80,7 +80,7 @@ func TestStartupDigestLabelsOlderUnresolvedWorkWithoutAwayClaim(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Still needs attention:",
-		"↻ 1 earlier task still needs attention: Implement binary search in Go (use /resume to continue)",
+		"↻ 1 earlier run still needs attention: Implement binary search in Go (use /resume to continue)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("unresolved digest missing %q:\n%s", want, text)

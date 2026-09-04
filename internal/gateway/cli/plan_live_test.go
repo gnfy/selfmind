@@ -23,7 +23,7 @@ func TestLivePlanReplacesSnapshotAboveComposer(t *testing.T) {
 		t.Fatalf("plan snapshots must not create transcript messages: %+v", model.messages)
 	}
 	rendered := stripANSI(model.viewActiveRegion())
-	if strings.Count(rendered, "Updated plan") != 1 {
+	if strings.Count(rendered, "Plan ·") != 1 {
 		t.Fatalf("expected exactly one live plan, got: %q", rendered)
 	}
 	for _, step := range []string{"inspect files", "apply changes", "run tests"} {
@@ -31,7 +31,7 @@ func TestLivePlanReplacesSnapshotAboveComposer(t *testing.T) {
 			t.Fatalf("latest plan missing %q: %q", step, rendered)
 		}
 	}
-	planAt := strings.Index(rendered, "Updated plan")
+	planAt := strings.Index(rendered, "Plan ·")
 	composerAt := strings.Index(rendered, "Ask SelfMind")
 	if planAt < 0 || composerAt < 0 || planAt >= composerAt {
 		t.Fatalf("live plan must render above the composer: %q", rendered)
@@ -54,7 +54,7 @@ func TestLivePlanClearsWhenRunFinishes(t *testing.T) {
 	if model.activePlanJSON != "" {
 		t.Fatalf("active plan was not cleared: %q", model.activePlanJSON)
 	}
-	if rendered := stripANSI(model.viewActiveRegion()); strings.Contains(rendered, "Updated plan") {
+	if rendered := stripANSI(model.viewActiveRegion()); strings.Contains(rendered, "Plan ·") {
 		t.Fatalf("finished UI must not retain the live plan: %q", rendered)
 	}
 }
@@ -67,10 +67,10 @@ func TestWaitingAnimationKeepsOneRowWhenPlanConsumesTightLayout(t *testing.T) {
 	model.activePlanJSON = `{"plan":[{"step":"inspect files","status":"completed"},{"step":"apply changes","status":"in_progress"},{"step":"run tests","status":"pending"}]}`
 	model.startModelWait("Reading tool results and deciding the next step")
 
-	if budget := model.processRowBudget(model.width); budget < 1 {
-		t.Fatalf("waiting animation lost its reserved row: budget=%d", budget)
-	}
-	if rendered := stripANSI(model.renderActiveBlock(model.width)); !strings.Contains(rendered, "Reading tool results and deciding the next step") {
+	// The progress line has its own reserved row, so a tight layout can starve
+	// the tool/process rows without ever costing the animation its slot.
+	// The label is truncated to this narrow width; its presence is the point.
+	if rendered := stripANSI(model.activityRow(model.width)); !strings.Contains(rendered, "Reading tool results") {
 		t.Fatalf("waiting animation disappeared beside a live plan: %q", rendered)
 	}
 }

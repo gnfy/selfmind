@@ -208,10 +208,21 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 	}
 	recorder := &recordingSender{}
 	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	// The registering Run hands off as waiting_external; the watcher owns the
+	// wait from here.
 	run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_external"); err != nil {
+		t.Fatal(err)
+	}
+	// Another person-level run keeps the drained finalization queued, so the
+	// durable products can be asserted without a model.
+	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{TaskID: "busy"}) {
+		t.Fatal("failed to install active-run guard")
+	}
+	defer daemon.coordinator().endActive(identity.PersonID)
 	command := "printf READY"
 	if runtime.GOOS == "windows" {
 		command = "Write-Output READY"
@@ -233,6 +244,15 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// While the watcher is live, the Run is monitoring Attention and nothing
+	// may claim it away from the watcher.
+	if attention, err := control.NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 10); err != nil ||
+		len(attention) != 1 || attention[0].RunID != run.ID || attention[0].Activity != control.ThreadActivityMonitoring {
+		t.Fatalf("attention while watching = %+v, %v", attention, err)
+	}
+	if _, err := store.StartRunWithOptions(ctx, task, "cli", "too early", control.StartRunOptions{ResumesRunID: run.ID}); !errors.Is(err, control.ErrResumeTargetNotResumable) {
+		t.Fatalf("claim during live watch = %v, want ErrResumeTargetNotResumable", err)
+	}
 
 	daemon.runExternalWatchPass(ctx)
 	counts, err := store.CountExternalWatchesByStatus(ctx, identity.TenantID, identity.PersonID)
@@ -244,15 +264,24 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 		t.Fatalf("watch did not complete in one pass: counts=%+v err=%v\n%s",
 			counts, err, describeWatch(ctx, t, store, identity.TenantID, watch.ID))
 	}
-	updated, err := store.GetTask(ctx, identity.TenantID, task.ID)
-	if err != nil || updated == nil {
-		t.Fatalf("task = %+v err=%v", updated, err)
+	stored, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("watch row = %+v, %v", stored, err)
 	}
-	// The durable finalization row is drained immediately. Depending on
-	// scheduler timing the task is either waiting_finalization or already
-	// running that finalization; both prove it was not falsely blocked.
-	if (updated.Status != "waiting_finalization" && updated.Status != "running") || !strings.Contains(updated.CurrentSummary, "CI build completed") {
-		t.Fatalf("task after watch = %+v", updated)
+	// The finalization row replies to the watcher Run, so the drained run
+	// becomes that Run's exact child; the Run itself stays parked for it.
+	queued, err := store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, externalWatchFinalizationKey(*stored))
+	if err != nil || queued == nil || queued.Status != control.QueueStatusQueued || queued.TaskID != task.ID || queued.ReplyToRunID != run.ID {
+		t.Fatalf("finalization row = %+v, %v; want queued reply to %s", queued, err, run.ID)
+	}
+	storedRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil || storedRun == nil || storedRun.Status != "waiting_external" {
+		t.Fatalf("watcher run after verdict = %+v, %v", storedRun, err)
+	}
+	// A concluded watcher is no longer monitoring Attention: the queued
+	// finalization owns the next step, not the person.
+	if attention, err := control.NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 10); err != nil || len(attention) != 0 {
+		t.Fatalf("attention after verdict = %+v, %v", attention, err)
 	}
 	if !hasEventOfType(t, store, task.ID, "external_watch.completed") {
 		t.Fatal("external watch completion event missing")
@@ -391,6 +420,61 @@ func TestExternalWatchFinalizationUsesRecordedEvidence(t *testing.T) {
 	}
 }
 
+// seedConcludedWatch parks a watcher Run as waiting_external, registers a watch
+// for it, and records a succeeded verdict. It returns the reloaded watch row
+// (with its verdict revision) and the Run.
+func seedConcludedWatch(t *testing.T, store *control.Store, identity *control.IdentityContext, task *control.Task) (*control.ExternalWatch, *control.Run) {
+	t.Helper()
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_external"); err != nil {
+		t.Fatal(err)
+	}
+	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Channel: "cli-session", Description: "CI build", CWD: t.TempDir(),
+		Command: "true", SuccessPattern: "SUCCESS", TimeoutAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished, err := store.FinishExternalWatch(ctx, watch.TenantID, watch.ID, control.ExternalWatchSucceeded, "SUCCESS\n", ""); err != nil || !finished {
+		t.Fatalf("finish watch = %v, %v", finished, err)
+	}
+	stored, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("watch row = %+v, %v", stored, err)
+	}
+	return stored, run
+}
+
+// assertWatcherRunState reads the watcher Run's execution truth and whether
+// Attention lists it; watch tests assert this state, never summary prose.
+func assertWatcherRunState(t *testing.T, store *control.Store, identity *control.IdentityContext, runID, wantStatus, wantActivity string) {
+	t.Helper()
+	ctx := context.Background()
+	run, err := store.GetRun(ctx, identity.TenantID, runID)
+	if err != nil || run == nil || run.Status != wantStatus {
+		t.Fatalf("watcher run = %+v, %v; want status %s", run, err, wantStatus)
+	}
+	attention, err := control.NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotActivity := ""
+	for _, item := range attention {
+		if item.RunID == runID {
+			gotActivity = item.Activity
+		}
+	}
+	if gotActivity != wantActivity {
+		t.Fatalf("attention activity for %s = %q, want %q (attention=%+v)", runID, gotActivity, wantActivity, attention)
+	}
+}
+
 func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
 	daemon, store, identity, task, approval := newApprovalTestServer(t)
 	ctx := context.Background()
@@ -402,22 +486,7 @@ func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
 	}
 	defer daemon.coordinator().endActive(identity.PersonID)
 
-	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
-		Channel: "cli-session", Description: "CI build", CWD: t.TempDir(),
-		Command: "true", SuccessPattern: "SUCCESS", TimeoutAt: time.Now().Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finished, err := store.FinishExternalWatch(ctx, watch.TenantID, watch.ID, control.ExternalWatchSucceeded, "SUCCESS\n", ""); err != nil || !finished {
-		t.Fatalf("finish watch = %v, %v", finished, err)
-	}
-	finished, err := store.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchSucceeded, time.Now().Add(-time.Minute), 10)
-	if err != nil || len(finished) != 1 {
-		t.Fatalf("finished watches = %+v, %v", finished, err)
-	}
-	watch = &finished[0]
+	watch, run := seedConcludedWatch(t, store, identity, task)
 	row, err := store.EnqueueQueued(ctx, control.QueuedTask{
 		TenantID: watch.TenantID, PersonID: watch.PersonID, Channel: watch.Channel,
 		Platform: "cli", Content: "old finalization", TaskID: watch.TaskID,
@@ -435,7 +504,7 @@ func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
 	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusDone); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "in_progress", "old status", nil); err != nil {
+	if err := store.UpdateThreadSummary(ctx, watch.TenantID, watch.TaskID, "old status", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -447,10 +516,9 @@ func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
 	if strings.Contains(row.Content, "old finalization") || !strings.Contains(row.Content, "authoritative evidence") || !strings.Contains(row.Content, "SUCCESS") {
 		t.Fatalf("reconciled queue kept stale instructions: %q", row.Content)
 	}
-	updated, err := store.GetTask(ctx, watch.TenantID, watch.TaskID)
-	if err != nil || updated == nil || updated.Status != "waiting_finalization" {
-		t.Fatalf("reconciled task = %+v, %v", updated, err)
-	}
+	// A retry is still available, so the watcher Run stays parked for its
+	// finalization rather than being parked on the person.
+	assertWatcherRunState(t, store, identity, run.ID, "waiting_external", "")
 }
 
 func TestExternalWatchFinalizationRepairsLegacyGatewayShutdownCancellation(t *testing.T) {
@@ -464,22 +532,7 @@ func TestExternalWatchFinalizationRepairsLegacyGatewayShutdownCancellation(t *te
 	}
 	defer daemon.coordinator().endActive(identity.PersonID)
 
-	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
-		Channel: "cli-session", Description: "CI build", CWD: t.TempDir(),
-		Command: "true", SuccessPattern: "SUCCESS", TimeoutAt: time.Now().Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finished, err := store.FinishExternalWatch(ctx, watch.TenantID, watch.ID, control.ExternalWatchSucceeded, "SUCCESS\n", ""); err != nil || !finished {
-		t.Fatalf("finish watch = %v, %v", finished, err)
-	}
-	finished, err := store.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchSucceeded, time.Now().Add(-time.Minute), 10)
-	if err != nil || len(finished) != 1 {
-		t.Fatalf("finished watches = %+v, %v", finished, err)
-	}
-	watch = &finished[0]
+	watch, run := seedConcludedWatch(t, store, identity, task)
 	row, err := store.EnqueueQueued(ctx, control.QueuedTask{
 		TenantID: watch.TenantID, PersonID: watch.PersonID, Channel: watch.Channel,
 		Platform: "cli", Content: "old finalization", TaskID: watch.TaskID,
@@ -498,19 +551,18 @@ func TestExternalWatchFinalizationRepairsLegacyGatewayShutdownCancellation(t *te
 	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusDone); err != nil {
 		t.Fatal(err)
 	}
+	// The watcher Run's OWN cancellation was a daemon shutdown, which is
+	// recoverable, not a decision.
 	for _, payload := range []map[string]interface{}{
 		{"reason": "gateway shutdown"},
 		{"error": "context canceled", "outcome": map[string]interface{}{"status": "cancelled"}},
 	} {
 		encoded, _ := json.Marshal(payload)
 		if _, err := store.AppendEvent(ctx, control.Event{
-			TaskID: task.ID, RunID: legacyRunID, Type: "run.cancelled", Payload: encoded,
+			TaskID: task.ID, RunID: run.ID, Type: "run.cancelled", Payload: encoded,
 		}); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := store.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "cancelled", "The run was cancelled before completion.", nil); err != nil {
-		t.Fatal(err)
 	}
 
 	daemon.reconcileExternalWatchFinalizations(ctx)
@@ -518,10 +570,7 @@ func TestExternalWatchFinalizationRepairsLegacyGatewayShutdownCancellation(t *te
 	if err != nil || row == nil || row.Status != control.QueueStatusQueued {
 		t.Fatalf("legacy cancelled queue = %+v, %v; want queued", row, err)
 	}
-	updated, err := store.GetTask(ctx, watch.TenantID, watch.TaskID)
-	if err != nil || updated == nil || updated.Status != "waiting_finalization" {
-		t.Fatalf("legacy cancelled task = %+v, %v; want waiting_finalization", updated, err)
-	}
+	assertWatcherRunState(t, store, identity, run.ID, "waiting_external", "")
 }
 
 func TestExternalWatchFinalizationDoesNotReopenLaterUserCancellation(t *testing.T) {
@@ -532,22 +581,7 @@ func TestExternalWatchFinalizationDoesNotReopenLaterUserCancellation(t *testing.
 	}
 	defer daemon.coordinator().endActive(identity.PersonID)
 
-	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
-		Channel: "cli-session", Description: "CI build", CWD: t.TempDir(),
-		Command: "true", SuccessPattern: "SUCCESS", TimeoutAt: time.Now().Add(time.Hour),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if finished, err := store.FinishExternalWatch(ctx, watch.TenantID, watch.ID, control.ExternalWatchSucceeded, "SUCCESS\n", ""); err != nil || !finished {
-		t.Fatalf("finish watch = %v, %v", finished, err)
-	}
-	finished, err := store.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchSucceeded, time.Now().Add(-time.Minute), 10)
-	if err != nil || len(finished) != 1 {
-		t.Fatalf("finished watches = %+v, %v", finished, err)
-	}
-	watch = &finished[0]
+	watch, run := seedConcludedWatch(t, store, identity, task)
 	row, err := store.EnqueueQueued(ctx, control.QueuedTask{
 		TenantID: watch.TenantID, PersonID: watch.PersonID, Channel: watch.Channel,
 		Platform: "cli", Content: "old finalization", TaskID: watch.TaskID,
@@ -559,16 +593,24 @@ func TestExternalWatchFinalizationDoesNotReopenLaterUserCancellation(t *testing.
 	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusDone); err != nil {
 		t.Fatal(err)
 	}
-	for _, event := range []control.Event{
-		{TaskID: task.ID, RunID: "run_old_shutdown", Type: "run.cancelled", Payload: json.RawMessage(`{"reason":"gateway shutdown"}`)},
-		{TaskID: task.ID, RunID: "run_old_shutdown", Type: "run.cancelled", Payload: json.RawMessage(`{"error":"context canceled"}`)},
-		{TaskID: task.ID, RunID: "run_later_user_cancel", Type: "run.cancelled", Payload: json.RawMessage(`{"reason":"cancelled by user"}`)},
-	} {
-		if _, err := store.AppendEvent(ctx, event); err != nil {
-			t.Fatal(err)
-		}
+	// The person stopped the watcher Run itself. A newer, unrelated Run in
+	// the same Thread was later cut by a daemon shutdown; that must not undo
+	// the person's decision the way a newest-cancellation scan would.
+	if _, err := store.AppendEvent(ctx, control.Event{
+		TaskID: task.ID, RunID: run.ID, Type: "run.cancelled", Payload: json.RawMessage(`{"reason":"user requested stop"}`),
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if err := store.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "cancelled", "The run was cancelled before completion.", nil); err != nil {
+	unrelated, err := store.StartRun(ctx, task, "cli", "unrelated later work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, unrelated.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, control.Event{
+		TaskID: task.ID, RunID: unrelated.ID, Type: "run.cancelled", Payload: json.RawMessage(`{"reason":"gateway shutdown"}`),
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -577,9 +619,90 @@ func TestExternalWatchFinalizationDoesNotReopenLaterUserCancellation(t *testing.
 	if err != nil || row == nil || row.Status != control.QueueStatusDone {
 		t.Fatalf("explicitly cancelled queue = %+v, %v; want done", row, err)
 	}
-	updated, err := store.GetTask(ctx, watch.TenantID, watch.TaskID)
-	if err != nil || updated == nil || updated.Status != "cancelled" {
-		t.Fatalf("explicitly cancelled task = %+v, %v; want cancelled", updated, err)
+	if hasEventOfType(t, store, task.ID, "external_watch.finalization_blocked") {
+		t.Fatal("suppressed finalization must not be reported as blocked")
+	}
+}
+
+// TestExternalWatchFinalizationBindsAndClaimsWatcherRun: the finalization row
+// replies to the watcher Run, and once that Run's watchers concluded the
+// continuation claims it as the exact parent. After the claim, a binding that
+// still names the watcher Run resolves to the Thread's current state instead
+// of failing closed, so a retry or a later reply is never unroutable.
+func TestExternalWatchFinalizationBindsAndClaimsWatcherRun(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{TaskID: "other-task"}) {
+		t.Fatal("failed to install active-run guard")
+	}
+	defer daemon.coordinator().endActive(identity.PersonID)
+
+	watch, run := seedConcludedWatch(t, store, identity, task)
+	if err := daemon.enqueueExternalWatchFinalization(ctx, *watch, identity, "CI build completed."); err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.GetQueuedByIdempotencyKey(ctx, watch.TenantID, externalWatchFinalizationKey(*watch))
+	if err != nil || row == nil || row.ReplyToRunID != run.ID || row.TaskID != task.ID {
+		t.Fatalf("finalization row = %+v, %v; want reply to %s", row, err, run.ID)
+	}
+	resolved, err := daemon.coordinator().resolveExplicitResumeTarget(ctx, identity, task, run.ID)
+	if err != nil || resolved.exact() == nil || resolved.exact().ID != run.ID {
+		t.Fatalf("concluded watcher run resolution = %+v, %v", resolved, err)
+	}
+	child, err := store.StartRunWithOptions(ctx, task, "cli", "finalize the release record", control.StartRunOptions{ResumesRunID: run.ID})
+	if err != nil || child == nil || child.ResumesRunID != run.ID {
+		t.Fatalf("finalization child = %+v, %v", child, err)
+	}
+	resolved, err = daemon.coordinator().resolveExplicitResumeTarget(ctx, identity, task, run.ID)
+	if err != nil || resolved.exact() != nil || resolved.ambiguous() {
+		t.Fatalf("claimed watcher run must resolve to the thread's current state, got %+v, %v", resolved, err)
+	}
+	// A Run that already moved on is never bound as an exact parent.
+	if err := store.FinishRun(ctx, identity.TenantID, child.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if parent := daemon.externalWatchFinalizationTarget(ctx, control.ExternalWatch{TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: child.ID}); parent != "" {
+		t.Fatalf("a done run was offered as finalization parent: %s", parent)
+	}
+}
+
+// TestExternalWatchFinalizationBlockParksWatcherRun: when the finalization
+// cannot be materialized, the watcher Run itself becomes blocked, which is what
+// puts it back in front of the person as resumable Attention.
+func TestExternalWatchFinalizationBlockParksWatcherRun(t *testing.T) {
+	daemon, store, identity, task, approval := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{TaskID: "other-task"}) {
+		t.Fatal("failed to install active-run guard")
+	}
+	defer daemon.coordinator().endActive(identity.PersonID)
+
+	watch, run := seedConcludedWatch(t, store, identity, task)
+	row, err := store.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: watch.TenantID, PersonID: watch.PersonID, Channel: watch.Channel,
+		Platform: "cli", Content: "finalization", TaskID: watch.TaskID, ReplyToRunID: run.ID,
+		IdempotencyKey: externalWatchFinalizationKey(*watch),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The person dropped the finalization from the queue.
+	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusCancelled); err != nil {
+		t.Fatal(err)
+	}
+	assertWatcherRunState(t, store, identity, run.ID, "waiting_external", "")
+
+	daemon.reconcileExternalWatchFinalizations(ctx)
+	assertWatcherRunState(t, store, identity, run.ID, "blocked", control.ThreadActivityResumable)
+	if !hasEventOfType(t, store, task.ID, "external_watch.finalization_blocked") {
+		t.Fatal("finalization block event missing")
+	}
+	// Blocking is idempotent and never rewrites a Run that moved on.
+	if changed, err := store.MarkExternalWatchRunBlocked(ctx, identity.TenantID, run.ID, "again"); err != nil || changed {
+		t.Fatalf("second block changed=%v err=%v", changed, err)
 	}
 }
 
@@ -729,4 +852,115 @@ func describeWatch(ctx context.Context, t *testing.T, store *control.Store, tena
 		row.Attempts, row.Command, row.SuccessPattern, row.CWD,
 		time.Until(row.NextCheckAt).Round(time.Millisecond),
 		time.Until(row.TimeoutAt).Round(time.Millisecond))
+}
+
+// A Run can be cancelled more than once: a daemon shutdown, then the person.
+// Only the most recent cancellation describes the Run now, so an older
+// gateway shutdown must not excuse retrying work the person has since stopped.
+func TestExternalWatchFinalizationHonorsNewestCancellationOfTheSameRun(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{TaskID: "other-task"}) {
+		t.Fatal("failed to install active-run guard")
+	}
+	defer daemon.coordinator().endActive(identity.PersonID)
+
+	watch, run := seedConcludedWatch(t, store, identity, task)
+	row, err := store.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: watch.TenantID, PersonID: watch.PersonID, Channel: watch.Channel,
+		Platform: "cli", Content: "old finalization", TaskID: watch.TaskID,
+		IdempotencyKey: externalWatchFinalizationKey(*watch),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusDone); err != nil {
+		t.Fatal(err)
+	}
+	// Oldest first: the daemon restarted, and only afterwards did the person
+	// stop this exact Run.
+	for _, payload := range []string{`{"reason":"gateway shutdown"}`, `{"reason":"user requested stop"}`} {
+		if _, err := store.AppendEvent(ctx, control.Event{
+			TaskID: task.ID, RunID: run.ID, Type: "run.cancelled", Payload: json.RawMessage(payload),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	daemon.reconcileExternalWatchFinalizations(ctx)
+	row, err = store.GetQueued(ctx, watch.TenantID, row.ID)
+	if err != nil || row == nil || row.Status != control.QueueStatusDone {
+		t.Fatalf("newest cancellation is the person's decision: queue = %+v, %v; want done", row, err)
+	}
+}
+
+// A watcher that concludes WITHOUT observing its target must park the Run it
+// handed off. Live gap (2026-09-03): watch_49654694 went blocked_environment
+// and its registering run stayed waiting_external forever — no monitoring
+// signal (the watcher was terminal), no resumable signal (waiting_external is
+// not resumable), so the person's own work sat in no Attention set at all
+// while its finalization waited behind an active run.
+func TestConcludedWatchWithoutObservationParksItsRun(t *testing.T) {
+	for _, tc := range []struct {
+		status     string
+		wantRun    string
+		wantWatch  string
+		wantParked bool
+	}{
+		{status: control.ExternalWatchBlocked, wantRun: "blocked", wantParked: true},
+		{status: control.ExternalWatchFailed, wantRun: "blocked", wantParked: true},
+		{status: control.ExternalWatchTimedOut, wantRun: "blocked", wantParked: true},
+		// An observed result needs no park: its finalization reports it.
+		{status: control.ExternalWatchSucceeded, wantRun: "waiting_external", wantParked: false},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			daemon, store, identity, task, _ := newApprovalTestServer(t)
+			ctx := context.Background()
+			run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_external"); err != nil {
+				t.Fatal(err)
+			}
+			watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
+				TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+				Channel: "cli-session", Description: "CI build", CWD: t.TempDir(),
+				Command: "true", SuccessPattern: "SUCCESS", TimeoutAt: time.Now().Add(time.Hour),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if finished, err := store.FinishExternalWatch(ctx, watch.TenantID, watch.ID, tc.status, "", "check could not observe"); err != nil || !finished {
+				t.Fatalf("finish watch = %v, %v", finished, err)
+			}
+			stored, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+			if err != nil || stored == nil {
+				t.Fatalf("watch row = %+v, %v", stored, err)
+			}
+
+			daemon.finalizeExternalWatch(ctx, *stored, tc.status, "", "check could not observe")
+
+			got, err := store.GetRun(ctx, identity.TenantID, run.ID)
+			if err != nil || got == nil {
+				t.Fatalf("run = %+v, %v", got, err)
+			}
+			if got.Status != tc.wantRun {
+				t.Fatalf("%s watcher left its run %q, want %q", tc.status, got.Status, tc.wantRun)
+			}
+			attention, err := control.NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := false
+			for _, item := range attention {
+				if item.RunID == run.ID {
+					listed = true
+				}
+			}
+			if listed != tc.wantParked {
+				t.Fatalf("%s watcher: run in attention = %v, want %v (attention=%+v)", tc.status, listed, tc.wantParked, attention)
+			}
+		})
+	}
 }

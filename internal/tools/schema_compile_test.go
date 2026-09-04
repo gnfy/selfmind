@@ -235,3 +235,37 @@ func TestMCPToolLocalNameIsProviderSafeAndCollisionResistant(t *testing.T) {
 		}
 	}
 }
+
+// TestReviewedCohortDefersBuiltinTools pins the C1 unlock: origin is no longer
+// an eligibility filter, so a reviewed built-in can be deferred. The cohort
+// itself stays empty in production, which the assertions below also cover —
+// unlocking the mechanism must not defer anything on its own.
+func TestReviewedCohortDefersBuiltinTools(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(NewReadFileTool())
+	registry.Register(NewSearchFilesTool())
+
+	exposures := func() map[string]ToolExposure {
+		registry.mu.RLock()
+		defer registry.mu.RUnlock()
+		return registry.effectiveToolExposuresLocked(true)
+	}
+
+	for name, exposure := range exposures() {
+		if exposure == ToolExposureDeferred {
+			t.Fatalf("empty cohort deferred %s; unlocking origin must not defer by itself", name)
+		}
+	}
+
+	restore := deferredReviewedCohort
+	deferredReviewedCohort = map[string]struct{}{"search_files": {}}
+	defer func() { deferredReviewedCohort = restore }()
+
+	got := exposures()
+	if got["search_files"] != ToolExposureDeferred {
+		t.Fatalf("reviewed built-in not deferred: exposure=%q", got["search_files"])
+	}
+	if got["read_file"] != ToolExposureDirect {
+		t.Fatalf("unreviewed built-in changed exposure: %q", got["read_file"])
+	}
+}

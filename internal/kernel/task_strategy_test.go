@@ -225,6 +225,17 @@ func TestUpdatePlanLifecycleCapSupportsMeaningfulProgress(t *testing.T) {
 	}
 }
 
+func TestWorkSelectLifecycleCapAllowsOneAuditedCorrection(t *testing.T) {
+	if got := lifecycleToolCap("work_select"); got != 2 {
+		t.Fatalf("work_select lifecycle cap = %d, want proposal plus one correction", got)
+	}
+	calls := []llm.ToolCall{{Function: "work_select"}, {Function: "work_select"}, {Function: "work_select"}}
+	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{})
+	if len(got) != 2 || dropped != 1 {
+		t.Fatalf("len(got)=%d dropped=%d, want 2 and 1", len(got), dropped)
+	}
+}
+
 func TestUnresolvedPlanStepsFromToolCall(t *testing.T) {
 	call := llm.ToolCall{Function: "update_plan", Args: `{"plan":[{"step":"inspect","status":"completed"},{"step":"verify","status":"in_progress"},{"step":"optional cleanup","status":"cancelled"}]}`}
 	got, ok := unresolvedPlanStepsFromToolCall(call)
@@ -237,6 +248,107 @@ func TestFinishRunStatusFromToolCall(t *testing.T) {
 	got, ok := finishRunStatusFromToolCall(llm.ToolCall{Function: "finish_run", Args: `{"status":"waiting_external"}`})
 	if !ok || got != "waiting_external" {
 		t.Fatalf("finish status = %q, ok=%v", got, ok)
+	}
+}
+
+func TestPlanEvidenceExcludesLifecycleAndReadOnlyTools(t *testing.T) {
+	// Only substantive work counts as evidence that a Run is multi-step.
+	// Lifecycle bookkeeping is not work, and a read-only observation may still
+	// belong to a direct answer.
+	for _, name := range []string{"update_plan", "finish_run", "queue_user_input", "work_select"} {
+		if countsTowardPlanEvidence(name) {
+			t.Fatalf("lifecycle tool %q must not count as plan evidence", name)
+		}
+	}
+	for _, name := range []string{"read_file", "search_files", "list_files", "process_poll"} {
+		if countsTowardPlanEvidence(name) {
+			t.Fatalf("read-only tool %q must not count as plan evidence", name)
+		}
+	}
+	for _, name := range []string{"terminal", "write_file", "patch", "some_unregistered_tool"} {
+		if !countsTowardPlanEvidence(name) {
+			t.Fatalf("substantive tool %q must count as plan evidence", name)
+		}
+	}
+}
+
+func TestPlanGuidanceEscalatesOnlyAfterEnoughInRunEvidence(t *testing.T) {
+	if planGuidanceEscalationThreshold != 2 {
+		t.Fatalf("plan escalation threshold=%d, want 2 so guidance arrives before a third substantive action", planGuidanceEscalationThreshold)
+	}
+	strategy := DefaultTaskStrategy()
+	if strategy.PlanPolicy != PlanPolicyOptional {
+		t.Fatalf("precondition: default plan policy = %s", strategy.PlanPolicy)
+	}
+	if shouldEscalatePlanGuidance(strategy, planGuidanceEscalationThreshold-1, false) {
+		t.Fatal("guidance escalated below the evidence threshold")
+	}
+	if !shouldEscalatePlanGuidance(strategy, planGuidanceEscalationThreshold, false) {
+		t.Fatal("guidance did not escalate after the evidence threshold was reached")
+	}
+}
+
+func TestPlanGuidanceNotEscalatedWhenRunAlreadyHasPlan(t *testing.T) {
+	if shouldEscalatePlanGuidance(DefaultTaskStrategy(), planGuidanceEscalationThreshold+10, true) {
+		t.Fatal("a Run with a durable plan must not be escalated")
+	}
+}
+
+func TestPlanGuidanceNeverEscalatesDisabledOrToolFreeTurns(t *testing.T) {
+	direct := BuildTaskStrategy("你是什么模型？", "cli")
+	if direct.PlanPolicy != PlanPolicyDisabled {
+		t.Fatalf("precondition: plan policy = %s, want disabled", direct.PlanPolicy)
+	}
+	if shouldEscalatePlanGuidance(direct, planGuidanceEscalationThreshold+10, false) {
+		t.Fatal("a direct-answer turn must never be escalated to a required plan")
+	}
+	if escalated := direct.WithPlanRequired(); escalated.PlanPolicy != PlanPolicyDisabled || escalated.AllowsTool("update_plan") {
+		t.Fatalf("WithPlanRequired must leave a disabled turn disabled with update_plan hidden: %+v", escalated)
+	}
+
+	toolFree := DefaultTaskStrategy()
+	toolFree.ToolMode = ToolModeNone
+	if shouldEscalatePlanGuidance(toolFree, planGuidanceEscalationThreshold+10, false) {
+		t.Fatal("a tool-free turn must never be escalated")
+	}
+
+	hidden := DefaultTaskStrategy().WithHiddenTools("update_plan")
+	if shouldEscalatePlanGuidance(hidden, planGuidanceEscalationThreshold+10, false) {
+		t.Fatal("guidance must not require a tool this turn cannot call")
+	}
+}
+
+func TestWithPlanRequiredEscalatesWithoutWideningToolSurface(t *testing.T) {
+	escalated := DefaultTaskStrategy().WithPlanRequired()
+	if escalated.PlanPolicy != PlanPolicyRequired {
+		t.Fatalf("plan policy = %s, want required", escalated.PlanPolicy)
+	}
+	if !escalated.AllowsTool("update_plan") {
+		t.Fatalf("required planning must keep update_plan available: %+v", escalated)
+	}
+	if escalated.AllowsTool("web_search") || escalated.AllowsTool("web_extract") {
+		t.Fatalf("plan escalation must not un-hide web tools: %+v", escalated)
+	}
+	if shouldEscalatePlanGuidance(escalated, planGuidanceEscalationThreshold+10, false) {
+		t.Fatal("an already-required turn has nothing left to escalate")
+	}
+}
+
+func TestPlanGuidanceEscalationNudgeCarriesRequiredWording(t *testing.T) {
+	nudge := planGuidanceEscalationNudge(DefaultTaskStrategy(), 5)
+	required := planToolGuidance(DefaultTaskStrategy().WithPlanRequired())
+	if !strings.Contains(nudge, strings.TrimSpace(required)) {
+		t.Fatalf("nudge does not carry the required plan wording:\n%s", nudge)
+	}
+	optional := planToolGuidance(DefaultTaskStrategy())
+	if strings.Contains(nudge, "BEFORE the first action tool") {
+		t.Fatalf("nudge repeated the optional wording it is meant to supersede:\n%s\noptional:\n%s", nudge, optional)
+	}
+	if !strings.Contains(nudge, "5 substantive tool action") {
+		t.Fatalf("nudge does not state the observed in-run evidence:\n%s", nudge)
+	}
+	if !strings.Contains(nudge, "finish normally") {
+		t.Fatalf("nudge must leave completion available:\n%s", nudge)
 	}
 }
 
@@ -256,5 +368,43 @@ func TestWithWebEnabledUnhidesWebTools(t *testing.T) {
 	}
 	if !s.AllowsTool("read_file") {
 		t.Fatalf("local tools must remain available: %+v", s)
+	}
+}
+
+// The plan guidance must carry the step-transition discipline under BOTH
+// policies. Without it a reluctant model produced its first snapshot only
+// after the work was done, so the person's first sight of the plan was
+// several steps retroactively marked completed (observed live 2026-09-03).
+func TestPlanGuidanceCarriesStepDisciplineUnderBothPolicies(t *testing.T) {
+	optional := planToolGuidance(DefaultTaskStrategy())
+	required := planToolGuidance(DefaultTaskStrategy().WithPlanRequired())
+	for name, guidance := range map[string]string{"optional": optional, "required": required} {
+		for _, want := range []string{
+			"in_progress before you work on it",
+			"never jump a step straight from pending to completed",
+			"never batch-complete several steps after the fact",
+			"resolve every step before a done outcome",
+		} {
+			if !strings.Contains(guidance, want) {
+				t.Fatalf("%s guidance is missing %q:\n%s", name, want, guidance)
+			}
+		}
+	}
+	// Concrete triggers replace the abstract test, and they belong only to the
+	// policy where the model still has to decide.
+	for _, want := range []string{
+		"ordered phases or dependencies",
+		"answers more than one request at once",
+		"grows extra steps while you work",
+	} {
+		if !strings.Contains(optional, want) {
+			t.Fatalf("optional guidance is missing the trigger %q:\n%s", want, optional)
+		}
+		if strings.Contains(required, want) {
+			t.Fatalf("required guidance must not restate decision triggers (%q):\n%s", want, required)
+		}
+	}
+	if guidance := planToolGuidance(planEscalationStrategy(PlanPolicyDisabled)); !strings.Contains(guidance, "Do not call update_plan") {
+		t.Fatalf("a disabled turn keeps its refusal: %s", guidance)
 	}
 }

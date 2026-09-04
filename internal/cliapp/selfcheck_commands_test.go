@@ -137,12 +137,11 @@ channel: cli
 model_required: false
 turns:
   - input: "/new providerless control check"
-  - input: "/tasks"
+  - input: "/resume"
 expect:
   status: completed
   max_tool_calls: 0
   contains:
-    - "Open tasks:"
     - "providerless control check"
 `
 	if err := os.WriteFile(filepath.Join(dir, "providerless.yaml"), []byte(content), 0o644); err != nil {

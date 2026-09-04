@@ -364,11 +364,12 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 	}
 
-	// Recent events for the current task (fall back to the person's current
-	// task pointer when no run is active).
+	// Recent events for the current subject: the active run's thread, else the
+	// resume pin, the top Attention item, or the most recent run, so a finished
+	// turn keeps its activity diagnosable instead of vanishing.
 	if currentTaskID == "" {
-		if task, _ := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); task != nil {
-			currentTaskID = task.ID
+		if subject, err := d.subjectThreadID(ctx, identity); err == nil {
+			currentTaskID = subject
 		}
 	}
 	if currentTaskID != "" {
@@ -1040,46 +1041,6 @@ func latestRecallUsageLine(events []control.Event) string {
 		return fmt.Sprintf("Recall output overlap: %d/%d slice(s) [%s] (trend signal, not causal proof)\n", p.OutputOverlap, p.Selected, detail)
 	}
 	return ""
-}
-
-// tasksDiagReply is /diag tasks: label hygiene counts plus a bounded
-// "possibly stuck" list — open work whose last activity is old enough that
-// the owner probably forgot it, never an automatic state change (W2).
-func (d *Server) tasksDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
-	if d == nil || d.Control == nil || identity == nil {
-		return "Task diagnostics unavailable.", nil
-	}
-	var sb strings.Builder
-	sb.WriteString("Task diagnostics\n")
-	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
-		fmt.Fprintf(&sb, "Labels: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
-			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
-	}
-	if stats, err := d.Control.ReadTaskReferenceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
-		fmt.Fprintf(&sb, "Task references: active %d, candidate %d, conflicted %d, shadow %d\n",
-			stats.Active, stats.Candidate, stats.Conflicted, stats.Shadow)
-		fmt.Fprintf(&sb, "Task routing audit: corrected %d, pending %d, unverified %d\n",
-			stats.ResolutionCorrected, stats.ResolutionPending, stats.ResolutionUnverified)
-		fmt.Fprintf(&sb, "Workspace knowledge: %d files, %d sections\n", stats.KnowledgeFiles, stats.KnowledgeSections)
-	}
-	queued, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
-	approvals, _, _ := d.pendingApprovalsForDisplay(ctx, identity)
-	clarifies, _ := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 20)
-	fmt.Fprintf(&sb, "Waiting: queued %d, pending approvals %d, pending questions %d\n", queued, len(approvals), len(clarifies))
-
-	// Possibly-stuck scan over the most recent open cards (bounded, read-only).
-	if cards, err := d.Control.ListTaskCards(ctx, identity.TenantID, identity.PersonID, 50); err == nil {
-		lines := stuckTaskLines(cards, time.Now())
-		if len(lines) == 0 {
-			sb.WriteString("Possibly stuck: none\n")
-		} else {
-			fmt.Fprintf(&sb, "Possibly stuck (%d): oldest first — /resume to continue, /task <id> to inspect\n", len(lines))
-			for _, line := range lines {
-				sb.WriteString(line)
-			}
-		}
-	}
-	return strings.TrimSpace(sb.String()), nil
 }
 
 // Stuck thresholds: open work parked without a pending human decision for

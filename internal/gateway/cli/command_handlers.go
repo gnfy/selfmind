@@ -43,7 +43,7 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 	}
 	// Echo the typed command as a user cell BEFORE any reply renders. Normal
 	// chat turns echo their input, but slash turns did not, so a control
-	// session (/workspaces → /workspace 2 → /resume …) read as disembodied
+	// session (/ws → /ws 2 → /resume …) read as disembodied
 	// replies with no visible questions (observed live). addMessage covers
 	// both surfaces: hybrid scrollback (commit) and the legacy viewport.
 	m.addMessage("user", input)
@@ -187,22 +187,6 @@ func (m *uiModel) handleStatus() tea.Cmd {
 	}
 }
 
-func (m *uiModel) handleTasks(args []string) tea.Cmd {
-	return func() tea.Msg {
-		if m.messageProcessor == nil {
-			return MsgAgentDone{Response: "Gateway not connected, cannot list tasks."}
-		}
-		// Relay variants (/tasks done|archived|all) to the gateway, which
-		// owns the aggregated view.
-		content := strings.TrimSpace("/tasks " + strings.Join(args, " "))
-		resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest(content))
-		if resp.Error != "" {
-			return MsgAgentDone{Response: fmt.Sprintf("Error fetching tasks: %s", resp.Error)}
-		}
-		return MsgAgentDone{Response: resp.Content}
-	}
-}
-
 // handleControlPassthrough forwards a gateway control command (e.g. /queue,
 // /diag) to the daemon and renders its plain-text reply. These are pre-agent
 // control commands owned by the gateway; the TUI is a thin client that just
@@ -235,7 +219,7 @@ func (m *uiModel) handleResumeSelect(args []string) tea.Cmd {
 		m.resumePickerArmed = false
 		return m.handleControlPassthrough("/resume", args)
 	}
-	list := m.handleControlPassthrough("/tasks", nil)
+	list := m.handleControlPassthrough("/resume", nil)
 	return func() tea.Msg {
 		msg := list()
 		done, ok := msg.(MsgAgentDone)
@@ -277,21 +261,21 @@ func (m *uiModel) controlMessageRequest(content string) api.MessageRequest {
 		Channel:        m.channel,
 		Content:        content,
 		ClientCWD:      currentWorkingDir(),
-		// Session workspace override (set by /workspace this session): explicit
+		// Session workspace override (set by /ws this session): explicit
 		// WorkspaceID wins over cwd derivation server-side, so /new and other
 		// control turns act in the selected workspace, not the launch dir.
 		WorkspaceID: m.workspaceOverrideID,
 	}
 }
 
-// handleWorkspaceSelect relays `/workspace <n|id>` to the gateway exactly like
+// handleWorkspaceSelect relays `/ws <n|id>` to the gateway exactly like
 // a control passthrough, then — on a successful switch — pins the resolved
 // workspace as this session's override so subsequent agent turns actually run
 // there (defect: the next message silently fell back to the launch-cwd
 // workspace because only ClientCWD rode the request). Failure replies (usage
 // text, "no workspace matching …") render as-is and set nothing.
 func (m *uiModel) handleWorkspaceSelect(args []string) tea.Cmd {
-	content := "/workspace"
+	content := "/ws"
 	if len(args) > 0 {
 		content += " " + strings.Join(args, " ")
 	}
@@ -596,37 +580,21 @@ func (m *uiModel) handleBundles(args []string) tea.Cmd {
 	}
 }
 
-// handleSessionSearch backs /search: find prior working sessions by keyword
-// (empty query = recent sessions). It rides the session_search tool through
-// m.dispatch, so BOTH modes hit their correct partition: client mode goes to
-// the daemon (/v1/dispatch overrides the partition to the person id — what
-// daemon runs write), in-process mode uses the local dispatcher with the
-// in-process tenant. This closed the last session-search parity gap before the
-// in-process path removal (ACTIVE PLAN P0-3).
+// handleSessionSearch backs /search. History search itself is a gateway
+// command now, so every endpoint gets the same answer from the same index —
+// searching past work is how a person picks it up from wherever they are, and
+// that cannot be an affordance of one terminal.
+//
+// `current` stays local: it is the full-fidelity view of the conversation in
+// progress, the escape hatch the immutable hybrid transcript otherwise gives up
+// since committed cells carry bounded diffs. It lives under this command rather
+// than its own so "look back at work" has one entry point.
 func (m *uiModel) handleSessionSearch(args []string) tea.Cmd {
-	query := strings.TrimSpace(strings.Join(args, " "))
-	// `/search current` is the full-fidelity view of the conversation in
-	// progress — the escape hatch the immutable hybrid transcript otherwise
-	// gives up, since committed cells carry bounded diffs. It lives here rather
-	// than under its own command so "look back at work" has one entry point.
-	if strings.EqualFold(query, "current") {
+	if len(args) == 1 && strings.EqualFold(strings.TrimSpace(args[0]), "current") {
 		m.openHistory()
 		return nil
 	}
-	return func() tea.Msg {
-		dispatchArgs := map[string]interface{}{"limit": 10, "_tenant_id": m.tenantID}
-		if query != "" {
-			dispatchArgs["query"] = query
-		}
-		resp, err := m.dispatch("session_search", dispatchArgs)
-		if err != nil {
-			return MsgAgentDone{Response: fmt.Sprintf("Session search error: %v", err)}
-		}
-		if strings.TrimSpace(resp) == "" {
-			resp = "No matching sessions."
-		}
-		return MsgAgentDone{Response: resp}
-	}
+	return m.handleControlPassthrough("/search", args)
 }
 
 func (m *uiModel) handleMemory(args []string) tea.Cmd {

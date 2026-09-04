@@ -114,16 +114,6 @@ func TestPostRunAnalyzerAcceptsObjectNewDecision(t *testing.T) {
 	}
 }
 
-func TestPostRunAnalyzerNormalizesTaskReferences(t *testing.T) {
-	got, err := decodePostRunAnalysis(`{"task_decision":"KEEP","task_references":[{"class":"literal","value":"RUQX-42","confidence":0.9},{"class":"literal","value":"ruqx-42","confidence":0.8},{"class":"unknown","value":"ignored","confidence":1}]}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.TaskReferences) != 1 || got.TaskReferences[0].Value != "RUQX-42" {
-		t.Fatalf("task references=%+v", got.TaskReferences)
-	}
-}
-
 func TestPostRunAnalyzerRetriesTruncatedContractOnce(t *testing.T) {
 	provider := &postRunProviderStub{responses: []*llm.ChatResponse{
 		{Content: `{"task_decision":`, FinishReason: "length"},

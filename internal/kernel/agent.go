@@ -635,7 +635,7 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 			ToolCallID:      toolCallID,
 			DurationSeconds: duration,
 			ToolResult:      result.Preview,
-			Error:           result.ModelContent,
+			Error:           result.DisplayError,
 			Payload:         metadataPayload(payload),
 		})
 	} else {
@@ -1058,6 +1058,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	planSeen := false
 	var unresolvedPlanSteps []string
 	planRepairAttempts := 0
+	// Distinct successful substantive action tools completed by this Run, taken
+	// from the same evidence gate that extends the tool budget. It excludes
+	// lifecycle bookkeeping and provably read-only observation, so only real
+	// multi-step work escalates the plan guidance below.
+	planEvidenceTools := 0
+	planGuidanceEscalated := false
 	successfulFinishStatus := ""
 	tryExtendToolBudget := func(iteration int) bool {
 		if actionToolBudget <= 0 || actionToolBudget >= actionToolBudgetLimit || budgetExtensions >= strategy.normalized().MaxBudgetExtensions {
@@ -1122,7 +1128,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// running into the conversation before the next model call, so the agent
 		// adjusts course in-flight instead of the input being rejected or lost.
 		for _, guidance := range drainSteering(steerCh) {
-			messages = append(messages, llm.Message{Role: "user", Content: guidance.Content})
+			messages = append(messages, llm.Message{Role: "user", Content: steeringContentForMain(guidance)})
 			history.Steps = append(history.Steps, "user added guidance mid-turn")
 			EmitAgentEvent(eventCh, AgentEvent{
 				Type: "agent.steering",
@@ -1174,6 +1180,37 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 		if len(cappedLifecycleTools) > 0 {
 			iterationStrategy = iterationStrategy.WithHiddenTools(cappedLifecycleTools...)
+		}
+		// Plan guidance escalation. The system prompt — including
+		// planToolGuidance — is composed once per Run, before any work has
+		// happened, so a model that simply never volunteers update_plan keeps
+		// reading the optional wording no matter how much work it does. This is
+		// the per-iteration seam: once the Run's own evidence shows genuinely
+		// multi-step work and there is still no durable plan, hand the model the
+		// required wording for the next model call. Same shape as the other
+		// runtime directives in this loop, and the same discipline as the tool
+		// budget — escalate only after real new evidence, never from the input
+		// text. Guidance only: no plan is fabricated, no provider call is added,
+		// and the model stays free to finish. It reads this iteration's strategy,
+		// so a turn whose plan tool is unavailable is never told to require it,
+		// and it stops once the turn is winding down — asking for a plan while
+		// the budget-exhausted path is telling the model to stop calling tools
+		// would be a contradiction, not guidance.
+		if !planGuidanceEscalated && !toolBudgetExhausted && shouldEscalatePlanGuidance(iterationStrategy, planEvidenceTools, planSeen) {
+			planGuidanceEscalated = true
+			previousPlanPolicy := iterationStrategy.normalized().PlanPolicy
+			iterationStrategy = iterationStrategy.WithPlanRequired()
+			messages = append(messages, llm.Message{
+				Role:    "user",
+				Content: planGuidanceEscalationNudge(iterationStrategy, planEvidenceTools),
+			})
+			EmitAgentEvent(eventCh, AgentEvent{Type: "strategy.plan_guidance_escalated", Payload: map[string]interface{}{
+				"iteration":            i,
+				"plan_evidence_tools":  planEvidenceTools,
+				"threshold":            planGuidanceEscalationThreshold,
+				"previous_plan_policy": string(previousPlanPolicy),
+				"plan_policy":          string(iterationStrategy.PlanPolicy),
+			}})
 		}
 		var fullResp strings.Builder
 		var reasoningResp strings.Builder
@@ -1483,6 +1520,19 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					messages[aged.index].Content = shrunk
 				}
 			}
+			// Then the cumulative cap: the age rule is per-result, so a window
+			// of several large results can still dominate the request even
+			// when none of them is individually old enough to shrink.
+			budgetIndexes := make([]int, 0, len(artifactToolMsgs))
+			for _, aged := range artifactToolMsgs {
+				budgetIndexes = append(budgetIndexes, aged.index)
+			}
+			if shrunk := enforceToolResultTurnBudget(messages, budgetIndexes); shrunk > 0 {
+				EmitAgentEvent(eventCh, AgentEvent{Type: "context.tool_results_aged", Payload: map[string]interface{}{
+					"messages": shrunk, "budget_bytes": toolResultTurnBudgetBytes,
+					"live_bytes": liveToolResultBytes(messages), "iteration": i,
+				}})
+			}
 
 			// Append results in order
 			if shouldExpireActiveSkillContext(ctx, calls, results) {
@@ -1523,6 +1573,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					if _, seen := successfulActionEvidence[res.signature]; !seen {
 						successfulActionEvidence[res.signature] = struct{}{}
 						progressVersion++
+						if countsTowardPlanEvidence(res.toolName) {
+							planEvidenceTools++
+						}
 					}
 				}
 				if res.msg.Role == "tool" && strings.Contains(res.msg.Content, toolArtifactNoteToken) {
@@ -2258,13 +2311,13 @@ func (a *Agent) saveHistory(ctx context.Context, tenantID, histKey, channel, use
 		}
 	}
 
-	// Index under a task-derived session id when the turn is bound to a task, so
-	// session_search retrieves the whole task ("what we did on the order system")
-	// as ONE coherent session regardless of which endpoint the turns arrived on.
-	// IndexSession is idempotent per session id, so re-indexing the growing task
-	// trajectory each turn overwrites rather than fragments it. Taskless turns
-	// keep the per-content session id. Indexing is keyed by the task-derived
-	// session id and the REAL channel — never by the spine key.
+	// Index under a RUN-derived session id (sessionKey), so every turn is
+	// searchable even though only the recent spine tail is replayed. Coherence
+	// across a continued line of work is recovered at read time from the resume
+	// edge, not from a key that presumes the grouping. IndexSession is
+	// idempotent per session id, so re-indexing the growing trajectory each turn
+	// overwrites rather than fragments it. Runless turns keep the per-content
+	// session id. Indexing uses the REAL channel — never the spine key.
 	record := struct {
 		Messages []llm.Message `json:"messages"`
 	}{Messages: messages}
@@ -2338,12 +2391,30 @@ func legacyChannelKey(channel string) string {
 	return channel
 }
 
-// sessionKey ties a task's turns to one FTS session id so cross-endpoint recall
-// spans the whole task; taskless turns fall back to a per-content id.
+// SessionRunKeyPrefix is the FTS session key prefix for a run-keyed session.
+// Readers that need "which runs are one line of work" resolve it from the
+// resume edge (control.ResumeChainRoot) rather than from the key itself.
+const SessionRunKeyPrefix = "run:"
+
+// SessionTaskKeyPrefix is the retired Task-keyed prefix. Sessions written
+// before the rekey keep it and stay searchable; nothing writes it any more.
+const SessionTaskKeyPrefix = "task:"
+
+// sessionKey ties one run's turns to one FTS session id.
+//
+// It used to key on the Task, so "one coherent session across endpoints" rested
+// on the judgment that a set of runs is one piece of work — the same judgment
+// that mis-grouped 32 unrelated runs into one thread, which would have put 32
+// unrelated conversations into one searchable session. The run is a fact, so
+// the key is now a fact; coherence across a continued line of work is recovered
+// at READ time by walking the resume edge, which is only ever recorded when
+// something was actually continued.
+//
+// Runless turns still fall back to a per-content id.
 func (a *Agent) sessionKey(ctx context.Context, messages []llm.Message) string {
 	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
-		if id := strings.TrimSpace(runtime.TaskID); id != "" {
-			return "task:" + id
+		if id := strings.TrimSpace(runtime.RunID); id != "" {
+			return SessionRunKeyPrefix + id
 		}
 	}
 	return generateSessionID(messages)
@@ -2548,6 +2619,11 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	if a.backend != nil {
 		defs := filterToolDefinitions(ctx, a.backend.GetToolDefinitions(), strategy)
 		if len(defs) > 0 {
+			if a.primaryForegroundPromptProfile() {
+				if continuity := workContinuityGuidanceForDefinitions(defs); continuity != "" {
+					addVolatile("tools", continuity)
+				}
+			}
 			// Durable learning is a primary-agent responsibility and names only
 			// surfaces actually available in this turn.
 			if a.primaryForegroundPromptProfile() {

@@ -3,6 +3,7 @@ package tools
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -36,7 +37,9 @@ func (g *ToolGuardrails) Middleware(next ToolExecutor) ToolExecutor {
 		}
 		toolName, _ := args["_tool_name"].(string)
 		if reason := activeTurnPollingReason(toolName, args); reason != "" {
-			return "", fmt.Errorf("%s; choose a supported durable watch_external check, provider-native wait, or one bounded status observation; if none is available, park with an actionable blocker", reason)
+			return "", guardrailRefusal("active_turn_polling",
+				fmt.Sprintf("%s; choose a supported durable watch_external check, provider-native wait, or one bounded status observation; if none is available, park with an actionable blocker", reason),
+				"watch_external", "provider_native_wait", "bounded_status_observation", "report_actionable_blocker")
 		}
 		runID := guardrailRunID(args)
 		key := guardrailKey(runID, toolName, args)
@@ -45,11 +48,15 @@ func (g *ToolGuardrails) Middleware(next ToolExecutor) ToolExecutor {
 		rec := g.records[key]
 		if rec.Failures >= 2 {
 			g.mu.Unlock()
-			return "", fmt.Errorf("tool guardrail blocked repeated failure for %s; change arguments or explain why retrying is necessary", toolName)
+			return "", guardrailRefusal("repeated_failure",
+				fmt.Sprintf("tool guardrail blocked repeated failure for %s; change arguments or explain why retrying is necessary", toolName),
+				"inspect_current_state", "change_strategy", "report_actionable_blocker")
 		}
 		if noProgressToolCall(toolName, args) && rec.SameResults >= 3 {
 			g.mu.Unlock()
-			return "", fmt.Errorf("tool guardrail blocked a repeated no-progress check for %s; use the existing result, choose a supported watch_external or provider-native wait, or park with an actionable blocker", toolName)
+			return "", guardrailRefusal("no_progress_check",
+				fmt.Sprintf("tool guardrail blocked a repeated no-progress check for %s; use the existing result, choose a supported watch_external or provider-native wait, or park with an actionable blocker", toolName),
+				"use_existing_result", "watch_external", "report_actionable_blocker")
 		}
 		g.mu.Unlock()
 
@@ -57,6 +64,15 @@ func (g *ToolGuardrails) Middleware(next ToolExecutor) ToolExecutor {
 		g.record(key, toolName, args, result, err)
 		return result, err
 	}
+}
+
+// guardrailRefusal is a typed, not-dispatched refusal: the tool never ran, so
+// the kernel recovery policy must not count it as a failed strategy attempt,
+// and the model receives the same structured alternatives as a policy refusal.
+func guardrailRefusal(code, message string, alternatives ...string) error {
+	return newStableToolRecoveryError(errors.New(message), code, "blocked_model_protocol", message,
+		"Use the typed alternatives or finish with an actionable blocker; do not retry a cosmetic variant.",
+		"planning", "different_strategy", "not_dispatched", false, alternatives...)
 }
 
 func (g *ToolGuardrails) record(key, toolName string, args map[string]interface{}, result string, err error) {
@@ -114,6 +130,13 @@ func activeTurnPollingReason(toolName string, args map[string]interface{}) strin
 }
 
 func containsPollingLoop(command string) bool {
+	return containsPollingLoopDepth(command, 0)
+}
+
+func containsPollingLoopDepth(command string, depth int) bool {
+	if depth > 4 {
+		return false
+	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil || file == nil {
 		// This guard prevents token-burning wait loops, not unsafe execution.
@@ -133,23 +156,120 @@ func containsPollingLoop(command string) bool {
 		case *syntax.WhileClause:
 			activeWait = true
 		case *syntax.ForClause:
-			activeWait = !finiteLiteralForLoop(value)
+			activeWait = forClauseWaits(value)
 		case *syntax.CallExpr:
 			if len(value.Args) == 0 {
 				return true
 			}
 			name, ok := staticObservationWord(value.Args[0])
 			activeWait = ok && strings.EqualFold(filepath.Base(name), "watch")
+			if !activeWait {
+				if nested, ok := nestedShellCommand(value); ok {
+					activeWait = containsPollingLoopDepth(nested, depth+1)
+				}
+			}
 		}
 		return !activeWait
 	})
 	return activeWait
 }
 
+// nestedShellCommand extracts a static `sh -c ...` body through common
+// process wrappers. The shell parser sees a quoted `bash -c` body as one word,
+// not as a nested AST; without this second bounded parse, `nohup bash -c
+// 'while ...' &` bypasses the active-turn polling guard while doing exactly
+// the same work as a top-level loop.
+func nestedShellCommand(call *syntax.CallExpr) (string, bool) {
+	if call == nil || len(call.Args) < 3 {
+		return "", false
+	}
+	words := make([]string, len(call.Args))
+	for i, arg := range call.Args {
+		word, ok := staticObservationWord(arg)
+		if !ok {
+			return "", false
+		}
+		words[i] = word
+	}
+	wrappers := map[string]bool{
+		"command": true, "env": true, "nohup": true, "setsid": true,
+		"timeout": true, "nice": true, "ionice": true, "stdbuf": true,
+	}
+	for i := 0; i+2 < len(words); i++ {
+		name := strings.ToLower(filepath.Base(words[i]))
+		if name != "sh" && name != "bash" && name != "dash" && name != "ksh" && name != "zsh" {
+			continue
+		}
+		if i > 0 && !wrappers[strings.ToLower(filepath.Base(words[0]))] {
+			continue
+		}
+		flags := strings.TrimPrefix(words[i+1], "-")
+		if !strings.Contains(flags, "c") || strings.TrimSpace(words[i+2]) == "" {
+			continue
+		}
+		return words[i+2], true
+	}
+	return "", false
+}
+
+// forClauseWaits separates an active wait loop from a bounded fan-out. A
+// literal item list is finite by construction. A dynamic list (`for id in
+// $ids`) is still one read per item unless its body sleeps, watches, or nests
+// another wait loop.
+func forClauseWaits(clause *syntax.ForClause) bool {
+	if clause == nil {
+		return false
+	}
+	if clause.Select {
+		return true
+	}
+	if _, cStyle := clause.Loop.(*syntax.CStyleLoop); cStyle {
+		return true
+	}
+	if finiteLiteralForLoop(clause) {
+		return false
+	}
+	return stmtsWait(clause.Do)
+}
+
+func stmtsWait(stmts []*syntax.Stmt) bool {
+	waits := false
+	for _, stmt := range stmts {
+		syntax.Walk(stmt, func(node syntax.Node) bool {
+			if node == nil || waits {
+				return false
+			}
+			switch value := node.(type) {
+			case *syntax.WhileClause:
+				waits = true
+			case *syntax.ForClause:
+				if value.Select {
+					waits = true
+				} else if _, cStyle := value.Loop.(*syntax.CStyleLoop); cStyle {
+					waits = true
+				}
+			case *syntax.CallExpr:
+				if len(value.Args) > 0 {
+					if name, ok := staticObservationWord(value.Args[0]); ok {
+						switch strings.ToLower(filepath.Base(name)) {
+						case "sleep", "watch":
+							waits = true
+						}
+					}
+				}
+			}
+			return !waits
+		})
+		if waits {
+			return true
+		}
+	}
+	return false
+}
+
 // finiteLiteralForLoop distinguishes a bounded batch such as
-// `for id in a b; do aws ...; done` from C-style, positional, dynamic, or
-// interactive loops. Array length is capped so a generated giant literal list
-// cannot occupy an agent turn indefinitely.
+// `for id in a b; do aws ...; done` from dynamic loops. Array length is capped
+// so a generated giant literal list cannot occupy an agent turn indefinitely.
 func finiteLiteralForLoop(clause *syntax.ForClause) bool {
 	if clause == nil || clause.Select {
 		return false
@@ -225,7 +345,7 @@ func hashString(value string) string {
 
 func idempotentTool(name string) bool {
 	switch name {
-	case "read_file", "list_files", "ls_r", "search_files", "grep", "session_search",
+	case "read_file", "list_files", "ls_r", "search_files", "grep", "session_search", "work_search", "work_inspect",
 		"web_search", "web_extract", "get_current_time", "process_list", "process_poll":
 		return true
 	default:

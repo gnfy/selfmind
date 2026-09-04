@@ -59,7 +59,7 @@ func (d *Server) scheduleAutomaticRunRecovery(ctx context.Context, item control.
 		TenantID: item.TenantID, PersonID: item.PersonID,
 		Platform: route.Platform, PlatformUserID: route.PlatformUserID,
 		Channel: fallback(item.Channel, route.Platform), Content: automaticRecoveryContent(decision.Mode),
-		WorkspaceID: task.WorkspaceID, ExecutionRoots: executionenv.CloneRootBindings(run.ExecutionRoots),
+		WorkspaceID: recoveryWorkspaceID(run, task), ExecutionRoots: executionenv.CloneRootBindings(run.ExecutionRoots),
 		TaskID: task.ID, ReplyToRunID: run.ID, IdempotencyKey: key,
 		Class: control.QueueClassRecovery,
 	})

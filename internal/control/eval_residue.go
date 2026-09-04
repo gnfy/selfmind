@@ -15,9 +15,9 @@ type EvalResidueReport struct {
 	Accounts             int `json:"accounts"`
 	Workspaces           int `json:"workspaces"`
 	CurrentWorkspace     int `json:"current_workspace"`
-	Tasks                int `json:"tasks"`
-	CurrentTask          int `json:"current_task"`
-	Runs                 int `json:"task_runs"`
+	Tasks                int `json:"threads"`
+	CurrentTask          int `json:"current_task"` // always zero since schema v11
+	Runs                 int `json:"runs"`
 	Events               int `json:"task_events"`
 	Handoffs             int `json:"task_handoffs"`
 	Artifacts            int `json:"task_artifacts"`
@@ -50,8 +50,8 @@ func (r *EvalResidueReport) Empty() bool {
 
 // CleanEvalResidue removes rows the eval harness historically leaked into a
 // shared control.db: persons whose ONLY accounts have platform `eval`, plus
-// everything keyed to those persons (accounts, workspaces, current_task /
-// current_workspace pointers, tasks, task_runs, task_events, task_handoffs,
+// everything keyed to those persons (accounts, workspaces,
+// current_workspace pointers, threads, runs, task_events, task_handoffs,
 // task_artifacts, channel messages, approvals, notifications, outbound
 // messages, and person-scoped Skill/evolution projections) and any non-default
 // tenants left empty by the deletion.
@@ -94,7 +94,7 @@ func (s *Store) CleanEvalResidue(ctx context.Context, apply bool) (*EvalResidueR
 		return report, nil
 	}
 
-	taskIDs, err := s.collectColumn(ctx, `tasks`, `person_id`, `id`, personIDs)
+	taskIDs, err := s.collectColumn(ctx, `threads`, `person_id`, `id`, personIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -110,11 +110,10 @@ func (s *Store) CleanEvalResidue(ctx context.Context, apply bool) (*EvalResidueR
 		{&report.Accounts, "accounts", "person_id", personIDs},
 		{&report.Workspaces, "workspaces", "owner_person_id", personIDs},
 		{&report.CurrentWorkspace, "current_workspace", "person_id", personIDs},
-		{&report.CurrentTask, "current_task", "person_id", personIDs},
-		{&report.Runs, "task_runs", "person_id", personIDs},
-		{&report.Events, "task_events", "task_id", taskIDs},
-		{&report.Handoffs, "task_handoffs", "task_id", taskIDs},
-		{&report.Artifacts, "task_artifacts", "task_id", taskIDs},
+		{&report.Runs, "runs", "person_id", personIDs},
+		{&report.Events, "task_events", "thread_id", taskIDs},
+		{&report.Handoffs, "task_handoffs", "thread_id", taskIDs},
+		{&report.Artifacts, "task_artifacts", "thread_id", taskIDs},
 		{&report.ChannelMessages, "channel_messages", "person_id", personIDs},
 		{&report.Approvals, "approval_requests", "person_id", personIDs},
 		{&report.Notifications, "notifications", "person_id", personIDs},
@@ -176,12 +175,11 @@ func (s *Store) CleanEvalResidue(ctx context.Context, apply bool) (*EvalResidueR
 		{"workflow_profiles", "person_id", personIDs},
 		{"evolution_candidates", "person_id", personIDs},
 		{"task_skill_bindings", "person_id", personIDs},
-		{"task_events", "task_id", taskIDs},
-		{"task_handoffs", "task_id", taskIDs},
-		{"task_artifacts", "task_id", taskIDs},
-		{"task_runs", "person_id", personIDs},
-		{"current_task", "person_id", personIDs},
-		{"tasks", "person_id", personIDs},
+		{"task_events", "thread_id", taskIDs},
+		{"task_handoffs", "thread_id", taskIDs},
+		{"task_artifacts", "thread_id", taskIDs},
+		{"runs", "person_id", personIDs},
+		{"threads", "person_id", personIDs},
 		{"channel_messages", "person_id", personIDs},
 		{"approval_requests", "person_id", personIDs},
 		{"notifications", "person_id", personIDs},

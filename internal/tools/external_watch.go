@@ -35,14 +35,20 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 		schema: ToolSchema{
 			Type: "object",
 			Properties: map[string]PropertyDef{
-				"description":              {Type: "string", Description: "Short user-facing description of what is being watched"},
-				"command":                  {Type: "string", Description: "Read-only command that checks the external state"},
-				"success_pattern":          {Type: "string", Description: "V1 regular expression that marks the watch successful"},
-				"failure_pattern":          {Type: "string", Description: "V1 optional regular expression that marks the watch failed"},
-				"target_pattern":           {Type: "string", Description: "V2 desired handoff state, such as PENDING_APPROVAL; when set, both terminal patterns are required because an external system may skip this state"},
-				"terminal_success_pattern": {Type: "string", Description: "V2 terminal success state; required with target_pattern so a skipped target can still finish successfully"},
-				"terminal_failure_pattern": {Type: "string", Description: "V2 terminal failure state; required with target_pattern and evaluated before success and target"},
-				"observation_adapter":      {Type: "string", Description: "V3 typed observation adapter; status_json.v1 expects JSON with status pending, succeeded, or failed", Enum: []string{ExternalWatchAdapterStatusJSON}},
+				"description": {Type: "string", Description: "Short user-facing description of what is being watched"},
+				"command":     {Type: "string", Description: "Read-only command that checks the external state"},
+				// A description says what the value IS. Which combination is
+				// legal is enforced by ValidateExternalWatchSpec, which returns
+				// a precise error, so repeating it here bought nothing and cost
+				// it in every request. The internal "V1/V2/V3" spec vocabulary
+				// was leaking too: the model never needed to know which
+				// generation of the evaluator it was addressing.
+				"success_pattern":          {Type: "string", Description: "Regular expression that marks the watch successful"},
+				"failure_pattern":          {Type: "string", Description: "Regular expression that marks the watch failed"},
+				"target_pattern":           {Type: "string", Description: "Intermediate state to watch for, such as PENDING_APPROVAL"},
+				"terminal_success_pattern": {Type: "string", Description: "Terminal success state"},
+				"terminal_failure_pattern": {Type: "string", Description: "Terminal failure state"},
+				"observation_adapter":      {Type: "string", Description: "Typed observation adapter", Enum: []string{ExternalWatchAdapterStatusJSON}},
 				"cwd":                      {Type: "string", Description: "Working directory within the active workspace", Default: "."},
 				"interval_seconds":         {Type: "integer", Description: "Seconds between checks (5-300)", Default: 30},
 				"timeout_seconds":          {Type: "integer", Description: "Maximum total watch duration in seconds (60-86400)", Default: 7200},
@@ -172,39 +178,17 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	// Freeze only capabilities that were effective for THIS registration call.
 	// A lease records what was available when its run started; copying that list
 	// could revive a grant that expired or was revoked before the watch was
-	// registered. The middleware resolves these booleans immediately before
-	// Execute, after consulting current trust, grants, and one-shot approvals.
-	capabilities := externalWatchEffectiveCapabilities(args)
-	binding := executionenv.BindingFromLease("", *lease, scope.TrustLevel, capabilities, identity)
+	// registered, so the effective set is resolved here from current trust,
+	// current grants, and this call's one-shot approvals.
 	activeGrants, err := t.store.ListActiveExecutionCapabilities(
 		context.Background(), scope.TenantID, scope.PersonID, scope.WorkspaceID)
 	if err != nil {
 		return "", fmt.Errorf("freeze external watch capabilities: %w", err)
 	}
-	for _, capability := range binding.ExecutionCapabilities {
-		bound := executionenv.CapabilityBinding{
-			Capability: capability,
-			Source:     executionenv.CapabilitySourceRegistration,
-			ExpiresAt:  timeoutAt,
-		}
-		for _, grant := range activeGrants {
-			if grant.Capability == capability {
-				bound.Source = executionenv.CapabilitySourceGrant
-				bound.GrantID = grant.ID
-				bound.ResourceFingerprint = grant.ResourceFingerprint
-				bound.ExpiresAt = grant.ExpiresAt
-				break
-			}
-		}
-		if bound.Source == executionenv.CapabilitySourceRegistration && scope.TrustLevel == executionenv.TrustTrusted {
-			if capability == executionenv.CapabilityCredentialRead ||
-				(capability == executionenv.CapabilityNetworkShared && ExecSandboxAllowsNetwork()) {
-				bound.Source = executionenv.CapabilitySourceTrust
-				bound.ExpiresAt = time.Time{}
-			}
-		}
-		binding.CapabilityBindings = append(binding.CapabilityBindings, bound)
-	}
+	capabilities := externalWatchEffectiveCapabilities(args, scope, activeGrants)
+	binding := executionenv.BindingFromLease("", *lease, scope.TrustLevel, capabilities, identity)
+	binding.CapabilityBindings = externalWatchCapabilityBindings(
+		binding.ExecutionCapabilities, scope, activeGrants, timeoutAt)
 	waitGroupID := ""
 	if waitGroupKey != "" {
 		group, groupErr := t.store.ResolveOrCreateExternalWatchGroup(context.Background(), scope.TenantID, scope.PersonID,
@@ -379,15 +363,94 @@ func invalidExternalWatchSpec(err error) error {
 	)
 }
 
-func externalWatchEffectiveCapabilities(args map[string]interface{}) []string {
+// externalWatchEffectiveCapabilities resolves the capabilities that are
+// effective for THIS registration call, the same way the foreground middleware
+// resolves them for an ordinary command.
+//
+// It cannot rely on `_network_shared` alone. ExecutionCapabilityMiddleware
+// returns before it decides anything whenever the EFFECTIVE sandbox mode is
+// `host` — the normal mode on macOS, and on any Linux host without an available
+// sandbox — because host networking is part of the broader, separately approved
+// host boundary. The arg then never arrived, so every such watch froze an EMPTY
+// capability set and every later poll refused with "does not include
+// network:shared", moments after the registration preflight had proven the same
+// command works with egress.
+//
+// Resolution adds no authority. network:shared comes from workspace trust plus
+// the operator sandbox policy (exactly the middleware's own condition), from a
+// live workspace grant, or from the one-shot approval the middleware recorded
+// for this call. credential:read keeps its single existing source: the decision
+// the middleware already made for this call.
+func externalWatchEffectiveCapabilities(
+	args map[string]interface{},
+	scope ExecutionScope,
+	activeGrants []executionenv.CapabilityGrant,
+) []string {
+	granted := func(capability string) bool {
+		for _, grant := range activeGrants {
+			if grant.Capability == capability {
+				return true
+			}
+		}
+		return false
+	}
+	networkShared, _ := args["_network_shared"].(bool)
+	if !networkShared {
+		networkShared = scope.TrustLevel == executionenv.TrustTrusted && ExecSandboxAllowsNetwork()
+	}
+	if !networkShared {
+		networkShared = granted(executionenv.CapabilityNetworkShared)
+	}
 	capabilities := make([]string, 0, 2)
-	if enabled, _ := args["_network_shared"].(bool); enabled {
+	if networkShared {
 		capabilities = append(capabilities, executionenv.CapabilityNetworkShared)
 	}
 	if enabled, _ := args[credentialReadArgKey].(bool); enabled {
 		capabilities = append(capabilities, executionenv.CapabilityCredentialRead)
 	}
 	return capabilities
+}
+
+// externalWatchCapabilityBindings records WHY each frozen capability was
+// available, because provenance is what a later poll re-validates: a
+// trust-derived capability must disappear when workspace trust is withdrawn (and
+// network:shared additionally when the operator sandbox policy stops allowing
+// egress), a grant-derived one dies with its grant, and a one-shot registration
+// approval is bounded by the watch deadline. Recording a trust-derived
+// capability as a registration approval instead would let it outlive the trust
+// decision it came from.
+func externalWatchCapabilityBindings(
+	capabilities []string,
+	scope ExecutionScope,
+	activeGrants []executionenv.CapabilityGrant,
+	deadline time.Time,
+) []executionenv.CapabilityBinding {
+	bindings := make([]executionenv.CapabilityBinding, 0, len(capabilities))
+	for _, capability := range capabilities {
+		bound := executionenv.CapabilityBinding{
+			Capability: capability,
+			Source:     executionenv.CapabilitySourceRegistration,
+			ExpiresAt:  deadline,
+		}
+		for _, grant := range activeGrants {
+			if grant.Capability == capability {
+				bound.Source = executionenv.CapabilitySourceGrant
+				bound.GrantID = grant.ID
+				bound.ResourceFingerprint = grant.ResourceFingerprint
+				bound.ExpiresAt = grant.ExpiresAt
+				break
+			}
+		}
+		if bound.Source == executionenv.CapabilitySourceRegistration && scope.TrustLevel == executionenv.TrustTrusted {
+			if capability == executionenv.CapabilityCredentialRead ||
+				(capability == executionenv.CapabilityNetworkShared && ExecSandboxAllowsNetwork()) {
+				bound.Source = executionenv.CapabilitySourceTrust
+				bound.ExpiresAt = time.Time{}
+			}
+		}
+		bindings = append(bindings, bound)
+	}
+	return bindings
 }
 
 func clampInt(value, minValue, maxValue int) int {

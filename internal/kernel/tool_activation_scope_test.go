@@ -148,6 +148,24 @@ func TestUpdatePlanIsolatesMixedToolCallBatch(t *testing.T) {
 	if len(got) != len(plain) || deferred != 0 {
 		t.Fatalf("ordinary batch changed: %+v deferred=%d", got, deferred)
 	}
+	independent := []llm.ToolCall{
+		{ID: "plan", Function: "update_plan"},
+		{ID: "queue", Function: "queue_user_input"},
+		{ID: "write", Function: "apply_patch"},
+	}
+	got, deferred = isolateWorkUnitBoundaryCall(independent)
+	if len(got) != 1 || got[0].ID != "queue" || deferred != 2 {
+		t.Fatalf("independent-input boundary=%+v deferred=%d; queue must win before plan mutation", got, deferred)
+	}
+	selection := []llm.ToolCall{
+		{ID: "plan", Function: "update_plan"},
+		{ID: "select", Function: "work_select"},
+		{ID: "write", Function: "apply_patch"},
+	}
+	got, deferred = isolateWorkUnitBoundaryCall(selection)
+	if len(got) != 1 || got[0].ID != "select" || deferred != 2 {
+		t.Fatalf("work-selection boundary=%+v deferred=%d; selection must win before scoped work", got, deferred)
+	}
 }
 
 func TestInProgressWorkUnitSequenceIgnoresOtherTools(t *testing.T) {

@@ -487,7 +487,7 @@ func TestIMAsyncFlagAndControlDetection(t *testing.T) {
 	if isControlCommand(req.Content) {
 		t.Fatal("ordinary task should not be treated as a control command")
 	}
-	if !isControlCommand("/status") || !isControlCommand("/stop") || !isControlCommand("/workspace ws_1") {
+	if !isControlCommand("/status") || !isControlCommand("/stop") || !isControlCommand("/ws ws_1") {
 		t.Fatal("expected common daemon commands to be detected")
 	}
 	if !isControlCommand("/events") {
@@ -721,7 +721,7 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 		PlatformUserID: "local",
 		Channel:        "cli",
 		ClientCWD:      t.TempDir(),
-		Content:        "inspect current project",
+		Content:        "continue",
 	}
 	if _, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		t.Fatal(err)
@@ -735,7 +735,7 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	if resolved == nil || resolved.ID != task.ID || resolved.WorkspaceID != req.WorkspaceID {
 		t.Fatalf("resolved task = %+v, req workspace = %s", resolved, req.WorkspaceID)
 	}
-	if attach.preLabel || attach.created || attach.parentRunID != waiting.ID {
+	if attach.preLabel || attach.created || attach.resumesRunID != waiting.ID {
 		t.Fatalf("continuation attach must be explicit with the exact parent, got %+v", attach)
 	}
 	// Plain new work owns a fresh root task (simplification P2); the EXECUTION
@@ -756,17 +756,6 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	}
 	if ws == nil || ws.ID != req.WorkspaceID {
 		t.Fatalf("a fresh root run must execute in the REQUEST workspace %s, got %+v", req.WorkspaceID, ws)
-	}
-}
-
-func addActiveTaskReference(t *testing.T, store *control.Store, task *control.Task, value string) {
-	t.Helper()
-	if _, err := store.UpsertTaskReference(context.Background(), control.TaskReferenceWrite{
-		TenantID: task.TenantID, PersonID: task.PersonID, TaskID: task.ID, WorkspaceID: task.WorkspaceID,
-		Class: control.TaskReferenceLiteral, Value: value, Status: control.TaskReferenceActive,
-		UserConfirmed: true, Provenance: "user_control", SourceRef: "test",
-	}); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -792,8 +781,6 @@ func TestReferencesNeverRouteAttachment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	addActiveTaskReference(t, store, target, "RUQX-369")
-
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local-work-key", Channel: "cli",
@@ -803,7 +790,7 @@ func TestReferencesNeverRouteAttachment(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resolved == nil || resolved.ID == target.ID {
-		t.Fatalf("a reference must not route the message onto its task: %+v", resolved)
+		t.Fatalf("a work key must not route the message onto an existing task: %+v", resolved)
 	}
 	if !attach.created || attach.claimsPriorRuns() {
 		t.Fatalf("ordinary message must own a fresh task without prior-run claims: %+v", attach)
@@ -846,7 +833,7 @@ func TestResolveContinuationDoesNotDeriveReferenceFromTaskTitle(t *testing.T) {
 	}
 	// The bare cue continues the unique waiting RUN; the ticket-shaped title is
 	// never identity evidence and mints no work key.
-	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() || attach.workKey != "" || attach.parentRunID != waiting.ID {
+	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() || attach.workKey != "" || attach.resumesRunID != waiting.ID {
 		t.Fatalf("resolved=%+v attach=%+v", resolved, attach)
 	}
 }
@@ -930,9 +917,6 @@ func TestResolveTaskTreatsUnregisteredWorkKeyAsMetadata(t *testing.T) {
 		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-100 old release", Channel: "cli",
 	})
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, old.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1028,7 +1012,7 @@ func TestContinueWithoutPendingWorkBecomesNewWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || !attach.created || attach.parentRunID != "" {
+	if resolved == nil || !attach.created || attach.resumesRunID != "" {
 		t.Fatalf("cue without pending work must create a fresh root task: task=%+v attach=%+v", resolved, attach)
 	}
 }
@@ -1114,11 +1098,11 @@ func TestExplicitTaskAttachResumesPriorRun(t *testing.T) {
 	}
 	// The continuation claims its resolved parent atomically with its own
 	// creation (P1: creation and ownership are one transaction).
-	current, err := store.StartRunWithOptions(ctx, task, "cli", "caller supplied task id", control.StartRunOptions{ParentRunID: prior.ID})
+	current, err := store.StartRunWithOptions(ctx, task, "cli", "caller supplied task id", control.StartRunOptions{ResumesRunID: prior.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.ParentRunID != prior.ID {
+	if current.ResumesRunID != prior.ID {
 		t.Fatalf("parent edge not recorded: %+v", current)
 	}
 	if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{
@@ -1337,7 +1321,7 @@ func TestTaskEventsEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local&task_id="+task.ID, nil)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1380,7 +1364,7 @@ func TestTaskEventsStreamEndpoint(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events/stream?platform=cli&platform_user_id=local&once=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events/stream?platform=cli&platform_user_id=local&once=true&task_id="+task.ID, nil)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1421,7 +1405,7 @@ func TestTaskArtifactsEndpoint(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/artifacts?platform=cli&platform_user_id=local", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/artifacts?platform=cli&platform_user_id=local&task_id="+task.ID, nil)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

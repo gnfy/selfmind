@@ -74,6 +74,13 @@ func (c *RunCoordinator) prepareRequestExecutionRoots(ctx context.Context, works
 	return nil
 }
 
+// WorkspaceRootBindings exposes the exact root bindings a request bound to this
+// workspace freezes into its run, so harnesses that seed historical runs can
+// place them in the same execution domain a live turn would use.
+func WorkspaceRootBindings(workspace *control.Workspace) []executionenv.RootBinding {
+	return workspaceRootBindings(workspace)
+}
+
 func workspaceRootBindings(workspace *control.Workspace) []executionenv.RootBinding {
 	if workspace == nil {
 		return nil

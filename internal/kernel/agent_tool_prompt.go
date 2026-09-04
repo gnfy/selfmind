@@ -52,6 +52,10 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 		}
 		if names["watch_external"] {
 			sb.WriteString("Do not repeatedly poll external state in the model loop. When watch_external supports a proven read-only observation, it can hand the run off as waiting_external. If preparation says the watcher is unsupported, use the returned alternatives to choose a genuinely different strategy—such as one bounded observation, a provider-native wait, or an existing local process handle—and park with an actionable blocker when none is available.\n")
+			// One sentence here replaces the same rule repeated across five
+			// parameter descriptions. This text is conditioned on the tool
+			// actually being offered; a schema description is not.
+			sb.WriteString("Pick ONE watch_external completion mode: a success (and optional failure) regex; or a target state with both terminal patterns; or a typed observation adapter. Mixing modes is rejected.\n")
 			if names["finish_run"] {
 				sb.WriteString("After watch_external registration, do not call finish_run.\n")
 			}
@@ -92,12 +96,38 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 
 func planToolGuidance(strategy TaskStrategy) string {
 	const boundary = "Call update_plan by itself; do not batch it with reads or other tools because it changes the work-unit boundary. "
+	// planStepDiscipline governs a plan that exists, under either policy. The
+	// transition rules exist because a reluctant model produced its first
+	// snapshot only after the work was already done, so the person's first
+	// sight of the plan was several steps retroactively marked completed
+	// (observed live 2026-09-03 with deepseek-v4-flash: 4/5 done on first
+	// appearance). A plan that only records history is not progress the person
+	// can follow.
+	const planStepDiscipline = "Every call replaces the prior plan, so send the complete snapshot. Move a step to in_progress before you work on it and mark it completed before the next command: never jump a step straight from pending to completed, and never batch-complete several steps after the fact. Keep the plan current while you work, and resolve every step before a done outcome.\n"
+	// planTriggers replaces an abstract test the model had to interpret with
+	// the concrete situations that call for a plan.
+	const planTriggers = "Plan when the work spans several actions over a long horizon, has ordered phases or dependencies, carries ambiguity worth outlining before acting, answers more than one request at once, or grows extra steps while you work. "
 	switch strategy.normalized().PlanPolicy {
 	case PlanPolicyDisabled:
 		return "Do not call update_plan for this turn.\n"
 	case PlanPolicyRequired:
-		return boundary + "Use update_plan early for this multi-step work. Every call replaces the prior plan, so send the complete snapshot, update it after meaningful transitions, and resolve every step before a done outcome.\n"
+		return boundary + "Use update_plan early for this multi-step work. " + planStepDiscipline
 	default:
-		return boundary + "Use update_plan only when the work genuinely needs multiple visible steps. Every call replaces the prior plan, so send the complete snapshot and resolve every step before a done outcome.\n"
+		// Neutral and time-bound rather than discouraging. The former "only
+		// when …" wording read as a reason not to plan, and it said nothing
+		// about WHEN. The decision stays the model's; only its timing and its
+		// triggers are stated.
+		return boundary + "When this work will take multiple visible steps, call update_plan BEFORE the first action tool so the person can see the shape of the work from the start; a single-step turn needs no plan. " + planTriggers + planStepDiscipline
 	}
+}
+
+// planGuidanceEscalationNudge carries the PlanPolicyRequired wording into a Run
+// whose system prompt was composed once, before the work proved multi-step. It
+// states the observed evidence, hands over the same required wording the
+// composer would have written, and keeps completion available so the escalation
+// cannot turn into busywork or block a finish.
+func planGuidanceEscalationNudge(strategy TaskStrategy, planEvidenceTools int) string {
+	return fmt.Sprintf("SelfMind observed %d substantive tool action(s) in this run and no visible plan, so this work is multi-step in practice. ", planEvidenceTools) +
+		planToolGuidance(strategy.WithPlanRequired()) +
+		"Do not perform extra tool work for the plan itself: describe the work already done and what genuinely remains, then continue. If only one step remains, send a one-step snapshot and finish normally.\n"
 }

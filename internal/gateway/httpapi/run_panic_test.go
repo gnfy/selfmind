@@ -77,15 +77,13 @@ func TestAsyncRunPanicIsRecovered(t *testing.T) {
 		return daemon.coordinator().currentActive(identity.PersonID) == nil
 	}, "person slot never freed after a panic")
 
-	// The task parked non-terminal (interrupted), never left 'running'.
-	task, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if err != nil || task == nil {
-		t.Fatalf("current task: %v %v", task, err)
+	// The Run parks interrupted and becomes exact Attention; no aggregate
+	// Thread status or implicit current pointer is required.
+	attention, err := control.NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil || len(attention) != 1 {
+		t.Fatalf("panic recovery attention: %+v err=%v", attention, err)
 	}
-	if task.Status == "running" {
-		t.Fatalf("task must not be left 'running' after a panic; status=%q", task.Status)
-	}
-	runs, err := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 1)
+	runs, err := store.ListTaskRuns(ctx, identity.TenantID, attention[0].Thread.ID, 1)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("task runs: %+v err=%v", runs, err)
 	}

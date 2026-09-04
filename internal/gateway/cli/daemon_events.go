@@ -40,6 +40,7 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 	case "run.started":
 		var payload struct {
 			Input      string `json:"input"`
+			QueueID    string `json:"queue_id"`
 			WatchID    string `json:"watch_id"`
 			TaskStatus string `json:"task_status"`
 			Origin     string `json:"origin"`
@@ -51,6 +52,7 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 		}
 		m.program.Send(MsgDaemonRunStarted{
 			RunID:      strings.TrimSpace(event.RunID),
+			QueueID:    strings.TrimSpace(payload.QueueID),
 			TaskID:     strings.TrimSpace(event.TaskID),
 			WatchID:    strings.TrimSpace(payload.WatchID),
 			TaskStatus: strings.TrimSpace(payload.TaskStatus),
@@ -107,6 +109,43 @@ func (m *uiModel) consumeQueuedInput(eventInput string) bool {
 	return false
 }
 
+func (m *uiModel) rememberQueuedRun(queueID string) bool {
+	queueID = strings.TrimSpace(queueID)
+	if queueID == "" {
+		return false
+	}
+	if m.daemonRunActive && m.daemonRunQueueID == queueID {
+		m.daemonRunOwned = true
+		return false
+	}
+	for _, existing := range m.queuedRunIDs {
+		if existing == queueID {
+			return false
+		}
+	}
+	m.queuedRunIDs = append(m.queuedRunIDs, queueID)
+	m.queuedCount++
+	return true
+}
+
+func (m *uiModel) consumeQueuedRun(queueID string) bool {
+	queueID = strings.TrimSpace(queueID)
+	if queueID == "" {
+		return false
+	}
+	for i, existing := range m.queuedRunIDs {
+		if existing != queueID {
+			continue
+		}
+		m.queuedRunIDs = append(m.queuedRunIDs[:i], m.queuedRunIDs[i+1:]...)
+		if m.queuedCount > 0 {
+			m.queuedCount--
+		}
+		return true
+	}
+	return false
+}
+
 func uiStatusForDaemonOutcome(status string) string {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "done", "completed", "succeeded", "success":
@@ -120,6 +159,10 @@ func uiStatusForDaemonOutcome(status string) string {
 	}
 }
 
+// watcherStatusNotice renders a watcher's OWN terminal observation. It is the
+// transient half of a watcher's report: the finalization run that follows leaves
+// the single durable transcript line (backgroundResultNotice), so this text goes
+// to the status bar and never becomes a second history cell.
 func watcherStatusNotice(watchID, status, taskStatus string) string {
 	watchID = strings.TrimSpace(watchID)
 	taskStatus = strings.TrimSpace(taskStatus)
@@ -134,10 +177,27 @@ func watcherStatusNotice(watchID, status, taskStatus string) string {
 		watchStatus = "timed_out"
 	case "cancelled", "canceled":
 		watchStatus = "cancelled"
-	case "finalizing":
-		watchStatus = "finalizing"
+	case "blocked_environment":
+		// A check that could not observe the external state at all. The daemon
+		// notice carries this status; rendering it as the default "succeeded"
+		// would report a blocked watcher as a completed operation.
+		watchStatus = "blocked_environment"
 	}
 	return "Watcher " + watchID + " | status: " + watchStatus + " | task: " + taskStatus
+}
+
+// watcherNoticeKind types a watcher's terminal observation for the status bar.
+// Only an observed success is neutral; anything else needs the person's
+// attention, and a blocked check is not a business failure.
+func watcherNoticeKind(status string) noticeKind {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed":
+		return noticeError
+	case "timed_out", "timeout", "cancelled", "canceled", "blocked_environment":
+		return noticeWarning
+	default:
+		return noticeInfo
+	}
 }
 
 // backgroundResultNotice is the single line a background run is allowed to
@@ -217,6 +277,10 @@ func (m *uiModel) finishedBackgroundRun(runID string) (watchID, origin string, o
 	return m.backgroundWatchID, m.backgroundOrigin, true
 }
 
+// passiveDaemonEvent reports whether a daemon-feed event belongs to work this
+// terminal merely observes. A run the person started here — synchronously or
+// through the durable queue — is owned: its activity drives the spinner and
+// tool cells exactly like a local turn.
 func (m *uiModel) passiveDaemonEvent(ref uiEventRef) bool {
 	if ref.Source != eventSourceDaemon {
 		return false
@@ -224,9 +288,16 @@ func (m *uiModel) passiveDaemonEvent(ref uiEventRef) bool {
 	if m.daemonRunID != "" && ref.RunID != "" && ref.RunID != m.daemonRunID {
 		return true
 	}
-	return !m.daemonRunAwaitingDone
+	return !m.daemonRunOwned
 }
 
 func queuedTurn(turn *api.TurnStatus) bool {
 	return turn != nil && strings.EqualFold(strings.TrimSpace(turn.Status), "queued")
+}
+
+// acceptedTurn is the daemon's acknowledgement that a message was steered into
+// the live run (busy path). It is not that run's terminal answer, so the UI
+// must keep the run's live state instead of finalizing it.
+func acceptedTurn(turn *api.TurnStatus) bool {
+	return turn != nil && strings.EqualFold(strings.TrimSpace(turn.Status), "accepted")
 }

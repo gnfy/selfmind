@@ -214,6 +214,17 @@ func TestEventToStreamForwardsPlan(t *testing.T) {
 	}
 }
 
+func TestEventToStreamForwardsToolFailureMetadata(t *testing.T) {
+	ev := control.Event{Type: "tool.completed", Payload: mustJSON(map[string]any{
+		"tool": "terminal", "tool_call_id": "call-1", "error": "Skipped before execution.",
+		"effect_state": "not_dispatched", "error_category": "blocked_model_protocol",
+	})}
+	se, ok := eventToStream(ev)
+	if !ok || se.Payload["effect_state"] != "not_dispatched" || se.Payload["error_category"] != "blocked_model_protocol" {
+		t.Fatalf("tool failure metadata was not forwarded: ok=%v event=%+v", ok, se)
+	}
+}
+
 // TestProcessMessageReturnsFinalAnswerAndStreamsEvents stands up a fake gateway
 // and verifies (1) the synchronous final answer is returned and (2) live task
 // events are replayed into the ctx stream observer.

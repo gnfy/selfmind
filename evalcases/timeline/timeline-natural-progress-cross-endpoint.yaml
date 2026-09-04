@@ -1,10 +1,9 @@
 id: timeline_natural_progress_cross_endpoint
-title: "natural-language IM progress resolves CLI work without starting a run"
+title: "natural-language IM progress is understood inside one audited Main run"
 require_cassette: true
 suite: timeline
 workspace: isolated
 channel: cli
-continuity_mode: safe
 
 setup:
   task:
@@ -20,14 +19,20 @@ turns:
 expect:
   status: completed
   http_status: 200
-  require_no_run: true
-  max_tool_calls: 0
-  max_duration_seconds: 60
+  min_tool_calls: 3
+  max_tool_calls: 4
+  max_duration_seconds: 90
   contains:
-    - "RUQX-767 production release"
+    - "RUQX-767"
     - "interrupted"
 
 checks:
   no_mojibake: true
   no_raw_json_leak: true
   no_empty_response: true
+
+assert_state:
+  - on: events
+    type: work.selection_committed
+    payload_contains: '"action":"observe"'
+    count_gte: 1

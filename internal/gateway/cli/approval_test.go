@@ -136,8 +136,8 @@ func TestApprovalPanelSuppressesSpinnerLine(t *testing.T) {
 	updated, _ := model.Update(sampleApproval("apr_1"))
 	model = updated.(*uiModel)
 
-	if active := stripANSI(model.renderActiveBlock(100)); strings.Contains(active, "Waiting for the model") {
-		t.Fatalf("hybrid active region must hide the spinner line while the panel is up:\n%s", active)
+	if row := stripANSI(model.activityRow(100)); strings.Contains(row, "Waiting for the model") {
+		t.Fatalf("the progress row must be hidden while the panel is up:\n%s", row)
 	}
 	// Resolving the approval resumes the run, but does not guess that the model is
 	// waiting. The next structured phase restarts the spinner.
@@ -146,13 +146,13 @@ func TestApprovalPanelSuppressesSpinnerLine(t *testing.T) {
 	if !model.thinking {
 		t.Fatal("run should resume as working after the decision")
 	}
-	if active := stripANSI(model.renderActiveBlock(100)); strings.TrimSpace(active) != "" {
-		t.Fatalf("spinner returned before model_wait:\n%s", active)
+	if row := stripANSI(model.activityRow(100)); strings.Contains(row, "Waiting for the model") {
+		t.Fatalf("the progress row must not guess a model wait before model_wait:\n%s", row)
 	}
 	updated, _ = model.Update(MsgAgentActivity{Phase: modelWaitPhase, Content: "Waiting for the model to decide after tool results"})
 	model = updated.(*uiModel)
-	if active := stripANSI(model.renderActiveBlock(100)); !strings.Contains(active, "Waiting for the model") {
-		t.Fatalf("spinner did not restart on model_wait:\n%s", active)
+	if row := stripANSI(model.activityRow(100)); !strings.Contains(row, "Waiting for the model") {
+		t.Fatalf("the progress row did not restart on model_wait:\n%s", row)
 	}
 }
 

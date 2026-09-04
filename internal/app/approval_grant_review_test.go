@@ -46,7 +46,7 @@ func TestReviewApprovalGrantsWithdrawsOverBroadClasses(t *testing.T) {
 		t.Fatalf("kept = %d grants, want %d", len(kept), len(keepKeys))
 	}
 	for _, key := range withdraw {
-		granted, err := store.IsApprovalGranted(ctx, control.DefaultTenantID, person, "", key)
+		granted, err := store.IsApprovalGranted(ctx, control.DefaultTenantID, person, key)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -55,7 +55,7 @@ func TestReviewApprovalGrantsWithdrawsOverBroadClasses(t *testing.T) {
 		}
 	}
 	for _, key := range keepKeys {
-		granted, err := store.IsApprovalGranted(ctx, control.DefaultTenantID, person, "", key)
+		granted, err := store.IsApprovalGranted(ctx, control.DefaultTenantID, person, key)
 		if err != nil {
 			t.Fatal(err)
 		}

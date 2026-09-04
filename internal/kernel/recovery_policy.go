@@ -6,8 +6,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 type RecoveryAttempt struct {
@@ -107,6 +110,13 @@ func (p *strategyRecoveryPolicy) RecordFailure(failure RecoveryFailure) {
 	if p == nil || lifecycleTool(failure.Attempt.ToolName) {
 		return
 	}
+	// A guardrail or policy refusal never ran the tool, so it is not evidence
+	// that the strategy fails against the target. Counting it consumed the one
+	// correction the policy promises (observed live: a blocked preflight loop
+	// plus one real failure locked out the corrected command).
+	if strings.EqualFold(strings.TrimSpace(failure.EffectState), "not_dispatched") {
+		return
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	key := recoveryAttemptKey(failure.Attempt)
@@ -165,12 +175,118 @@ func recoveryTargetHash(args map[string]interface{}) string {
 			target[lower] = value
 		}
 	}
+	// Shell tools carry their target inside the command text. Without this,
+	// every shell command in a plan step shared one key and two unrelated
+	// failures exhausted the strategy for a corrected command.
+	if command, ok := args["command"].(string); ok {
+		if derived := shellCommandTarget(command); derived != "" {
+			target["command_target"] = derived
+		}
+	}
 	if len(target) == 0 {
 		target["scope"] = "current"
 	}
 	data, _ := json.Marshal(target)
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:12])
+}
+
+// shellCommandTarget names what a shell command acts on: the first external
+// command plus up to two leading non-option words. Shell setup such as
+// `cd repo &&` is skipped; otherwise every command launched from one directory
+// would collapse to target "cd repo" and exhaust an unrelated strategy.
+func shellCommandTarget(command string) string {
+	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
+	if err != nil {
+		return shellCommandTargetFields(strings.Fields(command))
+	}
+	target := ""
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if node == nil || target != "" {
+			return false
+		}
+		call, ok := node.(*syntax.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		fields := make([]string, 0, len(call.Args))
+		for _, word := range call.Args {
+			value, ok := staticRecoveryShellWord(word)
+			if !ok {
+				continue
+			}
+			fields = append(fields, value)
+		}
+		if len(fields) == 0 || shellSetupCommand(fields[0]) {
+			return true
+		}
+		target = shellCommandTargetFields(fields)
+		return target == ""
+	})
+	return target
+}
+
+func shellCommandTargetFields(fields []string) string {
+	words := make([]string, 0, 3)
+	for _, field := range fields {
+		if len(words) == 0 && isShellEnvAssignment(field) {
+			continue
+		}
+		if strings.HasPrefix(field, "-") {
+			continue
+		}
+		if len(words) == 0 {
+			field = filepath.Base(field)
+		}
+		words = append(words, strings.ToLower(field))
+		if len(words) == 3 {
+			break
+		}
+	}
+	return strings.Join(words, " ")
+}
+
+func shellSetupCommand(command string) bool {
+	switch strings.ToLower(filepath.Base(strings.TrimSpace(command))) {
+	case "cd", "export", "source", ".", "set", "unset", "umask":
+		return true
+	default:
+		return false
+	}
+}
+
+func staticRecoveryShellWord(word *syntax.Word) (string, bool) {
+	if word == nil || len(word.Parts) == 0 {
+		return "", false
+	}
+	var out strings.Builder
+	for _, part := range word.Parts {
+		switch value := part.(type) {
+		case *syntax.Lit:
+			out.WriteString(value.Value)
+		case *syntax.SglQuoted:
+			out.WriteString(value.Value)
+		default:
+			return "", false
+		}
+	}
+	return out.String(), out.Len() > 0
+}
+
+func isShellEnvAssignment(field string) bool {
+	name, _, found := strings.Cut(field, "=")
+	if !found || name == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r == '_', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9' && i > 0:
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func recoveryTargetArg(key string) bool {

@@ -1,0 +1,141 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "交",
+      "phase": "commentary"
+    },
+    {
+      "content": "接",
+      "phase": "commentary"
+    },
+    {
+      "content": "记录",
+      "phase": "commentary"
+    },
+    {
+      "content": "未",
+      "phase": "commentary"
+    },
+    {
+      "content": "包含",
+      "phase": "commentary"
+    },
+    {
+      "content": "预",
+      "phase": "commentary"
+    },
+    {
+      "content": "检",
+      "phase": "commentary"
+    },
+    {
+      "content": "明",
+      "phase": "commentary"
+    },
+    {
+      "content": "细",
+      "phase": "commentary"
+    },
+    {
+      "content": "；",
+      "phase": "commentary"
+    },
+    {
+      "content": "我",
+      "phase": "commentary"
+    },
+    {
+      "content": "再",
+      "phase": "commentary"
+    },
+    {
+      "content": "查",
+      "phase": "commentary"
+    },
+    {
+      "content": "找",
+      "phase": "commentary"
+    },
+    {
+      "content": "该",
+      "phase": "commentary"
+    },
+    {
+      "content": "发布",
+      "phase": "commentary"
+    },
+    {
+      "content": "版本",
+      "phase": "commentary"
+    },
+    {
+      "content": "的",
+      "phase": "commentary"
+    },
+    {
+      "content": "既",
+      "phase": "commentary"
+    },
+    {
+      "content": "有",
+      "phase": "commentary"
+    },
+    {
+      "content": "对",
+      "phase": "commentary"
+    },
+    {
+      "content": "话",
+      "phase": "commentary"
+    },
+    {
+      "content": "，以",
+      "phase": "commentary"
+    },
+    {
+      "content": "准确",
+      "phase": "commentary"
+    },
+    {
+      "content": "复",
+      "phase": "commentary"
+    },
+    {
+      "content": "述",
+      "phase": "commentary"
+    },
+    {
+      "content": "步骤",
+      "phase": "commentary"
+    },
+    {
+      "content": "。",
+      "phase": "commentary"
+    },
+    {
+      "content": "Preparing to run session_search",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_HijeWkX2Cgn7RvxRcTrINxMU",
+          "Function": "session_search",
+          "Args": "{\"query\":\"cw2-seoant-ai-prod-api v20260902153117\",\"limit\":5}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 8753,
+        "output_tokens": 224,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8753,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

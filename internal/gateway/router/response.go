@@ -53,6 +53,10 @@ type EventSummary struct {
 	toolFailures []string
 	lastOutputs  []string
 	completion   TurnCompletion
+	// lastToolFailed is whether the LAST tool to finish failed. A failure the
+	// model recovered from — a refused finish_run, a corrected verification —
+	// must not be reported as the reason a final response is missing.
+	lastToolFailed bool
 }
 
 // TurnCompletion captures the kernel's structured terminal signal. It is
@@ -84,6 +88,7 @@ func (s *EventSummary) Observe(event llm.StreamEvent) {
 			s.lastOutputs = appendLimited(s.lastOutputs, line, 5)
 		}
 	case "tool.completed":
+		s.lastToolFailed = event.Err != nil
 		if event.Err != nil {
 			label := event.ToolName
 			if label == "" {
@@ -92,6 +97,11 @@ func (s *EventSummary) Observe(event llm.StreamEvent) {
 			s.toolFailures = appendLimited(s.toolFailures, fmt.Sprintf("%s: %v", label, event.Err), 5)
 		}
 	case "turn.completed":
+		// The TURN's own view of itself. It can say "completed" while the RUN
+		// resolves to verification_partial / missing_final_response, and the run
+		// outcome does not exist yet at this point — it is written at
+		// finalization, after this stream closes. The outcome-level notice is
+		// therefore appended by the coordinator, not here.
 		s.completion.Status = payloadString(event.Payload, "status")
 		s.completion.CompletionReason = payloadString(event.Payload, "completion_reason")
 		s.completion.FinishReason = payloadString(event.Payload, "finish_reason")
@@ -105,7 +115,7 @@ func (s EventSummary) Completion() TurnCompletion {
 
 func (s EventSummary) WithContent(content string) string {
 	content = strings.TrimSpace(content)
-	if s.completion.Status == "incomplete" {
+	if s.completion.incompleteWork() {
 		reason := humanCompletionReason(s.completion.CompletionReason)
 		notice := "SelfMind stopped before full completion"
 		if reason != "" {
@@ -124,7 +134,7 @@ func (s EventSummary) WithContent(content string) string {
 	if content != "" {
 		return content
 	}
-	if len(s.toolFailures) > 0 {
+	if len(s.toolFailures) > 0 && s.lastToolFailed {
 		return "SelfMind encountered a tool error before producing a final response. Review the tool events above, then retry or ask me to continue."
 	}
 	if len(s.phases) > 0 || len(s.toolsStarted) > 0 || len(s.lastOutputs) > 0 {
@@ -147,6 +157,18 @@ func payloadBool(payload map[string]interface{}, key string) bool {
 	}
 	value, _ := payload[key].(bool)
 	return value
+}
+
+// incompleteWork reports whether the structured terminal signal says work did
+// not finish. Only "done"/"completed" are successes; every resumable status
+// (interrupted, waiting_user, verification_partial, blocked) earns the notice
+// that names the reason and how to resume.
+func (c TurnCompletion) incompleteWork() bool {
+	switch strings.TrimSpace(c.Status) {
+	case "", "done", "completed":
+		return false
+	}
+	return true
 }
 
 func humanCompletionReason(reason string) string {

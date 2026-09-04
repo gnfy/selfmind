@@ -82,7 +82,7 @@ func TestCleanEvalResidueDryRunDeletesNothing(t *testing.T) {
 	if report.Persons != 1 || report.Accounts != 1 || report.Tasks != 1 || report.Runs != 1 {
 		t.Fatalf("dry run should select exactly the eval-only person tree, got %+v", report)
 	}
-	if report.Events != 1 || report.Handoffs != 1 || report.Artifacts != 1 || report.CurrentTask != 1 {
+	if report.Events != 1 || report.Handoffs != 1 || report.Artifacts != 1 || report.CurrentTask != 0 {
 		t.Fatalf("dry run should count the eval task rows, got %+v", report)
 	}
 	if report.Tenants != 1 {
@@ -156,7 +156,7 @@ func TestCleanEvalResidueIncludesSkillEvolutionRows(t *testing.T) {
 	ctx := context.Background()
 	store, evalID, realID, _, taskIDs := seedResidueWorld(t)
 	var runID, workUnitID string
-	if err := store.db.QueryRowContext(ctx, `SELECT id FROM task_runs WHERE person_id=?`, evalID.PersonID).Scan(&runID); err != nil {
+	if err := store.db.QueryRowContext(ctx, `SELECT id FROM runs WHERE person_id=?`, evalID.PersonID).Scan(&runID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.db.QueryRowContext(ctx, `SELECT id FROM run_work_units WHERE person_id=?`, evalID.PersonID).Scan(&workUnitID); err != nil {
@@ -176,9 +176,9 @@ func TestCleanEvalResidueIncludesSkillEvolutionRows(t *testing.T) {
 		query string
 		args  []interface{}
 	}{
-		{`INSERT INTO workflow_profiles(run_id, tenant_id, person_id, task_id, workflow_signature, created_at) VALUES(?,?,?,?,?,?)`, []interface{}{runID, evalID.TenantID, evalID.PersonID, taskIDs["eval"], "sig", now}},
+		{`INSERT INTO workflow_profiles(run_id, tenant_id, person_id, thread_id, workflow_signature, created_at) VALUES(?,?,?,?,?,?)`, []interface{}{runID, evalID.TenantID, evalID.PersonID, taskIDs["eval"], "sig", now}},
 		{`INSERT INTO evolution_candidates(id, tenant_id, person_id, workflow_signature, kind, created_at, updated_at) VALUES(?,?,?,?,?,?,?)`, []interface{}{"candidate-eval", evalID.TenantID, evalID.PersonID, "sig", "batch_read", now, now}},
-		{`INSERT INTO task_skill_bindings(identity_tenant_id, person_id, task_id, control_tenant_id, skill_key, skill_name, state, binding_source, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, []interface{}{evalID.TenantID, evalID.PersonID, taskIDs["eval"], evalID.TenantID, skillKey, "eval-skill", "active", "eval", now, now}},
+		{`INSERT INTO task_skill_bindings(identity_tenant_id, person_id, thread_id, control_tenant_id, skill_key, skill_name, state, binding_source, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, []interface{}{evalID.TenantID, evalID.PersonID, taskIDs["eval"], evalID.TenantID, skillKey, "eval-skill", "active", "eval", now, now}},
 		{`INSERT INTO workflow_observations(id, identity_tenant_id, control_tenant_id, person_id, run_id, work_unit_id, workflow_signature, outcome_status, created_at) VALUES(?,?,?,?,?,?,?,?,?)`, []interface{}{"observation-eval", evalID.TenantID, evalID.TenantID, evalID.PersonID, runID, workUnitID, "sig", "completed", now}},
 		{`INSERT INTO skill_failure_guards(control_tenant_id, skill_key, version_hash, failure_signature, state, source_run_id, created_at, last_seen_at) VALUES(?,?,?,?,?,?,?,?)`, []interface{}{evalID.TenantID, skillKey, "v1", "failure-eval", "active", runID, now, now}},
 	}

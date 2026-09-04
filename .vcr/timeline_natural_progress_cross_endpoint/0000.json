@@ -1,25 +1,4 @@
 {
-  "method": "chat",
-  "chat": {
-    "Content": "",
-    "ReasoningContent": "",
-    "Phase": "",
-    "ToolCalls": [
-      {
-        "ID": "call_00_Z4AtRTpYGZA9kwnXoJR29363",
-        "Function": "resolve_continuity",
-        "Args": "{\"action\": \"resume\", \"certainty\": \"clear\", \"target_task_id\": \"{{SELFMIND_VCR_TASK_1}}\", \"target_run_id\": \"{{SELFMIND_VCR_RUN_1}}\", \"reason\": \"User is asking about the progress of the RUQX-767 release task, which matches the existing interrupted run in the workspace. The candidate card shows an unresolved run for this exact task (RUQX-767 production release) with the same workspace, so this is a continuation of that work.\", \"evidence\": [\"candidate card title matches 'RUQX-767 production release'\", \"workspace matches 'eval-workspace'\", \"run is marked as interrupted and resumable\", \"user question directly references RUQX-767 release progress\"], \"observe_kind\": \"progress\", \"delivery_action\": \"keep\", \"alternative_run_ids\": []}"
-      }
-    ],
-    "Usage": {
-      "input_tokens": 700,
-      "output_tokens": 334,
-      "cache_read_input_tokens": 0,
-      "cache_miss_input_tokens": 700,
-      "cache_creation_input_tokens": 0,
-      "reasoning_output_tokens": 0,
-      "cache_usage_reported": true
-    },
-    "FinishReason": "tool_calls"
-  }
+  "method": "completion",
+  "completion": "RUQX-767 发布进度 RUQX-767 发布状态 RUQX-767 上线进展 RUQX-767 deployment status RUQX-767 发布"
 }

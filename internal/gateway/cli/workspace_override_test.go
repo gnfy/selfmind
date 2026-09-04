@@ -44,7 +44,7 @@ func TestWorkspaceSelectPinsSessionOverride(t *testing.T) {
 	if switched.ID != "ws_123" || switched.Name != "game" || switched.Path != "/mnt/d/wwwroot/ai/game" {
 		t.Fatalf("bad parse of switch reply: %+v", switched)
 	}
-	if len(captured) != 1 || captured[0].Content != "/workspace 2" {
+	if len(captured) != 1 || captured[0].Content != "/ws 2" {
 		t.Fatalf("switch must relay the raw command to the gateway: %+v", captured)
 	}
 	if _, cmd := m.Update(switched); cmd != nil {

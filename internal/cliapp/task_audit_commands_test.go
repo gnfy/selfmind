@@ -34,16 +34,14 @@ func TestMaintenanceTaskAuditIsDryRunByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.Close()
-	// Seed legacy projection drift below the reducer boundary. The production
-	// UpdateTaskStatus path now derives waiting_user from the parked run and
-	// deliberately cannot create this historical corruption.
+	// Seed a review-only invalid parent edge below the typed writer boundary.
 	db, err := sql.Open("sqlite", filepath.Join(dataDir, "control.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx,
-		`UPDATE tasks SET status = 'done', current_summary = 'drifted' WHERE tenant_id = ? AND id = ?`,
-		identity.TenantID, task.ID); err != nil {
+		`UPDATE runs SET resumes_run_id = 'run_missing' WHERE tenant_id = ? AND id = ?`,
+		identity.TenantID, run.ID); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
 	}
@@ -61,30 +59,29 @@ func TestMaintenanceTaskAuditIsDryRunByDefault(t *testing.T) {
 		}
 		return out.String()
 	}
-	if out := runCommand(); !strings.Contains(out, "RECONCILE") ||
-		!strings.Contains(out, "projection_mismatch") ||
-		!strings.Contains(out, "Re-run with --apply") {
+	if out := runCommand(); !strings.Contains(out, "REVIEW") ||
+		!strings.Contains(out, "illegal_parent_edge") {
 		t.Fatalf("dry-run output:\n%s", out)
 	}
 	store, err = control.OpenStore(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	afterDryRun, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	afterDryRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
 	store.Close()
-	if err != nil || afterDryRun.Status != "done" {
-		t.Fatalf("dry run mutated the projection: %+v err=%v", afterDryRun, err)
+	if err != nil || afterDryRun == nil || afterDryRun.ResumesRunID != "run_missing" {
+		t.Fatalf("dry run mutated the edge: %+v err=%v", afterDryRun, err)
 	}
-	if out := runCommand("--apply"); !strings.Contains(out, "applied 1") {
+	if out := runCommand("--apply"); !strings.Contains(out, "No automatic repairs were applied") {
 		t.Fatalf("apply output:\n%s", out)
 	}
 	store, err = control.OpenStore(dataDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	repaired, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	repaired, err := store.GetRun(ctx, identity.TenantID, run.ID)
 	store.Close()
-	if err != nil || repaired.Status != "waiting_user" {
-		t.Fatalf("apply must reconcile to waiting_user: %+v err=%v", repaired, err)
+	if err != nil || repaired == nil || repaired.ResumesRunID != "run_missing" {
+		t.Fatalf("review-only audit mutated the edge: %+v err=%v", repaired, err)
 	}
 }

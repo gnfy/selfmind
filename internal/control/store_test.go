@@ -100,8 +100,8 @@ func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CurrentTask failed: %v", err)
 	}
-	if currentTask == nil || currentTask.ID != task.ID || currentTask.CurrentSummary != "half done" {
-		t.Fatalf("current task mismatch: %+v", currentTask)
+	if currentTask != nil {
+		t.Fatalf("finished history must not become an implicit current task: %+v", currentTask)
 	}
 	handoff, err := store.LatestHandoff(ctx, task.ID)
 	if err != nil {
@@ -214,6 +214,11 @@ func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
 	}
 	run, err := store.StartRun(ctx, task, "telegram", "do work")
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Work was in flight: a durable plan keeps the later interruption visible
+	// as resumable state instead of settling an evidence-free run.
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "do work", []RunPlanStepInput{{Step: "prepare the work", Status: "completed"}, {Step: "do the work", Status: "in_progress"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.UpdateRunHeartbeat(ctx, identity.TenantID, run.ID); err != nil {
@@ -342,7 +347,6 @@ func TestApprovalGrantsScopes(t *testing.T) {
 		t.Fatalf("OpenStore failed: %v", err)
 	}
 	defer store.Close()
-
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -351,40 +355,45 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	const pk = "exec:invokes dangerous command: chmod"
 
 	// Nothing granted yet.
-	if ok, err := store.IsApprovalGranted(ctx, tenant, person, "task-1", pk); err != nil || ok {
+	if ok, err := store.IsApprovalGranted(ctx, tenant, person, pk); err != nil || ok {
 		t.Fatalf("expected no grant initially, ok=%v err=%v", ok, err)
 	}
 
-	// Task grant applies only to that task.
-	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err != nil {
-		t.Fatalf("GrantApproval task: %v", err)
-	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-1", pk); !ok {
-		t.Fatalf("task-1 grant should be visible for task-1")
-	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", pk); ok {
-		t.Fatalf("task-1 grant must NOT apply to task-2")
-	}
-
-	// Person grant applies across all tasks.
+	// Person is the only durable scope: person plus pattern key IS the
+	// category-scoped grant, so it needs no container.
 	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk, time.Time{}); err != nil {
 		t.Fatalf("GrantApproval person: %v", err)
 	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", pk); !ok {
-		t.Fatalf("person grant should apply to any task")
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, pk); !ok {
+		t.Fatal("person grant should authorize its class")
 	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "", pk); !ok {
-		t.Fatalf("person grant should apply even with no task id")
+
+	// The retired task scope must be refused rather than silently recorded
+	// under some other scope: a grant whose reuse depended on "these runs are
+	// one piece of work" could be inherited by unrelated work.
+	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err == nil {
+		t.Fatal("task-scoped grant must be refused")
+	}
+	if err := store.GrantApproval(ctx, "session", tenant, person, "task-1", pk, time.Time{}); err == nil {
+		t.Fatal("session-scoped grant must be refused")
 	}
 
 	// A different pattern key is still ungranted.
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", "exec:invokes dangerous command: rm"); ok {
-		t.Fatalf("unrelated class must not be granted")
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "exec:invokes dangerous command: rm"); ok {
+		t.Fatal("unrelated class must not be granted")
 	}
 
 	// Grants are idempotent.
-	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err != nil {
+	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk, time.Time{}); err != nil {
 		t.Fatalf("re-grant should be idempotent: %v", err)
+	}
+	// Another person never inherits it.
+	other, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "other", "Bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.IsApprovalGranted(ctx, other.TenantID, other.PersonID, pk); ok {
+		t.Fatal("a grant must not cross persons")
 	}
 }
 
@@ -412,12 +421,22 @@ func TestRespondApprovalRecordsDecisionScope(t *testing.T) {
 		return a
 	}
 	a1 := mk()
-	got, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a1.ID, "approved", "cli", ApprovalDecisionInput{GrantScope: "task"})
+	got, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a1.ID, "approved", "cli", ApprovalDecisionInput{GrantScope: "person"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DecisionScope != "task" {
-		t.Fatalf("approve should keep task scope, got %q", got.DecisionScope)
+	if got.DecisionScope != "person" {
+		t.Fatalf("approve should keep person scope, got %q", got.DecisionScope)
+	}
+	// The retired task scope normalizes to nothing, so a stale client cannot
+	// record a durable grant under a container that no longer has authority.
+	aRetired := mk()
+	got, err = store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, aRetired.ID, "approved", "cli", ApprovalDecisionInput{GrantScope: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DecisionScope != "" {
+		t.Fatalf("retired task scope must not be recorded, got %q", got.DecisionScope)
 	}
 	a2 := mk()
 	got, err = store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a2.ID, "rejected", "cli", ApprovalDecisionInput{GrantScope: "person"})
@@ -608,12 +627,12 @@ CREATE TABLE task_queue (
 	defer store.Close()
 
 	if _, err := store.db.ExecContext(ctx, `
-INSERT INTO task_events (id, cursor, task_id, type, visibility, idempotency_key, created_at)
+INSERT INTO task_events (id, cursor, thread_id, type, visibility, idempotency_key, created_at)
 VALUES ('event-1', 1, 'task-1', 'test', 'task', 'stable-key', 1);`); err != nil {
 		t.Fatalf("insert after migration: %v", err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
-INSERT INTO task_events (id, cursor, task_id, type, visibility, idempotency_key, created_at)
+INSERT INTO task_events (id, cursor, thread_id, type, visibility, idempotency_key, created_at)
 VALUES ('event-2', 2, 'task-1', 'test', 'task', 'stable-key', 2);`); err == nil {
 		t.Fatal("duplicate event idempotency key must be rejected after migration")
 	}
@@ -669,7 +688,7 @@ VALUES ('legacy-effect', 'tenant-a', 'task-a', 'run-a', 'test', 1);`); err != ni
 		t.Fatalf("legacy effect was not preserved: %v, %v", owned, err)
 	}
 	if _, err := store.db.ExecContext(ctx, `
-INSERT INTO effect_receipts (effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+INSERT INTO effect_receipts (effect_key, tenant_id, thread_id, run_id, kind, delivery_enqueued, created_at)
 VALUES ('legacy-effect', 'tenant-b', 'task-b', 'run-b', 'test', 0, 2);`); err != nil {
 		t.Fatalf("tenant-scoped effect key was not enabled: %v", err)
 	}
@@ -780,11 +799,9 @@ func TestPersonSettingsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestCreateTaskStartsNonRunning pins the fix for the live phantom-running
-// bug: a freshly created task (e.g. via /new) must NOT be 'running' — nothing
-// is executing, and 'running' made the stuck-run sweeper flip it to
-// 'interrupted'. A real run sets 'running' via StartRun.
-func TestCreateTaskStartsNonRunning(t *testing.T) {
+// TestCreateThreadDoesNotCreateExecutionState pins the Thread/Run boundary: a
+// newly retained history group does not imply that anything is executing.
+func TestCreateThreadDoesNotCreateExecutionState(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
 	if err != nil {
@@ -799,19 +816,14 @@ func TestCreateTaskStartsNonRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Status == "running" {
-		t.Fatalf("a freshly created task must not be 'running' (nothing executes yet); got %q", task.Status)
+	if task.ActiveRunID != "" {
+		t.Fatalf("a freshly created thread has an active Run: %+v", task)
 	}
-	switch task.Status {
-	case "done", "completed", "cancelled", "failed":
-		t.Fatalf("a freshly created task must be non-terminal (resumable); got %q", task.Status)
-	}
-	// A boot/periodic sweep must NOT touch it (only status='running' rows).
+	// A boot/periodic sweep only inspects authoritative Run rows.
 	if n, err := store.MarkInterruptedRuns(ctx, 0); err != nil || n != 0 {
 		t.Fatalf("sweep should ignore a new task: n=%d err=%v", n, err)
 	}
-	got, _ := store.GetTask(ctx, id.TenantID, task.ID)
-	if got == nil || got.Status == "interrupted" {
-		t.Fatalf("new task must not become interrupted; got %+v", got)
+	if runs, err := store.ListTaskRuns(ctx, id.TenantID, task.ID, 10); err != nil || len(runs) != 0 {
+		t.Fatalf("new thread unexpectedly owns Runs: %+v err=%v", runs, err)
 	}
 }

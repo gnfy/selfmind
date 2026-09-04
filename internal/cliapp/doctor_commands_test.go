@@ -200,7 +200,7 @@ jobs: 2 total, 0 system, retired skill-pruner rows: 0 keyed + 0 legacy, 0 duplic
 == Gateway log (last 50 lines) ==
 an old warning
 
-== Skill partitions ==
+== Person asset partitions ==
 - healthy: no person-partitioned skill assets need migration`
 
 	issues := collectDoctorIssues(full, configDiagnostics{Path: "/tmp/config.yaml"})
@@ -251,7 +251,7 @@ Recovery: send ANY message from that chat.
 jobs: 60 total
 warning: unusually many cron jobs — check for runaway system registration.
 
-== Skill partitions ==
+== Person asset partitions ==
 [MIGRATION] person-owned skill assets: partitions=1 migrate=1 dedupe=0 conflicts=0
 - preview: selfmind maintenance migrate-skills
 - apply after review: selfmind maintenance migrate-skills --apply`
@@ -275,7 +275,7 @@ warning: unusually many cron jobs — check for runaway system registration.
 		"[APPROVAL] Pending approvals",
 		"[DELIVERY] Message delivery",
 		"[SCHEDULE] Scheduler governance",
-		"[SKILLS] Skill partitions",
+		"[SKILLS] Person asset partitions",
 		"Next actions (9)",
 		"selfmind config upgrade",
 		"selfmind ws trust <workspace_id>",
@@ -590,5 +590,37 @@ func TestCronGovernanceReportsLegacySystemShape(t *testing.T) {
 	if !strings.Contains(section, "retired skill-pruner rows: 0 keyed + 1 legacy") ||
 		!strings.Contains(section, "obsolete Skill metric-pruner") {
 		t.Fatalf("legacy system-shaped row was not reported:\n%s", section)
+	}
+}
+
+func TestDoctorReportsControlSchemaVersionInSummaryAndBundle(t *testing.T) {
+	current := formatControlSchemaLine(control.StoreSchemaStatus{Version: 11, CurrentVersion: 11})
+	if current != "control schema: 11/11 (backup: none)" {
+		t.Fatalf("current schema line=%q", current)
+	}
+	migrated := formatControlSchemaLine(control.StoreSchemaStatus{Version: 11, CurrentVersion: 11, MigrationBackup: "/data/backups/control-v10-to-v11-x.db"})
+	if migrated != "control schema: 11/11 (backup: /data/backups/control-v10-to-v11-x.db)" {
+		t.Fatalf("migrated schema line=%q", migrated)
+	}
+	summary := formatDoctorSummary(nil, nil, false, current)
+	if !strings.Contains(summary, "✓ No problems found.\n"+current+"\n") {
+		t.Fatalf("problem-only summary does not show the schema fact:\n%s", summary)
+	}
+
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	store, err := control.OpenStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "doctor-schema", "Doctor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := buildDoctorReport(ctx, store, identity, dataDir, "not running", "", "", 5)
+	want := formatControlSchemaLine(store.SchemaStatus())
+	if !strings.HasPrefix(want, "control schema: ") || !strings.Contains(report, "\n"+want+"\n") {
+		t.Fatalf("verbose bundle lacks %q:\n%s", want, report)
 	}
 }

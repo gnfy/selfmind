@@ -21,7 +21,7 @@ func TestSkillUsageStatsDeriveFromActivationsAndWorkUnitOutcomes(t *testing.T) {
 		t.Helper()
 		task, err := store.CreateTask(ctx, TaskCreate{
 			TenantID: identity.TenantID, PersonID: identity.PersonID,
-			Title: title, Channel: "cli", KeepCurrent: true,
+			Title: title, Channel: "cli",
 		})
 		if err != nil {
 			t.Fatal(err)

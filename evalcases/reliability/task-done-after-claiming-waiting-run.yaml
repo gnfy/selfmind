@@ -15,7 +15,7 @@ turns:
       This task requires one user confirmation before completion. Finish this
       run as waiting_user and state that confirmation is the only open input.
   - input: >-
-      Confirmed. Continue the same task and complete it now.
+      continue
 
 expect:
   status: completed

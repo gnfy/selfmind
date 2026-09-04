@@ -59,16 +59,33 @@ func (s *Store) CreateClarifyRequest(ctx context.Context, req ClarifyRequest) (*
 	if req.ID == "" {
 		req.ID = "clr_" + uuid.NewString()
 	}
+	// The run is the authority for thread membership: a scope frozen before a
+	// direct continuation claim still names the interaction placeholder.
+	if threadID := s.threadIDForRun(ctx, req.TenantID, req.RunID); threadID != "" {
+		req.TaskID = threadID
+	}
 	now := time.Now()
 	req.CreatedAt = now
 	req.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO clarify_requests
-		   (id, tenant_id, person_id, task_id, run_id, question, options_json, status, answer, channel, created_at, updated_at)
+		   (id, tenant_id, person_id, thread_id, run_id, question, options_json, status, answer, channel, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		req.ID, req.TenantID, req.PersonID, req.TaskID, req.RunID, req.Question, string(req.Options), req.Status,
-		req.Answer, req.Channel, req.CreatedAt.Unix(), req.UpdatedAt.Unix())
-	if err != nil {
+		req.Answer, req.Channel, req.CreatedAt.Unix(), req.UpdatedAt.Unix()); err != nil {
+		return nil, err
+	}
+	// A pending clarification is durable work evidence: list the Run's Thread
+	// now rather than only at finalization.
+	if err := promoteThreadForControlObjectTx(ctx, tx, req.TenantID, req.RunID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &req, nil
@@ -84,7 +101,7 @@ func (s *Store) ListClarifyRequests(ctx context.Context, tenantID, personID, sta
 	tenantID = normalizeTenant(tenantID)
 	status = normalizeName(status, "pending")
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), question,
+		`SELECT id, tenant_id, person_id, COALESCE(thread_id, ''), COALESCE(run_id, ''), question,
 		        COALESCE(options_json, '[]'), status, COALESCE(answer, ''), COALESCE(channel, ''),
 		        created_at, updated_at
 		 FROM clarify_requests
@@ -112,7 +129,7 @@ func (s *Store) GetClarifyRequest(ctx context.Context, tenantID, clarifyID strin
 		return nil, fmt.Errorf("clarify id is required")
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), question,
+		`SELECT id, tenant_id, person_id, COALESCE(thread_id, ''), COALESCE(run_id, ''), question,
 		        COALESCE(options_json, '[]'), status, COALESCE(answer, ''), COALESCE(channel, ''),
 		        created_at, updated_at
 		 FROM clarify_requests WHERE tenant_id = ? AND id = ?`,
@@ -189,11 +206,11 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 
 	var status, owner, taskID, runID, runStatus, runPersonID, runTaskID, legacyClaim string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT c.status, c.person_id, COALESCE(c.task_id, ''), COALESCE(c.run_id, ''),
-		        COALESCE(r.status, ''), COALESCE(r.person_id, ''), COALESCE(r.task_id, ''),
+		`SELECT c.status, c.person_id, COALESCE(c.thread_id, ''), COALESCE(c.run_id, ''),
+		        COALESCE(r.status, ''), COALESCE(r.person_id, ''), COALESCE(r.thread_id, ''),
 		        COALESCE(r.resumed_by_run_id, '')
 		 FROM clarify_requests c
-		 LEFT JOIN task_runs r ON r.tenant_id = c.tenant_id AND r.id = c.run_id
+		 LEFT JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.run_id
 		 WHERE c.tenant_id = ? AND c.id = ?`, tenantID, clarifyID,
 	).Scan(&status, &owner, &taskID, &runID, &runStatus, &runPersonID, &runTaskID, &legacyClaim); err != nil {
 		if err == sql.ErrNoRows {
@@ -233,7 +250,7 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 		}
 		var claimed bool
 		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM task_runs WHERE tenant_id = ? AND parent_run_id = ?)`,
+			`SELECT EXISTS(SELECT 1 FROM runs WHERE tenant_id = ? AND resumes_run_id = ?)`,
 			tenantID, runID,
 		).Scan(&claimed); err != nil {
 			return nil, nil, err
@@ -266,7 +283,7 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 			notBefore = 0
 		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at)
+			`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 			q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
@@ -319,7 +336,7 @@ func (s *Store) MarkClarifyNotified(ctx context.Context, tenantID, clarifyID str
 // tenants, oldest first. Mirrors ListPendingApprovalsForEscrow (Fix 2).
 func (s *Store) ListPendingClarifiesForEscrow(ctx context.Context, createdBefore time.Time) ([]ClarifyRequest, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), question,
+		`SELECT id, tenant_id, person_id, COALESCE(thread_id, ''), COALESCE(run_id, ''), question,
 		        COALESCE(options_json, '[]'), status, COALESCE(answer, ''), COALESCE(channel, ''),
 		        created_at, updated_at
 		 FROM clarify_requests
@@ -357,24 +374,31 @@ func (s *Store) ExpireClarifyRequest(ctx context.Context, tenantID, clarifyID, r
 // ExpireOrphanedClarifies expires pending questions whose origin run can no
 // longer accept a continuation. Running and resumable runs keep their question:
 // a daemon restart intentionally parks the run as interrupted, and the later
-// answer must still be able to claim that exact parent. Questions with no run id
-// are left alone.
+// answer must still be able to claim that exact parent. A run whose Attention
+// was dismissed no longer surfaces its question anywhere, so that question is
+// an orphan too. Questions with no run id are left alone.
+//
+// This deliberately does not apply the full resumableRunConditionSQL: a
+// pending question is itself work evidence, and Attention lists a pending
+// clarification on any undismissed run regardless of whether a newer run
+// exists in the same thread, so expiry must not be stricter than that signal.
 func (s *Store) ExpireOrphanedClarifies(ctx context.Context) (int, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE clarify_requests SET status = 'expired', updated_at = ?
 		 WHERE status = 'pending' AND COALESCE(run_id, '') != ''
 		   AND NOT EXISTS (
-		     SELECT 1 FROM task_runs r
+		     SELECT 1 FROM runs r
 		     WHERE r.tenant_id = clarify_requests.tenant_id
 		       AND r.id = clarify_requests.run_id
 		       AND (
 		         r.status = 'running'
 		         OR (
 		           r.status IN `+resumableRunStatusSQL+`
+		           AND COALESCE(r.attention_dismissed_at, 0) = 0
 		           AND COALESCE(r.resumed_by_run_id, '') = ''
 		           AND NOT EXISTS (
-		             SELECT 1 FROM task_runs child
-		             WHERE child.tenant_id = r.tenant_id AND child.parent_run_id = r.id
+		             SELECT 1 FROM runs child
+		             WHERE child.tenant_id = r.tenant_id AND child.resumes_run_id = r.id
 		           )
 		         )
 		       )

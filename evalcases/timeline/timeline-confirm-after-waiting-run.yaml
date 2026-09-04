@@ -1,0 +1,46 @@
+id: timeline_confirm_after_waiting_run
+title: "a same-channel confirmation continues the waiting run inside the same Main turn"
+require_cassette: true
+suite: timeline
+workspace: isolated
+channel: cli
+
+# The live RUQX-797 miss (2026-09-02): a run parked as waiting_user after asking
+# the person to confirm a production release; the person answered "确认执行" on
+# the same channel and the message became a fresh root task with no parent.
+# Main-turn continuity must find the waiting run through work_search's
+# attention mode, and because the seeded run shares this turn's execution
+# domain, work_select claims it directly: one Main run, no queued child, the
+# parent's plan restored on the continuing run, and the work done in this turn.
+setup:
+  task:
+    title: "aws 生产发布 cw2-seoant-ai-prod-api"
+    parked_runs:
+      - input: "aws生产发布，cw2-seoant-ai-prod-api：v20260902153117。请先做只读预检，然后停下等我确认。我确认后，只需复述将要执行的发布步骤，不要真正执行任何命令。"
+        status: waiting_user
+
+turns:
+  - input: "确认执行"
+
+expect:
+  status: completed
+  http_status: 200
+  max_tool_calls: 6
+  max_duration_seconds: 180
+  must_not_contain:
+    - "Which one did you mean?"
+    - "queued as the next exact continuation"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+
+assert_state:
+  - on: events
+    type: work.selection_committed
+    payload_contains: '"commit_mode":"direct"'
+    count_gte: 1
+  - on: run
+    field: resumes_run_id
+    empty: false

@@ -462,22 +462,17 @@ intent:
   thresholds:
     direct: 0.8
     ask: 0.55
-continuity:
-  mode: "safe"         # shadow | safe | full | off
 ```
 
-Ordinary language always reaches the agent; these knobs only tune
-explicit-command and continuation detection. Defaults are fine for most users.
-
-`continuity.mode` controls the bounded `fast_classifier` decision over prior
-run cards. `shadow` records decisions but preserves the deterministic legacy
-path. `safe` (default) applies read-only progress, new-work decisions, and clear
-guidance to the currently active run, but asks before resuming historical work.
-`full` also applies a clear historical resume. `off` disables this model call;
-explicit IDs, reply metadata, `/resume`, `/choose`, `/new --run`, and standalone
-continue controls remain deterministic in every mode. The call uses the
-`models.roles.fast_classifier` override or `models.auxiliary`, with thinking
-disabled and a six-second total deadline.
+Ordinary language always reaches the agent. These knobs tune only explicit
+command and standalone continuation-cue detection; defaults are fine for most
+users. Idle natural language starts one audited Main Run, while active natural
+language is durably steered to the running Main. Explicit IDs, reply metadata,
+`/resume`, `/choose`, `/new --run`, and standalone continue controls remain
+deterministic. Person-scoped `work_search` and `work_inspect` provide progressive
+history lookup inside the turn, and `work_select` records an advisory exact-Run
+relationship for gateway validation. `fast_classifier` has no work-continuity
+authority. There is no continuity model or timeout setting.
 
 ## 11. MCP servers
 

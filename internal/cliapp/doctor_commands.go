@@ -145,7 +145,7 @@ func (a *App) doctor(args []string) int {
 		} else if probeSection != "" {
 			informational = append(informational, probeSection)
 		}
-		report = formatDoctorSummary(issues, informational, a.doctorColorEnabled())
+		report = formatDoctorSummary(issues, informational, a.doctorColorEnabled(), formatControlSchemaLine(store.SchemaStatus()))
 	} else if probeSection != "" {
 		report += "\n\n" + probeSection
 	}
@@ -381,10 +381,10 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 					})
 				}
 			}
-		case "Skill partitions":
+		case "Person asset partitions":
 			if !strings.Contains(body, "healthy:") {
 				if strings.Contains(body, "inspect failed:") {
-					issues = append(issues, doctorReadIssue("SKILLS", "Skill partitions", body))
+					issues = append(issues, doctorReadIssue("SKILLS", "Person asset partitions", body))
 				} else {
 					actions := []doctorAction{}
 					if strings.Contains(body, "[MIGRATION]") {
@@ -400,13 +400,13 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 						})
 					} else if strings.Contains(body, "[CLEANUP]") {
 						actions = append(actions,
-							doctorAction{Description: "Preview orphan person partitions.", Commands: []string{"selfmind maintenance cleanup-person-partitions"}},
+							doctorAction{Description: "Preview orphan person asset partitions.", Commands: []string{"selfmind maintenance cleanup-person-partitions"}},
 							doctorAction{Description: "Stop the gateway, then move reviewed orphans into recoverable quarantine.", Commands: []string{"selfmind gateway stop", "selfmind maintenance cleanup-person-partitions --apply", "selfmind gateway start"}},
 						)
 					}
 					issues = append(issues, doctorIssue{
 						Category: "SKILLS",
-						Title:    "Skill partitions",
+						Title:    "Person asset partitions",
 						Details:  doctorWithoutLines(body, "- preview:", "- apply after review:", "- quarantine after review:"),
 						Actions:  actions,
 					})
@@ -718,7 +718,10 @@ func (a *App) doctorColorEnabled() bool {
 	return true
 }
 
-func formatDoctorSummary(issues []doctorIssue, informational []string, colorEnabled bool) string {
+// formatDoctorSummary renders the default problem-only view. facts are short
+// always-shown state lines (such as the control schema version) that are
+// neither problems nor verbose-only detail.
+func formatDoctorSummary(issues []doctorIssue, informational []string, colorEnabled bool, facts ...string) string {
 	var sb strings.Builder
 	sb.WriteString(doctorPaint(colorEnabled, "SelfMind doctor", uicommon.PaletteText, true))
 	sb.WriteString("\n")
@@ -728,6 +731,10 @@ func formatDoctorSummary(issues []doctorIssue, informational []string, colorEnab
 		sb.WriteString(doctorPaint(colorEnabled, "⚠ 1 category needs attention.", uicommon.PaletteAmber, true))
 	} else {
 		sb.WriteString(doctorPaint(colorEnabled, fmt.Sprintf("⚠ %d categories need attention.", len(issues)), uicommon.PaletteAmber, true))
+	}
+	for _, fact := range facts {
+		sb.WriteString("\n")
+		sb.WriteString(doctorPaint(colorEnabled, fact, uicommon.PaletteSubtle, false))
 	}
 	for _, issue := range issues {
 		sb.WriteString("\n\n")
@@ -826,7 +833,7 @@ func doctorActionCount(issues []doctorIssue) int {
 
 func formatSkillPartitionDiagnostics(report tools.SkillMigrationReport, err error, cleanup tools.PersonPartitionCleanupReport, cleanupErr error) string {
 	var sb strings.Builder
-	sb.WriteString("== Skill partitions ==\n")
+	sb.WriteString("== Person asset partitions ==\n")
 	if err != nil {
 		fmt.Fprintf(&sb, "- migration inspect failed: %s", oneLine(tools.RedactSensitive(err.Error()), 180))
 		return sb.String()
@@ -836,7 +843,7 @@ func formatSkillPartitionDiagnostics(report tools.SkillMigrationReport, err erro
 		return sb.String()
 	}
 	if report.Partitions == 0 && cleanup.Candidates == 0 {
-		sb.WriteString("- healthy: skill assets use the control partition and no orphan person partitions were found")
+		sb.WriteString("- healthy: skill assets use the control partition and no orphan person asset partitions were found")
 		return sb.String()
 	}
 	if report.Partitions > 0 {
@@ -851,7 +858,7 @@ func formatSkillPartitionDiagnostics(report tools.SkillMigrationReport, err erro
 		return strings.TrimSpace(sb.String())
 	}
 	if cleanup.Candidates > 0 {
-		fmt.Fprintf(&sb, "[CLEANUP] orphan person partitions: candidates=%d protected=%d skipped=%d\n", cleanup.Candidates, cleanup.Protected, cleanup.Skipped)
+		fmt.Fprintf(&sb, "[CLEANUP] orphan person asset partitions: candidates=%d protected=%d skipped=%d\n", cleanup.Candidates, cleanup.Protected, cleanup.Skipped)
 		sb.WriteString("- preview: selfmind maintenance cleanup-person-partitions\n")
 		sb.WriteString("- quarantine after review: selfmind gateway stop && selfmind maintenance cleanup-person-partitions --apply && selfmind gateway start")
 	}
@@ -1033,7 +1040,8 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	sb.WriteString("SelfMind doctor — diagnostic bundle\n")
 	fmt.Fprintf(&sb, "generated: %s\n", time.Now().UTC().Format(time.RFC3339))
 	fmt.Fprintf(&sb, "person: %s  tenant: %s\n", identity.PersonID, identity.TenantID)
-	fmt.Fprintf(&sb, "data dir: %s\n\n", dataDir)
+	fmt.Fprintf(&sb, "data dir: %s\n", dataDir)
+	fmt.Fprintf(&sb, "%s\n\n", formatControlSchemaLine(store.SchemaStatus()))
 
 	fmt.Fprintf(&sb, "== Gateway ==\n%s\n\n", gatewayStatus)
 	if strings.TrimSpace(configSection) != "" {
@@ -1268,6 +1276,17 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	}
 
 	return strings.TrimSpace(sb.String())
+}
+
+// formatControlSchemaLine reports the control.db schema this process accepted
+// against the version the binary requires, plus the pre-migration backup made
+// by this open when it crossed a migration boundary.
+func formatControlSchemaLine(status control.StoreSchemaStatus) string {
+	backup := strings.TrimSpace(status.MigrationBackup)
+	if backup == "" {
+		backup = "none"
+	}
+	return fmt.Sprintf("control schema: %d/%d (backup: %s)", status.Version, status.CurrentVersion, backup)
 }
 
 func formatSkillPresentationDiagnostics(report control.SkillPresentationDiagnostics, err error) string {

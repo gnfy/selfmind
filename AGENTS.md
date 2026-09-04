@@ -67,7 +67,10 @@ daemon must not expose that directory as a product runtime Skill.
    Do not add speculative features, configurability, abstractions, or error
    handling for impossible states. Match existing patterns. Do not refactor,
    reformat, or remove adjacent code you do not need to change. Remove only
-   artifacts made obsolete by your own change.
+   artifacts made obsolete by your own change. Retiring a user-facing name
+   (command, verb, event type, status word) includes its invocation sites the
+   compiler never reads: `scripts/`, `.github/`, `evalcases/`, and docs. A test
+   guards this; a case that probes a retired name on purpose declares itself.
 4. **Respect the request type.** Analysis-only requests do not authorize edits.
    For implementation requests, carry the change through focused tests, the
    release gate when appropriate, and the installed WSL binary when the user is
@@ -111,10 +114,10 @@ daemon must not expose that directory as a product runtime Skill.
 
 - `person_id` is one human across endpoints; `account_id` is one platform
   binding. Adapters authenticate and normalize; only the gateway resolves
-  identity, workspace, task, run, queue, approval, and delivery state.
+  identity, workspace, thread, run, queue, approval, and delivery state.
 - Raw transcripts stay channel-local. Shared state is limited to structured
-  tasks, runs, events, handoffs, approvals, artifacts, memory, and skills.
-- Explicit controls such as `/status`, `/tasks`, `/workspace`, `/resume`,
+  threads, runs, events, handoffs, approvals, artifacts, memory, and skills.
+- Explicit controls such as `/status`, `/resume`, `/search`, `/workspace`,
   `/approve`, and `/stop` remain model-free. Other natural language is
   agent-first; do not add greeting or keyword bypasses.
 - Keep one active run per person until an active plan explicitly changes the
@@ -122,28 +125,39 @@ daemon must not expose that directory as a product runtime Skill.
   active run and is never queued.
 - Run events use the per-run channel installed with `kernel.WithEventChannel`.
   Never swap a shared Agent event channel.
-- Derive user-visible state from structured outcomes, handoffs, and events, not
-  prose parsing. A task is `running` only while a run executes. Recovery emits
-  one durable, deduplicated, actionable notification.
+- Derive user-visible state from Runs, pending control objects, handoffs, and
+  events, not prose parsing. Only a Run owns execution status; a Thread has no
+  lifecycle status. Recovery emits one durable, deduplicated, actionable
+  notification.
 - Long external operations use `watch_external`; do not occupy an agent turn
   with repeated model-driven polling or an unsupervised goroutine.
 - Daemon-originated runs carry an origin. Clients render concise results rather
   than replayed transcript progress. Approvals and clarifications stay visible.
   CLI streams user-originated progress; IM sends bounded milestones and a final
   result, never token deltas.
+- Never discard the error from writing an event that parks work on a human
+  (approval, clarification, recovery, handoff). A push suppressed because a
+  client is attached assumes that client was told; when the write failed, that
+  assumption is void and the push must go out. Both silenced means work parks
+  with nothing on any channel.
 - `sent_unconfirmed` is terminal for blind retry. Only the bounded,
   inbound-triggered catch-up path may claim and resend it.
 
-## Tasks, Context, and Memory
+## Threads, Context, and Memory
 
-- A task is a reversible work label, not a context boundary. Explicit task ids,
+- A Thread is a reversible work-history grouping, not a context boundary.
+  Ordinary root interactions are retained unlisted and deterministic durable
+  evidence promotes them into the work list. Attention is derived per exact
+  Run from live execution, pending human input, watchers, and unclaimed
+  resumable outcomes; dismissal never rewrites Run history. Explicit task ids,
   `/resume`, structured reply edges, and standalone continuation controls remain
-  deterministic. The one allowed ingress inference seam is the bounded
-  `fast_classifier` continuity resolver: it sees gateway-issued person-scoped
-  run cards, never raw transcripts or tool output; it recommends NEW, OBSERVE,
-  STEER, RESUME, or CLARIFY; and the gateway revalidates every target before
-  acting. Do not add a second classifier or let model output select permissions,
-  workspaces, task labels, or context rows directly.
+  deterministic. User-originated natural language is Main-owned inside an
+  accountable Run: when work is active it is durably steered for Main to apply
+  or queue, and when idle it starts an ordinary turn with bounded work-history
+  tools. Daemon-originated text never steers work. Do not add a run-external LLM
+  continuity classifier or let model output select permissions, workspaces,
+  Thread labels, context rows, or execution scope directly. `fast_classifier` is
+  not a continuity authority.
 - Continuity comes from the person-level work spine: one slim user/final-answer
   entry per agent turn plus touched paths and source. Tool intermediates and
   system prompts remain in run events.
@@ -157,7 +171,7 @@ daemon must not expose that directory as a product runtime Skill.
 - The streaming hot path performs no extra LLM call while under budget.
   Compaction preserves the original goal, recent tail, decisions, unresolved
   work, and relevant paths; deterministic trimming is its safe fallback.
-- Memory facts, task cards, handoffs, sessions, artifacts, and the work spine
+- Memory facts, Thread cards, handoffs, sessions, artifacts, and the work spine
   remain distinct sources. Recall is bounded and degrades without blocking a
   foreground turn.
 - Person data is person-partitioned; skills are control-tenant assets. Durable
@@ -171,13 +185,13 @@ daemon must not expose that directory as a product runtime Skill.
   `SUPERSEDE`, or `CONFLICT` against same-scope evidence. Similarity proposes
   candidates but never authorizes a merge.
 - Post-run maintenance is asynchronous, eligibility-filtered, debounced, and
-  idempotent. One frozen result includes preference decisions and optional task
-  reference hints; it never decides task routing. Never add a second extractor,
+  idempotent. One frozen result includes preference decisions and optional
+  Thread reference hints; it never decides routing. Never add a second extractor,
   a synchronous per-run maintenance call, or fallback to the primary coding
   model.
-- Automatic retention may archive stale terminal tasks with no live run or
-  pending human input. It never deletes run/artifact history, touches open work,
-  or overrides a pin.
+- Automatic retention may archive stale, settled Threads with no live Run or
+  pending human input. It never deletes Run/artifact history, touches Attention,
+  reopens an archive, or overrides a pin.
 
 ## Models and Agent Loop
 

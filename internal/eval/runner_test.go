@@ -308,7 +308,7 @@ func TestNewRuntimeHarnessCredentiallessReplayBuildsAuxiliaryRoles(t *testing.T)
 		t.Skip("boots the full gateway harness")
 	}
 	_, cfgPath := writeRunnerFixtures(t)
-	c := writeRunnerCase(t, "credentialless_replay_roles", "continuity_mode: safe\n")
+	c := writeRunnerCase(t, "credentialless_replay_roles", "")
 	c.Turns[0].WaitForMaintenance = true
 	root, err := makeEvalTempRoot(c.ID)
 	if err != nil {
@@ -321,11 +321,28 @@ func TestNewRuntimeHarnessCredentiallessReplayBuildsAuxiliaryRoles(t *testing.T)
 		t.Fatalf("newRuntimeHarness: %v", err)
 	}
 	defer harness.Close()
-	if harness.server.ContinuityResolver == nil {
-		t.Fatal("offline replay did not configure fast_classifier")
-	}
 	if harness.server.PostRunAnalyzer == nil {
 		t.Fatal("offline replay did not configure memory_extract")
+	}
+}
+
+func TestRegisterDaemonOwnedEvalToolsIncludesWorkContinuityBroker(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	dispatcher := tools.NewDispatcherWithRegistry(tools.NewRegistry())
+	registerDaemonOwnedEvalTools(dispatcher, store)
+
+	available := make(map[string]bool)
+	for _, name := range dispatcher.ListTools() {
+		available[name] = true
+	}
+	for _, name := range []string{"queue_user_input", "work_search", "work_inspect", "work_select"} {
+		if !available[name] {
+			t.Fatalf("eval harness omitted production continuity tool %q: %v", name, dispatcher.ListTools())
+		}
 	}
 }
 
@@ -582,7 +599,8 @@ func TestFinalizeLeftoverRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("task: %v", err)
 	}
-	if _, err := store.StartRun(ctx, task, "cli", "input"); err != nil {
+	run, err := store.StartRun(ctx, task, "cli", "input")
+	if err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
@@ -597,12 +615,21 @@ func TestFinalizeLeftoverRuns(t *testing.T) {
 	if len(left) != 0 {
 		t.Fatalf("run should be terminal after finalize, got %+v", left)
 	}
+	// The Run is the execution authority: it must be interrupted. The thread's
+	// derived status settles because an evidence-free leftover is not Attention.
+	forcedRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil || forcedRun == nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if forcedRun.Status != "interrupted" {
+		t.Fatalf("run should be interrupted, got %q", forcedRun.Status)
+	}
 	got, err := store.GetTask(ctx, identity.TenantID, task.ID)
 	if err != nil || got == nil {
 		t.Fatalf("get task: %v", err)
 	}
-	if got.Status != "interrupted" {
-		t.Fatalf("task should be interrupted, got %q", got.Status)
+	if got.Status == "running" {
+		t.Fatalf("task must not stay running after forced finalization, got %q", got.Status)
 	}
 }
 

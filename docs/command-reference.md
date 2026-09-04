@@ -86,7 +86,7 @@ selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|re
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
-selfmind stop
+selfmind stop [n|run_id]
 selfmind id
 selfmind new [title]
 ```
@@ -427,7 +427,7 @@ before normal agent dispatch.
 /approve <n|id|all> [run]
 /reject <n|id|all>
 /mode [on-request|read-only|auto-edit|full-auto|smart]
-/stop
+/stop [n|run_id]
 /cancel
 /notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
@@ -459,7 +459,11 @@ before normal agent dispatch.
   ordinal resolves against. `/resume <n|run_id>` continues one Run exactly; a
   Thread id is still accepted when it has exactly one unresolved Run. An idle
   `/stop` dismisses that exact Run and refuses while it still has a pending
-  approval, a pending clarification, or a live watcher. The compatibility
+  approval, a pending clarification, or a live watcher. `/stop <n|run_id>`
+  clears ONE listed item without running it — the exit a stale item otherwise
+  lacked, since retention never archives anything with pending human input and
+  pinning an item to dismiss it starts the work you were putting down. Naming
+  the executing Run routes to bare `/stop`, which cancels it. The compatibility
   `Task.status` field on the wire carries the derived vocabulary `active`,
   `needs_attention`, `monitoring`, or `resumable` for Attention, `done` for
   settled listed work, and `archived` for archived Threads; the value is

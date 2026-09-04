@@ -3,7 +3,9 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -27,7 +29,18 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, taskID, runID stri
 	}
 
 	var evidence []kernel.RunEvidence
-	var files []string
+	var changed []string
+	// Whether this run made a file from nothing is decided by the EARLIEST
+	// effect on that path: a later edit carries a real before-hash and would
+	// otherwise look like a pre-existing file. Keyed on the effect's own
+	// timestamp rather than iteration order, because ListTaskEvents returns
+	// newest-first — reading "the first one seen" as "the first one that
+	// happened" silently inverted this rule and the whole fix did nothing.
+	type firstTouch struct {
+		at      int64
+		created bool
+	}
+	firstSeen := map[string]firstTouch{}
 	for _, event := range events {
 		if event.RunID != runID || event.Type != "evidence.recorded" {
 			continue
@@ -39,10 +52,34 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, taskID, runID stri
 		evidence = append(evidence, payload.Evidence)
 		if payload.Evidence.Kind == "mutation" && payload.Evidence.Status == "succeeded" {
 			for _, effect := range payload.Evidence.Files {
+				if prev, known := firstSeen[effect.Path]; !known || payload.Evidence.StartedAt < prev.at {
+					firstSeen[effect.Path] = firstTouch{at: payload.Evidence.StartedAt, created: effect.BeforeSHA256 == ""}
+				}
 				if effect.BeforeSHA256 != effect.AfterSHA256 {
-					files = appendUnique(files, effect.Path, 32)
+					changed = appendUnique(changed, effect.Path, 32)
 				}
 			}
+		}
+	}
+	// A file this run created and then removed left the workspace exactly as it
+	// found it, so it is not a change anyone can verify — and demanding
+	// verification for it strands an otherwise finished run in Attention
+	// forever. Observed 2026-09-04: a turn whose real work (commit and push)
+	// succeeded was held at verification_partial by a throwaway `.py` helper it
+	// had already deleted, purely because `.py` is on the verifiable-suffix list
+	// and `.md` — the files it actually edited — is not. A file the run DELETED
+	// but did not create keeps its before-hash and still counts: removing real
+	// source is a change worth verifying.
+	transient := map[string]bool{}
+	for path, touch := range firstSeen {
+		if touch.created && !pathExists(path) {
+			transient[path] = true
+		}
+	}
+	files := make([]string, 0, len(changed))
+	for _, path := range changed {
+		if !transient[path] {
+			files = append(files, path)
 		}
 	}
 	if len(evidence) == 0 {
@@ -52,7 +89,7 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, taskID, runID stri
 
 	result := &api.VerificationOutcome{}
 	for _, item := range evidence {
-		if item.Kind == "mutation" && item.Status == "succeeded" && evidenceChangedFiles(item.Files) && item.FinishedAt > result.LatestMutationAt {
+		if item.Kind == "mutation" && item.Status == "succeeded" && evidenceChangedFiles(item.Files, transient) && item.FinishedAt > result.LatestMutationAt {
 			result.LatestMutationAt = item.FinishedAt
 		}
 		if item.Kind != "verification" || item.Command == nil {
@@ -73,13 +110,29 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, taskID, runID stri
 	return result, files
 }
 
-func evidenceChangedFiles(files []kernel.FileEffect) bool {
+func evidenceChangedFiles(files []kernel.FileEffect, transient map[string]bool) bool {
 	for _, effect := range files {
+		if transient[effect.Path] {
+			continue
+		}
 		if effect.BeforeSHA256 != effect.AfterSHA256 {
 			return true
 		}
 	}
 	return false
+}
+
+// pathExists answers only the question asked: is the file there now. An
+// unreadable path counts as present, because "cannot tell" must not be read as
+// "the run cleaned up after itself".
+func pathExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	if _, err := os.Stat(path); err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
+	return true
 }
 
 func verificationState(latestMutation int64, checks []api.VerificationCheck) (string, string) {

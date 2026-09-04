@@ -54,6 +54,18 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/forget" || strings.HasPrefix(lower, "/forget "):
 		reply, err := d.handleForgetCommand(ctx, identity, strings.TrimSpace(trimmed[len("/forget"):]))
 		return true, reply, err
+	case strings.HasPrefix(lower, "/stop "):
+		// `/stop <n>` clears ONE attention item without running it. Dismissing
+		// used to require pinning the item first — `/resume <n>` then `/stop` —
+		// which starts the work you were trying to put down. Stale items
+		// therefore had no exit: automatic retention will not touch anything
+		// with pending human input, so `waiting_user` residue accumulated (nine
+		// items, six of them a day old, observed 2026-09-04).
+		parts := strings.Fields(trimmed)
+		if len(parts) < 2 {
+			return true, "Usage: /stop <n|run_id>  (bare /stop cancels the active run)", nil
+		}
+		return true, d.dismissAttentionByReference(ctx, identity, req.Channel, parts[1]), nil
 	case lower == "/stop":
 		active := d.coordinator().stopActive(identity.PersonID)
 		if active == nil {
@@ -676,6 +688,55 @@ func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.
 	default:
 		return "No active run. Several items need attention; run /resume to see them."
 	}
+}
+
+// dismissAttentionByReference resolves ONE attention item — a list ordinal from
+// the same snapshot `/resume` owns, or an exact run id — and dismisses it
+// without executing anything. Cancelling the active run stays the job of bare
+// `/stop`, so naming the running item here routes there instead of pretending a
+// live run can be put down without stopping it.
+func (d *Server) dismissAttentionByReference(ctx context.Context, identity *control.IdentityContext, channel, ref string) string {
+	if d == nil || d.Control == nil || identity == nil {
+		return "Could not dismiss attention: the control store is unavailable."
+	}
+	ref = strings.TrimSpace(ref)
+	runID := ""
+	if ordinal, convErr := strconv.Atoi(ref); convErr == nil {
+		_, resolved, count, found := d.taskLists.resolveRun(identity, channel, ordinal, time.Now())
+		if !found {
+			return fmt.Sprintf("No list to number %d against; run /resume first.", ordinal)
+		}
+		if resolved == "" {
+			return fmt.Sprintf("No item number %d in the last list; it showed %d (run /resume to refresh).", ordinal, count)
+		}
+		runID = resolved
+	} else if strings.HasPrefix(strings.ToLower(ref), "run_") {
+		runID = ref
+	} else {
+		return "Usage: /stop <n|run_id>  (bare /stop cancels the active run)"
+	}
+
+	run, err := d.Control.GetRun(ctx, identity.TenantID, runID)
+	if err != nil {
+		return "Could not dismiss attention: " + err.Error()
+	}
+	if run == nil || run.PersonID != identity.PersonID {
+		return "That run is not yours or no longer exists."
+	}
+	if active := d.coordinator().currentActive(identity.PersonID); active != nil && active.RunID == run.ID {
+		return fmt.Sprintf("Run %s is executing now; use /stop with no number to cancel it.", shortRunID(run.ID))
+	}
+	dismissed, err := control.NewWorkTimeline(d.Control).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID)
+	if err != nil {
+		if refusal, ok := attentionDismissalRefusal(err); ok {
+			return refusal
+		}
+		return "Could not dismiss attention: " + err.Error()
+	}
+	if !dismissed {
+		return fmt.Sprintf("Run %s is not current attention (already dismissed or superseded).", shortRunID(run.ID))
+	}
+	return d.reportDismissedAttentionRun(ctx, identity, run.TaskID, run.ID, "user dismissed an attention item by reference")
 }
 
 // reportDismissedAttentionRun records the exact-run dismissal and names it.

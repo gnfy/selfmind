@@ -68,7 +68,9 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 			}
 			return true, a.sendGatewayMessage(strings.TrimSpace("/reject " + token))
 		case "stop":
-			return true, a.sendGatewayMessage("/stop")
+			// An optional ordinal forwards verbatim so CLI, IM, and TUI share one
+			// grammar and one resolver.
+			return true, a.sendGatewayMessage(strings.TrimSpace("/stop " + strings.Join(a.args[2:], " ")))
 		case "id":
 			return true, a.sendGatewayMessage("/id")
 		case "new":

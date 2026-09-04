@@ -70,7 +70,7 @@ var entries = []Entry{
 	{Name: "/approve", Usage: "/approve <n|id|all> [run]", Summary: "Approve a pending action; run is available only when the request offers run-local reuse.", SyncControl: true, Scope: Gateway},
 	{Name: "/reject", Usage: "/reject <n|id|all>", Summary: "Reject a pending action (or all of them).", SyncControl: true, Scope: Gateway},
 	{Name: "/mode", Usage: "/mode [on-request|read-only|auto-edit|full-auto|smart]", Summary: "Show or set your approval mode.", SyncControl: true, Scope: Gateway},
-	{Name: "/stop", Usage: "/stop", Summary: "Cancel the active run (or the current task if nothing is running).", SyncControl: true, Scope: Gateway},
+	{Name: "/stop", Usage: "/stop [n|run_id]", Summary: "Cancel the active run; with a number, clear that attention item without running it.", SyncControl: true, Scope: Gateway},
 	{Name: "/cancel", Usage: "/cancel", Summary: "Cancel the current task even if no run is active.", SyncControl: true, Scope: Gateway},
 	{Name: "/notify", Usage: "/notify <on|off|auto|platform|desk-first|phone-first>", Summary: "Choose the notification endpoint and approval surface.", SyncControl: true, Scope: Gateway},
 	{Name: "/new", Usage: "/new [title] | /new --run <request>", Summary: "Create a label, or explicitly run new work without history matching.", SyncControl: true, Scope: Gateway},

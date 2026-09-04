@@ -59,7 +59,7 @@ func (d *Server) attentionListReply(ctx context.Context, identity *control.Ident
 	if total > len(items) {
 		fmt.Fprintf(&sb, "... and %d more\n", total-len(items))
 	}
-	sb.WriteString("Use /resume <number> to continue one exactly, or /stop to dismiss the active one.")
+	sb.WriteString("Use /resume <number> to continue one exactly, or /stop <number> to clear it without running it.")
 	return sb.String(), nil
 }
 

@@ -284,7 +284,7 @@ func NewWriteFileTool() *WriteFileTool {
 	return &WriteFileTool{
 		BaseTool: BaseTool{
 			name:        "write_file",
-			description: "Write content to a file (overwrites)",
+			description: "Write content to a file (overwrites). This path is taken literally — env vars are not expanded. For a throwaway file (a scratch script, intermediate data) use terminal with mktemp instead, so it never lands in the workspace.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
@@ -360,7 +360,7 @@ func NewExecuteCommandTool() *ExecuteCommandTool {
 	return &ExecuteCommandTool{
 		BaseTool: BaseTool{
 			name:        "terminal",
-			description: "Execute a system command and return output. Linux commands run with Bash.",
+			description: "Execute a system command and return output. Linux commands run with Bash. $TMPDIR and $SELFMIND_RUN_TMP are this run's scratch space and persist across its commands, so `mktemp` keeps throwaway files out of the workspace.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{

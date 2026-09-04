@@ -71,7 +71,7 @@ selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|re
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
-selfmind stop
+selfmind stop [n|run_id]
 selfmind id
 selfmind new [title]
 ```
@@ -351,7 +351,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /approve <n|id|all> [run]
 /reject <n|id|all>
 /mode [on-request|read-only|auto-edit|full-auto|smart]
-/stop
+/stop [n|run_id]
 /cancel
 /notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
@@ -373,7 +373,10 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 - 裸 `/resume` 展示当前 Attention，也是所有序号解析所依据的那份编号列表；
   `/resume <n|run_id>` 精确继续一个 Run，恰有一个未解决 Run 的 Thread id 仍然
   接受。空闲时的 `/stop` 只 dismiss 该精确 Run，且在它仍有待处理审批、待处理
-  澄清或活动 watcher 时拒绝。线上兼容字段 `Task.status` 使用派生词汇：
+  澄清或活动 watcher 时拒绝。`/stop <n|run_id>` 清掉列表里的某一项而**不运行
+  它**——陈旧项此前没有这个出口:自动归档从不碰仍有待处理人工输入的条目，而
+  「先 pin 再 dismiss」会把你正想放下的工作启动起来。若指向正在执行的 Run，则
+  转由不带参数的 `/stop` 取消它。线上兼容字段 `Task.status` 使用派生词汇：
   Attention 为 `active`、`needs_attention`、`monitoring` 或 `resumable`，已
   settled 的 listed 工作为 `done`，已归档 Thread 为 `archived`；该值由 Run 和
   待处理控制对象计算得出，不会持久化。

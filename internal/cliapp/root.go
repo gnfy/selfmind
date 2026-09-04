@@ -239,7 +239,7 @@ var documentedCLIUsages = []string{
 	"selfmind approvals",
 	"selfmind approve [token]",
 	"selfmind reject [token]",
-	"selfmind stop",
+	"selfmind stop [n|run_id]",
 	"selfmind id",
 	"selfmind new [title]",
 	"selfmind config [doctor|upgrade]",

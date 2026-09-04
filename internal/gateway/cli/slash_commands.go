@@ -32,7 +32,6 @@ var slashCommandMetas = []slashCommandMeta{
 	tuiSlashMeta("/help", "show available commands"),
 	tuiSlashMeta("/model", "manage model settings"),
 	tuiSlashMeta("/status", "show runtime, gateway, and model state"),
-	tuiSlashMeta("/tasks", "view current action and work history"),
 	tuiSlashMeta("/skills", "list, bind, review candidates, promote, or rollback skills"),
 	tuiSlashMeta("/bundles", "load multiple skills together"),
 	tuiSlashMeta("/reload-skills", "refresh skill commands"),
@@ -49,9 +48,8 @@ var slashCommandMetas = []slashCommandMeta{
 	tuiSlashMeta("/copy", "copy the last response"),
 	tuiSlashMeta("/queue", "view or clear queued work"),
 	tuiSlashMeta("/watchers", "view or manage external watchers"),
-	tuiSlashMeta("/diag", "runs, queues, memory, context, tasks, models, delivery, execution, tools"),
+	tuiSlashMeta("/diag", "runs, queues, memory, context, models, delivery, execution, tools"),
 	tuiSlashMeta("/report", "review recent execution quality and cost"),
-	tuiSlashMeta("/search", "review this conversation or find prior work"),
 	// Gateway control commands the TUI relays to the daemon. Previously the TUI
 	// OMITTED these, so typing /approve fell through to the skill/unknown path
 	// and never reached the approve lifecycle. They now route through the shared
@@ -65,13 +63,11 @@ var slashCommandMetas = []slashCommandMeta{
 	tuiSlashMeta("/id", "show your account identity"),
 	registrySlashMeta("/new"),
 	registrySlashMeta("/resume"),
-	registrySlashMeta("/task"),
-	tuiSlashMeta("/workspace", "list or select a workspace"),
+	tuiSlashMeta("/ws", "list or select a workspace"),
+	tuiSlashMeta("/add-dir", "grant this session another directory"),
 	// /ws is an ALIAS: the catalog resolves it to the /workspace entry and holds
 	// no alias-specific usage or summary, so repeating that entry here would
 	// print the /workspace help row twice. This one row stays local.
-	{Name: "/ws", Usage: "/ws [n|id]", Description: "Short alias for /workspace (bare lists, arg selects)", Hint: "list or select a workspace"},
-	tuiSlashMeta("/workspaces", "list your workspaces"),
 	tuiSlashMeta("/events", "recent task events"),
 	tuiSlashMeta("/notify", "set notify preference"),
 }
@@ -102,13 +98,17 @@ var gatewayPassthroughCommands = func() []string {
 	return out
 }()
 
+// slashCommands binds each declared meta to its behavior BY NAME. It used to
+// index slashCommandMetas positionally, so removing one meta silently shifted
+// every command after it onto the wrong handler — removing /tasks re-pointed
+// /exit at the tasks view. A name cannot drift that way.
 var slashCommands = []slashCommand{
 	{
-		slashCommandMeta: slashCommandMetas[0],
+		slashCommandMeta: metaByName("/help"),
 		Run:              runHelpCommand,
 	},
 	{
-		slashCommandMeta: slashCommandMetas[1],
+		slashCommandMeta: metaByName("/model"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			if len(args) == 0 {
 				return m.openModelManager()
@@ -118,49 +118,43 @@ var slashCommands = []slashCommand{
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[2],
+		slashCommandMeta: metaByName("/status"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleStatus()
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[3],
-		Run: func(m *uiModel, args []string) tea.Cmd {
-			return m.handleTasks(args)
-		},
-	},
-	{
-		slashCommandMeta: slashCommandMetas[4],
+		slashCommandMeta: metaByName("/skills"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleSkills(args)
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[5],
+		slashCommandMeta: metaByName("/bundles"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleBundles(args)
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[6],
+		slashCommandMeta: metaByName("/reload-skills"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleReloadSkills()
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[7],
+		slashCommandMeta: metaByName("/memory"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleMemory(args)
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[8],
+		slashCommandMeta: metaByName("/curator"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleCurator(args)
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[9],
+		slashCommandMeta: metaByName("/checkpoint"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			if len(args) < 1 {
 				m.addMessage("assistant", "Usage: /checkpoint [list|save|load|delete] [name]")
@@ -170,13 +164,13 @@ var slashCommands = []slashCommand{
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[10],
+		slashCommandMeta: metaByName("/migrate"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleMigration()
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[11],
+		slashCommandMeta: metaByName("/clear"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			m.messages = []ChatMessage{}
 			m.activePlanJSON = ""
@@ -184,31 +178,31 @@ var slashCommands = []slashCommand{
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[12],
+		slashCommandMeta: metaByName("/exit"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.quitNow()
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[13],
+		slashCommandMeta: metaByName("/compact"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleCompact()
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[14],
+		slashCommandMeta: metaByName("/paste-image"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handlePasteImage()
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[15],
+		slashCommandMeta: metaByName("/mode"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleMode(args)
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[16],
+		slashCommandMeta: metaByName("/capture"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleCapture(args)
 		},
@@ -235,6 +229,14 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: metaByName("/search"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleSessionSearch(args)
+		},
+	},
+	{
+		// Local: the extra-root overlay is this terminal's, and the gateway
+		// validates and freezes it per run.
+		slashCommandMeta: metaByName("/add-dir"),
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleAddDir(args)
 		},
 	},
 }
@@ -282,11 +284,11 @@ var allSlashCommands = func() []slashCommand {
 		run := func(m *uiModel, args []string) tea.Cmd {
 			return m.handleControlPassthrough(name, args)
 		}
-		// /workspace still relays to the gateway (which owns resolution and
+		// /ws still relays to the gateway (which owns resolution and
 		// current_workspace), but the TUI additionally captures the resolved
 		// workspace from the success reply as the session override — see
 		// handleWorkspaceSelect.
-		if name == "/workspace" || name == "/ws" {
+		if name == "/ws" {
 			run = func(m *uiModel, args []string) tea.Cmd {
 				return m.handleWorkspaceSelect(args)
 			}

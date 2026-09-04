@@ -1,11 +1,17 @@
 # Thread 化工作历史重构方案
 
-> 生命周期：active（实现完成，daily-driver 观察中）；项目所有者已于 2026-09-02 批准。  
+> 生命周期：archived（实现记录；已由 task-capsule-work-history-redesign.zh-CN.md 取代）；
+> 项目所有者曾于 2026-09-02 批准。
 > 日期：2026-09-02  
 > 复审日期：2026-09-16  
 > 范围：Task、Run、跨端连续性、工作历史、Attention、上下文选择与本地数据迁移。  
 > 前置结论：`main-turn-work-continuity.md` 已暂停；其尚未完成的真实 IM、重启、
 > correction 与 stranger-isolation 证据门禁由本方案继续承担。
+
+> 归档说明：schema v11 的 Thread/Run/Attention 分离仍是有价值的中间结果，但
+> “每个 root Run 先创建 Thread”与“parent edge 同时承担自然语言连续性”的边界已被
+> 后续 daily-driver 证据否定。新方案保留 Run-owned execution 和 derived Attention，
+> 并进一步把语义 Task 整理与精确 Run 恢复分开。
 
 ## 1. 结论
 
@@ -42,9 +48,9 @@ Batch 6（2026-09-03 审查修复，见 §12）：同域自然语言 RESUME 已�
 证据门禁、证据式提升、状态判定收敛和 watcher finalization 精确 child 正在实施，
 随后进入 §13.3 的观察指标窗口。
 
-本计划保持 active 仅用于 24 小时与 7 天 daily-driver 指标观察，以及真实 CLI↔IM、
-restart、cross-workspace 和 correction 证据收集；这些时间性门禁不能用一次离线检查
-替代，也不阻塞当前实现供所有者试用。
+本计划原计划继续完成 24 小时与 7 天 daily-driver 指标观察，以及真实 CLI↔IM、
+restart、cross-workspace 和 correction 证据收集；这些尚未闭合的证据由后继
+Task Capsule 计划接管，本文件不再贡献 active priority。
 
 ## 2. 为什么现在需要调整
 

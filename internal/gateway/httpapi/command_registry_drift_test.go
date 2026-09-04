@@ -12,14 +12,14 @@ import (
 )
 
 // invocationForm returns a switch-acceptable invocation of a registry gateway
-// command. /resume and /workspace require an argument to reach their switch
+// command. /resume and /ws require an argument to reach their switch
 // case; the rest are handled bare.
 func invocationForm(name string) string {
 	switch name {
 	case "/resume":
 		return "/resume tsk_nonexistent"
-	case "/workspace":
-		return "/workspace ws_nonexistent"
+	case "/ws":
+		return "/ws ws_nonexistent"
 	default:
 		return name
 	}

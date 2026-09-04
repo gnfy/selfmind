@@ -40,7 +40,7 @@ func TestMaintenanceTaskAuditIsDryRunByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx,
-		`UPDATE runs SET parent_run_id = 'run_missing' WHERE tenant_id = ? AND id = ?`,
+		`UPDATE runs SET resumes_run_id = 'run_missing' WHERE tenant_id = ? AND id = ?`,
 		identity.TenantID, run.ID); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestMaintenanceTaskAuditIsDryRunByDefault(t *testing.T) {
 	}
 	afterDryRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
 	store.Close()
-	if err != nil || afterDryRun == nil || afterDryRun.ParentRunID != "run_missing" {
+	if err != nil || afterDryRun == nil || afterDryRun.ResumesRunID != "run_missing" {
 		t.Fatalf("dry run mutated the edge: %+v err=%v", afterDryRun, err)
 	}
 	if out := runCommand("--apply"); !strings.Contains(out, "No automatic repairs were applied") {
@@ -81,7 +81,7 @@ func TestMaintenanceTaskAuditIsDryRunByDefault(t *testing.T) {
 	}
 	repaired, err := store.GetRun(ctx, identity.TenantID, run.ID)
 	store.Close()
-	if err != nil || repaired == nil || repaired.ParentRunID != "run_missing" {
+	if err != nil || repaired == nil || repaired.ResumesRunID != "run_missing" {
 		t.Fatalf("review-only audit mutated the edge: %+v err=%v", repaired, err)
 	}
 }

@@ -10,7 +10,7 @@ type resumeAuthorizationStub struct {
 	calls   int
 }
 
-func (s *resumeAuthorizationStub) ClaimApprovalResumeAuthorization(_ context.Context, _, _, _, _, _ string) (string, string, string, bool, error) {
+func (s *resumeAuthorizationStub) ClaimApprovalResumeAuthorization(_ context.Context, _, _, _, _ string) (string, string, string, bool, error) {
 	s.calls++
 	if s.claimed {
 		return "", "", "", false, nil

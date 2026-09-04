@@ -35,7 +35,7 @@ func TestClaimInteractionContinuationMovesRunAndClaimsParentAtomically(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if claimed.TaskID != targetTask.ID || claimed.ParentRunID != parent.ID || claimed.Status != "running" {
+	if claimed.TaskID != targetTask.ID || claimed.ResumesRunID != parent.ID || claimed.Status != "running" {
 		t.Fatalf("claimed run = %+v", claimed)
 	}
 	if placeholder, _ := store.GetTask(ctx, identity.TenantID, sourceTask.ID); placeholder != nil {
@@ -77,7 +77,7 @@ func TestClaimInteractionContinuationRefusesDomainAndCheckpointMismatch(t *testi
 	if _, err := store.ClaimInteractionContinuation(ctx, identity.TenantID, identity.PersonID, foreign.ID, parent.ID); !errors.Is(err, ErrContinuationDomainMismatch) {
 		t.Fatalf("different roots must report a domain mismatch, got %v", err)
 	}
-	if refreshed, _ := store.GetRun(ctx, identity.TenantID, foreign.ID); refreshed == nil || refreshed.TaskID != foreignTask.ID || refreshed.ParentRunID != "" {
+	if refreshed, _ := store.GetRun(ctx, identity.TenantID, foreign.ID); refreshed == nil || refreshed.TaskID != foreignTask.ID || refreshed.ResumesRunID != "" {
 		t.Fatalf("a refused claim must leave the interaction untouched: %+v", refreshed)
 	}
 }
@@ -128,9 +128,9 @@ func TestClaimInteractionContinuationHasCrossConnectionSingleWinner(t *testing.T
 	winners, losers := 0, 0
 	for got := range results {
 		switch {
-		case got.err == nil && got.run != nil && got.run.ParentRunID == parent.ID:
+		case got.err == nil && got.run != nil && got.run.ResumesRunID == parent.ID:
 			winners++
-		case errors.Is(got.err, ErrParentRunClaimed):
+		case errors.Is(got.err, ErrResumeTargetClaimed):
 			losers++
 		default:
 			t.Fatalf("unexpected claim result: run=%+v err=%v", got.run, got.err)

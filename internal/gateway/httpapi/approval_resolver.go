@@ -156,9 +156,11 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 		}
 		content := parkedApprovalDecisionContent(decision, input.Note)
 		var executionRoots []executionenv.RootBinding
-		if sourceRun, runErr := d.Control.GetRun(ctx, identity.TenantID, resolved.RunID); runErr != nil {
+		sourceRun, runErr := d.Control.GetRun(ctx, identity.TenantID, resolved.RunID)
+		if runErr != nil {
 			return nil, runErr
-		} else if sourceRun != nil {
+		}
+		if sourceRun != nil {
 			executionRoots = executionenv.CloneRootBindings(sourceRun.ExecutionRoots)
 		}
 		var queued *control.QueuedTask
@@ -167,7 +169,7 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 			control.QueuedTask{
 				PersonID: identity.PersonID, Platform: identity.Platform,
 				PlatformUserID: identity.PlatformUserID, Channel: fallback(channel, identity.Platform),
-				Content: content, WorkspaceID: task.WorkspaceID, TaskID: task.ID,
+				Content: content, WorkspaceID: recoveryWorkspaceID(sourceRun, task), TaskID: task.ID,
 				ApprovalID:     resolved.ID,
 				ExecutionRoots: executionRoots,
 				IdempotencyKey: "approval-resume:" + resolved.ID,

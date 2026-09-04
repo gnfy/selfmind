@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/textutil"
 )
 
@@ -408,6 +409,64 @@ func toolResultModelContent(raw string) (string, bool) {
 // toolResultAgeIterations is how many agent-loop iterations an artifact-backed
 // tool result stays verbatim before shrinkAgedToolResult ages it down.
 const toolResultAgeIterations = 3
+
+// toolResultTurnBudgetBytes bounds the TOTAL live tool-result bytes in one
+// turn's working window.
+//
+// Per-result bounding and the age rule are both per-result, so several results
+// just under toolResultModelBytes could legitimately coexist inside the age
+// window: five of them is more context than the entire tool catalogue. Measured
+// on real traffic, current_tool_results averaged about as much as tool_schemas
+// and peaked far higher, which is a cumulative problem no per-result cap can
+// see. This is the cumulative cap.
+const toolResultTurnBudgetBytes = 32768
+
+// liveToolResultBytes totals the tool-result bytes currently replayed to the
+// model.
+func liveToolResultBytes(messages []llm.Message) int {
+	total := 0
+	for _, msg := range messages {
+		if msg.Role == "tool" {
+			total += len(msg.Content)
+		}
+	}
+	return total
+}
+
+// enforceToolResultTurnBudget ages artifact-backed tool results down,
+// oldest-first, until the live total fits toolResultTurnBudgetBytes. It returns
+// how many messages it shrank.
+//
+// Shrinking is lossless here: an artifact-backed result stays fully readable
+// through tool_output_view, so the model loses proximity, not evidence. Results
+// with no artifact reference are never touched — their bytes exist nowhere else,
+// and dropping them to make room would trade a context saving for lost
+// evidence. That means a turn full of small unspooled results can still exceed
+// the budget, which is the correct failure direction.
+func enforceToolResultTurnBudget(messages []llm.Message, indexes []int) int {
+	total := liveToolResultBytes(messages)
+	if total <= toolResultTurnBudgetBytes {
+		return 0
+	}
+	shrunkCount := 0
+	for _, index := range indexes {
+		if total <= toolResultTurnBudgetBytes {
+			break
+		}
+		if index < 0 || index >= len(messages) {
+			continue
+		}
+		before := len(messages[index].Content)
+		shrunk, ok := shrinkAgedToolResult(messages[index].Content)
+		if !ok {
+			continue
+		}
+		messages[index].Content = shrunk
+		total -= before - len(shrunk)
+		shrunkCount++
+	}
+	return shrunkCount
+}
 
 var toolArtifactIDPattern = regexp.MustCompile(`saved as artifact (art_[A-Za-z0-9_-]+)`)
 

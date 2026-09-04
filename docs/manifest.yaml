@@ -81,7 +81,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: af41df18b1e9e676
+    source_hash: 3a37ee08b7a482f7
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -95,7 +95,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 94bfc1a333bb6de7
+    source_hash: 980fe5fd763851b7
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -240,12 +240,24 @@ documents:
     review_by: 2026-09-09
   - path: docs/plans/threaded-work-history-redesign.zh-CN.md
     title: Thread 化工作历史重构方案
+    class: archive
+    owner: maintainers
+    state: archived
+    language: zh-CN
+  - path: docs/plans/task-capsule-work-history-redesign.zh-CN.md
+    title: Task Capsule 工作历史与执行连续性重构方案
+    class: archive
+    owner: maintainers
+    state: archived
+    language: zh-CN
+  - path: docs/plans/run-centric-work-history.zh-CN.md
+    title: Run 为中心的工作历史方案（移除 Task）
     class: plan
     owner: maintainers
     state: active
     language: zh-CN
     approved_by: project-owner
-    review_by: 2026-09-16
+    review_by: 2026-09-18
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference

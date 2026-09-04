@@ -65,6 +65,25 @@ func (d *Server) latestPlanForRun(ctx context.Context, tenantID, personID, taskI
 	return nil
 }
 
+// latestPlanPayloadForTask returns the newest plan.updated payload verbatim, so
+// a re-attaching client can restore its pinned plan through the same renderer
+// live events feed rather than a second, drifting representation.
+func (d *Server) latestPlanPayloadForTask(ctx context.Context, taskID string) string {
+	if d == nil || d.Control == nil || taskID == "" {
+		return ""
+	}
+	events, err := d.Control.ListTaskEvents(ctx, taskID, 50)
+	if err != nil {
+		return ""
+	}
+	for _, event := range events {
+		if event.Type == "plan.updated" && len(event.Payload) > 0 {
+			return string(event.Payload)
+		}
+	}
+	return ""
+}
+
 func (d *Server) latestPlanForTask(ctx context.Context, taskID string) []taskPlanStep {
 	if d == nil || d.Control == nil || taskID == "" {
 		return nil

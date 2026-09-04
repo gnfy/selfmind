@@ -12,15 +12,15 @@ import (
 // EnqueueSelectedContinuation commits a validated Main proposal as a durable
 // exact-parent turn. The caller supplies the original source request and route;
 // this method overwrites every ownership/execution field from the parent Run.
-func (s *Store) EnqueueSelectedContinuation(ctx context.Context, tenantID, personID, sourceRunID, parentRunID string, q QueuedTask) (*QueuedTask, error) {
+func (s *Store) EnqueueSelectedContinuation(ctx context.Context, tenantID, personID, sourceRunID, resumesRunID string, q QueuedTask) (*QueuedTask, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("control store is unavailable")
 	}
 	tenantID = normalizeTenant(tenantID)
 	personID = strings.TrimSpace(personID)
 	sourceRunID = strings.TrimSpace(sourceRunID)
-	parentRunID = strings.TrimSpace(parentRunID)
-	if personID == "" || sourceRunID == "" || parentRunID == "" || strings.TrimSpace(q.Content) == "" {
+	resumesRunID = strings.TrimSpace(resumesRunID)
+	if personID == "" || sourceRunID == "" || resumesRunID == "" || strings.TrimSpace(q.Content) == "" {
 		return nil, fmt.Errorf("person, source run, parent run, and content are required")
 	}
 	source, err := s.GetRun(ctx, tenantID, sourceRunID)
@@ -30,7 +30,7 @@ func (s *Store) EnqueueSelectedContinuation(ctx context.Context, tenantID, perso
 	if source == nil || source.PersonID != personID {
 		return nil, fmt.Errorf("source run is unavailable for the current person")
 	}
-	parent, err := s.GetRun(ctx, tenantID, parentRunID)
+	parent, err := s.GetRun(ctx, tenantID, resumesRunID)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func (s *Store) EnqueueSelectedContinuation(ctx context.Context, tenantID, perso
 	q.ReplyToRunID = parent.ID
 	q.WorkspaceID = parent.WorkspaceID
 	q.ExecutionRoots = executionenv.CloneRootBindings(parent.ExecutionRoots)
-	q.IdempotencyKey = "work-selection:" + sourceRunID + ":" + parentRunID
+	q.IdempotencyKey = "work-selection:" + sourceRunID + ":" + resumesRunID
 	q.Class = QueueClassForeground
 	return s.EnqueueQueued(ctx, q)
 }

@@ -28,8 +28,10 @@ func TestBareResumeArmsPickerFromDaemonList(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected MsgAgentDone, got %T", cmd())
 	}
-	if len(relayed) != 1 || relayed[0] != "/tasks" {
-		t.Fatalf("bare /resume must relay /tasks for the ordering: %v", relayed)
+	// The daemon owns the ordering AND the ordinal snapshot, so bare /resume
+	// asks it for its own list rather than borrowing another command's.
+	if len(relayed) != 1 || relayed[0] != "/resume" {
+		t.Fatalf("bare /resume must relay /resume for the ordering: %v", relayed)
 	}
 	if !strings.Contains(msg.Response, "1. Fix parser") {
 		t.Fatalf("picker must show the daemon list: %q", msg.Response)
@@ -174,11 +176,11 @@ func fakeControlProcessor(seen *[]string, reply string) MessageProcessor {
 }
 
 // TestWorkHistorySlashMetasComeFromSharedCatalog guards the single command
-// catalog rule: the TUI's /new, /resume, and /task presentation is the gateway
-// registry's usage and summary, never a local copy that can drift from what
-// the daemon accepts.
+// catalog rule: the TUI's /new, /resume, and /search presentation is the
+// gateway registry's usage and summary, never a local copy that can drift from
+// what the daemon accepts.
 func TestWorkHistorySlashMetasComeFromSharedCatalog(t *testing.T) {
-	for _, name := range []string{"/new", "/resume", "/task"} {
+	for _, name := range []string{"/new", "/resume", "/search"} {
 		entry, ok := commandcatalog.Lookup(name)
 		if !ok {
 			t.Fatalf("%s is missing from the shared catalog", name)

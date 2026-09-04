@@ -8,6 +8,8 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 - [执行质量历史方案](execution-quality-plan.zh-CN.md) - archived, zh-CN
 - [Agent Execution and Recovery Closure](plans/agent-execution-recovery.md) - archived, en
 - [Documentation and Release-Gate Governance](plans/document-governance.md) - archived, en
+- [Task Capsule 工作历史与执行连续性重构方案](plans/task-capsule-work-history-redesign.zh-CN.md) - archived, zh-CN
+- [Thread 化工作历史重构方案](plans/threaded-work-history-redesign.zh-CN.md) - archived, zh-CN
 - [TUI Claude Code Alignment Record](tui-claude-code-alignment.md) - archived, en
 
 ## Contract
@@ -46,7 +48,7 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 - [Daily-Driver Runtime Closure](plans/daily-driver-closure.md) - paused, en
 - [External Skill Package Adoption](plans/external-skill-packages.md) - paused, en
 - [Main-Turn Work Continuity](plans/main-turn-work-continuity.md) - paused, en
-- [Thread 化工作历史重构方案](plans/threaded-work-history-redesign.zh-CN.md) - active, zh-CN
+- [Run 为中心的工作历史方案（移除 Task）](plans/run-centric-work-history.zh-CN.md) - active, zh-CN
 
 ## Reference
 

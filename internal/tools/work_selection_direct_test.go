@@ -65,7 +65,7 @@ func TestWorkSelectClaimsSameDomainResumeInTurn(t *testing.T) {
 		}
 	}
 	moved, _ := store.GetRun(ctx, person.TenantID, interactionRun.ID)
-	if moved == nil || moved.TaskID != targetTask.ID || moved.ParentRunID != targetRun.ID || moved.Status != "running" {
+	if moved == nil || moved.TaskID != targetTask.ID || moved.ResumesRunID != targetRun.ID || moved.Status != "running" {
 		t.Fatalf("interaction run must now continue the parent: %+v", moved)
 	}
 	events, _ := store.ListRunEvents(ctx, person.TenantID, person.PersonID, targetTask.ID, interactionRun.ID, 20)
@@ -75,7 +75,7 @@ func TestWorkSelectClaimsSameDomainResumeInTurn(t *testing.T) {
 		case "work.selection_committed":
 			committed = strings.Contains(string(event.Payload), `"commit_mode":"direct"`)
 		case "plan.updated":
-			inherited = strings.Contains(string(event.Payload), `"source":"parent_run"`) && strings.Contains(string(event.Payload), "recite the release steps")
+			inherited = strings.Contains(string(event.Payload), `"source":"resumed_run"`) && strings.Contains(string(event.Payload), "recite the release steps")
 		}
 	}
 	if !committed || !inherited {
@@ -123,7 +123,7 @@ func TestWorkSelectCorrectsDirectClaimBeforeEffects(t *testing.T) {
 		t.Fatalf("same-domain correction: %v %s", err, corrected)
 	}
 	moved, _ := store.GetRun(ctx, person.TenantID, interactionRun.ID)
-	if moved == nil || moved.TaskID != correctTask.ID || moved.ParentRunID != correct.ID {
+	if moved == nil || moved.TaskID != correctTask.ID || moved.ResumesRunID != correct.ID {
 		t.Fatalf("run must continue the corrected parent: %+v", moved)
 	}
 	wrongCandidates, _ := store.ListUnresolvedRuns(ctx, person.TenantID, person.PersonID, wrongTask.ID, 10)

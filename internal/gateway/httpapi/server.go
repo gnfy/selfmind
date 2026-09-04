@@ -845,11 +845,11 @@ type taskAttach struct {
 	matchedSurfaceForms []string
 	candidateTaskIDs    []string
 	candidateTaskHints  []string
-	// parentRunID is structured parent evidence resolved at attach time (a
+	// resumesRunID is structured parent evidence resolved at attach time (a
 	// platform reply or an approval's origin run). It names the ONLY run this
 	// turn may continue; ambiguity resolution is skipped for it, and a named
 	// run that is terminal or already claimed simply yields no parent.
-	parentRunID string
+	resumesRunID string
 }
 
 type attachContextMode string

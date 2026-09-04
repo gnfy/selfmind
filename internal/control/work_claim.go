@@ -19,10 +19,10 @@ import (
 // must continue through a transfer child instead.
 var ErrContinuationDomainMismatch = errors.New("interaction and parent runs are in different execution domains")
 
-// ErrParentCheckpointRequired reports that the parent Run stopped inside an
+// ErrResumeCheckpointRequired reports that the parent Run stopped inside an
 // unfinished loop checkpoint. Only a fresh child kernel can restore that
 // checkpoint, so the continuation must be a transfer child.
-var ErrParentCheckpointRequired = errors.New("parent run requires checkpoint restoration in a fresh run")
+var ErrResumeCheckpointRequired = errors.New("parent run requires checkpoint restoration in a fresh run")
 
 // ClaimInteractionContinuation turns a still-running, effect-free interaction
 // Run into the direct child of one exact historical Run when both already share
@@ -31,8 +31,8 @@ var ErrParentCheckpointRequired = errors.New("parent run requires checkpoint res
 // re-pointing, dependent rows, blocker settlement, and placeholder cleanup
 // commit together. A domain or checkpoint mismatch is reported with a typed
 // error and the caller creates a transfer child instead.
-func (s *Store) ClaimInteractionContinuation(ctx context.Context, tenantID, personID, sourceRunID, parentRunID string) (*Run, error) {
-	return s.continuationClaimWithRetry(ctx, tenantID, personID, sourceRunID, parentRunID, false)
+func (s *Store) ClaimInteractionContinuation(ctx context.Context, tenantID, personID, sourceRunID, resumesRunID string) (*Run, error) {
+	return s.continuationClaimWithRetry(ctx, tenantID, personID, sourceRunID, resumesRunID, false)
 }
 
 // RetargetInteractionContinuation moves a running interaction that already
@@ -40,24 +40,24 @@ func (s *Store) ClaimInteractionContinuation(ctx context.Context, tenantID, pers
 // the pre-effect correction path; the caller has verified the run produced no
 // material effect. The previous parent becomes unclaimed again because the
 // edge lives on the child, and the run's dependent rows follow it.
-func (s *Store) RetargetInteractionContinuation(ctx context.Context, tenantID, personID, runID, newParentRunID string) (*Run, error) {
-	return s.continuationClaimWithRetry(ctx, tenantID, personID, runID, newParentRunID, true)
+func (s *Store) RetargetInteractionContinuation(ctx context.Context, tenantID, personID, runID, newResumesRunID string) (*Run, error) {
+	return s.continuationClaimWithRetry(ctx, tenantID, personID, runID, newResumesRunID, true)
 }
 
-func (s *Store) continuationClaimWithRetry(ctx context.Context, tenantID, personID, sourceRunID, parentRunID string, retarget bool) (*Run, error) {
+func (s *Store) continuationClaimWithRetry(ctx context.Context, tenantID, personID, sourceRunID, resumesRunID string, retarget bool) (*Run, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("control store is unavailable")
 	}
 	tenantID = normalizeTenant(tenantID)
 	personID = strings.TrimSpace(personID)
 	sourceRunID = strings.TrimSpace(sourceRunID)
-	parentRunID = strings.TrimSpace(parentRunID)
-	if personID == "" || sourceRunID == "" || parentRunID == "" || sourceRunID == parentRunID {
+	resumesRunID = strings.TrimSpace(resumesRunID)
+	if personID == "" || sourceRunID == "" || resumesRunID == "" || sourceRunID == resumesRunID {
 		return nil, fmt.Errorf("person, interaction run, and distinct parent run are required")
 	}
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		err = s.claimInteractionContinuationOnce(ctx, tenantID, personID, sourceRunID, parentRunID, retarget)
+		err = s.claimInteractionContinuationOnce(ctx, tenantID, personID, sourceRunID, resumesRunID, retarget)
 		if err == nil {
 			return s.GetRun(ctx, tenantID, sourceRunID)
 		}
@@ -80,13 +80,13 @@ type continuationRunDomain struct {
 func loadContinuationRunDomainTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (continuationRunDomain, error) {
 	var domain continuationRunDomain
 	err := tx.QueryRowContext(ctx, `SELECT thread_id, person_id, COALESCE(workspace_id, ''),
-		COALESCE(execution_roots_json, '[]'), status, COALESCE(parent_run_id, '')
+		COALESCE(execution_roots_json, '[]'), status, COALESCE(resumes_run_id, '')
 		FROM runs WHERE tenant_id = ? AND id = ?`, tenantID, runID).
 		Scan(&domain.threadID, &domain.personID, &domain.workspaceID, &domain.rootsJSON, &domain.status, &domain.parentID)
 	return domain, err
 }
 
-func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, personID, sourceRunID, parentRunID string, retarget bool) error {
+func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, personID, sourceRunID, resumesRunID string, retarget bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -99,7 +99,7 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 	if err != nil {
 		return err
 	}
-	parent, err := loadContinuationRunDomainTx(ctx, tx, tenantID, parentRunID)
+	parent, err := loadContinuationRunDomainTx(ctx, tx, tenantID, resumesRunID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("parent run not found")
 	}
@@ -113,7 +113,7 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 		return fmt.Errorf("interaction run is no longer eligible for a direct continuation claim")
 	}
 	if retarget {
-		if source.parentID == "" || source.parentID == parentRunID {
+		if source.parentID == "" || source.parentID == resumesRunID {
 			return fmt.Errorf("interaction run has no different parent to correct")
 		}
 	} else if source.parentID != "" {
@@ -126,11 +126,11 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 	}
 	var checkpointCount int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM loop_checkpoints
-		WHERE tenant_id = ? AND run_id = ? AND outcome <> 'complete_turn'`, tenantID, parentRunID).Scan(&checkpointCount); err != nil {
+		WHERE tenant_id = ? AND run_id = ? AND outcome <> 'complete_turn'`, tenantID, resumesRunID).Scan(&checkpointCount); err != nil {
 		return err
 	}
 	if checkpointCount > 0 {
-		return ErrParentCheckpointRequired
+		return ErrResumeCheckpointRequired
 	}
 	if !retarget {
 		var sourceRunCount int
@@ -141,16 +141,16 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 			return fmt.Errorf("direct continuation requires a single-run interaction thread")
 		}
 	}
-	child := &Run{ID: sourceRunID, TenantID: tenantID, PersonID: personID, TaskID: parent.threadID, ParentRunID: parentRunID}
-	if err := validateParentClaimTx(ctx, tx, child); err != nil {
+	child := &Run{ID: sourceRunID, TenantID: tenantID, PersonID: personID, TaskID: parent.threadID, ResumesRunID: resumesRunID}
+	if err := validateResumeClaimTx(ctx, tx, child); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE runs SET thread_id = ?, parent_run_id = ?
-		WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'running' AND COALESCE(parent_run_id, '') = ?`,
-		parent.threadID, parentRunID, tenantID, personID, sourceRunID, source.parentID)
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET thread_id = ?, resumes_run_id = ?
+		WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'running' AND COALESCE(resumes_run_id, '') = ?`,
+		parent.threadID, resumesRunID, tenantID, personID, sourceRunID, source.parentID)
 	if err != nil {
 		if strings.Contains(err.Error(), "parent_once") {
-			return ErrParentRunClaimed
+			return ErrResumeTargetClaimed
 		}
 		return err
 	}
@@ -160,7 +160,7 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 	if err := moveRunDependentsTx(ctx, tx, tenantID, personID, sourceRunID, source.threadID, parent.threadID); err != nil {
 		return err
 	}
-	if err := resolveOriginRunBlockersTx(ctx, tx, tenantID, parent.threadID, parentRunID, sourceRunID); err != nil {
+	if err := resolveOriginRunBlockersTx(ctx, tx, tenantID, parent.threadID, resumesRunID, sourceRunID); err != nil {
 		return err
 	}
 	now := time.Now().Unix()

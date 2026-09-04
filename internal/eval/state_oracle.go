@@ -155,11 +155,11 @@ func handoffListFields(h *control.Handoff) map[string][]string {
 }
 func runStringFields(r *control.Run) map[string]string {
 	return map[string]string{
-		"status":        r.Status,
-		"thread_id":     r.TaskID,
-		"parent_run_id": r.ParentRunID,
-		"workspace_id":  r.WorkspaceID,
-		"input_summary": r.InputSummary,
+		"status":         r.Status,
+		"thread_id":      r.TaskID,
+		"resumes_run_id": r.ResumesRunID,
+		"workspace_id":   r.WorkspaceID,
+		"input_summary":  r.InputSummary,
 	}
 }
 

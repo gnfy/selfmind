@@ -22,7 +22,7 @@ func sampleWorld(t *testing.T) WorldState {
 	}
 	return WorldState{
 		Task:    &control.Task{ID: "t1", Status: "done", CurrentSummary: "built the game", NextSteps: []string{"polish"}, LastChannel: "cli"},
-		Run:     &control.Run{ID: "r1", TaskID: "t1", Status: "done", ParentRunID: "r0", WorkspaceID: "workspace"},
+		Run:     &control.Run{ID: "r1", TaskID: "t1", Status: "done", ResumesRunID: "r0", WorkspaceID: "workspace"},
 		Handoff: &control.Handoff{TaskID: "t1", Summary: "done", NextSteps: []string{"polish ui"}, ChangedFiles: []string{"game.html"}, TestStatus: "tests pass"},
 		Events: []control.Event{
 			{Type: "tool.completed", Payload: json.RawMessage(`{"tool":"write_file"}`)},
@@ -59,7 +59,7 @@ func TestStateOraclePredicates(t *testing.T) {
 	mustFail(t, StatePredicate{On: "task", Field: "next_steps", LenGte: ip(5)}, w)
 	mustPass(t, StatePredicate{On: "task", Field: "current_summary", Contains: sp("game")}, w)
 	mustPass(t, StatePredicate{On: "run", Field: "status", Eq: sp("done")}, w)
-	mustPass(t, StatePredicate{On: "run", Field: "parent_run_id", Eq: sp("r0")}, w)
+	mustPass(t, StatePredicate{On: "run", Field: "resumes_run_id", Eq: sp("r0")}, w)
 
 	// handoff
 	mustPass(t, StatePredicate{On: "handoff", Field: "changed_files", Contains: sp("game.html")}, w)

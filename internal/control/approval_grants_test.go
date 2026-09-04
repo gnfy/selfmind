@@ -31,7 +31,7 @@ func TestApprovalGrantExpiryAndRevocation(t *testing.T) {
 	if err := store.GrantApproval(ctx, "person", tenant, person, person, key, time.Now().Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	granted, err := store.IsApprovalGranted(ctx, tenant, person, "", key)
+	granted, err := store.IsApprovalGranted(ctx, tenant, person, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestApprovalGrantExpiryAndRevocation(t *testing.T) {
 	if err := store.GrantApproval(ctx, "person", tenant, person, person, key, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if granted, err = store.IsApprovalGranted(ctx, tenant, person, "", key); err != nil {
+	if granted, err = store.IsApprovalGranted(ctx, tenant, person, key); err != nil {
 		t.Fatal(err)
 	} else if !granted {
 		t.Fatal("a refreshed grant must authorize its class")
@@ -77,7 +77,7 @@ func TestApprovalGrantExpiryAndRevocation(t *testing.T) {
 	if !withdrawn {
 		t.Fatal("revoke should report a change")
 	}
-	if granted, err = store.IsApprovalGranted(ctx, tenant, person, "", key); err != nil {
+	if granted, err = store.IsApprovalGranted(ctx, tenant, person, key); err != nil {
 		t.Fatal(err)
 	} else if granted {
 		t.Fatal("a revoked grant must not authorize its class")
@@ -103,15 +103,46 @@ func TestApprovalGrantWithoutDeadlineStaysActive(t *testing.T) {
 	store := newApprovalGrantTestStore(t)
 	ctx := context.Background()
 	const key = "exec:invokes dangerous command: chmod"
-	if err := store.GrantApproval(ctx, "task", DefaultTenantID, "p", "task-1", key, time.Time{}); err != nil {
+	if err := store.GrantApproval(ctx, "person", DefaultTenantID, "p", "p", key, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	granted, err := store.IsApprovalGranted(ctx, DefaultTenantID, "p", "task-1", key)
+	granted, err := store.IsApprovalGranted(ctx, DefaultTenantID, "p", key)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !granted {
 		t.Fatal("a grant without a deadline must remain active")
+	}
+}
+
+// TestHistoricalTaskScopedGrantAuthorizesNothing replaces the compatibility
+// rule that kept task-scoped ledger rows readable. Task-scoped reuse rested on
+// the judgment that a set of runs is one piece of work; that judgment
+// mis-groups unrelated runs, so honouring such a row would let one decision
+// authorize work the person never saw. Rows are left in place for audit and
+// simply stop authorizing.
+func TestHistoricalTaskScopedGrantAuthorizesNothing(t *testing.T) {
+	store := newApprovalGrantTestStore(t)
+	ctx := context.Background()
+	const key = "exec:requests execution on the host outside the isolated sandbox"
+	if _, err := store.db.ExecContext(ctx,
+		`INSERT INTO approval_grants (id, tenant_id, person_id, scope_kind, scope_id, pattern_key, created_at, expires_at, revoked_at)
+		 VALUES ('agr_legacy', ?, 'p', 'task', 'task-1', ?, 1, 0, 0)`, DefaultTenantID, key); err != nil {
+		t.Fatal(err)
+	}
+	granted, err := store.IsApprovalGranted(ctx, DefaultTenantID, "p", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if granted {
+		t.Fatal("a historical task-scoped row must not authorize anything")
+	}
+	grants, err := store.ListApprovalGrants(ctx, DefaultTenantID, "p", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 1 || grants[0].ScopeKind != "task" {
+		t.Fatalf("the row must stay listable for audit: %+v", grants)
 	}
 }
 

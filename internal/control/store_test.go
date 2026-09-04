@@ -347,7 +347,6 @@ func TestApprovalGrantsScopes(t *testing.T) {
 		t.Fatalf("OpenStore failed: %v", err)
 	}
 	defer store.Close()
-
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -356,40 +355,45 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	const pk = "exec:invokes dangerous command: chmod"
 
 	// Nothing granted yet.
-	if ok, err := store.IsApprovalGranted(ctx, tenant, person, "task-1", pk); err != nil || ok {
+	if ok, err := store.IsApprovalGranted(ctx, tenant, person, pk); err != nil || ok {
 		t.Fatalf("expected no grant initially, ok=%v err=%v", ok, err)
 	}
 
-	// Task grant applies only to that task.
-	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err != nil {
-		t.Fatalf("GrantApproval task: %v", err)
-	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-1", pk); !ok {
-		t.Fatalf("task-1 grant should be visible for task-1")
-	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", pk); ok {
-		t.Fatalf("task-1 grant must NOT apply to task-2")
-	}
-
-	// Person grant applies across all tasks.
+	// Person is the only durable scope: person plus pattern key IS the
+	// category-scoped grant, so it needs no container.
 	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk, time.Time{}); err != nil {
 		t.Fatalf("GrantApproval person: %v", err)
 	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", pk); !ok {
-		t.Fatalf("person grant should apply to any task")
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, pk); !ok {
+		t.Fatal("person grant should authorize its class")
 	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "", pk); !ok {
-		t.Fatalf("person grant should apply even with no task id")
+
+	// The retired task scope must be refused rather than silently recorded
+	// under some other scope: a grant whose reuse depended on "these runs are
+	// one piece of work" could be inherited by unrelated work.
+	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err == nil {
+		t.Fatal("task-scoped grant must be refused")
+	}
+	if err := store.GrantApproval(ctx, "session", tenant, person, "task-1", pk, time.Time{}); err == nil {
+		t.Fatal("session-scoped grant must be refused")
 	}
 
 	// A different pattern key is still ungranted.
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", "exec:invokes dangerous command: rm"); ok {
-		t.Fatalf("unrelated class must not be granted")
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "exec:invokes dangerous command: rm"); ok {
+		t.Fatal("unrelated class must not be granted")
 	}
 
 	// Grants are idempotent.
-	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err != nil {
+	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk, time.Time{}); err != nil {
 		t.Fatalf("re-grant should be idempotent: %v", err)
+	}
+	// Another person never inherits it.
+	other, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "other", "Bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, _ := store.IsApprovalGranted(ctx, other.TenantID, other.PersonID, pk); ok {
+		t.Fatal("a grant must not cross persons")
 	}
 }
 
@@ -417,12 +421,22 @@ func TestRespondApprovalRecordsDecisionScope(t *testing.T) {
 		return a
 	}
 	a1 := mk()
-	got, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a1.ID, "approved", "cli", ApprovalDecisionInput{GrantScope: "task"})
+	got, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a1.ID, "approved", "cli", ApprovalDecisionInput{GrantScope: "person"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.DecisionScope != "task" {
-		t.Fatalf("approve should keep task scope, got %q", got.DecisionScope)
+	if got.DecisionScope != "person" {
+		t.Fatalf("approve should keep person scope, got %q", got.DecisionScope)
+	}
+	// The retired task scope normalizes to nothing, so a stale client cannot
+	// record a durable grant under a container that no longer has authority.
+	aRetired := mk()
+	got, err = store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, aRetired.ID, "approved", "cli", ApprovalDecisionInput{GrantScope: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DecisionScope != "" {
+		t.Fatalf("retired task scope must not be recorded, got %q", got.DecisionScope)
 	}
 	a2 := mk()
 	got, err = store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a2.ID, "rejected", "cli", ApprovalDecisionInput{GrantScope: "person"})

@@ -211,8 +211,8 @@ func TestAgentActivityReplacesGenericWorkingText(t *testing.T) {
 	if model.activityText != "Waiting for the model to decide after tool results" {
 		t.Fatalf("activityText = %q", model.activityText)
 	}
-	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "Waiting for the model to decide after tool results") {
-		t.Fatalf("activity text was not rendered in the active region: %q", view)
+	if row := stripANSI(model.activityRow(80)); !strings.Contains(row, "Waiting for the model to decide after tool results") {
+		t.Fatalf("activity text was not rendered in the progress row: %q", row)
 	}
 }
 
@@ -226,8 +226,8 @@ func TestThinkingIndicatorRendersInActiveRegion(t *testing.T) {
 	})
 	model.startModelWait("Waiting for the model to choose the first step")
 
-	if view := stripANSI(model.renderActiveBlock(100)); !strings.Contains(view, "Waiting for the model to choose the first step") {
-		t.Fatalf("activity indicator missing from the active region: %q", view)
+	if row := stripANSI(model.activityRow(100)); !strings.Contains(row, "Waiting for the model to choose the first step") {
+		t.Fatalf("activity indicator missing from the progress row: %q", row)
 	}
 }
 
@@ -257,15 +257,46 @@ func TestModelWaitSpinnerHasOneTenFPSTickChain(t *testing.T) {
 	updated, _ = model.Update(MsgToolStart{ToolName: "read_file", ToolCallID: "call-spinner"})
 	model = updated.(*uiModel)
 	if model.waitingForModel {
-		t.Fatal("tool start did not stop model-wait animation")
+		t.Fatal("tool start did not end the model-wait phase")
+	}
+	// The chain spans the TURN, not the model wait. It used to stop here, which
+	// left a frozen frame beside a still-advancing counter for the whole tool
+	// step — read as a hang. It must keep animating, and still exactly once.
+	updated, cmd := model.Update(spinner.TickMsg{})
+	model = updated.(*uiModel)
+	if cmd == nil {
+		t.Fatal("the animation stopped while a tool was running")
+	}
+	if !model.spinnerRunning {
+		t.Fatal("chain ownership was dropped mid-turn")
+	}
+	updated, _ = model.Update(MsgAgentActivity{Phase: modelWaitPhase, Content: "Waiting for the model after tool results"})
+	model = updated.(*uiModel)
+	if !model.waitingForModel {
+		t.Fatal("tool -> model_wait did not re-enter the model-wait phase")
+	}
+	if extra := model.startModelWait("still waiting"); extra != nil {
+		t.Fatal("re-entering model_wait started a parallel chain over the live one")
+	}
+
+	// When the turn stops animating, both the chain and its ownership end, or an
+	// idle session keeps waking up at 10 FPS forever. The tool has to actually
+	// finish: a registered running tool is itself a reason to animate.
+	updated, _ = model.Update(MsgToolDone{ToolName: "read_file", ToolCallID: "call-spinner", Result: "ok"})
+	model = updated.(*uiModel)
+	model.stopModelWait()
+	model.thinking = false
+	model.toolExecuting = ""
+	model.daemonRunActive = false
+	model.localRequestActive = false
+	if model.animatingTurn() {
+		t.Fatalf("nothing should be animating: %+v", model.processState())
 	}
 	if _, cmd := model.Update(spinner.TickMsg{}); cmd != nil {
-		t.Fatal("stale tick kept running after tool start")
+		t.Fatal("the animation outlived the turn")
 	}
-	updated, restart := model.Update(MsgAgentActivity{Phase: modelWaitPhase, Content: "Waiting for the model after tool results"})
-	model = updated.(*uiModel)
-	if restart == nil || !model.waitingForModel {
-		t.Fatal("tool -> model_wait did not start a fresh tick chain")
+	if model.spinnerRunning {
+		t.Fatal("a stopped chain must release ownership")
 	}
 }
 
@@ -281,8 +312,8 @@ func TestThinkingPhaseStartsSpinnerBeforeFirstModelWaitHeartbeat(t *testing.T) {
 	if first == nil || !model.waitingForModel {
 		t.Fatal("thinking phase did not start the waiting animation immediately")
 	}
-	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "Reading tool results and deciding the next step") {
-		t.Fatalf("thinking phase was not rendered: %q", view)
+	if row := stripANSI(model.activityRow(80)); !strings.Contains(row, "Reading tool results and deciding the next step") {
+		t.Fatalf("thinking phase was not rendered in the progress row: %q", row)
 	}
 
 	updated, repeated := model.Update(MsgAgentActivity{
@@ -677,16 +708,16 @@ func TestToolMessageFormatsPlanJSON(t *testing.T) {
 	rendered := stripANSI(renderToolMessage(ChatMessage{
 		Role:     "tool",
 		ToolName: "update_plan",
-		Content:  `{"plan":[{"step":"确认环境","status":"completed"},{"step":"写代码","status":"in_progress"}]}`,
+		Content:  `{"plan_version":1,"plan":[{"step":"确认环境","status":"completed"},{"step":"写代码","status":"in_progress"}]}`,
 		Duration: 0.1,
 	}, 120))
 
 	if strings.Contains(rendered, `{"plan"`) {
 		t.Fatalf("plan JSON should not be rendered directly: %q", rendered)
 	}
-	// Codex-style checklist (hybrid): header `Updated plan · done/total` + per-step
+	// The first snapshot is a plan, not an update to a plan the user already saw.
 	// glyphs ✔ completed / □ in-progress (cyan) / □ pending.
-	if !strings.Contains(rendered, "Updated plan · 1/2") {
+	if !strings.Contains(rendered, "Plan · 1/2") || strings.Contains(rendered, "Updated plan") {
 		t.Fatalf("plan should show progress count: %q", rendered)
 	}
 	if !strings.Contains(rendered, "✔ 确认环境") || !strings.Contains(rendered, "□ 写代码") {
@@ -702,7 +733,8 @@ func TestForwardedPlanEventRendersChecklist(t *testing.T) {
 	event := llm.StreamEvent{
 		EventType: "plan.updated",
 		Payload: map[string]interface{}{
-			"explanation": "getting started",
+			"explanation":  "getting started",
+			"plan_version": 2,
 			"plan": []interface{}{
 				map[string]interface{}{"step": "read spec", "status": "completed"},
 				map[string]interface{}{"step": "write code", "status": "in_progress"},
@@ -725,7 +757,7 @@ func TestForwardedPlanEventRendersChecklist(t *testing.T) {
 		t.Fatalf("expected a plan tool cell")
 	}
 	rendered := stripANSI(renderToolMessage(model.messages[len(model.messages)-1], 120))
-	if !strings.Contains(rendered, "Updated plan · 1/3") {
+	if !strings.Contains(rendered, "Plan · 1/3") {
 		t.Fatalf("forwarded plan should render the checklist header: %q", rendered)
 	}
 	for _, step := range []string{"read spec", "write code", "run tests"} {
@@ -735,6 +767,17 @@ func TestForwardedPlanEventRendersChecklist(t *testing.T) {
 	}
 	if strings.Contains(rendered, `{"plan"`) {
 		t.Fatalf("forwarded plan should not render raw JSON: %q", rendered)
+	}
+}
+
+func TestInheritedPlanIsLabeledAsResumed(t *testing.T) {
+	// "parent_run" is the pre-v12 source tag. Historical transcripts still
+	// carry it, so both spellings must reach the same label.
+	for _, source := range []string{"resumed_run", "parent_run"} {
+		rendered := stripANSI(renderPlanCell(`{"source":"`+source+`","plan_version":1,"plan":[{"step":"start builds","status":"in_progress"}]}`, 0, 100))
+		if !strings.Contains(rendered, "Resumed plan · 0/1") {
+			t.Fatalf("inherited plan label for source=%q: %q", source, rendered)
+		}
 	}
 }
 
@@ -1040,10 +1083,13 @@ func TestHybridResizeRequestsCleanActiveRegionRedraw(t *testing.T) {
 func TestOnboardingStartupCardShowsModelPairWorkspaceAndFirstTask(t *testing.T) {
 	controller := NewController("codex-cli", "gpt-primary", nil, "")
 	controller.SetOnboardingContext(OnboardingContext{
-		BackgroundModel: "openai/gpt-background",
-		WorkspaceID:     "ws-1", WorkspaceName: "project", WorkspacePath: "/work/project",
+		BackgroundModel:  "openai/gpt-background",
 		FirstTaskPending: true,
 	})
+	// The card names the session's workspace, which is the launch directory
+	// unless /ws pinned one. Onboarding no longer supplies it: doing so made
+	// every session claim whichever directory onboarding happened to run in.
+	controller.model.Update(MsgWorkspaceSwitched{ID: "ws-1", Name: "project", Path: "/work/project"})
 	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(100), "\n"))
 	for _, expected := range []string{"gpt-primary", "openai/gpt-background", "WORKSPACE", "/work/project", "Try: Inspect this workspace"} {
 		if !strings.Contains(rendered, expected) {
@@ -1121,8 +1167,10 @@ func TestStartupCardWrapsLongValuesWithoutTruncatingThem(t *testing.T) {
 	controller := NewController("codex-cli", "provider/model-with-a-long-identity", nil, "")
 	controller.SetOnboardingContext(OnboardingContext{
 		BackgroundModel: "provider/background-model-with-a-long-identity",
-		WorkspaceID:     "ws-1", WorkspaceName: "project",
-		WorkspacePath: "/work/a-very-long-workspace-path/whose-tail-must-survive",
+	})
+	controller.model.Update(MsgWorkspaceSwitched{
+		ID: "ws-1", Name: "project",
+		Path: "/work/a-very-long-workspace-path/whose-tail-must-survive",
 	})
 
 	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(40), "\n"))
@@ -1476,6 +1524,9 @@ func TestControllerUsesResolvedContextLength(t *testing.T) {
 func TestCursorBlinkTickTogglesComposerCursor(t *testing.T) {
 	model := NewController("", "", nil, "").model
 	model.cursorVisible = true
+	// The caret only blinks while someone is plausibly watching it; a model
+	// built directly in a test has never seen input.
+	model.noteInputActivity(time.Now())
 
 	updated, cmd := model.Update(MsgCursorBlinkTick(time.Now()))
 	model = updated.(*uiModel)
@@ -1548,8 +1599,7 @@ func TestTUIGatewayControlCommandsRouteToDaemon(t *testing.T) {
 		{"/events", "/events"},
 		{"/notify auto", "/notify auto"},
 		{"/resume tsk_1", "/resume tsk_1"},
-		{"/workspace ws_1", "/workspace ws_1"},
-		{"/workspaces", "/workspaces"},
+		{"/ws ws_1", "/ws ws_1"},
 	} {
 		model := NewController("", "", nil, "").model
 		var got string
@@ -1589,35 +1639,35 @@ func TestSlashCommandEchoesUserInputBeforeReply(t *testing.T) {
 	model := c.model
 	c.SetClientMode(true)
 	c.SetMessageProcessor(func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
-		return api.MessageResponse{Content: "Open tasks:\n\n1. [paused] demo"}, 200
+		return api.MessageResponse{Content: "Needs attention:\n\n1. demo"}, 200
 	})
 
-	cmd := model.handleCommand("/tasks")
+	cmd := model.handleCommand("/resume")
 	if cmd == nil {
-		t.Fatal("expected /tasks to return a command")
+		t.Fatal("expected /resume to return a command")
 	}
 	// The echo must be committed synchronously, before the reply arrives.
 	if len(model.messages) == 0 {
 		t.Fatal("no transcript messages after submit")
 	}
 	echo := model.messages[len(model.messages)-1]
-	if echo.Role != "user" || echo.Content != "/tasks" {
+	if echo.Role != "user" || echo.Content != "/resume" {
 		t.Fatalf("typed command not echoed as a user cell: %+v", echo)
 	}
 
 	updated, _ := model.Update(cmd())
 	got := updated.(*uiModel)
 	last := got.messages[len(got.messages)-1]
-	if last.Role != "assistant" || !strings.Contains(last.Content, "Open tasks") {
+	if last.Role != "assistant" || !strings.Contains(last.Content, "Needs attention") {
 		t.Fatalf("control reply missing after echo: %+v", last)
 	}
 	// Order: user echo strictly before the reply.
 	var userIdx, replyIdx = -1, -1
 	for i, msg := range got.messages {
-		if msg.Role == "user" && msg.Content == "/tasks" {
+		if msg.Role == "user" && msg.Content == "/resume" {
 			userIdx = i
 		}
-		if msg.Role == "assistant" && strings.Contains(msg.Content, "Open tasks") {
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "Needs attention") {
 			replyIdx = i
 		}
 	}

@@ -146,6 +146,7 @@ type uiModel struct {
 	thinkingStart         time.Time // When current thinking started
 	activityText          string    // Current model/tool phase shown in transcript
 	waitingForModel       bool      // exactly one spinner tick chain owns this structured model_wait phase
+	spinnerRunning        bool      // a spinner tick chain is alive; guards against parallel chains
 	activePlanJSON        string    // Latest complete plan snapshot, rendered above the composer
 	runStatus             string    // ready | queued | working | done | error | cancelled
 	queuedCount           int       // requests submitted by this TUI and accepted into the daemon queue
@@ -180,6 +181,11 @@ type uiModel struct {
 	// this session carries WorkspaceID (explicit workspace wins server-side)
 	// and the status bar shows the override instead of the cwd. Empty = the
 	// default cwd-derived behavior.
+	// sessionWorkspace is the workspace this session runs in, as resolved by
+	// the daemon from the session's own directory at startup. It is what the
+	// card shows when no /ws switch has pinned one, and it carries the trust
+	// state the one-time trust question needs.
+	sessionWorkspace      *api.DigestWorkspace
 	workspaceOverrideID   string
 	workspaceOverrideName string
 	workspaceOverridePath string
@@ -241,9 +247,13 @@ type uiModel struct {
 	// and expanded to /resume <n>. Resolution stays on the daemon, which owns
 	// the ordering that produced the list.
 	resumePickerArmed bool
-	hybrid            bool     // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
-	pendingPrintln    []string // hybrid: cells to emit to scrollback at end of Update
-	startupCommitted  bool     // hybrid: startup card already printed to scrollback
+	// lastInputAt is when a key last arrived. The caret only blinks while
+	// someone is plausibly watching it, so an unattended session settles to no
+	// timers at all instead of waking twice a second forever.
+	lastInputAt      time.Time
+	hybrid           bool     // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
+	pendingPrintln   []string // hybrid: cells to emit to scrollback at end of Update
+	startupCommitted bool     // hybrid: startup card already printed to scrollback
 }
 
 type MsgClearStatus struct{ NoticeID uint64 }
@@ -331,8 +341,28 @@ func workingTick() tea.Cmd {
 	})
 }
 
+// cursorBlinkIdleAfter is how long without a keystroke before the caret stops
+// blinking. Long enough that it never interrupts someone reading the screen,
+// short enough that an abandoned session stops doing work.
+const cursorBlinkIdleAfter = 90 * time.Second
+
 func cursorBlinkTick() tea.Cmd {
 	return tea.Tick(530*time.Millisecond, func(t time.Time) tea.Msg {
+		return MsgCursorBlinkTick(t)
+	})
+}
+
+// idleCursorBlinkIntervalRatio is how much rarer the idle check is than the
+// blink itself. An unattended session used to wake ~1.9 times a second forever;
+// two abandoned ones had burned 27 minutes of CPU each blinking a caret nobody
+// could see.
+const idleCursorBlinkInterval = 30 * time.Second
+
+// idleCursorBlinkTick re-arms the caret check at the idle rate. It stays a tick
+// rather than stopping so the next keystroke restores the normal blink without
+// any other code path having to know about it.
+func idleCursorBlinkTick() tea.Cmd {
+	return tea.Tick(idleCursorBlinkInterval, func(t time.Time) tea.Msg {
 		return MsgCursorBlinkTick(t)
 	})
 }
@@ -377,14 +407,24 @@ func (c *Controller) SetModelManagerOnly(enabled bool) {
 
 // SetOnboardingContext initializes the first-use summary without making the
 // TUI own setup persistence or platform service mechanics.
+//
+// It deliberately does NOT seed the workspace override. Those fields are the
+// SESSION override that `/ws` sets, and the gateway prefers an explicit
+// WorkspaceID over the directory the session was launched in. Filling them from
+// the onboarding file pinned every turn — of every session, forever — to
+// whichever directory onboarding happened to run in, so launching in a project
+// silently worked somewhere else, a new directory never became a workspace, and
+// the startup card disagreed with `/ws` about which workspace was current.
+//
+// The workspace onboarding chose is still the person's durable default: it is
+// the daemon's current_workspace, which already applies to turns that carry no
+// directory of their own (IM, cron). A local session belongs to the directory
+// it was started in.
 func (c *Controller) SetOnboardingContext(ctx OnboardingContext) {
 	if c == nil || c.model == nil {
 		return
 	}
 	c.model.backgroundModelName = strings.TrimSpace(ctx.BackgroundModel)
-	c.model.workspaceOverrideID = strings.TrimSpace(ctx.WorkspaceID)
-	c.model.workspaceOverrideName = strings.TrimSpace(ctx.WorkspaceName)
-	c.model.workspaceOverridePath = strings.TrimSpace(ctx.WorkspacePath)
 	c.model.firstTaskPending = ctx.FirstTaskPending
 	c.model.onFirstTaskSuccess = ctx.OnFirstSuccess
 }
@@ -597,15 +637,22 @@ func cliSessionChannel() string {
 }
 
 func (m *uiModel) Init() tea.Cmd {
+	// terminalLivenessTick is started on every path: a session whose terminal
+	// goes away must end, and Bubble Tea will not tell us (see
+	// terminal_liveness.go). Seeding the input clock here starts the caret's
+	// idle countdown at launch, so a session opened and immediately abandoned
+	// also stops blinking.
+	m.noteInputActivity(time.Now())
 	if m.modelManagerOnly {
-		return tea.Batch(cursorBlinkTick(), m.openModelManager())
+		return tea.Batch(cursorBlinkTick(), terminalLivenessTick(), m.openModelManager())
 	}
 	var observe tea.Cmd
 	if m.modelChangeObserver != nil {
 		observe = m.observeModelChange(false, 0)
 	}
 	m.editor.SetSkillFilter(m.skillCompletionHints)
-	return tea.Batch(cursorBlinkTick(), observe, m.loadSkillCompletion())
+	m.noteInputActivity(time.Now())
+	return tea.Batch(cursorBlinkTick(), terminalLivenessTick(), observe, m.loadSkillCompletion())
 }
 
 const (
@@ -639,9 +686,10 @@ func (m *uiModel) startModelWait(content string) tea.Cmd {
 	if !wasWaiting || m.thinkingStart.IsZero() {
 		m.thinkingStart = time.Now()
 	}
-	if wasWaiting {
+	if wasWaiting || m.spinnerRunning {
 		return nil
 	}
+	m.spinnerRunning = true
 	return m.spinner.Tick
 }
 

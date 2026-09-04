@@ -15,12 +15,20 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 11
+const CurrentControlSchemaVersion = 13
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
 // orderedMigrations, so schema_migrations always describes what was applied.
 const schemaBaselineVersion = 1
+
+// threadedWorkHistorySchemaVersion is the version whose shape
+// hasThreadedWorkHistorySchema recognizes. It is pinned to that detector and
+// must NEVER be replaced by CurrentControlSchemaVersion: shape adoption may
+// only claim the steps it can actually see, and every step above it still has
+// to run. Tying it to "current" silently stamps future migrations as applied on
+// any database presenting this shape — which is every released v11 install.
+const threadedWorkHistorySchemaVersion = 11
 
 // schemaMigration is one ordered, idempotent step above the baseline. Steps run
 // lowest version first and each records its own ledger row, so a non-additive
@@ -426,6 +434,110 @@ CREATE INDEX IF NOT EXISTS idx_run_delivery_overrides_person
 			return migrateThreadedWorkHistory(ctx, db)
 		},
 	},
+	{
+		Version: 12,
+		Name:    "resume-edge-naming",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			return migrateResumeEdgeNaming(ctx, db)
+		},
+	},
+	{
+		Version: 13,
+		Name:    "attention-dismissal-only",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			return migrateAttentionDismissalOnly(ctx, db)
+		},
+	},
+}
+
+// migrateResumeEdgeNaming renames the forward continuation edge so the column
+// says what it means: this run resumes that run. The edge itself is unchanged —
+// no row gains, loses, or redirects an edge — which is why the pre/post
+// invariant bucket must agree exactly across this step.
+//
+// The name it replaces, parent_run_id, invited two readings the edge never
+// carried: a topic hierarchy, and general causal descent. Both let "related"
+// share a code path with "resumes execution state". The legacy reverse pointer
+// resumed_by_run_id keeps its name; it stays read-only compatibility.
+// migrateAttentionDismissalOnly moves Thread-row visibility out of Attention.
+// Attention used to exclude runs whose Thread was hidden or archived and to
+// rank pinned Threads first, which made a display row an input to "what needs
+// me now". Both are now expressed on the Run: dismissal is the only hide.
+//
+// Archiving a Thread was, in effect, a bulk dismissal of its Attention, so the
+// upgrade performs exactly that bulk dismissal. Without it, removing the filter
+// would resurface work the person had already put away. Runs already dismissed
+// keep their original timestamp and actor.
+func migrateAttentionDismissalOnly(ctx context.Context, db *sql.DB) error {
+	for _, table := range []string{"threads", "runs"} {
+		exists, existsErr := firstExistingMigrationTable(ctx, db, table)
+		if existsErr != nil {
+			return existsErr
+		}
+		if exists == "" {
+			return nil
+		}
+	}
+	hasVisibility, err := migrationColumnExists(ctx, db, "threads", "visibility")
+	if err != nil || !hasVisibility {
+		return err
+	}
+	hasDismissal, err := migrationColumnExists(ctx, db, "runs", "attention_dismissed_at")
+	if err != nil || !hasDismissal {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `UPDATE runs
+		SET attention_dismissed_at = ?, attention_dismissed_by = 'retention'
+		WHERE COALESCE(attention_dismissed_at, 0) = 0
+		  AND thread_id IN (
+		    SELECT id FROM threads
+		     WHERE threads.tenant_id = runs.tenant_id
+		       AND COALESCE(visibility, 'visible') IN ('hidden', 'archived')
+		  )`, time.Now().Unix())
+	return err
+}
+
+func migrateResumeEdgeNaming(ctx context.Context, db *sql.DB) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+
+	table := ""
+	for _, candidate := range []string{"runs", "task_runs"} {
+		exists, existsErr := migrationTableExistsTx(ctx, tx, candidate)
+		if existsErr != nil {
+			return existsErr
+		}
+		if exists {
+			table = candidate
+			break
+		}
+	}
+	if table == "" {
+		return tx.Commit()
+	}
+	if err = renameMigrationColumnTx(ctx, tx, table, "parent_run_id", "resumes_run_id"); err != nil {
+		return err
+	}
+	// SQLite rewrites the indexed column reference on RENAME COLUMN but keeps
+	// the index's own name, so the old name would outlive the column it
+	// describes. Recreate it under the new name; "at most one resume per
+	// target" is unchanged, and run ids are globally unique so (tenant_id,
+	// resumes_run_id) still fully enforces it.
+	if _, err = tx.ExecContext(ctx, `DROP INDEX IF EXISTS idx_task_runs_parent_once`); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_resumes_once
+	ON `+table+`(tenant_id, resumes_run_id) WHERE resumes_run_id <> ''`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func migrateThreadedWorkHistory(ctx context.Context, db *sql.DB) (err error) {
@@ -692,13 +804,18 @@ func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath str
 		s.migrationBackup = backup
 	}
 
-	// A current v11 database whose migration ledger was lost must not run the
+	// A database already presenting the v11 Thread/Run shape must not run the
 	// legacy additive InitSchema: doing so would recreate tasks/task_runs beside
-	// threads/runs and manufacture a second aggregate source. Adopt only the
-	// unmistakable v11 shape, after the normal backup and integrity check.
-	if modern, shapeErr := hasThreadedWorkHistorySchema(ctx, s.db); shapeErr != nil {
+	// threads/runs and manufacture a second aggregate source. So adopt the shape
+	// it unmistakably has — up to threadedWorkHistorySchemaVersion and no
+	// further — and then let the ordinary ordered loop below apply every step
+	// above it. Claiming the whole ledger here would stamp those steps as
+	// applied without running them.
+	modernShape, shapeErr := hasThreadedWorkHistorySchema(ctx, s.db)
+	if shapeErr != nil {
 		return migrationFailure(shapeErr, s.migrationBackup)
-	} else if modern && version < CurrentControlSchemaVersion {
+	}
+	if modernShape {
 		// The schedule is the only pre-v11 object that older recovery tests and
 		// released installs may legitimately lack while already presenting the
 		// unmistakable Thread shape; its migration is fully idempotent.
@@ -714,25 +831,23 @@ func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath str
 			return migrationFailure(err, s.migrationBackup)
 		}
 		for _, migration := range orderedMigrations {
+			if migration.Version > threadedWorkHistorySchemaVersion {
+				break
+			}
 			if err := recordSchemaMigration(ctx, s.db, migration.Version, migration.Name); err != nil {
 				return migrationFailure(err, s.migrationBackup)
 			}
 		}
-		if err := verifyMigrationInvariants(ctx, s.db, before); err != nil {
+		if version < threadedWorkHistorySchemaVersion {
+			version = threadedWorkHistorySchemaVersion
+		}
+	} else {
+		// Version 1 adopts the historical additive schema as a compatibility
+		// baseline. All subsequent durable changes must be explicit ordered
+		// migrations rather than more implicit OpenStore side effects.
+		if err := s.InitSchema(ctx); err != nil {
 			return migrationFailure(err, s.migrationBackup)
 		}
-		if err := checkIntegrity(ctx, s.db); err != nil {
-			return migrationFailure(err, s.migrationBackup)
-		}
-		s.schemaVersion = CurrentControlSchemaVersion
-		return nil
-	}
-
-	// Version 1 adopts the historical additive schema as a compatibility
-	// baseline. All subsequent durable changes must be explicit ordered
-	// migrations rather than more implicit OpenStore side effects.
-	if err := s.InitSchema(ctx); err != nil {
-		return migrationFailure(err, s.migrationBackup)
 	}
 	if err := ensureSchemaMigrationsTable(ctx, s.db); err != nil {
 		return migrationFailure(err, s.migrationBackup)
@@ -1071,8 +1186,11 @@ func captureMigrationInvariants(ctx context.Context, db *sql.DB) (migrationInvar
 		{"threads", "tasks", "threads", "tenant_id || char(0) || person_id"},
 		// The forward continuation edge is the only ownership authority, so a
 		// step may neither drop nor invent one. The column exists from v7 on;
-		// older shapes have no edge bucket to compare.
-		{"run_parent_edges", "task_runs", "runs", "CASE WHEN COALESCE(parent_run_id, '') <> '' THEN 'linked' ELSE 'root' END"},
+		// older shapes have no edge bucket to compare. Its name is resolved at
+		// capture time rather than hardcoded: v12 renames it, and this check
+		// runs both before and after that step, so a fixed name would compare
+		// the edge against nothing on one side of its own migration.
+		{"run_resume_edges", "task_runs", "runs", ""},
 	} {
 		table, err := firstExistingMigrationTable(ctx, db, spec.newTable, spec.oldTable)
 		if err != nil {
@@ -1081,16 +1199,25 @@ func captureMigrationInvariants(ctx context.Context, db *sql.DB) (migrationInvar
 		if table == "" {
 			continue
 		}
-		if spec.key == "run_parent_edges" {
-			hasEdge, err := migrationColumnExists(ctx, db, table, "parent_run_id")
-			if err != nil {
-				return migrationInvariants{}, err
+		state := spec.state
+		if spec.key == "run_resume_edges" {
+			column := ""
+			for _, candidate := range []string{"resumes_run_id", "parent_run_id"} {
+				hasEdge, existsErr := migrationColumnExists(ctx, db, table, candidate)
+				if existsErr != nil {
+					return migrationInvariants{}, existsErr
+				}
+				if hasEdge {
+					column = candidate
+					break
+				}
 			}
-			if !hasEdge {
+			if column == "" {
 				continue
 			}
+			state = "CASE WHEN COALESCE(" + column + ", '') <> '' THEN 'linked' ELSE 'root' END"
 		}
-		buckets, err := stateCountsIfTableExists(ctx, db, table, spec.state)
+		buckets, err := stateCountsIfTableExists(ctx, db, table, state)
 		if err != nil {
 			return migrationInvariants{}, err
 		}

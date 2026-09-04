@@ -33,22 +33,16 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 			return true, a.sendGatewayMessage("/report " + strings.Join(a.args[2:], " "))
 		case "watchers":
 			return true, a.sendGatewayMessage(strings.TrimSpace("/watchers " + strings.Join(a.args[2:], " ")))
-		case "tasks":
-			// Forward the view variant (done|archived|all) so `selfmind tasks
-			// done` matches the gateway /tasks grammar instead of dropping it.
-			if len(a.args) > 2 {
-				return true, a.sendGatewayMessage("/tasks " + strings.Join(a.args[2:], " "))
-			}
-			return true, a.sendGatewayMessage("/tasks")
-		case "task":
-			// Keep task detail and management commands available as short-lived
-			// CLI calls instead of falling through to the interactive TUI.
-			return true, a.sendGatewayMessage(strings.TrimSpace("/task " + strings.Join(a.args[2:], " ")))
-		case "workspaces":
-			return true, a.sendGatewayMessage("/workspaces")
+		case "resume":
+			// Bare `selfmind resume` lists what needs attention; an argument
+			// continues one exact run. This replaces `selfmind tasks`, which
+			// listed Task labels rather than the runs a person can continue.
+			return true, a.sendGatewayMessage(strings.TrimSpace("/resume " + strings.Join(a.args[2:], " ")))
+		case "search":
+			return true, a.sendGatewayMessage(strings.TrimSpace("/search " + strings.Join(a.args[2:], " ")))
 		case "ws":
-			// Short alias for `workspace` (unified verb: bare lists, arg selects,
-			// add/use manage).
+			// The one workspace verb, and the only spelling: bare lists, an
+			// argument selects, add/default/trust manage.
 			return true, a.handleWorkspaceCommand(a.args[2:])
 		case "approvals":
 			// Subcommands (grants | revoke <n>) forward verbatim so CLI and IM
@@ -83,8 +77,6 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 				title = "New task"
 			}
 			return true, a.sendGatewayMessage("/new " + title)
-		case "workspace":
-			return true, a.handleWorkspaceCommand(a.args[2:])
 		}
 	}
 	if len(a.args) > 1 && a.args[1] == "send" {
@@ -270,14 +262,16 @@ func gatewayErrorLine(status string, body []byte) string {
 	return status + ": " + trimmed
 }
 
-// handleWorkspaceCommand backs both `selfmind workspace ...` and its short
-// alias `selfmind ws ...`. Unified verb: bare lists, `add`/`use` are the
-// management subcommands, and a bare number/id selects — so
-// `ws`, `ws 2`, `ws add <path>`, `ws use <id>` all read the same way.
+// handleWorkspaceCommand backs `selfmind ws ...`, which is the whole workspace
+// surface: bare lists, a bare number/id selects for this session, and
+// add/default/trust/grants/observe/revoke manage — so `ws`, `ws 2`,
+// `ws add <path>`, `ws default 2` all read the same way. The subcommands that
+// change trust or capabilities stay local-CLI only; selection forwards to the
+// daemon so CLI, IM, and TUI share one resolver.
 func (a *App) handleWorkspaceCommand(args []string) int {
 	if len(args) == 0 {
-		// Bare `workspace`/`ws` lists, mirroring the gateway's unified verb.
-		return a.sendGatewayMessage("/workspaces")
+		// Bare `ws` lists, mirroring the gateway's unified verb.
+		return a.sendGatewayMessage("/ws")
 	}
 	switch args[0] {
 	case "add":
@@ -295,14 +289,14 @@ func (a *App) handleWorkspaceCommand(args []string) int {
 			name = strings.Join(args[2:], " ")
 		}
 		return a.registerWorkspace(abs, name)
-	case "use":
+	case "default":
+		// The durable default used by turns with no directory of their own
+		// (IM, cron). Selecting for a session no longer moves it.
 		if len(args) < 2 {
-			fmt.Fprintln(a.stderr, "usage: selfmind ws use <workspace_id>")
+			fmt.Fprintln(a.stderr, "usage: selfmind ws default <n|workspace_id>")
 			return 2
 		}
-		return a.sendGatewayMessage("/workspace " + args[1])
-	case "list":
-		return a.sendGatewayMessage("/workspaces")
+		return a.sendGatewayMessage("/ws default " + args[1])
 	case "trust", "untrust":
 		workspaceID := ""
 		if len(args) >= 2 {
@@ -333,7 +327,11 @@ func (a *App) handleWorkspaceCommand(args []string) int {
 		return a.revokeWorkspaceCapability(args[1], workspaceID)
 	default:
 		// A bare number or id selects the workspace (ws 2, ws ws_abc123).
-		return a.sendGatewayMessage("/workspace " + args[0])
+		// `use` and `list` used to be spelled out here as separate cases that
+		// did exactly this and exactly the bare form; three names for two
+		// actions, and both aliases were still pointing at retired slash
+		// spellings, so they answered "Unknown command".
+		return a.sendGatewayMessage("/ws " + args[0])
 	}
 }
 

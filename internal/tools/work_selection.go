@@ -73,8 +73,8 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 	// A direct claim earlier in this turn already moved the run onto the
 	// selected work: repeating that selection converges, and a different
 	// resume target is the one auditable pre-effect correction.
-	claimedThisTurn := current.ParentRunID != "" && current.TaskID != scope.TaskID
-	if claimedThisTurn && current.ParentRunID == targetRunID {
+	claimedThisTurn := current.ResumesRunID != "" && current.TaskID != scope.TaskID
+	if claimedThisTurn && current.ResumesRunID == targetRunID {
 		return t.directContinuationResult(ctx, scope.ControlTenantID, scope.PersonID, current, targetRunID)
 	}
 	if !claimedThisTurn && current.TaskID != scope.TaskID {
@@ -172,14 +172,14 @@ func (t *WorkSelectTool) retargetDirectContinuation(ctx context.Context, tenantI
 		return "", err
 	}
 	if blocked {
-		return "", fmt.Errorf("this turn already continues run %s and has produced effects (%s); the selection cannot be corrected now, so report the situation and ask the user how to proceed", current.ParentRunID, reason)
+		return "", fmt.Errorf("this turn already continues run %s and has produced effects (%s); the selection cannot be corrected now, so report the situation and ask the user how to proceed", current.ResumesRunID, reason)
 	}
 	retargeted, err := t.store.RetargetInteractionContinuation(ctx, tenantID, personID, current.ID, target.ID)
 	switch {
 	case err == nil:
 		return t.directContinuationResult(ctx, tenantID, personID, retargeted, target.ID)
-	case errors.Is(err, control.ErrContinuationDomainMismatch), errors.Is(err, control.ErrParentCheckpointRequired):
-		return "", fmt.Errorf("this turn already continues run %s in its execution scope; the corrected run lives in a different scope or needs checkpoint restoration and cannot be continued here. Report the correction and ask the user how to proceed", current.ParentRunID)
+	case errors.Is(err, control.ErrContinuationDomainMismatch), errors.Is(err, control.ErrResumeCheckpointRequired):
+		return "", fmt.Errorf("this turn already continues run %s in its execution scope; the corrected run lives in a different scope or needs checkpoint restoration and cannot be continued here. Report the correction and ask the user how to proceed", current.ResumesRunID)
 	default:
 		return "", err
 	}
@@ -200,7 +200,7 @@ func (t *WorkSelectTool) tryDirectContinuation(ctx context.Context, tenantID, pe
 	switch {
 	case err == nil:
 		return t.directContinuationResult(ctx, tenantID, personID, claimed, target.ID)
-	case errors.Is(err, control.ErrContinuationDomainMismatch), errors.Is(err, control.ErrParentCheckpointRequired):
+	case errors.Is(err, control.ErrContinuationDomainMismatch), errors.Is(err, control.ErrResumeCheckpointRequired):
 		return workSelectionResult(status, "resume", target.ID, "The selected run lives in a different execution scope or needs its checkpoint restored, so the gateway will queue it as an exact continuation after this turn. Acknowledge briefly and finish this turn; do not perform the target's work here."), nil
 	default:
 		return "", err
@@ -232,7 +232,7 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 			TaskID: claimed.TaskID, RunID: claimed.ID, Type: "plan.updated", Visibility: "task",
 			Channel: claimed.Channel, Payload: mustToolJSON(map[string]interface{}{
 				"plan": plan, "explanation": "Plan inherited from the continued run",
-				"source": "parent_run", "parent_run_id": targetRunID,
+				"source": "resumed_run", "resumes_run_id": targetRunID,
 			}),
 			IdempotencyKey: "plan.inherited:" + claimed.ID + ":" + targetRunID,
 		}); err != nil {
@@ -259,8 +259,8 @@ type planStepView struct {
 
 // inheritedPlanSteps prefers the durable run plan; runs recorded before the
 // durable plan contract only carry plan.updated snapshots in their events.
-func (t *WorkSelectTool) inheritedPlanSteps(ctx context.Context, tenantID, personID, threadID, parentRunID string) ([]planStepView, error) {
-	if plan, err := t.store.LatestRunPlan(ctx, tenantID, parentRunID); err != nil {
+func (t *WorkSelectTool) inheritedPlanSteps(ctx context.Context, tenantID, personID, threadID, resumesRunID string) ([]planStepView, error) {
+	if plan, err := t.store.LatestRunPlan(ctx, tenantID, resumesRunID); err != nil {
 		return nil, err
 	} else if plan != nil && len(plan.Steps) > 0 {
 		steps := make([]planStepView, 0, len(plan.Steps))
@@ -269,7 +269,7 @@ func (t *WorkSelectTool) inheritedPlanSteps(ctx context.Context, tenantID, perso
 		}
 		return steps, nil
 	}
-	events, err := t.store.ListRunEvents(ctx, tenantID, personID, threadID, parentRunID, 50)
+	events, err := t.store.ListRunEvents(ctx, tenantID, personID, threadID, resumesRunID, 50)
 	if err != nil {
 		return nil, err
 	}
@@ -287,18 +287,18 @@ func (t *WorkSelectTool) inheritedPlanSteps(ctx context.Context, tenantID, perso
 	return nil, nil
 }
 
-func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, threadID, parentRunID string, plan []planStepView) (string, error) {
-	handoff, err := t.store.RunHandoff(ctx, tenantID, personID, parentRunID)
+func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, threadID, resumesRunID string, plan []planStepView) (string, error) {
+	handoff, err := t.store.RunHandoff(ctx, tenantID, personID, resumesRunID)
 	if err != nil {
 		return "", err
 	}
-	parent, err := t.store.GetRun(ctx, tenantID, parentRunID)
+	parent, err := t.store.GetRun(ctx, tenantID, resumesRunID)
 	if err != nil {
 		return "", err
 	}
 	var sb strings.Builder
 	sb.WriteString("[SelfMind resume context]\n")
-	sb.WriteString("You are continuing run " + parentRunID + " in its own execution scope; this turn is now that work.\n")
+	sb.WriteString("You are continuing run " + resumesRunID + " in its own execution scope; this turn is now that work.\n")
 	if parent != nil {
 		if input := strings.TrimSpace(parent.InputSummary); input != "" {
 			sb.WriteString("Original request: " + workBound(input, 600) + "\n")

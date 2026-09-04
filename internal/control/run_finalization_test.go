@@ -576,7 +576,7 @@ func TestMaterializeRunFinalizationOnlyClaimReleasesUnresolvedRun(t *testing.T) 
 		t.Fatalf("unclaimed run must stay claimable: %+v", unresolved)
 	}
 	// The CLAIMING child's completion releases the wait atomically.
-	claiming, err := store.StartRunWithOptions(ctx, task, "cli", "verified", StartRunOptions{ParentRunID: prior.ID})
+	claiming, err := store.StartRunWithOptions(ctx, task, "cli", "verified", StartRunOptions{ResumesRunID: prior.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -735,12 +735,12 @@ func TestMaterializeRunFinalizationClosesDeliberatelyResumedRun(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	current, err := store.StartRunWithOptions(ctx, task, "cli", "continue", StartRunOptions{ParentRunID: prior.ID})
+	current, err := store.StartRunWithOptions(ctx, task, "cli", "continue", StartRunOptions{ResumesRunID: prior.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.ParentRunID != prior.ID {
-		t.Fatalf("parent edge = %q want %s", current.ParentRunID, prior.ID)
+	if current.ResumesRunID != prior.ID {
+		t.Fatalf("parent edge = %q want %s", current.ResumesRunID, prior.ID)
 	}
 	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
 		Identity: *identity, RunID: current.ID, RunStatus: "done",

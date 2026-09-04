@@ -112,7 +112,7 @@ func TestQueueUserInputCanTargetExactHistoricalParent(t *testing.T) {
 
 	tool := NewQueueUserInputTool(store)
 	if _, err := tool.Execute(map[string]interface{}{
-		"input_id": steering.ID, "parent_run_id": historicalRun.ID,
+		"input_id": steering.ID, "resumes_run_id": historicalRun.ID,
 		"_invocation_scope": kernel.ToolInvocationScope{
 			ControlTenantID: identity.TenantID, PersonID: identity.PersonID,
 			TaskID: activeTask.ID, RunID: activeRun.ID, ExecutionLane: "main",

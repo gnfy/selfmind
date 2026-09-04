@@ -111,11 +111,10 @@ func TestOrdinaryMessageWithArchivedCurrentCreatesNewLabel(t *testing.T) {
 	ctx := context.Background()
 
 	parked := parkEmptyTask(t, daemon, "shelved work")
-	aresp, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/task " + parked.ID + " archive",
-	})
-	if !strings.Contains(aresp.Content, "Archived thread") {
-		t.Fatalf("archive failed: %+v", aresp)
+	// Archiving has no user command any more (Attention reads no Thread
+	// column), so the state under test is set through the timeline itself.
+	if err := control.NewWorkTimeline(daemon.Control).Archive(ctx, parked.TenantID, parked.PersonID, parked.ID); err != nil {
+		t.Fatalf("archive failed: %v", err)
 	}
 
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
@@ -164,7 +163,7 @@ func TestContinuationCueAttachesToParkedRun(t *testing.T) {
 	if resp.Task.ID != parked.ID {
 		t.Fatalf("continuation created task %s; want attach to %s", resp.Task.ID, parked.ID)
 	}
-	if resp.Run == nil || resp.Run.ParentRunID != waiting.ID {
+	if resp.Run == nil || resp.Run.ResumesRunID != waiting.ID {
 		t.Fatalf("continuation must claim the waiting run as parent: %+v", resp.Run)
 	}
 	events, err := store.ListRunEvents(ctx, parked.TenantID, parked.PersonID, parked.ID, resp.Run.ID, 50)
@@ -177,7 +176,7 @@ func TestContinuationCueAttachesToParkedRun(t *testing.T) {
 			continue
 		}
 		payload := string(event.Payload)
-		if strings.Contains(payload, `"source":"parent_run"`) && strings.Contains(payload, "deploy to production") {
+		if strings.Contains(payload, `"source":"resumed_run"`) && strings.Contains(payload, "deploy to production") {
 			restored = true
 		}
 	}
@@ -238,9 +237,9 @@ func TestResumePinReopensArchivedTask(t *testing.T) {
 	if err := store.FinishRun(ctx, parked.TenantID, parent.ID, "interrupted"); err != nil {
 		t.Fatal(err)
 	}
-	daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/task " + parked.ID + " archive",
-	})
+	if err := control.NewWorkTimeline(daemon.Control).Archive(ctx, parked.TenantID, parked.PersonID, parked.ID); err != nil {
+		t.Fatalf("archive failed: %v", err)
+	}
 
 	// Pre-label skips the archived label: ordinary work gets its own task.
 	first, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
@@ -285,11 +284,10 @@ func TestResumePinReopensCompletedTask(t *testing.T) {
 	if err := store.FinishRun(ctx, completed.TenantID, parent.ID, "waiting_user"); err != nil {
 		t.Fatal(err)
 	}
-	closed, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/task " + completed.ID + " complete",
-	})
-	if !strings.Contains(closed.Content, "Dismissed current attention") {
-		t.Fatalf("completion failed: %+v", closed)
+	// Dismissal is now `/stop` on the exact run, or the timeline API; either
+	// way the state under test is "this attention was put away".
+	if _, err := control.NewWorkTimeline(daemon.Control).DismissAttention(ctx, completed.TenantID, completed.PersonID, completed.ID); err != nil {
+		t.Fatalf("dismissal failed: %v", err)
 	}
 
 	resumed, _ := daemon.ProcessMessage(ctx, api.MessageRequest{

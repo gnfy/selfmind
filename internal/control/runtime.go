@@ -325,12 +325,21 @@ func (s *Store) ListTaskEvents(ctx context.Context, taskID string, limit int) ([
 // LatestPersonEventCursor returns the durable append cursor visible to one
 // person. The explicit daemon-wide sequence is never reused by cleanup or
 // VACUUM, so it is suitable for SSE Last-Event-ID across daemon restarts.
+// Event ownership is derived from the RUN, not the Thread. task_events carries
+// no tenant or person column, so ownership used to come from a JOIN on threads
+// — which made a display grouping decide whose events these are, and would make
+// a thread-less run's events ownerless. The run owns tenant and person
+// directly. The threads leg stays as a fallback for historical rows written
+// before events carried a run id; both legs are LEFT joins so neither can drop
+// an event that the other can attribute.
 func (s *Store) LatestPersonEventCursor(ctx context.Context, tenantID, personID string) (int64, error) {
 	var cursor int64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(MAX(e.cursor), 0)
-		 FROM task_events e JOIN threads t ON t.id = e.thread_id
-		 WHERE t.tenant_id = ? AND t.person_id = ?`,
+		 FROM task_events e
+		 LEFT JOIN runs r ON r.id = e.run_id
+		 LEFT JOIN threads t ON t.id = e.thread_id
+		 WHERE COALESCE(r.tenant_id, t.tenant_id) = ? AND COALESCE(r.person_id, t.person_id) = ?`,
 		normalizeTenant(tenantID), personID,
 	).Scan(&cursor)
 	return cursor, err
@@ -350,9 +359,12 @@ func (s *Store) ListPersonEventsAfter(ctx context.Context, tenantID, personID st
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT e.cursor, e.id, e.thread_id, COALESCE(e.run_id, ''), e.type, e.visibility,
 		        COALESCE(e.channel, ''), COALESCE(e.payload_json, '{}'), e.created_at,
-		        t.tenant_id, t.person_id
-		 FROM task_events e JOIN threads t ON t.id = e.thread_id
-		 WHERE t.tenant_id = ? AND t.person_id = ? AND e.cursor > ?
+		        COALESCE(r.tenant_id, t.tenant_id), COALESCE(r.person_id, t.person_id)
+		 FROM task_events e
+		 LEFT JOIN runs r ON r.id = e.run_id
+		 LEFT JOIN threads t ON t.id = e.thread_id
+		 WHERE COALESCE(r.tenant_id, t.tenant_id) = ? AND COALESCE(r.person_id, t.person_id) = ?
+		   AND e.cursor > ?
 		 ORDER BY e.cursor ASC LIMIT ?`,
 		normalizeTenant(tenantID), personID, cursor, limit)
 	if err != nil {

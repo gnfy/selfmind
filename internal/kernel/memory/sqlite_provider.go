@@ -179,21 +179,27 @@ func (p *SQLiteProvider) worker() {
 
 			case "PurgeWorkHistoryReferences":
 				// A control work-history reset removed Threads and Runs. Sessions
-				// keyed to a Thread (`task:<id>`) and run provenance on facts and
-				// observations would otherwise cite rows that no longer exist.
-				// Preference content is untouched.
+				// keyed to work — `run:<id>` today, `task:<id>` before the rekey —
+				// and run provenance on facts and observations would otherwise
+				// cite rows that no longer exist. Both prefixes must be purged:
+				// dropping only one would leave a reset install still able to
+				// recall the work it was told to forget. Preference content is
+				// untouched.
 				tx, err := db.Begin()
 				if err != nil {
 					res = dbResult{err: err}
 					break
 				}
 				var purge workHistoryPurge
-				err = tx.QueryRow(`SELECT COUNT(*) FROM sessions_fts WHERE session_id LIKE 'task:%'`).Scan(&purge.sessions)
+				err = tx.QueryRow(`SELECT COUNT(*) FROM sessions_fts
+					WHERE session_id LIKE 'run:%' OR session_id LIKE 'task:%'`).Scan(&purge.sessions)
 				if err == nil {
-					_, err = tx.Exec(`DELETE FROM sessions_fts WHERE session_id LIKE 'task:%'`)
+					_, err = tx.Exec(`DELETE FROM sessions_fts
+						WHERE session_id LIKE 'run:%' OR session_id LIKE 'task:%'`)
 				}
 				if err == nil {
-					_, err = tx.Exec(`DELETE FROM session_messages WHERE session_id LIKE 'task:%'`)
+					_, err = tx.Exec(`DELETE FROM session_messages
+						WHERE session_id LIKE 'run:%' OR session_id LIKE 'task:%'`)
 				}
 				for _, statement := range []string{
 					`UPDATE facts SET created_from_run = '' WHERE COALESCE(created_from_run, '') <> ''`,

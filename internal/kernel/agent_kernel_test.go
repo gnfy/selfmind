@@ -645,6 +645,235 @@ func TestActionBudgetExhaustionStillAllowsLifecycleClosure(t *testing.T) {
 	}
 }
 
+// planEscalationBackend exposes one substantive command tool beside the read
+// and plan surface, so a Run can accumulate real non-read-only evidence.
+type planEscalationBackend struct{ calls []string }
+
+func (b *planEscalationBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
+	b.calls = append(b.calls, name)
+	switch name {
+	case "terminal":
+		return "exit status 0: " + fmt.Sprint(args["command"]), nil
+	case "read_file":
+		return "file content", nil
+	case "update_plan":
+		return `{"changed":true}`, nil
+	default:
+		return "", fmt.Errorf("unexpected tool %s", name)
+	}
+}
+
+func (b *planEscalationBackend) GetToolDefinitions() []map[string]interface{} {
+	definition := func(name string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name": name, "description": name,
+				"parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+			},
+		}
+	}
+	return []map[string]interface{}{definition("terminal"), definition("read_file"), definition("update_plan")}
+}
+
+// planEscalationProvider reproduces the deepseek-v4-flash symptom: it performs
+// real, distinct command work and never volunteers update_plan on its own.
+// openWithPlan makes it emit one accepted plan snapshot first.
+type planEscalationProvider struct {
+	commands     int
+	openWithPlan bool
+	requests     []llm.ChatRequest
+}
+
+func (p *planEscalationProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "done", nil
+}
+
+func (p *planEscalationProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "done"}, nil
+}
+
+func (p *planEscalationProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests = append(p.requests, req)
+	step := len(p.requests)
+	ch := make(chan llm.StreamEvent, 1)
+	if p.openWithPlan {
+		if step == 1 {
+			ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+				ID: "plan-open", Function: "update_plan",
+				Args: `{"plan":[{"step":"run the checks","status":"completed"}]}`,
+			}}}
+			close(ch)
+			return ch, nil
+		}
+		step--
+	}
+	if step <= p.commands {
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: fmt.Sprintf("cmd-%d", step), Function: "terminal",
+			Args: fmt.Sprintf(`{"command":"check-%d"}`, step),
+		}}}
+	} else {
+		ch <- llm.StreamEvent{Content: "All checks finished."}
+	}
+	close(ch)
+	return ch, nil
+}
+
+func planEscalationStrategy(plan PlanPolicy) TaskStrategy {
+	return TaskStrategy{
+		Class: TaskClassCICDTask, ToolMode: ToolModeFull, PlanPolicy: plan,
+		MaxActionTools: 10, ActionToolBudgetStep: 4, ActionToolBudgetLimit: 34, MaxBudgetExtensions: 6,
+	}
+}
+
+func runPlanEscalationTurn(t *testing.T, provider *planEscalationProvider, strategy TaskStrategy) []AgentEvent {
+	t.Helper()
+	agent := NewAgent(memory.NewMemoryManager(&mockStorage{}), &planEscalationBackend{}, provider, "helpful", 14, 1, nil)
+	events := make(chan string, 256)
+	ctx := WithEventChannel(context.Background(), events)
+	ctx = WithTaskStrategy(ctx, strategy)
+	if _, _, err := agent.RunConversation(ctx, "user123", "cli", "run the release checks"); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var decoded []AgentEvent
+	for raw := range events {
+		if event, ok := DecodeAgentEvent(raw); ok {
+			decoded = append(decoded, event)
+		}
+	}
+	return decoded
+}
+
+func planEscalationEvent(events []AgentEvent) (AgentEvent, int) {
+	found := AgentEvent{}
+	count := 0
+	for _, event := range events {
+		if event.Type == "strategy.plan_guidance_escalated" {
+			found = event
+			count++
+		}
+	}
+	return found, count
+}
+
+func requestsContainUserText(requests []llm.ChatRequest, needle string) bool {
+	for _, req := range requests {
+		for _, msg := range req.Messages {
+			if msg.Role == "user" && strings.Contains(msg.Content, needle) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+const (
+	requiredPlanWording = "Use update_plan early for this multi-step work"
+	optionalPlanWording = "call update_plan BEFORE the first action tool"
+)
+
+func TestPlanGuidanceBecomesRequiredAfterSubstantiveWorkWithoutAPlan(t *testing.T) {
+	// The observed defect: a model that never volunteers update_plan keeps
+	// reading the optional wording composed before any work happened, no matter
+	// how many real action tools the Run performs.
+	provider := &planEscalationProvider{commands: 5}
+	events := runPlanEscalationTurn(t, provider, planEscalationStrategy(PlanPolicyOptional))
+
+	if !requestsContainUserText(provider.requests, requiredPlanWording) {
+		t.Fatalf("a Run with %d substantive tool actions and no plan never received the required wording", provider.commands)
+	}
+	event, count := planEscalationEvent(events)
+	if count != 1 {
+		t.Fatalf("plan guidance escalation events = %d, want exactly 1", count)
+	}
+	if got := fmt.Sprint(event.Payload["plan_policy"]); got != string(PlanPolicyRequired) {
+		t.Fatalf("escalated plan policy = %q, want required: %+v", got, event.Payload)
+	}
+	if got := fmt.Sprint(event.Payload["previous_plan_policy"]); got != string(PlanPolicyOptional) {
+		t.Fatalf("previous plan policy = %q, want optional: %+v", got, event.Payload)
+	}
+	// Guidance only: the escalation must not fabricate a plan or stop the model
+	// from producing its answer.
+	if requestsContainUserText(provider.requests, "SelfMind tool budget for this turn has been reached") {
+		t.Fatal("plan escalation should not have consumed the tool budget")
+	}
+}
+
+func TestPlanGuidanceStaysOptionalBelowTheEvidenceThreshold(t *testing.T) {
+	provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold - 1}
+	events := runPlanEscalationTurn(t, provider, planEscalationStrategy(PlanPolicyOptional))
+
+	if requestsContainUserText(provider.requests, requiredPlanWording) {
+		t.Fatalf("guidance escalated after only %d substantive tool actions", provider.commands)
+	}
+	if _, count := planEscalationEvent(events); count != 0 {
+		t.Fatalf("plan guidance escalation events = %d, want 0", count)
+	}
+	if len(provider.requests) == 0 || !strings.Contains(provider.requests[0].Messages[0].Content, optionalPlanWording) {
+		t.Fatal("a short Run must keep the optional plan wording it was composed with")
+	}
+}
+
+func TestPlanGuidanceNotEscalatedForDirectAnswerTurns(t *testing.T) {
+	provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold + 2}
+	events := runPlanEscalationTurn(t, provider, planEscalationStrategy(PlanPolicyDisabled))
+
+	if requestsContainUserText(provider.requests, requiredPlanWording) {
+		t.Fatal("a plan-disabled turn was escalated to required planning")
+	}
+	if _, count := planEscalationEvent(events); count != 0 {
+		t.Fatalf("plan guidance escalation events = %d, want 0", count)
+	}
+	for i, req := range provider.requests {
+		if requestHasTool(req, "update_plan") {
+			t.Fatalf("request %d exposed update_plan on a plan-disabled turn: %+v", i, req.Tools)
+		}
+	}
+}
+
+func TestPlanGuidanceNotEscalatedWhenTheRunAlreadyPlanned(t *testing.T) {
+	provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold + 2, openWithPlan: true}
+	events := runPlanEscalationTurn(t, provider, planEscalationStrategy(PlanPolicyOptional))
+
+	if requestsContainUserText(provider.requests, requiredPlanWording) {
+		t.Fatal("a Run that already has a durable plan was escalated anyway")
+	}
+	if _, count := planEscalationEvent(events); count != 0 {
+		t.Fatalf("plan guidance escalation events = %d, want 0", count)
+	}
+}
+
+func TestPlanGuidanceNotEscalatedWhileTheTurnIsWindingDown(t *testing.T) {
+	// A turn that has exhausted its action budget is being told to stop calling
+	// tools and write the final answer. Asking it for a plan in the same window
+	// would be a contradiction, so escalation stops there even though the
+	// evidence threshold was reached.
+	strategy := planEscalationStrategy(PlanPolicyOptional)
+	strategy.MaxActionTools = planGuidanceEscalationThreshold
+	strategy.ActionToolBudgetLimit = planGuidanceEscalationThreshold
+	strategy.MaxBudgetExtensions = 1
+	provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold + 3}
+	events := runPlanEscalationTurn(t, provider, strategy)
+
+	exhausted := false
+	for _, event := range events {
+		if event.Type == "turn.completed" && event.Payload["completion_reason"] == "tool_budget_exhausted" {
+			exhausted = true
+		}
+	}
+	if !exhausted {
+		t.Fatalf("precondition: the turn did not exhaust its action budget: %+v", events)
+	}
+	if requestsContainUserText(provider.requests, requiredPlanWording) {
+		t.Fatal("plan guidance was escalated while the turn was being finalized")
+	}
+	if _, count := planEscalationEvent(events); count != 0 {
+		t.Fatalf("plan guidance escalation events = %d, want 0", count)
+	}
+}
+
 func TestSimpleRequestKeepsOptionalPlanButHidesWebTools(t *testing.T) {
 	mem := memory.NewMemoryManager(&mockStorage{})
 	backend := &planningBackend{}

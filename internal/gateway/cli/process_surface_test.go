@@ -244,7 +244,7 @@ func TestTUIProcessBudgetKeepsComposerAndStatusVisible(t *testing.T) {
 	if height := lipgloss.Height(view); height > model.height {
 		t.Fatalf("active region height = %d, terminal height = %d:\n%s", height, model.height, view)
 	}
-	if !strings.Contains(view, "mode:") || !strings.Contains(view, "Updated plan") {
+	if !strings.Contains(view, "mode:") || !strings.Contains(view, "Plan ·") {
 		t.Fatalf("composer/status or plan was displaced:\n%s", view)
 	}
 }

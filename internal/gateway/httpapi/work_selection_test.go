@@ -78,7 +78,7 @@ func TestCommitWorkSelectionQueuesSameDomainExactContinuation(t *testing.T) {
 	if commit == nil || commit.QueueID == "" || commit.Rejected {
 		t.Fatalf("commit = %+v", commit)
 	}
-	if interactionRun.TaskID != interactionTask.ID || interactionRun.ParentRunID != "" {
+	if interactionRun.TaskID != interactionTask.ID || interactionRun.ResumesRunID != "" {
 		t.Fatalf("the completed interpretation run was mutated in place: %+v", interactionRun)
 	}
 	queued, _ := store.GetQueued(ctx, identity.TenantID, commit.QueueID)
@@ -245,8 +245,8 @@ func TestNaturalProgressQuestionUsesReferenceInteractionWithoutClaimingTheRun(t 
 	if interaction == nil || interaction.Kind != control.ThreadKindInteraction || interaction.Visibility != control.ThreadVisibilityUnlisted {
 		t.Fatalf("observe interaction = %+v", interaction)
 	}
-	if interaction.ID == targetTask.ID || resp.Run.ParentRunID != "" {
-		t.Fatalf("natural progress question claimed the observed run: task=%s parent=%s", interaction.ID, resp.Run.ParentRunID)
+	if interaction.ID == targetTask.ID || resp.Run.ResumesRunID != "" {
+		t.Fatalf("natural progress question claimed the observed run: task=%s parent=%s", interaction.ID, resp.Run.ResumesRunID)
 	}
 	queued, _ := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	if len(queued) != 0 {
@@ -346,7 +346,7 @@ func TestIdleMainSelectionContinuesSameDomainRunInTurn(t *testing.T) {
 	if status != 200 || resp.Run == nil || resp.Task == nil {
 		t.Fatalf("interaction response: status=%d resp=%+v", status, resp)
 	}
-	if resp.Task.ID != targetTask.ID || resp.Run.ParentRunID != targetRun.ID || (resp.Turn != nil && resp.Turn.QueueID != "") {
+	if resp.Task.ID != targetTask.ID || resp.Run.ResumesRunID != targetRun.ID || (resp.Turn != nil && resp.Turn.QueueID != "") {
 		t.Fatalf("same-domain selection must continue the parent inside the interpretation run: task:%+v run:%+v turn:%+v", resp.Task, resp.Run, resp.Turn)
 	}
 	queued, _ := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
@@ -364,7 +364,7 @@ func TestIdleMainSelectionContinuesSameDomainRunInTurn(t *testing.T) {
 		case "work.selection_committed":
 			committed = strings.Contains(string(event.Payload), `"commit_mode":"direct"`)
 		case "plan.updated":
-			inherited = inherited || (strings.Contains(string(event.Payload), `"source":"parent_run"`) && strings.Contains(string(event.Payload), "promote the release"))
+			inherited = inherited || (strings.Contains(string(event.Payload), `"source":"resumed_run"`) && strings.Contains(string(event.Payload), "promote the release"))
 		}
 	}
 	if !committed || !inherited {
@@ -439,7 +439,7 @@ func TestLiveCorrectionReplacesImplicitSelectionBeforeEffects(t *testing.T) {
 		// Both targets share the interaction's execution domain, so the first
 		// selection is claimed in place and the pre-effect correction moves the
 		// same run onto the corrected parent; nothing is queued.
-		if got.resp.Task.ID != correctTask.ID || got.resp.Run.ParentRunID != correct.ID || (got.resp.Turn != nil && got.resp.Turn.QueueID != "") {
+		if got.resp.Task.ID != correctTask.ID || got.resp.Run.ResumesRunID != correct.ID || (got.resp.Turn != nil && got.resp.Turn.QueueID != "") {
 			provider.mu.Lock()
 			calls := provider.calls
 			provider.mu.Unlock()

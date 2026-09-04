@@ -66,7 +66,7 @@ func TestContinuityAuditFindsHistoricalEdgeAndOwnerDamage(t *testing.T) {
 	orphan := newTask("orphan parent edge")
 	orphanChild := parkedRun(orphan, "child of nothing", "done")
 	if _, err := store.db.ExecContext(ctx,
-		`UPDATE runs SET parent_run_id = 'run_missing' WHERE id = ?`,
+		`UPDATE runs SET resumes_run_id = 'run_missing' WHERE id = ?`,
 		orphanChild.ID); err != nil {
 		t.Fatal(err)
 	}

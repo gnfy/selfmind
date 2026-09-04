@@ -686,6 +686,27 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 		return
 	}
 
+	// A watcher that concluded WITHOUT observing its target leaves the Run it
+	// handed off with nothing able to wake it: the watcher is terminal, so no
+	// monitoring signal remains, and `waiting_external` is not a resumable
+	// status, so the Run is in no Attention set either. Park it as blocked as
+	// soon as the verdict is durable rather than waiting for a finalization
+	// FAILURE: the finalization run queues behind the person's active work and
+	// can sit there for hours, and during that window the person's own work
+	// must still be visible as theirs to resolve. A successful verdict needs no
+	// park — its finalization reports the observed result — and a user
+	// cancellation is already re-parked as waiting_user by
+	// CancelExternalWatchForPerson.
+	switch status {
+	case control.ExternalWatchSucceeded, control.ExternalWatchCancelled:
+	default:
+		if parked, err := d.Control.MarkExternalWatchRunBlocked(ctx, watch.TenantID, watch.RunID, summary); err != nil {
+			log.Warn("external watch run park failed", "watch_id", watch.ID, "run_id", watch.RunID, "error", err)
+		} else if parked {
+			log.Info("external watch run parked as blocked", "watch_id", watch.ID, "run_id", watch.RunID, "status", status)
+		}
+	}
+
 	origin := d.externalWatchOriginIdentity(ctx, watch)
 	if err := d.enqueueExternalWatchFinalization(ctx, watch, origin, summary); err != nil {
 		log.Warn("external watch finalization enqueue failed", "watch_id", watch.ID, "error", err)
@@ -802,7 +823,7 @@ func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch con
 		PlatformUserID: origin.PlatformUserID,
 		Content:        content,
 		TaskID:         watch.TaskID,
-		ReplyToRunID:   d.externalWatchFinalizationParent(ctx, watch),
+		ReplyToRunID:   d.externalWatchFinalizationTarget(ctx, watch),
 		Class:          control.QueueClassFinalization,
 		// Stable per-verdict key: a crash-recovery replay of the SAME verdict
 		// is one row; a revised verdict earns one fresh finalization run.
@@ -815,14 +836,14 @@ func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch con
 	return nil
 }
 
-// externalWatchFinalizationParent names the watcher Run the finalization
+// externalWatchFinalizationTarget names the watcher Run the finalization
 // continues as its exact child: the Run that registered the watch, while it is
 // still parked as waiting_external for this person and thread. The drain
-// claims it atomically (validateParentClaimTx admits a waiting_external parent
+// claims it atomically (validateResumeClaimTx admits a waiting_external parent
 // once its watchers concluded). A Run that already moved on leaves the row
 // bound to the Thread only, so a stale exact binding can never make the
 // finalization unroutable.
-func (d *Server) externalWatchFinalizationParent(ctx context.Context, watch control.ExternalWatch) string {
+func (d *Server) externalWatchFinalizationTarget(ctx context.Context, watch control.ExternalWatch) string {
 	if strings.TrimSpace(watch.RunID) == "" {
 		return ""
 	}

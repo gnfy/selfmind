@@ -116,19 +116,25 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// restore and continue the original request. Reaching this branch means
 		// the invocation did not satisfy that typed contract.
 		return true, "Usage: /choose <choice_id> <number>", nil
-	case lower == "/task status" || lower == "/status":
+	case lower == "/status":
 		reply, err := d.statusReply(ctx, identity)
+		return true, reply, err
+	case lower == "/resume":
+		// Bare /resume IS the attention list. It used to relay to /tasks, which
+		// made "what can I continue" a Task listing and put the ordinal
+		// snapshot in a view about labels rather than about runs.
+		reply, err := d.attentionListReply(ctx, identity, req.Channel)
 		return true, reply, err
 	case strings.HasPrefix(lower, "/resume "):
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
-			return true, "Usage: /resume <n|task_id|run_id>", nil
+			return true, "Usage: /resume <n|run_id>  (bare /resume lists what needs attention)", nil
 		}
 		if ordinal, convErr := strconv.Atoi(parts[1]); convErr == nil {
 			_, runID, count, found := d.taskLists.resolveRun(identity, req.Channel, ordinal, time.Now())
 			if found {
 				if runID == "" {
-					return true, fmt.Sprintf("No resumable run number %d in the last list; it showed %d (run /tasks to refresh).", ordinal, count), nil
+					return true, fmt.Sprintf("No resumable run number %d in the last list; it showed %d (run /resume to refresh).", ordinal, count), nil
 				}
 				return d.selectExactResumeRun(ctx, identity, runID)
 			}
@@ -136,9 +142,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if strings.HasPrefix(strings.ToLower(parts[1]), "run_") {
 			return d.selectExactResumeRun(ctx, identity, parts[1])
 		}
-		// Same reference grammar as /task: list ordinal (/tasks card order),
-		// full id, or the short card-displayed prefix — the id the /tasks card
-		// shows MUST round-trip through /resume.
+		// A bare number is a list ordinal against the last /resume listing;
+		// anything else is a full run id, or a thread id kept working for
+		// references copied out of older transcripts.
 		task, userErr, err := d.resolveTaskReference(ctx, identity, parts[1], req.Channel)
 		if err != nil {
 			return true, "", err
@@ -152,23 +158,14 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		switch len(runs) {
 		case 0:
-			return true, "That thread has no exact resumable run. Use /task " + shortTaskID(task.ID) + " runs to inspect its history.", nil
+			return true, "That thread has no exact resumable run. Use /search to find the work, then /resume <run_id>.", nil
 		case 1:
 			return d.selectExactResumeRun(ctx, identity, runs[0].ID)
 		default:
-			return true, fmt.Sprintf("That thread has %d resumable runs. Use /task %s runs, then /resume <run_id> to choose one exactly.", len(runs), shortTaskID(task.ID)), nil
+			return true, fmt.Sprintf("That thread has %d resumable runs. Run /resume to list them, then /resume <run_id> to choose one exactly.", len(runs)), nil
 		}
-	case lower == "/task" || strings.HasPrefix(lower, "/task "):
-		// /task <id> detail + subcommands (runs|rename|archive). "/task status"
-		// is an alias of /status and is claimed by the case above.
-		reply, err := d.taskCommandReply(ctx, identity, strings.Fields(trimmed)[1:], req.Channel)
-		return true, reply, err
-	case lower == "/tasks" || strings.HasPrefix(lower, "/tasks ") || lower == "tasks" || strings.Contains(lower, "任务列表"):
-		variant := ""
-		if strings.HasPrefix(lower, "/tasks ") {
-			variant = strings.TrimSpace(strings.TrimPrefix(lower, "/tasks"))
-		}
-		reply, err := d.tasksOverviewReply(ctx, identity, variant, req.Channel)
+	case lower == "/search" || strings.HasPrefix(lower, "/search "):
+		reply, err := d.searchCommandReply(ctx, identity, strings.TrimSpace(trimmed[len("/search"):]))
 		return true, reply, err
 	case lower == "/queue" || strings.HasPrefix(lower, "/queue "):
 		arg := strings.TrimSpace(trimmed[len("/queue"):])
@@ -206,9 +203,6 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		return true, reply, err
 	case lower == "/diag context":
 		reply, err := d.contextDiagReply(ctx, identity)
-		return true, reply, err
-	case lower == "/diag tasks":
-		reply, err := d.tasksDiagReply(ctx, identity)
 		return true, reply, err
 	case lower == "/diag models":
 		reply, err := d.modelsDiagReply(ctx, identity)
@@ -248,13 +242,38 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		reply, err := d.dailyQualityReport(ctx, identity, window)
 		return true, reply, err
-	case strings.HasPrefix(lower, "/workspace ") || strings.HasPrefix(lower, "/ws "):
-		// Unified workspace verb: WITH an argument it selects; bare it lists
-		// (handled by the case below). "/ws" is the short alias and
-		// "/workspaces" the plural spelling — all three behave identically.
+	case strings.HasPrefix(lower, "/ws "):
+		// One workspace verb, the short one. It used to have two more spellings
+		// (/workspace and /workspaces) that behaved identically; three names for
+		// one thing is something to read, remember, and keep in sync.
 		parts := strings.Fields(req.Content)
 		if len(parts) < 2 {
-			return true, "Usage: /workspace <n|workspace_id>", nil
+			return true, "Usage: /ws <n|id> | /ws default <n|id> | /ws trust|untrust|decline", nil
+		}
+		switch strings.ToLower(parts[1]) {
+		case "trust", "untrust", "decline":
+			reply, err := d.workspaceTrustReply(ctx, identity, req, strings.ToLower(parts[1]))
+			return true, reply, err
+		case "default":
+			// The DURABLE default, used by turns that carry no directory of
+			// their own (IM, cron). Selecting a workspace for the session no
+			// longer changes it: two terminals in different projects were
+			// overwriting one person-level value, so each one's list showed the
+			// other's choice as current while its own work ran elsewhere.
+			if len(parts) < 3 {
+				return true, "Usage: /ws default <n|workspace_id>", nil
+			}
+			ws, userErr, err := d.resolveWorkspaceReference(ctx, identity, parts[2])
+			if err != nil {
+				return true, "", err
+			}
+			if userErr != "" {
+				return true, userErr, nil
+			}
+			if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
+				return true, "", err
+			}
+			return true, fmt.Sprintf("Default workspace for IM and scheduled work: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
 		}
 		ws, userErr, err := d.resolveWorkspaceReference(ctx, identity, parts[1])
 		if err != nil {
@@ -263,26 +282,44 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if userErr != "" {
 			return true, userErr, nil
 		}
-		if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
-			return true, "", err
-		}
 		if !isLocalCLIRequest(req) {
+			// An IM turn has no session of its own, so selecting there IS the
+			// durable default.
+			if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
+				return true, "", err
+			}
 			return true, formatWorkspaceSwitchForIM(ws), nil
 		}
-		return true, fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
-	case lower == "/workspaces" || lower == "/workspace" || lower == "/ws":
+		reply := fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath)
+		if note := sessionWorkspaceTrustNote(ws); note != "" {
+			reply += "\n" + note
+		}
+		return true, reply, nil
+	case lower == "/ws":
+		// Ensure the session's own directory is a workspace before listing:
+		// control commands run before the run pipeline would create it, so a
+		// fresh directory used to be missing from its own listing.
+		session := d.ensureSessionWorkspace(ctx, identity, req)
 		workspaces, err := d.listWorkspacesForDisplay(ctx, identity)
 		if err != nil {
 			return true, "", err
 		}
-		currentID := ""
+		defaultID := ""
 		if current, _ := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); current != nil {
-			currentID = current.ID
+			defaultID = current.ID
 		}
 		if !isLocalCLIRequest(req) {
-			return true, formatWorkspacesForIM(workspaces, currentID), nil
+			return true, formatWorkspacesForIM(workspaces, defaultID), nil
 		}
-		return true, formatWorkspaces(workspaces, currentID), nil
+		sessionID := ""
+		if session != nil {
+			sessionID = session.ID
+		}
+		reply := formatWorkspaces(workspaces, sessionID, defaultID)
+		if note := sessionWorkspaceTrustNote(session); note != "" {
+			reply += "\n\n" + note
+		}
+		return true, reply, nil
 	case lower == "/approvals" || strings.HasPrefix(lower, "/approvals "):
 		rest := strings.TrimSpace(trimmed[len("/approvals"):])
 		if rest != "" {
@@ -614,7 +651,7 @@ func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.
 		return d.reportDismissedAttentionRun(ctx, identity, run.TaskID, run.ID, "user dismissed the pinned resume run")
 	}
 	if strings.TrimSpace(threadPin) != "" {
-		return "No active run to stop. A thread is selected for /resume but no exact run is pinned, so nothing was dismissed; use /tasks, then /task <number> complete to dismiss one attention item."
+		return "No active run to stop. A thread is selected for /resume but no exact run is pinned, so nothing was dismissed; run /resume to see what needs attention."
 	}
 	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 2)
 	if err != nil {
@@ -637,7 +674,7 @@ func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.
 		}
 		return d.reportDismissedAttentionRun(ctx, identity, item.Thread.ID, item.RunID, "user dismissed inactive attention")
 	default:
-		return "No active run. Several items need attention; use /tasks, then /task <number> complete."
+		return "No active run. Several items need attention; run /resume to see them."
 	}
 }
 

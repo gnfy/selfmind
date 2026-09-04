@@ -97,6 +97,21 @@ func TestToolGuardrailsBlockDynamicListPollingWithSleep(t *testing.T) {
 	}
 }
 
+func TestToolGuardrailsBlockDetachedNestedShellPolling(t *testing.T) {
+	called := false
+	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+		called = true
+		return "started", nil
+	})
+	_, err := exec(map[string]interface{}{
+		"_tool_name": "terminal",
+		"command":    `nohup bash -c 'for i in $(seq 1 90); do aws codebuild batch-get-builds --ids build-1; sleep 15; done' >/tmp/build.log 2>&1 &`,
+	})
+	if err == nil || !strings.Contains(err.Error(), "watch_external") || called {
+		t.Fatalf("detached nested polling must be blocked before execution: err=%v called=%v", err, called)
+	}
+}
+
 func TestToolGuardrailsBlockUnboundedCStyleRemotePolling(t *testing.T) {
 	called := false
 	exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {

@@ -37,9 +37,6 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 	if len(a.args) >= 3 && a.args[2] == "task-audit" {
 		return true, a.runMaintenanceTaskAudit(a.args[3:])
 	}
-	if len(a.args) >= 3 && a.args[2] == "migrate-task-references" {
-		return true, a.runMaintenanceMigrateTaskReferences(a.args[3:])
-	}
 	if len(a.args) >= 3 && a.args[2] == "restore-control" {
 		return true, a.runMaintenanceRestoreControl(a.args[3:])
 	}

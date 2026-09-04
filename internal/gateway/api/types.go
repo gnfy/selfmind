@@ -478,6 +478,26 @@ type DigestResponse struct {
 	// state — NOT a "while you were away" item — so it never affects Empty();
 	// clients read it to show the current mode in the status bar from startup.
 	ApprovalMode string `json:"approval_mode,omitempty"`
+	// SessionWorkspace is the workspace the requesting session runs in,
+	// resolved from its own directory. Clients show it at startup and use its
+	// trust state to ask about trust ONCE. Like ApprovalMode it is
+	// point-in-time person state and never affects Empty().
+	SessionWorkspace *DigestWorkspace `json:"session_workspace,omitempty"`
+}
+
+// DigestWorkspace is the session's workspace as the client needs it: what to
+// display, and whether trust is still an open question.
+type DigestWorkspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Path string `json:"path"`
+	// Trusted workspaces may use workspace Skills and remembered approval
+	// observations; untrusted ones silently cannot, which is why the client
+	// says so instead of leaving a bare "[untrusted]" tag.
+	Trusted bool `json:"trusted"`
+	// TrustAsked is true once the person has answered — trusted it, or
+	// declined. A client must not ask again after that.
+	TrustAsked bool `json:"trust_asked"`
 }
 
 // Empty reports whether there is literally nothing to tell the user; clients
@@ -563,6 +583,14 @@ type DigestActiveRun struct {
 	// steps and truncates the tail with "… N more steps". Empty when the run
 	// published no plan.
 	PlanSteps []string `json:"plan_steps,omitempty"`
+	// PlanJSON is the run's latest complete plan snapshot, verbatim as the
+	// `plan.updated` payload. PlanSteps is pre-rendered text for the one-shot
+	// digest; this is the structured form, so a client re-attaching mid-run can
+	// restore its PINNED plan view through the same renderer live events use.
+	// Without it the plan stayed blank until the run happened to publish another
+	// snapshot, which for a long tool step could be never — the person was told
+	// what was running but not how far along it was.
+	PlanJSON string `json:"plan_json,omitempty"`
 	// LatestActivity is ONE line describing the most recent progress event
 	// (tool call or thinking note), the "what is it doing right now" signal.
 	LatestActivity string `json:"latest_activity,omitempty"`

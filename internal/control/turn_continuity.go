@@ -237,6 +237,12 @@ func (s *Store) ClaimPendingTurnChoice(ctx context.Context, tenantID, personID, 
 	return choice, selected, nil
 }
 
+// rowScanner is the shared read shape for a single row, satisfied by both
+// *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...interface{}) error
+}
+
 func scanPendingTurnChoice(row rowScanner) (*PendingTurnChoice, error) {
 	var choice PendingTurnChoice
 	var optionsJSON string

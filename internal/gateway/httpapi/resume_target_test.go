@@ -156,7 +156,7 @@ func TestReplyMetadataBindsExactRun(t *testing.T) {
 	}
 	var child *control.Run
 	for i := range runs {
-		if runs[i].ParentRunID == target.ID {
+		if runs[i].ResumesRunID == target.ID {
 			child = &runs[i]
 		}
 	}
@@ -249,7 +249,7 @@ func TestExplicitTaskIDClaimsUniqueParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, run := range runs {
-		if run.ParentRunID == parent.ID {
+		if run.ResumesRunID == parent.ID {
 			return
 		}
 	}
@@ -325,7 +325,7 @@ func TestResumeRunReferenceClaimsExactParent(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, run := range runs {
-		if run.ParentRunID == target.ID {
+		if run.ResumesRunID == target.ID {
 			return
 		}
 	}
@@ -426,7 +426,7 @@ func TestApprovalReturnBindsOriginRun(t *testing.T) {
 	}
 	var child *control.Run
 	for i := range runs {
-		if runs[i].ParentRunID == origin.ID {
+		if runs[i].ResumesRunID == origin.ID {
 			child = &runs[i]
 		}
 	}

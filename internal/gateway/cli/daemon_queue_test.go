@@ -80,7 +80,12 @@ func TestDaemonFinishWithoutObservedStartDoesNotChangeStatus(t *testing.T) {
 	}
 }
 
-func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
+// One watcher lifecycle is ONE durable notification. The observation reaching a
+// terminal state and its finalization run starting are live state the status bar
+// already carries; only the finalization result, which is the outcome the person
+// acts on, becomes a transcript cell. Three cells for one watch id was the live
+// defect.
+func TestWatcherLifecycleLeavesOneTranscriptNotice(t *testing.T) {
 	model := NewController("", "", nil, "").model
 
 	updated, _ := model.Update(MsgWatcherCompleted{
@@ -90,8 +95,11 @@ func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
 		Event:      uiEventRef{Source: eventSourceDaemon, RunID: "run_origin", EventID: "evt_watch_done"},
 	})
 	m := updated.(*uiModel)
-	if got := m.messages[len(m.messages)-1].Content; got != "Watcher watch_123 | status: succeeded | task: waiting_finalization" {
-		t.Fatalf("completion notice = %q", got)
+	if len(m.messages) != 0 {
+		t.Fatalf("terminal observation wrote %d transcript cells: %+v", len(m.messages), m.messages)
+	}
+	if m.statusMsg != "Watcher watch_123 | status: succeeded | task: waiting_finalization" {
+		t.Fatalf("transient completion notice = %q", m.statusMsg)
 	}
 
 	updated, cmd := m.Update(MsgDaemonRunStarted{
@@ -103,11 +111,11 @@ func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
 		Event:      uiEventRef{Source: eventSourceDaemon, RunID: "run_finalize", EventID: "evt_finalize_start"},
 	})
 	m = updated.(*uiModel)
-	if got := m.messages[len(m.messages)-1].Content; got != "Watcher watch_123 | status: finalizing | task: running" {
-		t.Fatalf("finalization notice = %q", got)
+	if len(m.messages) != 0 {
+		t.Fatalf("finalization start wrote %d transcript cells: %+v", len(m.messages), m.messages)
 	}
-	if strings.Contains(m.messages[len(m.messages)-1].Content, "internal finalization prompt") {
-		t.Fatalf("internal finalization prompt leaked into notice")
+	if strings.Contains(m.statusMsg, "internal finalization prompt") {
+		t.Fatalf("internal finalization prompt leaked into the status notice: %q", m.statusMsg)
 	}
 	if line := m.statusLine(); !strings.Contains(line, "background watcher finalizing") || strings.Contains(line, "working ") {
 		t.Fatalf("background finalization status = %q", line)
@@ -116,6 +124,70 @@ func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
 	m = updated.(*uiModel)
 	if cmd != nil {
 		t.Fatal("background watcher finalization rescheduled the foreground working clock")
+	}
+
+	updated, _ = m.Update(MsgDaemonRunFinished{
+		RunID:   "run_finalize",
+		Status:  "done",
+		Summary: "Cloud Build 4965 succeeded; release record updated.",
+		Event:   uiEventRef{Source: eventSourceDaemon, RunID: "run_finalize", EventID: "evt_finalize_done"},
+	})
+	m = updated.(*uiModel)
+	if len(m.messages) != 1 {
+		t.Fatalf("watcher lifecycle left %d transcript cells, want 1: %+v", len(m.messages), m.messages)
+	}
+	if m.messages[0].Role != "notice" ||
+		!strings.HasPrefix(m.messages[0].Content, "Watcher watch_123 | status: finalized | task: done") {
+		t.Fatalf("terminal notice = role %q content %q", m.messages[0].Role, m.messages[0].Content)
+	}
+	if !strings.Contains(m.messages[0].Content, "release record updated") {
+		t.Fatalf("terminal notice dropped the outcome summary: %q", m.messages[0].Content)
+	}
+}
+
+// Collapsing the lifecycle to one line must not collapse its outcomes: a check
+// that could never observe the external state has to stay distinguishable from a
+// completed operation, both on the status bar and in the one transcript cell.
+func TestBlockedWatcherOutcomeStaysDistinguishable(t *testing.T) {
+	model := NewController("", "", nil, "").model
+
+	updated, _ := model.Update(MsgWatcherCompleted{
+		WatchID:    "watch_123",
+		Status:     "blocked_environment",
+		TaskStatus: "waiting_finalization",
+		Event:      uiEventRef{Source: eventSourceDaemon, RunID: "run_origin", EventID: "evt_watch_blocked"},
+	})
+	m := updated.(*uiModel)
+	if m.statusMsg != "Watcher watch_123 | status: blocked_environment | task: waiting_finalization" {
+		t.Fatalf("blocked observation notice = %q", m.statusMsg)
+	}
+	if m.statusNoticeKind != noticeWarning {
+		t.Fatalf("blocked observation notice kind = %v, want warning", m.statusNoticeKind)
+	}
+
+	updated, _ = m.Update(MsgDaemonRunStarted{
+		RunID:      "run_finalize",
+		WatchID:    "watch_123",
+		TaskStatus: "running",
+		Started:    time.Now(),
+		Event:      uiEventRef{Source: eventSourceDaemon, RunID: "run_finalize", EventID: "evt_finalize_start"},
+	})
+	m = updated.(*uiModel)
+	updated, _ = m.Update(MsgDaemonRunFinished{
+		RunID:   "run_finalize",
+		Status:  "waiting_user",
+		Summary: "The check environment was blocked; the external state was not observed.",
+		Event:   uiEventRef{Source: eventSourceDaemon, RunID: "run_finalize", EventID: "evt_finalize_done"},
+	})
+	m = updated.(*uiModel)
+	if len(m.messages) != 1 {
+		t.Fatalf("blocked watcher left %d transcript cells, want 1: %+v", len(m.messages), m.messages)
+	}
+	if !strings.HasPrefix(m.messages[0].Content, "Watcher watch_123 | status: finalized | task: waiting_user") {
+		t.Fatalf("blocked terminal notice = %q", m.messages[0].Content)
+	}
+	if !strings.Contains(m.messages[0].Content, "was not observed") {
+		t.Fatalf("blocked terminal notice dropped its evidence: %q", m.messages[0].Content)
 	}
 }
 

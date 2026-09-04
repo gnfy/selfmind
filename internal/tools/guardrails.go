@@ -130,6 +130,13 @@ func activeTurnPollingReason(toolName string, args map[string]interface{}) strin
 }
 
 func containsPollingLoop(command string) bool {
+	return containsPollingLoopDepth(command, 0)
+}
+
+func containsPollingLoopDepth(command string, depth int) bool {
+	if depth > 4 {
+		return false
+	}
 	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
 	if err != nil || file == nil {
 		// This guard prevents token-burning wait loops, not unsafe execution.
@@ -156,10 +163,53 @@ func containsPollingLoop(command string) bool {
 			}
 			name, ok := staticObservationWord(value.Args[0])
 			activeWait = ok && strings.EqualFold(filepath.Base(name), "watch")
+			if !activeWait {
+				if nested, ok := nestedShellCommand(value); ok {
+					activeWait = containsPollingLoopDepth(nested, depth+1)
+				}
+			}
 		}
 		return !activeWait
 	})
 	return activeWait
+}
+
+// nestedShellCommand extracts a static `sh -c ...` body through common
+// process wrappers. The shell parser sees a quoted `bash -c` body as one word,
+// not as a nested AST; without this second bounded parse, `nohup bash -c
+// 'while ...' &` bypasses the active-turn polling guard while doing exactly
+// the same work as a top-level loop.
+func nestedShellCommand(call *syntax.CallExpr) (string, bool) {
+	if call == nil || len(call.Args) < 3 {
+		return "", false
+	}
+	words := make([]string, len(call.Args))
+	for i, arg := range call.Args {
+		word, ok := staticObservationWord(arg)
+		if !ok {
+			return "", false
+		}
+		words[i] = word
+	}
+	wrappers := map[string]bool{
+		"command": true, "env": true, "nohup": true, "setsid": true,
+		"timeout": true, "nice": true, "ionice": true, "stdbuf": true,
+	}
+	for i := 0; i+2 < len(words); i++ {
+		name := strings.ToLower(filepath.Base(words[i]))
+		if name != "sh" && name != "bash" && name != "dash" && name != "ksh" && name != "zsh" {
+			continue
+		}
+		if i > 0 && !wrappers[strings.ToLower(filepath.Base(words[0]))] {
+			continue
+		}
+		flags := strings.TrimPrefix(words[i+1], "-")
+		if !strings.Contains(flags, "c") || strings.TrimSpace(words[i+2]) == "" {
+			continue
+		}
+		return words[i+2], true
+	}
+	return "", false
 }
 
 // forClauseWaits separates an active wait loop from a bounded fan-out. A

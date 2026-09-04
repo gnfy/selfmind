@@ -11,17 +11,17 @@ import (
 	"selfmind/internal/platform/textutil"
 )
 
-// parentRunResolution is the read-only, pre-run answer to "which prior run
+// resumeTargetResolution is the read-only, pre-run answer to "which prior run
 // does this turn continue?". It is resolved BEFORE the child run exists and
 // threaded to every context channel (selector, resume block, loop checkpoint)
 // so all three agree on one parent — or on the absence of one. Zero candidates
 // means a root turn; more than one means ambiguity that stays visible instead
 // of being guessed away.
-type parentRunResolution struct {
+type resumeTargetResolution struct {
 	candidates []control.Run
 }
 
-func (r parentRunResolution) exact() *control.Run {
+func (r resumeTargetResolution) exact() *control.Run {
 	if len(r.candidates) != 1 {
 		return nil
 	}
@@ -29,25 +29,25 @@ func (r parentRunResolution) exact() *control.Run {
 	return &run
 }
 
-func (r parentRunResolution) ambiguous() bool {
+func (r resumeTargetResolution) ambiguous() bool {
 	return len(r.candidates) > 1
 }
 
-// resolveParentRun lists the task's unclaimed resumable runs. Read-only; the
+// resolveResumeTarget lists the task's unclaimed resumable runs. Read-only; the
 // claim itself happens atomically inside child-run creation
-// (StartRunOptions.ParentRunID).
-func (c *RunCoordinator) resolveParentRun(ctx context.Context, identity *control.IdentityContext, task *control.Task) (parentRunResolution, error) {
+// (StartRunOptions.ResumesRunID).
+func (c *RunCoordinator) resolveResumeTarget(ctx context.Context, identity *control.IdentityContext, task *control.Task) (resumeTargetResolution, error) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil {
-		return parentRunResolution{}, fmt.Errorf("parent run resolver is unavailable")
+		return resumeTargetResolution{}, fmt.Errorf("parent run resolver is unavailable")
 	}
 	runs, err := c.srv.Control.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 5)
 	if err != nil {
-		return parentRunResolution{}, fmt.Errorf("list unresolved parent runs: %w", err)
+		return resumeTargetResolution{}, fmt.Errorf("list unresolved parent runs: %w", err)
 	}
-	return parentRunResolution{candidates: runs}, nil
+	return resumeTargetResolution{candidates: runs}, nil
 }
 
-// resolveExplicitParent narrows resolution to one platform-named run: reply
+// resolveExplicitResumeTarget narrows resolution to one platform-named run: reply
 // and approval bindings are exact, so the task's other unresolved runs are
 // irrelevant. A named run that is terminal or already claimed fails closed;
 // it never degrades to a root turn on the bounded task card.
@@ -55,49 +55,49 @@ func (c *RunCoordinator) resolveParentRun(ctx context.Context, identity *control
 // The one exception is a Run parked on a daemon watcher (waiting_external):
 // it is outside the resumable set, yet its watcher finalization must continue
 // it as an exact child. Once every watcher it registered has concluded and no
-// continuation claimed it, it is the exact parent (validateParentClaimTx
+// continuation claimed it, it is the exact parent (validateResumeClaimTx
 // admits the same case). Once its finalization has claimed it, a binding that
 // still names it points at finished system work rather than a person's open
 // question, so it continues the Thread's current resolution instead of
 // failing closed.
-func (c *RunCoordinator) resolveExplicitParent(ctx context.Context, identity *control.IdentityContext, task *control.Task, runID string) (parentRunResolution, error) {
+func (c *RunCoordinator) resolveExplicitResumeTarget(ctx context.Context, identity *control.IdentityContext, task *control.Task, runID string) (resumeTargetResolution, error) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || strings.TrimSpace(runID) == "" {
-		return parentRunResolution{}, fmt.Errorf("explicit parent run is unavailable")
+		return resumeTargetResolution{}, fmt.Errorf("explicit parent run is unavailable")
 	}
 	runs, err := c.srv.Control.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 20)
 	if err != nil {
-		return parentRunResolution{}, fmt.Errorf("list explicit parent run: %w", err)
+		return resumeTargetResolution{}, fmt.Errorf("list explicit parent run: %w", err)
 	}
 	for _, run := range runs {
 		if run.ID == runID {
-			return parentRunResolution{candidates: []control.Run{run}}, nil
+			return resumeTargetResolution{candidates: []control.Run{run}}, nil
 		}
 	}
 	run, err := c.srv.Control.GetRun(ctx, identity.TenantID, runID)
 	if err != nil {
-		return parentRunResolution{}, fmt.Errorf("load explicit parent run: %w", err)
+		return resumeTargetResolution{}, fmt.Errorf("load explicit parent run: %w", err)
 	}
 	if run != nil && run.PersonID == identity.PersonID && run.TaskID == task.ID && strings.EqualFold(run.Status, "waiting_external") {
 		claimed, err := c.watcherRunClaimed(ctx, identity, task, run.ID)
 		if err != nil {
-			return parentRunResolution{}, err
+			return resumeTargetResolution{}, err
 		}
 		if claimed {
-			return c.resolveParentRun(ctx, identity, task)
+			return c.resolveResumeTarget(ctx, identity, task)
 		}
 		live, err := c.watcherRunHasLiveWatch(ctx, identity, run.ID)
 		if err != nil {
-			return parentRunResolution{}, err
+			return resumeTargetResolution{}, err
 		}
 		if !live {
-			return parentRunResolution{candidates: []control.Run{*run}}, nil
+			return resumeTargetResolution{candidates: []control.Run{*run}}, nil
 		}
 	}
-	return parentRunResolution{}, fmt.Errorf("continuation parent %s is no longer resumable", shortRunID(runID))
+	return resumeTargetResolution{}, fmt.Errorf("continuation parent %s is no longer resumable", shortRunID(runID))
 }
 
 // watcherRunClaimed reports whether a child Run of this task already continues
-// runID on the forward edge validateParentClaimTx enforces. The claim itself
+// runID on the forward edge validateResumeClaimTx enforces. The claim itself
 // stays atomic inside run creation; this is the read-only pre-check.
 func (c *RunCoordinator) watcherRunClaimed(ctx context.Context, identity *control.IdentityContext, task *control.Task, runID string) (bool, error) {
 	children, err := c.srv.Control.ListTaskRuns(ctx, identity.TenantID, task.ID, 50)
@@ -105,7 +105,7 @@ func (c *RunCoordinator) watcherRunClaimed(ctx context.Context, identity *contro
 		return false, fmt.Errorf("list watcher continuations: %w", err)
 	}
 	for _, child := range children {
-		if child.ParentRunID == runID {
+		if child.ResumesRunID == runID {
 			return true, nil
 		}
 	}
@@ -127,11 +127,11 @@ func (c *RunCoordinator) watcherRunHasLiveWatch(ctx context.Context, identity *c
 	return false, nil
 }
 
-// parentCandidatesResponse answers an ambiguous continuation deterministically:
+// resumeCandidatesResponse answers an ambiguous continuation deterministically:
 // the model is never started, and the person sees the concrete waiting runs so
 // the next message can pick one. Platform reply metadata may bind one directly;
 // `/resume <run_id>` is the universal precise fallback.
-func (c *RunCoordinator) parentCandidatesResponse(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, task *control.Task, candidates []control.Run) api.MessageResponse {
+func (c *RunCoordinator) resumeCandidatesResponse(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, task *control.Task, candidates []control.Run) api.MessageResponse {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "I found several possible continuations under %s. Which one did you mean?\n",
 		textutil.Truncate(task.Title, 60))

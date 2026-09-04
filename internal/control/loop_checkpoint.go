@@ -67,26 +67,6 @@ func (s *Store) IncompleteLoopCheckpointForRun(ctx context.Context, tenantID, ru
 	return &record, nil
 }
 
-func (s *Store) LatestIncompleteLoopCheckpoint(ctx context.Context, tenantID, taskID, excludeRunID string) (*LoopCheckpointRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT tenant_id, person_id, thread_id, run_id,
-		contract_version, recovery_json, iteration, outcome, detail, snapshot_json, updated_at
-		FROM loop_checkpoints
-		WHERE tenant_id = ? AND thread_id = ? AND run_id <> ?
-		  AND outcome <> 'complete_turn'
-		ORDER BY updated_at DESC, run_id DESC LIMIT 1`, normalizeTenant(tenantID), taskID, excludeRunID)
-	var record LoopCheckpointRecord
-	var updated int64
-	if err := row.Scan(&record.TenantID, &record.PersonID, &record.TaskID, &record.RunID,
-		&record.ContractVersion, &record.Recovery, &record.Iteration, &record.Outcome, &record.Detail, &record.Snapshot, &updated); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		return nil, err
-	}
-	record.UpdatedAt = time.Unix(updated, 0)
-	return &record, nil
-}
-
 func recoveryJSON(value []byte) []byte {
 	if len(value) == 0 {
 		return []byte("{}")

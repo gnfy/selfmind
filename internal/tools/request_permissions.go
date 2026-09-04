@@ -100,7 +100,7 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 	for _, rule := range requested {
 		granted := scope.runGrants != nil && scope.runGrants.has(rule.Key)
 		if scope.Grants != nil {
-			persisted, _ := scope.Grants.IsApprovalGranted(ctx, scope.TenantID, scope.PersonID, scope.TaskID, rule.Key)
+			persisted, _ := scope.Grants.IsApprovalGranted(ctx, scope.TenantID, scope.PersonID, rule.Key)
 			granted = granted || persisted
 		}
 		if granted {

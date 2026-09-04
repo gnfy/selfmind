@@ -114,7 +114,7 @@ daemon must not expose that directory as a product runtime Skill.
   identity, workspace, thread, run, queue, approval, and delivery state.
 - Raw transcripts stay channel-local. Shared state is limited to structured
   threads, runs, events, handoffs, approvals, artifacts, memory, and skills.
-- Explicit controls such as `/status`, `/tasks`, `/workspace`, `/resume`,
+- Explicit controls such as `/status`, `/resume`, `/search`, `/workspace`,
   `/approve`, and `/stop` remain model-free. Other natural language is
   agent-first; do not add greeting or keyword bypasses.
 - Keep one active run per person until an active plan explicitly changes the

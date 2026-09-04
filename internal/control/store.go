@@ -111,11 +111,11 @@ type Run struct {
 	InputSummary   string                     `json:"input_summary,omitempty"`
 	WorkKey        string                     `json:"work_key,omitempty"`
 	WorkUnitID     string                     `json:"work_unit_id,omitempty"`
-	// ParentRunID is the forward continuation edge: the prior run this run
+	// ResumesRunID is the forward continuation edge: the prior run this run
 	// deliberately continues. At most one child may claim a parent
 	// (idx_task_runs_parent_once); the edge is written atomically with the
 	// child row and never rewritten by rename/merge/display operations.
-	ParentRunID string `json:"parent_run_id,omitempty"`
+	ResumesRunID string `json:"resumes_run_id,omitempty"`
 	// RecoveryContractVersion is zero for historical rows. New Runs opt into
 	// the durable plan/effect/checkpoint contract explicitly.
 	RecoveryContractVersion int        `json:"recovery_contract_version,omitempty"`
@@ -1881,8 +1881,25 @@ func (s *Store) registerWorkspace(ctx context.Context, ws Workspace, replaceConf
 	if err != nil {
 		return nil, err
 	}
-	if err := s.SetCurrentWorkspace(ctx, ws.TenantID, ws.OwnerPersonID, ws.ID); err != nil {
-		return nil, err
+	// Registering EXPLICITLY (`ws add`, onboarding) adopts the new workspace as
+	// the durable default. Merely ENSURING one must not: every local CLI turn
+	// ensures its own cwd, so an implicit write here silently stole the default
+	// that `/ws default` had just set for IM and scheduled work — the same
+	// person-level clobber that session-scoped selection was introduced to end.
+	// A person with no default yet is the one case where ensuring should set it,
+	// or a fresh install would leave IM with nowhere to run.
+	adoptAsDefault := replaceConfiguration
+	if !adoptAsDefault {
+		current, err := s.CurrentWorkspace(ctx, ws.TenantID, ws.OwnerPersonID)
+		if err != nil {
+			return nil, err
+		}
+		adoptAsDefault = current == nil
+	}
+	if adoptAsDefault {
+		if err := s.SetCurrentWorkspace(ctx, ws.TenantID, ws.OwnerPersonID, ws.ID); err != nil {
+			return nil, err
+		}
 	}
 	return s.GetWorkspace(ctx, ws.TenantID, ws.ID)
 }
@@ -2323,18 +2340,49 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, tenantID, taskID, status, 
 }
 
 func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary string) (*Run, error) {
-	return s.startRun(ctx, task, channel, inputSummary, StartRunOptions{})
+	return s.startRun(ctx, runOwnerFromTask(task), channel, inputSummary, StartRunOptions{})
+}
+
+// RunOwner is who a Run belongs to and where it executes. It is what Run
+// creation actually needs; a Task was only ever the carrier.
+//
+// ThreadID is optional. A Run with none is a complete, executable, resumable
+// unit of work: nothing about running, parking, resuming, or being Attention
+// consults a Thread. Requiring one meant every message minted a label before
+// anyone knew what the work was.
+type RunOwner struct {
+	ThreadID    string
+	TenantID    string
+	PersonID    string
+	WorkspaceID string
+}
+
+func runOwnerFromTask(task *Task) RunOwner {
+	if task == nil {
+		return RunOwner{}
+	}
+	return RunOwner{
+		ThreadID:    task.ID,
+		TenantID:    task.TenantID,
+		PersonID:    task.PersonID,
+		WorkspaceID: task.WorkspaceID,
+	}
+}
+
+// StartRunForOwner creates a Run with no Thread behind it.
+func (s *Store) StartRunForOwner(ctx context.Context, owner RunOwner, channel, inputSummary string, options StartRunOptions) (*Run, error) {
+	return s.startRun(ctx, owner, channel, inputSummary, options)
 }
 
 type StartRunOptions struct {
 	WorkKey        string
 	ExecutionRoots []executionenv.RootBinding
-	// ParentRunID claims the named prior run as this run's continuation parent
+	// ResumesRunID claims the named prior run as this run's continuation parent
 	// in the SAME transaction that creates the child. The claim validates
 	// tenant/person/task agreement and the parent's resumable, unclaimed state
-	// inside the transaction; a lost race surfaces as ErrParentRunClaimed and
+	// inside the transaction; a lost race surfaces as ErrResumeTargetClaimed and
 	// creates nothing.
-	ParentRunID string
+	ResumesRunID string
 }
 
 // StartRunWithWorkKey atomically creates a run with its deterministic work
@@ -2342,31 +2390,31 @@ type StartRunOptions struct {
 // daemon crash between admission and a follow-up UPDATE from turning an
 // explicit continuation into an ambiguous one.
 func (s *Store) StartRunWithWorkKey(ctx context.Context, task *Task, channel, inputSummary, workKey string) (*Run, error) {
-	return s.startRun(ctx, task, channel, inputSummary, StartRunOptions{WorkKey: workKey})
+	return s.startRun(ctx, runOwnerFromTask(task), channel, inputSummary, StartRunOptions{WorkKey: workKey})
 }
 
 // StartRunWithOptions is used when ingress attached a run to a display-only
 // weak label. The run is durable and active, but the guessed task lifecycle is
 // left untouched until deterministic or post-run label resolution.
 func (s *Store) StartRunWithOptions(ctx context.Context, task *Task, channel, inputSummary string, options StartRunOptions) (*Run, error) {
-	return s.startRun(ctx, task, channel, inputSummary, options)
+	return s.startRun(ctx, runOwnerFromTask(task), channel, inputSummary, options)
 }
 
-func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary string, options StartRunOptions) (*Run, error) {
-	if task == nil {
-		return nil, fmt.Errorf("task is required")
+func (s *Store) startRun(ctx context.Context, owner RunOwner, channel, inputSummary string, options StartRunOptions) (*Run, error) {
+	if strings.TrimSpace(owner.TenantID) == "" || strings.TrimSpace(owner.PersonID) == "" {
+		return nil, fmt.Errorf("run owner requires a tenant and a person")
 	}
 	// A parent-claiming creation races other connections by design (the whole
 	// point of the unique parent index). Under WAL, the loser's deferred
 	// transaction reads on a pre-commit snapshot and its write upgrade fails
 	// immediately with SQLITE_BUSY instead of waiting. Retry on a fresh
 	// snapshot: the re-run validation then sees the committed child and
-	// returns ErrParentRunClaimed deterministically.
-	if strings.TrimSpace(options.ParentRunID) != "" {
+	// returns ErrResumeTargetClaimed deterministically.
+	if strings.TrimSpace(options.ResumesRunID) != "" {
 		var run *Run
 		var err error
 		for attempt := 0; attempt < 3; attempt++ {
-			run, err = s.startRunOnce(ctx, task, channel, inputSummary, options)
+			run, err = s.startRunOnce(ctx, owner, channel, inputSummary, options)
 			if err == nil || !isSQLiteBusy(err) {
 				return run, err
 			}
@@ -2378,21 +2426,42 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		}
 		return run, err
 	}
-	return s.startRunOnce(ctx, task, channel, inputSummary, options)
+	return s.startRunOnce(ctx, owner, channel, inputSummary, options)
 }
 
-func (s *Store) startRunOnce(ctx context.Context, task *Task, channel, inputSummary string, options StartRunOptions) (*Run, error) {
+// isResumeEdgeUniqueViolation reports whether err is the "at most one resume
+// per target" partial unique index firing.
+//
+// SQLite names the COLUMNS in a unique-constraint message, never the index, so
+// matching on the index name never worked: a lost race returned a raw
+// constraint error instead of ErrResumeTargetClaimed, and the caller could not
+// tell "someone else claimed it" from a storage failure. Ordinary tests never
+// saw it because validateResumeClaimTx catches the claim first on any snapshot
+// that already shows the winner; only a genuine simultaneous commit reaches
+// here.
+func isResumeEdgeUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	if !strings.Contains(message, "unique constraint failed") {
+		return false
+	}
+	return strings.Contains(message, "resumes_run_id") || strings.Contains(message, "parent_run_id")
+}
+
+func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, inputSummary string, options StartRunOptions) (*Run, error) {
 	run := &Run{
 		ID:                      "run_" + uuid.NewString(),
-		TaskID:                  task.ID,
-		TenantID:                task.TenantID,
-		PersonID:                task.PersonID,
-		WorkspaceID:             task.WorkspaceID,
+		TaskID:                  strings.TrimSpace(owner.ThreadID),
+		TenantID:                owner.TenantID,
+		PersonID:                owner.PersonID,
+		WorkspaceID:             owner.WorkspaceID,
 		ExecutionRoots:          executionenv.CloneRootBindings(options.ExecutionRoots),
 		Channel:                 normalizeName(channel, "cli"),
 		InputSummary:            inputSummary,
 		WorkKey:                 strings.ToUpper(strings.TrimSpace(options.WorkKey)),
-		ParentRunID:             strings.TrimSpace(options.ParentRunID),
+		ResumesRunID:            strings.TrimSpace(options.ResumesRunID),
 		RecoveryContractVersion: RunRecoveryContractVersion,
 		Status:                  "running",
 		StartedAt:               time.Now(),
@@ -2409,24 +2478,24 @@ func (s *Store) startRunOnce(ctx context.Context, task *Task, channel, inputSumm
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if run.ParentRunID != "" {
-		if err := validateParentClaimTx(ctx, tx, run); err != nil {
+	if run.ResumesRunID != "" {
+		if err := validateResumeClaimTx(ctx, tx, run); err != nil {
 			return nil, err
 		}
 	}
 	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO runs (id, thread_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, parent_run_id, recovery_contract_version, status, started_at, heartbeat_at)
+		`INSERT INTO runs (id, thread_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, resumes_run_id, recovery_contract_version, status, started_at, heartbeat_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.ParentRunID, run.RecoveryContractVersion, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
-		if run.ParentRunID != "" && strings.Contains(err.Error(), "idx_task_runs_parent_once") {
-			return nil, ErrParentRunClaimed
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.ResumesRunID, run.RecoveryContractVersion, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		if run.ResumesRunID != "" && isResumeEdgeUniqueViolation(err) {
+			return nil, ErrResumeTargetClaimed
 		}
 		return nil, err
 	}
-	if run.ParentRunID != "" {
+	if run.ResumesRunID != "" {
 		// The claim settles the parent's open wait records in the same
 		// transaction: the continuation now owns that unresolved condition.
-		if err := resolveOriginRunBlockersTx(ctx, tx, run.TenantID, run.TaskID, run.ParentRunID, run.ID); err != nil {
+		if err := resolveOriginRunBlockersTx(ctx, tx, run.TenantID, run.TaskID, run.ResumesRunID, run.ID); err != nil {
 			return nil, err
 		}
 	}
@@ -2439,10 +2508,13 @@ func (s *Store) startRunOnce(ctx context.Context, task *Task, channel, inputSumm
 		run.TaskID, run.InputSummary, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
 		return nil, err
 	}
-	if _, err = tx.ExecContext(ctx,
-		`UPDATE threads SET last_activity_at = ?, updated_at = ? WHERE id = ?`,
-		time.Now().Unix(), time.Now().Unix(), run.TaskID); err != nil {
-		return nil, err
+	// A run with no Thread has nothing to touch.
+	if run.TaskID != "" {
+		if _, err = tx.ExecContext(ctx,
+			`UPDATE threads SET last_activity_at = ?, updated_at = ? WHERE id = ?`,
+			time.Now().Unix(), time.Now().Unix(), run.TaskID); err != nil {
+			return nil, err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
@@ -2463,13 +2535,13 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 	var rootsJSON string
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, thread_id, tenant_id, person_id, COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), channel,
-		        COALESCE(input_summary, ''), COALESCE(work_key, ''), COALESCE(parent_run_id, ''),
+		        COALESCE(input_summary, ''), COALESCE(work_key, ''), COALESCE(resumes_run_id, ''),
 		        COALESCE((SELECT id FROM run_work_units WHERE run_id = runs.id ORDER BY sequence LIMIT 1), ''),
 		        COALESCE(recovery_contract_version, 0), status, started_at, finished_at
 		 FROM runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).
 		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &rootsJSON, &r.Channel,
-			&r.InputSummary, &r.WorkKey, &r.ParentRunID, &r.WorkUnitID, &r.RecoveryContractVersion, &r.Status, &started, &finished)
+			&r.InputSummary, &r.WorkKey, &r.ResumesRunID, &r.WorkUnitID, &r.RecoveryContractVersion, &r.Status, &started, &finished)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -2542,8 +2614,25 @@ func (s *Store) finishRun(ctx context.Context, tenantID, runID, status string, a
 }
 
 func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {
+	// The Run owns event identity, so whenever one is named it decides — the
+	// caller's thread id is a hint, not the authority. Two ways a caller gets it
+	// wrong, both observed live: a caller holding only a Run and no Task (normal
+	// now that Runs execute without one), and a tool scope frozen BEFORE a
+	// continuation claim, which still names the interaction placeholder that the
+	// claim superseded. Trusting either one dropped the events that make parked
+	// work visible — an approval nobody can see is worse than a failed turn —
+	// and CreateApprovalRequest already resolves the same way for the same
+	// reason.
+	if event.RunID != "" {
+		// Not every event's run is materialized as a row — the queue emits for
+		// runs it settles without replay — so an unresolvable run degrades to the
+		// caller's hint instead of losing the event.
+		if threadID, tenantID, personID, err := s.eventOwnerForRun(ctx, event.RunID); err == nil && threadID != "" {
+			event.TaskID, event.TenantID, event.PersonID = threadID, tenantID, personID
+		}
+	}
 	if event.TaskID == "" {
-		return nil, fmt.Errorf("task id is required")
+		return nil, fmt.Errorf("event needs a thread id, or a run that has one")
 	}
 	if event.Type == "" {
 		event.Type = "note"
@@ -2563,10 +2652,12 @@ func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {
 	}
 	event.ID = "event_" + uuid.NewString()
 	event.CreatedAt = time.Now()
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT tenant_id, person_id FROM threads WHERE id = ?`, event.TaskID,
-	).Scan(&event.TenantID, &event.PersonID); err != nil {
-		return nil, err
+	if event.TenantID == "" || event.PersonID == "" {
+		if err := s.db.QueryRowContext(ctx,
+			`SELECT tenant_id, person_id FROM threads WHERE id = ?`, event.TaskID,
+		).Scan(&event.TenantID, &event.PersonID); err != nil {
+			return nil, err
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -2613,15 +2704,34 @@ func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {
 	return &event, nil
 }
 
+// eventOwnerForRun resolves an event's thread and identity from the Run, which
+// is the ownership authority. Run ids are globally unique, so no tenant filter
+// is needed to identify one; the run's own tenant is the answer.
+func (s *Store) eventOwnerForRun(ctx context.Context, runID string) (threadID, tenantID, personID string, err error) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return "", "", "", fmt.Errorf("run id is required")
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(thread_id, ''), tenant_id, person_id FROM runs WHERE id = ?`, runID,
+	).Scan(&threadID, &tenantID, &personID); err != nil {
+		return "", "", "", err
+	}
+	return strings.TrimSpace(threadID), tenantID, personID, nil
+}
+
 func (s *Store) eventByIdempotencyKey(ctx context.Context, key string) (*Event, error) {
 	var event Event
 	var payload string
 	var createdAt int64
-	err := s.db.QueryRowContext(ctx, `SELECT e.id, e.cursor, t.tenant_id, t.person_id,
+	err := s.db.QueryRowContext(ctx, `SELECT e.id, e.cursor,
+		COALESCE(r.tenant_id, t.tenant_id), COALESCE(r.person_id, t.person_id),
 		e.thread_id, COALESCE(e.run_id, ''), e.type, e.visibility,
 		COALESCE(e.channel, ''), COALESCE(e.payload_json, ''),
 		COALESCE(e.idempotency_key, ''), e.created_at
-		FROM task_events e JOIN threads t ON t.id = e.thread_id
+		FROM task_events e
+		LEFT JOIN runs r ON r.id = e.run_id
+		LEFT JOIN threads t ON t.id = e.thread_id
 		WHERE e.idempotency_key = ?`, key).Scan(
 		&event.ID, &event.Cursor, &event.TenantID, &event.PersonID,
 		&event.TaskID, &event.RunID, &event.Type, &event.Visibility,

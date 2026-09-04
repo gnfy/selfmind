@@ -186,10 +186,10 @@ func TestParkedClarifyAnswerResumesExactOriginRun(t *testing.T) {
 			t.Fatal(listErr)
 		}
 		for _, run := range runs {
-			if run.ParentRunID == sibling.ID {
+			if run.ResumesRunID == sibling.ID {
 				t.Fatalf("clarification resumed the sibling run: %+v", run)
 			}
-			if run.ParentRunID == origin.ID {
+			if run.ResumesRunID == origin.ID {
 				return
 			}
 		}
@@ -211,7 +211,7 @@ func TestParkedClarifyAnswerDoesNotFollowAClaimedOrigin(t *testing.T) {
 	if err := store.FinishRun(ctx, identity.TenantID, origin.ID, "interrupted"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.StartRunWithOptions(ctx, task, "cli", "already continuing", control.StartRunOptions{ParentRunID: origin.ID}); err != nil {
+	if _, err := store.StartRunWithOptions(ctx, task, "cli", "already continuing", control.StartRunOptions{ResumesRunID: origin.ID}); err != nil {
 		t.Fatal(err)
 	}
 

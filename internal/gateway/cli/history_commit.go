@@ -148,34 +148,92 @@ func (m *uiModel) flushPendingPrintln(cmd tea.Cmd) tea.Cmd {
 // transcript content the hybrid View draws each frame, so its cost is bounded
 // by what is currently in flight, not by history length.
 func (m *uiModel) renderActiveBlock(width int) string {
-	st := m.common.Styles
 	var lines []string
-	activeRows := m.processRowBudget(width)
-	showSpinner := m.waitingForModel && m.approvalPrompt == nil && activeRows > 0
-	processRows := activeRows
-	if showSpinner {
-		processRows--
-	}
-	if rendered := m.processState().RenderWithTheme(processViewport{width: width, maxRows: processRows}, m.common.Theme); strings.TrimSpace(rendered) != "" {
+	if rendered := m.processState().RenderWithTheme(processViewport{width: width, maxRows: m.processRowBudget(width)}, m.common.Theme); strings.TrimSpace(rendered) != "" {
 		lines = append(lines, strings.Split(rendered, "\n")...)
 	}
-	// While the approval panel is up, the run is paused on the user: the
-	// spinner/activity line ("Preparing to run <tool>…") would be noise next to
-	// the panel, so it is suppressed until the decision resumes the run.
-	if showSpinner {
-		spinnerView := m.spinner.View()
-		label := strings.TrimSpace(m.activityText)
-		if label == "" {
+	return strings.Join(lines, "\n")
+}
+
+// animatingTurn reports whether this terminal owns work that is in flight right
+// now. It is deliberately the union of every live phase — provider wait, tool
+// execution, the gap between phases, an outstanding synchronous request, and an
+// owned daemon run — because the person only needs to know that their work is
+// moving, and a gap between two of those phases is exactly when the animation
+// used to vanish.
+func (m *uiModel) animatingTurn() bool {
+	if m == nil {
+		return false
+	}
+	switch {
+	case m.waitingForModel, m.thinking, m.localRequestActive:
+		return true
+	case strings.TrimSpace(m.toolExecuting) != "":
+		return true
+	case m.daemonRunActive && m.daemonRunOwned:
+		return true
+	}
+	return m.processState().HasRunningTools()
+}
+
+// activityRow is the run's one progress line, and it owns a fixed slot: below
+// the plan and directly above the composer. Previously the spinner lived at the
+// TOP of the active region inside the process-row budget, so it moved whenever
+// tool rows accumulated or the plan grew, and the budget could squeeze it out
+// entirely — the animation appeared to be lost mid-run. As its own reserved row
+// the position never changes for the life of the turn.
+//
+// A blocking approval owns the next action instead, so the row yields to the
+// panel; the run is paused on the person, not progressing.
+func (m *uiModel) activityRow(width int) string {
+	if m == nil || width <= 0 || m.approvalPrompt != nil || !m.animatingTurn() {
+		return ""
+	}
+	// Name only what is actually known. Without a structured phase the run is
+	// moving but its stage is not established, so the row says "Working" rather
+	// than claiming a provider wait: a resumed approval must not be reported as
+	// a model wait that never started.
+	label := strings.TrimSpace(m.activityText)
+	if label == "" {
+		switch {
+		case strings.TrimSpace(m.toolExecuting) != "":
+			label = "Running " + strings.TrimSpace(m.toolExecuting)
+		case m.waitingForModel:
 			label = "Waiting for the model"
+		default:
+			label = "Working"
 		}
-		elapsed := int(time.Since(m.thinkingStart).Seconds())
+	}
+	started := m.thinkingStart
+	if started.IsZero() {
+		started = m.daemonRunStarted
+	}
+	line := trimActivityElapsed(label)
+	if !started.IsZero() {
+		elapsed := int(time.Since(started).Seconds())
 		if elapsed < 1 {
 			elapsed = 1
 		}
-		label = fmt.Sprintf("%s (%ds)", trimActivityElapsed(label), elapsed)
-		lines = append(lines, st.Chat.Thinking.Render(spinnerView+" "+label))
+		line = fmt.Sprintf("%s (%ds)", line, elapsed)
 	}
-	return strings.Join(lines, "\n")
+	chat := m.common.Styles.Chat
+	return chat.ProgressGlyph.Render(m.spinner.View()) + " " + chat.ProgressLabel.Render(truncateToWidth(line, width-2))
+}
+
+// activityRowBlock gives the progress line one blank row above and one below so
+// it reads as its own band. Without the trailing blank the row sat flush against
+// the Composer while the plan above it kept its gap, which looked like part of
+// the input frame. The plan block already ends with a blank row, so the leading
+// blank is added only when no plan precedes the line.
+func (m *uiModel) activityRowBlock(width int) string {
+	row := m.activityRow(width)
+	if row == "" {
+		return ""
+	}
+	if strings.TrimSpace(m.activePlanBlock(width)) != "" {
+		return row + "\n"
+	}
+	return "\n" + row + "\n"
 }
 
 // viewActiveRegion is the hybrid-mode View: only the active region, pinned at
@@ -213,6 +271,12 @@ func (m *uiModel) viewActiveRegion() string {
 	// terminal scrollback with stale snapshots.
 	if plan := m.activePlanBlock(mainW); plan != "" {
 		parts = append(parts, plan)
+	}
+	// The progress line sits between the plan and the composer: the plan keeps
+	// its established position, and the animation keeps one fixed slot that no
+	// amount of tool output or plan growth can move or squeeze away.
+	if activity := m.activityRowBlock(mainW); activity != "" {
+		parts = append(parts, activity)
 	}
 	// A blocking approval stays closest to the composer so the next expected
 	// user action remains obvious. It temporarily preempts a pager/model overlay

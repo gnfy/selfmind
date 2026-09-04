@@ -26,7 +26,7 @@ func TestLoopCheckpointOverwritesAndFindsIncomplete(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := store.LatestIncompleteLoopCheckpoint(ctx, identity.TenantID, task.ID, "new-run")
+	got, err := store.IncompleteLoopCheckpointForRun(ctx, identity.TenantID, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestLoopCheckpointOverwritesAndFindsIncomplete(t *testing.T) {
 	if err := store.SaveLoopCheckpoint(ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := store.LatestIncompleteLoopCheckpoint(ctx, identity.TenantID, task.ID, "new-run"); err != nil || got != nil {
-		t.Fatalf("completed checkpoint must not resume: got=%+v err=%v", got, err)
+	if got, err := store.IncompleteLoopCheckpointForRun(ctx, identity.TenantID, run.ID); err != nil || got != nil {
+		t.Fatalf("a completed checkpoint must not resume: got=%+v err=%v", got, err)
 	}
 }

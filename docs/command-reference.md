@@ -80,12 +80,9 @@ All of these commands talk to the same gateway used by the TUI and IM channels.
 selfmind send [--async] [--mode MODE] [--add-dir DIR]... <message>
 selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-selfmind tasks [done|archived|all|<keyword>]
-selfmind task <n|task_id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>]
-selfmind task <n|task_id> references|reference add <name>|reference remove <name>
-selfmind resume <n|task_id|run_id>
-selfmind workspaces
-selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
+selfmind resume [n|run_id]
+selfmind search [query]
+selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|revoke] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -129,22 +126,26 @@ selfmind new [title]
   id, or a full run id. A number resolves the exact Run from the snapshot the
   endpoint last displayed; a Thread id is accepted only when the Thread has
   exactly one unresolved Run.
-- `workspaces`, `ws`, and `workspace` share the workspace controls:
+- `ws` is the whole workspace surface. There is no `workspace`, `workspaces`,
+  `ws list`, or `ws use` spelling: bare `ws` lists, and a bare number or id
+  selects.
 
 ```text
-selfmind workspaces
 selfmind ws
-selfmind ws list
 selfmind ws <n|workspace_id>
+selfmind ws default <n|workspace_id>
 selfmind ws add [path] [name...]
-selfmind ws use <workspace_id>
 selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
 selfmind ws revoke <capability> [workspace_id]
-selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 ```
+
+- Selecting a workspace applies to the current session only. `ws default` sets
+  the durable default that IM and scheduled work use, since those turns have no
+  directory of their own. A local CLI or TUI turn started inside a directory
+  keeps using that directory's workspace either way.
 
 - Only an authenticated local CLI can change workspace trust. Omitting the
   workspace ID targets the current workspace. `untrust` also revokes active
@@ -417,11 +418,9 @@ before normal agent dispatch.
 /model
 /id
 /status
-/tasks [open|done|archived|all|search <keyword>] [--workspace <id>] [--page <n>]
-/task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/diag [memory|context|tasks|models|delivery|execution|tools]
+/diag [memory|context|models|delivery|execution|tools]
 /report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
@@ -432,12 +431,12 @@ before normal agent dispatch.
 /cancel
 /notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
-/resume [n|task_id|run_id]  (bare = list Attention)
+/resume [n|run_id]  (bare = list what needs attention)
 /choose <choice_id> <number>
 /remember <preference>
 /forget <text|ref>
-/workspace [n|id]  (bare = list; alias: /ws)
-/workspaces  (same as bare /workspace or /ws)
+/ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)
+/add-dir [path]  (bare = list this session's extra roots)
 ```
 
 - Approval requests contain their authoritative choices. Ordinary requests show
@@ -456,14 +455,30 @@ before normal agent dispatch.
 - `/new [title]` keeps its existing task-label behavior. `/new --run <request>`
   is the deterministic escape hatch for sending unrelated work without a
   continuity model decision.
-- `/tasks` renders current Attention. `/resume` accepts a list number, a Thread
-  id that has exactly one unresolved Run, or a full run id. `/task <n> complete`
-  dismisses that exact Run and refuses while it still has a pending approval,
-  a pending clarification, or a live watcher. Task cards and the compatibility
-  `Task.status` field on the wire carry the derived vocabulary `active`,
+- A bare `/resume` renders current Attention and is the numbered list every
+  ordinal resolves against. `/resume <n|run_id>` continues one Run exactly; a
+  Thread id is still accepted when it has exactly one unresolved Run. An idle
+  `/stop` dismisses that exact Run and refuses while it still has a pending
+  approval, a pending clarification, or a live watcher. The compatibility
+  `Task.status` field on the wire carries the derived vocabulary `active`,
   `needs_attention`, `monitoring`, or `resumable` for Attention, `done` for
   settled listed work, and `archived` for archived Threads; the value is
   computed from Runs and pending control objects and never stored.
+- `/search [query]` finds past working sessions on every endpoint, and a bare
+  `/search` lists recent ones. In the terminal, `/search current` is the local
+  full-fidelity view of the conversation in progress.
+- `/ws` separates the session from the person's durable default. A local session
+  belongs to the directory it was started in, and bare `/ws` creates that
+  workspace if the directory had none yet, so the listing always includes where
+  the session actually is. `/ws <n|id>` selects for THIS session only;
+  `/ws default <n|id>` moves the default that turns without a directory of their
+  own (IM, cron) use. They were one person-level value, so two terminals in
+  different projects each showed the other's choice as current while their own
+  work ran elsewhere.
+- An untrusted workspace may not use workspace Skills or remembered approval
+  observations. A session started in one asks about trust ONCE at startup:
+  `/ws trust` enables those capabilities, `/ws decline` keeps it untrusted and
+  stops asking. Ordinary file and command work is unaffected either way.
 - `/choose <choice_id> <number>` answers a durable continuity question exactly,
   including from another bound endpoint or after daemon restart. A bare number
   is accepted only when the person has one recent pending continuity question.
@@ -478,10 +493,6 @@ before normal agent dispatch.
   endpoint. `/forget <text|ref>` forgets one — by its text, or by the ref
   `/memory` shows; several matches return a numbered ref list. Transient
   run/build state is refused with guidance.
-- `/task <id> references` lists the governed names and identifiers that may
-  address that task. `/task <id> reference add <name>` confirms one immediately;
-  `reference remove <name>` supersedes it. Automatically learned references
-  require repeated user-text evidence, and conflicting references never route.
 - `/diag tools` reports the registration-time tool schema catalogue. Repaired
   and quarantined external tools are listed by name, issue class, and schema
   hash; raw schemas and values are never printed. Quarantined tools are not

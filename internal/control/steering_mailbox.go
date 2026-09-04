@@ -240,14 +240,14 @@ func (s *Store) QueueSteeringAsIndependent(ctx context.Context, tenantID, person
 // QueueSteeringAsContinuation moves one exact Main-consumed input into the
 // queue with a validated historical parent. The parent domain, not the active
 // Run or source endpoint, owns the eventual child's task/workspace/roots.
-func (s *Store) QueueSteeringAsContinuation(ctx context.Context, tenantID, personID, runID, steeringID, parentRunID string) (*QueuedTask, error) {
-	if strings.TrimSpace(parentRunID) == "" {
+func (s *Store) QueueSteeringAsContinuation(ctx context.Context, tenantID, personID, runID, steeringID, resumesRunID string) (*QueuedTask, error) {
+	if strings.TrimSpace(resumesRunID) == "" {
 		return nil, fmt.Errorf("parent run id is required")
 	}
-	return s.queueSteeringAsWork(ctx, tenantID, personID, runID, steeringID, parentRunID)
+	return s.queueSteeringAsWork(ctx, tenantID, personID, runID, steeringID, resumesRunID)
 }
 
-func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, runID, steeringID, parentRunID string) (*QueuedTask, error) {
+func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, runID, steeringID, resumesRunID string) (*QueuedTask, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("control store is unavailable")
 	}
@@ -271,8 +271,8 @@ func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, run
 		return nil, fmt.Errorf("live input does not belong to this run")
 	}
 	queueKey := "steering-independent:" + m.ID
-	if strings.TrimSpace(parentRunID) != "" {
-		queueKey = "steering-continuation:" + m.ID + ":" + strings.TrimSpace(parentRunID)
+	if strings.TrimSpace(resumesRunID) != "" {
+		queueKey = "steering-continuation:" + m.ID + ":" + strings.TrimSpace(resumesRunID)
 	}
 	if m.Status == SteeringDeferred {
 		// A retry of this exact tool call returns the row it already created.
@@ -304,8 +304,8 @@ func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, run
 	} else {
 		executionRoots = executionenv.CloneRootBindings(active.ExecutionRoots)
 	}
-	if strings.TrimSpace(parentRunID) != "" {
-		parent, err := s.GetRun(ctx, tenantID, parentRunID)
+	if strings.TrimSpace(resumesRunID) != "" {
+		parent, err := s.GetRun(ctx, tenantID, resumesRunID)
 		if err != nil {
 			return nil, err
 		}

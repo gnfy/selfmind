@@ -65,12 +65,9 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
 selfmind send [--async] [--mode MODE] [--add-dir DIR]... <message>
 selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-selfmind tasks [done|archived|all|<keyword>]
-selfmind task <n|task_id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>]
-selfmind task <n|task_id> references|reference add <name>|reference remove <name>
-selfmind resume <n|task_id|run_id>
-selfmind workspaces
-selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
+selfmind resume [n|run_id]
+selfmind search [query]
+selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|revoke] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -106,22 +103,24 @@ selfmind new [title]
 - `resume` 接受列表序号、稳定的 Thread 兼容 task id 或完整 run id。序号解析为
   该端点最近展示快照中的精确 Run；Thread id 只在该 Thread 恰有一个未解决 Run
   时被接受。
-- `workspaces`、`ws` 和 `workspace` 共用以下工作区操作：
+- `ws` 就是工作区操作的全部入口。不再有 `workspace`、`workspaces`、`ws list`
+  或 `ws use` 这些写法：不带参数即列出，直接给序号或 id 即选中。
 
 ```text
-selfmind workspaces
 selfmind ws
-selfmind ws list
 selfmind ws <n|workspace_id>
+selfmind ws default <n|workspace_id>
 selfmind ws add [path] [name...]
-selfmind ws use <workspace_id>
 selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
 selfmind ws revoke <capability> [workspace_id]
-selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 ```
+
+- 选中工作区只对当前会话生效。`ws default` 设置持久默认值，供 IM 与定时任务
+  使用——这类回合本身没有所属目录。本地 CLI 或 TUI 在某个目录里启动时，无论
+  默认值为何，都仍然使用该目录对应的工作区。
 
 - 只有已认证的本地 CLI 可以修改工作区信任状态。省略 workspace ID 时操作当前工作区；
   `untrust` 还会撤销该工作区当前有效的执行能力授权。
@@ -343,11 +342,9 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /model
 /id
 /status
-/tasks [open|done|archived|all|search <keyword>] [--workspace <id>] [--page <n>]
-/task <n|id> [runs|rename <name>|pin|unpin|complete|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/diag [memory|context|tasks|models|delivery|execution|tools]
+/diag [memory|context|models|delivery|execution|tools]
 /report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
@@ -358,12 +355,12 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /cancel
 /notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
-/resume [n|task_id|run_id]  (bare = list Attention)
+/resume [n|run_id]  (bare = list what needs attention)
 /choose <choice_id> <number>
 /remember <preference>
 /forget <text|ref>
-/workspace [n|id]  (bare = list; alias: /ws)
-/workspaces  (same as bare /workspace or /ws)
+/ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)
+/add-dir [path]  (bare = list this session's extra roots)
 ```
 
 - `/watchers` 在 CLI 与 IM 中使用同一个按 person 隔离的视图，展示 checker、
@@ -373,12 +370,23 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   取消 watcher 不会取消外部操作。
 - `/new [title]` 保留现有的 task 标签行为；`/new --run <request>` 是确定性的
   新工作入口，不经过连续性模型判断。
-- `/tasks` 展示当前 Attention；`/resume` 接受列表序号、恰有一个未解决 Run 的
-  Thread id 或完整 run id；`/task <n> complete` 只 dismiss 该精确 Run，且在它仍有
-  待处理审批、待处理澄清或活动 watcher 时拒绝。Task card 与线上兼容字段
-  `Task.status` 使用派生词汇：Attention 为 `active`、`needs_attention`、
-  `monitoring` 或 `resumable`，已 settled 的 listed 工作为 `done`，已归档 Thread
-  为 `archived`；该值由 Run 和待处理控制对象计算得出，不会持久化。
+- 裸 `/resume` 展示当前 Attention，也是所有序号解析所依据的那份编号列表；
+  `/resume <n|run_id>` 精确继续一个 Run，恰有一个未解决 Run 的 Thread id 仍然
+  接受。空闲时的 `/stop` 只 dismiss 该精确 Run，且在它仍有待处理审批、待处理
+  澄清或活动 watcher 时拒绝。线上兼容字段 `Task.status` 使用派生词汇：
+  Attention 为 `active`、`needs_attention`、`monitoring` 或 `resumable`，已
+  settled 的 listed 工作为 `done`，已归档 Thread 为 `archived`；该值由 Run 和
+  待处理控制对象计算得出，不会持久化。
+- `/search [query]` 在所有端点检索过去的工作会话，裸 `/search` 列出最近的几条。
+  在终端里，`/search current` 是当前对话的本地全保真回看。
+- `/ws` 把会话与个人的持久默认分开。本地会话属于它被启动的那个目录，裸 `/ws` 会在
+  该目录尚无工作区时创建它，所以列表里一定包含会话真正所在的位置。`/ws <n|id>`
+  只切换**本会话**；`/ws default <n|id>` 改的是没有自己目录的回合（IM、cron）所用的
+  默认值。这两者原先是同一个 person 级取值，于是两个终端在不同项目里会把对方的选择
+  显示成自己的 current，而各自的工作其实在别处运行。
+- 未信任的工作区不能使用工作区级 Skill 和已记住的审批观察。在未信任工作区中启动的
+  会话，启动时**只问一次**：`/ws trust` 开启这两项能力，`/ws decline` 保持未信任并
+  不再询问。普通文件与命令工作不受影响。
 - `/choose <choice_id> <number>` 精确回答一个持久化的连续性问题，可从另一个
   已绑定端点或 daemon 重启后回答。只有该 person 最近恰好有一个待答问题时，
   才会把裸数字当作选择。
@@ -389,9 +397,6 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   只存偏好），跨所有端点生效；`/forget <text|ref>` 按文本或 `/memory` 显示的
   ref 遗忘一条，多条匹配时返回带 ref 的编号列表。临时运行/构建状态会被拒绝
   并给出指引。
-- `/task <id> references` 查看可用于定位该任务的受治理名称和标识；
-  `reference add <名称>` 由用户直接确认，`reference remove <名称>` 停用它。
-  自动学习的 reference 需要不同 run 的原始用户文本重复支持；冲突时系统不会猜测。
 
 - 审批请求自身携带权威选项。普通请求显示“仅本次 / 当前 run 内复用 / 拒绝”，
   高敏感请求只显示“仅本次 / 拒绝”；新提示不再创建 task/person 级授权。

@@ -159,6 +159,10 @@ func uiStatusForDaemonOutcome(status string) string {
 	}
 }
 
+// watcherStatusNotice renders a watcher's OWN terminal observation. It is the
+// transient half of a watcher's report: the finalization run that follows leaves
+// the single durable transcript line (backgroundResultNotice), so this text goes
+// to the status bar and never becomes a second history cell.
 func watcherStatusNotice(watchID, status, taskStatus string) string {
 	watchID = strings.TrimSpace(watchID)
 	taskStatus = strings.TrimSpace(taskStatus)
@@ -173,10 +177,27 @@ func watcherStatusNotice(watchID, status, taskStatus string) string {
 		watchStatus = "timed_out"
 	case "cancelled", "canceled":
 		watchStatus = "cancelled"
-	case "finalizing":
-		watchStatus = "finalizing"
+	case "blocked_environment":
+		// A check that could not observe the external state at all. The daemon
+		// notice carries this status; rendering it as the default "succeeded"
+		// would report a blocked watcher as a completed operation.
+		watchStatus = "blocked_environment"
 	}
 	return "Watcher " + watchID + " | status: " + watchStatus + " | task: " + taskStatus
+}
+
+// watcherNoticeKind types a watcher's terminal observation for the status bar.
+// Only an observed success is neutral; anything else needs the person's
+// attention, and a blocked check is not a business failure.
+func watcherNoticeKind(status string) noticeKind {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed":
+		return noticeError
+	case "timed_out", "timeout", "cancelled", "canceled", "blocked_environment":
+		return noticeWarning
+	default:
+		return noticeInfo
+	}
 }
 
 // backgroundResultNotice is the single line a background run is allowed to

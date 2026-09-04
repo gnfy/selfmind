@@ -40,7 +40,7 @@ func (s *Store) AuditTaskRunContinuity(ctx context.Context, tenantID string, lim
 
 	// Legacy reverse edges the forward backfill did not convert.
 	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.thread_id, p.resumed_by_run_id,
-		COALESCE((SELECT c.parent_run_id FROM runs c WHERE c.tenant_id = p.tenant_id AND c.id = p.resumed_by_run_id), '')
+		COALESCE((SELECT c.resumes_run_id FROM runs c WHERE c.tenant_id = p.tenant_id AND c.id = p.resumed_by_run_id), '')
 		FROM runs p
 		WHERE p.tenant_id = ? AND COALESCE(p.resumed_by_run_id, '') <> ''`, tenant)
 	if err != nil {
@@ -70,11 +70,11 @@ func (s *Store) AuditTaskRunContinuity(ctx context.Context, tenantID string, lim
 	}
 
 	// Forward parent edges must agree with their child on tenant/person/task.
-	rows, err = s.db.QueryContext(ctx, `SELECT c.id, c.thread_id, c.parent_run_id,
+	rows, err = s.db.QueryContext(ctx, `SELECT c.id, c.thread_id, c.resumes_run_id,
 		COALESCE(p.thread_id, ''), COALESCE(p.person_id, ''), c.person_id
 		FROM runs c
-		LEFT JOIN runs p ON p.tenant_id = c.tenant_id AND p.id = c.parent_run_id
-		WHERE c.tenant_id = ? AND COALESCE(c.parent_run_id, '') <> ''`, tenant)
+		LEFT JOIN runs p ON p.tenant_id = c.tenant_id AND p.id = c.resumes_run_id
+		WHERE c.tenant_id = ? AND COALESCE(c.resumes_run_id, '') <> ''`, tenant)
 	if err != nil {
 		return nil, err
 	}

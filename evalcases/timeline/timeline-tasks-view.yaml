@@ -5,8 +5,8 @@ workspace: "."
 channel: cli
 model_required: false
 
-# Control-command turns only: a waiting Run is actionable, while settled
-# history is absent from the default Attention view.
+# Control-command turns only: a waiting Run is actionable and the listing names
+# the exact Run, not a label. Settled history is absent.
 setup:
   task:
     title: "时间线视图验证"
@@ -15,13 +15,14 @@ setup:
         status: waiting_user
 
 turns:
-  - input: "/tasks"
+  - input: "/resume"
 
 expect:
   status: completed
   max_tool_calls: 0
   max_duration_seconds: 60
-  contains: ["Needs attention:", "时间线视图验证", "resume: run_"]
+  contains: ["Needs attention:", "执行验证并等待确认", "run_"]
+  must_not_contain: ["Unknown command"]
 
 checks:
   no_mojibake: true

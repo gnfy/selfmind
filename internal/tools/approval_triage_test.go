@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -229,35 +230,69 @@ func runSmart(t *testing.T, scope ExecutionScope, personKey, cmd string) (ran bo
 	return ran, err
 }
 
+// runSmartInOneRun installs the scope ONCE and executes several commands under
+// it, which is how a real run behaves: the run-local grant set is created with
+// the scope and lives as long as it. Triage grants are run-scoped, so a helper
+// that reinstalls the scope per command would model a new run each time.
+func runSmartInOneRun(t *testing.T, scope ExecutionScope, personKey string, cmds ...string) []error {
+	t.Helper()
+	cleanup := SetExecutionScope(personKey, scope)
+	defer cleanup()
+	errs := make([]error, 0, len(cmds))
+	for _, cmd := range cmds {
+		ran := false
+		exec := SmartApprovalMiddleware("")(func(args map[string]interface{}) (string, error) {
+			ran = true
+			return "ok", nil
+		})
+		_, err := exec(map[string]interface{}{"_tenant_id": personKey, "_tool_name": "terminal", "command": cmd})
+		if err == nil && !ran {
+			err = fmt.Errorf("tool did not run for %q", cmd)
+		}
+		errs = append(errs, err)
+	}
+	return errs
+}
+
 // TestSmartTriageApproveRunsAndGrantsClass: an APPROVE verdict auto-runs the op
-// AND records a task-scope class grant, so a second same-class op in the same
-// task does NOT consult the judge again.
+// AND records a RUN-scope class grant, so a second same-class op in the same
+// run does NOT consult the judge again. Run scope is the point: the judge's
+// verdict controls cost within one run and never becomes durable authority.
 func TestSmartTriageApproveRunsAndGrantsClass(t *testing.T) {
 	withExecSandboxPolicy(t, true, true, false)
 	store := newFakeGrantStore()
 	judge := &fakeJudge{reply: "APPROVE"}
 	scope := ExecutionScope{
-		TenantID: "tenant-a", PersonID: "person-a", TaskID: "task-1",
+		TenantID: "tenant-a", PersonID: "person-a", TaskID: "task-1", RunID: "run-1",
 		ApprovalMode: ApprovalSmart, Grants: store, Judge: judge,
 		Approval: func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
 			t.Fatalf("human ask must not be reached on an APPROVE verdict")
 			return ToolApprovalDecision{}, nil
 		},
 	}
-	ran, err := runSmart(t, scope, "person-a", "chmod 777 a.sh")
-	if err != nil || !ran {
-		t.Fatalf("APPROVE verdict must auto-run: ran=%v err=%v", ran, err)
+	errs := runSmartInOneRun(t, scope, "person-a", "chmod 777 a.sh", "chmod +x other.sh")
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("command %d must auto-run: %v", i, err)
+		}
 	}
 	if judge.calls != 1 {
-		t.Fatalf("judge should be consulted once, got %d", judge.calls)
+		t.Fatalf("the second same-class op must reuse the run grant; calls=%d", judge.calls)
 	}
-	// Second same-class op: the recorded task grant must suppress the judge.
-	ran2, err2 := runSmart(t, scope, "person-a", "chmod +x other.sh")
-	if err2 != nil || !ran2 {
-		t.Fatalf("second same-class op must run via the grant: ran=%v err=%v", ran2, err2)
+	// The judge's verdict must not have written any durable grant.
+	for key := range store.granted {
+		t.Fatalf("triage minted a durable grant: %s", key)
 	}
-	if judge.calls != 1 {
-		t.Fatalf("second same-class op must NOT re-consult the judge; calls=%d", judge.calls)
+
+	// A new run consults the judge again: nothing was remembered across runs.
+	fresh := scope
+	fresh.RunID = "run-2"
+	fresh.runGrants = nil
+	if errs := runSmartInOneRun(t, fresh, "person-a", "chmod 777 a.sh"); errs[0] != nil {
+		t.Fatalf("new run must still auto-run: %v", errs[0])
+	}
+	if judge.calls != 2 {
+		t.Fatalf("a new run must re-consult the judge; calls=%d", judge.calls)
 	}
 }
 

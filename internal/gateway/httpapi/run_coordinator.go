@@ -240,16 +240,16 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// answer, and an ambiguous person-typed continuation stops here with a
 	// deterministic candidate list instead of starting a model run under a
 	// guessed parent.
-	var parentRes parentRunResolution
+	var parentRes resumeTargetResolution
 	if task != nil && attach.resolvedPolicy().ContextMode == attachContextFull {
-		if attach.parentRunID != "" {
+		if attach.resumesRunID != "" {
 			// Structured evidence (reply/approval) named the exact run: resolve
 			// only it — the task's other unresolved runs are irrelevant here.
-			parentRes, err = c.resolveExplicitParent(ctx, identity, task, attach.parentRunID)
+			parentRes, err = c.resolveExplicitResumeTarget(ctx, identity, task, attach.resumesRunID)
 		} else {
-			parentRes, err = c.resolveParentRun(ctx, identity, task)
+			parentRes, err = c.resolveResumeTarget(ctx, identity, task)
 			if parentRes.ambiguous() && attach.selectsPriorRun() && isUserOriginTurn(ctx, req) {
-				return c.parentCandidatesResponse(ctx, identity, req, task, parentRes.candidates), http.StatusOK
+				return c.resumeCandidatesResponse(ctx, identity, req, task, parentRes.candidates), http.StatusOK
 			}
 		}
 		if err != nil {
@@ -278,9 +278,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
 		WorkKey:        attach.workKey,
 		ExecutionRoots: req.ExecutionRoots,
-		ParentRunID:    claimParentID,
+		ResumesRunID:   claimParentID,
 	})
-	if errors.Is(err, control.ErrParentRunClaimed) || errors.Is(err, control.ErrParentRunNotResumable) {
+	if errors.Is(err, control.ErrResumeTargetClaimed) || errors.Is(err, control.ErrResumeTargetNotResumable) {
 		// A concurrent continuation claimed the parent first (or it stopped
 		// being resumable). No fork: nothing was created; report the claimed
 		// state deterministically instead of running under shared ownership.
@@ -351,7 +351,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Channel:    req.Channel,
 		Payload:    mustJSON(startedPayload),
 	})
-	if run.ParentRunID != "" {
+	if run.ResumesRunID != "" {
 		_, _ = d.Control.AppendEvent(ctx, control.Event{
 			TaskID:     task.ID,
 			RunID:      run.ID,
@@ -359,18 +359,18 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			Visibility: "task",
 			Channel:    req.Channel,
 			Payload: mustJSON(map[string]interface{}{
-				"parent_run_id": run.ParentRunID,
-				"claimed":       true,
-				"reason":        intent.Reason,
-				"confidence":    intent.Confidence,
-				"work_key":      strings.ToUpper(strings.TrimSpace(attach.workKey)),
+				"resumes_run_id": run.ResumesRunID,
+				"claimed":        true,
+				"reason":         intent.Reason,
+				"confidence":     intent.Confidence,
+				"work_key":       strings.ToUpper(strings.TrimSpace(attach.workKey)),
 			}),
 		})
 		// Restore the parent's plan before Main starts. This is durable child
 		// state, not a display-only echo: completion checks and later resume paths
 		// must see the same unresolved steps as the TUI checklist.
-		if inherited, inheritErr := c.inheritParentRunPlan(ctx, identity, task, run); inheritErr != nil {
-			log.Warn("parent run plan inheritance failed", "parent_run_id", run.ParentRunID, "run_id", run.ID, "error", inheritErr)
+		if inherited, inheritErr := c.inheritResumeTargetPlan(ctx, identity, task, run); inheritErr != nil {
+			log.Warn("resumed run plan inheritance failed", "resumes_run_id", run.ResumesRunID, "run_id", run.ID, "error", inheritErr)
 		} else if inherited != nil {
 			_, _ = d.Control.AppendEvent(ctx, control.Event{
 				TaskID:     task.ID,
@@ -379,16 +379,15 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 				Visibility: "task",
 				Channel:    req.Channel,
 				Payload: mustJSON(map[string]interface{}{
-					"plan":          inherited.Plan.Steps,
-					"explanation":   "Plan inherited from the continued run",
-					"plan_version":  inherited.Plan.Version,
-					"source":        "parent_run",
-					"parent_run_id": run.ParentRunID,
+					"plan":           inherited.Plan.Steps,
+					"explanation":    "Plan inherited from the continued run",
+					"plan_version":   inherited.Plan.Version,
+					"source":         "resumed_run",
+					"resumes_run_id": run.ResumesRunID,
 				}),
 			})
 		}
 	}
-	c.recordTaskResolution(ctx, identity, run, req, task, attach, task.ID, "pending", false)
 	if attach.workKey != "" {
 		d.appendLabelAssignedEvent(ctx, task.ID, run.ID, map[string]interface{}{
 			"decision": "ingress_work_key",
@@ -538,7 +537,12 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if sink := c.newLoopCheckpointSink(identity, task, run); sink != nil {
 		ctx = kernel.WithLoopCheckpointSink(ctx, sink)
 	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode, parent))
+	runtimeContext := c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode, parent)
+	if isUserOriginTurn(ctx, req) && !req.ForceNew && attach.reason == taskAttachNewLabel &&
+		strings.TrimSpace(req.ReplyToRunID) == "" && strings.TrimSpace(req.ApprovalID) == "" && strings.TrimSpace(req.ClarifyID) == "" {
+		runtimeContext.WorkContinuityHints = c.workContinuityHints(ctx, identity, run, req.Channel, 3)
+	}
+	ctx = kernel.WithTaskRuntimeContext(ctx, runtimeContext)
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, parent, intent)
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.ExecutionRoots, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, parent, intent, attach.claimsPriorRuns(), agentInput)
@@ -709,11 +713,11 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	return out, http.StatusOK
 }
 
-func (c *RunCoordinator) inheritParentRunPlan(ctx context.Context, identity *control.IdentityContext, task *control.Task, child *control.Run) (*control.RunPlanProjection, error) {
-	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || child == nil || strings.TrimSpace(child.ParentRunID) == "" {
+func (c *RunCoordinator) inheritResumeTargetPlan(ctx context.Context, identity *control.IdentityContext, task *control.Task, child *control.Run) (*control.RunPlanProjection, error) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || child == nil || strings.TrimSpace(child.ResumesRunID) == "" {
 		return nil, nil
 	}
-	parent, err := c.srv.Control.LatestRunPlan(ctx, identity.TenantID, child.ParentRunID)
+	parent, err := c.srv.Control.LatestRunPlan(ctx, identity.TenantID, child.ResumesRunID)
 	if err != nil {
 		return nil, err
 	}
@@ -732,7 +736,7 @@ func (c *RunCoordinator) inheritParentRunPlan(ctx context.Context, identity *con
 		// Runs created before the durable recovery contract may only have the
 		// historical plan.updated snapshot. Import that bounded snapshot once
 		// into the child rather than keeping two plan authorities thereafter.
-		for _, step := range c.srv.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, child.ParentRunID) {
+		for _, step := range c.srv.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, child.ResumesRunID) {
 			steps = append(steps, control.RunPlanStepInput{Step: step.Step, Status: step.Status})
 		}
 	}

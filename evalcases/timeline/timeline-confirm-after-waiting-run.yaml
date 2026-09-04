@@ -42,5 +42,5 @@ assert_state:
     payload_contains: '"commit_mode":"direct"'
     count_gte: 1
   - on: run
-    field: parent_run_id
+    field: resumes_run_id
     empty: false

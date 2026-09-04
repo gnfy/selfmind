@@ -180,7 +180,19 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	if roleLabel == "" {
 		lines = append(lines, "")
 	}
+	// An explicit /ws switch wins; otherwise name the workspace the daemon
+	// resolved for this session's directory, falling back to the bare directory
+	// when the daemon has not answered yet.
 	workspaceValue := currentWorkingDir()
+	if m.sessionWorkspace != nil && strings.TrimSpace(m.sessionWorkspace.Path) != "" {
+		workspaceValue = m.sessionWorkspace.Path
+		if name := strings.TrimSpace(m.sessionWorkspace.Name); name != "" {
+			workspaceValue = name + " · " + m.sessionWorkspace.Path
+		}
+		if !m.sessionWorkspace.Trusted {
+			workspaceValue += " [untrusted]"
+		}
+	}
 	if strings.TrimSpace(m.workspaceOverridePath) != "" {
 		workspaceValue = m.workspaceOverridePath
 	}
@@ -852,7 +864,9 @@ const (
 )
 
 // renderPlanCell renders update_plan as a Codex-style checklist (the "hybrid"
-// look chosen for SelfMind): header `• Updated plan · done/total`, then a
+// look chosen for SelfMind): header `• Plan · done/total` for work planned in
+// this line, `• Resumed plan · done/total` for a plan inherited from the run
+// being resumed; then a
 // tree-indented block — an italic/dim explanation note, then one line per step
 // marked ✔ (struck-through+dim) completed / □ (cyan+bold) in-progress / □ (dim)
 // pending. Long notes and steps wrap to the terminal width with a hanging
@@ -862,6 +876,7 @@ const (
 func renderPlanCellWithStyles(content string, duration float64, width int, styles transcriptStyles) string {
 	var payload struct {
 		Explanation string `json:"explanation"`
+		Source      string `json:"source"`
 		Plan        []struct {
 			Step   string `json:"step"`
 			Status string `json:"status"`
@@ -904,7 +919,18 @@ func renderPlanCellWithStyles(content string, duration float64, width int, style
 	}
 
 	var sb strings.Builder
-	sb.WriteString(styles.planSecondary.Render(glyphBullet) + " " + styles.planHeader.Render("Updated plan") +
+	// Two headings, and only two. The distinction worth a different word is
+	// PROVENANCE — authored in this line of work, or inherited from the run
+	// being resumed — not revision count: every update is a complete snapshot,
+	// and `· done/total` already shows movement. A third "Updated plan" label
+	// made one plan look like three different things as a turn progressed.
+	heading := "Plan"
+	// "parent_run" is the pre-v12 source tag for an inherited plan; historical
+	// transcripts still carry it.
+	if source := strings.TrimSpace(payload.Source); strings.EqualFold(source, "resumed_run") || strings.EqualFold(source, "parent_run") {
+		heading = "Resumed plan"
+	}
+	sb.WriteString(styles.planSecondary.Render(glyphBullet) + " " + styles.planHeader.Render(heading) +
 		styles.planSecondary.Render(fmt.Sprintf(" · %d/%d", completed, len(payload.Plan))) + "\n")
 	// Tree prefix: first block line gets "  └ ", the rest a flat 4-space indent.
 	for i, ln := range block {

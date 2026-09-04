@@ -137,7 +137,7 @@ func isDeterministicContinuationInput(input string) bool {
 // continuation's user message. Run-scoped by P0: without an exact resolved
 // parent it returns the input unchanged — the spine tail and the bounded task
 // card are the only background then. The ownership claim itself happens
-// atomically inside child-run creation (StartRunOptions.ParentRunID); this
+// atomically inside child-run creation (StartRunOptions.ResumesRunID); this
 // function only assembles context and never writes ownership.
 func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, parent *control.Run, intent router.IntentResult, explicitResume bool, input string) string {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || parent == nil || (!explicitResume && intent.Intent != router.IntentContinue) {

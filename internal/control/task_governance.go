@@ -450,7 +450,7 @@ func (s *Store) ArchiveStaleTasks(ctx context.Context, now time.Time, doneAfter,
 		     WHERE w.thread_id=threads.id AND w.status IN ('pending','running') AND COALESCE(r.attention_dismissed_at,0)=0)
 		   AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.thread_id=threads.id AND r.status IN `+resumableRunStatusSQL+`
 		     AND COALESCE(r.resumed_by_run_id,'')='' AND COALESCE(r.attention_dismissed_at,0)=0
-		     AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.parent_run_id=r.id))`)
+		     AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.resumes_run_id=r.id))`)
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +512,7 @@ func (s *Store) ArchiveStaleTasks(ctx context.Context, now time.Time, doneAfter,
 			                   WHERE r.thread_id = threads.id AND r.status IN `+resumableRunStatusSQL+`
 			                     AND COALESCE(r.resumed_by_run_id, '') = ''
 			                     AND COALESCE(r.attention_dismissed_at, 0) = 0
-			                     AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.parent_run_id = r.id))`,
+			                     AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.resumes_run_id = r.id))`,
 			now.Unix(), c.TenantID, c.TaskID, cutoff)
 		if err != nil {
 			_ = tx.Rollback()

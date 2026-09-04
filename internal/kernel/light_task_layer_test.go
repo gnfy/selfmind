@@ -452,16 +452,25 @@ func TestSpine_CasualAndTaskTurnsInterleave(t *testing.T) {
 	}
 }
 
-func TestSessionKey_TaskDerived(t *testing.T) {
+// TestSessionKey_RunDerived pins the retrieval key. It is the run, a fact, not
+// the Task, a judgment: keying on Task meant a mis-grouped thread put unrelated
+// conversations into one searchable session. Coherence across a continued line
+// of work is recovered at read time from the resume edge.
+func TestSessionKey_RunDerived(t *testing.T) {
 	a := &Agent{}
-	ctxTask := WithTaskRuntimeContext(context.Background(), TaskRuntimeContext{TaskID: "T9"})
-	if got := a.sessionKey(ctxTask, nil); got != "task:T9" {
-		t.Fatalf("expected task-derived session id task:T9, got %q", got)
+	ctxRun := WithTaskRuntimeContext(context.Background(), TaskRuntimeContext{TaskID: "T9", RunID: "R7"})
+	if got := a.sessionKey(ctxRun, nil); got != "run:R7" {
+		t.Fatalf("expected run-derived session id run:R7, got %q", got)
 	}
-	// Taskless turns keep a per-content id (non-empty, not task-prefixed).
+	// A Task without a run must not resurrect the task key.
+	ctxTaskOnly := WithTaskRuntimeContext(context.Background(), TaskRuntimeContext{TaskID: "T9"})
+	if got := a.sessionKey(ctxTaskOnly, msgs("user", "hello")); strings.HasPrefix(got, "task:") {
+		t.Fatalf("a task must never key a session: %q", got)
+	}
+	// Runless turns keep a per-content id (non-empty, not work-prefixed).
 	got := a.sessionKey(context.Background(), msgs("user", "hello"))
-	if got == "" || strings.HasPrefix(got, "task:") {
-		t.Fatalf("taskless session id should be per-content, got %q", got)
+	if got == "" || strings.HasPrefix(got, "run:") || strings.HasPrefix(got, "task:") {
+		t.Fatalf("runless session id should be per-content, got %q", got)
 	}
 }
 

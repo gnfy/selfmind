@@ -158,7 +158,7 @@ func TestAnswerParkedClarifyExpiresWhenOriginWasClaimed(t *testing.T) {
 	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "interrupted"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.StartRunWithOptions(ctx, task, "cli", "another continuation", StartRunOptions{ParentRunID: run.ID}); err != nil {
+	if _, err := store.StartRunWithOptions(ctx, task, "cli", "another continuation", StartRunOptions{ResumesRunID: run.ID}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -239,7 +239,7 @@ func TestExpireOrphanedClarifies(t *testing.T) {
 	if err := store.FinishRun(ctx, identity.TenantID, claimedRun.ID, "waiting_user"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.StartRunWithOptions(ctx, task, "cli", "claim it", StartRunOptions{ParentRunID: claimedRun.ID}); err != nil {
+	if _, err := store.StartRunWithOptions(ctx, task, "cli", "claim it", StartRunOptions{ResumesRunID: claimedRun.ID}); err != nil {
 		t.Fatal(err)
 	}
 

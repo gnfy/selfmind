@@ -184,6 +184,24 @@ func (w *WorkTimeline) Archive(ctx context.Context, tenantID, personID, threadID
 	if rows, _ := result.RowsAffected(); rows != 1 {
 		return fmt.Errorf("thread not found: %s", threadID)
 	}
+	// Archiving is a bulk dismissal. Attention derives from the Run and reads
+	// no Thread column, so the visibility flag alone would leave every parked
+	// run of an archived thread still asking for attention. Dismissal is the
+	// only hide, and it is recorded on the exact runs — which is also what the
+	// v13 upgrade did to already-archived history.
+	//
+	// Unlike DismissAttention this does not refuse on a pending control object:
+	// archiving is a retention decision over settled work, and the caller has
+	// already established the thread has no live run. A pending approval keeps
+	// its own Attention signal, which is not a resumable-run dismissal.
+	if _, err := w.store.db.ExecContext(ctx, `UPDATE runs
+		SET attention_dismissed_at = ?, attention_dismissed_by = ?
+		WHERE tenant_id = ? AND person_id = ? AND thread_id = ?
+		  AND COALESCE(attention_dismissed_at, 0) = 0`,
+		now, strings.TrimSpace(personID), normalizeTenant(tenantID),
+		strings.TrimSpace(personID), strings.TrimSpace(threadID)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -212,7 +230,7 @@ const nonWorkToolNamesSQL = `('update_plan', 'finish_run', 'queue_user_input', '
 // row still counts: a command that ran and exited non-zero (a failing build or
 // test) is real work, and the ledger cannot currently distinguish that from a
 // guardrail refusal without a durable effect-state column.
-const runWorkEvidenceSQL = `(COALESCE(r.parent_run_id, '') != ''
+const runWorkEvidenceSQL = `(COALESCE(r.resumes_run_id, '') != ''
 	OR EXISTS (SELECT 1 FROM run_plan_steps s WHERE s.tenant_id = r.tenant_id AND s.run_id = r.id
 	     GROUP BY s.plan_version HAVING COUNT(*) > 1)
 	OR EXISTS (SELECT 1 FROM tool_ledger l WHERE l.tenant_id = r.tenant_id AND l.run_id = r.id
@@ -233,9 +251,9 @@ const runWorkEvidenceSQL = `(COALESCE(r.parent_run_id, '') != ''
 const resumableRunConditionSQL = `r.status IN ` + resumableRunStatusSQL + `
 	AND COALESCE(r.attention_dismissed_at, 0) = 0
 	AND COALESCE(r.resumed_by_run_id, '') = ''
-	AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.tenant_id = r.tenant_id AND child.parent_run_id = r.id)
+	AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.tenant_id = r.tenant_id AND child.resumes_run_id = r.id)
 	AND NOT EXISTS (SELECT 1 FROM runs newer WHERE newer.tenant_id = r.tenant_id AND newer.thread_id = r.thread_id
-	     AND newer.id <> COALESCE(r.parent_run_id, '')
+	     AND newer.id <> COALESCE(r.resumes_run_id, '')
 	     AND (newer.started_at > r.started_at OR (newer.started_at = r.started_at AND newer.rowid > r.rowid)))
 	AND (r.status != 'interrupted' OR ` + runWorkEvidenceSQL + `)`
 
@@ -363,22 +381,36 @@ const attentionRankedSQL = `WITH signals AS (
 )
 `
 
-const attentionSelectSQL = `SELECT t.id, t.tenant_id, t.person_id, COALESCE(t.workspace_id, ''),
-       COALESCE(t.kind, 'work'), COALESCE(t.visibility, 'visible'), t.title,
-       COALESCE(t.summary, ''), COALESCE(t.pinned, 0), t.created_at,
-       t.updated_at, COALESCE(t.last_activity_at, t.updated_at), ranked.run_id,
+// attentionSelectSQL reads identity and scope from the RUN. The Thread columns
+// are a display label and every one of them tolerates its absence: a Run with
+// no Thread is still complete Attention, and falling back to the run's own
+// input summary is what the person needs to recognize it anyway.
+const attentionSelectSQL = `SELECT COALESCE(t.id, ''), r.tenant_id, r.person_id,
+       COALESCE(t.workspace_id, r.workspace_id, ''),
+       COALESCE(t.kind, 'work'), COALESCE(t.visibility, 'visible'),
+       COALESCE(t.title, r.input_summary, ''),
+       COALESCE(t.summary, ''), COALESCE(t.pinned, 0), COALESCE(t.created_at, r.started_at),
+       COALESCE(t.updated_at, r.started_at),
+       COALESCE(t.last_activity_at, t.updated_at, r.started_at), ranked.run_id,
        COALESCE(r.input_summary, ''), r.status, COALESCE(r.channel, ''), ranked.activity`
 
+// attentionFromSQL reads the Thread row for display only, and LEFT so a Run
+// without one cannot vanish. No Thread column filters or orders Attention any
+// more: visibility and pinning let a display row decide "what needs me now",
+// and the Run already owns that. Dismissal on the exact Run is the only hide,
+// and v13 converted every hidden/archived Thread into the bulk dismissal it
+// effectively was.
 const attentionFromSQL = `
-  FROM ranked JOIN threads t ON t.id = ranked.thread_id
-  JOIN runs r ON r.tenant_id = t.tenant_id AND r.id = ranked.run_id
- WHERE ranked.rank = 1 AND COALESCE(t.visibility, 'visible') NOT IN ('hidden', 'archived')`
+  FROM ranked
+  JOIN runs r ON r.id = ranked.run_id
+  LEFT JOIN threads t ON t.id = ranked.thread_id AND t.tenant_id = r.tenant_id
+ WHERE ranked.rank = 1`
 
 // attentionOrderSQL is a total order over the ranked set (run_id is unique
 // within it), so counting, paging, and the ordinals a client binds to a page
 // all agree. The two placeholders are the preferred channel.
 const attentionOrderSQL = `
- ORDER BY COALESCE(t.pinned, 0) DESC, ranked.priority,
+ ORDER BY ranked.priority,
           CASE WHEN ? != '' AND r.channel = ? THEN 0 ELSE 1 END,
           ranked.activity_at DESC, ranked.run_id DESC`
 

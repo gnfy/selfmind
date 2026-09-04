@@ -250,7 +250,7 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 		}
 		var claimed bool
 		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS(SELECT 1 FROM runs WHERE tenant_id = ? AND parent_run_id = ?)`,
+			`SELECT EXISTS(SELECT 1 FROM runs WHERE tenant_id = ? AND resumes_run_id = ?)`,
 			tenantID, runID,
 		).Scan(&claimed); err != nil {
 			return nil, nil, err
@@ -398,7 +398,7 @@ func (s *Store) ExpireOrphanedClarifies(ctx context.Context) (int, error) {
 		           AND COALESCE(r.resumed_by_run_id, '') = ''
 		           AND NOT EXISTS (
 		             SELECT 1 FROM runs child
-		             WHERE child.tenant_id = r.tenant_id AND child.parent_run_id = r.id
+		             WHERE child.tenant_id = r.tenant_id AND child.resumes_run_id = r.id
 		           )
 		         )
 		       )

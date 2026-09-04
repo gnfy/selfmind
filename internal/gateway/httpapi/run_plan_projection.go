@@ -34,7 +34,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	for _, step := range state.Plan {
 		input = append(input, control.RunPlanStepInput{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
-			SuccessCriteria: step.SuccessCriteria, RelatedTaskID: step.RelatedTaskID,
+			SuccessCriteria:      step.SuccessCriteria,
 			VerificationRequired: step.VerificationRequired,
 			WorkUnitID:           step.WorkUnitID, WorkUnit: step.WorkUnit,
 		})
@@ -47,7 +47,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	for _, step := range projection.Plan.Steps {
 		plan.Plan = append(plan.Plan, tools.PlanStep{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
-			SuccessCriteria: step.SuccessCriteria, RelatedTaskID: step.RelatedTaskID,
+			SuccessCriteria:      step.SuccessCriteria,
 			VerificationRequired: step.VerificationRequired,
 			WorkUnitID:           step.WorkUnitID, WorkUnit: step.WorkUnit,
 		})
@@ -56,7 +56,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	for _, unit := range projection.WorkUnits {
 		identity := tools.PlanWorkUnitIdentity{
 			ID: unit.ID, Sequence: unit.Sequence, Goal: unit.GoalDigest,
-			PlanStatus: unit.PlanStatus, RelatedTaskID: unit.RelatedTaskID,
+			PlanStatus: unit.PlanStatus,
 		}
 		if unit.PlanStatus == "in_progress" {
 			bindingBlocksCandidates := false

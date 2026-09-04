@@ -138,7 +138,7 @@ func TestSoleWaitingRunContinuationReconcilesWithoutAnalyzer(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, candidate := range runs {
-			if candidate.ParentRunID == waiting.ID && candidate.Status == "failed" {
+			if candidate.ResumesRunID == waiting.ID && candidate.Status == "failed" {
 				return
 			}
 		}

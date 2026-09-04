@@ -190,6 +190,17 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 		item.SuccessCriteria = strings.TrimSpace(item.SuccessCriteria)
 		item.RelatedTaskID = strings.TrimSpace(item.RelatedTaskID)
 		item.WorkUnitID = strings.TrimSpace(item.WorkUnitID)
+		// A first snapshot has no server-issued identities for the model to
+		// reference. Some providers still invent descriptive ids despite the
+		// schema guidance; treating those strings as stale rejects the entire
+		// plan and makes the first visible snapshot arrive only after work has
+		// already happened. Normalize both identities to empty on version zero
+		// and issue authoritative ids below. Once a plan exists, foreign ids
+		// remain a hard stale-precondition error.
+		if previous == nil {
+			item.StepID = ""
+			item.WorkUnitID = ""
+		}
 		if item.Step == "" {
 			return nil, fmt.Errorf("plan[%d].step is required", i)
 		}

@@ -250,8 +250,8 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 		len(attention) != 1 || attention[0].RunID != run.ID || attention[0].Activity != control.ThreadActivityMonitoring {
 		t.Fatalf("attention while watching = %+v, %v", attention, err)
 	}
-	if _, err := store.StartRunWithOptions(ctx, task, "cli", "too early", control.StartRunOptions{ParentRunID: run.ID}); !errors.Is(err, control.ErrParentRunNotResumable) {
-		t.Fatalf("claim during live watch = %v, want ErrParentRunNotResumable", err)
+	if _, err := store.StartRunWithOptions(ctx, task, "cli", "too early", control.StartRunOptions{ResumesRunID: run.ID}); !errors.Is(err, control.ErrResumeTargetNotResumable) {
+		t.Fatalf("claim during live watch = %v, want ErrResumeTargetNotResumable", err)
 	}
 
 	daemon.runExternalWatchPass(ctx)
@@ -645,15 +645,15 @@ func TestExternalWatchFinalizationBindsAndClaimsWatcherRun(t *testing.T) {
 	if err != nil || row == nil || row.ReplyToRunID != run.ID || row.TaskID != task.ID {
 		t.Fatalf("finalization row = %+v, %v; want reply to %s", row, err, run.ID)
 	}
-	resolved, err := daemon.coordinator().resolveExplicitParent(ctx, identity, task, run.ID)
+	resolved, err := daemon.coordinator().resolveExplicitResumeTarget(ctx, identity, task, run.ID)
 	if err != nil || resolved.exact() == nil || resolved.exact().ID != run.ID {
 		t.Fatalf("concluded watcher run resolution = %+v, %v", resolved, err)
 	}
-	child, err := store.StartRunWithOptions(ctx, task, "cli", "finalize the release record", control.StartRunOptions{ParentRunID: run.ID})
-	if err != nil || child == nil || child.ParentRunID != run.ID {
+	child, err := store.StartRunWithOptions(ctx, task, "cli", "finalize the release record", control.StartRunOptions{ResumesRunID: run.ID})
+	if err != nil || child == nil || child.ResumesRunID != run.ID {
 		t.Fatalf("finalization child = %+v, %v", child, err)
 	}
-	resolved, err = daemon.coordinator().resolveExplicitParent(ctx, identity, task, run.ID)
+	resolved, err = daemon.coordinator().resolveExplicitResumeTarget(ctx, identity, task, run.ID)
 	if err != nil || resolved.exact() != nil || resolved.ambiguous() {
 		t.Fatalf("claimed watcher run must resolve to the thread's current state, got %+v, %v", resolved, err)
 	}
@@ -661,7 +661,7 @@ func TestExternalWatchFinalizationBindsAndClaimsWatcherRun(t *testing.T) {
 	if err := store.FinishRun(ctx, identity.TenantID, child.ID, "done"); err != nil {
 		t.Fatal(err)
 	}
-	if parent := daemon.externalWatchFinalizationParent(ctx, control.ExternalWatch{TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: child.ID}); parent != "" {
+	if parent := daemon.externalWatchFinalizationTarget(ctx, control.ExternalWatch{TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: child.ID}); parent != "" {
 		t.Fatalf("a done run was offered as finalization parent: %s", parent)
 	}
 }
@@ -891,5 +891,76 @@ func TestExternalWatchFinalizationHonorsNewestCancellationOfTheSameRun(t *testin
 	row, err = store.GetQueued(ctx, watch.TenantID, row.ID)
 	if err != nil || row == nil || row.Status != control.QueueStatusDone {
 		t.Fatalf("newest cancellation is the person's decision: queue = %+v, %v; want done", row, err)
+	}
+}
+
+// A watcher that concludes WITHOUT observing its target must park the Run it
+// handed off. Live gap (2026-09-03): watch_49654694 went blocked_environment
+// and its registering run stayed waiting_external forever — no monitoring
+// signal (the watcher was terminal), no resumable signal (waiting_external is
+// not resumable), so the person's own work sat in no Attention set at all
+// while its finalization waited behind an active run.
+func TestConcludedWatchWithoutObservationParksItsRun(t *testing.T) {
+	for _, tc := range []struct {
+		status     string
+		wantRun    string
+		wantWatch  string
+		wantParked bool
+	}{
+		{status: control.ExternalWatchBlocked, wantRun: "blocked", wantParked: true},
+		{status: control.ExternalWatchFailed, wantRun: "blocked", wantParked: true},
+		{status: control.ExternalWatchTimedOut, wantRun: "blocked", wantParked: true},
+		// An observed result needs no park: its finalization reports it.
+		{status: control.ExternalWatchSucceeded, wantRun: "waiting_external", wantParked: false},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			daemon, store, identity, task, _ := newApprovalTestServer(t)
+			ctx := context.Background()
+			run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_external"); err != nil {
+				t.Fatal(err)
+			}
+			watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
+				TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+				Channel: "cli-session", Description: "CI build", CWD: t.TempDir(),
+				Command: "true", SuccessPattern: "SUCCESS", TimeoutAt: time.Now().Add(time.Hour),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if finished, err := store.FinishExternalWatch(ctx, watch.TenantID, watch.ID, tc.status, "", "check could not observe"); err != nil || !finished {
+				t.Fatalf("finish watch = %v, %v", finished, err)
+			}
+			stored, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+			if err != nil || stored == nil {
+				t.Fatalf("watch row = %+v, %v", stored, err)
+			}
+
+			daemon.finalizeExternalWatch(ctx, *stored, tc.status, "", "check could not observe")
+
+			got, err := store.GetRun(ctx, identity.TenantID, run.ID)
+			if err != nil || got == nil {
+				t.Fatalf("run = %+v, %v", got, err)
+			}
+			if got.Status != tc.wantRun {
+				t.Fatalf("%s watcher left its run %q, want %q", tc.status, got.Status, tc.wantRun)
+			}
+			attention, err := control.NewWorkTimeline(store).Attention(ctx, identity.TenantID, identity.PersonID, 20)
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := false
+			for _, item := range attention {
+				if item.RunID == run.ID {
+					listed = true
+				}
+			}
+			if listed != tc.wantParked {
+				t.Fatalf("%s watcher: run in attention = %v, want %v (attention=%+v)", tc.status, listed, tc.wantParked, attention)
+			}
+		})
 	}
 }

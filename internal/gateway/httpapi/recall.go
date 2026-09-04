@@ -74,12 +74,16 @@ type RecallTaskCardLister interface {
 	ListTaskCards(ctx context.Context, tenantID, personID string, limit int) ([]control.TaskCard, error)
 }
 
-type RecallTaskReferenceLister interface {
-	ListTaskReferenceCards(ctx context.Context, tenantID, personID string, statuses []string, limit int) ([]control.TaskReferenceCard, error)
-}
-
 type RecallWorkspaceKnowledgeLister interface {
 	ListWorkspaceKnowledge(ctx context.Context, tenantID, personID, workspaceID string, limit int) ([]control.WorkspaceKnowledgeSection, error)
+}
+
+// RecallResumeChainResolver collapses run-keyed sessions onto the line of work
+// they belong to, satisfied by *control.Store. Sessions are keyed by run, so
+// two sessions of one continued line would otherwise compete as two separate
+// recall hits; the resume edge is the only evidence that they are one line.
+type RecallResumeChainResolver interface {
+	ResumeChainRoot(ctx context.Context, tenantID, runID string) (string, error)
 }
 
 // RecallQuery is the per-turn search request handed to every source.
@@ -102,9 +106,44 @@ type RecallQuery struct {
 	// the whole point of expansion is reaching vocabulary the raw message
 	// lacks, so those terms must not starve behind raw ones.
 	RawTermCount int
-	// ExcludeWorkKey is the current turn's own work line ("task:<id>") — its
-	// context is already in the bundle/history, echoing it back is noise.
-	ExcludeWorkKey string
+	// ExcludeWorkKeys are the current turn's own work lines — its context is
+	// already in the bundle/history, so echoing it back is noise. A turn has
+	// more than one spelling during the Task retirement: the run line it writes
+	// today ("run:<chain root>") and the label line older cards still carry
+	// ("task:<id>").
+	ExcludeWorkKeys []string
+}
+
+// excludesWorkKey reports whether key is one of the current turn's own lines.
+func (q RecallQuery) excludesWorkKey(key string) bool {
+	if strings.TrimSpace(key) == "" {
+		return true
+	}
+	for _, excluded := range q.ExcludeWorkKeys {
+		if excluded != "" && excluded == key {
+			return true
+		}
+	}
+	return false
+}
+
+// workLineKey collapses a run-keyed work key onto its resume chain root, so
+// every run of one continued line dedups and excludes as a single line of work.
+// Any other key (a label card, a knowledge section, a legacy task-keyed
+// session) is returned unchanged, and a resolver failure degrades to the
+// unresolved key rather than dropping the hit: recall is allowed to be less
+// coherent, never to fail the turn.
+func (e *RecallEngine) workLineKey(ctx context.Context, tenantID, key string) string {
+	key = strings.TrimSpace(key)
+	if e == nil || e.chains == nil || !strings.HasPrefix(key, kernel.SessionRunKeyPrefix) {
+		return key
+	}
+	runID := strings.TrimPrefix(key, kernel.SessionRunKeyPrefix)
+	root, err := e.chains.ResumeChainRoot(ctx, tenantID, runID)
+	if err != nil || strings.TrimSpace(root) == "" {
+		return key
+	}
+	return kernel.SessionRunKeyPrefix + root
 }
 
 // probeTerms picks up to max terms for per-term probing: leading raw terms
@@ -189,6 +228,7 @@ type RecallStats struct {
 // slices for one turn. Nil engine (not wired) disables automatic recall.
 type RecallEngine struct {
 	sources  []RecallSource
+	chains   RecallResumeChainResolver
 	expander RecallQueryExpander
 	// expandTimeout bounds the semantic_recall expansion call; tests shrink it.
 	expandTimeout time.Duration
@@ -216,11 +256,11 @@ func WithRecallExpandTimeout(timeout time.Duration) RecallEngineOption {
 func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher, expander RecallQueryExpander, opts ...RecallEngineOption) *RecallEngine {
 	engine := &RecallEngine{expander: expander, expandTimeout: defaultExpandTimeout}
 	if cards != nil {
+		if chains, ok := cards.(RecallResumeChainResolver); ok {
+			engine.chains = chains
+		}
 		if knowledge, ok := cards.(RecallWorkspaceKnowledgeLister); ok {
 			engine.sources = append(engine.sources, &workspaceKnowledgeRecallSource{knowledge: knowledge})
-		}
-		if references, ok := cards.(RecallTaskReferenceLister); ok {
-			engine.sources = append(engine.sources, &taskReferenceRecallSource{references: references})
 		}
 		engine.sources = append(engine.sources, &taskCardRecallSource{cards: cards})
 	}
@@ -292,69 +332,21 @@ func (s *workspaceKnowledgeRecallSource) Search(ctx context.Context, q RecallQue
 	return hits, nil
 }
 
-// taskReferenceRecallSource turns governed aliases into a searchable bridge
-// to the same task card. Active references get a stronger score; candidates
-// may assist context recall but never participate in deterministic routing.
-type taskReferenceRecallSource struct {
-	references RecallTaskReferenceLister
-}
-
-func (s *taskReferenceRecallSource) Name() string { return "task_reference" }
-
-func (s *taskReferenceRecallSource) Search(ctx context.Context, q RecallQuery) ([]RecallHit, error) {
-	items, err := s.references.ListTaskReferenceCards(ctx, q.TenantID, q.PersonID,
-		[]string{control.TaskReferenceActive, control.TaskReferenceCandidate}, 200)
-	if err != nil {
-		return nil, err
-	}
-	var hits []RecallHit
-	for _, item := range items {
-		alias := strings.ToLower(item.Reference.NormalizedValue)
-		score := 0.0
-		for _, term := range q.Terms {
-			if containsTerm(alias, term) || containsTerm(term, alias) {
-				score += 2
-			}
-		}
-		if score == 0 {
-			continue
-		}
-		if item.Reference.Status == control.TaskReferenceActive {
-			score += 3
-		} else {
-			score += 0.5
-		}
-		excerpt := "reference: " + item.Reference.RawValue
-		if card := taskCardExcerpt(item.Card); card != "" {
-			excerpt += "; " + card
-		}
-		priority := 0
-		if item.Reference.UserConfirmed ||
-			(item.Reference.Status == control.TaskReferenceActive && item.Reference.Class == control.TaskReferenceLiteral &&
-				control.TaskReferenceAppearsInText(q.Message, item.Reference.RawValue)) {
-			priority = -1
-		}
-		hits = append(hits, RecallHit{
-			Slice: kernel.RecallSlice{Source: s.Name(), Title: item.Card.Title, Excerpt: excerpt, Ref: item.Card.TaskID},
-			Score: score, WorkKey: "task:" + item.Card.TaskID, Priority: priority,
-		})
-	}
-	return hits, nil
-}
-
 // Select builds the search query from the incoming user message, runs every
 // source, and returns the deduped, budgeted top slices plus redacted stats.
 // It never returns an error: recall degrades, the turn proceeds.
 func (e *RecallEngine) Select(ctx context.Context, tenantID, personID, currentTaskID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
-	return e.selectRecall(ctx, tenantID, personID, "", currentTaskID, message)
+	return e.selectRecall(ctx, tenantID, personID, "", currentTaskID, "", message)
 }
 
 // SelectForWorkspace runs bounded recall with the selected workspace scope.
-func (e *RecallEngine) SelectForWorkspace(ctx context.Context, tenantID, personID, workspaceID, currentTaskID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
-	return e.selectRecall(ctx, tenantID, personID, workspaceID, currentTaskID, message)
+// currentRunID names the turn's own run so its own line of work — the run and
+// everything it resumes — is not recalled back into itself.
+func (e *RecallEngine) SelectForWorkspace(ctx context.Context, tenantID, personID, workspaceID, currentTaskID, currentRunID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
+	return e.selectRecall(ctx, tenantID, personID, workspaceID, currentTaskID, currentRunID, message)
 }
 
-func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, workspaceID, currentTaskID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
+func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, workspaceID, currentTaskID, currentRunID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
 	stats = RecallStats{Candidates: map[string]int{}, Sources: map[string]int{}}
 	started := time.Now()
 	// Named returns so the deferred stamp reaches every exit, skips included.
@@ -397,8 +389,11 @@ func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, wor
 		Terms:        terms,
 		RawTermCount: rawCount,
 	}
-	if strings.TrimSpace(currentTaskID) != "" {
-		query.ExcludeWorkKey = "task:" + strings.TrimSpace(currentTaskID)
+	if id := strings.TrimSpace(currentTaskID); id != "" {
+		query.ExcludeWorkKeys = append(query.ExcludeWorkKeys, kernel.SessionTaskKeyPrefix+id)
+	}
+	if id := strings.TrimSpace(currentRunID); id != "" {
+		query.ExcludeWorkKeys = append(query.ExcludeWorkKeys, e.workLineKey(ctx, tenantID, kernel.SessionRunKeyPrefix+id))
 	}
 
 	// Dedupe by work line: keep the best hit per task/session, preferring the
@@ -410,14 +405,18 @@ func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, wor
 			continue // recall degrades, never fails the turn
 		}
 		for _, hit := range hits {
-			if hit.WorkKey == "" || hit.WorkKey == query.ExcludeWorkKey {
+			// A run-keyed session first collapses onto its resume chain root,
+			// so a continued line of work competes once rather than once per
+			// run.
+			key := e.workLineKey(ctx, tenantID, hit.WorkKey)
+			if query.excludesWorkKey(key) {
 				continue
 			}
 			stats.Candidates[source.Name()]++
-			existing, ok := best[hit.WorkKey]
+			existing, ok := best[key]
 			if !ok || hit.Priority < existing.Priority ||
 				(hit.Priority == existing.Priority && hit.Score > existing.Score) {
-				best[hit.WorkKey] = hit
+				best[key] = hit
 			}
 		}
 	}
@@ -860,13 +859,19 @@ func (s *sessionRecallSource) Search(ctx context.Context, q RecallQuery) ([]Reca
 	}
 	var hits []RecallHit
 	for _, c := range found {
+		// A run- or task-keyed id already names a work line; anything else is a
+		// bare content-hash session and gets its own namespace so it cannot
+		// collide with one.
 		workKey := c.session.SessionID
-		if !strings.HasPrefix(workKey, "task:") {
+		if !strings.HasPrefix(workKey, kernel.SessionTaskKeyPrefix) && !strings.HasPrefix(workKey, kernel.SessionRunKeyPrefix) {
 			workKey = "session:" + workKey
 		}
 		title := c.session.SessionID
-		if strings.HasPrefix(c.session.SessionID, "task:") {
-			title = "prior task session " + strings.TrimPrefix(c.session.SessionID, "task:")
+		switch {
+		case strings.HasPrefix(c.session.SessionID, kernel.SessionRunKeyPrefix):
+			title = "prior work session " + strings.TrimPrefix(c.session.SessionID, kernel.SessionRunKeyPrefix)
+		case strings.HasPrefix(c.session.SessionID, kernel.SessionTaskKeyPrefix):
+			title = "prior task session " + strings.TrimPrefix(c.session.SessionID, kernel.SessionTaskKeyPrefix)
 		}
 		excerpt := strings.TrimSpace(c.session.Summary)
 		if excerpt == "" {

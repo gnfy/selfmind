@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,91 @@ import (
 	"selfmind/internal/executionenv"
 	"selfmind/internal/tools"
 )
+
+// A trusted workspace whose operator policy allows egress freezes network:shared
+// as trust-derived, and its polls must actually run. The live failure was the
+// opposite: the binding froze an EMPTY capability set, so every poll refused
+// with "does not include network:shared" and four Cloud Build results were left
+// unverified. The same watcher must still stop the moment either half of that
+// trust decision is withdrawn.
+func TestExternalWatchTrustDerivedNetworkCapabilityPollsUntilTrustOrPolicyChanges(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	server, store, identity, _, _ := newClarifyTestServer(t)
+	ctx := context.Background()
+
+	registry := executionenv.NewRegistry()
+	previous := executionenv.DefaultRegistry()
+	executionenv.SetDefaultRegistry(registry)
+	t.Cleanup(func() { executionenv.SetDefaultRegistry(previous) })
+	tools.InstallEnvironmentSnapshot(os.Environ(), "inherited")
+
+	policy := tools.CurrentExecSandboxPolicy()
+	enabled, required := policy.Enabled, policy.Required
+	tools.SetExecSandbox(enabled, required, true)
+	t.Cleanup(func() { tools.SetExecSandbox(policy.Enabled, policy.Required, policy.AllowNetwork) })
+
+	workspace, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID,
+		Name: "workspace", LocalPath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetWorkspaceTrust(ctx, identity.TenantID, identity.PersonID,
+		workspace.ID, executionenv.TrustTrusted, "local_cli"); err != nil {
+		t.Fatal(err)
+	}
+	binding := executionenv.Binding{
+		Version:               executionenv.BindingVersion,
+		TenantID:              identity.TenantID,
+		PersonID:              identity.PersonID,
+		WorkspaceID:           workspace.ID,
+		TrustLevel:            executionenv.TrustTrusted,
+		ExecutionCapabilities: []string{executionenv.CapabilityNetworkShared},
+		CapabilityBindings: []executionenv.CapabilityBinding{{
+			Capability: executionenv.CapabilityNetworkShared,
+			Source:     executionenv.CapabilitySourceTrust,
+		}},
+	}
+	watch := control.ExternalWatch{
+		ID: "watch_trusted", TenantID: identity.TenantID, PersonID: identity.PersonID,
+		WorkspaceID: workspace.ID, CWD: t.TempDir(), Command: "printf PENDING",
+		ExecutionBinding: binding,
+	}
+	got, err := server.validateExternalWatchCapabilities(ctx, watch, binding)
+	if err != nil || len(got) != 1 || got[0] != executionenv.CapabilityNetworkShared {
+		t.Fatalf("trust-derived capability was not accepted: %v, %v", got, err)
+	}
+	result, err := server.runExternalWatchCommand(ctx, watch)
+	if err != nil {
+		t.Fatalf("trusted watcher poll refused: %v (%s)", err, result.Output)
+	}
+	if result.Output != "PENDING" {
+		t.Fatalf("poll output = %q, want PENDING", result.Output)
+	}
+
+	// The operator disables sandbox egress: a trust-derived network capability
+	// must stop the watch instead of running without the capability it froze.
+	tools.SetExecSandbox(enabled, required, false)
+	if _, err := server.runExternalWatchCommand(ctx, watch); err == nil ||
+		!strings.Contains(err.Error(), "sandbox policy") {
+		t.Fatalf("poll after egress was disabled = %v, want a sandbox policy refusal", err)
+	}
+	tools.SetExecSandbox(enabled, required, true)
+
+	// Workspace trust is withdrawn: the capability came from that decision, so
+	// it disappears with it.
+	if _, err := store.SetWorkspaceTrust(ctx, identity.TenantID, identity.PersonID,
+		workspace.ID, executionenv.TrustUntrusted, "local_cli"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.runExternalWatchCommand(ctx, watch); err == nil ||
+		!strings.Contains(err.Error(), "trust") {
+		t.Fatalf("poll after trust revocation = %v, want a trust refusal", err)
+	}
+}
 
 func TestExternalWatchFrozenGrantCanBeRevokedButNotExpanded(t *testing.T) {
 	server, store, identity, _, _ := newClarifyTestServer(t)

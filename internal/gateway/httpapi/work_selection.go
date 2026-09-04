@@ -76,7 +76,7 @@ func (c *RunCoordinator) commitWorkSelection(ctx context.Context, identity *cont
 		// A same-domain resume is claimed by work_select while the turn runs
 		// (ClaimInteractionContinuation); the run already carries the parent
 		// edge and the commit event. Nothing is left to queue.
-		if strings.TrimSpace(run.ParentRunID) == target.ID {
+		if strings.TrimSpace(run.ResumesRunID) == target.ID {
 			commit.Direct = true
 			return commit, nil
 		}

@@ -11,14 +11,22 @@ import (
 	"github.com/google/uuid"
 )
 
-// Approval grants are the durable backing for class-level approval memory (the
-// layered approval funnel's session/persistent allowlist). A grant says "this
-// action CLASS (pattern_key) is pre-approved" for a scope:
+// Approval grants are the durable backing for class-level approval memory. A
+// grant says "this action CLASS (pattern_key) is pre-approved" for a scope, and
+// "person" is the only durable scope: scope_id is a person id and the grant
+// applies to all of that person's work. Person plus pattern_key IS the
+// category-scoped grant — it needs no container.
 //
-//   - scope_kind "task"   → scope_id is a task id; the grant survives across
-//     runs of that task but not other tasks (session memory).
-//   - scope_kind "person" → scope_id is a person id; the grant applies to every
-//     task the person owns (persistent memory).
+// A "task" scope used to exist as session memory, surviving across runs of one
+// task. It was removed because Task never earned that authority: grant reuse
+// depended on the judgment that a set of runs is one piece of work, and that
+// judgment demonstrably mis-groups unrelated runs, so one decision could be
+// inherited by work the person never saw. The server-issued option set had
+// already stopped offering it (buildApprovalDecisions offers once / run-local /
+// deny), which made every remaining task-scoped row unreachable.
+//
+// Transient run-local reuse is not here at all: it lives in the execution
+// scope and dies with the run.
 //
 // Content-level and hard-floor denials are never eligible: the middleware only
 // reaches the grant path after the hard floor, and only records a grant when a
@@ -56,14 +64,14 @@ func (g ApprovalGrant) Revoked() bool { return !g.RevokedAt.IsZero() }
 func (g ApprovalGrant) Active(now time.Time) bool { return !g.Revoked() && !g.Expired(now) }
 
 // GrantApproval records (or refreshes) a class-level approval grant. scopeKind
-// is "task" (scopeID = task id) or "person" (scopeID = person id). expiresAt
-// bounds the grant; a zero value means no deadline. Re-granting an existing
-// class refreshes both timestamps and clears a previous revocation, because the
-// caller has just made a fresh human decision.
+// must be "person" (scopeID = person id). expiresAt bounds the grant; a zero
+// value means no deadline. Re-granting an existing class refreshes both
+// timestamps and clears a previous revocation, because the caller has just made
+// a fresh human decision.
 func (s *Store) GrantApproval(ctx context.Context, scopeKind, tenantID, personID, scopeID, patternKey string, expiresAt time.Time) error {
 	scopeKind = normalizeGrantScope(scopeKind)
-	if scopeKind != "task" && scopeKind != "person" {
-		return fmt.Errorf("grant scope must be task or person")
+	if scopeKind != "person" {
+		return fmt.Errorf("grant scope must be person")
 	}
 	tenantID = normalizeTenant(tenantID)
 	personID = strings.TrimSpace(personID)
@@ -89,10 +97,8 @@ func (s *Store) GrantApproval(ctx context.Context, scopeKind, tenantID, personID
 }
 
 // IsApprovalGranted reports whether patternKey is already approved for the
-// person — either by a person-scoped grant (any task) or a task-scoped grant
-// for taskID. taskID may be empty (then only person-scoped grants match).
-// Expired and revoked grants never match.
-func (s *Store) IsApprovalGranted(ctx context.Context, tenantID, personID, taskID, patternKey string) (bool, error) {
+// person. Expired and revoked grants never match.
+func (s *Store) IsApprovalGranted(ctx context.Context, tenantID, personID, patternKey string) (bool, error) {
 	tenantID = normalizeTenant(tenantID)
 	personID = strings.TrimSpace(personID)
 	patternKey = strings.TrimSpace(patternKey)
@@ -105,10 +111,9 @@ func (s *Store) IsApprovalGranted(ctx context.Context, tenantID, personID, taskI
 		 WHERE tenant_id = ? AND person_id = ? AND pattern_key = ?
 		   AND revoked_at = 0
 		   AND (expires_at = 0 OR expires_at > ?)
-		   AND ( (scope_kind = 'person' AND scope_id = ?)
-		      OR (scope_kind = 'task' AND scope_id = ?) )
+		   AND scope_kind = 'person' AND scope_id = ?
 		 LIMIT 1`,
-		tenantID, personID, patternKey, time.Now().Unix(), personID, strings.TrimSpace(taskID)).Scan(&one)
+		tenantID, personID, patternKey, time.Now().Unix(), personID).Scan(&one)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil

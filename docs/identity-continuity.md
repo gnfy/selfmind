@@ -101,9 +101,9 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
 `turn_choices.go`, and `continue_resolver.go`.
 
 > **Landed (2026-07-06, Work Timeline P1–P3; revised 2026-08-31):**
-> context ownership lives on the person-level work spine plus the parent-run
+> context ownership lives on the person-level work spine plus the resumed-run
 > slice; `task` is a work label, every root run owns a fresh one, and
-> `child.parent_run_id` is the only continuation authority.
+> `resumes_run_id` is the only continuation authority.
 > `docs/work-timeline.md` is the canonical description (mandatory reading
 > before changing this contract); the rules below are the live behavior.
 

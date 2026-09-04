@@ -455,13 +455,13 @@ func TestVersionTenFixtureMigratesRowsToThreadedWorkHistory(t *testing.T) {
 			t.Fatalf("retired table %s count=%d err=%v", retired, count, err)
 		}
 	}
-	var parentEdges int
-	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE parent_run_id <> ''`).Scan(&parentEdges); err != nil || parentEdges != 1 {
-		t.Fatalf("parent edges=%d err=%v, want the single seeded edge", parentEdges, err)
+	var resumeEdges int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE resumes_run_id <> ''`).Scan(&resumeEdges); err != nil || resumeEdges != 1 {
+		t.Fatalf("parent edges=%d err=%v, want the single seeded edge", resumeEdges, err)
 	}
-	var parentRunID, resumedBy string
-	if err := store.db.QueryRowContext(ctx, `SELECT parent_run_id FROM runs WHERE id = 'run_child'`).Scan(&parentRunID); err != nil || parentRunID != "run_parent" {
-		t.Fatalf("child parent=%q err=%v", parentRunID, err)
+	var resumesRunID, resumedBy string
+	if err := store.db.QueryRowContext(ctx, `SELECT resumes_run_id FROM runs WHERE id = 'run_child'`).Scan(&resumesRunID); err != nil || resumesRunID != "run_parent" {
+		t.Fatalf("child resumes=%q err=%v", resumesRunID, err)
 	}
 	if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM runs WHERE id = 'run_legacy'`).Scan(&resumedBy); err != nil || resumedBy != "run_hidden" {
 		t.Fatalf("legacy reverse edge=%q err=%v", resumedBy, err)
@@ -519,7 +519,7 @@ func TestVersionTenFixtureMigratesRowsToThreadedWorkHistory(t *testing.T) {
 // itself: a step that strands subordinate rows or changes the continuation edge
 // count must fail, while dangling history that predates the upgrade is
 // tolerated so an old database is never refused over it.
-func TestMigrationInvariantsRejectOrphansAndParentEdgeChanges(t *testing.T) {
+func TestMigrationInvariantsRejectOrphansAndResumeEdgeChanges(t *testing.T) {
 	ctx := context.Background()
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "control.db"))
 	if err != nil {
@@ -566,7 +566,7 @@ func TestMigrationInvariantsRejectOrphansAndParentEdgeChanges(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `UPDATE task_runs SET parent_run_id = '' WHERE id = 'run_b'`); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyMigrationInvariants(ctx, db, before); err == nil || !strings.Contains(err.Error(), "run_parent_edges") {
-		t.Fatalf("dropped parent edge error=%v", err)
+	if err := verifyMigrationInvariants(ctx, db, before); err == nil || !strings.Contains(err.Error(), "run_resume_edges") {
+		t.Fatalf("dropped resume edge error=%v", err)
 	}
 }

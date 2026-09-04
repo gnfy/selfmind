@@ -24,7 +24,7 @@ func NewQueueUserInputTool(store *control.Store) *QueueUserInputTool {
 func (t *QueueUserInputTool) Name() string { return "queue_user_input" }
 
 func (t *QueueUserInputTool) Description() string {
-	return "Queue one server-issued live user input outside the active objective. Omit parent_run_id for independent new work, or provide an exact inspected resumable run for a historical continuation."
+	return "Queue one server-issued live user input outside the active objective. Omit resumes_run_id for independent new work, or provide an exact inspected resumable run for a historical continuation."
 }
 
 func (t *QueueUserInputTool) Schema() ToolSchema {
@@ -35,7 +35,7 @@ func (t *QueueUserInputTool) Schema() ToolSchema {
 				Type:        "string",
 				Description: "Server-issued id from a [SelfMind live user input] block. Never invent or reuse an id.",
 			},
-			"parent_run_id": {
+			"resumes_run_id": {
 				Type:        "string",
 				Description: "Optional exact resumable run_id when this input clearly continues other historical work. Omit for independent new work.",
 			},
@@ -60,12 +60,12 @@ func (t *QueueUserInputTool) Execute(args map[string]interface{}) (string, error
 	if inputID == "" {
 		return "", fmt.Errorf("input_id is required")
 	}
-	parentRunID := strings.TrimSpace(taskStringArg(args, "parent_run_id"))
+	resumesRunID := strings.TrimSpace(taskStringArg(args, "resumes_run_id"))
 	var queued *control.QueuedTask
 	var err error
-	if parentRunID != "" {
+	if resumesRunID != "" {
 		queued, err = t.store.QueueSteeringAsContinuation(
-			ContextFromArgs(args), scope.ControlTenantID, scope.PersonID, scope.RunID, inputID, parentRunID,
+			ContextFromArgs(args), scope.ControlTenantID, scope.PersonID, scope.RunID, inputID, resumesRunID,
 		)
 	} else {
 		queued, err = t.store.QueueSteeringAsIndependent(
@@ -77,8 +77,8 @@ func (t *QueueUserInputTool) Execute(args map[string]interface{}) (string, error
 	}
 	result, _ := json.Marshal(map[string]interface{}{
 		"status": "queued", "input_id": inputID, "queue_id": queued.ID,
-		"parent_run_id": parentRunID,
-		"message":       "User input queued outside the active plan; the current plan is unchanged.",
+		"resumes_run_id": resumesRunID,
+		"message":        "User input queued outside the active plan; the current plan is unchanged.",
 	})
 	return string(result), nil
 }

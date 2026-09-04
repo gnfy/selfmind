@@ -279,7 +279,7 @@ func (t *WorkInspectTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	result := map[string]interface{}{
 		"run": map[string]interface{}{
-			"run_id": run.ID, "task_id": run.TaskID, "parent_run_id": run.ParentRunID,
+			"run_id": run.ID, "task_id": run.TaskID, "resumes_run_id": run.ResumesRunID,
 			"status": run.Status, "workspace_id": run.WorkspaceID, "channel": run.Channel,
 			"started_at": run.StartedAt.UTC().Format(time.RFC3339),
 		},

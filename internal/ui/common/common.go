@@ -35,7 +35,7 @@ type Styles struct {
 	Base, Muted, HalfMuted, Subtle, TagBase, TagError, TagInfo, TagSuccess, TagWarning                       lipgloss.Style
 	Header                                                                                                   struct{ Title, Subtitle, Separator lipgloss.Style }
 	Sidebar                                                                                                  struct{ Panel, Title, Item, ItemFocus, Muted lipgloss.Style }
-	Chat                                                                                                     struct{ UserBubble, UserText, AssistantBubble, AssistantText, ToolBubble, ToolName, ToolResult, Thinking, ThinkingPrefix, Timestamp, Separator, Selected lipgloss.Style }
+	Chat                                                                                                     struct{ UserBubble, UserText, AssistantBubble, AssistantText, ToolBubble, ToolName, ToolResult, Thinking, ThinkingPrefix, ProgressGlyph, ProgressLabel, Timestamp, Separator, Selected lipgloss.Style }
 	Editor                                                                                                   struct{ Panel, Prompt, Text, Placeholder, Cursor, LineNumber, CompletionName, CompletionDescription, CompletionSelectedName, CompletionSelectedDescription lipgloss.Style }
 	Status                                                                                                   struct{ Panel, Label, Value, Good, Warning, Error lipgloss.Style }
 	Welcome                                                                                                  string
@@ -89,6 +89,14 @@ func StylesFor(t theme.Theme) *Styles {
 	s.Chat.ToolName = lipgloss.NewStyle().Foreground(primary).Bold(true)
 	s.Chat.ToolResult = lipgloss.NewStyle().Foreground(fgMuted)
 	s.Chat.Thinking = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
+	// The live progress row is status, not evidence. It used to share
+	// TextSecondary with tool results and plan explanations, so it read as one
+	// more piece of evidence instead of "this is happening now". Only the
+	// moving glyph takes Accent — the plan's active step already owns bold
+	// Accent text, and two accent blocks would compete — while the label uses
+	// the mainline foreground.
+	s.Chat.ProgressGlyph = lipgloss.NewStyle().Foreground(primary)
+	s.Chat.ProgressLabel = lipgloss.NewStyle().Foreground(fg)
 	s.Chat.Selected = lipgloss.NewStyle().Foreground(t.Color(theme.SelectionText)).Background(t.Color(theme.SelectionBackground))
 
 	editorText := t.Color(theme.ComposerText)

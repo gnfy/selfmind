@@ -73,21 +73,35 @@ _Avoid_: Thread, shared transcript, session
 One accountable agent execution attempt and the sole owner of execution state.
 _Avoid_: Task status, thread status
 
-**Thread**:
-A reversible grouping of related Runs with a stable title and summary; it does
-not own execution state.
-_Avoid_: Task lifecycle, conversation
+**Active Work Buffer**:
+A bounded view of the current Run, endpoint-local tail, and unconsolidated Work
+Spine evidence used for immediate understanding before background organization.
+_Avoid_: Shared transcript, current task
 
-**Work Thread**:
-A Thread promoted into the user's ordinary work list because it has durable
-ongoing-work evidence.
-_Avoid_: Every interaction, open task
+**Task Capsule**:
+A reversible semantic summary that groups evidence from related work across
+Runs; it does not own execution state or authority.
+_Avoid_: Thread, task lifecycle, conversation, context boundary
+
+**Task Evidence**:
+A sourced, correctable relationship between a Task Capsule and a Run, Work
+Unit, or evidence slice.
+_Avoid_: Resume edge, parent relationship
+
+**Resume Source**:
+The exact prior Run whose unfinished execution a new Run resumes, recorded by
+`resumes_run_id`; it does not express general semantic relatedness.
+_Avoid_: Parent Run, current task, related task
 
 **Attention**:
 The work that currently needs the person or agent to act, derived from Runs and
-pending control objects rather than stored as a Thread status; only the latest
-Run of a Thread can be resumable Attention.
+pending control objects rather than stored as a Task Capsule status.
 _Avoid_: Task status, inbox
+
+**Work Obligation**:
+An unresolved condition with a named owner and acceptance evidence that a
+later Run may satisfy without pretending to resume the source Run.
+_Avoid_: Task status, waiting label, next-step prose
 
 **Work Evidence**:
 Durable proof that a Run did work: a plan, a non-lifecycle side-effect tool

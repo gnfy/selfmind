@@ -43,9 +43,9 @@ Attention = projection(Runs, approvals, clarifications, watchers)
 - **Memory** stores durable personal preferences and corrections, not work
   progress, project state, or transcript archives.
 
-The public commands retain `/tasks`, `/task`, and historical `task_*` ids for
-compatibility. These are presentation names over the Thread model, not a
-second Task aggregate.
+Historical `task_*` ids are still accepted as references for continuity with
+older transcripts, but the `/tasks` and `/task` commands are gone: they
+presented a Thread list, and Attention derives per exact Run.
 
 ## Why the old Task lifecycle was removed
 
@@ -106,6 +106,13 @@ Thread. Only an explicit person control may reopen an archive.
 Main may advise `NEW`, `OBSERVE`, or `RESUME` through bounded work-history
 tools, but the gateway owns every state transition. Optional model disposition
 must not block foreground work and cannot grant execution authority.
+For an otherwise new user-originated turn, the selector also places at most
+three same-channel-first Attention cards in `TaskRuntimeContext`. These cards
+contain bounded structured Run state, never transcripts or tool output. They
+make a short reply discoverable by the normal Main call even when
+`semantic_recall` deliberately skips short text; they remain hints, and Main
+must call `work_select` before observing or resuming prior work. Explicit
+`/new` and daemon-originated turns receive no such hints.
 
 ## Continuation authority
 
@@ -116,13 +123,16 @@ explicit /new, /resume, /choose
   -> structured approval / clarification / platform reply edge
   -> daemon-origin gate
   -> active Run: durable steer
-  -> idle: ordinary Main Run with bounded history tools
+  -> idle: ordinary Main Run with bounded Attention hints and history tools
 ```
 
-- `runs.parent_run_id` is the only continuation ownership edge. The child is
-  created transactionally after tenant, person, Thread, resumability, scope,
-  and unclaimed-parent validation. A partial unique index prevents two
-  processes from claiming the same parent.
+- `runs.resumes_run_id` is the only continuation ownership edge: this run
+  resumes that run. The resuming row is created transactionally after tenant,
+  person, Thread, resumability, scope, and unclaimed-target validation. A
+  partial unique index prevents two processes from claiming the same target.
+  Schema v12 renamed the column from `parent_run_id`, which invited two
+  readings the edge never carried — a topic hierarchy, and general causal
+  descent. The legacy reverse pointer `resumed_by_run_id` stays read-only.
 - `/resume <number>` resolves the exact Run from the endpoint-local snapshot
   the user saw. Full Run ids are restart-safe. A Thread id is accepted only
   when it has exactly one unresolved Run; ambiguity is never guessed.
@@ -158,7 +168,7 @@ queue. Prose such as “resume after approval” has no routing authority.
    its Thread; a later Run in the same Thread causally supersedes an older
    parked one. An `interrupted` Run counts only when it left work evidence (a
    plan, a non-lifecycle side-effect tool row, an approval, clarification, or
-   watcher, a parent edge, or next steps).
+   watcher, a resume edge, or next steps).
 
 Items are person-partitioned; same-channel items rank first, then pinned
 Threads and stronger live signals outrank recency. `/status`, the attach
@@ -180,15 +190,16 @@ Settled is a query result, never a stored status.
 
 ## Commands and presentation
 
-- `/tasks` shows current Attention, not every historical Thread.
-- `/tasks done` shows listed settled history.
-- `/tasks archived` shows archived history; `/tasks all` shows all retained
-  Threads.
-- `/tasks search <text>` searches complete retained history, including titles,
-  Run input summaries, handoffs, and changed paths. It is not limited to a
-  recent-five or seven-day window.
-- `/task <number|id> ...` accepts the last rendered ordinal or a stable id for
-  detail, runs, rename, pin, unpin, complete, archive, and references.
+- A bare `/resume` shows current Attention as exact Runs, and is the numbered
+  list every ordinal resolves against.
+- `/resume <n|run_id>` continues one Run exactly. A Thread id is still accepted
+  when it has exactly one unresolved Run.
+- `/search [query]` searches complete retained history on every endpoint,
+  including titles, Run input summaries, handoffs, and changed paths. It is not
+  limited to a recent-five or seven-day window. In the terminal, `/search
+  current` is the local full-fidelity view of the conversation in progress.
+- Pinning and archiving are removed: both let a display field decide what needs
+  the person now. Dismissal on the exact Run is the only hide.
 - `/status` prefers the active Run, then the highest Attention item. It never
   invents a current Thread from recency.
 - Startup digest reports only derived Attention. Old settled interactions do

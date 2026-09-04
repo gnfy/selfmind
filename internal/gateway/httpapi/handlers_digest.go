@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
@@ -69,7 +70,35 @@ func (d *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	digest.SessionWorkspace = d.digestSessionWorkspace(r.Context(), identity, r.URL.Query().Get("cwd"))
 	writeJSON(w, http.StatusOK, digest)
+}
+
+// digestSessionWorkspace resolves the workspace this session runs in and
+// reports whether trust is still an open question.
+//
+// The startup handshake is the only place trust can be asked once: control
+// commands are handled before the run pipeline would create the directory's
+// workspace, so before this the workspace did not exist yet at startup and
+// nothing ever asked. A person who declines is recorded, so it is asked once
+// and then never again.
+func (d *Server) digestSessionWorkspace(ctx context.Context, identity *control.IdentityContext, cwd string) *api.DigestWorkspace {
+	if d == nil || d.Control == nil || identity == nil {
+		return nil
+	}
+	ws := d.ensureSessionWorkspace(ctx, identity, api.MessageRequest{
+		Platform: "cli", Channel: "cli", ClientCWD: cwd,
+	})
+	if ws == nil {
+		return nil
+	}
+	trusted := ws.TrustLevel == executionenv.TrustTrusted
+	return &api.DigestWorkspace{
+		ID: ws.ID, Name: ws.Name, Path: ws.LocalPath, Trusted: trusted,
+		// Trusting is itself an answer; declining is recorded as the source so
+		// a "no" is not mistaken for "not asked yet".
+		TrustAsked: trusted || ws.TrustSource == WorkspaceTrustDeclined,
+	}
 }
 
 // buildDigest assembles the bounded attach digest for the requesting account.
@@ -212,6 +241,7 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 			// recent progress event, so re-attach shows where the run stands,
 			// bounded to a glanceable few lines.
 			run.PlanSteps = digestPlanLines(d.latestPlanForTask(ctx, active.TaskID))
+			run.PlanJSON = d.latestPlanPayloadForTask(ctx, active.TaskID)
 			run.LatestActivity = d.latestActivityForTask(ctx, active.TaskID)
 		}
 		out.ActiveRun = run

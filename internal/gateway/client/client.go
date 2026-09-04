@@ -459,6 +459,12 @@ func (c *Client) Digest(ctx context.Context) (*api.DigestResponse, error) {
 	q := url.Values{}
 	q.Set("platform", "cli")
 	q.Set("platform_user_id", clientUserID())
+	// The session's directory decides which workspace it runs in, and the
+	// digest is the startup handshake — so it is also where the client learns
+	// whether trust is still an open question for that workspace.
+	if cwd, err := os.Getwd(); err == nil && strings.TrimSpace(cwd) != "" {
+		q.Set("cwd", cwd)
+	}
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/digest?"+q.Encode(), nil)

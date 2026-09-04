@@ -36,104 +36,6 @@ func newRecallMemory(t *testing.T) *memory.MemoryManager {
 	return mem
 }
 
-func TestTaskReferenceRecallFindsAliasOutsideTaskTitle(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "reference-recall", "User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Infrastructure follow-up"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	addActiveTaskReference(t, store, task, "customer portal")
-	engine := NewRecallEngine(store, nil, nil)
-	slices, stats := engine.Select(ctx, identity.TenantID, identity.PersonID, "", "please inspect customer portal again")
-	if len(slices) == 0 || slices[0].Source != "task_reference" || slices[0].Ref != task.ID {
-		t.Fatalf("slices=%+v stats=%+v", slices, stats)
-	}
-}
-
-func TestTaskReferenceRecallPriorityRequiresConfirmedOrExactActiveSurface(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ctx := context.Background()
-	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "reference-priority", "User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	task, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
-		Title:    "Infrastructure follow-up",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	write := control.TaskReferenceWrite{
-		TenantID:   identity.TenantID,
-		PersonID:   identity.PersonID,
-		TaskID:     task.ID,
-		Class:      control.TaskReferenceLiteral,
-		Value:      "customer portal",
-		Status:     control.TaskReferenceCandidate,
-		RunID:      "run-support-1",
-		Provenance: "user_text",
-		SourceRef:  "turn:run-support-1",
-	}
-	if _, err := store.UpsertTaskReference(ctx, write); err != nil {
-		t.Fatal(err)
-	}
-	source := &taskReferenceRecallSource{references: store}
-	query := RecallQuery{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
-		Message:  "please inspect customer portal",
-		Terms:    []string{"customer portal"},
-	}
-	hits, err := source.Search(ctx, query)
-	if err != nil || len(hits) != 1 || hits[0].Priority != 0 {
-		t.Fatalf("candidate reference must remain advisory: hits=%+v err=%v", hits, err)
-	}
-
-	write.RunID = "run-support-2"
-	write.SourceRef = "turn:run-support-2"
-	if _, err := store.UpsertTaskReference(ctx, write); err != nil {
-		t.Fatal(err)
-	}
-	// Run support alone never activates (P2 freeze): still advisory.
-	hits, err = source.Search(ctx, query)
-	if err != nil || len(hits) != 1 || hits[0].Priority != 0 {
-		t.Fatalf("supported-but-unconfirmed reference must stay advisory: hits=%+v err=%v", hits, err)
-	}
-	confirm := write
-	confirm.Status = control.TaskReferenceActive
-	confirm.UserConfirmed = true
-	confirm.Provenance = "user_control"
-	confirm.SourceRef = "test-confirm"
-	if _, err := store.UpsertTaskReference(ctx, confirm); err != nil {
-		t.Fatal(err)
-	}
-	hits, err = source.Search(ctx, query)
-	if err != nil || len(hits) != 1 || hits[0].Priority != -1 {
-		t.Fatalf("confirmed literal in original user text must be authoritative: hits=%+v err=%v", hits, err)
-	}
-
-	query.Message = "please inspect the deployment"
-	hits, err = source.Search(ctx, query)
-	if err != nil || len(hits) != 1 || hits[0].Priority != -1 {
-		t.Fatalf("a user-confirmed reference is authoritative regardless of surface form: hits=%+v err=%v", hits, err)
-	}
-}
-
 func TestWorkspaceKnowledgeRecallFindsProceduralRule(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
@@ -158,7 +60,7 @@ func TestWorkspaceKnowledgeRecallFindsProceduralRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine := NewRecallEngine(store, nil, nil)
-	slices, stats := engine.SelectForWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID, "", "请检查 GitOps 发布差异")
+	slices, stats := engine.SelectForWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID, "", "", "请检查 GitOps 发布差异")
 	if len(slices) == 0 || slices[0].Source != "workspace_knowledge" {
 		t.Fatalf("slices=%+v stats=%+v", slices, stats)
 	}
@@ -557,6 +459,7 @@ func TestCanonicalRecallRespectsWorkspaceValidityAndPinnedBoundary(t *testing.T)
 		personID,
 		"ws-a",
 		"",
+		"",
 		"check the aurora alpha blue gate release checklist",
 	)
 	refs := map[string]bool{}
@@ -577,6 +480,7 @@ func TestCanonicalRecallRespectsWorkspaceValidityAndPinnedBoundary(t *testing.T)
 		"default",
 		personID,
 		"ws-a",
+		"",
 		"",
 		"check the aurora beta red gate deployment",
 	)

@@ -67,7 +67,10 @@ daemon must not expose that directory as a product runtime Skill.
    Do not add speculative features, configurability, abstractions, or error
    handling for impossible states. Match existing patterns. Do not refactor,
    reformat, or remove adjacent code you do not need to change. Remove only
-   artifacts made obsolete by your own change.
+   artifacts made obsolete by your own change. Retiring a user-facing name
+   (command, verb, event type, status word) includes its invocation sites the
+   compiler never reads: `scripts/`, `.github/`, `evalcases/`, and docs. A test
+   guards this; a case that probes a retired name on purpose declares itself.
 4. **Respect the request type.** Analysis-only requests do not authorize edits.
    For implementation requests, carry the change through focused tests, the
    release gate when appropriate, and the installed WSL binary when the user is
@@ -132,6 +135,11 @@ daemon must not expose that directory as a product runtime Skill.
   than replayed transcript progress. Approvals and clarifications stay visible.
   CLI streams user-originated progress; IM sends bounded milestones and a final
   result, never token deltas.
+- Never discard the error from writing an event that parks work on a human
+  (approval, clarification, recovery, handoff). A push suppressed because a
+  client is attached assumes that client was told; when the write failed, that
+  assumption is void and the push must go out. Both silenced means work parks
+  with nothing on any channel.
 - `sent_unconfirmed` is terminal for blind retry. Only the bounded,
   inbound-triggered catch-up path may claim and resend it.
 

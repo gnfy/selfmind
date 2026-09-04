@@ -297,6 +297,44 @@ func verificationNextStep(verification *api.VerificationOutcome) string {
 	}
 }
 
+// withCompletionNotice states, in the turn's own reply, that the run did not
+// finish and how to pick it up. The RUN outcome is the only place this is
+// known: the turn's streamed self-report can say "completed" while the run
+// resolves to verification_partial / missing_final_response, and that outcome is
+// written after the stream closes — which is why this belongs beside the
+// verification notice rather than in the router's stream summary.
+//
+// Observed 2026-09-04: a run whose model stopped without a final answer told the
+// person a tool had errored (two earlier failures had in fact been recovered
+// from) and never mentioned that replying "continue" would resume it, even
+// though the outcome had already computed exactly that.
+func withCompletionNotice(content string, outcome api.RunOutcome) string {
+	content = strings.TrimSpace(content)
+	switch strings.TrimSpace(outcome.Status) {
+	case "", "done", "completed":
+		return content
+	}
+	reason := strings.ReplaceAll(strings.TrimSpace(outcome.CompletionReason), "_", " ")
+	notice := "SelfMind stopped before full completion"
+	if reason != "" && reason != "completed" {
+		notice += " (" + reason + ")"
+	}
+	if outcome.Resumable {
+		notice += `; reply "continue" to resume.`
+	} else {
+		notice += "."
+	}
+	// The router's stream summary appends the same sentence when the TURN itself
+	// reported incomplete. Saying it twice is worse than saying it once.
+	if strings.Contains(content, "SelfMind stopped before full completion") {
+		return content
+	}
+	if content == "" {
+		return notice
+	}
+	return content + "\n\n" + notice
+}
+
 func withVerificationNotice(content string, verification *api.VerificationOutcome, mismatches []string) string {
 	if verification == nil || verification.State == "not_applicable" {
 		return strings.TrimSpace(content)

@@ -5,6 +5,10 @@ workspace: "."
 channel: cli
 model_required: false
 
+# retired-name-probe: intentional — this case INVOKES `/tasks` and `/task 1 pin`
+# to prove they are rejected. Without that marker the retired-name sweep would
+# read these turns as live callers left behind.
+#
 # Control-only. Pinning let a display field decide what needs the person now,
 # and the /tasks card view listed labels rather than runs. Both are removed:
 # the listing must come from Attention, and the retired commands must answer as

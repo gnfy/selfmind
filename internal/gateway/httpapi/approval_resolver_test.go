@@ -333,7 +333,7 @@ func TestCLIOriginatedApprovalRoutesToPreferredIM(t *testing.T) {
 	// TUI turns use a session-UUID channel, not the literal "cli" — origin
 	// detection must key on the platform (regression: a channel match routed
 	// TUI approvals to a nonexistent "cli" sender, stuck in 'sending' forever).
-	coord.notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval)
+	coord.notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval, true)
 
 	if len(recorder.messages) != 1 {
 		t.Fatalf("messages = %+v", recorder.messages)
@@ -368,7 +368,7 @@ func TestApprovalAnsweredInCLISendsIdempotentResolutionToPushedIM(t *testing.T) 
 	}
 	recorder := &recordingSender{}
 	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
-	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval, true)
 	if len(recorder.messages) != 1 || recorder.messages[0].Kind != delivery.KindApproval {
 		t.Fatalf("approval push = %+v", recorder.messages)
 	}
@@ -406,14 +406,14 @@ func TestPhoneFirstApprovalSurfaceMirrorsWhileCLIIsAttached(t *testing.T) {
 	daemon.touchPresence(ctx, identity)
 
 	// desk-first is the default: the inline TUI owns the young request.
-	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval, true)
 	if len(recorder.messages) != 0 {
 		t.Fatalf("desk-first unexpectedly mirrored approval: %+v", recorder.messages)
 	}
 	if _, err := daemon.notifyPreferenceReply(ctx, identity, "phone-first"); err != nil {
 		t.Fatal(err)
 	}
-	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval, true)
 	if len(recorder.messages) != 1 || recorder.messages[0].Platform != "weixin" || recorder.messages[0].Kind != delivery.KindApproval {
 		t.Fatalf("phone-first approval push = %+v", recorder.messages)
 	}
@@ -443,7 +443,7 @@ func TestIMOriginatedApprovalNotifiesOwnChannelOnly(t *testing.T) {
 	recorder := &recordingSender{}
 	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
 
-	daemon.coordinator().notifyApprovalRequested(ctx, imIdentity, task.ID, "", "wx_chat_1", approval)
+	daemon.coordinator().notifyApprovalRequested(ctx, imIdentity, task.ID, "", "wx_chat_1", approval, true)
 
 	if len(recorder.messages) != 1 {
 		t.Fatalf("messages = %+v", recorder.messages)

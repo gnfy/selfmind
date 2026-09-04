@@ -53,7 +53,6 @@ type EventSummary struct {
 	toolFailures []string
 	lastOutputs  []string
 	completion   TurnCompletion
-	outcomeSeen  bool
 	// lastToolFailed is whether the LAST tool to finish failed. A failure the
 	// model recovered from — a refused finish_run, a corrected verification —
 	// must not be reported as the reason a final response is missing.
@@ -98,23 +97,14 @@ func (s *EventSummary) Observe(event llm.StreamEvent) {
 			s.toolFailures = appendLimited(s.toolFailures, fmt.Sprintf("%s: %v", label, event.Err), 5)
 		}
 	case "turn.completed":
-		if s.outcomeSeen {
-			return
-		}
+		// The TURN's own view of itself. It can say "completed" while the RUN
+		// resolves to verification_partial / missing_final_response, and the run
+		// outcome does not exist yet at this point — it is written at
+		// finalization, after this stream closes. The outcome-level notice is
+		// therefore appended by the coordinator, not here.
 		s.completion.Status = payloadString(event.Payload, "status")
 		s.completion.CompletionReason = payloadString(event.Payload, "completion_reason")
 		s.completion.FinishReason = payloadString(event.Payload, "finish_reason")
-		s.completion.Resumable = payloadBool(event.Payload, "resumable")
-	case "run.outcome":
-		// The RUN outcome is the authority, not the turn's own view of itself: a
-		// turn can report "completed" while the run resolves to
-		// verification_partial / missing_final_response. Trusting the turn meant
-		// the person was told a tool had errored — the last tool had in fact
-		// succeeded — and lost the "reply continue to resume" the outcome had
-		// already computed.
-		s.outcomeSeen = true
-		s.completion.Status = payloadString(event.Payload, "status")
-		s.completion.CompletionReason = payloadString(event.Payload, "completion_reason")
 		s.completion.Resumable = payloadBool(event.Payload, "resumable")
 	}
 }

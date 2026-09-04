@@ -643,6 +643,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		outcome.Risks = appendUnique(outcome.Risks, mismatch, 8)
 	}
 	content = withVerificationNotice(content, outcome.Verification, outcome.ClaimMismatches)
+	content = withCompletionNotice(content, outcome)
 	var finalizeErrs []string
 	recordFinalizeErr := func(action string, err error) {
 		if err == nil {

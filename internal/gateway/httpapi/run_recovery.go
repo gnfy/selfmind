@@ -224,10 +224,12 @@ func (d *Server) sweepRecoveryNotifications() {
 		identity := &control.IdentityContext{TenantID: item.TenantID, PersonID: item.PersonID, Platform: "cli"}
 		content := recoveryNotificationContent(item.Title,
 			d.recoveryHandoffForRun(ctx, item.TenantID, item.PersonID, item.RunID))
+		// liveSurfaceInformed=true: recovery's own notification is the signal, not
+		// a fallback for a live event that may have failed to land.
 		if d.coordinator().routePendingNotification(ctx, identity, item.Channel, delivery.Message{
 			TenantID: item.TenantID, PersonID: item.PersonID, TaskID: item.TaskID, RunID: item.RunID,
 			Content: content, Kind: "recovery",
-		}) {
+		}, true) {
 			if err := d.Control.MarkRecoveryNotificationSent(ctx, item); err != nil {
 				log.Warn("gateway: recovery notification marker failed", "run", item.RunID, "error", err)
 			}

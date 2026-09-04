@@ -737,6 +737,8 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 		return
 	}
 	origin := d.externalWatchOriginIdentity(ctx, watch)
+	// liveSurfaceInformed=true: a watcher's own events reach the attached TUI on
+	// their normal path, so the established suppression still applies here.
 	handled := d.coordinator().routePendingNotification(ctx, origin, watch.Channel, delivery.Message{
 		TenantID: watch.TenantID,
 		PersonID: watch.PersonID,
@@ -744,7 +746,7 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 		RunID:    watch.RunID,
 		Content:  externalWatchNotice(watch, "waiting_finalization"),
 		Kind:     "external_watch",
-	})
+	}, true)
 	if !handled && origin != nil && origin.Platform == "cli" &&
 		d.presenceTracker().IsAttached(watch.PersonID, "cli") {
 		// external_watch.completed was committed before this method and is

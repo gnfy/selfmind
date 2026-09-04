@@ -19,6 +19,16 @@ expect:
   require_tool_events: true
   min_tool_calls: 2
   max_duration_seconds: 120
+  # The reply must SAY the work did not finish and how to pick it up. The notice
+  # used to fire only for status == "incomplete", so verification_partial,
+  # waiting_user, interrupted and blocked all dropped their resume hint; and a
+  # turn with any recovered tool failure was told a tool had errored instead.
+  contains:
+    - "stopped before full completion"
+    - 'reply "continue" to resume'
+  must_not_contain:
+    - "encountered a tool error"
+
 checks:
   no_mojibake: true
   no_raw_json_leak: true

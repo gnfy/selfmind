@@ -116,11 +116,13 @@ fi
 
 # Exercise the authenticated short-lived client path against durable state.
 # These model-free commands prove more than process liveness without spending a
-# provider call or depending on external network access.
+# provider call or depending on external network access. Bare `resume` IS the
+# attention listing; it replaced `tasks`, which listed Task labels rather than
+# the runs a person can continue.
 control_status="$(run_selfmind status)"
 grep -F "No active task." <<<"${control_status}" >/dev/null
-tasks_before_restart="$(run_selfmind tasks)"
-grep -F "Nothing needs attention." <<<"${tasks_before_restart}" >/dev/null
+attention_before_restart="$(run_selfmind resume)"
+grep -F "Nothing needs attention." <<<"${attention_before_restart}" >/dev/null
 
 run_selfmind gateway restart --drain
 second_status="$(wait_for_running)"
@@ -129,8 +131,8 @@ if [[ "${first_pid}" == "${second_pid}" ]]; then
   echo "gateway restart reused pid ${first_pid}; expected a new daemon process" >&2
   exit 1
 fi
-tasks_after_restart="$(run_selfmind tasks)"
-grep -F "Nothing needs attention." <<<"${tasks_after_restart}" >/dev/null
+attention_after_restart="$(run_selfmind resume)"
+grep -F "Nothing needs attention." <<<"${attention_after_restart}" >/dev/null
 
 run_selfmind gateway stop
 stopped_status="$(run_selfmind gateway status --json)"

@@ -178,11 +178,7 @@ func TestWaitingRunsParkWorkUnitsAndSkillActivations(t *testing.T) {
 	for _, status := range []string{"waiting_user", "waiting_external", "waiting_finalization"} {
 		t.Run(status, func(t *testing.T) {
 			ctx := context.Background()
-			store, err := OpenStore(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer store.Close()
+			store := newTestStore(t)
 			identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "park-"+status, "Parked")
 			task, _ := store.CreateTask(ctx, TaskCreate{
 				TenantID: identity.TenantID, PersonID: identity.PersonID,

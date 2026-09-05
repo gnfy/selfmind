@@ -45,11 +45,7 @@ func seedPendingSession(t *testing.T, s *Store, personID, channel, content strin
 
 func TestDeliveryHealthByPlatformSeparatesTransportStates(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	unconfirmed := seedUnconfirmed(t, store, "p1", "wx", "maybe")
 	_ = unconfirmed
 	sent, err := store.EnqueueDelivery(ctx, Delivery{TenantID: "default", PersonID: "p1", Platform: "telegram", Channel: "tg", Content: "ok"})
@@ -76,11 +72,7 @@ func TestDeliveryHealthByPlatformSeparatesTransportStates(t *testing.T) {
 }
 
 func TestLatestDeliveryEndpointStateIsEndpointScoped(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	one, err := store.EnqueueDelivery(ctx, Delivery{
 		TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: "wx-1", Channel: "wx-1", Content: "one",
@@ -118,11 +110,7 @@ func TestLatestDeliveryEndpointStateIsEndpointScoped(t *testing.T) {
 // oldest-first ordering, the one-shot claim, and the freshness window.
 func TestCatchUpEligibilityAndClaim(t *testing.T) {
 	ctx := context.Background()
-	s, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	s := newTestStore(t)
 
 	first := seedUnconfirmed(t, s, "p1", "wx-chat", "older notice")
 	time.Sleep(1100 * time.Millisecond) // created_at is unix-seconds; force distinct ordering
@@ -176,11 +164,7 @@ func TestCatchUpEligibilityAndClaim(t *testing.T) {
 // TestCountOutboundByStatusSince backs the /diag outbound-health section.
 func TestCountOutboundByStatusSince(t *testing.T) {
 	ctx := context.Background()
-	s, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	s := newTestStore(t)
 
 	seedUnconfirmed(t, s, "p1", "wx", "one")
 	d := seedUnconfirmed(t, s, "p1", "wx", "two")
@@ -199,11 +183,7 @@ func TestCountOutboundByStatusSince(t *testing.T) {
 
 func TestPendingSessionDiagnosticsAreScopedAndBounded(t *testing.T) {
 	ctx := context.Background()
-	s, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
+	s := newTestStore(t)
 
 	first := seedPendingSession(t, s, "p1", "wx-chat", "first", 3)
 	seedPendingSession(t, s, "p1", "other-chat", "second", 3)

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/runpool"
@@ -161,10 +162,7 @@ func TestStructuredDoneSurvivesExhaustedActionBudget(t *testing.T) {
 
 func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -229,10 +227,7 @@ func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 
 func TestFinalizeErroredRunReturnsStructuredHandoffWhenMutationCannotAutoResume(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -272,10 +267,7 @@ func TestFinalizeErroredRunReturnsStructuredHandoffWhenMutationCannotAutoResume(
 
 func TestFinalizeErroredRunPreservesStallAttributionAcrossGatewayBoundary(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "stalled", "Local User")
 	if err != nil {
@@ -306,10 +298,7 @@ func TestFinalizeErroredRunPreservesStallAttributionAcrossGatewayBoundary(t *tes
 
 func TestFinalizeErroredRunPreservesDurableStructuredOutcome(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {

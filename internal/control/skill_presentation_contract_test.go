@@ -9,11 +9,7 @@ import (
 )
 
 func TestSkillCandidateRefIsStableScopedAndNeverUnknownAfterIssue(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	input := IssueSkillCandidateRefInput{
 		IdentityTenantID: "default", ControlTenantID: "default", PersonID: "person-1",
 		RunID: "run-1", WorkUnitID: "unit-1", SkillKey: "skill-key", SkillName: "flow",
@@ -41,11 +37,7 @@ func TestSkillCandidateRefIsStableScopedAndNeverUnknownAfterIssue(t *testing.T) 
 }
 
 func TestSkillCandidateRefLedgerIsBoundedPerWorkUnit(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	for index := 0; index < MaxSkillCandidateRefsPerWorkUnit; index++ {
 		_, err := store.IssueSkillCandidateRef(ctx, IssueSkillCandidateRefInput{
@@ -58,7 +50,7 @@ func TestSkillCandidateRefLedgerIsBoundedPerWorkUnit(t *testing.T) {
 			t.Fatalf("issue ref %d: %v", index, err)
 		}
 	}
-	_, err = store.IssueSkillCandidateRef(ctx, IssueSkillCandidateRefInput{
+	_, err := store.IssueSkillCandidateRef(ctx, IssueSkillCandidateRefInput{
 		IdentityTenantID: "default", ControlTenantID: "default", PersonID: "person-limit",
 		RunID: "run-limit", WorkUnitID: "unit-limit", SkillKey: "overflow", SkillName: "overflow",
 		VersionHash: "version", PackageHash: "overflow-package", DescriptionHash: "description",
@@ -69,11 +61,7 @@ func TestSkillCandidateRefLedgerIsBoundedPerWorkUnit(t *testing.T) {
 }
 
 func TestSkillPackageResourcesAreImmutableAndReadable(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	body := "resource body"
 	digest := sha256.Sum256([]byte(body))
 	resource := SkillPackageResource{Path: "references/detail.md", ContentHash: fmt.Sprintf("%x", digest[:]), ContentBody: body, Bytes: len(body)}
@@ -96,11 +84,7 @@ func TestSkillPackageResourcesAreImmutableAndReadable(t *testing.T) {
 
 func TestSkillCandidateRefsExpireOnlyWhenTheirWorkUnitEnds(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "candidate-cleanup", "Candidate Cleanup")
 	if err != nil {
 		t.Fatal(err)
@@ -139,11 +123,7 @@ func TestSkillCandidateRefsExpireOnlyWhenTheirWorkUnitEnds(t *testing.T) {
 
 func TestPruneSkillCandidateRefsIsDryRunFirstAndPreservesLiveOwners(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "candidate-prune", "Candidate Prune")
 	if err != nil {
 		t.Fatal(err)
@@ -205,11 +185,7 @@ func TestPruneSkillCandidateRefsIsDryRunFirstAndPreservesLiveOwners(t *testing.T
 
 func TestSkillPresentationDiagnosticsRecomputesStoredDeliveryReceipt(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "receipt-doctor", "Receipt Doctor")
 	if err != nil {
 		t.Fatal(err)

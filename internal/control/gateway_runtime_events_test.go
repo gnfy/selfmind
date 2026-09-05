@@ -6,11 +6,7 @@ import (
 )
 
 func TestGatewayRuntimeEventIsIdempotentPerInstance(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	event := GatewayRuntimeEvent{InstanceID: "gateway_previous", EventType: "gateway.unclean_exit"}
 	if inserted, err := store.RecordGatewayRuntimeEvent(ctx, event); err != nil || !inserted {
@@ -29,22 +25,14 @@ func TestGatewayRuntimeEventIsIdempotentPerInstance(t *testing.T) {
 }
 
 func TestGatewayRuntimeEventRejectsMissingIdentity(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	if inserted, err := store.RecordGatewayRuntimeEvent(context.Background(), GatewayRuntimeEvent{EventType: "gateway.unclean_exit"}); err == nil || inserted {
 		t.Fatalf("missing identity must be visible, inserted=%v err=%v", inserted, err)
 	}
 }
 
 func TestGatewayRuntimeEventForInstanceDoesNotReturnAnotherDaemon(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	for _, id := range []string{"gateway_old", "gateway_current"} {
 		if inserted, err := store.RecordGatewayRuntimeEvent(ctx, GatewayRuntimeEvent{

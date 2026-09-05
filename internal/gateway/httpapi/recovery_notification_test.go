@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,17 +15,38 @@ import (
 	"selfmind/internal/gateway/delivery"
 )
 
+// flakyRecordingSender is written by the test and read by whatever background
+// goroutine the delivery layer runs, so it needs the same locking syncedSender
+// already has. Without it the fields were a genuine data race that the old
+// per-test setup cost (about 4.6s of database creation before every test under
+// -race) happened to serialize away; it surfaced the moment the suite stopped
+// paying that.
 type flakyRecordingSender struct {
+	mu       sync.Mutex
 	messages []delivery.Message
 	err      error
 }
 
 func (s *flakyRecordingSender) Send(_ context.Context, msg delivery.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
 	}
 	s.messages = append(s.messages, msg)
 	return nil
+}
+
+func (s *flakyRecordingSender) setErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
+
+func (s *flakyRecordingSender) snapshot() []delivery.Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]delivery.Message(nil), s.messages...)
 }
 
 func TestRecoveryNotificationDeliveredOnce(t *testing.T) {
@@ -337,7 +359,7 @@ func TestExternalWatchNotificationWaitsForConfirmedEndpointDelivery(t *testing.T
 		t.Fatalf("failed endpoint must preserve retryable notification: %+v", stored)
 	}
 
-	sender.err = nil
+	sender.setErr(nil)
 	time.Sleep(5 * time.Millisecond)
 	daemon.runExternalWatchNotificationPass(ctx)
 	stored, err = store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
@@ -345,13 +367,13 @@ func TestExternalWatchNotificationWaitsForConfirmedEndpointDelivery(t *testing.T
 		t.Fatalf("watch was not marked after confirmed retry: %+v err=%v", stored, err)
 	}
 	externalNotices := 0
-	for _, msg := range sender.messages {
+	for _, msg := range sender.snapshot() {
 		if msg.Kind == "external_watch" {
 			externalNotices++
 		}
 	}
 	if externalNotices != 1 {
-		t.Fatalf("confirmed external watch notices=%d messages=%+v", externalNotices, sender.messages)
+		t.Fatalf("confirmed external watch notices=%d messages=%+v", externalNotices, sender.snapshot())
 	}
 }
 

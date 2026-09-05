@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 )
 
 type fakeReviewRunner struct {
@@ -44,11 +45,7 @@ func (f *fakeReviewRunner) RunReviewFromPayload(_ context.Context, _, _ string) 
 // claims and completes a job exactly once, and failures stay pending with a
 // retry horizon instead of vanishing (W7).
 func TestSkillReviewJobsDurable(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 
 	inserted, err := store.EnqueueMaintenanceJob(ctx, "tenant", "skillreview_abc", SkillReviewJobVersion, `{"channel":"cli"}`)
@@ -80,11 +77,7 @@ func TestSkillReviewJobsDurable(t *testing.T) {
 }
 
 func TestSkillReviewJobFailureRetries(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	if _, err := store.EnqueueMaintenanceJob(ctx, "tenant", "skillreview_fail", SkillReviewJobVersion, `{"channel":"cli"}`); err != nil {
 		t.Fatal(err)
@@ -106,11 +99,7 @@ func TestSkillReviewJobFailureRetries(t *testing.T) {
 }
 
 func TestSkillCurationJobFreezesProposalBeforeApply(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	if _, err := store.EnqueueMaintenanceJob(ctx, "tenant", "skillcuration_evidence", SkillCurationJobVersion, `{"evidence_set_hash":"evidence"}`); err != nil {
 		t.Fatal(err)

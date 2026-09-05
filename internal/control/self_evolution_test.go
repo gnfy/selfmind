@@ -9,11 +9,7 @@ import (
 
 func TestWorkflowProfileObservationsDoNotClaimShadowEvidence(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatalf("identity: %v", err)
@@ -99,11 +95,7 @@ func TestWorkflowProfileObservationsDoNotClaimShadowEvidence(t *testing.T) {
 
 func TestEnabledEvolutionAdviceRequiresVerifiedComparisonContract(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "verified-advice", "Verified")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "verified", Channel: "cli"})
 	run := appendReadOnlyProfileRun(t, store, identity, task, "observed", "")
@@ -123,11 +115,7 @@ func TestEnabledEvolutionAdviceRequiresVerifiedComparisonContract(t *testing.T) 
 
 func TestParkedWorkflowProfileDoesNotAdvanceBatchReadCandidate(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "parked-profile", "Parked")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect", Channel: "cli"})
 	policy := EvolutionPolicy{Enabled: true, Mode: "auto-readonly", ShadowAfterObservations: 1, PromoteAfterObservations: 10, MinShadowRuns: 3, MaxShadowFailureRate: 0.05}
@@ -156,11 +144,7 @@ func TestParkedWorkflowProfileDoesNotAdvanceBatchReadCandidate(t *testing.T) {
 
 func TestWorkflowEventsRetainOnlyEvolutionInputs(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "event-filter", "Events")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "events", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "events")

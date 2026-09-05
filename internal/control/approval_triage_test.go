@@ -8,11 +8,7 @@ import (
 )
 
 func TestApprovalTriageEventsPersistAndPrune(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Second)
 	for _, event := range []struct {
@@ -50,11 +46,7 @@ func TestApprovalTriageEventsPersistAndPrune(t *testing.T) {
 
 func TestApprovalDecisionFunnelKeepsHumanRequestsSeparateFromTriage(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant", "cli", "approval-owner", "Approval Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -92,11 +84,7 @@ func TestApprovalDecisionFunnelKeepsHumanRequestsSeparateFromTriage(t *testing.T
 }
 
 func TestApprovalTriageAuditPersistsStructuredEvidenceWithoutCommandText(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	now := time.Now().Truncate(time.Second)
 	if err := store.RecordApprovalTriageAudit(context.Background(), ApprovalTriageEvent{
 		TenantID: "tenant", PersonID: "person", TaskID: "task-1", RunID: "run-1", ToolName: "terminal",
@@ -108,7 +96,7 @@ func TestApprovalTriageAuditPersistsStructuredEvidenceWithoutCommandText(t *test
 	}
 	var taskID, runID, toolName, risk, auth, route, policy, rationale string
 	var latency int64
-	err = store.db.QueryRowContext(context.Background(), `SELECT thread_id, run_id, tool_name, risk_level,
+	err := store.db.QueryRowContext(context.Background(), `SELECT thread_id, run_id, tool_name, risk_level,
 		user_authorization, provider_route, latency_ms, policy_version, rationale
 		FROM approval_triage_events WHERE tenant_id = 'tenant' AND person_id = 'person'`).Scan(
 		&taskID, &runID, &toolName, &risk, &auth, &route, &latency, &policy, &rationale)

@@ -7,11 +7,7 @@ import (
 
 func TestSkillUsageStatsDeriveFromActivationsAndWorkUnitOutcomes(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "skill-stats", "Skill Stats")
 	if err != nil {
 		t.Fatal(err)

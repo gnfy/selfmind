@@ -7,11 +7,7 @@ import (
 
 func TestListTaskCards(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
 	if err != nil {
 		t.Fatal(err)

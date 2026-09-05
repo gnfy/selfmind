@@ -302,11 +302,7 @@ func TestOrderedMigrationsCoverCurrentSchemaVersion(t *testing.T) {
 // to describe what was applied, and left a future non-additive step with no
 // slot to land in.
 func TestFreshControlStoreRecordsEveryAppliedVersion(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	ledger := schemaLedger(t, store)
 	var versions []int
@@ -342,11 +338,7 @@ func TestFreshControlStoreRecordsEveryAppliedVersion(t *testing.T) {
 // database at v1 is already "correct" by accident and the ordered step is
 // untested dead code.
 func TestBaselineSchemaExcludesOrderedMigrationObjects(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	// Drop the migration-owned object, then re-run ONLY the baseline. The object
 	// must stay absent until the ordered step runs.

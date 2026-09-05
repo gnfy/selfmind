@@ -12,11 +12,7 @@ import (
 
 func TestClaimInteractionContinuationMovesRunAndClaimsParentAtomically(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	roots := []executionenv.RootBinding{{Path: "/workspace", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace}}
 	targetTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "target", Channel: "cli"})
@@ -60,11 +56,7 @@ func TestClaimInteractionContinuationMovesRunAndClaimsParentAtomically(t *testin
 
 func TestClaimInteractionContinuationRefusesDomainAndCheckpointMismatch(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	parentRoots := []executionenv.RootBinding{{Path: "/workspace", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace}}
 	targetTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "target", Channel: "cli"})
@@ -146,11 +138,7 @@ func TestClaimInteractionContinuationHasCrossConnectionSingleWinner(t *testing.T
 // thread, or a pending approval would never join the run in Attention.
 func TestControlObjectsFollowTheRunAfterDirectClaim(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	roots := []executionenv.RootBinding{{Path: "/workspace", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace}}
 	targetTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "target", Channel: "cli"})

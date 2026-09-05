@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
@@ -146,10 +147,7 @@ func TestDurableDeliveryOverrideSurvivesCoordinatorRestart(t *testing.T) {
 }
 
 func TestRecordToolOutputIsLiveOnly(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
@@ -185,10 +183,7 @@ func TestRecordToolOutputIsLiveOnly(t *testing.T) {
 }
 
 func TestRecordSteeringConsumedIsDurableAndRedacted(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")

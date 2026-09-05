@@ -10,11 +10,7 @@ import (
 
 func TestBindQueuedRunAllowsOnlyOneConcurrentLauncher(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -73,11 +69,7 @@ func TestBindQueuedRunAllowsOnlyOneConcurrentLauncher(t *testing.T) {
 
 func TestTaskQueueLifecycle(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
@@ -154,11 +146,7 @@ func TestTaskQueueLifecycle(t *testing.T) {
 
 func TestTaskQueueUsesClassPriorityAndNotBefore(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	enqueue := func(content, class string, notBefore time.Time) *QueuedTask {
 		t.Helper()
@@ -198,11 +186,7 @@ func TestTaskQueueUsesClassPriorityAndNotBefore(t *testing.T) {
 
 func TestQueueIdempotencyIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	first, err := store.EnqueueQueued(ctx, QueuedTask{
 		TenantID: "tenant-a", PersonID: "person-a", Platform: "cli", Channel: "cli",
@@ -232,11 +216,7 @@ func TestQueueIdempotencyIsTenantScoped(t *testing.T) {
 
 func TestListAllQueuedAcrossPersons(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	a, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	b, _ := store.ResolveOrCreateAccount(ctx, "default", "telegram", "tg_bob", "Bob")
@@ -257,11 +237,7 @@ func TestListAllQueuedAcrossPersons(t *testing.T) {
 
 func TestEnqueueQueuedOnlyIgnoresIdempotencyConflict(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -299,11 +275,7 @@ func TestEnqueueQueuedOnlyIgnoresIdempotencyConflict(t *testing.T) {
 
 func TestRequeueSystemQueuedIsBoundedAndLeavesOrdinaryRowsAlone(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -353,11 +325,7 @@ func TestRequeueSystemQueuedIsBoundedAndLeavesOrdinaryRowsAlone(t *testing.T) {
 
 func TestQueueClaimLeasePreventsLiveSystemRequeue(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -387,11 +355,7 @@ func TestQueueClaimLeasePreventsLiveSystemRequeue(t *testing.T) {
 
 func TestQueueClaimRejectsStaleWorker(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	row, _ := store.EnqueueQueued(ctx, QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Content: "work"})
 	token, claimed, err := store.ClaimQueued(ctx, identity.TenantID, row.ID, time.Minute)
@@ -408,11 +372,7 @@ func TestQueueClaimRejectsStaleWorker(t *testing.T) {
 
 func TestDoneSystemQueueOnlyRequeuesWithoutSuccessfulRunEvent(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -463,11 +423,7 @@ func TestDoneSystemQueueOnlyRequeuesWithoutSuccessfulRunEvent(t *testing.T) {
 
 func TestRequeueStartedQueuedSettlesMaterializedRunWithoutReplay(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -514,11 +470,7 @@ func TestRequeueStartedQueuedSettlesMaterializedRunWithoutReplay(t *testing.T) {
 
 func TestRequeueStartedQueuedReplaysUntilFinalResultIsDurable(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "finalization"})
 	row, err := store.EnqueueQueued(ctx, QueuedTask{
@@ -556,11 +508,7 @@ func TestRequeueStartedQueuedReplaysUntilFinalResultIsDurable(t *testing.T) {
 
 func TestEffectReceiptsAreTenantScoped(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	for _, tenant := range []string{"tenant-a", "tenant-b"} {
 		if _, err := store.db.ExecContext(ctx, `INSERT INTO effect_receipts
 			(effect_key, tenant_id, thread_id, run_id, kind, delivery_enqueued, created_at)
@@ -578,11 +526,7 @@ func TestEffectReceiptsAreTenantScoped(t *testing.T) {
 
 func TestRequeueStartedQueuedReopensFailedBoundRun(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -614,11 +558,7 @@ func TestRequeueStartedQueuedReopensFailedBoundRun(t *testing.T) {
 
 func TestUpdateSystemQueuedContentOnlyTouchesDurableSystemRows(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -658,11 +598,7 @@ func TestUpdateSystemQueuedContentOnlyTouchesDurableSystemRows(t *testing.T) {
 
 func TestMarkQueuedIfStatusDoesNotOverwriteRecoveryTransition(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)

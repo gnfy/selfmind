@@ -8,11 +8,7 @@ import (
 )
 
 func TestPruneOutboundDeliveriesPreservesRecoverableRows(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	ctx := context.Background()
 	now := time.Now()
@@ -108,11 +104,7 @@ func TestPruneOutboundDeliveriesPreservesRecoverableRows(t *testing.T) {
 }
 
 func TestPruneOutboundDeliveriesDisabled(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	ctx := context.Background()
 	old := time.Now().Add(-30 * 24 * time.Hour).Unix()

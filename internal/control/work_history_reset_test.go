@@ -216,11 +216,7 @@ func TestWorkHistoryResetBackupCanBeRestored(t *testing.T) {
 
 func TestResetWorkHistoryDetachesSkillLearningEvidenceButKeepsPackages(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	id, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "skill-evidence", "Owner")
 	if err != nil {
 		t.Fatal(err)

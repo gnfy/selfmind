@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
@@ -85,11 +86,7 @@ func TestMessageRequestFromFeishuEvent(t *testing.T) {
 
 func TestAccountBindEndpoint(t *testing.T) {
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
@@ -123,11 +120,7 @@ func TestAccountBindEndpoint(t *testing.T) {
 
 func TestApprovalsEndpoints(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
@@ -200,11 +193,7 @@ func TestApprovalsEndpoints(t *testing.T) {
 
 func TestLegacyDaemonTokenAuth(t *testing.T) {
 	t.Setenv("SELF_DAEMON_TOKEN", "secret")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	body := bytes.NewReader([]byte(`{"platform":"cli","platform_user_id":"local","content":"/tasks"}`))
@@ -227,11 +216,7 @@ func TestLegacyDaemonTokenAuth(t *testing.T) {
 func TestGatewayTokenTakesPrecedence(t *testing.T) {
 	t.Setenv("SELF_DAEMON_TOKEN", "old")
 	t.Setenv("SELF_GATEWAY_TOKEN", "new")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	body := []byte(`{"platform":"cli","platform_user_id":"local","content":"/tasks"}`)
@@ -254,11 +239,7 @@ func TestGatewayTokenTakesPrecedence(t *testing.T) {
 
 func TestGatewayStatusEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	daemon := &Server{
 		Control:         store,
 		DefaultTenantID: "default",
@@ -546,11 +527,7 @@ func TestGatewayContextIncludesAttachments(t *testing.T) {
 }
 
 func TestPrepareRequestWorkspaceRegistersCLICWD(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
@@ -583,11 +560,7 @@ func TestPrepareRequestWorkspaceRegistersCLICWD(t *testing.T) {
 }
 
 func TestPrepareRequestWorkspaceIgnoresIMClientCWD(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx_user", "Weixin User")
@@ -619,11 +592,7 @@ func TestPrepareRequestWorkspaceIgnoresIMClientCWD(t *testing.T) {
 }
 
 func TestPrepareRequestWorkspaceUsesCurrentWorkspaceForIM(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx_user", "Weixin User")
@@ -683,11 +652,7 @@ func TestPrepareRequestWorkspaceUsesCurrentWorkspaceForIM(t *testing.T) {
 // plain new work pre-labels onto the open current task while executing in the
 // request's workspace (Work Timeline P3).
 func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
@@ -764,11 +729,7 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 // an ordinary message still owns its own fresh root task, with the deterministic
 // work key kept as display metadata.
 func TestReferencesNeverRouteAttachment(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-work-key", "Local User")
@@ -801,11 +762,7 @@ func TestReferencesNeverRouteAttachment(t *testing.T) {
 }
 
 func TestResolveContinuationDoesNotDeriveReferenceFromTaskTitle(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-continuation-key", "Local User")
 	if err != nil {
@@ -839,11 +796,7 @@ func TestResolveContinuationDoesNotDeriveReferenceFromTaskTitle(t *testing.T) {
 }
 
 func TestExplicitTaskDetailedMessageSelectsPriorWork(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-explicit-detail", "Local User")
 	if err != nil {
@@ -869,11 +822,7 @@ func TestExplicitTaskDetailedMessageSelectsPriorWork(t *testing.T) {
 }
 
 func TestResumePinDetailedMessageSelectsPriorWork(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-pin-detail", "Local User")
 	if err != nil {
@@ -902,11 +851,7 @@ func TestResumePinDetailedMessageSelectsPriorWork(t *testing.T) {
 }
 
 func TestResolveTaskTreatsUnregisteredWorkKeyAsMetadata(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-new-work-key", "Local User")
@@ -939,11 +884,7 @@ func TestResolveTaskTreatsUnregisteredWorkKeyAsMetadata(t *testing.T) {
 }
 
 func TestModelCommandDoesNotCreateTask(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	resp, status := daemon.ProcessMessage(httptest.NewRequest(http.MethodPost, "/", nil).Context(), api.MessageRequest{
@@ -968,11 +909,7 @@ func TestModelCommandDoesNotCreateTask(t *testing.T) {
 }
 
 func TestUnresolvedPastePlaceholderIsRejectedBeforeDispatch(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	resp, status := daemon.ProcessMessage(context.Background(), api.MessageRequest{
@@ -994,11 +931,7 @@ func TestUnresolvedPastePlaceholderIsRejectedBeforeDispatch(t *testing.T) {
 // task instead of failing the turn (the spine carries any conversational
 // context it referred to).
 func TestContinueWithoutPendingWorkBecomesNewWork(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1018,11 +951,7 @@ func TestContinueWithoutPendingWorkBecomesNewWork(t *testing.T) {
 }
 
 func TestResumeContextIncludesLatestHandoff(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1070,11 +999,7 @@ func TestResumeContextIncludesLatestHandoff(t *testing.T) {
 }
 
 func TestExplicitTaskAttachResumesPriorRun(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1125,11 +1050,7 @@ func TestExplicitTaskAttachResumesPriorRun(t *testing.T) {
 // created, recovered from write_file/patch tool events, so the continuation
 // edits the right file instead of rediscovering and guessing.
 func TestResumeContextIncludesCreatedFilesFromEvents(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1187,11 +1108,7 @@ func TestResumeContextIncludesCreatedFilesFromEvents(t *testing.T) {
 // workspace — otherwise a CLI `继续` of an IM task would run in the terminal's
 // directory and trip out-of-root approvals.
 func TestWorkspacePreservedOnResume(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1243,11 +1160,7 @@ func TestWorkspacePreservedOnResume(t *testing.T) {
 // write_file — so a continuation of a run that used any file-mutating tool still
 // knows the exact paths to edit.
 func TestResumeChangedFilesHarvestsPatchAndEditPaths(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1298,11 +1211,7 @@ func TestResumeChangedFilesHarvestsPatchAndEditPaths(t *testing.T) {
 
 func TestTaskEventsEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1340,11 +1249,7 @@ func TestTaskEventsEndpoint(t *testing.T) {
 
 func TestTaskEventsStreamEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1381,11 +1286,7 @@ func TestTaskEventsStreamEndpoint(t *testing.T) {
 
 func TestTaskArtifactsEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -1423,11 +1324,7 @@ func TestTaskArtifactsEndpoint(t *testing.T) {
 }
 
 func TestRecordOutcomeArtifactsCreatesEvents(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {

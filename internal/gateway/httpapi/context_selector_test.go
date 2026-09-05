@@ -6,17 +6,14 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/kernel"
 )
 
 func TestWorkContinuityHintsSurfaceWaitingRunForShortReply(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "hint-user", "User")
 	if err != nil {
 		t.Fatal(err)
@@ -61,11 +58,7 @@ func TestWorkContinuityHintsSurfaceWaitingRunForShortReply(t *testing.T) {
 
 func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
 	if err != nil {
@@ -162,11 +155,7 @@ func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 // fall back to the bounded task card — no handoff, no artifacts, no events.
 func TestFullContextWithoutExactParentDowngrades(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "downgrade", "User")
 	if err != nil {
 		t.Fatal(err)
@@ -215,11 +204,7 @@ func TestFullContextWithoutExactParentDowngrades(t *testing.T) {
 
 func TestBoundedTaskContextOmitsEventAndCompatibilityHistory(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "bounded-context", "User")
 	if err != nil {
 		t.Fatal(err)
@@ -266,11 +251,7 @@ func TestBoundedTaskContextOmitsEventAndCompatibilityHistory(t *testing.T) {
 // by TestSelectedTaskRuntimeContext above.
 func TestPreLabelContextIsMinimal(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Sel")
 	if err != nil {
 		t.Fatal(err)
@@ -309,11 +290,7 @@ func TestPreLabelContextIsMinimal(t *testing.T) {
 
 func TestExplicitCLIAttachIncludesPossiblyMissedIMFinalResult(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Sel")
 	if err != nil {
 		t.Fatal(err)

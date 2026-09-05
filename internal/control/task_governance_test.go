@@ -10,11 +10,7 @@ import (
 
 func TestDeleteEmptyTaskNeverDeletesHistory(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
 	if err != nil {
 		t.Fatal(err)
@@ -47,11 +43,7 @@ func TestDeleteEmptyTaskNeverDeletesHistory(t *testing.T) {
 
 func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
 	if err != nil {
 		t.Fatal(err)
@@ -123,11 +115,7 @@ func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
 
 func TestSearchTasksFindsOlderCJKRunAndHandoff(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
 	if err != nil {
 		t.Fatal(err)
@@ -174,11 +162,7 @@ func TestSearchTasksFindsOlderCJKRunAndHandoff(t *testing.T) {
 
 func TestQueryTasksFiltersWorkspaceStatusKeywordAndPaginates(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
 	if err != nil {
 		t.Fatal(err)
@@ -237,11 +221,7 @@ func TestQueryTasksFiltersWorkspaceStatusKeywordAndPaginates(t *testing.T) {
 // its undismissed Run.
 func TestGetTaskStatusFollowsAttentionRules(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
 	if err != nil {
 		t.Fatal(err)
@@ -322,11 +302,7 @@ func TestGetTaskStatusFollowsAttentionRules(t *testing.T) {
 // nothing at all.
 func TestPinResumeSelectionIsAtomic(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
 	if err != nil {
 		t.Fatal(err)

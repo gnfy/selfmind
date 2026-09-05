@@ -9,11 +9,7 @@ import (
 )
 
 func TestPendingTurnChoiceBareClaimRequiresOneRecentChoice(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Second)
 	create := func(label string) *PendingTurnChoice {
@@ -55,11 +51,7 @@ func TestPendingTurnChoiceBareClaimRequiresOneRecentChoice(t *testing.T) {
 }
 
 func TestPendingTurnChoiceClaimIsSingleUse(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	choice, err := store.CreatePendingTurnChoice(ctx, PendingTurnChoiceCreate{
 		TenantID: "default", PersonID: "person", RequestJSON: `{"content":"continue"}`,
@@ -88,11 +80,7 @@ func TestPendingTurnChoiceClaimIsSingleUse(t *testing.T) {
 }
 
 func TestLatestPendingTurnChoiceForChannelIsBoundedToPersonAndChannel(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now()
 	created, err := store.CreatePendingTurnChoice(ctx, PendingTurnChoiceCreate{
@@ -164,11 +152,7 @@ func TestPendingTurnChoiceClaimIsSingleUseAcrossStoreConnections(t *testing.T) {
 }
 
 func TestPruneTurnContinuityBoundsChoicesAndResolutionAudit(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Second)
 	choice, err := store.CreatePendingTurnChoice(ctx, PendingTurnChoiceCreate{
@@ -198,11 +182,7 @@ func TestPruneTurnContinuityBoundsChoicesAndResolutionAudit(t *testing.T) {
 }
 
 func TestRecordTurnResolutionStoresHashNotInput(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	id, err := store.RecordTurnResolution(ctx, TurnResolutionRecord{
 		TenantID: "default", PersonID: "person", Input: "sensitive original input",

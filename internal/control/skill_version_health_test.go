@@ -8,11 +8,7 @@ import (
 
 func TestSkillVersionHealthNominatesStalenessAndQuarantinesRepairRegression(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	now := time.Now().Truncate(time.Second)
 	verified := WorkflowObservation{
 		ID: "verified-a", RunID: "run-a", VerificationState: "passed", OutcomeStatus: WorkUnitCompleted,
@@ -81,11 +77,7 @@ func TestSkillVersionHealthNominatesStalenessAndQuarantinesRepairRegression(t *t
 
 func TestSemanticRepairCandidateAccumulatesImmutableEvidenceSnapshotsBeforePromotion(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	key := SkillKey("default", "semantic-repair", "workspace", "agent-created", "/managed/workspace", "semantic-repair/SKILL.md")
 	parent, err := store.CreateSkillCandidateVersion(ctx, "default", key, "semantic-repair", "", "parent", "parent-evidence", []string{"parent"}, SkillEvidenceDigest{})
 	if err != nil {

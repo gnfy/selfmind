@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
@@ -168,11 +169,7 @@ func liveInputID(messages []llm.Message) string {
 
 func TestActiveMainCanQueueIndependentSteeringWithoutChangingCurrentTask(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	provider := newIndependentSteeringProvider()
 	registry := tools.NewRegistry()
 	dispatcher := tools.NewDispatcherWithRegistry(registry)
@@ -249,11 +246,7 @@ func TestActiveMainCanQueueIndependentSteeringWithoutChangingCurrentTask(t *test
 
 func TestActiveMainCanReviseTheCurrentPlanFromRelatedSteering(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	provider := newRelatedSteeringProvider()
 	registry := tools.NewRegistry()
 	dispatcher := tools.NewDispatcherWithRegistry(registry)

@@ -8,10 +8,7 @@ import (
 
 func labelTestStore(t *testing.T) (*Store, *IdentityContext) {
 	t.Helper()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := newTestStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "local", "Me")
 	if err != nil {

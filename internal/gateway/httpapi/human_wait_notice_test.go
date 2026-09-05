@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/delivery"
 )
 
@@ -16,11 +17,7 @@ import (
 // minutes with nothing on any channel.
 func TestHumanWaitEventReportsWhetherTheLiveSurfaceSawIt(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	task, err := store.CreateTask(ctx, control.TaskCreate{
 		TenantID: "default", PersonID: "p1", Title: "release", Channel: "cli",

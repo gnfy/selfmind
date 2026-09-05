@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 )
 
@@ -23,10 +24,7 @@ func newDigestTestServer(t *testing.T) (*Server, *control.Store, *control.Identi
 	t.Helper()
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "local", "Local User")
 	if err != nil {

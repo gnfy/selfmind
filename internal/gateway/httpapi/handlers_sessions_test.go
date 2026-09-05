@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
@@ -45,11 +45,7 @@ func (t *argRecordingTool) Execute(args map[string]interface{}) (string, error) 
 func TestDispatchPartitionScoping(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	memTool := &argRecordingTool{name: "memory"}
 	skillTool := &argRecordingTool{name: "skill_manage"}
@@ -107,11 +103,7 @@ func TestDispatchSkillManageUsesDaemonConfiguredStorage(t *testing.T) {
 	t.Setenv("HOME", home)
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	base := filepath.Join(t.TempDir(), "skill-assets")
 	storage, err := tools.NewSkillStorage(base)
 	if err != nil {
@@ -149,11 +141,7 @@ func TestDispatchSkillManageMutationsUseAuthenticatedManagementScope(t *testing.
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	tool := tools.NewSkillManageTool()
 	direct := kernel.ToolInvocationScope{ControlTenantID: "default", SkillMutationMode: kernel.SkillMutationDirect}
@@ -249,11 +237,7 @@ func (f *fakeSessions) GetSessionMessages(tenantID, sessionID string, around, wi
 func TestSessionsEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	fake := &fakeSessions{
 		sessions: []memory.FTS5Session{{SessionID: "task:t1", Channel: "cli", Summary: "refactor loader", Timestamp: 42}},

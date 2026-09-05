@@ -115,7 +115,17 @@ jobs:
   race:
     name: Race-sensitive runtime tests (${{ matrix.name }})
     needs: changes
-    if: github.event_name != 'pull_request' && needs.changes.outputs.code == 'true'
+    # Runs on pull requests too. These jobs used to be push-only, so a race or a
+    # timeout could only ever be discovered after merging — main went red while
+    # the PR that caused it was green (observed 2026-09-04). They were skipped on
+    # PRs because they took about 13 minutes each; test databases are now seeded
+    # from one built copy instead of re-running the migration chain per test, so
+    # the whole matrix finishes in a few minutes.
+    #
+    # No per-package filter beyond code-vs-docs: a race these packages catch is
+    # often introduced somewhere else entirely, so narrowing the trigger to the
+    # packages under test would miss exactly the changes worth checking.
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/promptassets"
 )
@@ -31,11 +32,7 @@ func TestPostRunReplayPayloadPinsPromptSnapshot(t *testing.T) {
 }
 
 func TestBlockPromptRevisionJobPersistsAfterWorkerContextCancellation(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	const tenantID = "tenant"
 	const key = "skillreview_missing_revision"
 	if _, err := store.EnqueueMaintenanceJob(context.Background(), tenantID, key, SkillReviewJobVersion, `{}`); err != nil {

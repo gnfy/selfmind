@@ -12,11 +12,7 @@ import (
 
 func TestSkillLifecycleSeparatesWorkUnitsFallbackAndTaskAffinity(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -117,11 +113,7 @@ func TestSkillLifecycleSeparatesWorkUnitsFallbackAndTaskAffinity(t *testing.T) {
 
 func TestWorkUnitOutcomeAndActivationRemainIndependentWhenLaterUnitFails(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "mixed", "Mixed")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "mixed work", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "complete A then attempt B")
@@ -240,11 +232,7 @@ func TestWaitingRunsParkWorkUnitsAndSkillActivations(t *testing.T) {
 
 func TestWaitingRunWithFailedVerificationRemainsFailure(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "park-failed", "Parked")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "verify", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "verify and wait")
@@ -262,11 +250,7 @@ func TestWaitingRunWithFailedVerificationRemainsFailure(t *testing.T) {
 
 func TestWorkflowCohortRequiresMultipleComparableSuccessesAndKeepsFailures(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "cohort", "Cohort")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect releases", Channel: "cli"})
 
@@ -336,11 +320,7 @@ func TestWorkflowCohortRequiresMultipleComparableSuccessesAndKeepsFailures(t *te
 
 func TestVerifiedSkillFallbackRecoveryNominatesImmediateRepair(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "repair", "Repair")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "repair release skill", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "update release record safely")
@@ -598,11 +578,7 @@ V`
 
 func TestWorkflowCohortExcludesExternalWatchRuns(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "watch-cohort", "Watch")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect release", Channel: "cli"})
 	runOne := func(origin string) *Run {
@@ -641,11 +617,7 @@ func TestWorkflowCohortExcludesExternalWatchRuns(t *testing.T) {
 
 func TestWorkflowCohortNominatesCJKParaphrasesAndSeparatesSkillVersions(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "cjk-cohort", "CJK")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "发布检查", Channel: "cli"})
 	goals := []string{"检查发布元数据 12345", "查看发布元数据 67890", "核对发布元数据 24680"}
@@ -683,11 +655,7 @@ func TestWorkflowCohortNominatesCJKParaphrasesAndSeparatesSkillVersions(t *testi
 
 func TestWorkUnitStableIDsSurvivePlanReordering(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "reorder", "Reorder")
 	taskA, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "A", Channel: "cli"})
 	taskB, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "B", Channel: "cli"})
@@ -711,16 +679,12 @@ func TestWorkUnitStableIDsSurvivePlanReordering(t *testing.T) {
 
 func TestStaleWorkUnitReferenceReturnsCurrentRunIDs(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "stale-unit", "Stale Unit")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "work", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "work")
 
-	_, err = store.SyncRunWorkUnits(ctx, identity.TenantID, run.ID, []WorkUnitPlanInput{{
+	_, err := store.SyncRunWorkUnits(ctx, identity.TenantID, run.ID, []WorkUnitPlanInput{{
 		WorkUnitID: "wu-from-prior-run", GoalDigest: "work", PlanStatus: "in_progress",
 	}})
 	var stale *StaleWorkUnitReferenceError
@@ -735,11 +699,7 @@ func TestStaleWorkUnitReferenceReturnsCurrentRunIDs(t *testing.T) {
 
 func TestWeakPlanCannotAttachAnotherPersonsTask(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	owner, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "Owner")
 	other, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "other", "Other")
 	ownerTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: "owner", Channel: "cli"})
@@ -752,11 +712,7 @@ func TestWeakPlanCannotAttachAnotherPersonsTask(t *testing.T) {
 
 func TestSkillFailureGuardMatchesOnlyTheSameInputShape(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "guard", "Guard")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "inspect build 12345 at /tmp/build-123")
@@ -790,11 +746,7 @@ func TestSkillFailureGuardMatchesOnlyTheSameInputShape(t *testing.T) {
 
 func TestSkillFailureGuardMatchesOnlyTheSameEnvironmentFingerprint(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "guard-environment", "Guard")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect", Channel: "cli"})
 	runA, _ := store.StartRun(ctx, task, "cli", "inspect the release manifest")
@@ -832,11 +784,7 @@ func TestSkillFailureGuardMatchesOnlyTheSameEnvironmentFingerprint(t *testing.T)
 
 func TestTransientSkillFallbackDoesNotCreateFailureGuard(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "transient-guard", "Guard")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "fetch", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "fetch status")

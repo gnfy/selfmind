@@ -6,14 +6,11 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 )
 
 func TestModelsDiagReplySummarizesMaintenanceProviderCost(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	if err := store.RecordMaintenanceProviderCall(context.Background(), control.MaintenanceProviderCall{
 		TenantID: "tenant", Role: "maintenance_backup", Provider: "minimax", Model: "MiniMax-M2.7",
 		Status: control.MaintenanceProviderCallSucceeded, InputTokens: 12500, OutputTokens: 800,

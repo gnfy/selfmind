@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 )
 
 func feishuSig(ts, nonce, key string, body []byte) string {
@@ -97,10 +97,7 @@ func TestIMMessageIDExtraction(t *testing.T) {
 // contract: a webhook whose message id was already seen is acknowledged 200
 // (so the platform stops retrying) without reaching the agent again.
 func TestIMWebhookDuplicateAcknowledgedWithoutProcessing(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 

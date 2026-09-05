@@ -13,11 +13,7 @@ import (
 // 'sending') must become reclaimable so the message is not stranded.
 func TestClaimDeliveryExactlyOnce(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	d, err := store.EnqueueDelivery(ctx, Delivery{
 		TenantID: "default", PersonID: "p1", Platform: "weixin",
@@ -66,11 +62,7 @@ func TestClaimDeliveryExactlyOnce(t *testing.T) {
 // in 'sending' beyond staleSendingSeconds becomes due and claimable again.
 func TestClaimDeliveryStaleReclaim(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	d, err := store.EnqueueDelivery(ctx, Delivery{
 		TenantID: "default", PersonID: "p1", Platform: "weixin",

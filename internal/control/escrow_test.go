@@ -12,11 +12,7 @@ import (
 // escrow scan; MarkApprovalNotified stamps it (idempotently) and it drops out.
 func TestApprovalNotifiedRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	if err != nil {
@@ -67,11 +63,7 @@ func TestApprovalNotifiedRoundTrip(t *testing.T) {
 // TestClarifyNotifiedRoundTrip mirrors the approval round-trip for clarifies.
 func TestClarifyNotifiedRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	if err != nil {

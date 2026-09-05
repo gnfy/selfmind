@@ -15,10 +15,7 @@ import (
 func seedResidueWorld(t *testing.T) (*Store, *IdentityContext, *IdentityContext, *IdentityContext, map[string]string) {
 	t.Helper()
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	store := newTestStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 
 	evalID, err := store.ResolveOrCreateAccount(ctx, "eval-tenant-123", "eval", "eval-case1", "SelfMind Eval")

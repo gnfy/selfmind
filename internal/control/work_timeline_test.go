@@ -13,11 +13,7 @@ import (
 // to know which persisted facts produce a listed Thread.
 func TestWorkTimelineKeepsOrdinaryInteractionSearchableButUnlisted(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -50,11 +46,7 @@ func TestWorkTimelineKeepsOrdinaryInteractionSearchableButUnlisted(t *testing.T)
 
 func TestWorkTimelinePromotesInteractionWithoutChangingRunHistory(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -94,11 +86,7 @@ func TestWorkTimelinePromotesInteractionWithoutChangingRunHistory(t *testing.T) 
 
 func TestWorkTimelineDerivesAndDismissesAttentionWithoutRewritingRun(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -202,11 +190,7 @@ func TestWorkTimelineNewerRunSupersedesOlderParkedRun(t *testing.T) {
 
 func TestRunPlanDeterministicallyPromotesItsInteractionThread(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -254,11 +238,7 @@ func TestRunPlanDeterministicallyPromotesItsInteractionThread(t *testing.T) {
 
 func TestAutomaticPromotionNeverReopensArchivedThread(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -296,11 +276,7 @@ func TestAutomaticPromotionNeverReopensArchivedThread(t *testing.T) {
 
 func TestResumableFinalizationPromotesItsInteractionThread(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -334,11 +310,7 @@ func TestResumableFinalizationPromotesItsInteractionThread(t *testing.T) {
 
 func TestDirectAnswerFinalizationKeepsItsInteractionUnlisted(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -823,10 +795,7 @@ func TestProjectInteractionTaskNeverLowersPromotedVisibility(t *testing.T) {
 
 func newTimelineFixture(t *testing.T) (*Store, *IdentityContext, *WorkTimeline) {
 	t.Helper()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(context.Background(), DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
@@ -849,11 +818,7 @@ func setRunStartedAtForTest(t *testing.T, store *Store, runID string, at time.Ti
 // nothing, so it is not work evidence; a dispatched one is.
 func TestWorkEvidenceIgnoresNeverDispatchedLedgerRow(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -911,11 +876,7 @@ func TestWorkEvidenceIgnoresNeverDispatchedLedgerRow(t *testing.T) {
 // also lifts that Run's Attention dismissal (docs/work-timeline.md).
 func TestPinResumeSelectionClearsAttentionDismissal(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)

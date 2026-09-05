@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/tools"
@@ -34,10 +35,7 @@ func newMemoryCommandServer(t *testing.T) (*Server, *memory.MemoryManager, *cont
 	t.Helper()
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	provider, err := memory.NewSQLiteProvider(t.TempDir())
 	if err != nil {

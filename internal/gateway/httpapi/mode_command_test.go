@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
@@ -18,10 +18,7 @@ import (
 func TestModeCommandPersistsAndResolves(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
@@ -99,10 +96,7 @@ func (j *recordingJudge) calls() int {
 func TestApprovalModeLiveLookupMidRun(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")

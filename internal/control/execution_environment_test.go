@@ -67,11 +67,7 @@ func TestLegacyWorkspaceMigrationRequiresLocalTrustReview(t *testing.T) {
 }
 
 func TestWorkspaceTrustControlsExecutionCapabilities(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	ctx := context.Background()
 	workspace, err := store.EnsureWorkspace(ctx, Workspace{
@@ -153,11 +149,7 @@ func TestWorkspaceTrustControlsExecutionCapabilities(t *testing.T) {
 }
 
 func TestExecutionLeaseIsImmutablePerRun(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	ctx := context.Background()
 	first, err := store.MaterializeExecutionLease(ctx, executionenv.Lease{
@@ -204,15 +196,11 @@ func TestExecutionLeaseIsImmutablePerRun(t *testing.T) {
 }
 
 func TestExpiredExecutionCapabilityIsInactive(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	ctx := context.Background()
 	now := time.Now().Unix()
-	_, err = store.db.ExecContext(ctx, `INSERT INTO execution_capability_grants
+	_, err := store.db.ExecContext(ctx, `INSERT INTO execution_capability_grants
 		(id, tenant_id, person_id, workspace_id, capability, resource_fingerprint,
 		 granted_by, expires_at, revoked_at, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,

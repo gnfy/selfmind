@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/kernel"
 	"selfmind/internal/tools"
 )
@@ -16,11 +17,7 @@ import (
 func TestTaskSkillBindingRequiresDeterministicAttachAndHonorsFailureGuard(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "selector", "Selector")
 	task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect build", Channel: "cli"})
 	if _, err := tools.NewSkillManageTool().Execute(map[string]interface{}{
@@ -91,11 +88,7 @@ func TestTaskSkillBindingRequiresDeterministicAttachAndHonorsFailureGuard(t *tes
 func TestSkillCandidateCatalogueIssuesDurableWorkUnitRefs(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "candidate-selector", "Candidate Selector")
 	task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "inspect")
@@ -162,11 +155,7 @@ func TestSkillCandidateCatalogueIssuesDurableWorkUnitRefs(t *testing.T) {
 func TestExplicitSlashSkillActivatesSamePinnedDeliveryBeforeDiscovery(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "slash-selector", "Slash Selector")
 	task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "slash", Channel: "cli"})
 	run, _ := store.StartRun(ctx, task, "cli", "slash")

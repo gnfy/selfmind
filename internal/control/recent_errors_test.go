@@ -10,11 +10,7 @@ import (
 // merge into one newest-first list; successful tool events and successful run
 // outcomes are excluded.
 func TestListRecentErrors(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant", "cli", "local", "Tester")
 	if err != nil {

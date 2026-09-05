@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 )
@@ -22,11 +23,7 @@ import (
 func TestRunSteerEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")

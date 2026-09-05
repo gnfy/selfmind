@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
@@ -39,10 +40,7 @@ func (panicLLMProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-
 func TestAsyncRunPanicIsRecovered(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { store.Close() })
 
 	agent := kernel.NewAgent(memory.NewMemoryManager(nil), stubToolBackend{}, panicLLMProvider{}, "test agent", 1, 1, nil)

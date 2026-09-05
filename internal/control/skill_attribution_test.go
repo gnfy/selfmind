@@ -51,10 +51,7 @@ func TestVersionSixMigrationAddsSkillAttributionToVersionFiveShape(t *testing.T)
 
 func attributionFixture(t *testing.T) (*Store, context.Context) {
 	t.Helper()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestStore(t)
 	t.Cleanup(func() { store.Close() })
 	return store, context.Background()
 }

@@ -7,11 +7,7 @@ import (
 
 func TestContinuityAuditFindsHistoricalEdgeAndOwnerDamage(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "audit-user", "Audit User")
 	if err != nil {
 		t.Fatal(err)

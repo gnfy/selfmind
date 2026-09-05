@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/kernel"
 )
 
@@ -82,11 +83,7 @@ func TestPathExistsTreatsUnknownAsPresent(t *testing.T) {
 // actually edited were `.md`, which nothing asks to verify.
 func TestEvidenceOutcomeIgnoresATransientHelper(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 
 	task, err := store.CreateTask(ctx, control.TaskCreate{

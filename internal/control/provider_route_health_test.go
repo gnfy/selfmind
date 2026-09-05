@@ -8,11 +8,7 @@ import (
 
 func TestProviderRouteQuotaCircuitAllowsOneProbeAndReplaysBlockedJobs(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	const tenant = "tenant"
 	const route = "route-kimi"
@@ -63,11 +59,7 @@ func TestProviderRouteQuotaCircuitAllowsOneProbeAndReplaysBlockedJobs(t *testing
 
 func TestInactiveProviderRouteRequeuesBlockedJobsAfterConfigChange(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	const tenant = "tenant"
 	if _, err := store.EnqueueMaintenanceJob(ctx, tenant, "job", 1, `{}`); err != nil {
@@ -92,11 +84,7 @@ func TestInactiveProviderRouteRequeuesBlockedJobsAfterConfigChange(t *testing.T)
 
 func TestInactiveProviderRouteSweepDoesNotReleaseRetryLimitPolicy(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	const tenant = "tenant"
 	if _, err := store.EnqueueMaintenanceJob(ctx, tenant, "retry-limited", 1, `{}`); err != nil {
@@ -124,11 +112,7 @@ func TestInactiveProviderRouteSweepDoesNotReleaseRetryLimitPolicy(t *testing.T) 
 
 func TestInactiveProviderRouteSweepDoesNotReleaseNetworkRoute(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	const tenant = "tenant"
 	if _, err := store.EnqueueMaintenanceJob(ctx, tenant, "network-blocked", 1, `{}`); err != nil {
@@ -157,11 +141,7 @@ func TestInactiveProviderRouteSweepDoesNotReleaseNetworkRoute(t *testing.T) {
 
 func TestHealthyFallbackRequeuesOnlyMatchingMaintenanceVersion(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	const tenant = "tenant"
 	const blockedRoute = "route-kimi"
@@ -205,11 +185,7 @@ func TestHealthyFallbackRequeuesOnlyMatchingMaintenanceVersion(t *testing.T) {
 
 func TestOpenFallbackRoutesDoNotRequeueBlockedMaintenance(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	const tenant = "tenant"
 	now := time.Now().Truncate(time.Second)
@@ -243,11 +219,7 @@ func TestOpenFallbackRoutesDoNotRequeueBlockedMaintenance(t *testing.T) {
 
 func TestDaemonMaintenanceHealthRequeuesPersonOwnedJobs(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	const healthTenant = "default"
 	const personTenant = "person-owner"

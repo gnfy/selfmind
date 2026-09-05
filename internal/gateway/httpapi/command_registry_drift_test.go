@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 )
@@ -34,10 +34,7 @@ func invocationForm(name string) string {
 func TestEveryRegistryGatewayCommandIsHandledBySwitch(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	ctx := context.Background()
@@ -60,10 +57,7 @@ func TestEveryRegistryGatewayCommandIsHandledBySwitch(t *testing.T) {
 func TestUnknownSlashStillRejected(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	ctx := context.Background()

@@ -12,11 +12,7 @@ import (
 // and IM/cron work silently followed whichever terminal ran last.
 func TestEnsureWorkspaceDoesNotStealTheDefault(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	// First ensure bootstraps the default: a fresh install must leave IM
 	// somewhere to run.

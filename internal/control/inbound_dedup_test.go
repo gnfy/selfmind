@@ -7,11 +7,7 @@ import (
 )
 
 func TestMarkInboundSeen(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 
 	first, err := store.MarkInboundSeen(ctx, "feishu", "msg-1")
@@ -50,11 +46,7 @@ func TestMarkInboundSeen(t *testing.T) {
 }
 
 func TestMarkInboundSeenPrunesOldRows(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 
 	old := time.Now().Add(-inboundDedupRetention - time.Hour).Unix()

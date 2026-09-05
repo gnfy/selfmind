@@ -7,11 +7,7 @@ import (
 
 func TestListRecentRunsForPerson(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
@@ -49,11 +45,7 @@ func TestListRecentRunsForPerson(t *testing.T) {
 
 func TestCountChannelMessagesByChannel(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {

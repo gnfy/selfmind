@@ -28,10 +28,7 @@ func TestIsSQLiteBusyRecognizesExtendedCodes(t *testing.T) {
 
 func continuityFixture(t *testing.T) (*Store, *IdentityContext, *Task) {
 	t.Helper()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := newTestStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "User")

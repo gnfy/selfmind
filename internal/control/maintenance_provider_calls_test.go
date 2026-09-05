@@ -7,11 +7,7 @@ import (
 )
 
 func TestMaintenanceProviderUsageAggregatesPhysicalCalls(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	now := time.Now()
 	for _, call := range []MaintenanceProviderCall{
@@ -43,11 +39,7 @@ func TestMaintenanceProviderUsageAggregatesPhysicalCalls(t *testing.T) {
 }
 
 func TestPruneMaintenanceProviderCalls(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	if err := store.RecordMaintenanceProviderCall(context.Background(), MaintenanceProviderCall{
 		TenantID: "tenant", Provider: "kimi-coding", Status: MaintenanceProviderCallSucceeded,
 		CreatedAt: time.Now().Add(-48 * time.Hour),
@@ -61,11 +53,7 @@ func TestPruneMaintenanceProviderCalls(t *testing.T) {
 }
 
 func TestMaintenanceProviderUsageForPersonIsIsolated(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	now := time.Now()
 	for _, personID := range []string{"person-a", "person-b"} {
 		if err := store.RecordMaintenanceProviderCall(context.Background(), MaintenanceProviderCall{

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 )
 
 // TestStuckRunSweeperRecoversStaleRunsButSkipsActive drives the periodic sweep
@@ -14,11 +15,7 @@ import (
 // the active-run registry must never be touched regardless of heartbeat age.
 func TestStuckRunSweeperRecoversStaleRunsButSkipsActive(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	deadIdentity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "dead", "Dead Session")
 	if err != nil {
@@ -110,11 +107,7 @@ func TestContinuationLadderOffersInterruptedRun(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
 		t.Fatalf("identity: %v", err)

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
@@ -37,11 +38,7 @@ func newRecallMemory(t *testing.T) *memory.MemoryManager {
 }
 
 func TestWorkspaceKnowledgeRecallFindsProceduralRule(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "knowledge-recall", "User")
 	if err != nil {
@@ -124,10 +121,7 @@ func seedCanonicalMemory(t *testing.T, mem *memory.MemoryManager, personID strin
 
 func newRecallControl(t *testing.T) (*control.Store, *control.IdentityContext) {
 	t.Helper()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "local", "Me")
 	if err != nil {

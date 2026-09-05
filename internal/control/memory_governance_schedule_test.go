@@ -8,11 +8,7 @@ import (
 
 func TestMemoryGovernanceSchedulePersistsLifecycle(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "scheduler-owner", "Scheduler Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -60,11 +56,7 @@ func TestMemoryGovernanceSchedulePersistsLifecycle(t *testing.T) {
 
 func TestListPersonPartitionsPreservesTenant(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "partition-owner", "Partition Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -84,11 +76,7 @@ func TestListPersonPartitionsPreservesTenant(t *testing.T) {
 // pass after the 30s startup grace, re-burning model budget with no backoff.
 func TestMemoryGovernanceAttemptLeavesCrashRetryLease(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	now := time.Unix(1_800_000_000, 0)
 	if err := store.EnsureMemoryGovernanceSchedule(ctx, "default", "p-crash", now); err != nil {
 		t.Fatal(err)
@@ -119,11 +107,7 @@ func TestMemoryGovernanceAttemptLeavesCrashRetryLease(t *testing.T) {
 // nor any diagnostic could see a crash loop.
 func TestReconcileInterruptedMemoryGovernanceCountsFailure(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	now := time.Unix(1_800_000_000, 0)
 	for _, person := range []string{"p-interrupted", "p-healthy"} {
 		if err := store.EnsureMemoryGovernanceSchedule(ctx, "default", person, now); err != nil {

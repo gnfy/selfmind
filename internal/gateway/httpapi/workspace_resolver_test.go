@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 )
 
@@ -124,11 +125,7 @@ func TestWorkspaceHasExactlyOneVerb(t *testing.T) {
 }
 
 func TestWorkspaceIMRepliesAreReadableAndHideIDs(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx_user", "Weixin User")
 	if err != nil {

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
@@ -105,10 +106,7 @@ func newDetachedRunServer(t *testing.T, provider *slowLLMProvider) (*Server, *co
 	t.Helper()
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := controltest.NewStore(t)
 	t.Cleanup(func() { store.Close() })
 	t.Cleanup(provider.releaseNow)
 

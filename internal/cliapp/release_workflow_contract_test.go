@@ -109,8 +109,20 @@ func TestCIWorkflowSeparatesFastPRFromCompleteParallelMainGate(t *testing.T) {
 		}
 	}
 	races := workflow.Jobs["race"]
-	if !strings.Contains(races.If, "event_name != 'pull_request'") || !strings.Contains(workflowRunText(races), "go test -race") {
-		t.Fatalf("race gate must run on main/manual but not PR: if=%q", races.If)
+	// The race gate must GATE PULL REQUESTS. It was push-only because each job
+	// took about 13 minutes, which meant a race or a timeout could only be found
+	// after merging: main went red while the PR that caused it was green
+	// (observed 2026-09-04). Test databases are now seeded from one built copy
+	// rather than re-running the migration chain per test, so the matrix is fast
+	// enough to run before merge.
+	if strings.Contains(races.If, "event_name != 'pull_request'") {
+		t.Fatalf("race gate must not skip pull requests; that is how a red main gets merged: if=%q", races.If)
+	}
+	if !strings.Contains(races.If, "changes.outputs.code") {
+		t.Fatalf("race gate must still skip documentation-only changes: if=%q", races.If)
+	}
+	if !strings.Contains(workflowRunText(races), "go test -race") {
+		t.Fatalf("race gate does not run the race detector: %s", workflowRunText(races))
 	}
 	evalJob := workflow.Jobs["eval"]
 	fast := workflowStep(t, evalJob, "Fast provider-offline PR corpus")

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/modelchange"
 )
 
@@ -21,11 +22,7 @@ type testMemoryConsolidator struct {
 
 func TestMemoryGovernancePassStopsWhenAReadyModelBecomesPending(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	if _, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "owner", "Owner"); err != nil {
 		t.Fatal(err)
 	}
@@ -107,11 +104,7 @@ func TestMemoryGovernanceScheduleSurvivesRestartClock(t *testing.T) {
 
 func TestMemoryGovernanceFailureRetriesWithoutFullInterval(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "retry-owner", "Retry Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -133,11 +126,7 @@ func TestMemoryGovernanceFailureRetriesWithoutFullInterval(t *testing.T) {
 
 func TestMemoryGovernanceActiveRunDefersDueWork(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "active-owner", "Active Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -161,11 +150,7 @@ func TestMemoryGovernanceActiveRunDefersDueWork(t *testing.T) {
 
 func TestMemoryGovernancePartialProgressSchedulesBoundedCatchUp(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "partial-owner", "Partial Owner")
 	if err != nil {
 		t.Fatal(err)

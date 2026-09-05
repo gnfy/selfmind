@@ -12,10 +12,7 @@ import (
 func newRecoveryFixture(t *testing.T) (*Store, *IdentityContext, *Task, *Run) {
 	t.Helper()
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := newTestStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {

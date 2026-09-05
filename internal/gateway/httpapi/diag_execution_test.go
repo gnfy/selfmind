@@ -6,15 +6,12 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 )
 
 func TestExecutionDiagIsRedactedAndShowsWorkspace(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity := &control.IdentityContext{
 		TenantID: "tenant-exec-diag",

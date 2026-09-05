@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 )
 
@@ -30,11 +31,7 @@ func seedContinuityHistory(t *testing.T, store *control.Store, identity *control
 }
 
 func TestClaimedObserveChoiceIsReadOnly(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	_, run := seedContinuityHistory(t, store, identity, "completed")

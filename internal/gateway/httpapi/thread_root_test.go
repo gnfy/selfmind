@@ -5,16 +5,13 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 )
 
 func TestOrdinaryRootRequestCreatesSearchableUnlistedInteraction(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)

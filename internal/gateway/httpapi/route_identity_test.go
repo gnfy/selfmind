@@ -4,16 +4,12 @@ import (
 	"context"
 	"testing"
 
-	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 )
 
 func TestRouteIdentityForPersonNeverDriftsToCLILocal(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Owner")
 	if err != nil {

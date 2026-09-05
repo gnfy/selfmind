@@ -8,11 +8,7 @@ import (
 
 func TestPersonEventCursorIsDurableScopedAndNeverReused(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	a, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
 	if err != nil {

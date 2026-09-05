@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
@@ -20,11 +21,7 @@ import (
 
 func TestCommitWorkSelectionQueuesExactContinuation(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx-user", "WX")
 	targetTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace-parent", Title: "old release", Channel: "cli"})
 	targetRun, _ := store.StartRun(ctx, targetTask, "cli", "old release")
@@ -53,11 +50,7 @@ func TestCommitWorkSelectionQueuesExactContinuation(t *testing.T) {
 
 func TestCommitWorkSelectionQueuesSameDomainExactContinuation(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	targetTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "old release", Channel: "cli"})
 	targetRun, _ := store.StartRun(ctx, targetTask, "cli", "old release")
@@ -89,11 +82,7 @@ func TestCommitWorkSelectionQueuesSameDomainExactContinuation(t *testing.T) {
 
 func TestCommitWorkSelectionStopsAfterMaterialEffect(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	targetTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "target", Channel: "cli"})
 	targetRun, _ := store.StartRun(ctx, targetTask, "cli", "target")
@@ -216,11 +205,7 @@ func (p *workSelectionProvider) StreamChat(ctx context.Context, _ llm.ChatReques
 
 func TestNaturalProgressQuestionUsesReferenceInteractionWithoutClaimingTheRun(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wx-local", "Local on Weixin"); err != nil {
 		t.Fatal(err)
@@ -256,11 +241,7 @@ func TestNaturalProgressQuestionUsesReferenceInteractionWithoutClaimingTheRun(t 
 
 func TestIdleMainSelectionCommitsThroughNormalRunAndHidesInteractionLabel(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	targetTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "old release", Channel: "cli"})
 	targetRun, _ := store.StartRunWithOptions(ctx, targetTask, "cli", "old release", control.StartRunOptions{ExecutionRoots: []executionenv.RootBinding{{
@@ -317,11 +298,7 @@ func TestIdleMainSelectionCommitsThroughNormalRunAndHidesInteractionLabel(t *tes
 // queued, and the whole continuation costs one Main run.
 func TestIdleMainSelectionContinuesSameDomainRunInTurn(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	targetTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "old release", Channel: "cli"})
 	targetRun, _ := store.StartRun(ctx, targetTask, "cli", "old release")
@@ -384,11 +361,7 @@ func TestIdleMainSelectionContinuesSameDomainRunInTurn(t *testing.T) {
 
 func TestLiveCorrectionReplacesImplicitSelectionBeforeEffects(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	makeTarget := func(title string) (*control.Task, *control.Run) {
 		task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: title, Channel: "cli"})

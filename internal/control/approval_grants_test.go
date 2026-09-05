@@ -8,10 +8,7 @@ import (
 
 func newApprovalGrantTestStore(t *testing.T) *Store {
 	t.Helper()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
+	store := newTestStore(t)
 	t.Cleanup(func() { _ = store.Close() })
 	return store
 }

@@ -8,11 +8,7 @@ import (
 
 func TestMaterializeRunFinalizationIsAtomicAndReplaySafe(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
@@ -99,11 +95,7 @@ func TestMaterializeRunFinalizationIsAtomicAndReplaySafe(t *testing.T) {
 
 func TestMaterializeRunFinalizationRollsBackMismatchedTask(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
@@ -155,11 +147,7 @@ func TestMaterializeRunFinalizationRollsBackMismatchedTask(t *testing.T) {
 
 func TestMaterializeRunFinalizationSuppressesDuplicateLogicalEffect(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "watch closure"})
 	firstRun, _ := store.StartRun(ctx, task, "cli", "first finalization")
@@ -224,18 +212,14 @@ func TestMaterializeRunFinalizationSuppressesDuplicateLogicalEffect(t *testing.T
 // attached" to an established card anymore.
 func TestMaterializeRunFinalizationAlwaysCommitsDerivedCard(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Work line"})
 	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "in_progress", "old summary", []string{"old next"}); err != nil {
 		t.Fatal(err)
 	}
 	run, _ := store.StartRun(ctx, task, "cli", "finish the work")
-	_, err = store.MaterializeRunFinalization(ctx, RunFinalization{
+	_, err := store.MaterializeRunFinalization(ctx, RunFinalization{
 		Identity: *identity, RunID: run.ID, RunStatus: "done", TaskID: task.ID,
 		TaskStatus: "done", Summary: "new run summary", NextSteps: []string{"new next"},
 		Handoff:         Handoff{Summary: "new run summary"},
@@ -255,11 +239,7 @@ func TestMaterializeRunFinalizationAlwaysCommitsDerivedCard(t *testing.T) {
 
 func TestMaterializeRunFinalizationSynthesizesOutcomeBeforeTerminal(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
@@ -413,11 +393,7 @@ func TestMaterializeRunFinalizationDerivesAttentionFromDurableControlFacts(t *te
 
 func TestUpdateTaskStatusCannotRewriteDerivedAttention(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -467,11 +443,7 @@ func TestUpdateTaskStatusCannotRewriteDerivedAttention(t *testing.T) {
 
 func TestMaterializeRunFinalizationPreservesUnresumedPriorRun(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -523,11 +495,7 @@ func TestMaterializeRunFinalizationPreservesUnresumedPriorRun(t *testing.T) {
 
 func TestMaterializeRunFinalizationOnlyClaimReleasesUnresolvedRun(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -710,11 +678,7 @@ func TestMaterializeRunFinalizationKeepsEachAttentionRunExact(t *testing.T) {
 
 func TestMaterializeRunFinalizationClosesDeliberatelyResumedRun(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -763,11 +727,7 @@ func TestMaterializeRunFinalizationClosesDeliberatelyResumedRun(t *testing.T) {
 // unclaimed, and completing an unrelated run cannot erase them.
 func TestWorkKeysNeverResolveRunOwnership(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -858,11 +818,7 @@ func TestWorkKeysNeverResolveRunOwnership(t *testing.T) {
 // current Attention, but each stays unclaimed and explicitly resumable.
 func TestSameKeyUnfinishedWorkSurvivesCompletion(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -953,11 +909,7 @@ func lenMapCounts(values map[string]int) int {
 
 func TestStartRunWithWorkKeyIsAtomicAndReadable(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)

@@ -11,11 +11,7 @@ import (
 
 func TestListTaskRunTransitionsSinceUsesRunClock(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore failed: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
@@ -134,11 +130,7 @@ func TestListTaskRunTransitionsSinceUsesRunClock(t *testing.T) {
 
 func TestListTasksByStatusReturnsCurrentUnresolvedState(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -175,11 +167,7 @@ func TestListTasksByStatusReturnsCurrentUnresolvedState(t *testing.T) {
 
 func TestListUndeliveredOutbound(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore failed: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {

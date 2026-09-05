@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 	"selfmind/internal/modelchange"
@@ -21,11 +22,7 @@ import (
 
 func TestGatewayShutdownInterruptsAndRequeuesInsteadOfCancelling(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -90,11 +87,7 @@ func TestGatewayShutdownInterruptsAndRequeuesInsteadOfCancelling(t *testing.T) {
 
 func TestModelChangeDrainLeavesNewWorkQueuedForNextDaemon(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	if err != nil {
 		t.Fatal(err)

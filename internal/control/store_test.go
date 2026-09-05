@@ -10,11 +10,7 @@ import (
 
 func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore failed: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
 	if err != nil {
@@ -121,11 +117,7 @@ func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 
 func TestResolveAccountIsReadOnly(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	missing, err := store.ResolveAccount(ctx, "default", "cli", "doctor-only")
 	if err != nil || missing != nil {
@@ -143,11 +135,7 @@ func TestResolveAccountIsReadOnly(t *testing.T) {
 
 func TestEnsureWorkspacePreservesExplicitAllowedRoots(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore failed: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	root := filepath.Join(t.TempDir(), "repo")
 	extra := filepath.Join(t.TempDir(), "shared")
@@ -193,11 +181,7 @@ func TestEnsureWorkspacePreservesExplicitAllowedRoots(t *testing.T) {
 
 func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore failed: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
 	if err != nil {
@@ -281,11 +265,7 @@ func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
 
 func TestStoreApprovalFlow(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore failed: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
 	if err != nil {
@@ -342,11 +322,7 @@ func TestStoreApprovalFlow(t *testing.T) {
 
 func TestApprovalGrantsScopes(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore failed: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -401,11 +377,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 // on an approval and is dropped on a rejection.
 func TestRespondApprovalRecordsDecisionScope(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore failed: %v", err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
 	if err != nil {
 		t.Fatal(err)
@@ -450,11 +422,7 @@ func TestRespondApprovalRecordsDecisionScope(t *testing.T) {
 
 func TestListAccountsByPerson(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
@@ -492,11 +460,7 @@ func TestListAccountsByPerson(t *testing.T) {
 
 func TestDeliveryKindSurvivesQueue(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	if _, err := store.EnqueueDelivery(ctx, Delivery{
 		TenantID:   "default",
@@ -696,11 +660,7 @@ VALUES ('legacy-effect', 'tenant-b', 'task-b', 'run-b', 'test', 0, 2);`); err !=
 
 func TestMostRecentIMAccount(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 	if err != nil {
@@ -762,11 +722,7 @@ func TestMostRecentIMAccount(t *testing.T) {
 
 func TestPersonSettingsRoundTrip(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	if value, err := store.GetPersonSetting(ctx, "default", "person_1", "notify_platform"); err != nil || value != "" {
 		t.Fatalf("unset value = %q, %v", value, err)
@@ -803,11 +759,7 @@ func TestPersonSettingsRoundTrip(t *testing.T) {
 // newly retained history group does not imply that anything is executing.
 func TestCreateThreadDoesNotCreateExecutionState(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	id, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "U")
 	if err != nil {
 		t.Fatal(err)

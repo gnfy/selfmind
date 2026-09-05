@@ -8,11 +8,7 @@ import (
 
 func TestCompleteTaskByUserRefusesPendingControlObjects(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -84,11 +80,7 @@ func TestCompleteTaskByUserRefusesPendingControlObjects(t *testing.T) {
 
 func TestCompleteTaskByUserDismissesParkedRunWithWorkEvidence(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)
@@ -142,11 +134,7 @@ func TestCompleteTaskByUserDismissesParkedRunWithWorkEvidence(t *testing.T) {
 
 func TestCompleteTaskByUserRefusesRunningWork(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "Owner")
 	if err != nil {
 		t.Fatal(err)

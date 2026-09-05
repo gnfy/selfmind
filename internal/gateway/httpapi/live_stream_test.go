@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 )
 
@@ -48,11 +49,7 @@ func TestRunEventBrokerIsPersonScopedAndSequencesEvents(t *testing.T) {
 
 func TestEventsStreamReplaysAfterCursorAndScopesPerson(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
 	if err != nil {
 		t.Fatal(err)

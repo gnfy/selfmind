@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
@@ -49,11 +50,7 @@ func TestWorkspaceTrustRequiresLocalCLIRequest(t *testing.T) {
 func TestObservationProfileEndpointRequiresTrustedWorkspaceAndLocalCLI(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "local", "Local user")
 	if err != nil {
@@ -107,11 +104,7 @@ func TestWorkspaceTrustEndpointRequiresLocalControlToken(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
 
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("open control store: %v", err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "local", "Local user")
@@ -175,11 +168,7 @@ func TestWorkspaceCapabilityEndpointListsAndRevokesWithLocalControlToken(t *test
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
 
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("open control store: %v", err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "local", "Local user")

@@ -6,11 +6,7 @@ import (
 )
 
 func TestReplaceWorkspaceKnowledgeRemovesStaleSections(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant", "cli", "person", "User")
 	if err != nil {
@@ -45,11 +41,7 @@ func TestReplaceWorkspaceKnowledgeRemovesStaleSections(t *testing.T) {
 }
 
 func TestReplaceWorkspaceKnowledgeSkipsUnchangedProjection(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "tenant", "cli", "knowledge-noop", "User")
 	if err != nil {
@@ -84,11 +76,7 @@ func TestReplaceWorkspaceKnowledgeSkipsUnchangedProjection(t *testing.T) {
 }
 
 func TestReplaceWorkspaceKnowledgeRejectsForeignWorkspace(t *testing.T) {
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	ctx := context.Background()
 	owner, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "Owner")
 	other, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "other", "Other")

@@ -48,11 +48,7 @@ func TestRunDeliveryOverrideUsesBoundSteeringEndpointAndSurvivesReopen(t *testin
 
 func TestRunDeliveryOverrideRejectsUnboundOrForeignEndpoint(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 	alice, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
 	bob, _ := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx-bob", "Bob")
 	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: alice.TenantID, PersonID: alice.PersonID, Title: "release", Channel: "cli"})

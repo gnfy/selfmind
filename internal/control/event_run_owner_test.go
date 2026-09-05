@@ -13,11 +13,7 @@ import (
 // rendered "Running" over work that was actually waiting on a human.
 func TestAppendEventResolvesOwnerFromRun(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	thread, err := store.CreateTask(ctx, TaskCreate{
 		TenantID: "default", PersonID: "p1", Title: "release", Channel: "cli",
@@ -71,11 +67,7 @@ func TestAppendEventResolvesOwnerFromRun(t *testing.T) {
 // person-scoped queries do not filter, so refusing loudly beats writing one.
 func TestAppendEventRefusesWithoutAnyOwner(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	if _, err := store.AppendEvent(ctx, Event{Type: "approval.requested"}); err == nil {
 		t.Fatal("an event with neither a thread nor a run should be refused")
@@ -94,11 +86,7 @@ func TestAppendEventRefusesWithoutAnyOwner(t *testing.T) {
 // the TUI kept rendering "Running".
 func TestAppendEventCorrectsAStaleScopeThread(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := newTestStore(t)
 
 	thread, err := store.CreateTask(ctx, TaskCreate{
 		TenantID: "default", PersonID: "p1", Title: "release", Channel: "cli",

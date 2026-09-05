@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
@@ -32,11 +33,7 @@ func seedUnresolvedRun(t *testing.T, store *control.Store, tenantID string, task
 // acceptance row: two unfinished runs under one task and a vague "继续" must
 // produce a deterministic candidate list — no model run, no new task_runs row.
 func TestAmbiguousContinuationReturnsCandidatesWithoutModel(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -77,11 +74,7 @@ func TestAmbiguousContinuationReturnsCandidatesWithoutModel(t *testing.T) {
 // daemon itself originated (cron/watch/approval) whose text happens to contain
 // a continuation cue must queue durably, never steer the person's active run.
 func TestDaemonOriginCueNeverSteersActiveRun(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -117,11 +110,7 @@ func TestDaemonOriginCueNeverSteersActiveRun(t *testing.T) {
 // carrying reply_to_run_id binds its task AND its exact parent run, immune to
 // the current-task pointer and to sibling unresolved runs.
 func TestReplyMetadataBindsExactRun(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -166,11 +155,7 @@ func TestReplyMetadataBindsExactRun(t *testing.T) {
 }
 
 func TestStructuredReturnEdgesFailClosed(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Owner")
 	if err != nil {
@@ -221,11 +206,7 @@ func TestStructuredReturnEdgesFailClosed(t *testing.T) {
 }
 
 func TestExplicitTaskIDClaimsUniqueParent(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -257,11 +238,7 @@ func TestExplicitTaskIDClaimsUniqueParent(t *testing.T) {
 }
 
 func TestExplicitTaskIDAmbiguityDoesNotStartRun(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -291,11 +268,7 @@ func TestExplicitTaskIDAmbiguityDoesNotStartRun(t *testing.T) {
 }
 
 func TestResumeRunReferenceClaimsExactParent(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -333,11 +306,7 @@ func TestResumeRunReferenceClaimsExactParent(t *testing.T) {
 }
 
 func TestReplyMetadataSteersNamedActiveRunWithoutCue(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -384,11 +353,7 @@ func TestReplyMetadataSteersNamedActiveRunWithoutCue(t *testing.T) {
 // daemon-originated approval continuation reaches the parked approval's origin
 // run exactly — even with sibling unresolved runs — with no prose parsing.
 func TestApprovalReturnBindsOriginRun(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {
@@ -440,11 +405,7 @@ func TestApprovalReturnBindsOriginRun(t *testing.T) {
 // a newer checkpoint under a sibling run must not be restored, and no parent
 // means no restore at all.
 func TestLoopCheckpointResumeIsParentScoped(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
 	if err != nil {

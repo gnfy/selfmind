@@ -350,11 +350,7 @@ func TestMaterializeRunFinalizationDerivesAttentionFromDurableControlFacts(t *te
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			store, err := OpenStore(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer store.Close()
+			store := newTestStore(t)
 			identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 			if err != nil {
 				t.Fatal(err)
@@ -608,11 +604,7 @@ func TestMaterializeRunFinalizationKeepsEachAttentionRunExact(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			store, err := OpenStore(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer store.Close()
+			store := newTestStore(t)
 			identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
 			if err != nil {
 				t.Fatal(err)

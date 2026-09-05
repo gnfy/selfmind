@@ -132,11 +132,7 @@ func TestResetWorkHistoryRefusesEachLiveWorkClass(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
-			store, err := OpenStore(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer store.Close()
+			store := newTestStore(t)
 			id, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "local", "Owner")
 			if err != nil {
 				t.Fatal(err)

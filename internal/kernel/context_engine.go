@@ -335,8 +335,7 @@ func estimateTokens(content string) int {
 func estimateMessageTokens(msgs []llm.Message) int {
 	total := 0
 	for _, msg := range msgs {
-		total += estimateTokens(msg.Content)
-		total += 10
+		total += messageTokenCount(msg, estimateTokens)
 	}
 	return total
 }
@@ -345,7 +344,7 @@ func roughTokenCount(messages []llm.Message) int {
 	return estimateMessageTokens(messages)
 }
 
-// TruncateMessages keeps the request inside the configured context window.
+// TruncateMessages reduces history toward the configured input budget.
 //
 // When the window is over the summary threshold and a summarizer provider is
 // wired, it compacts the middle turns into ONE structured summary (protecting
@@ -354,8 +353,8 @@ func roughTokenCount(messages []llm.Message) int {
 // deterministic trimming (the old behavior). SELFMIND_SYNC_CONTEXT_SUMMARY is
 // now a legacy no-op for the default path (compaction runs without it); it only
 // still enables the fallback of using the MAIN provider when no dedicated
-// summarizer role was injected. A final deterministic pass always guarantees the
-// result fits the budget even after compaction.
+// summarizer role was injected. A final deterministic pass preserves mandatory
+// instructions; PrepareRequest rejects requests that still exceed the budget.
 func (c *ContextEngine) TruncateMessages(messages []llm.Message) []llm.Message {
 	return c.TruncateMessagesCtx(context.Background(), messages)
 }
@@ -365,16 +364,12 @@ func (c *ContextEngine) TruncateMessages(messages []llm.Message) []llm.Message {
 // event (before/after tokens, span, duration) so /diag context can show what
 // compaction bought — observability only, the compaction path is unchanged.
 func (c *ContextEngine) TruncateMessagesCtx(ctx context.Context, messages []llm.Message) []llm.Message {
+	return c.truncateMessages(ctx, messages, c.inputBudget())
+}
+
+func (c *ContextEngine) truncateMessages(ctx context.Context, messages []llm.Message, max int) []llm.Message {
 	if len(messages) == 0 {
 		return messages
-	}
-
-	max := c.maxTokens - c.reserveTokens
-	if max <= 0 {
-		max = c.maxTokens
-	}
-	if max <= 0 {
-		max = 1
 	}
 
 	if c.countMessages(messages) <= max {
@@ -385,7 +380,7 @@ func (c *ContextEngine) TruncateMessagesCtx(ctx context.Context, messages []llm.
 		beforeTokens := c.countMessages(messages)
 		beforeCount := len(messages)
 		started := time.Now()
-		if compacted, ok := c.compactMiddle(messages, sp); ok {
+		if compacted, ok := c.compactMiddle(ctx, messages, sp); ok {
 			if ch := EventChannelFromContext(ctx); ch != nil {
 				EmitAgentEvent(ch, AgentEvent{
 					Type: "context.compacted",
@@ -401,7 +396,7 @@ func (c *ContextEngine) TruncateMessagesCtx(ctx context.Context, messages []llm.
 		}
 	}
 
-	return c.truncateDeterministically(messages, max)
+	return c.trimContext(ctx, messages, max)
 }
 
 // RecoverMessages rebuilds a materially smaller request after the provider
@@ -412,6 +407,10 @@ func (c *ContextEngine) TruncateMessagesCtx(ctx context.Context, messages []llm.
 // instruction remains at the tail and adapter-side tool-ledger sanitization
 // removes any pair made orphaned by dropping old turns.
 func (c *ContextEngine) RecoverMessages(messages []llm.Message) []llm.Message {
+	return c.RecoverMessagesCtx(context.Background(), messages)
+}
+
+func (c *ContextEngine) RecoverMessagesCtx(ctx context.Context, messages []llm.Message) []llm.Message {
 	if c == nil || len(messages) == 0 {
 		return messages
 	}
@@ -433,7 +432,7 @@ func (c *ContextEngine) RecoverMessages(messages []llm.Message) []llm.Message {
 	if target < 256 {
 		target = max
 	}
-	out = c.truncateDeterministically(out, target)
+	out = c.trimContext(ctx, out, target)
 	for len(out) > 0 && out[0].Role == "system" && c.countMessages(out) > target && len([]rune(out[0].Content)) > 512 {
 		before := out[0].Content
 		out[0].Content = truncateContextMiddlePreservingActiveSkill(before, len([]rune(before))*3/4)
@@ -521,21 +520,30 @@ func (c *ContextEngine) summarizer() llm.Provider {
 }
 
 // compactMiddle replaces the drop-eligible middle of the window with a single
-// structured summary message, keeping the head (leading system message + the
-// first user turn = the original task) and the tail (recent turns) verbatim.
+// structured summary message, keeping system instructions, the current Run's
+// user guidance, and the tail (recent turns) verbatim.
 // It returns (result, true) only when compaction is a strict improvement; on any
 // guard trip — too little middle, an empty summary, a summary no smaller than the
 // span it replaces, or a middle that is already just a prior summary — it returns
 // (nil, false) so the caller falls back to deterministic trimming. Compaction
 // therefore never silently loses content, never grows the window, and cannot
 // recurse into summarizing its own summaries.
-func (c *ContextEngine) compactMiddle(messages []llm.Message, sp llm.Provider) ([]llm.Message, bool) {
-	head := c.headProtect(messages)
+func (c *ContextEngine) compactMiddle(ctx context.Context, messages []llm.Message, sp llm.Provider) ([]llm.Message, bool) {
+	protected := protectedContextMessages(ctx, messages)
+	head := 0
+	for head < len(messages) && protected[head] {
+		head++
+	}
 	tail := compactionTailTurns
 	if head+tail >= len(messages) {
 		return nil, false
 	}
-	middle := messages[head : len(messages)-tail]
+	tailStart := len(messages) - tail
+	// Never cut between a call batch and its results.
+	for tailStart > head && messages[tailStart].Role == "tool" {
+		tailStart--
+	}
+	middle := messages[head:tailStart]
 	if len(middle) < compactionMinMiddle {
 		return nil, false
 	}
@@ -544,7 +552,7 @@ func (c *ContextEngine) compactMiddle(messages []llm.Message, sp llm.Provider) (
 		return nil, false
 	}
 
-	summaryMsg, ok := c.summarizeSpan(sp, middle)
+	summaryMsg, ok := c.summarizeSpan(ctx, sp, middle)
 	if !ok {
 		return nil, false
 	}
@@ -557,25 +565,16 @@ func (c *ContextEngine) compactMiddle(messages []llm.Message, sp llm.Provider) (
 	result := make([]llm.Message, 0, head+1+tail)
 	result = append(result, messages[:head]...)
 	result = append(result, summaryMsg)
-	result = append(result, messages[len(messages)-tail:]...)
+	for i := head; i < tailStart; i++ {
+		if protected[i] {
+			result = append(result, messages[i])
+		}
+	}
+	result = append(result, messages[tailStart:]...)
+	if c.countMessages(result) >= c.countMessages(messages) {
+		return nil, false
+	}
 	return result, true
-}
-
-// headProtect returns the count of leading messages kept verbatim: every
-// leading system message plus the first genuine user turn (the original task
-// goal), so the goal survives compaction. A first user turn that is itself a
-// prior compaction summary is NOT protected — it stays in the middle so
-// summarizeSpan folds it into the fresh summary (update mode), keeping summaries
-// from stacking.
-func (c *ContextEngine) headProtect(messages []llm.Message) int {
-	head := 0
-	for head < len(messages) && messages[head].Role == "system" {
-		head++
-	}
-	if head < len(messages) && messages[head].Role == "user" && !isCompactionSummary(messages[head]) {
-		head++
-	}
-	return head
 }
 
 func isCompactionSummary(msg llm.Message) bool {
@@ -587,7 +586,10 @@ func isCompactionSummary(msg llm.Message) bool {
 // deterministically harvests the file paths touched by tool calls in the span,
 // and — even if the model's summary omits them — appends the bounded structured
 // fallback under a "Relevant Files" section.
-func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.Message, bool) {
+func (c *ContextEngine) summarizeSpan(ctx context.Context, sp llm.Provider, span []llm.Message) (llm.Message, bool) {
+	if ctx.Err() != nil {
+		return llm.Message{}, false
+	}
 	if time.Since(c.lastSummaryFailure) < c.summaryCooldown {
 		return llm.Message{}, false
 	}
@@ -617,7 +619,11 @@ func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.
 		c.promptSnapshot.Custom(promptassets.FileSummarizer, promptassets.SectionLanguageDetail),
 	)
 	input := buildSummaryInput(existingSummary, transcript.String())
-	callCtx := llm.WithModelContext(context.Background(), llm.ModelContext{Role: llm.RoleSummarizer})
+	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	owner := llm.ModelContextFrom(ctx)
+	owner.Role = llm.RoleSummarizer
+	callCtx = llm.WithModelContext(callCtx, owner)
 	limit := c.summaryOutputLimit
 	if limit <= 0 || limit > maxSummaryOutputTokens {
 		limit = maxSummaryOutputTokens
@@ -628,6 +634,9 @@ func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.
 	}
 	var summary string
 	for attempt := 0; attempt < 2; attempt++ {
+		if callCtx.Err() != nil {
+			return llm.Message{}, false
+		}
 		response, err := sp.Chat(callCtx, llm.ChatRequest{
 			SystemPrompt: systemPrompt,
 			Messages:     []llm.Message{{Role: "user", Content: input}},
@@ -638,7 +647,9 @@ func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.
 			},
 		})
 		if err != nil || response == nil {
-			c.lastSummaryFailure = time.Now()
+			if ctx.Err() == nil {
+				c.lastSummaryFailure = time.Now()
+			}
 			return llm.Message{}, false
 		}
 		if summaryFinishReasonTruncated(response.FinishReason) {
@@ -794,17 +805,6 @@ func patchPathsFromText(patch string) []string {
 		}
 	}
 	return out
-}
-
-func (c *ContextEngine) truncateDeterministically(messages []llm.Message, max int) []llm.Message {
-	for c.countMessages(messages) > max && len(messages) > 2 {
-		if messages[0].Role == "system" {
-			messages = append([]llm.Message{messages[0]}, messages[2:]...)
-		} else {
-			messages = messages[1:]
-		}
-	}
-	return messages
 }
 
 func (c *ContextEngine) countMessages(msgs []llm.Message) int {

@@ -40,6 +40,7 @@ credentials.json
 # Contains business strategy, security gap inventory, and IM platform risk
 # discussion unsuitable for the public repository.
 /docs/vision-saas-enterprise.zh-CN.md
+/docs/onelinkai-cli-phase1-proposal.zh-CN.md
 
 # --- Editor / OS / agent tooling ---
 .claude/

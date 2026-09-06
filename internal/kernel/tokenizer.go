@@ -1,7 +1,10 @@
 package kernel
 
 import (
+	"encoding/json"
+
 	"github.com/tiktoken-go/tokenizer"
+
 	"selfmind/internal/kernel/llm"
 )
 
@@ -35,8 +38,29 @@ func (te *TokenEstimator) Count(text string) int {
 func (te *TokenEstimator) CountMessages(msgs []llm.Message) int {
 	total := 0
 	for _, m := range msgs {
-		total += te.Count(m.Content)
-		total += 4 // role overhead approximation
+		total += messageTokenCount(m, te.Count)
 	}
 	return total
+}
+
+func messageTokenCount(m llm.Message, count func(string) int) int {
+	total := count(m.Content) + 4
+	for _, part := range m.MultiContent {
+		total += count(part.Text)
+		if part.ImageURL != "" || part.Data != "" {
+			total += 256 // provider-dependent image estimate, also used by diagnostics
+		}
+	}
+	for _, call := range m.ToolCalls {
+		total += count(call.ID) + count(call.Function) + count(call.Args) + 4
+	}
+	return total + count(m.ToolCallID)
+}
+
+func (te *TokenEstimator) CountTools(tools []llm.ToolDefinition) int {
+	if len(tools) == 0 {
+		return 0
+	}
+	raw, _ := json.Marshal(tools)
+	return te.Count(string(raw))
 }

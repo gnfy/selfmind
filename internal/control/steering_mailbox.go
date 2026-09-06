@@ -46,9 +46,13 @@ type SteeringMessage struct {
 	ApprovalMode   string
 	Content        string
 	ContentHash    string
-	Status         string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// Attachments ride with the guidance for the same reason they ride with a
+	// queued task: accepting the text and dropping the files tells the person
+	// their image was received when the model will never see it.
+	Attachments []AttachmentRef
+	Status      string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // SteeringContentHash is the deterministic consumption-matching key between a
@@ -77,13 +81,17 @@ func (s *Store) AcceptSteering(ctx context.Context, m SteeringMessage) (*Steerin
 	now := time.Now()
 	m.CreatedAt = now
 	m.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx, `INSERT INTO steering_mailbox
+	attachmentsJSON, err := encodeAttachmentRefs(m.Attachments)
+	if err != nil {
+		return nil, fmt.Errorf("encode steering attachments: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO steering_mailbox
 		(id, tenant_id, person_id, run_id, thread_id, channel, platform, platform_user_id,
-		 workspace_id, approval_mode, content, content_hash, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 workspace_id, approval_mode, content, content_hash, status, created_at, updated_at, attachments_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.TenantID, m.PersonID, m.RunID, m.TaskID, m.Channel, m.Platform, m.PlatformUserID,
 		m.WorkspaceID, m.ApprovalMode,
-		m.Content, m.ContentHash, m.Status, now.Unix(), now.Unix())
+		m.Content, m.ContentHash, m.Status, now.Unix(), now.Unix(), attachmentsJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -161,7 +169,7 @@ func (s *Store) ListUnconsumedSteering(ctx context.Context, tenantID, runID stri
 	query := `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
 		COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
 		COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
-		content, content_hash, status, created_at, updated_at
+		content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]')
 		FROM steering_mailbox WHERE status IN (?, ?)`
 	args := []interface{}{SteeringAccepted, SteeringClaimed}
 	if strings.TrimSpace(tenantID) != "" {
@@ -214,6 +222,10 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 		ApprovalMode:   m.ApprovalMode,
 		WorkspaceID:    m.WorkspaceID,
 		ExecutionRoots: executionRoots,
+		// Guidance the run never consumed becomes queued work, and it keeps its
+		// files: dropping them here would lose the attachment a second time,
+		// after it had already been accepted and stored.
+		Attachments:    m.Attachments,
 		IdempotencyKey: "steering:" + m.ID,
 		Class:          QueueClassForeground,
 	}); err != nil {
@@ -261,7 +273,7 @@ func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, run
 	row := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
 		COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
 		COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
-		content, content_hash, status, created_at, updated_at
+		content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]')
 		FROM steering_mailbox WHERE tenant_id = ? AND id = ?`, tenantID, steeringID)
 	m, err := scanSteering(row)
 	if err != nil {
@@ -386,11 +398,17 @@ func (s *Store) RecoverSteeringAtBoot(ctx context.Context) (int, int, error) {
 func scanSteering(rows interface{ Scan(dest ...any) error }) (SteeringMessage, error) {
 	var m SteeringMessage
 	var created, updated int64
+	var attachmentsJSON string
 	if err := rows.Scan(&m.ID, &m.TenantID, &m.PersonID, &m.RunID, &m.TaskID,
 		&m.Channel, &m.Platform, &m.PlatformUserID, &m.WorkspaceID, &m.ApprovalMode,
-		&m.Content, &m.ContentHash, &m.Status, &created, &updated); err != nil {
+		&m.Content, &m.ContentHash, &m.Status, &created, &updated, &attachmentsJSON); err != nil {
 		return SteeringMessage{}, err
 	}
+	attachments, err := decodeAttachmentRefs(attachmentsJSON)
+	if err != nil {
+		return SteeringMessage{}, err
+	}
+	m.Attachments = attachments
 	m.CreatedAt = time.Unix(created, 0)
 	m.UpdatedAt = time.Unix(updated, 0)
 	return m, nil

@@ -471,7 +471,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// Import attachment files into the daemon-managed person partition BEFORE
 	// scope install and context assembly: the rendered attachment paths and
 	// the scope's allowed roots must both point at the managed copies.
-	req.Attachments = c.importAttachments(identity, run, req.Attachments)
+	req.Attachments = c.importAttachments(ctx, identity, run, req.Attachments)
 	cleanupScope := c.installExecutionScope(ctx, identity, task, run, workspace, req, lease)
 	defer cleanupScope()
 	// Tag the turn with its run-scoped key so tool calls resolve exactly this
@@ -1034,6 +1034,10 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		ApprovalMode:   next.ApprovalMode,
 		WorkspaceID:    next.WorkspaceID,
 		ExecutionRoots: next.ExecutionRoots,
+		// Files the person attached when the work was accepted. They were
+		// imported into the person's partition before the row was written, so
+		// they are managed copies and the turn sees exactly what was submitted.
+		Attachments: attachmentsFromRefs(next.Attachments),
 		// A system-originated finalization row carries the task it closes;
 		// resolveTask honors an explicit TaskID before any label guess.
 		TaskID: next.TaskID,

@@ -161,23 +161,54 @@ func fileMtime(path string) time.Time {
 // `codex login` and clears any quarantine); for static keys it loads once.
 // Caller must hold e.mu.
 func (e *authEntry) reload() {
+	// A credential that can no longer be loaded must STOP BEING USED. Both
+	// branches below used to keep the cached snapshot when loading failed, so
+	// deleting the credentials file or removing the provider entry left the
+	// daemon holding the old token for the rest of its life: a logout that
+	// revoked nothing. Losing a credential is a state change, not a read error
+	// to ride out.
 	if e.ref.Kind != AuthOAuthFile {
-		if !e.loaded {
-			if snap, err := e.load(e.ref); err == nil {
-				e.snap, e.loaded = snap, true
+		// A static key backed by a file (the selfmind-auth store) can still be
+		// deleted, and load-once never noticed. With no path there is nothing to
+		// observe — the key came from config or the environment — so it keeps the
+		// historical behavior and the resolver owns its lifetime.
+		if e.loaded {
+			if e.ref.Path != "" && fileMtime(e.ref.Path).IsZero() {
+				e.forget()
 			}
+			return
 		}
+		snap, err := e.load(e.ref)
+		if err != nil {
+			e.forget()
+			return
+		}
+		e.snap, e.loaded = snap, true
 		return
 	}
 	mt := fileMtime(e.ref.Path)
 	if e.loaded && !mt.After(e.snap.FileMtime) {
+		// The file going away is exactly the case a same-or-older mtime hides:
+		// fileMtime reports a zero time for a missing file, which never advances.
+		if mt.IsZero() {
+			e.forget()
+		}
 		return
 	}
-	if snap, err := e.load(e.ref); err == nil {
-		snap.FileMtime = mt
-		e.snap, e.loaded = snap, true
-		e.quar = nil // a newer file means a fresh login → leave quarantine
+	snap, err := e.load(e.ref)
+	if err != nil {
+		e.forget()
+		return
 	}
+	snap.FileMtime = mt
+	e.snap, e.loaded = snap, true
+	e.quar = nil // a newer file means a fresh login → leave quarantine
+}
+
+// forget drops a cached credential whose source is gone. Callers hold e.mu.
+func (e *authEntry) forget() {
+	e.snap = AuthSnapshot{}
+	e.loaded = false
 }
 
 func (e *authEntry) fresh(skew time.Duration) bool {

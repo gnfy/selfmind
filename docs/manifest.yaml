@@ -321,6 +321,8 @@ documents:
     state: current
     language: en
 excluded_documents:
+  - path: docs/onelinkai-cli-phase1-proposal.zh-CN.md
+    reason: Private official-client integration proposal covering account authorization, billing contracts, and unapproved product scope; not an active public plan.
   - path: docs/task-run-memory-simplification.zh-CN.md
     reason: Private Chinese implementation analysis and migration record; current public behavior lives in the English Work Timeline and STATUS documents.
   - path: docs/vision-saas-enterprise.zh-CN.md

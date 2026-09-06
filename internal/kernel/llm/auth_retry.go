@@ -6,11 +6,15 @@ import (
 	"strings"
 )
 
+// apiKeyFrom resolves the credential for one request. When a dynamic getter is
+// installed it is the ONLY authority: an empty answer means the credential is
+// gone, not that the transport should reach for the key it captured at
+// construction. Falling back was how a logout kept working — delete the
+// credentials file, and the daemon carried on with the token it had cached
+// before, for as long as it stayed up.
 func apiKeyFrom(static string, getter func() string) string {
 	if getter != nil {
-		if key := strings.TrimSpace(getter()); key != "" {
-			return key
-		}
+		return strings.TrimSpace(getter())
 	}
 	return strings.TrimSpace(static)
 }

@@ -562,14 +562,16 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		stopSemanticRecallHealth := semanticHealth.Start(ctx)
 		defer stopSemanticRecallHealth()
 	}
-	if healthyModelStatus.RouteReady(modelchange.RouteAuxiliary) {
-		// Maintenance roles use their own route plus the verified auxiliary floor.
-		// A failed semantic_recall override degrades lexical expansion only.
-		stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
-		defer stopMaintenanceWorker()
-		stopMemoryGovernance := gatewayAPI.StartMemoryGovernance(ctx)
-		defer stopMemoryGovernance()
-	} else if modelStartupHealthy {
+	// Maintenance roles use their own route plus the verified auxiliary floor.
+	// A failed semantic_recall override degrades lexical expansion only.
+	//
+	// Startup is no longer the only chance: EnsureBackgroundServices is
+	// idempotent and every later readiness transition calls it too, so a daemon
+	// that starts unready and recovers does not leave maintenance and memory
+	// governance parked for its whole lifetime.
+	gatewayAPI.EnsureBackgroundServices(ctx)
+	defer gatewayAPI.StopBackgroundServices()
+	if !healthyModelStatus.RouteReady(modelchange.RouteAuxiliary) && modelStartupHealthy {
 		log.Warn("gateway: auxiliary model readiness is incomplete; maintenance and learning remain parked", "hint", "run `selfmind model`")
 	}
 	if modelStartupHealthy {

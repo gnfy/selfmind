@@ -51,6 +51,92 @@ func (m *uiModel) handleAddDir(args []string) tea.Cmd {
 	return m.reportAddDirState(expanded)
 }
 
+// describeAdditionalRoot renders one extra root against the workspace it
+// extends. A bare absolute path says where the directory is but not what it
+// does to this session's reach, which is the part worth knowing: a root that
+// contains the workspace widens it, one already inside it adds nothing, and a
+// neighbour is best read as the hop from the workspace to it.
+// describeAdditionalRoot is the detail form, used where the person deliberately
+// asked: the absolute path is the truth, and the parenthetical says how the root
+// sits against the workspace it extends.
+func describeAdditionalRoot(root, workspacePath, workspaceName string) string {
+	form := addDirFlagForm(root, workspacePath)
+	root = filepath.Clean(strings.TrimSpace(root))
+	workspacePath = filepath.Clean(strings.TrimSpace(workspacePath))
+	if workspacePath == "" || workspacePath == "." || root == "" {
+		return root
+	}
+	if workspaceName = strings.TrimSpace(workspaceName); workspaceName == "" {
+		workspaceName = filepath.Base(workspacePath)
+	}
+	switch {
+	case root == workspacePath:
+		return root + "  (the workspace itself)"
+	case pathContains(workspacePath, root):
+		return root + "  (inside " + workspaceName + ")"
+	case pathContains(root, workspacePath):
+		return root + "  (contains " + workspaceName + ")"
+	case form != root:
+		return root + "  (" + form + ")"
+	}
+	return root
+}
+
+// addDirFlagForm is the shortest honest way to write one root: exactly what
+// could be passed back to --add-dir. A neighbour reads best as the hop from the
+// workspace; a distant tree does not, because "../../../../etc/ssl" is longer
+// and less clear than the path itself.
+func addDirFlagForm(root, workspacePath string) string {
+	root = filepath.Clean(strings.TrimSpace(root))
+	workspacePath = filepath.Clean(strings.TrimSpace(workspacePath))
+	if workspacePath == "" || workspacePath == "." || root == "" {
+		return root
+	}
+	if relative, err := filepath.Rel(workspacePath, root); err == nil && len(relative) < len(root) {
+		return relative
+	}
+	return root
+}
+
+// additionalRootReach names the directories this session reaches beyond its
+// workspace, each in the shortest form that still says where it sits. Empty
+// when the session carries none, so the card stays as it was.
+func (m *uiModel) additionalRootReach() string {
+	if len(m.additionalRoots) == 0 {
+		return ""
+	}
+	workspacePath := m.workspaceOverridePath
+	if workspacePath == "" && m.sessionWorkspace != nil {
+		workspacePath = m.sessionWorkspace.Path
+	}
+	forms := make([]string, 0, len(m.additionalRoots))
+	for _, root := range m.additionalRoots {
+		forms = append(forms, addDirFlagForm(root, workspacePath))
+	}
+	return strings.Join(forms, "  ")
+}
+
+// pathContains reports whether child sits under parent, comparing whole path
+// segments so /repo does not appear to contain /repo-fork.
+func pathContains(parent, child string) bool {
+	if parent == child {
+		return false
+	}
+	return strings.HasPrefix(child, strings.TrimSuffix(parent, string(filepath.Separator))+string(filepath.Separator))
+}
+
+func (m *uiModel) additionalRootDescriptions() []string {
+	workspacePath, workspaceName := m.workspaceOverridePath, m.workspaceOverrideName
+	if workspacePath == "" && m.sessionWorkspace != nil {
+		workspacePath, workspaceName = m.sessionWorkspace.Path, m.sessionWorkspace.Name
+	}
+	out := make([]string, 0, len(m.additionalRoots))
+	for _, root := range m.additionalRoots {
+		out = append(out, describeAdditionalRoot(root, workspacePath, workspaceName))
+	}
+	return out
+}
+
 func (m *uiModel) reportAddDirState(added string) tea.Cmd {
 	var sb strings.Builder
 	if added != "" {
@@ -60,8 +146,8 @@ func (m *uiModel) reportAddDirState(added string) tea.Cmd {
 		sb.WriteString("No extra directories in this session. Use /add-dir <path> to add one.")
 	} else {
 		sb.WriteString("Extra directories this session:")
-		for _, root := range m.additionalRoots {
-			fmt.Fprintf(&sb, "\n  %s", root)
+		for _, described := range m.additionalRootDescriptions() {
+			fmt.Fprintf(&sb, "\n  %s", described)
 		}
 	}
 	m.addMessage("assistant", sb.String())

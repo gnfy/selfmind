@@ -239,10 +239,14 @@ func (m *uiModel) activityRowBlock(width int) string {
 // viewActiveRegion is the hybrid-mode View: only the active region, pinned at
 // the bottom of the terminal. Finalized history lives in scrollback above it.
 func (m *uiModel) viewActiveRegion() string {
-	if m.modelManager != nil && m.approvalPrompt == nil {
+	// While an apply is in flight the wizard has nothing left to ask, and its
+	// last screen still carries a stale per-route "validating…" line and an
+	// "Enter continue" footer. Fall through to the ordinary active region so
+	// the animated progress row reports the daemon round trip instead.
+	if m.modelManager != nil && !m.modelApplying && m.approvalPrompt == nil && m.workspaceTrustPrompt == nil {
 		return m.modelManager.View()
 	}
-	if m.pager != nil && m.approvalPrompt == nil {
+	if m.pager != nil && m.approvalPrompt == nil && m.workspaceTrustPrompt == nil {
 		return m.pager.View()
 	}
 	mainW := m.width
@@ -283,6 +287,12 @@ func (m *uiModel) viewActiveRegion() string {
 	// without hiding the active process, Plan, draft, or status context.
 	if m.approvalPrompt != nil {
 		parts = append(parts, m.approvalPrompt.View(mainW))
+	}
+	// The trust question sits in the same slot but yields to an approval: a run
+	// blocked on the person is the more urgent of the two, and only one question
+	// may own the keyboard at a time.
+	if m.approvalPrompt == nil && m.workspaceTrustPrompt != nil {
+		parts = append(parts, m.workspaceTrustPrompt.View(mainW))
 	}
 	if gapH := m.composerGapHeight(); gapH > 0 {
 		parts = append(parts, lipgloss.NewStyle().Width(m.width).Height(gapH).Render(""))

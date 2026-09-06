@@ -92,6 +92,7 @@ type uiModel struct {
 	pager                 *components.Pager
 	modelManager          *components.ModelManager
 	modelManagerOnly      bool
+	modelApplying         bool
 	modelManagerStatus    components.ModelManagerStatus
 	modelManagerRoutes    []components.ModelManagerProvider
 	messages              []ChatMessage
@@ -186,6 +187,11 @@ type uiModel struct {
 	// card shows when no /ws switch has pinned one, and it carries the trust
 	// state the one-time trust question needs.
 	sessionWorkspace      *api.DigestWorkspace
+	// workspaceTrustPrompt is the armed trust question; trustPromptedWorkspaceID
+	// records which workspace this session already asked about, so returning to
+	// it does not ask again.
+	workspaceTrustPrompt     *components.WorkspaceTrustPrompt
+	trustPromptedWorkspaceID string
 	workspaceOverrideID   string
 	workspaceOverrideName string
 	workspaceOverridePath string
@@ -1169,6 +1175,9 @@ type MsgWorkspaceSwitched struct {
 	Name  string
 	Path  string
 	Reply string
+	// Workspace is the daemon's typed view of the workspace just entered. Trust
+	// state is read from here; the reply prose is display only.
+	Workspace *api.DigestWorkspace
 }
 
 type helpRow struct {

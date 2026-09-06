@@ -288,7 +288,7 @@ func (m *uiModel) handleWorkspaceSelect(args []string) tea.Cmd {
 			return MsgAgentDone{Response: fmt.Sprintf("Error: %s", resp.Error)}
 		}
 		if id, name, path, ok := parseWorkspaceSwitchReply(resp.Content); ok {
-			return MsgWorkspaceSwitched{ID: id, Name: name, Path: path, Reply: resp.Content}
+			return MsgWorkspaceSwitched{ID: id, Name: name, Path: path, Reply: resp.Content, Workspace: resp.Workspace}
 		}
 		return MsgAgentDone{Response: resp.Content}
 	}

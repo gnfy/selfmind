@@ -373,11 +373,11 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		return *response, statusForMessageResponse(*response)
 	}
 
-	if handled, content, err := d.tryHandleControlCommand(ctx, identity, req); handled {
+	if handled, content, workspace, err := d.tryHandleControlCommand(ctx, identity, req); handled {
 		if err != nil {
 			return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
 		}
-		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Content: content, Workspace: workspace, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
 	}
 	// A bare number is a continuity answer only when exactly one recent
 	// person-wide choice is pending. Approval and run-clarification answers ran

@@ -13,7 +13,10 @@ import (
 	"time"
 )
 
-func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (bool, string, error) {
+// tryHandleControlCommand returns whether a control command claimed the message,
+// its reply, and — for the commands that select or re-trust a workspace — the
+// resulting workspace in typed form so the client never parses the reply prose.
+func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (bool, string, *api.DigestWorkspace, error) {
 	trimmed := strings.TrimSpace(req.Content)
 	lower := strings.ToLower(trimmed)
 	// Conversational approval: a bare "y"/"n" (or 好/可以/不行 …) answers a
@@ -22,7 +25,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	// otherwise the word falls through to the agent (and to the continuation
 	// cue handling for "ok"/"可以"). Runs before the "/" gate below.
 	if handled, reply, err := d.tryHandleBareApprovalReply(ctx, identity, trimmed, req.Channel); handled {
-		return true, reply, err
+		return true, reply, nil, err
 	}
 	// Pending question: a plain (non-slash) reply while a clarify_requests row is
 	// pending IS the answer (G3) — resolve it here, above the new-task/queue
@@ -30,30 +33,30 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	// or steered. Runs after the bare y/n approval leg (which wins for y/n-looking
 	// input) and before the "/" gate (slash commands are never answers).
 	if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, req.ClarifyID, trimmed, req.Channel); handled {
-		return true, reply, err
+		return true, reply, nil, err
 	}
 	// Command-shaped tokens only: a "/"-leading file path ("/mnt/c/pic.png …")
 	// is ordinary message text and must fall through to the agent-first path,
 	// never into the command switch or the near-miss suggester.
 	if !command.LooksLikeCommand(lower) {
-		return false, "", nil
+		return false, "", nil, nil
 	}
 	switch {
 	case lower == "/help":
 		// Canonical gateway help comes from the shared command registry so the
 		// help text, the switch below, and every other endpoint cannot drift.
-		return true, command.HelpText(), nil
+		return true, command.HelpText(), nil, nil
 	case lower == "/model" || strings.HasPrefix(lower, "/model "):
 		reply, err := d.handleModelControl(ctx, req.Channel, trimmed)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/id":
-		return true, formatIdentity(identity), nil
+		return true, formatIdentity(identity), nil, nil
 	case lower == "/remember" || strings.HasPrefix(lower, "/remember "):
 		reply, err := d.handleRememberCommand(ctx, identity, strings.TrimSpace(trimmed[len("/remember"):]))
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/forget" || strings.HasPrefix(lower, "/forget "):
 		reply, err := d.handleForgetCommand(ctx, identity, strings.TrimSpace(trimmed[len("/forget"):]))
-		return true, reply, err
+		return true, reply, nil, err
 	case strings.HasPrefix(lower, "/stop "):
 		// `/stop <n>` clears ONE attention item without running it. Dismissing
 		// used to require pinning the item first — `/resume <n>` then `/stop` —
@@ -63,13 +66,13 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// items, six of them a day old, observed 2026-09-04).
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
-			return true, "Usage: /stop <n|run_id>  (bare /stop cancels the active run)", nil
+			return true, "Usage: /stop <n|run_id>  (bare /stop cancels the active run)", nil, nil
 		}
-		return true, d.dismissAttentionByReference(ctx, identity, req.Channel, parts[1]), nil
+		return true, d.dismissAttentionByReference(ctx, identity, req.Channel, parts[1]), nil, nil
 	case lower == "/stop":
 		active := d.coordinator().stopActive(identity.PersonID)
 		if active == nil {
-			return true, d.dismissCurrentAttention(ctx, identity), nil
+			return true, d.dismissCurrentAttention(ctx, identity), nil, nil
 		}
 		if active.RunID != "" {
 			_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, active.RunID)
@@ -95,12 +98,12 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if n, err := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); err == nil && n > 0 {
 			reply += fmt.Sprintf(" %d queued task(s) will start next — /queue clear to drop them.", n)
 		}
-		return true, reply, nil
+		return true, reply, nil, nil
 	case strings.HasPrefix(lower, "/cancel"):
 		// With no live execution, cancel is the compatibility spelling for
 		// dismissing the one unambiguous Attention item. It never rewrites a
 		// historical Run outcome.
-		return true, d.dismissCurrentAttention(ctx, identity), nil
+		return true, d.dismissCurrentAttention(ctx, identity), nil, nil
 	case strings.HasPrefix(lower, "/new"):
 		title := strings.TrimSpace(trimmed[len("/new"):])
 		if title == "" {
@@ -120,77 +123,80 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			Channel:     req.Channel,
 		})
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
-		return true, fmt.Sprintf("Created task: %s (%s)", task.Title, task.ID), nil
+		return true, fmt.Sprintf("Created task: %s (%s)", task.Title, task.ID), nil, nil
 	case lower == "/choose" || strings.HasPrefix(lower, "/choose "):
 		// ProcessMessage handles /choose before this generic switch so it can
 		// restore and continue the original request. Reaching this branch means
 		// the invocation did not satisfy that typed contract.
-		return true, "Usage: /choose <choice_id> <number>", nil
+		return true, "Usage: /choose <choice_id> <number>", nil, nil
 	case lower == "/status":
 		reply, err := d.statusReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/resume":
 		// Bare /resume IS the attention list. It used to relay to /tasks, which
 		// made "what can I continue" a Task listing and put the ordinal
 		// snapshot in a view about labels rather than about runs.
 		reply, err := d.attentionListReply(ctx, identity, req.Channel)
-		return true, reply, err
+		return true, reply, nil, err
 	case strings.HasPrefix(lower, "/resume "):
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
-			return true, "Usage: /resume <n|run_id>  (bare /resume lists what needs attention)", nil
+			return true, "Usage: /resume <n|run_id>  (bare /resume lists what needs attention)", nil, nil
 		}
 		if ordinal, convErr := strconv.Atoi(parts[1]); convErr == nil {
 			_, runID, count, found := d.taskLists.resolveRun(identity, req.Channel, ordinal, time.Now())
 			if found {
 				if runID == "" {
-					return true, fmt.Sprintf("No resumable run number %d in the last list; it showed %d (run /resume to refresh).", ordinal, count), nil
+					return true, fmt.Sprintf("No resumable run number %d in the last list; it showed %d (run /resume to refresh).", ordinal, count), nil, nil
 				}
-				return d.selectExactResumeRun(ctx, identity, runID)
+				handled, reply, err := d.selectExactResumeRun(ctx, identity, runID)
+				return handled, reply, nil, err
 			}
 		}
 		if strings.HasPrefix(strings.ToLower(parts[1]), "run_") {
-			return d.selectExactResumeRun(ctx, identity, parts[1])
+			handled, reply, err := d.selectExactResumeRun(ctx, identity, parts[1])
+			return handled, reply, nil, err
 		}
 		// A bare number is a list ordinal against the last /resume listing;
 		// anything else is a full run id, or a thread id kept working for
 		// references copied out of older transcripts.
 		task, userErr, err := d.resolveTaskReference(ctx, identity, parts[1], req.Channel)
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
 		if userErr != "" {
-			return true, userErr, nil
+			return true, userErr, nil, nil
 		}
 		runs, err := d.Control.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 20)
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
 		switch len(runs) {
 		case 0:
-			return true, "That thread has no exact resumable run. Use /search to find the work, then /resume <run_id>.", nil
+			return true, "That thread has no exact resumable run. Use /search to find the work, then /resume <run_id>.", nil, nil
 		case 1:
-			return d.selectExactResumeRun(ctx, identity, runs[0].ID)
+			handled, reply, err := d.selectExactResumeRun(ctx, identity, runs[0].ID)
+			return handled, reply, nil, err
 		default:
-			return true, fmt.Sprintf("That thread has %d resumable runs. Run /resume to list them, then /resume <run_id> to choose one exactly.", len(runs)), nil
+			return true, fmt.Sprintf("That thread has %d resumable runs. Run /resume to list them, then /resume <run_id> to choose one exactly.", len(runs)), nil, nil
 		}
 	case lower == "/search" || strings.HasPrefix(lower, "/search "):
 		reply, err := d.searchCommandReply(ctx, identity, strings.TrimSpace(trimmed[len("/search"):]))
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/queue" || strings.HasPrefix(lower, "/queue "):
 		arg := strings.TrimSpace(trimmed[len("/queue"):])
 		if strings.EqualFold(arg, "clear") {
 			n, err := d.Control.ClearQueued(ctx, identity.TenantID, identity.PersonID)
 			if err != nil {
-				return true, "", err
+				return true, "", nil, err
 			}
-			return true, fmt.Sprintf("Cleared %d queued task(s).", n), nil
+			return true, fmt.Sprintf("Cleared %d queued task(s).", n), nil, nil
 		}
 		queued, err := d.Control.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
 		// `/queue drop <n>` removes one item by its list position (same
 		// ordering as the /queue listing), so a single unwanted task can be
@@ -198,74 +204,74 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if rest := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(arg), "drop")); arg != "" && strings.HasPrefix(strings.ToLower(arg), "drop") {
 			n, convErr := strconv.Atoi(strings.TrimSpace(rest))
 			if convErr != nil || n < 1 || n > len(queued) {
-				return true, fmt.Sprintf("Usage: /queue drop <n> (1-%d). Run /queue to see positions.", len(queued)), nil
+				return true, fmt.Sprintf("Usage: /queue drop <n> (1-%d). Run /queue to see positions.", len(queued)), nil, nil
 			}
 			target := queued[n-1]
 			if err := d.Control.MarkQueued(ctx, identity.TenantID, target.ID, control.QueueStatusCancelled); err != nil {
-				return true, "", err
+				return true, "", nil, err
 			}
-			return true, "Dropped queued task: " + textutil.Truncate(toOneLine(target.Content), 60), nil
+			return true, "Dropped queued task: " + textutil.Truncate(toOneLine(target.Content), 60), nil, nil
 		}
-		return true, formatQueue(queued), nil
+		return true, formatQueue(queued), nil, nil
 	case lower == "/watchers" || strings.HasPrefix(lower, "/watchers "):
 		reply, err := d.watchersCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag memory":
 		reply, err := d.memoryDiagReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag context":
 		reply, err := d.contextDiagReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag models":
 		reply, err := d.modelsDiagReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag execution":
 		reply, err := d.executionDiagReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag tools":
 		reply, err := d.toolsDiagReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag delivery recover stale-results":
 		reply, err := d.recoverStaleDeliveryResultsReply(ctx, identity, req)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag delivery dismiss stale-results":
 		reply, err := d.dismissStaleDeliveryResultsReply(ctx, identity, req)
-		return true, reply, err
+		return true, reply, nil, err
 	case strings.HasPrefix(lower, "/diag delivery retry "):
 		ref := strings.TrimSpace(trimmed[len("/diag delivery retry "):])
 		reply, err := d.retryDeliveryReply(ctx, identity, req, ref)
-		return true, reply, err
+		return true, reply, nil, err
 	case strings.HasPrefix(lower, "/diag delivery dismiss "):
 		ref := strings.TrimSpace(trimmed[len("/diag delivery dismiss "):])
 		reply, err := d.dismissDeliveryReply(ctx, identity, req, ref)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag delivery":
 		reply, err := d.deliveryDiagReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/diag":
 		reply, err := d.diagReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/report":
-		return true, "Usage: /report daily [--since 24h]", nil
+		return true, "Usage: /report daily [--since 24h]", nil, nil
 	case lower == "/report daily" || strings.HasPrefix(lower, "/report daily "):
 		window, err := parseDailyReportWindow(trimmed)
 		if err != nil {
-			return true, "Usage: /report daily [--since 24h]", nil
+			return true, "Usage: /report daily [--since 24h]", nil, nil
 		}
 		reply, err := d.dailyQualityReport(ctx, identity, window)
-		return true, reply, err
+		return true, reply, nil, err
 	case strings.HasPrefix(lower, "/ws "):
 		// One workspace verb, the short one. It used to have two more spellings
 		// (/workspace and /workspaces) that behaved identically; three names for
 		// one thing is something to read, remember, and keep in sync.
 		parts := strings.Fields(req.Content)
 		if len(parts) < 2 {
-			return true, "Usage: /ws <n|id> | /ws default <n|id> | /ws trust|untrust|decline", nil
+			return true, "Usage: /ws <n|id> | /ws default <n|id> | /ws trust|untrust|decline", nil, nil
 		}
 		switch strings.ToLower(parts[1]) {
 		case "trust", "untrust", "decline":
-			reply, err := d.workspaceTrustReply(ctx, identity, req, strings.ToLower(parts[1]))
-			return true, reply, err
+			reply, ws, err := d.workspaceTrustReply(ctx, identity, req, strings.ToLower(parts[1]))
+			return true, reply, ws, err
 		case "default":
 			// The DURABLE default, used by turns that carry no directory of
 			// their own (IM, cron). Selecting a workspace for the session no
@@ -273,40 +279,43 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			// overwriting one person-level value, so each one's list showed the
 			// other's choice as current while its own work ran elsewhere.
 			if len(parts) < 3 {
-				return true, "Usage: /ws default <n|workspace_id>", nil
+				return true, "Usage: /ws default <n|workspace_id>", nil, nil
 			}
 			ws, userErr, err := d.resolveWorkspaceReference(ctx, identity, parts[2])
 			if err != nil {
-				return true, "", err
+				return true, "", nil, err
 			}
 			if userErr != "" {
-				return true, userErr, nil
+				return true, userErr, nil, nil
 			}
 			if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
-				return true, "", err
+				return true, "", nil, err
 			}
-			return true, fmt.Sprintf("Default workspace for IM and scheduled work: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
+			return true, fmt.Sprintf("Default workspace for IM and scheduled work: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil, nil
 		}
 		ws, userErr, err := d.resolveWorkspaceReference(ctx, identity, parts[1])
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
 		if userErr != "" {
-			return true, userErr, nil
+			return true, userErr, nil, nil
 		}
 		if !isLocalCLIRequest(req) {
 			// An IM turn has no session of its own, so selecting there IS the
 			// durable default.
 			if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
-				return true, "", err
+				return true, "", nil, err
 			}
-			return true, formatWorkspaceSwitchForIM(ws), nil
+			return true, formatWorkspaceSwitchForIM(ws), nil, nil
 		}
 		reply := fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath)
+		// Entering an untrusted workspace is where the client asks the trust
+		// question, so the switch publishes the workspace typed. The reply text
+		// stays as-is for endpoints that render prose only.
 		if note := sessionWorkspaceTrustNote(ws); note != "" {
 			reply += "\n" + note
 		}
-		return true, reply, nil
+		return true, reply, digestWorkspaceFrom(ws), nil
 	case lower == "/ws":
 		// Ensure the session's own directory is a workspace before listing:
 		// control commands run before the run pipeline would create it, so a
@@ -314,14 +323,14 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		session := d.ensureSessionWorkspace(ctx, identity, req)
 		workspaces, err := d.listWorkspacesForDisplay(ctx, identity)
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
 		defaultID := ""
 		if current, _ := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); current != nil {
 			defaultID = current.ID
 		}
 		if !isLocalCLIRequest(req) {
-			return true, formatWorkspacesForIM(workspaces, defaultID), nil
+			return true, formatWorkspacesForIM(workspaces, defaultID), nil, nil
 		}
 		sessionID := ""
 		if session != nil {
@@ -331,7 +340,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if note := sessionWorkspaceTrustNote(session); note != "" {
 			reply += "\n\n" + note
 		}
-		return true, reply, nil
+		return true, reply, nil, nil
 	case lower == "/approvals" || strings.HasPrefix(lower, "/approvals "):
 		rest := strings.TrimSpace(trimmed[len("/approvals"):])
 		if rest != "" {
@@ -339,48 +348,48 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			// and revocable. Without this surface ten person-scope host grants
 			// accumulated in a single day with nothing able to show or withdraw
 			// them.
-			return true, d.approvalGrantsReply(ctx, identity, rest), nil
+			return true, d.approvalGrantsReply(ctx, identity, rest), nil, nil
 		}
 		approvals, titles, err := d.pendingApprovalsForDisplay(ctx, identity)
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
-		return true, formatApprovals(approvals, titles), nil
+		return true, formatApprovals(approvals, titles), nil, nil
 	case lower == "/notify" || strings.HasPrefix(lower, "/notify "):
 		reply, err := d.notifyPreferenceReply(ctx, identity, strings.TrimSpace(trimmed[len("/notify"):]))
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/mode" || strings.HasPrefix(lower, "/mode "):
 		reply, err := d.approvalModeReply(ctx, identity, strings.TrimSpace(trimmed[len("/mode"):]))
-		return true, reply, err
+		return true, reply, nil, err
 	case lower == "/approve" || strings.HasPrefix(lower, "/approve "):
-		return true, d.respondApprovalCommand(ctx, identity, strings.TrimSpace(trimmed[len("/approve"):]), "approved", req.Channel), nil
+		return true, d.respondApprovalCommand(ctx, identity, strings.TrimSpace(trimmed[len("/approve"):]), "approved", req.Channel), nil, nil
 	case lower == "/reject" || strings.HasPrefix(lower, "/reject "):
-		return true, d.respondApprovalCommand(ctx, identity, strings.TrimSpace(trimmed[len("/reject"):]), "rejected", req.Channel), nil
+		return true, d.respondApprovalCommand(ctx, identity, strings.TrimSpace(trimmed[len("/reject"):]), "rejected", req.Channel), nil, nil
 	case lower == "/events":
 		task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
 		if task == nil {
-			return true, "No active task.", nil
+			return true, "No active task.", nil, nil
 		}
 		events, err := d.Control.ListTaskEvents(ctx, task.ID, 20)
 		if err != nil {
-			return true, "", err
+			return true, "", nil, err
 		}
-		return true, formatEvents(events), nil
+		return true, formatEvents(events), nil, nil
 	case lower == "/task status" || lower == "task status" || lower == "/status" || lower == "status" || strings.Contains(lower, "进度"):
 		reply, err := d.statusReply(ctx, identity)
-		return true, reply, err
+		return true, reply, nil, err
 	default:
 		// Near-miss typo help: "/approves" → suggest "/approvals". Only claim
 		// the message when the token is close to a KNOWN control command —
 		// unknown slashes may be skill invocations or agent input and must
 		// keep flowing through unchanged.
 		if suggestion := suggestControlCommand(lower); suggestion != "" {
-			return true, fmt.Sprintf("Unknown command %s — did you mean %s?", strings.Fields(lower)[0], suggestion), nil
+			return true, fmt.Sprintf("Unknown command %s — did you mean %s?", strings.Fields(lower)[0], suggestion), nil, nil
 		}
-		return false, "", nil
+		return false, "", nil, nil
 	}
 }
 

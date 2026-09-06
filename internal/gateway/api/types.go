@@ -289,6 +289,10 @@ type MessageResponse struct {
 	Error    string                   `json:"error,omitempty"`
 	Accepted bool                     `json:"accepted,omitempty"`
 	Choice   *TurnChoice              `json:"choice,omitempty"`
+	// Workspace is the session's workspace after a control command that
+	// selected or re-trusted one. Clients derive trust state from this, never
+	// from the reply prose.
+	Workspace *DigestWorkspace `json:"workspace,omitempty"`
 }
 
 // TurnChoice is the structured, cross-endpoint form of a continuity

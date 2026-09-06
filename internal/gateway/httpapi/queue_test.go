@@ -369,7 +369,7 @@ func TestQueueControlCommandsListAndClear(t *testing.T) {
 	identity, _ := daemon.Control.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	store.EnqueueQueued(ctx, control.QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "queued alpha"})
 
-	handled, reply, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/queue"})
+	handled, reply, _, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/queue"})
 	if !handled || err != nil {
 		t.Fatalf("/queue handled=%v err=%v", handled, err)
 	}
@@ -377,7 +377,7 @@ func TestQueueControlCommandsListAndClear(t *testing.T) {
 		t.Fatalf("/queue reply = %q; want the queued content", reply)
 	}
 
-	handled, reply, err = daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/queue clear"})
+	handled, reply, _, err = daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/queue clear"})
 	if !handled || err != nil {
 		t.Fatalf("/queue clear handled=%v err=%v", handled, err)
 	}
@@ -403,7 +403,7 @@ func TestStopThenDrain(t *testing.T) {
 	}
 
 	// /stop cancels the active run; its finalization drains the queue.
-	handled, _, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/stop"})
+	handled, _, _, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/stop"})
 	if !handled || err != nil {
 		t.Fatalf("/stop handled=%v err=%v", handled, err)
 	}
@@ -429,7 +429,7 @@ func TestDiagControlCommand(t *testing.T) {
 	identity, _ := daemon.Control.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
 	store.EnqueueQueued(ctx, control.QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "queued thing"})
 
-	handled, reply, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/diag"})
+	handled, reply, _, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/diag"})
 	if !handled || err != nil {
 		t.Fatalf("/diag handled=%v err=%v", handled, err)
 	}
@@ -446,7 +446,7 @@ func TestDiagControlCommand(t *testing.T) {
 		t.Fatalf("/diag reply = %q; want Active run: none", reply)
 	}
 
-	handled, reply, err = daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/diag memory"})
+	handled, reply, _, err = daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/diag memory"})
 	if !handled || err != nil {
 		t.Fatalf("/diag memory handled=%v err=%v", handled, err)
 	}

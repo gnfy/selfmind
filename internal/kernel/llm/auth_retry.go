@@ -6,15 +6,23 @@ import (
 	"strings"
 )
 
-// apiKeyFrom resolves the credential for one request. When a dynamic getter is
-// installed it is the ONLY authority: an empty answer means the credential is
-// gone, not that the transport should reach for the key it captured at
-// construction. Falling back was how a logout kept working — delete the
-// credentials file, and the daemon carried on with the token it had cached
-// before, for as long as it stayed up.
+// apiKeyFrom resolves the credential for one request. An empty answer from the
+// dynamic getter means "no per-tenant override for this provider", NOT "the
+// credential was revoked" — see buildKeyGetter, whose empty return is the
+// documented signal to use the adapter's configured key. Treating it as
+// revocation sends an empty key for every provider whose credential lives in
+// config or the auth file rather than the tenant secret store, which is the
+// ordinary case: the daemon answered HTTP 401 on the first turn after such a
+// change.
+//
+// Revocation is enforced where a credential actually lives: the auth manager
+// drops a cached token whose source is gone, so a logout stops the token being
+// served rather than being inferred from an empty override.
 func apiKeyFrom(static string, getter func() string) string {
 	if getter != nil {
-		return strings.TrimSpace(getter())
+		if key := strings.TrimSpace(getter()); key != "" {
+			return key
+		}
 	}
 	return strings.TrimSpace(static)
 }

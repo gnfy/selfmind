@@ -189,6 +189,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""
+		m.modelApplying = false
 		if msg.Err != nil {
 			m.addErrorMessage("Model change failed: " + msg.Err.Error())
 			return m, nil
@@ -331,6 +332,13 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleKey(msg)
 		}
 		if m.modelManager != nil {
+			// An apply is a multi-second daemon round trip. Swallow keys until
+			// it resolves: the wizard's own answer is already given, and a
+			// second Enter would post a duplicate apply the daemon rejects as a
+			// pending conflict.
+			if m.modelApplying {
+				return m, nil
+			}
 			action := m.modelManager.Update(msg)
 			if action.RecoveryAction != "" {
 				m.modelManager = nil
@@ -350,6 +358,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.thinking = true
 				m.thinkingStart = time.Now()
 				m.activityText = "Applying model changes"
+				m.modelApplying = true
 				return m, m.submitModelManager(action.Draft, action.ProviderDraft, m.modelManager.CredentialStage())
 			}
 			if action.Closed {
@@ -833,6 +842,22 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case MsgWorkspaceTrustAnswered:
+		if msg.Err != nil {
+			m.addErrorMessage("Workspace trust was not changed: " + msg.Err.Error())
+			return m, nil
+		}
+		// The daemon is the authority on the resulting trust level; adopt what
+		// it published rather than assuming the answer took, and confirm from
+		// that typed state rather than echoing its CLI reply.
+		reply := msg.Reply
+		if msg.Workspace != nil {
+			m.sessionWorkspace = msg.Workspace
+			reply = workspaceTrustConfirmation(msg.Workspace)
+		}
+		m.addNotice(noticeSuccess, reply)
+		return m, nil
+
 	case MsgWorkspaceSwitched:
 		// A successful /workspace switch: pin the session override, then render
 		// the gateway's reply through the normal done path so the transcript
@@ -840,6 +865,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.workspaceOverrideID = msg.ID
 		m.workspaceOverrideName = msg.Name
 		m.workspaceOverridePath = msg.Path
+		// Entering a workspace is exactly when its trust question is worth
+		// asking, so a switch re-arms it the same way startup does.
+		if msg.Workspace != nil {
+			m.sessionWorkspace = msg.Workspace
+			m.armWorkspaceTrustPrompt()
+		}
 		return m.Update(MsgAgentDone{Response: msg.Reply})
 
 	default:
@@ -853,6 +884,13 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// reject the current request; stray keys must not leak into the composer.
 	if m.approvalPrompt != nil {
 		if cmd, handled := m.handleApprovalPromptKey(msg); handled {
+			return m, cmd
+		}
+	}
+	// The trust question owns the keyboard while armed, for the same reason:
+	// stray keys must not leak into the composer past an unanswered question.
+	if m.approvalPrompt == nil && m.workspaceTrustPrompt != nil {
+		if cmd, handled := m.handleWorkspaceTrustPromptKey(msg); handled {
 			return m, cmd
 		}
 	}

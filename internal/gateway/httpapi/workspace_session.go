@@ -69,11 +69,28 @@ func sessionWorkspaceTrustNote(ws *control.Workspace) string {
 	return "This workspace is untrusted, so workspace Skills and remembered approval observations stay off. `/ws trust` enables them; `/ws decline` stops asking."
 }
 
+// digestWorkspaceFrom is the one typed form of a workspace that clients read
+// trust from. Both the attach digest and workspace-selecting control commands
+// publish it, so a client never has to parse a reply sentence to learn whether
+// the trust question is still open.
+func digestWorkspaceFrom(ws *control.Workspace) *api.DigestWorkspace {
+	if ws == nil {
+		return nil
+	}
+	trusted := ws.TrustLevel == executionenv.TrustTrusted
+	return &api.DigestWorkspace{
+		ID: ws.ID, Name: ws.Name, Path: ws.LocalPath, Trusted: trusted,
+		// Trusting is itself an answer; declining is recorded as the source so
+		// a "no" is not mistaken for "not asked yet".
+		TrustAsked: trusted || ws.TrustSource == WorkspaceTrustDeclined,
+	}
+}
+
 // workspaceTrustReply applies a trust decision to the session's workspace.
-func (d *Server) workspaceTrustReply(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, action string) (string, error) {
+func (d *Server) workspaceTrustReply(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, action string) (string, *api.DigestWorkspace, error) {
 	ws := d.ensureSessionWorkspace(ctx, identity, req)
 	if ws == nil {
-		return "No workspace for this session yet.", nil
+		return "No workspace for this session yet.", nil, nil
 	}
 	level, source := executionenv.TrustTrusted, "local_cli"
 	switch action {
@@ -83,21 +100,22 @@ func (d *Server) workspaceTrustReply(ctx context.Context, identity *control.Iden
 	case "decline":
 		level, source = executionenv.TrustUntrusted, WorkspaceTrustDeclined
 	default:
-		return "Usage: /ws trust | /ws untrust | /ws decline", nil
+		return "Usage: /ws trust | /ws untrust | /ws decline", nil, nil
 	}
 	updated, err := d.Control.SetWorkspaceTrust(ctx, identity.TenantID, identity.PersonID, ws.ID, level, source)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if updated == nil {
-		return "Workspace not found.", nil
+		return "Workspace not found.", nil, nil
 	}
+	published := digestWorkspaceFrom(updated)
 	switch action {
 	case "trust":
-		return fmt.Sprintf("Trusted %s (%s)\n%s", updated.Name, updated.ID, updated.LocalPath), nil
+		return fmt.Sprintf("Trusted %s (%s)\n%s", updated.Name, updated.ID, updated.LocalPath), published, nil
 	case "untrust":
-		return fmt.Sprintf("No longer trusted: %s (%s)", updated.Name, updated.ID), nil
+		return fmt.Sprintf("No longer trusted: %s (%s)", updated.Name, updated.ID), published, nil
 	default:
-		return fmt.Sprintf("Left untrusted and will not ask again: %s (%s)", updated.Name, updated.ID), nil
+		return fmt.Sprintf("Left untrusted and will not ask again: %s (%s)", updated.Name, updated.ID), published, nil
 	}
 }

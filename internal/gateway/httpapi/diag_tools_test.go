@@ -19,7 +19,7 @@ func TestToolsDiagShowsSchemaHealthWithoutRawSchema(t *testing.T) {
 			}
 		},
 	}
-	handled, reply, err := server.tryHandleControlCommand(context.Background(), &control.IdentityContext{}, api.MessageRequest{Content: "/diag tools"})
+	handled, reply, _, err := server.tryHandleControlCommand(context.Background(), &control.IdentityContext{}, api.MessageRequest{Content: "/diag tools"})
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}

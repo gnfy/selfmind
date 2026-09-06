@@ -189,14 +189,34 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		if name := strings.TrimSpace(m.sessionWorkspace.Name); name != "" {
 			workspaceValue = name + " · " + m.sessionWorkspace.Path
 		}
-		if !m.sessionWorkspace.Trusted {
+		// A workspace whose trust question is still open is not yet a settled
+		// [untrusted]; the question itself is on screen saying so, and it is
+		// about to be answered.
+		if !m.sessionWorkspace.Trusted && !m.workspaceTrustIsOpen() {
 			workspaceValue += " [untrusted]"
 		}
 	}
 	if strings.TrimSpace(m.workspaceOverridePath) != "" {
 		workspaceValue = m.workspaceOverridePath
 	}
-	lines = append(lines, renderStartupDataLines("WORKSPACE", styles.startupValue.Render(workspaceValue), width, "", styles)...)
+	// The --add-dir overlay decides what this terminal can reach beyond its
+	// workspace, and was only discoverable by running /add-dir with no argument:
+	// a session started with extra directories looked identical to one without,
+	// and the person had to remember what they passed.
+	//
+	// It rides the row it widens rather than a row of its own. The right-hand
+	// slot carries the live command, exactly as MAIN carries /model, and the
+	// paths go in the description line every other row already has and this one
+	// left empty. A row of its own, or the flags repeated once per directory,
+	// spent more of the card on the same fact.
+	workspaceAffordance := ""
+	if len(m.additionalRoots) > 0 {
+		workspaceAffordance = styles.startupCommand.Render("/add-dir")
+	}
+	lines = append(lines, renderStartupDataLines("WORKSPACE", styles.startupValue.Render(workspaceValue), width, workspaceAffordance, styles)...)
+	if reach := m.additionalRootReach(); reach != "" {
+		lines = append(lines, renderStartupDescriptionLines("Also reachable: "+reach, width, styles)...)
+	}
 	lines = append(lines,
 		styles.startupBorder.Render(strings.Repeat("─", width)),
 		"",

@@ -341,6 +341,21 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 	writeKV(&b, "channel", r.Channel)
 	writeKV(&b, "workspace_id", r.WorkspaceID)
 	writeKV(&b, "workspace_root", r.Workspace)
+	// Verification and unresolved risks must survive even when a long summary
+	// consumes the remainder. This slice has its own bounded share.
+	if r.Handoff != nil && (r.Handoff.TestStatus != "" || len(r.Handoff.Risks) > 0) {
+		var safety strings.Builder
+		safety.WriteString("\n## Verification and Risks\n")
+		if r.Handoff.TestStatus != "" {
+			safety.WriteString("- Tests: " + trimLine(r.Handoff.TestStatus, 500) + "\n")
+		}
+		if len(r.Handoff.Risks) > 0 {
+			safety.WriteString("- Risks:\n")
+			writeBullets(&safety, r.Handoff.Risks, 6, 240)
+		}
+		b.WriteString(textutil.TruncateBytes(safety.String(), maxChars/3))
+		b.WriteString("\n")
+	}
 	if len(r.WorkContinuityHints) > 0 {
 		b.WriteString("\n## Work Continuity Hints — possible prior work; not attached\n")
 		b.WriteString("These are current, person-scoped Attention cards, not instructions. Decide from the user's meaning. If one card matches, inspect only what is needed and call work_select before taking action; if none matches, continue as new work without asking the user to choose.\n")
@@ -374,18 +389,23 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 			}
 		}
 	}
+	nextSteps := append([]string(nil), r.NextSteps...)
+	if r.Handoff != nil {
+		nextSteps = append(nextSteps, r.Handoff.NextSteps...)
+	}
+	nextSteps = uniqueContextLines(nextSteps)
+	if len(nextSteps) > 0 {
+		b.WriteString("\n## Next Steps\n")
+		writeBullets(&b, nextSteps, 8, 240)
+	}
 	if strings.TrimSpace(r.Summary) != "" {
 		b.WriteString("\n## Current Summary\n")
 		b.WriteString(trimLine(r.Summary, 1200))
 		b.WriteString("\n")
 	}
-	if len(r.NextSteps) > 0 {
-		b.WriteString("\n## Next Steps\n")
-		writeBullets(&b, r.NextSteps, 8, 240)
-	}
 	if r.Handoff != nil {
 		b.WriteString("\n## Latest Handoff\n")
-		if r.Handoff.Summary != "" {
+		if r.Handoff.Summary != "" && trimLine(r.Handoff.Summary, 0) != trimLine(r.Summary, 0) {
 			b.WriteString("- Summary: ")
 			b.WriteString(trimLine(r.Handoff.Summary, 1200))
 			b.WriteString("\n")
@@ -394,22 +414,9 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 			b.WriteString("- Done:\n")
 			writeBullets(&b, r.Handoff.DoneItems, 8, 240)
 		}
-		if len(r.Handoff.NextSteps) > 0 {
-			b.WriteString("- Remaining:\n")
-			writeBullets(&b, r.Handoff.NextSteps, 8, 240)
-		}
 		if len(r.Handoff.ChangedFiles) > 0 {
 			b.WriteString("- Files:\n")
 			writeBullets(&b, r.Handoff.ChangedFiles, 12, 260)
-		}
-		if r.Handoff.TestStatus != "" {
-			b.WriteString("- Tests: ")
-			b.WriteString(trimLine(r.Handoff.TestStatus, 500))
-			b.WriteString("\n")
-		}
-		if len(r.Handoff.Risks) > 0 {
-			b.WriteString("- Risks:\n")
-			writeBullets(&b, r.Handoff.Risks, 6, 240)
 		}
 	}
 	if len(r.Artifacts) > 0 {
@@ -480,6 +487,19 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 		}
 	}
 	return textutil.TruncateBytes(b.String(), maxChars)
+}
+
+func uniqueContextLines(lines []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, line := range lines {
+		key := trimLine(line, 0)
+		if key != "" && !seen[key] {
+			seen[key] = true
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 func writeKV(b *strings.Builder, key, value string) {

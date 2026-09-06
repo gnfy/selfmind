@@ -1691,3 +1691,55 @@ func TestSkillSlashDoesNotDoubleEchoInput(t *testing.T) {
 		t.Fatalf("typed command echoed %d times, want exactly 1", count)
 	}
 }
+
+// Applying a model change is a multi-second daemon round trip: it revalidates
+// the routes against the live provider before it ever schedules the restart.
+// The review screen must therefore say the apply is running and must stop
+// accepting the same key, or the screen reads as frozen and a second Enter
+// posts a duplicate apply the daemon rejects as a pending conflict.
+func TestModelManagerApplyShowsProgressAndIgnoresRepeatKeys(t *testing.T) {
+	model := NewController("codex-cli", "gpt-old", nil, "").model
+	model.width, model.height = 100, 30
+	applies := 0
+	model.modelChangeProcessor = func(_ context.Context, req api.ModelChangeRequest) (api.ModelChangeResponse, error) {
+		if req.Action == "apply" {
+			applies++
+		}
+		return api.ModelChangeResponse{}, nil
+	}
+	model.modelManagerRoutes = []components.ModelManagerProvider{{
+		ID: "deepseek", Label: "DeepSeek", Models: []components.ModelManagerModel{{ID: "deepseek-v4-flash-vision-exp"}},
+	}}
+	model.modelManager = components.NewModelManagerWithTheme(model.modelManagerStatus, model.modelManagerRoutes, model.width, model.height, model.common.Theme)
+
+	press := func(key tea.KeyMsg) {
+		_, cmd := model.Update(key)
+		if cmd != nil {
+			cmd()
+		}
+	}
+	enter := tea.KeyMsg{Type: tea.KeyEnter}
+	// Main model wizard: provider -> model -> reasoning -> service tier.
+	for i := 0; i < 5; i++ {
+		press(enter)
+	}
+	// Menu -> "Review and apply" -> "Apply all changes".
+	for i := 0; i < 5; i++ {
+		press(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	press(enter)
+	press(enter)
+	if applies != 1 {
+		t.Fatalf("apply did not reach the daemon exactly once: applies=%d", applies)
+	}
+
+	view := stripANSI(model.viewActiveRegion())
+	if !strings.Contains(view, "Applying model changes") {
+		t.Fatalf("apply gives no visible progress:\n%s", view)
+	}
+
+	press(enter)
+	if applies != 1 {
+		t.Fatalf("repeat Enter posted a duplicate apply: applies=%d", applies)
+	}
+}

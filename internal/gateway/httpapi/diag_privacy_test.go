@@ -19,7 +19,7 @@ func TestDiagHidesInternalEventAndChannelIdentifiers(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handled, reply, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: channelID, Content: "/diag"})
+	handled, reply, _, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: channelID, Content: "/diag"})
 	if !handled || err != nil {
 		t.Fatalf("/diag handled=%v err=%v", handled, err)
 	}

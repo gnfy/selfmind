@@ -25,6 +25,7 @@ expect:
   require_task_switch: true
 
 checks:
+  context_not_exceeded: true
   no_mojibake: true
   no_empty_response: true
   no_raw_json_leak: true

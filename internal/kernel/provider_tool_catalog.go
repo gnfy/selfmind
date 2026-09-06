@@ -9,6 +9,18 @@ import (
 	"selfmind/internal/kernel/llm"
 )
 
+// probeOutputBudget is the output cap for the health check. It is NOT a spend:
+// measured against DeepSeek V4 with the real 27-tool catalogue, a budget of 16
+// burned all 16 tokens and produced nothing, while 256 finished naturally after
+// TWO — a tight cap costs more and fails, because reasoning tokens are output
+// tokens and truncation happens before any content appears.
+//
+// That is what made this expensive to diagnose: a healthy model, already
+// serving traffic, failed its own health check about half the time, and the
+// failure rolled back the person's model change and parked their queued work.
+// The budget exists to keep one check bounded, not to be the thing it measures.
+const probeOutputBudget = 256
+
 type ProviderToolCatalogProbe struct {
 	Catalog llm.ToolCatalogPreview
 	Model   string
@@ -45,13 +57,31 @@ func (a *Agent) ProbeProviderToolCatalog(ctx context.Context) ProviderToolCatalo
 			{Role: "user", Content: "Reply with OK."},
 		},
 		Tools:     definitions,
-		MaxTokens: 16,
+		MaxTokens: probeOutputBudget,
 	})
-	if err != nil {
+	switch {
+	case err != nil:
 		probe.Err = err
-	} else if resp == nil || (strings.TrimSpace(resp.Content) == "" && len(resp.ToolCalls) == 0) {
-		probe.Err = fmt.Errorf("provider returned neither content nor a tool call")
+	case resp == nil:
+		probe.Err = fmt.Errorf("provider returned no response")
+	case strings.TrimSpace(resp.Content) != "" || len(resp.ToolCalls) > 0:
+		// Accepted: a tool-call-only answer is healthy and is never dispatched.
+	case strings.EqualFold(strings.TrimSpace(resp.FinishReason), "length"):
+		// Say WHY it was empty. The old message named only the symptom, so a
+		// truncated reasoning model looked identical to a provider that had
+		// rejected the catalogue outright — and the one fact that separates
+		// them, the finish reason, was the fact being discarded.
+		probe.Err = fmt.Errorf("provider produced no content within the %d-token probe budget (finish_reason=length); a reasoning model may need more", probeOutputBudget)
+	default:
+		probe.Err = fmt.Errorf("provider returned neither content nor a tool call (finish_reason=%s)", fallbackFinishReason(resp.FinishReason))
 	}
 	probe.Latency = time.Since(started)
 	return probe
+}
+
+func fallbackFinishReason(value string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return "unset"
 }

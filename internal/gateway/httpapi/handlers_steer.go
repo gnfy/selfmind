@@ -80,6 +80,8 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 	// Report back-pressure instead of blocking the handler or dropping text;
 	// the rejected row is expired so it can never replay as a surprise later.
 	select {
+	// This endpoint's request type carries no attachments; the message path
+	// below is the one that can.
 	case active.Steer <- kernel.SteeringInput{ID: record.ID, Content: text, ContentHash: record.ContentHash}:
 		_ = d.Control.MarkSteeringClaimed(r.Context(), identity.TenantID, record.ID)
 	default:
@@ -115,7 +117,11 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 	// Durability before acknowledgement — see handleRunSteer. On persistence
 	// failure the caller falls back to the busy/queue path, which is itself
 	// durable, so the guidance is never ack'd into thin air.
+	// Same contract as the queue: import before acknowledging, so guidance that
+	// carries a file is not accepted with the file silently dropped.
+	steerAttachments := d.coordinator().importAttachments(ctx, identity, nil, req.Attachments)
 	record, err := d.Control.AcceptSteering(ctx, control.SteeringMessage{
+		Attachments:    attachmentRefsFromAPI(steerAttachments),
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
 		RunID:          active.RunID,
@@ -131,7 +137,15 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 		return api.MessageResponse{}, false
 	}
 	select {
-	case active.Steer <- kernel.SteeringInput{ID: record.ID, Content: text, ContentHash: record.ContentHash}:
+	// Send the guidance WITH its files. Persisting them and then handing the
+	// kernel bare text meant the person was told their attachment was accepted
+	// while the model was never told the file existed. ContentHash stays the
+	// hash of what they typed, so dedup is unaffected.
+	case active.Steer <- kernel.SteeringInput{
+		ID:          record.ID,
+		Content:     steeringContentWithAttachments(text, steerAttachments),
+		ContentHash: record.ContentHash,
+	}:
 		_ = d.Control.MarkSteeringClaimed(ctx, identity.TenantID, record.ID)
 		appendRunSteeredEvent(ctx, d.Control, active, record)
 		return api.MessageResponse{

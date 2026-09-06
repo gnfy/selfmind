@@ -1439,27 +1439,8 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 		}
 		sb.WriteString("These roots are explicitly bound to this run. Use an absolute path or set cwd to the selected root; relative paths still resolve against workspace_root.\n")
 	}
-	if len(attachments) > 0 {
-		sb.WriteString("attachments:\n")
-		for i, att := range attachments {
-			fmt.Fprintf(&sb, "- index: %d\n", i+1)
-			if att.Kind != "" {
-				fmt.Fprintf(&sb, "  kind: %s\n", att.Kind)
-			}
-			if att.Path != "" {
-				fmt.Fprintf(&sb, "  path: %s\n", att.Path)
-			}
-			if att.MimeType != "" {
-				fmt.Fprintf(&sb, "  mime_type: %s\n", att.MimeType)
-			}
-			if att.Name != "" {
-				fmt.Fprintf(&sb, "  name: %s\n", att.Name)
-			}
-			if att.Size > 0 {
-				fmt.Fprintf(&sb, "  size: %d\n", att.Size)
-			}
-		}
-		sb.WriteString("When useful, inspect attachment paths with local tools before answering.\n")
+	if block := renderAttachmentBlock(attachments); block != "" {
+		sb.WriteString(block)
 	}
 	sb.WriteString("[/SelfMind daemon context]\n\n")
 	sb.WriteString(input)

@@ -57,6 +57,10 @@ type Server struct {
 	// ModelChanges owns the daemon-serialized, non-secret route transaction
 	// state. UI and channel adapters only render or submit its commands.
 	ModelChanges *modelchange.Service
+
+	// background owns the post-run maintenance and memory-governance workers so
+	// every readiness transition has one place to (re)start them.
+	background backgroundServices
 	// ModelRestartFunc starts the normal external restart helper after a model
 	// transaction is committed. The helper, rather than the daemon itself,
 	// preserves launchd/systemd ownership and on-demand restart behavior.
@@ -369,11 +373,11 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		return *response, statusForMessageResponse(*response)
 	}
 
-	if handled, content, err := d.tryHandleControlCommand(ctx, identity, req); handled {
+	if handled, content, workspace, err := d.tryHandleControlCommand(ctx, identity, req); handled {
 		if err != nil {
 			return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
 		}
-		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Content: content, Workspace: workspace, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
 	}
 	// A bare number is a continuity answer only when exactly one recent
 	// person-wide choice is pending. Approval and run-clarification answers ran
@@ -436,6 +440,19 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// new work is parked without consulting an unverified model.
 	if !d.modelReadyForWork() {
 		coord := d.coordinator()
+		// Resolve the execution scope BEFORE deciding to queue. Queuing first
+		// stored a row with no workspace and no roots, so work submitted from one
+		// directory could later drain against the person's default workspace —
+		// an agent writing files in the wrong repository. The scope belongs to
+		// the moment of submission, not to whenever the queue happens to drain,
+		// and the model-change drain path beside this one already resolves first.
+		workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
+		if workspaceErr != nil {
+			return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", workspaceErr.Error())}, http.StatusBadRequest
+		}
+		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
+			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
+		}
 		running := coord.currentActive(identity.PersonID)
 		if running == nil {
 			return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
@@ -446,13 +463,6 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}
 		if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
 			intent.Intent = router.IntentContinue
-		}
-		workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
-		if workspaceErr != nil {
-			return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", workspaceErr.Error())}, http.StatusBadRequest
-		}
-		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
-			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
 		}
 		if requestTargetsActiveRun(req, intent, running) && isUserOriginTurn(ctx, req) {
 			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
@@ -576,6 +586,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 
 	if req.Async {
+		// The async worker owns a fresh context. Admit caller paths while their
+		// authenticated local authority is still available; the worker only
+		// receives managed references and must not inherit filesystem authority.
+		req.Attachments = coord.importAttachments(ctx, identity, nil, req.Attachments)
 		return coord.startAsyncRun(identity, req, intent), http.StatusOK
 	}
 	// Run lifetime is daemon-owned; endpoints detach, never cancel

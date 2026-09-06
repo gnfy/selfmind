@@ -51,20 +51,37 @@ func (c *Controller) SetStartupDigest(digest *api.DigestResponse) {
 	}
 }
 
-// untrustedWorkspaceNotice is the one-time trust question, or "" when there is
-// nothing to ask.
+// armWorkspaceTrustPrompt asks the one-time trust question when this session
+// enters a workspace whose trust is still an open question, and reports whether
+// it armed.
 //
-// It is a notice rather than a modal: trust is not urgent, nothing is blocked
-// without it, and a modal at startup would stand between the person and the
-// prompt they came to type at. Once they answer either way the daemon records
-// it and this stops appearing.
-func (m *uiModel) untrustedWorkspaceNotice() string {
-	ws := m.sessionWorkspace
-	if ws == nil || ws.Trusted || ws.TrustAsked {
-		return ""
+// It used to be a line of startup prose instead. Trust is not urgent and
+// nothing is blocked without it, so a notice read as the proportionate choice —
+// but it lands among the startup card, tips, and digest, and a line that never
+// asks for an answer is a line people read past, leaving two capabilities off
+// for the life of the workspace with nobody having decided that. Deferring is
+// one keystroke.
+//
+// It arms at most once per workspace per session: switching away and back must
+// not turn a declined-for-now answer into a nag.
+func (m *uiModel) armWorkspaceTrustPrompt() bool {
+	if !m.workspaceTrustIsOpen() || m.sessionWorkspace.ID == m.trustPromptedWorkspaceID {
+		return false
 	}
-	return "This workspace is untrusted, so workspace Skills and remembered approval observations stay off. `/ws trust` enables them for " +
-		ws.Name + "; `/ws decline` keeps it untrusted and stops asking."
+	ws := m.sessionWorkspace
+	m.trustPromptedWorkspaceID = ws.ID
+	m.workspaceTrustPrompt = components.NewWorkspaceTrustPrompt(ws.Name, ws.Path, m.common.Theme)
+	return true
+}
+
+// workspaceTrustIsOpen reports whether trust for this session's workspace is
+// still an unanswered question. The startup card reads it too: stamping
+// [untrusted] on a workspace the person is about to be asked about left the
+// card contradicting their own answer one line below it, and the card is
+// committed scrollback that cannot be corrected afterwards.
+func (m *uiModel) workspaceTrustIsOpen() bool {
+	ws := m.sessionWorkspace
+	return ws != nil && ws.ID != "" && !ws.Trusted && !ws.TrustAsked
 }
 
 // SetRunWatcher installs the client-mode follower for a mid-flight daemon run
@@ -92,14 +109,9 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 	if m.startupDigest != nil {
 		text = formatStartupDigest(m.startupDigest)
 	}
-	// The trust question rides the same one-shot render: startup is the only
-	// moment it can be asked once without becoming a nag.
-	if notice := m.untrustedWorkspaceNotice(); notice != "" {
-		if text != "" {
-			text += "\n"
-		}
-		text += notice
-	}
+	// The trust question is asked, not printed: it arms a prompt in the active
+	// region alongside whatever the digest had to say.
+	m.armWorkspaceTrustPrompt()
 	if text == "" {
 		return nil
 	}

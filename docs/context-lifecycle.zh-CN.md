@@ -95,6 +95,15 @@ LLM system prompt: # DURABLE TASK CONTEXT
 - 继续/恢复任务时优先读取 handoff 和 task events，不要只靠最近聊天文本。
 - 如果 IM 端没有 workspace，应要求用户绑定/选择 workspace；不要猜本机路径。
 
+### 请求预算与保留顺序
+
+- 模型请求发出前统一估算消息正文、多模态内容、原生工具调用参数与工具定义，扣除输出预留后裁剪历史。图像和不同 provider 的协议开销仍是估算，provider 拒绝超窗时保留既有恢复路径。
+- 压缩和确定性裁剪保留当前 Run 的用户目标及后续补充限制；旧 work spine 不作为当前目标。工具调用与结果成组裁剪。必需指令、最新工具结果和工具定义仍超过预算时，返回可行动错误，不静默丢弃用户限制。
+- 摘要调用继承 Run 的取消、截止时间及模型调用归属，只将模型角色改为 `summarizer`；预算以内不增加摘要调用。
+- Task 切片先保留验证结果与风险，再放去重后的下一步和摘要；Task 与 Handoff 相同的摘要、下一步只注入一次。
+
+回归证据：`internal/kernel/context_safety_test.go`、`internal/kernel/context_engine_test.go` 与 `evalcases/timeline/timeline-iterate.yaml`。
+
 ## P2：长期上下文与可扩展召回
 
 P2 的目标是让 SelfMind 具备长期上下文能力：event log、artifacts、summaries、indexed memory 都是 durable context source，但每轮只选择必要片段给模型。

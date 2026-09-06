@@ -27,7 +27,7 @@ func TestExecutionDiagIsRedactedAndShowsWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	server := &Server{Control: store}
-	handled, reply, err := server.tryHandleControlCommand(ctx, identity, api.MessageRequest{
+	handled, reply, _, err := server.tryHandleControlCommand(ctx, identity, api.MessageRequest{
 		Channel: "cli:person-exec-diag",
 		Content: "/diag execution",
 	})

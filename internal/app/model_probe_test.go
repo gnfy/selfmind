@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"selfmind/internal/kernel/llm"
 	"strings"
 	"testing"
 
@@ -181,5 +182,48 @@ func TestResolveModelRuntimeDoesNotApplyAuxiliaryToVision(t *testing.T) {
 
 	if _, err := ResolveModelRuntime(context.Background(), cfg, "vision"); err == nil {
 		t.Fatal("vision must require an explicit capability-specific role")
+	}
+}
+
+// TestModelProbeBudgetFitsAReasoningModel pins the output cap on the probe that
+// GATES MODEL CHANGES. Reasoning tokens are output tokens, so this cap is what
+// the model must finish thinking inside before it can answer at all. Measured
+// against DeepSeek V4 at reasoning_effort=xhigh, in this probe's exact shape,
+// five attempts used 14, 64, 22, 23 and 38 completion tokens — one hit the old
+// ceiling of 64 exactly and returned nothing. A false failure here rolls the
+// person's model choice back and parks their queued work, which is why setting
+// a model behaved like a coin flip.
+func TestModelProbeBudgetFitsAReasoningModel(t *testing.T) {
+	req := modelProbeRequest(modelruntime.Runtime{Model: "probe-model"}, false, false)
+	if req.MaxTokens < 128 {
+		t.Fatalf("plain probe budget = %d; a reasoning model can spend more than that before saying anything",
+			req.MaxTokens)
+	}
+}
+
+// TestModelProbeContentErrorNamesTruncation: an empty answer that was CUT OFF
+// is a different diagnosis from a route that answered with nothing, and the
+// finish reason is the only thing separating them.
+func TestModelProbeContentErrorNamesTruncation(t *testing.T) {
+	err := modelProbeContentError(&llm.ChatResponse{FinishReason: "length"})
+	if err == nil {
+		t.Fatal("a truncated empty answer must still fail the probe")
+	}
+	for _, want := range []string{"finish_reason=length", "budget"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("probe error must name %q so a log shows the cause: %q", want, err)
+		}
+	}
+
+	if err := modelProbeContentError(&llm.ChatResponse{FinishReason: "content_filter"}); err == nil ||
+		!strings.Contains(err.Error(), "content_filter") {
+		t.Fatalf("a non-truncation empty answer should name its finish reason: %v", err)
+	}
+	if err := modelProbeContentError(&llm.ChatResponse{}); err == nil ||
+		!strings.Contains(err.Error(), "unset") {
+		t.Fatalf("an absent finish reason should read as unset: %v", err)
+	}
+	if err := modelProbeContentError(&llm.ChatResponse{Content: "OK", FinishReason: "stop"}); err != nil {
+		t.Fatalf("a normal answer must pass: %v", err)
 	}
 }

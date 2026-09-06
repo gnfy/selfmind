@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ func TestImportAttachmentsCopiesIntoPersonPartition(t *testing.T) {
 	identity := &control.IdentityContext{TenantID: "t1", PersonID: "person_a"}
 	run := &control.Run{ID: "run_123"}
 
-	out := c.importAttachments(identity, run, []api.MessageAttachment{
+	out := c.importAttachments(withLocalFilesystemAuthority(context.Background()), identity, run, []api.MessageAttachment{
 		{Kind: "image", Path: tempSrc, Name: "selfmind-paste-1.png", MimeType: "image/png"},
 	})
 	if len(out) != 1 {
@@ -55,7 +56,7 @@ func TestImportAttachmentsDegradesNeverDrops(t *testing.T) {
 
 	// Missing source file.
 	c := &RunCoordinator{srv: &Server{AttachmentsDir: t.TempDir()}}
-	out := c.importAttachments(identity, run, []api.MessageAttachment{{Path: "/nonexistent/x.png"}})
+	out := c.importAttachments(withLocalFilesystemAuthority(context.Background()), identity, run, []api.MessageAttachment{{Path: "/nonexistent/x.png"}})
 	if len(out) != 1 || out[0].Path != "/nonexistent/x.png" {
 		t.Fatalf("missing file must keep original path, got %+v", out)
 	}
@@ -66,7 +67,7 @@ func TestImportAttachmentsDegradesNeverDrops(t *testing.T) {
 	if err := os.WriteFile(src, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out = c.importAttachments(identity, run, []api.MessageAttachment{{Path: src}})
+	out = c.importAttachments(withLocalFilesystemAuthority(context.Background()), identity, run, []api.MessageAttachment{{Path: src}})
 	if len(out) != 1 || out[0].Path != src {
 		t.Fatalf("disabled store must keep original path, got %+v", out)
 	}

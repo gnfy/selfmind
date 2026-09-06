@@ -17,7 +17,7 @@ SELFMIND_EVAL_VCR=record selfmind eval run evalcases/timeline
 | 5 | Cross-endpoint answer continuity (cli → weixin) via the spine | `timeline-cross-endpoint.yaml` (`require_task_switch`; content continuity asserted) |
 | 6 | bare `/resume` is exact-Run Attention | `timeline-tasks-view.yaml`, `timeline-ordinal-refs.yaml` (control-only) |
 | 7 | Grouping is reversible display metadata | Go: `work_timeline_test.go`, `task_view_test.go` |
-| 8 | Long-run compaction keeps the goal | Go: `internal/kernel/context_engine_test.go` (default compaction, head/tail protection, Relevant Files) + `light_task_layer_test.go` (spine) — unbounded-length runs are not eval-expressible offline |
+| 8 | Long-run compaction keeps the goal | Go: `internal/kernel/context_engine_test.go` (compaction, Relevant Files), `context_safety_test.go` (tool arguments/catalog budget, current goal and steering retention, summary ownership/cancellation, verification priority), and `light_task_layer_test.go` (spine). `timeline-iterate.yaml` checks the production request stays in budget; unbounded-length runs are not eval-expressible offline. |
 | 9 | Control-plane zero regression | Existing suites: approvals/queue/recovery Go tests + `evalcases/continuity/*` cassettes |
 | 10 | Promotion and selection decisions are auditable | Go: `run_finalization_test.go`, `work_selection_test.go` |
 | 11 | Thread presentation is user-controlled | `timeline-task-governance.yaml`; Go: `task_governance_test.go`, `work_timeline_test.go` |

@@ -36,7 +36,7 @@ type Agent struct {
 	summaryProvider  llm.Provider                 // optional cheap model for over-budget context compaction, kept OFF the main run provider
 	summaryMaxTokens int                          // resolved output ceiling for the summarizer route
 	judgeProvider    llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
-	runLLM           llm.Provider                 // per-run active provider, set under runMu
+	runLLM           llm.Provider                 // per-run active provider; every access goes through runLLMMu
 	skillInventory   func(tenantID string) string // optional: compact learned-skill list for the prompt
 	soul             string
 	maxIterations    int
@@ -54,7 +54,14 @@ type Agent struct {
 	toolBudgetPolicy ToolBudgetPolicy
 	EventChannel     chan string // emits JSON-encoded AgentEvent records; legacy text decoding is compatibility-only
 	runMu            sync.Mutex
-	syncQueue        chan syncTurnRequest
+	// runLLMMu guards runLLM alone. It cannot be runMu: RunConversation holds
+	// that for the whole turn, so a read taken from inside the run would
+	// deadlock. Readers outside the run — the provider tool-catalog probe that
+	// `selfmind doctor` fires — used to read the field with no lock at all while
+	// a run was assigning it, which `go test -race` reports as exactly what it
+	// is.
+	runLLMMu  sync.RWMutex
+	syncQueue chan syncTurnRequest
 
 	// Evolution config.
 	nudgeInterval     int
@@ -189,10 +196,27 @@ func (a *Agent) SummaryProvider() llm.Provider {
 // activeLLM returns the provider for the current run (the per-run choice when
 // set, else the default coding provider).
 func (a *Agent) activeLLM() llm.Provider {
-	if a != nil && a.runLLM != nil {
-		return a.runLLM
+	if a == nil {
+		return nil
+	}
+	a.runLLMMu.RLock()
+	run := a.runLLM
+	a.runLLMMu.RUnlock()
+	if run != nil {
+		return run
 	}
 	return a.llm
+}
+
+// setRunLLM publishes the per-run provider. Pairs with activeLLM so a concurrent
+// reader observes one provider or the other, never a half-written field.
+func (a *Agent) setRunLLM(provider llm.Provider) {
+	if a == nil {
+		return
+	}
+	a.runLLMMu.Lock()
+	a.runLLM = provider
+	a.runLLMMu.Unlock()
 }
 
 // chooseRunProvider keeps every user-visible turn on the coding provider.
@@ -378,13 +402,18 @@ func (a *Agent) waitBeforeRetry(ctx context.Context, attempt int, err error) err
 func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (*llm.ChatResponse, error) {
 	var lastErr error
 	max := a.retryAttempts()
-	messages = a.prepareMessagesForModel(ctx, messages)
+	definitions := a.llmToolDefinitions(ctx, strategy)
+	var prepErr error
+	messages, prepErr = a.contextEngine.PrepareRequest(ctx, messages, definitions)
+	if prepErr != nil {
+		return nil, prepErr
+	}
 	if err := ensureActiveSkillProviderDelivery(ctx, messages); err != nil {
 		emitActiveSkillDeliveryDeviation(ctx, err)
 		return nil, err
 	}
 	for attempt := 1; attempt <= max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(ctx, strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
+		req := llm.ChatRequest{Messages: messages, Tools: definitions, PromptCacheKey: llm.StablePromptCacheKey(ctx)}
 		resp, err := a.activeLLM().Chat(ctx, req)
 		if err == nil {
 			return resp, nil
@@ -428,13 +457,18 @@ func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (stri
 func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (<-chan llm.StreamEvent, error) {
 	var lastErr error
 	max := a.retryAttempts()
-	messages = a.prepareMessagesForModel(ctx, messages)
+	definitions := a.llmToolDefinitions(ctx, strategy)
+	var prepErr error
+	messages, prepErr = a.contextEngine.PrepareRequest(ctx, messages, definitions)
+	if prepErr != nil {
+		return nil, prepErr
+	}
 	if err := ensureActiveSkillProviderDelivery(ctx, messages); err != nil {
 		emitActiveSkillDeliveryDeviation(ctx, err)
 		return nil, err
 	}
 	for attempt := 1; attempt <= max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(ctx, strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
+		req := llm.ChatRequest{Messages: messages, Tools: definitions, PromptCacheKey: llm.StablePromptCacheKey(ctx)}
 		ch, err := a.activeLLM().StreamChat(ctx, req)
 		if err == nil {
 			return ch, nil
@@ -513,18 +547,11 @@ func emitActiveSkillDeliveryDeviation(ctx context.Context, err error) {
 	})
 }
 
-func (a *Agent) prepareMessagesForModel(ctx context.Context, messages []llm.Message) []llm.Message {
+func (a *Agent) prepareMessagesForContextRecovery(ctx context.Context, messages []llm.Message) []llm.Message {
 	if a == nil || a.contextEngine == nil {
 		return messages
 	}
-	return a.contextEngine.TruncateMessagesCtx(ctx, messages)
-}
-
-func (a *Agent) prepareMessagesForContextRecovery(messages []llm.Message) []llm.Message {
-	if a == nil || a.contextEngine == nil {
-		return messages
-	}
-	return a.contextEngine.RecoverMessages(messages)
+	return a.contextEngine.RecoverMessagesCtx(ctx, messages)
 }
 
 // partialStreamRecoveryMessages resumes a response whose transport ended
@@ -759,6 +786,7 @@ func emitToolEndEvent(ch chan string, name, result string, err error) {
 func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, initialPrompt string) (finalOutput string, finalUsage llm.UsageStats, finalErr error) {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
+	ctx = withContextInput(ctx, initialPrompt)
 
 	// Flight recorder: tag this turn so the recorder captures its model calls,
 	// and write the turn's metadata when it finishes (no-op unless enabled).
@@ -866,8 +894,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 	// Freeze this run on the foreground coding provider. Safe because runMu
 	// serializes RunConversation.
-	a.runLLM = a.chooseRunProvider(strategy)
-	defer func() { a.runLLM = nil }()
+	a.setRunLLM(a.chooseRunProvider(strategy))
+	defer func() { a.setRunLLM(nil) }()
 	EmitAgentEvent(eventCh, AgentEvent{
 		Type:    "strategy.selected",
 		Content: strategy.Reason,
@@ -1000,10 +1028,15 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		Type:    "context.breakdown",
 		Payload: breakdownPayload,
 	})
-	emitProviderCallContext := func(iteration int, transport string, callMessages []llm.Message, callStrategy TaskStrategy) {
-		prepared := a.prepareMessagesForModel(ctx, callMessages)
+	emitProviderCallContext := func(iteration int, transport string, callMessages []llm.Message, callStrategy TaskStrategy) ([]llm.Message, error) {
 		toolDefinitions := a.llmToolDefinitions(ctx, callStrategy)
+		prepared, err := a.contextEngine.PrepareRequest(ctx, callMessages, toolDefinitions)
+		if err != nil {
+			return nil, err
+		}
 		payload := ProviderCallContextBreakdown(promptSections, prepared, toolDefinitions)
+		payload["tool_schemas"] = a.contextEngine.tokenizer.CountTools(toolDefinitions)
+		payload["estimated_total"] = a.contextEngine.countMessages(prepared) + a.contextEngine.tokenizer.CountTools(toolDefinitions)
 		payload["iteration"] = iteration
 		payload["transport"] = transport
 		payload["tool_schema_count"] = len(toolDefinitions)
@@ -1024,6 +1057,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			payload["provider_prefix_blocks"] = fingerprint.Blocks
 		}
 		EmitAgentEvent(eventCh, AgentEvent{Type: "provider.call.context_breakdown", Payload: payload})
+		return prepared, nil
 	}
 
 	history := TaskHistory{
@@ -1304,8 +1338,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}
 		}
 
+		messages, err = emitProviderCallContext(i, "stream", messages, iterationStrategy)
+		if err != nil {
+			return "", totalUsage, err
+		}
 		streamCtx, streamCancel := context.WithCancel(ctx)
-		emitProviderCallContext(i, "stream", messages, iterationStrategy)
 		streamCallStarted := time.Now()
 		streamCh, err := a.streamChatWithRetry(streamCtx, messages, iterationStrategy)
 		if err != nil {
@@ -1317,7 +1354,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			fallbackMessages := messages
 			if llm.IsContextWindowError(err) {
 				emitAgentActivity(eventCh, "Context window was rejected; retrying with a smaller context slice", "context_recovery", i)
-				fallbackMessages = a.prepareMessagesForContextRecovery(messages)
+				fallbackMessages = a.prepareMessagesForContextRecovery(ctx, messages)
 			} else if !llm.IsRetryableError(err) {
 				// Quota/auth/billing/invalid-request failures are not streaming
 				// transport failures. Re-sending the same request through Chat would
@@ -1326,7 +1363,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			} else {
 				emitAgentActivity(eventCh, "Streaming transport failed; retrying without streaming", "transport_recovery", i)
 			}
-			emitProviderCallContext(i, "non_stream", fallbackMessages, iterationStrategy)
+			var prepareErr error
+			fallbackMessages, prepareErr = emitProviderCallContext(i, "non_stream", fallbackMessages, iterationStrategy)
+			if prepareErr != nil {
+				return "", totalUsage, prepareErr
+			}
 			fallbackCallStarted := time.Now()
 			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, fallbackMessages, iterationStrategy)
 			if fallbackErr != nil {
@@ -1422,7 +1463,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					phase := "transport_recovery"
 					if llm.IsContextWindowError(streamErr) {
 						phase = "context_recovery"
-						recoveryMessages = a.prepareMessagesForContextRecovery(recoveryMessages)
+						recoveryMessages = a.prepareMessagesForContextRecovery(ctx, recoveryMessages)
 					} else if !llm.IsRetryableError(streamErr) {
 						return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
 					}
@@ -1436,7 +1477,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					} else {
 						emitAgentActivity(eventCh, "Model stream interrupted; retrying the response", phase, i)
 					}
-					emitProviderCallContext(i, "non_stream", recoveryMessages, iterationStrategy)
+					var prepareErr error
+					recoveryMessages, prepareErr = emitProviderCallContext(i, "non_stream", recoveryMessages, iterationStrategy)
+					if prepareErr != nil {
+						return "", totalUsage, prepareErr
+					}
 					fallbackCallStarted := time.Now()
 					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, recoveryMessages, iterationStrategy)
 					if fallbackErr != nil {

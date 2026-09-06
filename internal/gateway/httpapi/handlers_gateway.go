@@ -216,6 +216,11 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 		if status, inspectErr := d.ModelChanges.Inspect(); inspectErr == nil && status.ModelReady() {
 			d.drainQueuedWhenReady(context.Background())
 		}
+		// Background readiness is its own route, not the foreground's, so this
+		// cannot ride the condition above: cancelling a pending change is exactly
+		// the transition that used to resume the queue while leaving maintenance
+		// and memory governance parked.
+		d.EnsureBackgroundServices(context.Background())
 	case "rollback":
 		prepared, err := d.ModelChanges.PrepareRollback(r.Context(), "local-cli", true)
 		if err != nil {

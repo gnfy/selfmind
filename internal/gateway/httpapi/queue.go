@@ -53,12 +53,14 @@ func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.I
 	if d.coordinator().currentActive(identity.PersonID) != nil {
 		ahead++
 	}
+	attachments := d.admitQueuedAttachments(ctx, identity, req)
 	queued, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
 		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
 		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
 		ExecutionRoots: req.ExecutionRoots, ReplyToRunID: req.ReplyToRunID,
 		ApprovalID: req.ApprovalID, ClarifyID: req.ClarifyID,
+		Attachments: attachments,
 	})
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}
@@ -90,6 +92,7 @@ func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.Iden
 		PlatformUserID: req.PlatformUserID,
 		Content:        req.Content,
 		ApprovalMode:   req.ApprovalMode,
+		Attachments:    d.admitQueuedAttachments(ctx, identity, req),
 		WorkspaceID:    req.WorkspaceID,
 		ExecutionRoots: req.ExecutionRoots,
 		ReplyToRunID:   req.ReplyToRunID,
@@ -127,6 +130,7 @@ func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control
 		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
 		ExecutionRoots: req.ExecutionRoots, ReplyToRunID: req.ReplyToRunID,
 		ApprovalID: req.ApprovalID, ClarifyID: req.ClarifyID,
+		Attachments: d.admitQueuedAttachments(ctx, identity, req),
 	})
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "draining", "", "", err.Error())}
@@ -199,4 +203,19 @@ func (d *Server) drainQueuedWhenReady(ctx context.Context) {
 		identity := d.routeIdentityForPerson(ctx, q.TenantID, q.PersonID, q.Channel, q.Platform, nil)
 		d.coordinator().drainQueue(identity)
 	}
+}
+
+// admitQueuedAttachments imports a request's attachments into the person's
+// partition and returns the durable references, so a row is written with files
+// that exist rather than a path the caller supplied.
+//
+// Every user-facing enqueue path goes through here. There are three of them —
+// model not ready, waiting behind an active run, and parked during a model
+// change — and fixing only the first left the other two silently dropping files
+// while still telling the person the work was accepted.
+func (d *Server) admitQueuedAttachments(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) []control.AttachmentRef {
+	if len(req.Attachments) == 0 {
+		return nil
+	}
+	return attachmentRefsFromAPI(d.coordinator().importAttachments(ctx, identity, nil, req.Attachments))
 }

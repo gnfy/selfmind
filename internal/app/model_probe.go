@@ -181,10 +181,23 @@ func probeThinkingToolLoop(ctx context.Context, provider llm.Provider, rt modelr
 	return nil
 }
 
+// plainProbeOutputBudget caps the "reply OK" health check. Reasoning tokens are
+// output tokens, so this budget is what the model must finish REASONING inside
+// before it can say anything at all — and it is a ceiling, not a spend: the
+// model stops at "OK" and is billed for what it used.
+//
+// Measured against DeepSeek V4 with reasoning_effort=xhigh, the shape this
+// probe actually sends: completion tokens came back as 14, 64, 22, 23, 38 over
+// five attempts — one run hit the old ceiling of 64 exactly, was truncated, and
+// returned nothing. That is a ~20% false failure on a healthy model, and this
+// probe gates model changes: a false failure rolls the person's model choice
+// back and parks their queued work, so setting a model looked like a coin flip.
+const plainProbeOutputBudget = 512
+
 func modelProbeRequest(rt modelruntime.Runtime, includeTools, maintenanceContract bool) llm.ChatRequest {
 	req := llm.ChatRequest{
 		Model:        rt.Model,
-		MaxTokens:    64,
+		MaxTokens:    plainProbeOutputBudget,
 		SystemPrompt: "This is a model health check. Return exactly OK and do not call tools.",
 		Messages:     []llm.Message{{Role: "user", Content: "Reply with OK."}},
 	}
@@ -346,5 +359,19 @@ func modelProbeContentError(resp *llm.ChatResponse) error {
 	if len(resp.ToolCalls) > 0 {
 		return fmt.Errorf("model returned an unexpected tool call instead of probe text")
 	}
-	return fmt.Errorf("model returned an empty response")
+	// Being CUT OFF is a different diagnosis from a model that answered with
+	// nothing, and the finish reason is the only thing that separates them.
+	// Reporting just the symptom is what made a truncated reasoning model look
+	// like a broken route, in the one message the person and the log both see.
+	if strings.EqualFold(strings.TrimSpace(resp.FinishReason), "length") {
+		return fmt.Errorf("model produced no answer within the %d-token probe budget (finish_reason=length); a reasoning model may need more", plainProbeOutputBudget)
+	}
+	return fmt.Errorf("model returned an empty response (finish_reason=%s)", probeFinishReason(resp.FinishReason))
+}
+
+func probeFinishReason(value string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return "unset"
 }

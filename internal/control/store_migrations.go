@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 13
+const CurrentControlSchemaVersion = 14
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -448,6 +448,28 @@ CREATE INDEX IF NOT EXISTS idx_run_delivery_overrides_person
 			return migrateAttentionDismissalOnly(ctx, db)
 		},
 	},
+	{
+		Version: 14,
+		Name:    "durable-attachments",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			return migrateDurableAttachments(ctx, db)
+		},
+	},
+}
+
+// migrateDurableAttachments gives parked and steered work somewhere to keep its
+// attachments. Both paths persisted the text and dropped the files, so a person
+// who attached an image to work that happened to be queued — or to guidance
+// added mid-run — was told it was accepted and the model never saw it. Existing
+// rows are capability-inert: an absent column reads as no attachments, which is
+// exactly what those rows had.
+func migrateDurableAttachments(ctx context.Context, db *sql.DB) error {
+	for _, table := range []string{"task_queue", "steering_mailbox"} {
+		if err := ensureMigrationColumn(ctx, db, table, "attachments_json", "TEXT"); err != nil {
+			return fmt.Errorf("add %s.attachments_json: %w", table, err)
+		}
+	}
+	return nil
 }
 
 // migrateResumeEdgeNaming renames the forward continuation edge so the column

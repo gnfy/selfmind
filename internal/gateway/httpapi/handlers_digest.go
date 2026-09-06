@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"selfmind/internal/control"
-	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
@@ -92,13 +91,7 @@ func (d *Server) digestSessionWorkspace(ctx context.Context, identity *control.I
 	if ws == nil {
 		return nil
 	}
-	trusted := ws.TrustLevel == executionenv.TrustTrusted
-	return &api.DigestWorkspace{
-		ID: ws.ID, Name: ws.Name, Path: ws.LocalPath, Trusted: trusted,
-		// Trusting is itself an answer; declining is recorded as the source so
-		// a "no" is not mistaken for "not asked yet".
-		TrustAsked: trusted || ws.TrustSource == WorkspaceTrustDeclined,
-	}
+	return digestWorkspaceFrom(ws)
 }
 
 // buildDigest assembles the bounded attach digest for the requesting account.

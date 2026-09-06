@@ -84,6 +84,17 @@ const (
 // minimum an async run needs to route its result back to the origin endpoint
 // (channel/platform/platform_user_id) and to reproduce the request scope
 // (approval_mode, workspace_id).
+// AttachmentRef is one durable attachment: a daemon-managed copy plus what a
+// reader needs to render it. Control owns this shape rather than importing the
+// gateway's request type, so the durable record does not follow the wire format.
+type AttachmentRef struct {
+	Kind     string `json:"kind,omitempty"`
+	Path     string `json:"path,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Size     int64  `json:"size,omitempty"`
+}
+
 type QueuedTask struct {
 	ID             string `json:"id"`
 	TenantID       string `json:"tenant_id"`
@@ -98,6 +109,12 @@ type QueuedTask struct {
 	// queued request. A later drain never derives them from daemon cwd, current
 	// workspace, or task history.
 	ExecutionRoots []executionenv.RootBinding `json:"execution_roots,omitempty"`
+	// Attachments are the daemon-managed copies admitted with the request. The
+	// queue used to keep only the text, so a person who attached a file to work
+	// that happened to park was told it was accepted and the model never saw it.
+	// These are references into the person's own partition, never a caller's
+	// path: what a path is allowed to mean is settled before anything is queued.
+	Attachments []AttachmentRef `json:"attachments,omitempty"`
 	// TaskID pins the drained run to a specific existing task (used by
 	// system-originated finalization work such as external-watch closure).
 	// Empty for ordinary inbound messages, which resolve their task normally.
@@ -152,17 +169,21 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	if err != nil {
 		return nil, fmt.Errorf("encode queue execution roots: %w", err)
 	}
+	attachmentsJSON, err := encodeAttachmentRefs(q.Attachments)
+	if err != nil {
+		return nil, fmt.Errorf("encode queue attachments: %w", err)
+	}
 	notBefore := q.NotBefore.Unix()
 	if q.NotBefore.IsZero() {
 		notBefore = 0
 	}
-	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at, attachments_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if q.IdempotencyKey != "" {
 		query += ` ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`
 	}
 	result, err := s.db.ExecContext(ctx, query,
-		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, rootsJSON, q.TaskID, q.ReplyToRunID, q.ApprovalID, q.ClarifyID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, rootsJSON, q.TaskID, q.ReplyToRunID, q.ApprovalID, q.ClarifyID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix(), attachmentsJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -197,10 +218,11 @@ func scanQueuedTask(rows interface {
 	var q QueuedTask
 	var created, notBefore, leaseUntil int64
 	var rootsJSON string
+	var attachmentsJSON string
 	if err := rows.Scan(&q.ID, &q.TenantID, &q.PersonID, &q.Channel, &q.Platform, &q.PlatformUserID,
 		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &rootsJSON, &q.TaskID, &q.RunID, &q.ReplyToRunID, &q.ApprovalID, &q.ClarifyID,
 		&q.IdempotencyKey, &q.Class, &q.Priority, &notBefore, &q.Status, &q.Restarts, &q.ClaimToken,
-		&leaseUntil, &q.AttemptGeneration, &created); err != nil {
+		&leaseUntil, &q.AttemptGeneration, &created, &attachmentsJSON); err != nil {
 		return QueuedTask{}, err
 	}
 	q.CreatedAt = time.Unix(created, 0)
@@ -213,6 +235,11 @@ func scanQueuedTask(rows interface {
 	if err := json.Unmarshal([]byte(rootsJSON), &q.ExecutionRoots); err != nil {
 		return QueuedTask{}, fmt.Errorf("decode queue execution roots: %w", err)
 	}
+	attachments, attachErr := decodeAttachmentRefs(attachmentsJSON)
+	if attachErr != nil {
+		return QueuedTask{}, attachErr
+	}
+	q.Attachments = attachments
 	return q, nil
 }
 
@@ -220,7 +247,8 @@ const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESC
 	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), COALESCE(thread_id, ''),
 	COALESCE(run_id, ''), COALESCE(reply_to_run_id, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), COALESCE(idempotency_key, ''), COALESCE(class, 'foreground'),
 	COALESCE(priority, 100), COALESCE(not_before, 0), status, COALESCE(restarts, 0),
-	COALESCE(claim_token, ''), COALESCE(lease_until, 0), COALESCE(attempt_generation, 0), created_at`
+	COALESCE(claim_token, ''), COALESCE(lease_until, 0), COALESCE(attempt_generation, 0), created_at,
+	COALESCE(attachments_json, '[]')`
 
 const defaultQueueClaimLease = 2 * time.Minute
 
@@ -661,4 +689,32 @@ func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int
 		return 0, 0, err
 	}
 	return int(nRequeued), int(nDropped), nil
+}
+
+// encodeAttachmentRefs renders the durable attachment list. An empty list is
+// stored as "[]" so a row always decodes, including rows written before the
+// column existed.
+func encodeAttachmentRefs(refs []AttachmentRef) (string, error) {
+	if len(refs) == 0 {
+		return "[]", nil
+	}
+	data, err := json.Marshal(refs)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+// decodeAttachmentRefs reads the durable attachment list. Rows written before
+// the column existed decode as none, which is what they had.
+func decodeAttachmentRefs(raw string) ([]AttachmentRef, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return nil, nil
+	}
+	var refs []AttachmentRef
+	if err := json.Unmarshal([]byte(raw), &refs); err != nil {
+		return nil, fmt.Errorf("decode attachments: %w", err)
+	}
+	return refs, nil
 }

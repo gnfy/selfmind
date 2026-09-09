@@ -2756,6 +2756,59 @@ func (s *Store) RecordChannelMessage(ctx context.Context, identity IdentityConte
 	return err
 }
 
+// PrecedingAssistantOffer returns what SelfMind last said in one channel, but
+// only while the person's current turn is still a direct reply to it. Empty
+// otherwise.
+//
+// It exists for one narrow purpose: a person's reply is often only meaningful
+// against what they were just offered. "2", "the second one", "do that" carry
+// their whole authorization in a message this store already holds, and approval
+// triage used to see the reply alone and rule "authorization unknown".
+//
+// The recency bound is the point of the method. The newest assistant message is
+// not automatically an offer being answered — after a person opens an unrelated
+// topic it is just the previous turn's closing remark, and presenting that as
+// the referent of their new words invents a connection. So it is withheld once
+// more than one of the person's own turns has followed it: at most the current
+// turn may sit in between.
+//
+// The text stays channel-local, as raw transcripts must: the only caller is the
+// approval path for a run in this same channel, and it is handed on as
+// attributed, untrusted evidence — what was OFFERED, never what was authorized.
+func (s *Store) PrecedingAssistantOffer(ctx context.Context, tenantID, personID, channel string) (string, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(personID) == "" || strings.TrimSpace(channel) == "" {
+		return "", nil
+	}
+	tenant := normalizeTenant(tenantID)
+	// Ordering is by rowid, not created_at: the column holds whole seconds, and
+	// a person's reply lands in the same second as the finalization that wrote
+	// the offer often enough that a timestamp comparison cannot separate them.
+	var content string
+	var row int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT content, rowid FROM channel_messages
+		 WHERE tenant_id = ? AND person_id = ? AND channel = ? AND role = 'assistant'
+		 ORDER BY rowid DESC LIMIT 1`,
+		tenant, personID, channel).Scan(&content, &row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	var newerTurns int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM channel_messages
+		 WHERE tenant_id = ? AND person_id = ? AND channel = ? AND role = 'user' AND rowid > ?`,
+		tenant, personID, channel, row).Scan(&newerTurns); err != nil {
+		return "", err
+	}
+	if newerTurns > 1 {
+		return "", nil
+	}
+	return content, nil
+}
+
 func (s *Store) SaveHandoff(ctx context.Context, handoff Handoff) (*Handoff, error) {
 	if handoff.TaskID == "" {
 		return nil, fmt.Errorf("task id is required")

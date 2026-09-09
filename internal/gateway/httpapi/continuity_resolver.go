@@ -52,16 +52,6 @@ type ContinuityCandidate struct {
 	startedAt time.Time
 }
 
-func isStandaloneContinueControl(input string) bool {
-	clean := strings.ToLower(strings.Trim(strings.TrimSpace(input), " \t\r\n.!?,;:。！？；：，"))
-	switch clean {
-	case "continue", "resume", "go on", "keep going", "继续", "接着", "继续吧", "接着来":
-		return true
-	default:
-		return false
-	}
-}
-
 func continuityRunResumable(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "interrupted", "waiting_user", "verification_partial", "blocked":

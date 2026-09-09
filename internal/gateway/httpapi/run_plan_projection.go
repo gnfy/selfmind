@@ -43,6 +43,23 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	if err != nil {
 		return tools.PlanProjectionResult{}, err
 	}
+	// A step that arrives completed under a different acceptance bar than the
+	// one that declared it is how a false completion stays invisible: the plan
+	// still resolves, and the bar it resolved against is gone. Record the pair
+	// so an audit can see the bar move; nothing here judges the change, because
+	// restating a criterion can be honest replanning.
+	for _, change := range projection.CriteriaRestated {
+		_, _ = p.coordinator.srv.Control.AppendEvent(ctx, control.Event{
+			RunID:      p.run.ID,
+			Type:       "plan.criteria_restated",
+			Visibility: "task",
+			Channel:    p.run.Channel,
+			Payload: mustJSON(map[string]interface{}{
+				"step_id": change.StepID, "step": change.Step,
+				"from": change.From, "to": change.To,
+			}),
+		})
+	}
 	plan := tools.PlanState{Explanation: projection.Plan.Explanation, Plan: make([]tools.PlanStep, 0, len(projection.Plan.Steps))}
 	for _, step := range projection.Plan.Steps {
 		plan.Plan = append(plan.Plan, tools.PlanStep{

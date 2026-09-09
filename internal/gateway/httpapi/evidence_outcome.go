@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 )
@@ -19,13 +20,26 @@ type recordedEvidencePayload struct {
 
 // evidenceOutcome derives a verification verdict from durable runtime events.
 // Model prose is intentionally not an input to the verdict.
-func (c *RunCoordinator) evidenceOutcome(ctx context.Context, taskID, runID string) (*api.VerificationOutcome, []string) {
+func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, taskID, runID string) (*api.VerificationOutcome, []string) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || taskID == "" || runID == "" {
 		return nil, nil
 	}
-	events, err := c.srv.Control.ListTaskEvents(ctx, taskID, 200)
-	if err != nil {
+	run, err := c.srv.Control.GetRun(ctx, tenantID, runID)
+	if err != nil || run == nil || run.TaskID != taskID {
 		return nil, nil
+	}
+	var events []control.Event
+	var before int64
+	for {
+		page, err := c.srv.Control.ListRunEvidenceEvents(ctx, run.TenantID, run.ID, before, 200)
+		if err != nil {
+			return nil, nil
+		}
+		events = append(events, page...)
+		if len(page) < 200 {
+			break
+		}
+		before = page[len(page)-1].Cursor
 	}
 
 	var evidence []kernel.RunEvidence
@@ -250,14 +264,6 @@ func verificationClaimContainsAny(value string, markers []string) bool {
 		}
 	}
 	return false
-}
-
-func mergeEvidenceFiles(verification *api.VerificationOutcome, evidenceFiles, claimedFiles []string) (*api.VerificationOutcome, []string) {
-	files := append([]string(nil), claimedFiles...)
-	for _, path := range evidenceFiles {
-		files = appendUnique(files, path, 32)
-	}
-	return verification, files
 }
 
 func verificationRequiresResume(verification *api.VerificationOutcome, changedFiles []string) bool {

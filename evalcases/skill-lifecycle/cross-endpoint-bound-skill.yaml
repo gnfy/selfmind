@@ -1,5 +1,5 @@
 id: skill_cross_endpoint_bound
-title: "A deterministic IM continuation loads the task-bound Skill without a directory dump"
+title: "An explicit IM resume loads the task-bound Skill without a directory dump"
 suite: skill-lifecycle
 workspace: isolated
 channel: weixin
@@ -25,13 +25,17 @@ setup:
   task:
     title: "Inspect the current release"
     default_skill: release-inspection
-    # P2: a bare continuation binds through the run ladder, so the bound task
-    # must hold an unclaimed resumable run for the IM cue to continue it.
+    # Deterministic binding uses explicit controls. Ordinary natural-language
+    # selection is covered by timeline and waiting-run confirmation cases.
     parked_runs:
       - input: "开始检查当前发布版本"
         status: waiting_user
 
 turns:
+  - input: "/resume"
+    channel: weixin
+  - input: "/resume 1"
+    channel: weixin
   - input: "继续"
     channel: weixin
 
@@ -44,6 +48,9 @@ expect:
   max_duration_seconds: 180
 
 assert_state:
+  # A read-only result may mention its input file, but creates no file artifact.
+  - { on: artifacts, count_lte: 0 }
+  - { on: run, field: resumes_run_id, empty: false }
   - on: events
     type: skill.activated
     payload_contains: '"name":"release-inspection"'

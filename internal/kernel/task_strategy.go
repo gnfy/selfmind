@@ -420,7 +420,7 @@ func (s TaskStrategy) SystemPromptNote() string {
 			sb.WriteString("This is a verification-only recovery turn. Observe current state and resolve uncertainty; do not mutate files, processes, services, or external systems. If read-only evidence cannot determine the result, finish with an actionable blocker.\n")
 		}
 		sb.WriteString("All non-command user input has been routed to the agent. Do not assume a short message is casual; use the conversation, task, workspace, and resume context to decide what to do.\n")
-		sb.WriteString("When the user replies with a brief acceptance or continuation such as ok, yes, continue, proceed, or equivalent wording, inspect the previous assistant/task context and continue the proposed work if that is what the user approved.\n")
+		sb.WriteString("Interpret the user's reply in context, including prior proposals and work history. Proceed with clearly accepted work within its authorized scope.\n")
 		sb.WriteString("You decide whether tools are useful. Prefer a direct answer for pure questions and small snippets when no local or external state is needed.\n")
 		sb.WriteString("Use local tools when the user asks you to inspect, create, change, run, validate, or reason about files, directories, repositories, command output, workspace state, or a runnable artifact.\n")
 		sb.WriteString("For ambiguous CLI requests that may produce an artifact, do a cheap read-only probe first, such as listing the current directory, then decide whether to answer inline, create a standalone file, or ask a brief clarification.\n")

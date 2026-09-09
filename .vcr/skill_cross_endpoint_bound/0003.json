@@ -1,0 +1,64 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "当前"
+    },
+    {
+      "content": "发布"
+    },
+    {
+      "content": "版本"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "v"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 9545,
+        "output_tokens": 16,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9545,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

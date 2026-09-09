@@ -150,9 +150,10 @@ daemon must not expose that directory as a product runtime Skill.
   evidence promotes them into the work list. Attention is derived per exact
   Run from live execution, pending human input, watchers, and unclaimed
   resumable outcomes; dismissal never rewrites Run history. Explicit task ids,
-  `/resume`, structured reply edges, and standalone continuation controls remain
-  deterministic. User-originated natural language is Main-owned inside an
-  accountable Run: when work is active it is durably steered for Main to apply
+  `/resume` and structured reply edges remain deterministic. Ordinary natural
+  language, including brief acceptances and continuations, is Main-owned inside
+  an accountable Run; no word list may select its execution parent. When work
+  is active it is durably steered for Main to apply
   or queue, and when idle it starts an ordinary turn with bounded work-history
   tools. Daemon-originated text never steers work. Do not add a run-external LLM
   continuity classifier or let model output select permissions, workspaces,

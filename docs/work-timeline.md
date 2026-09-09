@@ -126,6 +126,10 @@ explicit /new, /resume, /choose
   -> idle: ordinary Main Run with bounded Attention hints and history tools
 ```
 
+- Brief acceptances and continuations in any language follow the ordinary
+  Main path. No phrase list binds an execution parent or forces a history
+  choice before Main interprets the request. Accepting a new proposal can
+  proceed without resuming a historical Run.
 - `runs.resumes_run_id` is the only continuation ownership edge: this run
   resumes that run. The resuming row is created transactionally after tenant,
   person, Thread, resumability, scope, and unclaimed-target validation. A
@@ -153,6 +157,13 @@ explicit /new, /resume, /choose
 - Active user input is durably steered. Main decides at a safe checkpoint
   whether it updates current work, creates a new plan item, or queues
   independent work. Daemon-originated content never steers from text.
+
+Approval, clarification, and external-watch completion carry structured ids
+through the durable queue. Watch finalization claims its exact parent before
+inheriting the plan and bounded observation targets/results. Recent user
+additions and corrections follow at most eight Runs of that exact lineage;
+unrelated Runs in the same Thread are excluded. These records inform Main and
+approval triage without granting additional execution authority.
 
 Approval and clarification replies carry structured ids through the durable
 queue. Prose such as “resume after approval” has no routing authority.

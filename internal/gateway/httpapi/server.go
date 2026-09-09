@@ -419,7 +419,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 				return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", rootsErr.Error())}, http.StatusBadRequest
 			}
-			if running := coord.currentActive(identity.PersonID); running != nil && requestTargetsActiveRun(req, intent, running) {
+			if running := coord.currentActive(identity.PersonID); running != nil && (d.shouldSteerActiveNaturalInput(ctx, identity, req, running) || requestTargetsActiveRun(req, intent, running)) {
 				if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
 					return resp, http.StatusOK
 				}
@@ -457,14 +457,11 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		if running == nil {
 			return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
 		}
-		intent := router.NewIntentClassifier().ClassifyDetailed(req.Content)
+		intent := d.classifyIntent(ctx, req.Content, req.Channel)
 		if req.ForceNew {
 			intent = forcedNewIntent()
 		}
-		if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
-			intent.Intent = router.IntentContinue
-		}
-		if requestTargetsActiveRun(req, intent, running) && isUserOriginTurn(ctx, req) {
+		if (d.shouldSteerActiveNaturalInput(ctx, identity, req, running) || requestTargetsActiveRun(req, intent, running)) && isUserOriginTurn(ctx, req) {
 			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
 				return resp, http.StatusOK
 			}
@@ -513,25 +510,6 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	intent := d.classifyIntent(ctx, req.Content, req.Channel)
 	if req.ForceNew {
 		intent = forcedNewIntent()
-	}
-	if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
-		// A bare acceptance upgrades to a continuation only when the person
-		// actually has a pending run to accept — the run-level check replaces
-		// the old current-task pointer (simplification P2: the pointer is a UI
-		// projection, never continuation authority).
-		if d.Control != nil {
-			if runs, _ := d.Control.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 1); len(runs) > 0 {
-				intent = router.IntentResult{
-					Intent:           router.IntentContinue,
-					Confidence:       0.84,
-					Reason:           "affirmative reply with pending resumable work",
-					Signals:          []string{"continue.affirmative_with_context"},
-					ShouldCreateTask: true,
-					ShouldUseTools:   true,
-					Source:           "httpapi",
-				}
-			}
-		}
 	}
 	if handled, resp := d.tryHandleIntentClarification(identity, intent); handled {
 		return resp, http.StatusOK
@@ -704,7 +682,7 @@ func requestTargetsActiveRun(req api.MessageRequest, intent router.IntentResult,
 	case string(ContinuitySteer):
 		return false // a typed steer always carries an exact run edge
 	default:
-		return intent.Intent == router.IntentContinue
+		return false
 	}
 }
 

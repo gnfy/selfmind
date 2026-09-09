@@ -28,7 +28,7 @@ func TestWorkSelectClaimsSameDomainResumeInTurn(t *testing.T) {
 	targetRun, _ := store.StartRunWithOptions(ctx, targetTask, "cli", "aws生产发布，先预检再等我确认", control.StartRunOptions{ExecutionRoots: directClaimRoots})
 	if _, err := store.SyncRunPlan(ctx, person.TenantID, targetRun.ID, "release", []control.RunPlanStepInput{
 		{Step: "read-only preflight", Status: "completed"},
-		{Step: "recite the release steps after confirmation", Status: "in_progress"},
+		{Step: "recite the release steps after confirmation", Status: "in_progress", SuccessCriteria: "include the rollback step", VerificationRequired: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestWorkSelectClaimsSameDomainResumeInTurn(t *testing.T) {
 	if decoded.Status != "committed" || decoded.CommitMode != "direct" || decoded.ThreadID != targetTask.ID {
 		t.Fatalf("same-domain resume must commit directly: %s", result)
 	}
-	for _, want := range []string{"Preflight passed", "[x] read-only preflight", "[>] recite the release steps", "keeps the completed steps"} {
+	for _, want := range []string{"Preflight passed", "[x] read-only preflight", "[>] recite the release steps", "keeps the completed steps", "include the rollback step", "verification_required=true"} {
 		if !strings.Contains(decoded.ResumeContext, want) {
 			t.Fatalf("resume context lacks %q:\n%s", want, decoded.ResumeContext)
 		}

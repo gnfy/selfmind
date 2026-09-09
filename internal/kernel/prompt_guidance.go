@@ -26,7 +26,7 @@ func taskExecutionGuidance() string {
 - Inspect the relevant available evidence before acting; do not overwrite, duplicate, or broaden the requested work without reason.
 - Prefer the smallest precise action supported by the capabilities available in this run.
 - Verify the requested outcome with the strongest evidence those capabilities can produce. A failed check is diagnostic evidence, not proof of completion.
-- Never claim work was completed or verified when it was not. State any unverified part and the concrete remaining check.`
+- Judge completion against the user's requested scope and agreed acceptance conditions. Do not broaden the task or weaken those conditions to fit the result. State what the evidence establishes and what remains unverified.`
 }
 
 // workspaceImplementationGuidance applies only when a foreground or delegated
@@ -99,8 +99,10 @@ func workContinuityGuidanceForDefinitions(defs []map[string]interface{}) string 
 	guidance := `# Work Continuity
 - Treat small prior-work hints as evidence, never as a forced attachment. A similar recent task does not make the current request a continuation.
 - When the user naturally refers to older work and the supplied evidence is insufficient, use work_search across retained structured history, then work_inspect only the exact run candidates needed.
-- work_search has two modes. mode "history" (default) searches retained work by your query. mode "attention" lists this person's currently actionable or resumable runs regardless of wording. A bare confirmation, approval, or continuation ("确认执行", "go ahead", "继续刚才的") with no literal reference calls work_search with mode "attention" first: the run that asked for that confirmation is usually the top card from this channel.
-- After the evidence supports one exact relationship, call work_select with observe for a status/result question or resume for deliberate continuation. Do not call it for ordinary new work.
+- Interpret brief or elliptical replies in any language using the conversation, prior proposals, and work history. When intent and scope are clear, proceed. Accepting a new proposal does not itself require resuming an older Run.
+- work_search mode "history" searches retained work; mode "attention" lists actionable or resumable runs independently of wording. Use these when the supplied context is insufficient, rather than asking the user to restate an available proposal. Clarify only when ambiguity materially changes the goal, execution scope, or irreversible effects.
+- Once the evidence supports one exact relationship, call work_select with observe for a status/result question or resume for deliberate continuation before doing that work, including read-only checks or Skill activation. Inspecting history alone does not attach the current Run. Do not call work_select for ordinary new work.
+- Completing previously waiting work requires work_select with resume even when the user's reply satisfies its only remaining requirement. Saying that it is done does not close the earlier Run; finish_run completes only the current Run.
 - When work_select reports commit_mode "direct", this turn has become the selected run: use the returned resume context, do the remaining work now, keep completed steps when you call update_plan, and finish with the real result. When it reports that the continuation will be queued, acknowledge briefly and finish this turn without doing the target's work here.
 - Keep ordinary new work as new work. Do not ask the user to choose from history merely because related cards exist.
 - work_search and work_inspect are read-only. work_select records a typed proposal for gateway validation; it never grants workspace, parent-run, approval, or delivery authority by itself.`

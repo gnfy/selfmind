@@ -1,4 +1,4 @@
 {
   "method": "completion",
-  "completion": "waiting_user user_confirmation confirmation_required pending_user open_input"
+  "completion": "waiting_user awaiting_user user_confirmation confirmation_pending open_input"
 }

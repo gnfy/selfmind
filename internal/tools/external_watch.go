@@ -31,12 +31,18 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 	t := &ExternalWatchTool{store: store, planStore: planStore}
 	t.BaseTool = BaseTool{
 		name:        "watch_external",
-		description: "Register a durable daemon-side read-only check for external CI/CD or deployment state. Successful registration automatically hands off the current run as waiting_external; do not call finish_run afterward.",
+		description: "Register a durable daemon-side read-only check for external CI/CD or deployment state. The command must be PROVABLY read-only by static inspection before registration is attempted — see the command field. Successful registration automatically hands off the current run as waiting_external; do not call finish_run afterward.",
 		schema: ToolSchema{
 			Type: "object",
 			Properties: map[string]PropertyDef{
 				"description": {Type: "string", Description: "Short user-facing description of what is being watched"},
-				"command":     {Type: "string", Description: "Read-only command that checks the external state"},
+				// "Read-only command that checks the external state" promised a
+				// wider input than the evaluator accepts: read-only here means
+				// STATICALLY PROVABLE, and the model could only discover that by
+				// spending a call and reading the rejection. The failure path
+				// already names the alternatives well; this states the shape up
+				// front so the first attempt can be a legal one.
+				"command": {Type: "string", Description: "Command that checks the external state, written so it can be proven read-only without running it: catalogued read-only commands with literal arguments, optionally joined by pipes or &&. Loops, subshells, background jobs, command substitution, redirection into files, env assignments, sudo and xargs cannot be proven and are rejected before registration. An operator-approved observation script in the workspace is the supported way to check something more involved."},
 				// A description says what the value IS. Which combination is
 				// legal is enforced by ValidateExternalWatchSpec, which returns
 				// a precise error, so repeating it here bought nothing and cost

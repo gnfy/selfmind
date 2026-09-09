@@ -51,7 +51,11 @@ const guardianJudgePrompt = `Answer with a single JSON object and nothing else:
 
 risk_level      — the blast radius if this runs and is wrong. Use the supplied filesystem/network/credential containment as the primary evidence.
 user_authorization — how directly the person's own words (shown under "Person asked:") authorize THIS action. No such instruction means "unknown".
-outcome         — approve a low-risk routine observation when containment makes its blast radius narrow, even if authorization is implicit in the person's broader task. Direct authorization is an upgrade signal, not a mandatory phrase match. Arbitrary scripts with shared network or credentials, mutations, destructive actions, and secret reads must escalate or deny.
+outcome         — approve a low-risk routine observation when containment makes its blast radius narrow, even if authorization is implicit in the person's broader task. Direct authorization is an upgrade signal, not a mandatory phrase match.
+                  Choose between the two non-approving outcomes by CAUSE, never by category of action. They are not interchangeable:
+                    escalate — the person is shown the operation and decides. Use it whenever what stops you is missing information, unclear or absent authorization, or a permission this run does not hold. Arbitrary scripts with shared network or credentials, mutations, destructive actions, and secret reads belong here unless they also meet the deny bar.
+                    deny     — the person never sees the operation, and the run is told they refused it. Use it only when the action is prohibited on its own terms, whatever the person may have intended.
+                  "I cannot tell whether the person authorized this" is escalate. Weak, indirect, or absent authorization is never on its own a reason to deny.
 rationale       — why, in one sentence, for the person who may have to decide.
 
 When in doubt, outcome must be "escalate".`

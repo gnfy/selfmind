@@ -1,15 +1,7 @@
 package httpapi
 
-// Pre-label semantics (Work Timeline P3, docs/work-timeline.md "Labels" /
-// "Ingress"): explicit continuation evidence — req.TaskID, an IntentContinue
-// cue (or short acceptance), or the one-shot /resume pin — attaches
-// deterministically; every OTHER agent-bound message gets a harmless pre-label
-// GUESS: the person's current OPEN (non-terminal, non-archived) label, else a
-// fresh placeholder. The guess is safe because context is spine-based and the
-// execution workspace follows the REQUEST — the old capture bug's harm (wrong
-// workspace, wrong context) is structurally gone — and the post-run labeler
-// can re-point a wrong guess. These tests go through ProcessMessage, the same
-// entry real channels use.
+// Message-path tests distinguish explicit binding from Main-owned natural
+// language. Ordinary turns receive history context without claiming a parent.
 
 import (
 	"context"
@@ -128,10 +120,8 @@ func TestOrdinaryMessageWithArchivedCurrentCreatesNewLabel(t *testing.T) {
 	}
 }
 
-// TestContinuationCueAttachesToParkedRun: "继续" is explicit continuation
-// evidence — it continues the unique unclaimed resumable RUN (the §5.3 ladder)
-// and claims it as the new run's parent.
-func TestContinuationCueAttachesToParkedRun(t *testing.T) {
+// An explicit resume still restores and claims the exact durable parent.
+func TestExplicitResumeRestoresParkedRunPlan(t *testing.T) {
 	provider := newSlowLLMProvider("continuing where we left off")
 	provider.releaseNow()
 	daemon, store, _ := newDetachedRunServer(t, provider)
@@ -146,7 +136,7 @@ func TestContinuationCueAttachesToParkedRun(t *testing.T) {
 	// durable child state, not merely replay a display event.
 	if _, err := store.SyncRunPlan(ctx, parked.TenantID, waiting.ID, "release safely", []control.RunPlanStepInput{
 		{Step: "build the image", Status: "completed"},
-		{Step: "deploy to production", Status: "in_progress"},
+		{Step: "deploy to production", Status: "in_progress", SuccessCriteria: "the requested revision is serving", VerificationRequired: true},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +145,12 @@ func TestContinuationCueAttachesToParkedRun(t *testing.T) {
 	}
 
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "继续",
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/resume " + waiting.ID,
 	})
+	if status != 200 || !strings.Contains(resp.Content, "Selected run") {
+		t.Fatalf("resume control: %+v", resp)
+	}
+	resp, status = daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "Proceed with the selected work."})
 	if status != 200 || resp.Task == nil {
 		t.Fatalf("continuation turn failed: status=%d resp=%+v", status, resp)
 	}
@@ -189,6 +183,13 @@ func TestContinuationCueAttachesToParkedRun(t *testing.T) {
 	}
 	if childPlan == nil || len(childPlan.Steps) != 2 || childPlan.Steps[1].Step != "deploy to production" || childPlan.Steps[1].Status != "in_progress" {
 		t.Fatalf("continuation did not inherit durable plan state: %+v", childPlan)
+	}
+	selected := daemon.coordinator().selectedTaskRuntimeContextWithMode(ctx, parked, resp.Run, nil, "cli", "cli", "finish", attachContextFull, waiting)
+	prompt := selected.Prompt(8000)
+	for _, required := range []string{childPlan.Steps[1].StepID, "the requested revision is serving", "verification_required=true"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("inherited acceptance context missing %q: %s", required, prompt)
+		}
 	}
 }
 

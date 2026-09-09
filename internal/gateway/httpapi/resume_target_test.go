@@ -29,44 +29,28 @@ func seedUnresolvedRun(t *testing.T, store *control.Store, tenantID string, task
 	return run
 }
 
-// TestAmbiguousContinuationReturnsCandidatesWithoutModel pins the P0
-// acceptance row: two unfinished runs under one task and a vague "继续" must
-// produce a deterministic candidate list — no model run, no new task_runs row.
-func TestAmbiguousContinuationReturnsCandidatesWithoutModel(t *testing.T) {
-	store := controltest.NewStore(t)
-	ctx := httptest.NewRequest(http.MethodPost, "/", nil).Context()
-	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
-	if err != nil {
-		t.Fatal(err)
-	}
-	task, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "gcp release", Channel: "cli",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedUnresolvedRun(t, store, identity.TenantID, task, "cli", "gcp 生产发布，先不要执行", "waiting_user")
-	seedUnresolvedRun(t, store, identity.TenantID, task, "cli", "开始执行", "interrupted")
-
-	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "继续",
-	})
-	if status != http.StatusOK {
-		t.Fatalf("status=%d resp=%+v", status, resp)
-	}
-	if !strings.Contains(resp.Content, "several possible continuations") || resp.Choice == nil {
-		t.Fatalf("expected deterministic candidate list, got: %+v", resp)
-	}
-	if resp.Turn == nil || resp.Turn.Status != "waiting_user" || resp.Turn.RunID != "" {
-		t.Fatalf("candidate turn must not carry a run: %+v", resp.Turn)
-	}
-	runs, err := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runs) != 2 {
-		t.Fatalf("no run may start on an ambiguous continuation, got %d runs", len(runs))
+// Ordinary replies reach Main even beside several unfinished Runs.
+func TestNaturalContinuationDoesNotPreselectPendingRuns(t *testing.T) {
+	for _, input := range []string{"继续", "go ahead", "sigamos", "進めてください", "按你刚才的方案办"} {
+		t.Run(input, func(t *testing.T) {
+			provider := newSlowLLMProvider("I will inspect the relevant prior work.")
+			provider.releaseNow()
+			daemon, store, _ := newDetachedRunServer(t, provider)
+			ctx := context.Background()
+			task := parkEmptyTask(t, daemon, "prior work")
+			first := seedUnresolvedRun(t, store, task.TenantID, task, "cli", "first request", "waiting_user")
+			second := seedUnresolvedRun(t, store, task.TenantID, task, "cli", "second request", "interrupted")
+			resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: input})
+			if status != http.StatusOK || resp.Run == nil || resp.Choice != nil || resp.Run.ResumesRunID != "" || resp.Task.ID == task.ID {
+				t.Fatalf("natural input was intercepted before Main: status=%d resp=%+v", status, resp)
+			}
+			for _, id := range []string{first.ID, second.ID} {
+				run, err := store.GetRun(ctx, task.TenantID, id)
+				if err != nil || run.Status == "running" {
+					t.Fatalf("parent claimed without model selection: %+v %v", run, err)
+				}
+			}
+		})
 	}
 }
 

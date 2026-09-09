@@ -1,37 +1,32 @@
 id: timeline_run_candidates
-title: "ambiguous continuation returns deterministic run candidates without a model"
+title: "natural-language acceptance selects prior work inside Main without a cue dictionary"
 suite: timeline
-# Simplification P2 acceptance (docs/task-run-memory-simplification.zh-CN.md
-# §13): two unfinished runs and a vague "继续" must produce a deterministic,
-# model-free candidate list — no run starts, no model is consulted, and the
-# person picks by restating or /resume. Fully deterministic: no cassette.
-model_required: false
+require_cassette: true
 workspace: isolated
 channel: cli
 
+# Ordinary language reaches Main even beside pending work. Main interprets
+# the proposal and uses the broker to claim the exact execution relationship.
+# Re-record after changing the default continuity prompt or message path.
 setup:
   task:
-    title: "gcp 生产发布"
+    title: "Documentation outline"
     parked_runs:
-      - input: "gcp 生产发布，先不要执行，等我确认"
+      - input: "Prepare a three-part outline explaining how to organize a small project's documentation. Wait for my confirmation before giving the outline; after confirmation, provide it without reading files or running commands."
         status: waiting_user
-      - input: "开始执行"
-        status: interrupted
 
 turns:
-  - input: "继续"
+  - input: "Sigamos con lo que propusiste."
 
 expect:
-  status: waiting_user
+  status: completed
   http_status: 200
-  require_no_run: true
-  max_tool_calls: 0
-  max_duration_seconds: 60
-  contains:
-    - "I found several possible continuations."
-    - "Reply with a number, or use /choose"
+  max_tool_calls: 8
+  max_tool_errors: 0
+  max_duration_seconds: 180
   must_not_contain:
-    - "<tool>"
+    - "I found several possible continuations."
+    - "queued as the next exact continuation"
 
 checks:
   no_mojibake: true
@@ -40,5 +35,9 @@ checks:
 
 assert_state:
   - on: events
-    type: continuation.candidates
+    type: work.selection_committed
+    payload_contains: '"commit_mode":"direct"'
     count_gte: 1
+  - on: run
+    field: resumes_run_id
+    empty: false

@@ -1,0 +1,148 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Done"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " complete"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " open"
+    },
+    {
+      "content": " input"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " user"
+    },
+    {
+      "content": " confirmation"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " which"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " provided"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "continue"
+    },
+    {
+      "content": ".\""
+    },
+    {
+      "content": " No"
+    },
+    {
+      "content": " further"
+    },
+    {
+      "content": " work"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " pending"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " previously"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " finished"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 16328,
+        "output_tokens": 44,
+        "cache_read_input_tokens": 896,
+        "cache_miss_input_tokens": 15432,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

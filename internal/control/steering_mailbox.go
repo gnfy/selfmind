@@ -198,6 +198,63 @@ func (s *Store) ListUnconsumedSteering(ctx context.Context, tenantID, runID stri
 	return out, rows.Err()
 }
 
+// RunSteeringRequirements returns recent user additions from this Run and at
+// most seven exact ancestors, oldest first within the selected window. It
+// preserves corrections across recovery without importing unrelated work.
+//
+// It exists because approval evidence was captured once at run start and never
+// refreshed. A person who added a requirement mid-run — "also do the approvals
+// automatically", or a narrowing "but do not touch production" — changed what
+// the run is for, while every later approval decision was still judged against
+// the opening message. Consumed rows are included precisely because those are
+// the ones the run is now acting on.
+//
+// The result is judgement evidence, not authority: it widens what the judge
+// knows, never what the run may do.
+func (s *Store) RunSteeringRequirements(ctx context.Context, tenantID, runID string, limit int) ([]SteeringMessage, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(runID) == "" {
+		return nil, nil
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`WITH RECURSIVE lineage(id, person_id, parent_id, depth) AS (
+			SELECT id, person_id, resumes_run_id, 0 FROM runs WHERE tenant_id=? AND id=?
+			UNION ALL
+			SELECT r.id, r.person_id, r.resumes_run_id, l.depth+1
+			FROM runs r JOIN lineage l ON r.id=l.parent_id AND r.person_id=l.person_id
+			WHERE r.tenant_id=? AND l.depth<7
+		)
+		SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
+			COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
+			COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
+			content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]')
+		 FROM steering_mailbox
+		 WHERE tenant_id = ? AND run_id IN (SELECT id FROM lineage)
+		 AND person_id=(SELECT person_id FROM lineage WHERE depth=0)
+		 AND status IN (?, ?, ?)
+		 ORDER BY created_at DESC, rowid DESC LIMIT ?`,
+		normalizeTenant(tenantID), runID, normalizeTenant(tenantID), normalizeTenant(tenantID),
+		SteeringAccepted, SteeringClaimed, SteeringConsumed, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SteeringMessage
+	for rows.Next() {
+		m, err := scanSteering(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	for left, right := 0, len(out)-1; left < right; left, right = left+1, right-1 {
+		out[left], out[right] = out[right], out[left]
+	}
+	return out, rows.Err()
+}
+
 // DeferSteering re-homes an unconsumed row into the durable task queue so the
 // guidance survives run completion or a daemon restart as ordinary next-turn
 // input. It is deliberately not pinned to the finished task: Main never saw

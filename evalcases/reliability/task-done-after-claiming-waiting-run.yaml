@@ -6,8 +6,8 @@ channel: cli
 require_cassette: true
 
 # §10.3 acceptance: a run parked as waiting_user holds the task. The
-# confirmation turn is a continuation — it claims that run through the atomic
-# parent edge and completes on the SAME task; the reducer then derives "done"
+# confirmation reaches Main, which selects and claims that run through the
+# atomic parent edge and completes on the SAME task; the reducer derives "done"
 # because the parent is claimed and nothing else holds the task. This is the
 # waiting-turn cassette continuity-resume.yaml defers to.
 turns:
@@ -26,6 +26,8 @@ expect:
 
 assert_state:
   - { on: task, field: status, eq: "done" }
+  - { on: run, field: resumes_run_id, empty: false }
+  - { on: events, type: work.selection_committed, count_gte: 1 }
 
 checks:
   no_mojibake: true

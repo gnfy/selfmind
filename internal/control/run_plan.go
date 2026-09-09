@@ -44,6 +44,22 @@ type RunPlanProjection struct {
 	Plan      RunPlan       `json:"plan"`
 	Changed   bool          `json:"changed"`
 	WorkUnits []RunWorkUnit `json:"work_units,omitempty"`
+	// CriteriaRestated names steps this snapshot marks completed whose
+	// success_criteria differs from the bar FIRST declared for them. Restating a
+	// criterion can be honest replanning, so this is a fact and not a verdict:
+	// a run once moved a step's criterion from "gh api confirms the file exists
+	// with the right content" to "a PR is created with the right content" while
+	// the step was still pending, completed it snapshots later, and nothing
+	// recorded that the bar had moved.
+	CriteriaRestated []RunPlanCriteriaChange `json:"criteria_restated,omitempty"`
+}
+
+// RunPlanCriteriaChange is one step's acceptance bar before and after.
+type RunPlanCriteriaChange struct {
+	StepID string `json:"step_id"`
+	Step   string `json:"step"`
+	From   string `json:"from"`
+	To     string `json:"to"`
 }
 
 type RunRecoverySnapshot struct {
@@ -125,6 +141,11 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		steps[start].WorkUnitID = units[i].ID
 	}
 
+	original, err := originalPlanCriteriaTx(ctx, tx, tenant, runID)
+	if err != nil {
+		return RunPlanProjection{}, err
+	}
+	restated := restatedCompletedCriteria(original, steps)
 	hash := hashRunPlanSteps(steps, stepWorkUnits)
 	if previous != nil && previous.ContentHash == hash {
 		if err := promoteThreadForRunTx(ctx, tx, tenant, runID); err != nil {
@@ -169,7 +190,58 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		return RunPlanProjection{}, err
 	}
 	plan := RunPlan{RunID: runID, Version: version, Explanation: strings.TrimSpace(explanation), ContentHash: hash, Steps: steps, CreatedAt: now}
-	return RunPlanProjection{Plan: plan, Changed: true, WorkUnits: units}, nil
+	return RunPlanProjection{Plan: plan, Changed: true, WorkUnits: units, CriteriaRestated: restated}, nil
+}
+
+// originalPlanCriteriaTx returns each step's acceptance bar as first declared
+// for this run, keyed by step id.
+//
+// The comparison baseline has to be the ORIGINAL bar, not the previous
+// snapshot's: the run that motivated this moved a step's criterion while the
+// step was still pending and completed it several snapshots later, so a
+// version-to-version diff saw a status change and nothing else.
+func originalPlanCriteriaTx(ctx context.Context, tx *sql.Tx, tenant, runID string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT step_id, success_criteria FROM run_plan_steps
+		 WHERE tenant_id=? AND run_id=? ORDER BY plan_version ASC, sequence ASC`, tenant, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	original := map[string]string{}
+	for rows.Next() {
+		var stepID, criteria string
+		if err := rows.Scan(&stepID, &criteria); err != nil {
+			return nil, err
+		}
+		if _, seen := original[stepID]; !seen {
+			original[stepID] = criteria
+		}
+	}
+	return original, rows.Err()
+}
+
+// restatedCompletedCriteria reports steps that arrive completed under a
+// different acceptance bar than the one first declared for them. Only completed
+// steps qualify: moving the bar for work still in flight is ordinary
+// replanning, while completing against a moved bar is the shape that let a
+// false completion resolve a plan cleanly.
+func restatedCompletedCriteria(original map[string]string, steps []RunPlanStep) []RunPlanCriteriaChange {
+	var changed []RunPlanCriteriaChange
+	for _, step := range steps {
+		first, ok := original[step.StepID]
+		if !ok || step.Status != "completed" {
+			continue
+		}
+		if normalizeRunPlanText(first) == normalizeRunPlanText(step.SuccessCriteria) {
+			continue
+		}
+		changed = append(changed, RunPlanCriteriaChange{
+			StepID: step.StepID, Step: step.Step,
+			From: first, To: step.SuccessCriteria,
+		})
+	}
+	return changed
 }
 
 func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPlan) ([]RunPlanStep, error) {
@@ -223,11 +295,28 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 		if item.StepID == "" {
 			item.StepID = "step_" + uuid.NewString()
 		}
+		// Execution attribution is already known for an existing step. A
+		// normal progress update need not repeat the work-unit identity.
+		if old, ok := byID[item.StepID]; ok && item.WorkUnitID == "" {
+			item.WorkUnitID = old.WorkUnitID
+			item.WorkUnit = item.WorkUnit || old.WorkUnit
+		}
 		if used[item.StepID] {
 			return nil, fmt.Errorf("plan step %s appears more than once in the snapshot", item.StepID)
 		}
 		used[item.StepID] = true
 		out = append(out, RunPlanStep{RunPlanStepInput: item, Sequence: i + 1})
+	}
+	// Repeating the current unit's id describes membership, not another
+	// independent objective. Keep one boundary and let ordinary steps omit it.
+	unitID := ""
+	for i := range out {
+		if i > 0 && out[i].WorkUnitID != "" && out[i].WorkUnitID == unitID && !out[i].WorkUnit {
+			out[i].WorkUnitID = ""
+		}
+		if isRunPlanBoundary(out, i) {
+			unitID = out[i].WorkUnitID
+		}
 	}
 	return out, nil
 }

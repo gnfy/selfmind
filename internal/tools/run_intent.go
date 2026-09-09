@@ -56,13 +56,29 @@ type DenyScope struct {
 // evidence before an approval judge sees them. GoalSummary is advisory context;
 // none of these fields bypasses deterministic approval floors or stored grants.
 type RunIntentSnapshot struct {
-	RawUserText   string   `json:"raw_user_text,omitempty"`
-	GoalSummary   string   `json:"goal_summary,omitempty"`
-	WorkKey       string   `json:"work_key,omitempty"`
-	WorkspaceID   string   `json:"workspace_id,omitempty"`
-	Source        string   `json:"source,omitempty"`
-	ExplicitAllow []string `json:"explicit_allow,omitempty"`
-	ExplicitDeny  []string `json:"explicit_deny,omitempty"`
+	RawUserText string `json:"raw_user_text,omitempty"`
+	// PriorAssistantOffer is what the assistant said immediately before
+	// RawUserText, in the same channel. A person's reply is often only
+	// meaningful against it: "2" answering a numbered list of next steps is a
+	// complete authorization that reads as nothing on its own.
+	//
+	// It is context for interpreting the PERSON's words, never authorization in
+	// its own right. The assistant cannot authorize anything by describing an
+	// action; only the person's acceptance of an offer they were actually shown
+	// can, and this text is exactly what they were shown.
+	PriorAssistantOffer string `json:"prior_assistant_offer,omitempty"`
+	// AddedRequirements are the person's mid-run additions, oldest first: what
+	// they asked for after the run had already started. The opening message
+	// alone used to decide every approval in the run, so a requirement added
+	// mid-run — or a narrowing one — was invisible to the judge while the main
+	// model was already acting on it.
+	AddedRequirements []string `json:"added_requirements,omitempty"`
+	GoalSummary       string   `json:"goal_summary,omitempty"`
+	WorkKey           string   `json:"work_key,omitempty"`
+	WorkspaceID       string   `json:"workspace_id,omitempty"`
+	Source            string   `json:"source,omitempty"`
+	ExplicitAllow     []string `json:"explicit_allow,omitempty"`
+	ExplicitDeny      []string `json:"explicit_deny,omitempty"`
 	// DenyScopes is the structured form of ExplicitDeny. When it is empty but
 	// ExplicitDeny is not, the snapshot came from a caller that predates
 	// scoping and keeps the old blanket behavior.

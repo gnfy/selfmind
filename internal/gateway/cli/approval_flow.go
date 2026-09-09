@@ -118,6 +118,9 @@ func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 		record += " — " + reason
 	}
 	m.addNotice(noticeWarning, record)
+	// The panel only reaches someone already looking at this terminal, and the
+	// run is stopped until it is answered.
+	m.signalHumanWait(humanWaitApproval, msg.Tool)
 }
 
 // hasApprovalRequest keeps digest hydration and event replay idempotent. A

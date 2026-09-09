@@ -224,10 +224,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	task, attach, err := c.resolveTask(ctx, identity, req, intent)
 	if err != nil {
-		var candidates *continuationCandidatesError
-		if errors.As(err, &candidates) {
-			return c.crossTaskCandidatesResponse(ctx, identity, req, candidates.runs), http.StatusOK
-		}
 		status := http.StatusInternalServerError
 		if strings.TrimSpace(req.ReplyToRunID) != "" || strings.TrimSpace(req.ApprovalID) != "" || strings.TrimSpace(req.ClarifyID) != "" {
 			status = http.StatusConflict
@@ -272,7 +268,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// before run creation.
 	parent := parentRes.exact()
 	claimParentID := ""
-	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery) {
+	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery || runOrigin(ctx, req) == runOriginWatch) {
 		claimParentID = parent.ID
 	}
 	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
@@ -628,8 +624,8 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		// the router's generic missing-response fallback as a successful answer.
 		content = strings.TrimSpace(outcome.Summary)
 	}
-	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.ID, run.ID)
-	outcome.Verification, outcome.Files = mergeEvidenceFiles(verification, evidenceFiles, outcome.Files)
+	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.TenantID, task.ID, run.ID)
+	outcome.Verification, outcome.Files = verification, evidenceFiles
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
 	outcome = applyVerificationOutcome(outcome)
 	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {

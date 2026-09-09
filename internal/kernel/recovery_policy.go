@@ -95,6 +95,13 @@ func (p *strategyRecoveryPolicy) BeforeDispatch(attempt RecoveryAttempt) error {
 			appendRecoveryAlternatives(last.Alternatives, "inspect_current_state", "verify_effect", "report_actionable_blocker"),
 		)
 	}
+	// Distinct proven read-only probes remain available for diagnosis. A
+	// coarse strategy/target match cannot establish that a changed query is
+	// pointless. Exact repeats are still bounded above; tool budgets and the
+	// normal permission checks remain in force.
+	if attempt.Strategy == "observe" {
+		return nil
+	}
 	if last.Retryability == "different_strategy" || len(failures) >= 2 {
 		return newRecoveryPolicyError(
 			"recovery_strategy_exhausted", "blocked_model_capability", "different_strategy", "not_dispatched",

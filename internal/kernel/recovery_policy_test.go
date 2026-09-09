@@ -97,8 +97,11 @@ func TestStrategyRecoveryPolicyIgnoresNotDispatchedRefusals(t *testing.T) {
 	policy.RecordFailure(RecoveryFailure{Attempt: corrected, FailureClass: "command_failed"})
 	third := real
 	third.InputSignature = "terminal\x00list-builds-third"
-	if err := policy.BeforeDispatch(third); err == nil || !recoveryErrorCode(err, "recovery_strategy_exhausted") {
-		t.Fatalf("two real failures on one target must exhaust the strategy: %v", err)
+	if err := policy.BeforeDispatch(third); err != nil {
+		t.Fatalf("a changed read-only probe must remain available: %v", err)
+	}
+	if err := policy.BeforeDispatch(corrected); err == nil || !recoveryErrorCode(err, "recovery_attempt_repeated") {
+		t.Fatalf("unchanged failed observation must still be bounded: %v", err)
 	}
 }
 

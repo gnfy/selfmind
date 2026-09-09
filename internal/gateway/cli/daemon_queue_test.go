@@ -143,6 +143,9 @@ func TestWatcherLifecycleLeavesOneTranscriptNotice(t *testing.T) {
 	if !strings.Contains(m.messages[0].Content, "release record updated") {
 		t.Fatalf("terminal notice dropped the outcome summary: %q", m.messages[0].Content)
 	}
+	if m.statusMsg != "" {
+		t.Fatalf("finalization left an obsolete status notice: %q", m.statusMsg)
+	}
 }
 
 // Collapsing the lifecycle to one line must not collapse its outcomes: a check

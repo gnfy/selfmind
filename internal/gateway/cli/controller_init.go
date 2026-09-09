@@ -316,7 +316,9 @@ func (c *Controller) Start() {
 	// viewport was removed with the in-process path, ACTIVE PLAN P0-3): run
 	// inline so finalized cells commit to native scrollback, and without mouse
 	// capture so the terminal owns selection/scroll.
-	p := tea.NewProgram(c.model)
+	// Focus reporting drives the terminal attention signal: an approval that
+	// parks the run stays silent while the person is demonstrably watching it.
+	p := tea.NewProgram(c.model, tea.WithReportFocus())
 	c.model.program = p
 	stopHangupWatch := watchHangup(p)
 	defer stopHangupWatch()

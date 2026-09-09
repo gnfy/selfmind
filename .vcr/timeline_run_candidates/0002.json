@@ -1,0 +1,816 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " inspected"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " shows"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " empty"
+    },
+    {
+      "reasoning_content": " summary"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " next"
+    },
+    {
+      "reasoning_content": "_st"
+    },
+    {
+      "reasoning_content": "eps"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "pro"
+    },
+    {
+      "reasoning_content": "posed"
+    },
+    {
+      "reasoning_content": ".\""
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " didn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " return"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " actual"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " search"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " history"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " more"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " conversation"
+    },
+    {
+      "reasoning_content": "/s"
+    },
+    {
+      "reasoning_content": "ession"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " card"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Prepare"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": "-part"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": " explaining"
+    },
+    {
+      "reasoning_content": " how"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " organize"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " small"
+    },
+    {
+      "reasoning_content": " project"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " documentation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " my"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " giving"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " without"
+    },
+    {
+      "reasoning_content": " ..."
+    },
+    {
+      "reasoning_content": "\"\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": "-part"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " organizing"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " small"
+    },
+    {
+      "reasoning_content": " project"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " documentation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " confirms"
+    },
+    {
+      "reasoning_content": " (\""
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " continue"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " you"
+    },
+    {
+      "reasoning_content": " proposed"
+    },
+    {
+      "reasoning_content": "\").\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " full"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " didn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " give"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " search"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " history"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " sessions"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " proposed"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " more"
+    },
+    {
+      "reasoning_content": " detail"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_search"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " find"
+    },
+    {
+      "reasoning_content": " more"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " documentation"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " gave"
+    },
+    {
+      "reasoning_content": " bounded"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " actual"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " isn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " search"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " session"
+    },
+    {
+      "reasoning_content": " history"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " full"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " session"
+    },
+    {
+      "reasoning_content": "_search"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_search"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " since"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " matters"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " search"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " session"
+    },
+    {
+      "reasoning_content": "_search"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " find"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " conversation"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " documentation"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "V"
+    },
+    {
+      "content": "oy"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " buscar"
+    },
+    {
+      "content": " el"
+    },
+    {
+      "content": " contenido"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": "o"
+    },
+    {
+      "content": " de"
+    },
+    {
+      "content": " esa"
+    },
+    {
+      "content": " prop"
+    },
+    {
+      "content": "uesta"
+    },
+    {
+      "content": " para"
+    },
+    {
+      "content": " d"
+    },
+    {
+      "content": "arte"
+    },
+    {
+      "content": " el"
+    },
+    {
+      "content": " outline"
+    },
+    {
+      "content": " correct"
+    },
+    {
+      "content": "o"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10121,
+        "output_tokens": 344,
+        "cache_read_input_tokens": 9856,
+        "cache_miss_input_tokens": 265,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 241,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_h8EraemaPSiJ4yYeCfPG1579",
+          "Function": "work_search",
+          "Args": "{\"query\": \"documentation outline three-part small project\"}"
+        },
+        {
+          "ID": "call_01_QpDZDwQQjKA2bHhz0mOy2072",
+          "Function": "session_search",
+          "Args": "{\"query\": \"outline documentation small project\"}"
+        }
+      ]
+    }
+  ]
+}

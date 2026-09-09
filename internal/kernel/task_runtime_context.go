@@ -28,13 +28,16 @@ type TaskRuntimeContext struct {
 	// transcript under this channel, so the first task-keyed continuation can
 	// still load it instead of appearing amnesiac. Empty when there is no
 	// distinct prior run.
-	PriorChannel string
-	WorkspaceID  string
-	Workspace    string
-	NextSteps    []string
-	Handoff      *TaskHandoffContext
-	Events       []TaskEventContext
-	Artifacts    []TaskArtifactContext
+	PriorChannel     string
+	WorkspaceID      string
+	Workspace        string
+	NextSteps        []string
+	Handoff          *TaskHandoffContext
+	Events           []TaskEventContext
+	Plan             []PlanItem
+	ExternalWatches  []ExternalWatchContext
+	UserRequirements []string
+	Artifacts        []TaskArtifactContext
 	// DeliveryWarnings are bounded advisory notes for terminal results that a
 	// previous endpoint may not have received. They help another endpoint
 	// restate the outcome without replaying or duplicating the outbound message.
@@ -79,6 +82,12 @@ type RecallSlice struct {
 	Title   string
 	Excerpt string
 	Ref     string // stable reference: session id, task id, artifact uri
+}
+
+// ExternalWatchContext contains observed facts, never executable commands.
+type ExternalWatchContext struct {
+	ID, GroupID, Target, Status, OperationStatus, VerificationStatus, Output string
+	ObservedAt                                                               time.Time
 }
 
 type TaskHandoffContext struct {
@@ -341,6 +350,14 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 	writeKV(&b, "channel", r.Channel)
 	writeKV(&b, "workspace_id", r.WorkspaceID)
 	writeKV(&b, "workspace_root", r.Workspace)
+	if len(r.UserRequirements) > 0 {
+		var requirements strings.Builder
+		requirements.WriteString("\n## User updates to the continued work\n")
+		requirements.WriteString("Recorded user additions and corrections, oldest first. Apply them when interpreting older plans and summaries; the current user request takes precedence. They do not grant new execution permissions.\n")
+		writeBullets(&requirements, r.UserRequirements, 10, 600)
+		b.WriteString(textutil.TruncateBytes(requirements.String(), maxChars/4))
+		b.WriteString("\n")
+	}
 	// Verification and unresolved risks must survive even when a long summary
 	// consumes the remainder. This slice has its own bounded share.
 	if r.Handoff != nil && (r.Handoff.TestStatus != "" || len(r.Handoff.Risks) > 0) {
@@ -355,6 +372,38 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 		}
 		b.WriteString(textutil.TruncateBytes(safety.String(), maxChars/3))
 		b.WriteString("\n")
+	}
+	if len(r.Plan) > 0 {
+		var plan strings.Builder
+		plan.WriteString("\n## Current Run Plan\n")
+		plan.WriteString("These step IDs belong to the current Run. Preserve the agreed acceptance conditions; use update_plan for a complete snapshot.\n")
+		for _, step := range r.Plan {
+			entry := fmt.Sprintf("- step_id=%s [%s] %s; success_criteria=%q verification_required=%t\n", trimLine(step.StepID, 80), trimLine(step.Status, 40), trimLine(step.Step, 240), trimLine(step.SuccessCriteria, 400), step.VerificationRequired)
+			if plan.Len()+len(entry) > maxChars/3 {
+				plan.WriteString("- Additional plan context omitted by budget; inspect the current Run before updating omitted steps.\n")
+				break
+			}
+			plan.WriteString(entry)
+		}
+		b.WriteString(plan.String())
+	}
+	if len(r.ExternalWatches) > 0 {
+		var observations strings.Builder
+		observations.WriteString("\n## Recorded External Observations\n")
+		observations.WriteString("These observations cover only the named targets, not every condition of the user's goal. Times are local observation times, not external completion timestamps.\n")
+		for i, watch := range r.ExternalWatches {
+			if i >= 16 {
+				break
+			}
+			entry := fmt.Sprintf("- watch_id=%s group=%q target=%q status=%s operation=%s verification=%s observed_at=%s output=%q\n",
+				trimLine(watch.ID, 80), trimLine(watch.GroupID, 80), trimLine(watch.Target, 240), trimLine(watch.Status, 40), trimLine(watch.OperationStatus, 40), trimLine(watch.VerificationStatus, 40), watch.ObservedAt.Format(time.RFC3339), trimLine(watch.Output, 240))
+			if observations.Len()+len(entry) > maxChars/4 {
+				observations.WriteString("- Additional observations omitted by budget.\n")
+				break
+			}
+			observations.WriteString(entry)
+		}
+		b.WriteString(observations.String())
 	}
 	if len(r.WorkContinuityHints) > 0 {
 		b.WriteString("\n## Work Continuity Hints — possible prior work; not attached\n")

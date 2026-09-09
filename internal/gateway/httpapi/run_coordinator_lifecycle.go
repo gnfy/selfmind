@@ -75,8 +75,8 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		if recorded, ok := c.latestStructuredRunOutcome(finCtx, task.ID, run.ID); ok {
 			structured = true
 			outcome = reconcileStructuredOutcome(recorded)
-			verification, evidenceFiles := c.evidenceOutcome(finCtx, task.ID, run.ID)
-			outcome.Verification, outcome.Files = mergeEvidenceFiles(verification, evidenceFiles, outcome.Files)
+			verification, evidenceFiles := c.evidenceOutcome(finCtx, task.TenantID, task.ID, run.ID)
+			outcome.Verification, outcome.Files = verification, evidenceFiles
 			outcome = applyVerificationOutcome(outcome)
 		}
 	}
@@ -219,16 +219,9 @@ func (c *RunCoordinator) recordOutcomeArtifacts(ctx context.Context, task *contr
 	}
 }
 
-// resolveTask decides which task this turn runs under (simplification P2,
-// Deterministic evidence wins in a fixed ladder: structured return edges (approval origin run,
-// platform reply metadata), a caller-supplied task id, the one-shot /resume
-// pin, then an explicit continuation cue resolved through the person-wide
-// unclaimed-run ladder (same channel first, then global; several candidates
-// stay visible, none is guessed). Everything else owns a FRESH root task:
-// grouping is display-only — context comes from the spine and the parent-run
-// slice, so a new task per message can never corrupt execution.
-// task_runs.task_id stays NOT NULL and the control plane
-// (queue/approvals/busy/steer) is untouched.
+// resolveTask binds only explicit controls and structured return edges.
+// Ordinary language starts an interaction Run; Main interprets it and may
+// propose an exact continuation through the validated work-history tools.
 func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, taskAttach, error) {
 	store := c.srv.Control
 	inputWorkKey := uniqueTaskWorkKey(req.Content)
@@ -337,75 +330,12 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		attach.resumesRunID = pinnedRunID
 		return task, attach, err
 	}
-	// §5.3 steps 5–7: an explicit continuation cue continues the unique
-	// unclaimed resumable run — same channel first, then person-global. Task
-	// References and the current-task pointer no longer route anything
-	// (simplification P2): references are search hints, current_task is a UI
-	// projection.
-	if intent.Intent == router.IntentContinue && isDeterministicContinuationInput(req.Content) {
-		task, attach, err := c.resolveContinuationByRuns(ctx, identity, req, inputWorkKey)
-		if err != nil || task != nil {
-			return task, attach, err
-		}
-		// No pending run anywhere: the cue has nothing to continue, so the
-		// message is ordinary new work (§5.3 step 8) — the spine tail carries
-		// any conversational context it referred to.
-	}
 	// §5.3 step 8: every ordinary message owns a fresh root task. Wrong-looking
 	// grouping is a display concern only — context comes from the spine and the
 	// parent-run slice, and the default /tasks view ranks one-shot Q&A last.
 	task, attach, err := c.createRootTask(ctx, identity, req)
 	attach.workKey = inputWorkKey
 	return task, attach, err
-}
-
-// continuationCandidatesError carries the deterministic cross-task candidate
-// set for an ambiguous person-typed continuation. runMessage renders it; it is
-// a control-flow signal, not a failure.
-type continuationCandidatesError struct {
-	runs []control.Run
-}
-
-func (e *continuationCandidatesError) Error() string {
-	return fmt.Sprintf("continuation matches %d unfinished runs", len(e.runs))
-}
-
-// resolveContinuationByRuns implements the §5.3 candidate ladder for a
-// deliberate continuation cue. It returns (nil, zero, nil) when the person has
-// no pending run at all — the caller then treats the message as new work.
-func (c *RunCoordinator) resolveContinuationByRuns(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, inputWorkKey string) (*control.Task, taskAttach, error) {
-	store := c.srv.Control
-	candidates, err := store.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, req.Channel, 5)
-	if err != nil {
-		return nil, taskAttach{}, err
-	}
-	if len(candidates) == 0 {
-		candidates, err = store.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 5)
-		if err != nil {
-			return nil, taskAttach{}, err
-		}
-	}
-	switch len(candidates) {
-	case 0:
-		return nil, taskAttach{}, nil
-	case 1:
-		parent := candidates[0]
-		task, err := store.GetTask(ctx, identity.TenantID, parent.TaskID)
-		if err != nil || task == nil {
-			return nil, taskAttach{}, err
-		}
-		task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
-		attach := newTaskAttach(taskAttachContinuation, inputWorkKey, false, false)
-		attach.resumesRunID = parent.ID
-		return task, attach, err
-	default:
-		if !isUserOriginTurn(ctx, req) {
-			// A daemon-originated text (cron output that happens to contain a
-			// cue word) is never asked to disambiguate; it proceeds as new work.
-			return nil, taskAttach{}, nil
-		}
-		return nil, taskAttach{}, &continuationCandidatesError{runs: candidates}
-	}
 }
 
 // createRootTask creates the fresh root task every ordinary message owns
@@ -567,8 +497,17 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	// destructive-looking command an instruction, while the same command with no
 	// such request is the model acting alone. Bounded and redacted here because
 	// the judge prompt treats it as untrusted data (docs/tool-safety.md).
-	intentSnapshot := runIntentSnapshot(req, task, run, workspace)
-	scope.IntentSnapshot = func() tools.RunIntentSnapshot { return intentSnapshot }
+	// Live, for the same reason ModeGetter above is live: a person who adds a
+	// requirement mid-run has changed what the run is for, and every approval
+	// after that point must be judged against what they now want. A frozen
+	// snapshot left the judge deciding from the opening message while the main
+	// model was already acting on the addition. Re-resolved per ask, like the
+	// mode; a bounded read on a path that runs at most once per approval.
+	baseIntent := c.intentSnapshotWithOffer(ctx, identity, task, run, workspace, req, scope.Channel)
+	runID := scope.RunID
+	scope.IntentSnapshot = func() tools.RunIntentSnapshot {
+		return c.intentWithAddedRequirements(ctx, identity, baseIntent, runID)
+	}
 	// Grants back class-level approval memory (session/persistent allowlist);
 	// the control store satisfies tools.ApprovalGrantStore structurally.
 	if c.srv != nil && c.srv.Control != nil {
@@ -605,6 +544,66 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 // materializeExecutionLease binds one run to the operator environment that
 // existed when the run started. Durable state contains credential source names
 // and a non-secret principal fingerprint only; raw values stay process-local.
+// intentWithAddedRequirements overlays the person's mid-run additions onto the
+// run-start evidence. The opening message and its deny scopes stay: an addition
+// supplements what the person asked for, it does not replace it. Nothing here
+// widens execution authority — the judge still rules, and a rejection still
+// parks the work.
+func (c *RunCoordinator) intentWithAddedRequirements(ctx context.Context, identity *control.IdentityContext, base tools.RunIntentSnapshot, runID string) tools.RunIntentSnapshot {
+	if !base.UserAuthored() || c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || strings.TrimSpace(runID) == "" {
+		return base
+	}
+	added, err := c.srv.Control.RunSteeringRequirements(ctx, identity.TenantID, runID, 10)
+	if err != nil {
+		log.Debug("approval intent: mid-run requirements unavailable", "run", runID, "error", err)
+		return base
+	}
+	if len(added) == 0 {
+		return base
+	}
+	overlaid := base
+	overlaid.AddedRequirements = make([]string, 0, len(added))
+	for _, message := range added {
+		text := strings.TrimSpace(message.Content)
+		if text == "" {
+			continue
+		}
+		overlaid.AddedRequirements = append(overlaid.AddedRequirements, truncate(tools.RedactSensitive(text), triageIntentMaxChars))
+		// A narrowing arrives the same way an addition does. Prohibitions the
+		// person states mid-run must constrain the rest of the run, not only the
+		// turn that carried them.
+		deny, scopes := extractDenyScopes(strings.ToLower(text))
+		overlaid.ExplicitDeny = append(overlaid.ExplicitDeny, deny...)
+		overlaid.DenyScopes = append(overlaid.DenyScopes, scopes...)
+	}
+	return overlaid
+}
+
+// intentSnapshotWithOffer builds the approval-evidence snapshot and attaches// intentSnapshotWithOffer builds the approval-evidence snapshot and attaches
+// what the person was answering.
+//
+// A reply like "2" against a numbered list of next steps is a complete
+// authorization that reads as nothing on its own, and the judge used to see
+// only the reply. The offer is withheld from a run with no current human
+// author: a cron turn must not inherit the last thing a person was shown as if
+// they had just accepted it. The judge prompt withholds it again for the same
+// reason — this gate also keeps a system run from making the query at all.
+func (c *RunCoordinator) intentSnapshotWithOffer(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace, req api.MessageRequest, channel string) tools.RunIntentSnapshot {
+	snapshot := runIntentSnapshot(req, task, run, workspace)
+	if !snapshot.UserAuthored() || c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
+		return snapshot
+	}
+	offer, err := c.srv.Control.PrecedingAssistantOffer(ctx, identity.TenantID, identity.PersonID, channel)
+	if err != nil {
+		log.Debug("approval intent: prior assistant offer unavailable", "error", err)
+		return snapshot
+	}
+	if trimmed := strings.TrimSpace(offer); trimmed != "" {
+		snapshot.PriorAssistantOffer = truncate(tools.RedactSensitive(trimmed), triageIntentMaxChars)
+	}
+	return snapshot
+}
+
 func (c *RunCoordinator) materializeExecutionLease(ctx context.Context, identity *control.IdentityContext, run *control.Run, workspace *control.Workspace) (*executionenv.Lease, error) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || run == nil {
 		return nil, fmt.Errorf("execution lease dependencies are unavailable")

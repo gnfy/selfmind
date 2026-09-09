@@ -1,0 +1,1042 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " session"
+    },
+    {
+      "reasoning_content": " search"
+    },
+    {
+      "reasoning_content": " returned"
+    },
+    {
+      "reasoning_content": " nothing"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " don"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " have"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " full"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " card"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Prepare"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": "-part"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": " explaining"
+    },
+    {
+      "reasoning_content": " how"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " organize"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " small"
+    },
+    {
+      "reasoning_content": " project"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " documentation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " my"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " giving"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " without"
+    },
+    {
+      "reasoning_content": " ..."
+    },
+    {
+      "reasoning_content": "\"\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": " seems"
+    },
+    {
+      "reasoning_content": " simple"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " clear"
+    },
+    {
+      "reasoning_content": " enough"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": "-part"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": " explaining"
+    },
+    {
+      "reasoning_content": " how"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " organize"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " small"
+    },
+    {
+      "reasoning_content": " project"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " documentation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " confirms"
+    },
+    {
+      "reasoning_content": " (\""
+    },
+    {
+      "reasoning_content": "Sig"
+    },
+    {
+      "reasoning_content": "amos"
+    },
+    {
+      "reasoning_content": " con"
+    },
+    {
+      "reasoning_content": " lo"
+    },
+    {
+      "reasoning_content": " que"
+    },
+    {
+      "reasoning_content": " prop"
+    },
+    {
+      "reasoning_content": "us"
+    },
+    {
+      "reasoning_content": "iste"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " continue"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " you"
+    },
+    {
+      "reasoning_content": " proposed"
+    },
+    {
+      "reasoning_content": "\").\n\n"
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Per"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " continue"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "After"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": "-part"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " clear"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": "-part"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": " parts"
+    },
+    {
+      "reasoning_content": " would"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " organizing"
+    },
+    {
+      "reasoning_content": " small"
+    },
+    {
+      "reasoning_content": " project"
+    },
+    {
+      "reasoning_content": " documentation"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "A"
+    },
+    {
+      "reasoning_content": " typical"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": "-part"
+    },
+    {
+      "reasoning_content": " outline"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " organizing"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " small"
+    },
+    {
+      "reasoning_content": " project"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " documentation"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Part"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Core"
+    },
+    {
+      "reasoning_content": "/"
+    },
+    {
+      "reasoning_content": "primary"
+    },
+    {
+      "reasoning_content": " docs"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "ME"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " project"
+    },
+    {
+      "reasoning_content": " overview"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " quick"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Part"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Reference"
+    },
+    {
+      "reasoning_content": " docs"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " API"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " configuration"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " technical"
+    },
+    {
+      "reasoning_content": " reference"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Part"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Process"
+    },
+    {
+      "reasoning_content": "/"
+    },
+    {
+      "reasoning_content": "usage"
+    },
+    {
+      "reasoning_content": " docs"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " guides"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " workflows"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " contribution"
+    },
+    {
+      "reasoning_content": "/"
+    },
+    {
+      "reasoning_content": "road"
+    },
+    {
+      "reasoning_content": "map"
+    },
+    {
+      "reasoning_content": "\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " structure"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " well"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " Part"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Project"
+    },
+    {
+      "reasoning_content": " Overview"
+    },
+    {
+      "reasoning_content": " \u0026"
+    },
+    {
+      "reasoning_content": " On"
+    },
+    {
+      "reasoning_content": "boarding"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "README"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " getting"
+    },
+    {
+      "reasoning_content": " started"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " setup"
+    },
+    {
+      "reasoning_content": ")\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " Part"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Reference"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "API"
+    },
+    {
+      "reasoning_content": " reference"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " configuration"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " data"
+    },
+    {
+      "reasoning_content": " model"
+    },
+    {
+      "reasoning_content": ")\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " Part"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Ongoing"
+    },
+    {
+      "reasoning_content": " Operations"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "cont"
+    },
+    {
+      "reasoning_content": "ribution"
+    },
+    {
+      "reasoning_content": " guide"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " chang"
+    },
+    {
+      "reasoning_content": "el"
+    },
+    {
+      "reasoning_content": "og"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " roadmap"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " support"
+    },
+    {
+      "reasoning_content": ")\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " since"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " continuation"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Co"
+    },
+    {
+      "content": "inc"
+    },
+    {
+      "content": "ide"
+    },
+    {
+      "content": " con"
+    },
+    {
+      "content": " la"
+    },
+    {
+      "content": " prop"
+    },
+    {
+      "content": "uesta"
+    },
+    {
+      "content": " que"
+    },
+    {
+      "content": " qued"
+    },
+    {
+      "content": "ó"
+    },
+    {
+      "content": " en"
+    },
+    {
+      "content": " esper"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Voy"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " ret"
+    },
+    {
+      "content": "omar"
+    },
+    {
+      "content": " ese"
+    },
+    {
+      "content": " trabajo"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10753,
+        "output_tokens": 420,
+        "cache_read_input_tokens": 10368,
+        "cache_miss_input_tokens": 385,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 317,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_76hj1bUluplsAVmiYQTS5280",
+          "Function": "work_select",
+          "Args": "{\"action\": \"resume\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -108,11 +108,15 @@ func TestExternalWatchGroupEmitsOneAggregateFinalization(t *testing.T) {
 	defer daemon.coordinator().endActive(identity.PersonID)
 
 	daemon.completeExternalWatch(ctx, first, control.ExternalWatchSucceeded, "DONE", "")
+	daemon.recoverExternalWatchVerdicts(ctx)
+	daemon.reconcileExternalWatchFinalizations(ctx)
 	queued, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	if err != nil || len(queued) != 0 {
 		t.Fatalf("group finalized early: %+v err=%v", queued, err)
 	}
 	daemon.completeExternalWatch(ctx, second, control.ExternalWatchSucceeded, "DONE", "")
+	daemon.recoverExternalWatchVerdicts(ctx)
+	daemon.reconcileExternalWatchFinalizations(ctx)
 	queued, err = store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	if err != nil || len(queued) != 1 || !strings.Contains(queued[0].Content, "wait group release-checks (all)") {
 		t.Fatalf("aggregate finalization=%+v err=%v", queued, err)

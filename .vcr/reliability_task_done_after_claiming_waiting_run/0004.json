@@ -2,84 +2,10431 @@
   "method": "stream",
   "events": [
     {
-      "content": "Confirmation",
-      "phase": "commentary"
+      "reasoning_content": "Let"
     },
     {
-      "content": " received",
-      "phase": "commentary"
+      "reasoning_content": " me"
     },
     {
-      "content": ";",
-      "phase": "commentary"
+      "reasoning_content": " understand"
     },
     {
-      "content": " I",
-      "phase": "commentary"
+      "reasoning_content": " the"
     },
     {
-      "content": "’m",
-      "phase": "commentary"
+      "reasoning_content": " situation"
     },
     {
-      "content": " closing",
-      "phase": "commentary"
+      "reasoning_content": "."
     },
     {
-      "content": " the",
-      "phase": "commentary"
+      "reasoning_content": " The"
     },
     {
-      "content": " run",
-      "phase": "commentary"
+      "reasoning_content": " user"
     },
     {
-      "content": " with",
-      "phase": "commentary"
+      "reasoning_content": "'s"
     },
     {
-      "content": " no",
-      "phase": "commentary"
+      "reasoning_content": " message"
     },
     {
-      "content": " remaining",
-      "phase": "commentary"
+      "reasoning_content": " is"
     },
     {
-      "content": " open",
-      "phase": "commentary"
+      "reasoning_content": " \""
     },
     {
-      "content": " inputs",
-      "phase": "commentary"
+      "reasoning_content": "continue"
     },
     {
-      "content": ".",
-      "phase": "commentary"
+      "reasoning_content": "\"."
     },
     {
-      "content": "Preparing to run finish_run",
-      "event_type": "agent.thinking"
+      "reasoning_content": " There"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " da"
+    },
+    {
+      "reasoning_content": "emon"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " block"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " continuity"
+    },
+    {
+      "reasoning_content": " card"
+    },
+    {
+      "reasoning_content": " shows"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " completion"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Wait"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " re"
+    },
+    {
+      "reasoning_content": "-read"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "_c"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "eb"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "027"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "439"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "-b"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "033"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "af"
+    },
+    {
+      "reasoning_content": "609"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_e"
+    },
+    {
+      "reasoning_content": "27"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "89"
+    },
+    {
+      "reasoning_content": "-f"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "420"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "15"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "ee"
+    },
+    {
+      "reasoning_content": "793"
+    },
+    {
+      "reasoning_content": "fd"
+    },
+    {
+      "reasoning_content": "60"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " title"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " continuity"
+    },
+    {
+      "reasoning_content": " hint"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_id"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "253"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "432"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "854"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "-dd"
+    },
+    {
+      "reasoning_content": "92"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "628"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": " title"
+    },
+    {
+      "reasoning_content": "=\""
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " completion"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Finish"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " w"
+    },
+    {
+      "reasoning_content": "...\""
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " channel"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "cli"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": "=\""
+    },
+    {
+      "reasoning_content": "eval"
+    },
+    {
+      "reasoning_content": "-w"
+    },
+    {
+      "reasoning_content": "orks"
+    },
+    {
+      "reasoning_content": "pace"
+    },
+    {
+      "reasoning_content": "\"\n"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": " request"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " completion"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Finish"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": " latest"
+    },
+    {
+      "reasoning_content": "_result"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " awaiting"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " can"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " additional"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " decision"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": " next"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " single"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " interesting"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " previous"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " asked"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " responded"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " saying"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " parked"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Wait"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "task"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "after"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "claim"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " name"
+    },
+    {
+      "reasoning_content": " literally"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "task"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " claiming"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " testing"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " correctly"
+    },
+    {
+      "reasoning_content": " handle"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " hand"
+    },
+    {
+      "reasoning_content": "off"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " means"
+    },
+    {
+      "reasoning_content": " here"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " background"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " titled"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " There"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " needs"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " Work"
+    },
+    {
+      "reasoning_content": " Continu"
+    },
+    {
+      "reasoning_content": "ity"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Com"
+    },
+    {
+      "reasoning_content": "ple"
+    },
+    {
+      "reasoning_content": "ting"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " even"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " elliptical"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " According"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " interpret"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " including"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " history"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " )"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "next"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " single"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " per"
+    },
+    {
+      "reasoning_content": " se"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Actually"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " could"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " interpreted"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " continue"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " \n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " carefully"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " name"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "task"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "after"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "claim"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " likely"
+    },
+    {
+      "reasoning_content": " testing"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " claims"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " gets"
+    },
+    {
+      "reasoning_content": " marked"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " system"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " correctly"
+    },
+    {
+      "reasoning_content": " handle"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Actually"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " concern"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " claims"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " actually"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " issue"
+    },
+    {
+      "reasoning_content": " where"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " reported"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " claiming"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " scenario"
+    },
+    {
+      "reasoning_content": " seems"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " A"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " completion"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " testing"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " correctly"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " rather"
+    },
+    {
+      "reasoning_content": " than"
+    },
+    {
+      "reasoning_content": " prematurely"
+    },
+    {
+      "reasoning_content": " marking"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " There"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " existing"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " \n\n"
+    },
+    {
+      "reasoning_content": "Per"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Com"
+    },
+    {
+      "reasoning_content": "ple"
+    },
+    {
+      "reasoning_content": "ting"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " even"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " ambiguous"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " It"
+    },
+    {
+      "reasoning_content": " might"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " interpret"
+    },
+    {
+      "reasoning_content": " brief"
+    },
+    {
+      "reasoning_content": "/"
+    },
+    {
+      "reasoning_content": "elli"
+    },
+    {
+      "reasoning_content": "pt"
+    },
+    {
+      "reasoning_content": "ical"
+    },
+    {
+      "reasoning_content": " replies"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " unit"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " continuation"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "_c"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "eb"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_e"
+    },
+    {
+      "reasoning_content": "27"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "89"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " title"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " That"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " CURRENT"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "/"
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " separate"
+    },
+    {
+      "reasoning_content": " historical"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " re"
+    },
+    {
+      "reasoning_content": "-read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " more"
+    },
+    {
+      "reasoning_content": " carefully"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "D"
+    },
+    {
+      "reasoning_content": "UR"
+    },
+    {
+      "reasoning_content": "ABLE"
+    },
+    {
+      "reasoning_content": " T"
+    },
+    {
+      "reasoning_content": "ASK"
+    },
+    {
+      "reasoning_content": " CONT"
+    },
+    {
+      "reasoning_content": "EXT"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "_id"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "_c"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "eb"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "027"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "439"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "-b"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "033"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "af"
+    },
+    {
+      "reasoning_content": "609"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_id"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_e"
+    },
+    {
+      "reasoning_content": "27"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "89"
+    },
+    {
+      "reasoning_content": "-f"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "420"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "15"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "ee"
+    },
+    {
+      "reasoning_content": "793"
+    },
+    {
+      "reasoning_content": "fd"
+    },
+    {
+      "reasoning_content": "60"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " title"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " continue"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " channel"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " cl"
+    },
+    {
+      "reasoning_content": "i"
+    },
+    {
+      "reasoning_content": "\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " titled"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " Work"
+    },
+    {
+      "reasoning_content": " Continu"
+    },
+    {
+      "reasoning_content": "ity"
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "ints"
+    },
+    {
+      "reasoning_content": " card"
+    },
+    {
+      "reasoning_content": " references"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " DI"
+    },
+    {
+      "reasoning_content": "FFER"
+    },
+    {
+      "reasoning_content": "ENT"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "status"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " possible"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " attachment"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " name"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " eval"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "self"
+    },
+    {
+      "reasoning_content": "mind"
+    },
+    {
+      "reasoning_content": "-e"
+    },
+    {
+      "reasoning_content": "val"
+    },
+    {
+      "reasoning_content": "-re"
+    },
+    {
+      "reasoning_content": "li"
+    },
+    {
+      "reasoning_content": "ability"
+    },
+    {
+      "reasoning_content": "_task"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "after"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "claim"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "\"\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " scenario"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " An"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " claims"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " gets"
+    },
+    {
+      "reasoning_content": " marked"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "done"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " concern"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " lifecycle"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " correct"
+    },
+    {
+      "reasoning_content": " action"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " here"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " where"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " parked"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " point"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " specific"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " scenario"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " subtle"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " re"
+    },
+    {
+      "reasoning_content": "-read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": "Com"
+    },
+    {
+      "reasoning_content": "ple"
+    },
+    {
+      "reasoning_content": "ting"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " even"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " S"
+    },
+    {
+      "reasoning_content": "aying"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " does"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " close"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " earlier"
+    },
+    {
+      "reasoning_content": " Run"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " completes"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " Run"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "\"When"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " reports"
+    },
+    {
+      "reasoning_content": " commit"
+    },
+    {
+      "reasoning_content": "_mode"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "direct"
+    },
+    {
+      "reasoning_content": "',"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " become"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " selected"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " returned"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": " steps"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " you"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " real"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " When"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " reports"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " continuation"
+    },
+    {
+      "reasoning_content": " will"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " que"
+    },
+    {
+      "reasoning_content": "ued"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " acknowledge"
+    },
+    {
+      "reasoning_content": " briefly"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": " without"
+    },
+    {
+      "reasoning_content": " doing"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " target"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " here"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " question"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " does"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " relate"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ")?\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " very"
+    },
+    {
+      "reasoning_content": " brief"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Given"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"..."
+    },
+    {
+      "reasoning_content": " \n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " It"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " ambiguous"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " doesn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " really"
+    },
+    {
+      "reasoning_content": " sound"
+    },
+    {
+      "reasoning_content": " like"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " something"
+    },
+    {
+      "reasoning_content": " specific"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " earlier"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " where"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " asked"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "...\n\n"
+    },
+    {
+      "reasoning_content": "Wait"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " actually"
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " In"
+    },
+    {
+      "reasoning_content": " my"
+    },
+    {
+      "reasoning_content": " previous"
+    },
+    {
+      "reasoning_content": " response"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " didn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " actually"
+    },
+    {
+      "reasoning_content": " ask"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " question"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " stated"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " parked"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " single"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "Then"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " here"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " claimed"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "after"
+    },
+    {
+      "reasoning_content": " being"
+    },
+    {
+      "reasoning_content": " told"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " essentially"
+    },
+    {
+      "reasoning_content": " claiming"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " NOT"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " checks"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " back"
+    },
+    {
+      "reasoning_content": "-and"
+    },
+    {
+      "reasoning_content": "-for"
+    },
+    {
+      "reasoning_content": "th"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " gets"
+    },
+    {
+      "reasoning_content": " correctly"
+    },
+    {
+      "reasoning_content": " reported"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " already"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " That"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " confusing"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " scenario"
+    },
+    {
+      "reasoning_content": " name"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "task"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "after"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "claim"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " Could"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " concern"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " claimed"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " actually"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": ".e"
+    },
+    {
+      "reasoning_content": ".,"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " claims"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " defer"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'m"
+    },
+    {
+      "reasoning_content": " over"
+    },
+    {
+      "reasoning_content": "analy"
+    },
+    {
+      "reasoning_content": "zing"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " eval"
+    },
+    {
+      "reasoning_content": " name"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " focus"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " actual"
+    },
+    {
+      "reasoning_content": " instructions"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " key"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " from"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " completion"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Finish"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " did"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "next"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " single"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "Given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " \n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " safest"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " most"
+    },
+    {
+      "reasoning_content": " correct"
+    },
+    {
+      "reasoning_content": " interpretation"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " elliptical"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Per"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " interpret"
+    },
+    {
+      "reasoning_content": " brief"
+    },
+    {
+      "reasoning_content": " replies"
+    },
+    {
+      "reasoning_content": " using"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " proposals"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " history"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " logically"
+    },
+    {
+      "reasoning_content": " indicates"
+    },
+    {
+      "reasoning_content": " they"
+    },
+    {
+      "reasoning_content": " want"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " proceed"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ").\n\n"
+    },
+    {
+      "reasoning_content": "Per"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Com"
+    },
+    {
+      "reasoning_content": "ple"
+    },
+    {
+      "reasoning_content": "ting"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " even"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Insp"
+    },
+    {
+      "reasoning_content": "ect"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ")\n"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Continue"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_e"
+    },
+    {
+      "reasoning_content": "27"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "89"
+    },
+    {
+      "reasoning_content": " titled"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Is"
+    },
+    {
+      "reasoning_content": " THAT"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'m"
+    },
+    {
+      "reasoning_content": " supposed"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " working"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " Or"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "?\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " continuity"
+    },
+    {
+      "reasoning_content": " hint"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "possible"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " attached"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " It"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " Attention"
+    },
+    {
+      "reasoning_content": " card"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " If"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " card"
+    },
+    {
+      "reasoning_content": " matches"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " needed"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " taking"
+    },
+    {
+      "reasoning_content": " action"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " does"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " match"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " card"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " yes"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " continuing"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " conversation"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_search"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " whole"
+    },
+    {
+      "reasoning_content": " thing"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " eval"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " consider"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "correct"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " behavior"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " scenario"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "task"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "after"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "claim"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " name"
+    },
+    {
+      "reasoning_content": " suggests"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " gets"
+    },
+    {
+      "reasoning_content": " marked"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " AFTER"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " claimed"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " probably"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "in"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ")"
+    },
+    {
+      "reasoning_content": " claimed"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " appropriately"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " checking"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " system"
+    },
+    {
+      "reasoning_content": " correctly"
+    },
+    {
+      "reasoning_content": " transitions"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'m"
+    },
+    {
+      "reasoning_content": " over"
+    },
+    {
+      "reasoning_content": "com"
+    },
+    {
+      "reasoning_content": "plic"
+    },
+    {
+      "reasoning_content": "ating"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " well"
+    },
+    {
+      "reasoning_content": "-be"
+    },
+    {
+      "reasoning_content": "hav"
+    },
+    {
+      "reasoning_content": "ed"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " There"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_id"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_e"
+    },
+    {
+      "reasoning_content": "27"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "89"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "title"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " \n\n"
+    },
+    {
+      "reasoning_content": "Wait"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " CURRENT"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " already"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "done"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Why"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " saying"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"?\n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Maybe"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " fresh"
+    },
+    {
+      "reasoning_content": " continuation"
+    },
+    {
+      "reasoning_content": " prompt"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "status"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " stale"
+    },
+    {
+      "reasoning_content": "/c"
+    },
+    {
+      "reasoning_content": "ached"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " continue"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " re"
+    },
+    {
+      "reasoning_content": "-reading"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " header"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "done"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " asking"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " continue"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " might"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " where"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " cached"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " blindly"
+    },
+    {
+      "reasoning_content": " claim"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " back"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " most"
+    },
+    {
+      "reasoning_content": " reliable"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " honest"
+    },
+    {
+      "reasoning_content": " behavior"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " told"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " \n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " providing"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " go"
+    },
+    {
+      "reasoning_content": "-a"
+    },
+    {
+      "reasoning_content": "head"
+    },
+    {
+      "reasoning_content": " /"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " continue"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ")"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " satisfied"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Per"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " must"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " hold"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " careful"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " really"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " It"
+    },
+    {
+      "reasoning_content": " could"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " consider"
+    },
+    {
+      "reasoning_content": " both"
+    },
+    {
+      "reasoning_content": ":\n\n"
+    },
+    {
+      "reasoning_content": "Option"
+    },
+    {
+      "reasoning_content": " A"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirms"
+    },
+    {
+      "reasoning_content": " /"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " proceed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " →"
+    },
+    {
+      "reasoning_content": " Complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": "Option"
+    },
+    {
+      "reasoning_content": " B"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " /"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " →"
+    },
+    {
+      "reasoning_content": " Stay"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Com"
+    },
+    {
+      "reasoning_content": "ple"
+    },
+    {
+      "reasoning_content": "ting"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " even"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " S"
+    },
+    {
+      "reasoning_content": "aying"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " does"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " close"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " earlier"
+    },
+    {
+      "reasoning_content": " Run"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " strongly"
+    },
+    {
+      "reasoning_content": " suggests"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " does"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " satisfy"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "\"?"
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " saying"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "conf"
+    },
+    {
+      "reasoning_content": "irmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " most"
+    },
+    {
+      "reasoning_content": " naturally"
+    },
+    {
+      "reasoning_content": " means"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " giving"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " go"
+    },
+    {
+      "reasoning_content": "-a"
+    },
+    {
+      "reasoning_content": "head"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " specific"
+    },
+    {
+      "reasoning_content": " decision"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " implies"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "go"
+    },
+    {
+      "reasoning_content": " ahead"
+    },
+    {
+      "reasoning_content": " /"
+    },
+    {
+      "reasoning_content": " proceed"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " want"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " re"
+    },
+    {
+      "reasoning_content": "-read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " WORK"
+    },
+    {
+      "reasoning_content": " CONTIN"
+    },
+    {
+      "reasoning_content": "U"
+    },
+    {
+      "reasoning_content": "ITY"
+    },
+    {
+      "reasoning_content": " section"
+    },
+    {
+      "reasoning_content": ":\n\n"
+    },
+    {
+      "reasoning_content": "\"When"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " naturally"
+    },
+    {
+      "reasoning_content": " refers"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " older"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " supplied"
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " insufficient"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_search"
+    },
+    {
+      "reasoning_content": " across"
+    },
+    {
+      "reasoning_content": " retained"
+    },
+    {
+      "reasoning_content": " structured"
+    },
+    {
+      "reasoning_content": " history"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " candidates"
+    },
+    {
+      "reasoning_content": " needed"
+    },
+    {
+      "reasoning_content": ".\"\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": "Interpret"
+    },
+    {
+      "reasoning_content": " brief"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " elliptical"
+    },
+    {
+      "reasoning_content": " replies"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " any"
+    },
+    {
+      "reasoning_content": " language"
+    },
+    {
+      "reasoning_content": " using"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " conversation"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " proposals"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " history"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " When"
+    },
+    {
+      "reasoning_content": " intent"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " scope"
+    },
+    {
+      "reasoning_content": " are"
+    },
+    {
+      "reasoning_content": " clear"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " proceed"
+    },
+    {
+      "reasoning_content": ".\"\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": "Com"
+    },
+    {
+      "reasoning_content": "ple"
+    },
+    {
+      "reasoning_content": "ting"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " even"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " yes"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " confirm"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " relationship"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "After"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": " supports"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " relationship"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " observe"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "/"
+    },
+    {
+      "reasoning_content": "result"
+    },
+    {
+      "reasoning_content": " question"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " deliberate"
+    },
+    {
+      "reasoning_content": " continuation"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "And"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Use"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_search"
+    },
+    {
+      "reasoning_content": " across"
+    },
+    {
+      "reasoning_content": " retained"
+    },
+    {
+      "reasoning_content": " structured"
+    },
+    {
+      "reasoning_content": " history"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " candidates"
+    },
+    {
+      "reasoning_content": " needed"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " Work"
+    },
+    {
+      "reasoning_content": " Continu"
+    },
+    {
+      "reasoning_content": "ity"
+    },
+    {
+      "reasoning_content": " Hint"
+    },
+    {
+      "reasoning_content": " already"
+    },
+    {
+      "reasoning_content": " gives"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_id"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " can"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " directly"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " observe"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Since"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " we"
+    },
+    {
+      "reasoning_content": " want"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " appropriate"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " double"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " If"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " interpreted"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " inspecting"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " whole"
+    },
+    {
+      "reasoning_content": " thing"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " more"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " eval"
+    },
+    {
+      "reasoning_content": " named"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "task"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "after"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "claim"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " \n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " concern"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " preceding"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " asked"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Finish"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\""
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "me"
+    },
+    {
+      "reasoning_content": ")"
+    },
+    {
+      "reasoning_content": " did"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " previous"
+    },
+    {
+      "reasoning_content": " assistant"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " might"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " checking"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " marks"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " correctly"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "done"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " already"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "from"
+    },
+    {
+      "reasoning_content": " cached"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": "...\n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " wonder"
+    },
+    {
+      "reasoning_content": " if"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " real"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " here"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " previously"
+    },
+    {
+      "reasoning_content": " claimed"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "de"
+    },
+    {
+      "reasoning_content": "fer"
+    },
+    {
+      "reasoning_content": "ring"
+    },
+    {
+      "reasoning_content": " completion"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " actual"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " completing"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " concern"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " agent"
+    },
+    {
+      "reasoning_content": " might"
+    },
+    {
+      "reasoning_content": " wrongly"
+    },
+    {
+      "reasoning_content": " claim"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " you"
+    },
+    {
+      "reasoning_content": " know"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " honest"
+    },
+    {
+      "reasoning_content": " thing"
+    },
+    {
+      "reasoning_content": ":\n\n"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Recognize"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ")"
+    },
+    {
+      "reasoning_content": " awaiting"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " treat"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " carefully"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " get"
+    },
+    {
+      "reasoning_content": " accurate"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " decide"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " responding"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " believe"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " most"
+    },
+    {
+      "reasoning_content": " reliable"
+    },
+    {
+      "reasoning_content": " interpretation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " providing"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " go"
+    },
+    {
+      "reasoning_content": "-a"
+    },
+    {
+      "reasoning_content": "head"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " hold"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " genuinely"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'m"
+    },
+    {
+      "reasoning_content": " pattern"
+    },
+    {
+      "reasoning_content": " matching"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " \n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " assistant"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " parked"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " single"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " No"
+    },
+    {
+      "reasoning_content": " other"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " provided"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " can"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " natural"
+    },
+    {
+      "reasoning_content": " way"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " say"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "go"
+    },
+    {
+      "reasoning_content": " ahead"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " /"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "pro"
+    },
+    {
+      "reasoning_content": "ceed"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " In"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " proceed"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " yes"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " treat"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " satisfying"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " confirm"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " get"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " return"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " directly"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " confirm"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " relationship"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " proceed"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Since"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": " independent"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": "-only"
+    },
+    {
+      "reasoning_content": " ops"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " have"
+    },
+    {
+      "reasoning_content": " dependency"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "need"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " select"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " realize"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " reconsider"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " even"
+    },
+    {
+      "reasoning_content": " involve"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " historical"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " already"
+    },
+    {
+      "reasoning_content": " identifies"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " different"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ").\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "eda"
+    },
+    {
+      "reasoning_content": "753"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " inspect"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " prior"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " relationship"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " res"
+    },
+    {
+      "content": "uming"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9331,
+        "output_tokens": 3535,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9331,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 3452,
+        "cache_usage_reported": true
+      }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_Xm67NjrwUar8mF2O7pQWKqII",
-          "Function": "finish_run",
-          "Args": "{\"done\":[\"Received the required user confirmation.\",\"Completed the task after confirmation.\"],\"next_steps\":[],\"risks\":[],\"status\":\"done\",\"summary\":\"Confirmation received and the run is complete.\"}"
+          "ID": "call_00_PJZBO8pwBUAhPhXDCfo41830",
+          "Function": "work_inspect",
+          "Args": "{\"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
         }
       ]
-    },
-    {
-      "usage": {
-        "input_tokens": 7680,
-        "output_tokens": 95,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 7680,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0,
-        "cache_usage_reported": true
-      }
     }
   ]
 }

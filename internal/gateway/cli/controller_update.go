@@ -324,6 +324,14 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
 		return m, nil
 
+	case tea.FocusMsg:
+		m.terminalFocused = true
+		return m, nil
+
+	case tea.BlurMsg:
+		m.terminalFocused = false
+		return m, nil
+
 	case tea.KeyMsg:
 		// Same signal, different purpose: the approval panel must not arm while
 		// the person is mid-keystroke (approvalTypingIdleDelay).
@@ -564,6 +572,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.acceptEvent(msg.Event) {
 			return m, spinnerCmd
 		}
+		backgroundWatchID, backgroundOrigin, backgroundRun := m.finishedBackgroundRun(msg.RunID)
+		if backgroundRun {
+			m.finishWatcherNotice(backgroundWatchID, msg.Event.Cursor)
+			m.addMessage("notice", backgroundResultNotice(backgroundWatchID, backgroundOrigin, msg.Status, msg.Summary))
+		}
 		if !m.daemonRunActive {
 			return m, spinnerCmd
 		}
@@ -580,7 +593,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if awaitingSynchronousDone {
 			return m, spinnerCmd
 		}
-		if backgroundWatchID, backgroundOrigin, backgroundRun := m.finishedBackgroundRun(msg.RunID); backgroundRun {
+		if backgroundRun {
 			// Nothing of this run entered the transcript, the live stream, or
 			// the tool cells, so none of the foreground cleanup below applies —
 			// running it would discard state that belongs to this terminal.
@@ -590,7 +603,6 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.runStatus = uiStatusForDaemonOutcome(msg.Status)
 			}
-			m.addMessage("notice", backgroundResultNotice(backgroundWatchID, backgroundOrigin, msg.Status, msg.Summary))
 			return m, spinnerCmd
 		}
 		m.stopModelWait()
@@ -818,9 +830,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// acts on is the finalization result that follows within seconds. This
 		// is therefore the transient half of the watcher's report: it stays on
 		// the status bar (no timer, so it is not lost while finalization is
-		// still pending) until the terminal notice replaces it in the
-		// transcript.
-		m.setStatusNotice(watcherNoticeKind(msg.Status), watcherStatusNotice(msg.WatchID, msg.Status, msg.TaskStatus))
+		// still pending). The matching finalization clears the bar and writes
+		// the terminal result to the transcript.
+		m.showWatcherNotice(msg)
 		return m, nil
 
 	case MsgClearStatus:

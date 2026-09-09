@@ -253,8 +253,10 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 }
 
 type planStepView struct {
-	Step   string `json:"step"`
-	Status string `json:"status"`
+	Step                 string `json:"step"`
+	Status               string `json:"status"`
+	SuccessCriteria      string `json:"success_criteria,omitempty"`
+	VerificationRequired bool   `json:"verification_required,omitempty"`
 }
 
 // inheritedPlanSteps prefers the durable run plan; runs recorded before the
@@ -265,7 +267,8 @@ func (t *WorkSelectTool) inheritedPlanSteps(ctx context.Context, tenantID, perso
 	} else if plan != nil && len(plan.Steps) > 0 {
 		steps := make([]planStepView, 0, len(plan.Steps))
 		for _, step := range plan.Steps {
-			steps = append(steps, planStepView{Step: step.Step, Status: step.Status})
+			steps = append(steps, planStepView{Step: step.Step, Status: step.Status,
+				SuccessCriteria: step.SuccessCriteria, VerificationRequired: step.VerificationRequired})
 		}
 		return steps, nil
 	}
@@ -327,8 +330,11 @@ func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, 
 				marker = "[>]"
 			}
 			sb.WriteString("- " + marker + " " + workBound(step.Step, 240) + "\n")
+			if step.SuccessCriteria != "" || step.VerificationRequired {
+				fmt.Fprintf(&sb, "  success_criteria=%q verification_required=%t\n", workBound(step.SuccessCriteria, 400), step.VerificationRequired)
+			}
 		}
-		sb.WriteString("This plan is inherited from the continued run. For multi-step work, call update_plan with a complete snapshot that keeps the completed steps, then continue from the in-progress step.\n")
+		sb.WriteString("This plan is inherited from the continued run. For multi-step work, call update_plan with a complete snapshot that keeps the completed steps and acceptance conditions, then continue from the in-progress step. Use only step IDs issued for the current Run; omit IDs for steps not yet registered here.\n")
 	}
 	sb.WriteString("Continue from this state now. Do not restart completed work unless the user asks for a restart.\n")
 	sb.WriteString("[/SelfMind resume context]")

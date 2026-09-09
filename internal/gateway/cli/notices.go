@@ -61,6 +61,8 @@ func (m *uiModel) setStatusNotice(kind noticeKind, text string) uint64 {
 	m.statusNoticeKind = kind
 	m.statusNoticeText = text
 	m.statusMsg = text
+	m.watcherNoticeID = ""
+	m.watcherNoticeCursor = 0
 	return m.statusNoticeID
 }
 
@@ -69,6 +71,8 @@ func (m *uiModel) clearStatusNotice() {
 	m.statusNoticeText = ""
 	m.statusNoticeKind = noticeInfo
 	m.statusNoticeID = 0
+	m.watcherNoticeID = ""
+	m.watcherNoticeCursor = 0
 }
 
 func clearStatusNoticeAfter(id uint64, delay time.Duration) tea.Cmd {

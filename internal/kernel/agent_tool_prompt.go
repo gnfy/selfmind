@@ -38,10 +38,13 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 		if hasAny("terminal", "execute_code", "run_command") {
 			sb.WriteString("For command failures, inspect the working directory, files, environment, authentication, runtime, and command help before choosing an override or retry.\n")
 		}
+		if names["verify"] {
+			sb.WriteString("Use verify for checks that establish completion: it executes the command and records verification evidence. A command run through terminal is recorded as ordinary execution, not a verification check. Run the relevant check after the final change.\n")
+		}
 		if names["update_plan"] {
 			sb.WriteString(planToolGuidance(strategy))
 			if names["skill_select"] {
-				sb.WriteString("When a new top-level work unit is returned, echo its work_unit_id in later plan snapshots. Use bound_skill_name or a listed skill_candidate; do not invent or activate a Skill through inspection alone.\n")
+				sb.WriteString("Use bound_skill_name or a listed skill_candidate for the current work unit; do not invent or activate a Skill through inspection alone.\n")
 			}
 		}
 		if names["finish_run"] {
@@ -96,14 +99,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 
 func planToolGuidance(strategy TaskStrategy) string {
 	const boundary = "Call update_plan by itself; do not batch it with reads or other tools because it changes the work-unit boundary. "
-	// planStepDiscipline governs a plan that exists, under either policy. The
-	// transition rules exist because a reluctant model produced its first
-	// snapshot only after the work was already done, so the person's first
-	// sight of the plan was several steps retroactively marked completed
-	// (observed live 2026-09-03 with deepseek-v4-flash: 4/5 done on first
-	// appearance). A plan that only records history is not progress the person
-	// can follow.
-	const planStepDiscipline = "Every call replaces the prior plan, so send the complete snapshot. Move a step to in_progress before you work on it and mark it completed before the next command: never jump a step straight from pending to completed, and never batch-complete several steps after the fact. Keep the plan current while you work, and resolve every step before a done outcome.\n"
+	const planStepDiscipline = "Every call replaces the prior plan, so send the complete snapshot. Update it at meaningful progress or scope changes, not around every tool call. Report the actual state of each step and resolve every step before a done outcome. Existing step IDs preserve execution attribution; work-unit IDs need not be repeated.\n"
 	// planTriggers replaces an abstract test the model had to interpret with
 	// the concrete situations that call for a plan.
 	const planTriggers = "Plan when the work spans several actions over a long horizon, has ordered phases or dependencies, carries ambiguity worth outlining before acting, answers more than one request at once, or grows extra steps while you work. "

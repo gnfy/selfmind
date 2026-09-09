@@ -371,18 +371,15 @@ func TestWithWebEnabledUnhidesWebTools(t *testing.T) {
 	}
 }
 
-// The plan guidance must carry the step-transition discipline under BOTH
-// policies. Without it a reluctant model produced its first snapshot only
-// after the work was done, so the person's first sight of the plan was
-// several steps retroactively marked completed (observed live 2026-09-03).
+// Plans describe meaningful progress without requiring per-command bookkeeping.
 func TestPlanGuidanceCarriesStepDisciplineUnderBothPolicies(t *testing.T) {
 	optional := planToolGuidance(DefaultTaskStrategy())
 	required := planToolGuidance(DefaultTaskStrategy().WithPlanRequired())
 	for name, guidance := range map[string]string{"optional": optional, "required": required} {
 		for _, want := range []string{
-			"in_progress before you work on it",
-			"never jump a step straight from pending to completed",
-			"never batch-complete several steps after the fact",
+			"meaningful progress or scope changes",
+			"not around every tool call",
+			"work-unit IDs need not be repeated",
 			"resolve every step before a done outcome",
 		} {
 			if !strings.Contains(guidance, want) {

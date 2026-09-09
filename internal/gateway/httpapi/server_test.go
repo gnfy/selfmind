@@ -687,12 +687,12 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 		Channel:        "cli",
 		ClientCWD:      t.TempDir(),
 		Content:        "continue",
+		ReplyToRunID:   waiting.ID,
 	}
 	if _, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		t.Fatal(err)
 	}
-	// A continuation resolves through the run ladder to the waiting run's
-	// workspace-less task and binds the request's resolved CLI workspace to it.
+	// An exact reply binds the request workspace when the parent has none.
 	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentContinue})
 	if err != nil {
 		t.Fatal(err)
@@ -705,6 +705,7 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	}
 	// Plain new work owns a fresh root task (simplification P2); the EXECUTION
 	// workspace follows the request either way.
+	req.ReplyToRunID = ""
 	fresh, attach, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
 	if err != nil {
 		t.Fatal(err)
@@ -788,9 +789,8 @@ func TestResolveContinuationDoesNotDeriveReferenceFromTaskTitle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The bare cue continues the unique waiting RUN; the ticket-shaped title is
-	// never identity evidence and mints no work key.
-	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() || attach.workKey != "" || attach.resumesRunID != waiting.ID {
+	// Natural language and a ticket-shaped title never claim a parent before Main.
+	if resolved == nil || resolved.ID == task.ID || attach.claimsPriorRuns() || attach.workKey != "" || attach.resumesRunID != "" {
 		t.Fatalf("resolved=%+v attach=%+v", resolved, attach)
 	}
 }

@@ -13,18 +13,10 @@ import (
 	"selfmind/internal/kernel/llm"
 )
 
-// classifyIntent is rules-first intent classification (plus the router's own
-// LLM consult for ambiguous non-task input). The implicit-continuation LLM
-// upgrade that used to live here was REMOVED with Work Timeline P3: context is
-// spine-based (P1) so task attachment no longer affects what the model sees —
-// a pre-agent "does this continue that task?" call bought nothing. Explicit
-// rules-based IntentContinue (cues, short acceptance) remains: it still drives
-// the busy/steer path and deterministic continue semantics.
+// classifyIntent leaves semantic interpretation to Main inside the Run.
+// Explicit commands and structured return edges have their own control paths.
 func (d *Server) classifyIntent(ctx context.Context, input, channel string) router.IntentResult {
-	if d == nil || d.Gateway == nil {
-		return router.NewIntentClassifier().ClassifyDetailed(input)
-	}
-	return d.Gateway.ClassifyIntentWithContext(ctx, input, channel)
+	return router.IntentResult{Intent: router.IntentTask, Confidence: 1, ShouldCreateTask: true, ShouldUseTools: true, Source: "main"}
 }
 
 func (d *Server) tryHandleIntentClarification(identity *control.IdentityContext, intent router.IntentResult) (bool, api.MessageResponse) {
@@ -112,25 +104,6 @@ func resumableTaskStatus(status string) bool {
 	default:
 		return false
 	}
-}
-
-func looksLikeAffirmativeContinuation(input string) bool {
-	clean := strings.ToLower(strings.TrimSpace(input))
-	clean = strings.Trim(clean, " \t\r\n.!?,;:。！？；：，")
-	switch clean {
-	case "ok", "okay", "yes", "y", "sure", "go ahead", "proceed", "sounds good",
-		"\u53ef\u4ee5", "\u597d", "\u597d\u7684", "\u884c", "\u6ca1\u95ee\u9898",
-		"\u540c\u610f", "\u5f00\u59cb", "\u5f00\u59cb\u5427", "\u6309\u8fd9\u4e2a\u505a",
-		"\u5f00\u59cb\u6267\u884c", "\u6267\u884c\u5427", "\u8bf7\u6267\u884c",
-		"\u5c31\u8fd9\u6837", "\u90a3\u5c31\u8fd9\u6837":
-		return true
-	default:
-		return false
-	}
-}
-
-func isDeterministicContinuationInput(input string) bool {
-	return isStandaloneContinueControl(input) || looksLikeAffirmativeContinuation(input)
 }
 
 // withResumeContext prepends the parent run's durable state to a deliberate

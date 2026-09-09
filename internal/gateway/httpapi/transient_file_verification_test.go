@@ -130,7 +130,7 @@ func TestEvidenceOutcomeIgnoresATransientHelper(t *testing.T) {
 		Command: &kernel.CommandEvidence{Command: "python3 tmp_resolve_merge.py && rm -f tmp_resolve_merge.py"},
 	})
 
-	verification, files := daemon.coordinator().evidenceOutcome(ctx, task.ID, run.ID)
+	verification, files := daemon.coordinator().evidenceOutcome(ctx, task.TenantID, task.ID, run.ID)
 	if verification == nil {
 		t.Fatal("expected a verification verdict")
 	}
@@ -155,7 +155,7 @@ func TestEvidenceOutcomeIgnoresATransientHelper(t *testing.T) {
 	if err := os.WriteFile(helper, []byte("print(1)\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	verification, files = daemon.coordinator().evidenceOutcome(ctx, task.ID, run.ID)
+	verification, files = daemon.coordinator().evidenceOutcome(ctx, task.TenantID, task.ID, run.ID)
 	if verification.State != "not_run" {
 		t.Fatalf("a surviving .py helper still owes verification, got %q", verification.State)
 	}

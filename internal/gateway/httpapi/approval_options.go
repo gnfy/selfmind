@@ -173,14 +173,16 @@ func runIntentSnapshot(req api.MessageRequest, task *control.Task, run *control.
 	if workspace != nil {
 		snapshot.WorkspaceID = workspace.ID
 	}
+	// A phrase list used to sit here, turning a fixed set of spellings
+	// ("continue", "开始执行", "同意", …) into an explicit_allow signal. It was a
+	// keyword taxonomy pretending to be authorization evidence, and it failed
+	// exactly where it mattered: on 2026-09-07 "开始执行" was recognized and "2",
+	// answering a numbered list of next steps, was not, so the same day
+	// produced both a working authorization and an unauthorized-looking one for
+	// the same intent. The judge now receives what the person was answering
+	// (PriorAssistantOffer) and reads the reply against it, which covers every
+	// spelling and every shape of acceptance instead of a list of them.
 	compact := strings.ToLower(strings.Trim(strings.TrimSpace(raw), "。.!！?？ \t\r\n"))
-	switch compact {
-	case "continue", "resume", "keep going", "go on", "继续", "开始执行", "执行吧", "请执行", "可以", "同意", "确认执行":
-		if snapshot.UserAuthored() {
-			snapshot.Source = "continuation"
-			snapshot.ExplicitAllow = []string{"continue-current-task"}
-		}
-	}
 	snapshot.ExplicitDeny, snapshot.DenyScopes = extractDenyScopes(compact)
 	return snapshot
 }

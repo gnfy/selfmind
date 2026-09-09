@@ -118,7 +118,7 @@ func TestForegroundPromptKeepsDeliveryAndQualityWithoutTools(t *testing.T) {
 		"# RESPONSE & INTERACTION",
 		"Respond in the language of the user's latest message",
 		"# WORK QUALITY & VERIFICATION",
-		"Never claim work was completed or verified when it was not",
+		"Judge completion against the user's requested scope",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("tool-free foreground prompt missing %q:\n%s", want, prompt)

@@ -93,8 +93,8 @@ func TestAsyncRunOwnsFreshInteractionThread(t *testing.T) {
 	}
 }
 
-// The continuation ladder binds the sole waiting run; without any analyzer
-// the finalize path itself must commit the derived lifecycle onto the task.
+// An exact reply binds the waiting run; without any analyzer the finalize
+// path itself must record the child outcome.
 func TestSoleWaitingRunContinuationReconcilesWithoutAnalyzer(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
@@ -119,7 +119,7 @@ func TestSoleWaitingRunContinuationReconcilesWithoutAnalyzer(t *testing.T) {
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
-		Platform: "cli", PlatformUserID: "local", Channel: "send", Content: "continue", Async: true,
+		Platform: "cli", PlatformUserID: "local", Channel: "send", Content: "continue", ReplyToRunID: waiting.ID, Async: true,
 	})
 	if status != http.StatusOK || !resp.Accepted {
 		t.Fatalf("async accept failed: status=%d resp=%+v", status, resp)

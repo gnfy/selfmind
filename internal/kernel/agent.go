@@ -1729,8 +1729,17 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			emitAgentActivity(eventCh, "The visible plan still has unresolved steps; reconciling final progress", "plan_reconciliation", i)
 			messages = append(messages, llm.Message{
 				Role: "user",
+				// This used to read "mark finished steps completed and steps
+				// intentionally not performed cancelled", which asks for a
+				// status, not a judgement. On 2026-09-07 a plan whose own step 5
+				// was "verify and report / re-check the actual state with gh api"
+				// arrived here and came back completed, with the change absent.
+				// The gate can only require that statuses are filled in, so what
+				// it asks for has to be the comparison.
 				Content: "Before giving the final answer, reconcile the visible plan. Call update_plan once with the complete current snapshot. " +
-					"Mark finished steps completed and steps intentionally not performed cancelled. If work is genuinely blocked or waiting externally, call finish_run with that non-done status instead. Unresolved steps: " + strings.Join(unresolvedPlanSteps, "; "),
+					"Judge each unresolved step against the success_criteria you declared for it: completed only when that criterion is actually met, cancelled when you decided not to do it. " +
+					"A step whose criterion you never checked is not completed — check it now, or resolve it honestly and name the unmet criterion in your final answer. " +
+					"Do not weaken a criterion to fit what happened. If work is genuinely blocked or waiting externally, call finish_run with that non-done status instead. Unresolved steps: " + strings.Join(unresolvedPlanSteps, "; "),
 			})
 			recordStep(i, StepContinueModel, "plan_repair")
 			continue

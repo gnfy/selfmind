@@ -129,14 +129,18 @@ func (m *uiModel) commit(msg *ChatMessage) {
 // synchronously from within it. cmd is the handler's original command, which
 // runs after the prints so the committed cell appears before any follow-up.
 func (m *uiModel) flushPendingPrintln(cmd tea.Cmd) tea.Cmd {
-	if len(m.pendingPrintln) == 0 {
+	if len(m.pendingPrintln) == 0 && len(m.pendingCmds) == 0 {
 		return cmd
 	}
-	cmds := make([]tea.Cmd, 0, len(m.pendingPrintln)+1)
+	cmds := make([]tea.Cmd, 0, len(m.pendingPrintln)+len(m.pendingCmds)+1)
 	for _, line := range m.pendingPrintln {
 		cmds = append(cmds, tea.Println(line))
 	}
 	m.pendingPrintln = nil
+	// Handlers that write to the terminal themselves ride the same deferral:
+	// they must run after Update returns, for the same reason Println must.
+	cmds = append(cmds, m.pendingCmds...)
+	m.pendingCmds = nil
 	if cmd != nil {
 		cmds = append(cmds, cmd)
 	}

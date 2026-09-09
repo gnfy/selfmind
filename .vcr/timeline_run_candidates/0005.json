@@ -1,0 +1,106 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "List"
+    },
+    {
+      "content": "o"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " te"
+    },
+    {
+      "content": " entreg"
+    },
+    {
+      "content": "ué"
+    },
+    {
+      "content": " el"
+    },
+    {
+      "content": " esqu"
+    },
+    {
+      "content": "ema"
+    },
+    {
+      "content": " en"
+    },
+    {
+      "content": " tres"
+    },
+    {
+      "content": " partes"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Cuando"
+    },
+    {
+      "content": " defin"
+    },
+    {
+      "content": "as"
+    },
+    {
+      "content": " el"
+    },
+    {
+      "content": " proyecto"
+    },
+    {
+      "content": " con"
+    },
+    {
+      "content": "creto"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " las"
+    },
+    {
+      "content": " con"
+    },
+    {
+      "content": "vi"
+    },
+    {
+      "content": "erto"
+    },
+    {
+      "content": " en"
+    },
+    {
+      "content": " contenido"
+    },
+    {
+      "content": " real"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 12400,
+        "output_tokens": 30,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 12400,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

@@ -21,6 +21,7 @@ expect:
   max_duration_seconds: 60
 
 assert_state:
+  - { on: artifacts, count_lte: 0 }
   - { on: events, type: "run.outcome", payload_contains: '"status":"done"', count_gte: 1 }
   - { on: run, field: status, eq: "done" }
   - { on: task, field: kind, eq: "interaction" }

@@ -76,9 +76,15 @@ func TestEvidenceOutcomeReadsDurableRunEvidence(t *testing.T) {
 		ToolName: "verify", Kind: "verification", Status: "succeeded", StartedAt: 30, FinishedAt: 40,
 		Command: &kernel.CommandEvidence{Command: "go test ./...", CWD: ".", Kind: "test", ExitCode: 0},
 	})
+	// Transcript volume cannot evict execution evidence from completion.
+	for i := 0; i < 225; i++ {
+		if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "agent.thinking", Payload: mustJSON(map[string]string{"message": "progress"})}); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	server := &Server{Control: store, DefaultTenantID: "default"}
-	got, files := server.coordinator().evidenceOutcome(ctx, task.ID, run.ID)
+	got, files := server.coordinator().evidenceOutcome(ctx, task.TenantID, task.ID, run.ID)
 	if got == nil || got.State != "passed" || len(got.Checks) != 1 {
 		t.Fatalf("outcome = %+v", got)
 	}

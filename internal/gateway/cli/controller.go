@@ -81,18 +81,28 @@ type ChatMessage struct {
 
 // uiModel is the main TUI model. It holds all conversation state.
 type uiModel struct {
-	program               *tea.Program
-	width, height         int
-	common                *common.Common
-	sidebar               *sidebar.Sidebar
-	status                *status.Status
-	editor                *components.Editor
-	sessionBrowser        *components.SessionBrowser
-	sessionBrowserOpen    bool
-	pager                 *components.Pager
-	modelManager          *components.ModelManager
-	modelManagerOnly      bool
-	modelApplying         bool
+	program            *tea.Program
+	width, height      int
+	common             *common.Common
+	sidebar            *sidebar.Sidebar
+	status             *status.Status
+	editor             *components.Editor
+	sessionBrowser     *components.SessionBrowser
+	sessionBrowserOpen bool
+	pager              *components.Pager
+	modelManager       *components.ModelManager
+	modelManagerOnly   bool
+	modelApplying      bool
+	// terminalFocused is true only while this terminal has reported having the
+	// person's attention. The false zero value deliberately means "not known to
+	// be watched": many terminals and multiplexers never report focus at all,
+	// and an unanswered question must still reach someone whose terminal stays
+	// silent about it.
+	terminalFocused bool
+	// pendingCmds are commands a handler queued for after Update returns, for
+	// handlers that are void by design: arming a prompt is called from several
+	// places, some of which have no command of their own to return.
+	pendingCmds           []tea.Cmd
 	modelManagerStatus    components.ModelManagerStatus
 	modelManagerRoutes    []components.ModelManagerProvider
 	messages              []ChatMessage
@@ -144,6 +154,10 @@ type uiModel struct {
 	statusNoticeKind      noticeKind
 	statusNoticeID        uint64
 	nextStatusNoticeID    uint64
+	watcherNoticeID       string // exact watcher owning this transient notice, if any
+	watcherNoticeCursor   int64
+	finalizedWatchNotices map[string]int64 // bounded per-watch terminal cursors reject stale observation replay
+	finalizedWatchOrder   []string
 	thinkingStart         time.Time // When current thinking started
 	activityText          string    // Current model/tool phase shown in transcript
 	waitingForModel       bool      // exactly one spinner tick chain owns this structured model_wait phase
@@ -186,18 +200,18 @@ type uiModel struct {
 	// the daemon from the session's own directory at startup. It is what the
 	// card shows when no /ws switch has pinned one, and it carries the trust
 	// state the one-time trust question needs.
-	sessionWorkspace      *api.DigestWorkspace
+	sessionWorkspace *api.DigestWorkspace
 	// workspaceTrustPrompt is the armed trust question; trustPromptedWorkspaceID
 	// records which workspace this session already asked about, so returning to
 	// it does not ask again.
 	workspaceTrustPrompt     *components.WorkspaceTrustPrompt
 	trustPromptedWorkspaceID string
-	workspaceOverrideID   string
-	workspaceOverrideName string
-	workspaceOverridePath string
-	firstTaskPending      bool
-	firstTaskReported     bool
-	onFirstTaskSuccess    func() error
+	workspaceOverrideID      string
+	workspaceOverrideName    string
+	workspaceOverridePath    string
+	firstTaskPending         bool
+	firstTaskReported        bool
+	onFirstTaskSuccess       func() error
 	// additionalRoots is the invocation-local --add-dir overlay supplied by
 	// cliapp. It rides every new agent turn but is never persisted as workspace
 	// configuration by the TUI.
@@ -986,6 +1000,8 @@ func (m *uiModel) armClarifyPrompt(req tools.ClarifyRequest, viaGateway bool) {
 	}
 	m.clarifyReq = req
 	m.setStatusNotice(noticeWarning, "Answer the question to continue the task.")
+	// A clarification parks the run on the person exactly as an approval does.
+	m.signalHumanWait(humanWaitClarification, "")
 }
 
 func (m *uiModel) answerClarifyViaGateway(response string) tea.Cmd {

@@ -565,31 +565,6 @@ func (d *Server) completeExternalWatch(ctx context.Context, watch control.Extern
 	if err := executionenv.CleanupLeaseScratch(watch.ID); err != nil {
 		log.Debug("external watch scratch cleanup failed", "watch_id", watch.ID, "error", err)
 	}
-	if strings.TrimSpace(watch.WaitGroupID) != "" {
-		group, groupErr := d.Control.ResolveExternalWatchGroup(ctx, watch.TenantID, watch.WaitGroupID, watch.ID)
-		if groupErr != nil {
-			log.Warn("external watch group resolution failed", "watch_id", watch.ID, "group_id", watch.WaitGroupID, "error", groupErr)
-			return
-		}
-		if !group.Terminal || !group.Won {
-			return
-		}
-		status = group.Status
-		watch.Status = status
-		watch.Description = fmt.Sprintf("wait group %s (%s)", group.Group.GroupKey, group.Group.Mode)
-		_, _ = d.Control.AppendEvent(ctx, control.Event{
-			TaskID: watch.TaskID, RunID: watch.RunID, Type: "external_watch.group_resolved",
-			Visibility: "task", Channel: watch.Channel,
-			Payload: mustJSON(map[string]interface{}{
-				"group_id": group.Group.ID, "group_key": group.Group.GroupKey,
-				"mode": group.Group.Mode, "status": status, "winner_watch_id": watch.ID,
-			}),
-			IdempotencyKey: "external-watch-group-resolved:" + group.Group.ID,
-		})
-		if status == control.ExternalWatchFailed && strings.TrimSpace(lastError) == "" {
-			lastError = "the aggregate wait-group condition could not be satisfied"
-		}
-	}
 	d.finalizeExternalWatch(ctx, watch, status, output, lastError)
 }
 
@@ -659,6 +634,12 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 	watch.Status = status
 	watch.LastOutput = output
 	watch.LastError = lastError
+	var ready bool
+	watch, ready = d.externalWatchAggregate(ctx, watch)
+	if !ready {
+		return
+	}
+	status, output, lastError = watch.Status, watch.LastOutput, watch.LastError
 	summary, nextSteps := externalWatchOutcome(watch, status, output, lastError)
 	if err := d.Control.UpdateThreadSummary(ctx, watch.TenantID, watch.TaskID, summary, nextSteps); err != nil {
 		log.Warn("external watch thread summary update failed", "watch_id", watch.ID, "error", err)
@@ -733,6 +714,11 @@ func (d *Server) runExternalWatchNotificationPass(ctx context.Context) {
 }
 
 func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch control.ExternalWatch) {
+	var ready bool
+	watch, ready = d.externalWatchAggregate(ctx, watch)
+	if !ready {
+		return
+	}
 	if watch.Notified {
 		return
 	}
@@ -866,7 +852,7 @@ func externalWatchFinalizationContent(watch control.ExternalWatch, summary strin
 		evidence = string(runes[:1200]) + "\n... evidence truncated"
 	}
 	verdictInstruction := "The daemon's durable external watcher verified that this operation completed successfully."
-	finalInstruction := "Backfill any pending records this task promised to update, summarize the final state, and finish the task with an accurate status."
+	finalInstruction := "Use the inherited goal, plan and recorded evidence to complete the promised remaining work. The watcher verdict proves only the observed external condition; preserve unmet acceptance conditions and report the actual completion scope."
 	if watch.Status != control.ExternalWatchSucceeded {
 		verdictInstruction = fmt.Sprintf(
 			"The daemon's durable external watcher recorded terminal status %s for this operation.",
@@ -937,7 +923,10 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 		watches = append(watches, found...)
 	}
 	for i := range watches {
-		watch := watches[i]
+		watch, ready := d.externalWatchAggregate(ctx, watches[i])
+		if !ready {
+			continue
+		}
 		task, err := d.Control.GetTask(ctx, watch.TenantID, watch.TaskID)
 		if err != nil || task == nil {
 			if err != nil {
@@ -1005,6 +994,10 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 			refreshSummary()
 			d.coordinator().drainQueue(origin)
 		case control.QueueStatusStarted:
+			// A worker may own the queue before its Run is materialized.
+			if queued.LeaseUntil.After(time.Now()) {
+				continue
+			}
 			materialized, err := d.Control.RunHasSuccessfulTerminalEvent(ctx, queued.RunID)
 			if err != nil {
 				log.Warn("external watch started finalization terminal lookup failed", "watch_id", watch.ID, "run_id", queued.RunID, "error", err)
@@ -1042,7 +1035,9 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 				d.coordinator().drainQueue(origin)
 				continue
 			}
-			d.blockExternalWatchFinalization(ctx, watch, queued)
+			if queued.Restarts >= externalWatchFinalizationRetries {
+				d.blockExternalWatchFinalization(ctx, watch, queued)
+			}
 		case control.QueueStatusDone:
 			materialized, err := d.Control.RunHasSuccessfulTerminalEvent(ctx, queued.RunID)
 			if err != nil {
@@ -1062,7 +1057,9 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 				d.coordinator().drainQueue(origin)
 				continue
 			}
-			d.blockExternalWatchFinalization(ctx, watch, queued)
+			if queued.Restarts >= externalWatchFinalizationRetries {
+				d.blockExternalWatchFinalization(ctx, watch, queued)
+			}
 		case control.QueueStatusCancelled:
 			d.blockExternalWatchFinalization(ctx, watch, queued)
 		}

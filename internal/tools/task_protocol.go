@@ -148,16 +148,30 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"success_criteria": {
 									Type:        "string",
-									Description: "Optional observable condition that proves this step is complete.",
+									Description: "Observable condition that proves this step is complete. State what would be true, not what you will do. You will be asked to judge the step against it before finishing, so do not weaken it later to fit what happened.",
 								},
+								// The wording used to be "True ONLY when this step
+								// cannot be considered complete without executable
+								// verification evidence required by the user,
+								// repository instructions, or the nature of the
+								// change" — an exception with three qualifiers,
+								// which reads as rare. It was left false on every
+								// step of every plan, including one whose own step
+								// was "verify and report" with the criterion
+								// "re-check the actual state with gh api". The
+								// completion gate that reads this flag
+								// (Store.ValidateRunCompletion) was therefore never
+								// armed. Tie the flag to the criterion the model has
+								// already written instead of asking it to classify
+								// the step.
 								"verification_required": {
 									Type:        "boolean",
-									Description: "True only when this step cannot be considered complete without executable verification evidence required by the user, repository instructions, or the nature of the change.",
+									Description: "True when success_criteria names something that has to be observed or run to know it holds — a command, an API read, a test, a file check. A successful finish is blocked while such a step is completed without verification evidence, so leaving this false on a step whose criterion you have not actually checked reports work as done that is not.",
 									Default:     false,
 								},
 								"work_unit_id": {
 									Type:        "string",
-									Description: "Stable work-unit id returned by an earlier update_plan result. Echo it when updating or reordering the same independent objective; never invent one.",
+									Description: "Optional existing work-unit identity. Omit it for ordinary step updates: the runtime preserves attribution from step_id. Never invent an id.",
 								},
 								"work_unit": {
 									Type:        "boolean",

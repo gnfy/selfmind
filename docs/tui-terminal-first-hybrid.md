@@ -423,6 +423,11 @@ substrate). Document results in this file.
   instead of exposing its internal prompt. The
   current user run is never interrupted; finalization still obeys the
   per-person durable queue.
+- The transient observation is owned by its exact watcher ID. Its matching
+  finalization clears it without erasing a newer unrelated notice. Bounded
+  per-watcher terminal cursors reject older observation replay while allowing
+  a newer revised verdict. A delayed background result is still reported after
+  a foreground Run starts, without resetting that Run's activity state.
 - Regression coverage: `event_identity_test.go`, `attach_digest_test.go`, and
   the targeted watcher tests in `gateway/client/client_test.go` and
   `gateway/cli/daemon_queue_test.go`.

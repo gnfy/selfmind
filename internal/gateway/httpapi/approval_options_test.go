@@ -224,8 +224,13 @@ func TestRunIntentSnapshotSeparatesTaskContextFromAuthorization(t *testing.T) {
 	if snapshot.RawUserText != "开始执行" || snapshot.GoalSummary == "" || snapshot.WorkKey != "RUQX-500" || snapshot.WorkspaceID != "ws-1" {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
-	if snapshot.Source != "continuation" || len(snapshot.ExplicitAllow) != 1 {
-		t.Fatalf("continuation evidence = %+v", snapshot)
+	// A phrase list used to promote a fixed set of spellings to an
+	// explicit_allow signal. It recognized "开始执行" and not "2" answering a
+	// numbered list of next steps, so one intent produced two different
+	// authorization verdicts on the same day. Acceptance is now judged from
+	// what the person was answering, not from a table of words.
+	if snapshot.Source != "direct" || len(snapshot.ExplicitAllow) != 0 {
+		t.Fatalf("a recognized phrase must not become deterministic authorization: %+v", snapshot)
 	}
 	if len(snapshot.ExplicitDeny) != 0 {
 		t.Fatalf("unexpected deny evidence = %+v", snapshot.ExplicitDeny)

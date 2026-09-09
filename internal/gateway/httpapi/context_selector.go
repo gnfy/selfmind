@@ -25,7 +25,7 @@ import (
 // live work, and semantic recall (whose current-task exclusion is lifted for
 // pre-label turns) surfaces related prior work with an explicit
 // "possibly related; reference only" framing instead. Explicit attaches
-// (/resume, task_id, continuation cue) keep the full context.
+// (/resume, task_id, structured return edge) keep the full context.
 func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, platform, channel, userMessage string, preLabel bool) kernel.TaskRuntimeContext {
 	mode := attachContextFull
 	var parent *control.Run
@@ -93,6 +93,34 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 	// may supply it.
 	if includeFull && parent != nil {
 		selected.PriorChannel = parent.Channel
+		if requirements, err := c.srv.Control.RunSteeringRequirements(ctx, task.TenantID, parent.ID, 10); err == nil {
+			for _, requirement := range requirements {
+				if requirement.PersonID == task.PersonID {
+					selected.UserRequirements = append(selected.UserRequirements, textutil.Truncate(requirement.Content, 600))
+				}
+			}
+		}
+		// The inherited child plan has server-issued IDs for this Run. Parent
+		// IDs must not be offered to update_plan as current execution state.
+		if run != nil {
+			if plan, err := c.srv.Control.LatestRunPlan(ctx, task.TenantID, run.ID); err == nil && plan != nil {
+				for _, step := range plan.Steps {
+					selected.Plan = append(selected.Plan, kernel.PlanItem{
+						StepID: step.StepID, Step: step.Step, Status: step.Status,
+						SuccessCriteria: step.SuccessCriteria, VerificationRequired: step.VerificationRequired,
+					})
+				}
+			}
+		}
+		if watches, err := c.srv.Control.ListRunExternalWatches(ctx, task.TenantID, task.PersonID, parent.ID); err == nil {
+			for _, watch := range watches {
+				selected.ExternalWatches = append(selected.ExternalWatches, kernel.ExternalWatchContext{
+					ID: watch.ID, GroupID: watch.WaitGroupID, Target: watch.PreflightReceipt.Target,
+					Status: watch.Status, OperationStatus: watch.OperationStatus, VerificationStatus: watch.VerificationStatus,
+					Output: textutil.Truncate(watch.LastOutput, 240), ObservedAt: watch.UpdatedAt,
+				})
+			}
+		}
 	}
 	if workspace != nil {
 		selected.WorkspaceID = firstNonEmptyString(selected.WorkspaceID, workspace.ID)

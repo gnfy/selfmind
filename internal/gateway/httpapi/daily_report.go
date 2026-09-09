@@ -383,7 +383,7 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	fmt.Fprintf(&sb, "Evidence window: %s to %s; generated %s; scanned %d event(s); coverage %s\n",
 		since.Local().Format(time.RFC3339), generatedAt.Local().Format(time.RFC3339),
 		generatedAt.Local().Format(time.RFC3339), len(events), coverage)
-	fmt.Fprintf(&sb, "Runs: %s\n", formatCountMap(stats.RunStatuses))
+	fmt.Fprintf(&sb, "Runs at turn completion: %s\n", formatCountMap(stats.RunStatuses))
 	fmt.Fprintf(&sb, "Completion reasons: %s\n", formatCountMap(stats.CompletionReasons))
 	fmt.Fprintf(&sb, "External outcomes: %s\n", formatCountMap(stats.ExternalStatuses))
 	fmt.Fprintf(&sb, "Automatic recovery: scheduled %s; %d child run(s), outcomes %s; guardrails %s\n",

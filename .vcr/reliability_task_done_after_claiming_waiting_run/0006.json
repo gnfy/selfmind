@@ -1,0 +1,667 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " committed"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " direct"
+    },
+    {
+      "reasoning_content": " mode"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " satisfies"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " remaining"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " real"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " original"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " requires"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " completion"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Finish"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " provided"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " (\""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\")."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " can"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " completing"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " required"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " been"
+    },
+    {
+      "reasoning_content": " provided"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " record"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " completion"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " because"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " provided"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " proceed"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Summary"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " required"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " been"
+    },
+    {
+      "reasoning_content": " provided"
+    },
+    {
+      "reasoning_content": " (\""
+    },
+    {
+      "reasoning_content": "continue"
+    },
+    {
+      "reasoning_content": "\"),"
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " No"
+    },
+    {
+      "reasoning_content": " additional"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": " beyond"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Next"
+    },
+    {
+      "reasoning_content": " steps"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " none"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Done"
+    },
+    {
+      "reasoning_content": " items"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " clean"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " go"
+    },
+    {
+      "content": "-a"
+    },
+    {
+      "content": "head"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " confirmed"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " open"
+    },
+    {
+      "content": " input"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " user"
+    },
+    {
+      "content": " confirmation"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " has"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " been"
+    },
+    {
+      "content": " provided"
+    },
+    {
+      "content": " via"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "continue"
+    },
+    {
+      "content": "\","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " work"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " complete"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 16163,
+        "output_tokens": 378,
+        "cache_read_input_tokens": 15744,
+        "cache_miss_input_tokens": 419,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 181,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_fJ7c88ls0OAlSYFVUvlh8865",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"done\", \"summary\": \"Task completed. The single required user confirmation was provided via the \\\"continue\\\" message, which was the only open input; no additional work or decision was pending.\", \"done\": [\"Confirmed the required user confirmation via the 'continue' message.\", \"Completed the task that was parked as waiting_user.\"], \"next_steps\": [], \"risks\": []}"
+        }
+      ]
+    }
+  ]
+}

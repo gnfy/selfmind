@@ -108,11 +108,12 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
 > before changing this contract); the rules below are the live behavior.
 
 1. **Deterministic controls stay first.** Structured return edges, explicit
-   task/run IDs, `/resume`, `/new --run`, a claimed `/choose`, and exact
-   standalone continuation controls never call an ingress model. Approval and
+   task/run IDs, `/resume`, `/new --run`, and a claimed `/choose` never call an
+   ingress model. Ordinary acceptances and continuation phrases go to Main,
+   without a language-specific shortcut selecting the execution parent. Approval and
    clarification answers retain priority over a bare numbered continuity
    choice. Daemon-originated work never uses text to steer another run.
-2. **Structured return edges outrank cues.** A daemon-originated approval
+2. **Structured return edges identify exact work.** A daemon-originated approval
    continuation binds the parked approval's origin run; platform reply
    metadata (`reply_to_run_id`, durable across the queue) binds the exact run
    it answers; a clarify answer lands structurally (one pending) or via a
@@ -147,7 +148,7 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
    post-effect correction stops and asks. `semantic_recall`
    is optional search enrichment and may fail without blocking the turn;
    `fast_classifier` is not consulted. Exact IDs, structured reply edges, and
-   standalone controls remain model-free.
+   explicit commands remain model-free.
 4. **Resume context injection** (`withResumeContext`): the turn is prefixed
    with a bounded `[SelfMind resume context]` block selected from the PARENT
    RUN — its finalization handoff, its events, its file manifest, its plan —

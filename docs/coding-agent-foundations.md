@@ -37,8 +37,9 @@ For an ordinary coding request, the agent should:
 The runtime enforces the same recovery discipline below the prompt. Tool
 attempts are correlated with the current durable plan step, target, strategy,
 and environment. One changed-input correction may follow diagnostic evidence;
-an identical retry, a third cosmetic variant, or a new mutation after an
-unknown effect is refused before dispatch. The Agent must then observe current
+an identical retry, a third mutation-strategy variant, or a new mutation after
+an unknown effect is refused before dispatch. Distinct proven read-only probes
+remain available for diagnosis under the existing tool and resource budgets. The Agent must then observe current
 state, select a genuinely different strategy, or finish with an actionable
 blocker. A plan step sets `verification_required` only when executable evidence
 is actually required by the user, repository instructions, or the nature of
@@ -48,7 +49,9 @@ same way: after a Run completes several distinct, successful, non-read-only
 tool actions with no durable plan, its optional plan guidance is escalated to
 the required wording for the next model step. That escalation reads the Run's
 own tool evidence, never the request text, and it stays guidance — no plan is
-fabricated and no completion is blocked.
+fabricated and no completion is blocked. Plans update at meaningful progress or
+scope changes; they do not require a transition around every tool call. Stable
+step IDs preserve work-unit attribution without asking the model to repeat it.
 
 New Runs opt into a versioned recovery contract. A daemon or provider
 interruption with no external effect may enqueue one idempotent exact-parent
@@ -78,7 +81,9 @@ Completion is evidence-based:
 
 The agent must not claim success solely because it wrote files or because a
 tool returned output. File changes, command results, artifacts, and run events
-are the evidence surface.
+are the evidence surface. Completion reads paged Run evidence independently of
+transcript volume. File names in an answer remain prose: only observed file
+changes become changed-file metadata and automatic file artifacts.
 
 ## Platform Boundary
 

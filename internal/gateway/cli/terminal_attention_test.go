@@ -130,25 +130,113 @@ func TestArmingAHumanWaitQueuesTheTerminalSignal(t *testing.T) {
 func TestAttentionSubjectAdmitsOnlyAnIdentifier(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		kind   humanWaitKind
+		kind   attentionKind
 		detail string
 		want   string
 	}{
-		{"a tool name is useful and safe", humanWaitApproval, "terminal", "SelfMind needs your approval: terminal"},
-		{"a dotted role name passes", humanWaitApproval, "watch_external", "SelfMind needs your approval: watch_external"},
+		{"a tool name is useful and safe", attentionApproval, "terminal", "SelfMind needs your approval: terminal"},
+		{"a dotted role name passes", attentionApproval, "watch_external", "SelfMind needs your approval: watch_external"},
 		// A command, a path, or a sentence is DROPPED, not truncated: half a
 		// command in a notification body is worse than no detail.
-		{"a command is dropped", humanWaitApproval, "gcloud builds approve 49d9", "SelfMind needs your approval"},
-		{"a path is dropped", humanWaitApproval, "/Users/cwill/.config/gcloud", "SelfMind needs your approval"},
-		{"a model-authored sentence is dropped", humanWaitApproval, "should I delete the bucket?", "SelfMind needs your approval"},
-		{"an over-long token is dropped", humanWaitApproval, strings.Repeat("a", 41), "SelfMind needs your approval"},
+		{"a command is dropped", attentionApproval, "gcloud builds approve 49d9", "SelfMind needs your approval"},
+		{"a path is dropped", attentionApproval, "/Users/cwill/.config/gcloud", "SelfMind needs your approval"},
+		{"a model-authored sentence is dropped", attentionApproval, "should I delete the bucket?", "SelfMind needs your approval"},
+		{"an over-long token is dropped", attentionApproval, strings.Repeat("a", 41), "SelfMind needs your approval"},
 		// A clarification's question is model-authored, so the kind carries no
 		// detail at all.
-		{"a clarification names no detail", humanWaitClarification, "should I delete the bucket?", "SelfMind is waiting on your answer"},
-		{"an unknown kind still says something true", humanWaitKind("handoff"), "x", "SelfMind is waiting on you"},
+		{"a clarification names no detail", attentionClarification, "should I delete the bucket?", "SelfMind is waiting on your answer"},
+		{"an unknown kind still says something true", attentionKind("handoff"), "x", "SelfMind is waiting on you"},
+		// The three surfaces added after the first two, same rule: detail is an
+		// identifier or nothing.
+		{"a parked approval names its tool", attentionParkedApproval, "terminal", "SelfMind still needs your approval: terminal"},
+		{"a parked approval drops a command", attentionParkedApproval, "rm -rf build", "SelfMind still needs your approval"},
+		{"finished background work names its watcher", attentionBackgroundDone, "watch_9f2c", "SelfMind finished background work: watch_9f2c"},
+		{"finished background work drops a summary", attentionBackgroundDone, "deployed 3 services to prod", "SelfMind finished background work"},
+		{"a background failure carries no detail", attentionBackgroundFailed, "watch_9f2c", "SelfMind background work failed"},
 	} {
 		if got := attentionSubject(tc.kind, tc.detail); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The three surfaces that had events but no signal. Each is asserted through
+// the real Update/handler path, not by calling signalAttention directly: what
+// matters is that the site fires, not that the function works.
+func TestParkedApprovalBackgroundOutcomeAndFailureSignalTheTerminal(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "ghostty")
+	t.Setenv("SELF_TUI_ATTENTION", "")
+	t.Setenv("TMUX", "")
+	unfocused := func() *uiModel {
+		m := NewController("", "", nil, "").model
+		m.Update(tea.BlurMsg{})
+		return m
+	}
+	drain := func(m *uiModel) int {
+		n := len(m.pendingCmds)
+		m.pendingCmds = nil
+		return n
+	}
+
+	// A parked approval: nothing is visibly running any more, so it is the
+	// approval most easily left unanswered.
+	parked := unfocused()
+	parked.armApprovalPrompt(sampleApproval("apr_parked"))
+	drain(parked) // the arm itself signalled; the park is a second moment
+	parked.markApprovalParked("apr_parked")
+	if got := drain(parked); got != 1 {
+		t.Errorf("parking an approval queued %d signals, want 1", got)
+	}
+
+	// A background run reaching its outcome: the person delegated it so they
+	// could look away. startNoticeFinalizer registers a watcher's finalizer run
+	// the same way the daemon feed does, so the finish lands on the
+	// background branch rather than the foreground one.
+	background := unfocused()
+	startNoticeFinalizer(background)
+	drain(background)
+	background.updateInner(MsgDaemonRunFinished{RunID: "run_finalizer", Status: "done", Summary: "release recorded",
+		Event: uiEventRef{Source: eventSourceDaemon, RunID: "run_finalizer", Cursor: 20}})
+	if got := drain(background); got != 1 {
+		t.Errorf("a finished background run queued %d signals, want 1", got)
+	}
+	// A foreground finish is the person's own turn ending in front of them.
+	foreground := unfocused()
+	foreground.updateInner(MsgDaemonRunFinished{RunID: "run_fg", Status: "done",
+		Event: uiEventRef{Source: eventSourceDaemon, RunID: "run_fg", Cursor: 21}})
+	if got := drain(foreground); got != 0 {
+		t.Errorf("a foreground finish queued %d signals, want 0", got)
+	}
+
+	// A background failure is worth hearing about; a routine success is not.
+	// updateInner is the handler before Update flushes the queue into the
+	// returned command; the returned command is not a usable probe because the
+	// handler's own addNotice produces a Println command either way.
+	failed := unfocused()
+	failed.updateInner(MsgBackgroundNotice{Content: "watcher could not reach the API", Success: false})
+	if got := drain(failed); got != 1 {
+		t.Errorf("a background failure queued %d signals, want 1", got)
+	}
+	succeeded := unfocused()
+	succeeded.updateInner(MsgBackgroundNotice{Content: "watcher registered", Success: true})
+	if got := drain(succeeded); got != 0 {
+		t.Errorf("a routine background success queued %d signals, want 0", got)
+	}
+}
+
+// A watched terminal is never belled at, for the new surfaces exactly as for
+// the first two: the outcome is already on screen in front of them.
+func TestNewAttentionSurfacesStayQuietWhileWatched(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "ghostty")
+	t.Setenv("SELF_TUI_ATTENTION", "")
+	t.Setenv("TMUX", "")
+	m := NewController("", "", nil, "").model
+	m.Update(tea.FocusMsg{})
+
+	m.armApprovalPrompt(sampleApproval("apr_1"))
+	m.markApprovalParked("apr_1")
+	m.updateInner(MsgBackgroundNotice{Content: "failed", Success: false})
+	if len(m.pendingCmds) != 0 {
+		t.Fatalf("a watched terminal queued %d signals", len(m.pendingCmds))
 	}
 }

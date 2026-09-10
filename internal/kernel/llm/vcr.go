@@ -38,6 +38,7 @@ type vcrWorkspaceCtxKey struct{}
 const vcrWorkspacePlaceholder = "{{SELFMIND_VCR_WORKSPACE}}"
 
 var vcrWorkUnitIDPattern = regexp.MustCompile(`\bwu_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+var vcrPlanStepIDPattern = regexp.MustCompile(`\bstep_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
 var vcrSkillCandidateRefPattern = regexp.MustCompile(`\bskref_[0-9a-fA-F]{16}\b`)
 var vcrTaskIDPattern = regexp.MustCompile(`\btask_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
 var vcrRunIDPattern = regexp.MustCompile(`\brun_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
@@ -261,6 +262,9 @@ func (v *vcrProvider) load(ctx context.Context, path string, messages []Message)
 		return nil, err
 	}
 	c = rewriteCassette(c, vcrWorkspacePlaceholder, vcrWorkspaceFromContext(ctx))
+	for i, id := range vcrOpaqueIDs(messages, vcrPlanStepIDPattern) {
+		c = rewriteCassette(c, vcrPlanStepPlaceholder(i), id)
+	}
 	for i, id := range vcrWorkUnitIDs(messages) {
 		c = rewriteCassette(c, vcrWorkUnitPlaceholder(i), id)
 	}
@@ -308,6 +312,9 @@ func (v *vcrProvider) save(ctx context.Context, path string, c cassette, message
 	}
 	_ = os.Chmod(dir, 0o700)
 	c = rewriteCassette(c, vcrWorkspaceFromContext(ctx), vcrWorkspacePlaceholder)
+	for i, id := range vcrOpaqueIDs(messages, vcrPlanStepIDPattern) {
+		c = rewriteCassette(c, id, vcrPlanStepPlaceholder(i))
+	}
 	for i, id := range vcrWorkUnitIDs(messages) {
 		c = rewriteCassette(c, id, vcrWorkUnitPlaceholder(i))
 	}
@@ -518,6 +525,10 @@ func rewriteCassette(c cassette, from, to string) cassette {
 
 func vcrWorkUnitPlaceholder(index int) string {
 	return fmt.Sprintf("{{SELFMIND_VCR_WORK_UNIT_%d}}", index+1)
+}
+
+func vcrPlanStepPlaceholder(index int) string {
+	return fmt.Sprintf("{{SELFMIND_VCR_PLAN_STEP_%d}}", index+1)
 }
 
 func vcrSkillCandidateRefPlaceholder(index int) string {

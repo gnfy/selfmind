@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "watch_external success_pattern printf %s (READY)"
+}

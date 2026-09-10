@@ -119,6 +119,19 @@ func TestMissingFinalResponseCannotCompleteRun(t *testing.T) {
 	}
 }
 
+func TestMissingFinalSummaryRetainsEvidenceWithoutClaimingCompletion(t *testing.T) {
+	outcome := api.RunOutcome{Files: []string{"report.csv"}, Verification: &api.VerificationOutcome{State: "not_run", Summary: "No structured verification evidence."}}
+	got := missingFinalEvidenceSummary("run_test", outcome)
+	for _, want := range []string{"without a final response", "report.csv", "not_run", "/resume run_test"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "completed") {
+		t.Fatalf("missing response was called complete: %s", got)
+	}
+}
+
 func TestStructuredOutcomeIsFinalWithoutSeparateProse(t *testing.T) {
 	outcome := reconcileMissingFinalResponse(api.RunOutcome{
 		Status:           "done",

@@ -1,0 +1,169 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " deliberately"
+    },
+    {
+      "reasoning_content": " leave"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " expecting"
+    },
+    {
+      "reasoning_content": " precondition"
+    },
+    {
+      "reasoning_content": " rejection"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "File"
+    },
+    {
+      "content": " written"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Now"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " deliberately"
+    },
+    {
+      "content": " call"
+    },
+    {
+      "content": " finish"
+    },
+    {
+      "content": "_run"
+    },
+    {
+      "content": " while"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " still"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": "_pro"
+    },
+    {
+      "content": "gress"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " observe"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " precondition"
+    },
+    {
+      "content": " rejection"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9724,
+        "output_tokens": 152,
+        "cache_read_input_tokens": 9472,
+        "cache_miss_input_tokens": 252,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 22,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_h6KFgVnse2tgqpjPlK679532",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"done\", \"summary\": \"Wrote closure.txt containing READY in the workspace.\", \"done\": [\"Created closure.txt containing READY\"], \"files\": [\"closure.txt\"]}"
+        }
+      ]
+    }
+  ]
+}

@@ -166,7 +166,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								// the step.
 								"verification_required": {
 									Type:        "boolean",
-									Description: "True when success_criteria names something that has to be observed or run to know it holds — a command, an API read, a test, a file check. A successful finish is blocked while such a step is completed without verification evidence, so leaving this false on a step whose criterion you have not actually checked reports work as done that is not.",
+									Description: "True when success_criteria names something that has to be observed or run to know it holds — a command, an API read, a test, a file check. Use verify before completing the work unit: completion freezes its evidence window and is rejected without required successful verification. Leaving this false on a step whose criterion you have not checked reports work as done that is not.",
 									Default:     false,
 								},
 								"work_unit_id": {
@@ -231,6 +231,11 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		projected, projectionErr := projection.Project(ContextFromArgs(args), state)
 		err = projectionErr
 		if err != nil {
+			var verification interface{ PlanVerificationPrecondition() bool }
+			if errors.As(err, &verification) && verification.PlanVerificationPrecondition() {
+				return "", newStableToolError(err, "plan_verification_required", "stale_precondition", err.Error(),
+					"Keep the current work unit open, use verify for its required checks, then submit the completed plan snapshot. Preserve the declared acceptance criteria.")
+			}
 			var staleStep interface{ CurrentPlanStepIDs() []string }
 			if errors.As(err, &staleStep) {
 				current := staleStep.CurrentPlanStepIDs()
@@ -509,6 +514,10 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 	projection := runPlanProjectionFromArgs(args)
 	if status == "done" && projection != nil {
 		if err := projection.ValidateCompletion(ContextFromArgs(args)); err != nil {
+			var precondition interface{ CompletionPrecondition() bool }
+			if errors.As(err, &precondition) && precondition.CompletionPrecondition() {
+				return "", completionPreconditionFailure(err)
+			}
 			return "", err
 		}
 	}
@@ -521,7 +530,7 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 				}
 			}
 			if len(unresolved) > 0 {
-				return "", fmt.Errorf("successful run still has unresolved plan steps: %s; call update_plan with the complete plan snapshot before finish_run", strings.Join(unresolved, "; "))
+				return "", completionPreconditionFailure(fmt.Errorf("successful run still has unresolved plan steps: %s; call update_plan with the complete plan snapshot before finish_run", strings.Join(unresolved, "; ")))
 			}
 		}
 	}
@@ -543,6 +552,12 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 		t.store.Purge(key)
 	}
 	return string(data), nil
+}
+
+func completionPreconditionFailure(err error) error {
+	return newStableToolRecoveryError(err, "completion_precondition", "stale_precondition", err.Error(),
+		"Resolve the outstanding plan or verification requirement. One corrected finish_run attempt is available after a changed plan or successful verification; unchanged retries are refused.",
+		"preparation", "after_state_change", "not_dispatched", false)
 }
 
 func finishRunCompletionReason(status string) string {

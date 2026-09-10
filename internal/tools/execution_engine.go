@@ -285,6 +285,12 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 	argv := req.Command
 	if req.Shell {
 		argv = shellArgv(req.Payload)
+		if req.ToolName == "verify" && runtime.GOOS != "windows" {
+			// Verification must preserve a failed check even when the payload
+			// pipes its output or prints a footer afterwards. Explicit shell
+			// conditionals remain available for intentionally handled failures.
+			argv = []string{"/bin/bash", "-e", "-o", "pipefail", "-c", req.Payload}
+		}
 	}
 	if len(argv) == 0 {
 		return result, fmt.Errorf("command is required")

@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "finish_run closure.txt READY verification_required verify"
+}

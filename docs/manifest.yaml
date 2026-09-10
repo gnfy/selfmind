@@ -238,6 +238,7 @@ documents:
     language: en
     approved_by: project-owner
     review_by: 2026-09-09
+    verdict: "2026-09-10: remain paused; continuity evidence carries forward to the active run-centric plan, while daily-driver defects are repaired within existing contracts."
   - path: docs/plans/threaded-work-history-redesign.zh-CN.md
     title: Thread 化工作历史重构方案
     class: archive

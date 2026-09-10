@@ -1,0 +1,553 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Expected"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " closure"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " like"
+    },
+    {
+      "reasoning_content": " grep"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "qx"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": " closure"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Ver"
+    },
+    {
+      "reasoning_content": "ification"
+    },
+    {
+      "reasoning_content": " shell"
+    },
+    {
+      "reasoning_content": " commands"
+    },
+    {
+      "reasoning_content": " stop"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " un"
+    },
+    {
+      "reasoning_content": "hand"
+    },
+    {
+      "reasoning_content": "led"
+    },
+    {
+      "reasoning_content": " errors"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " failed"
+    },
+    {
+      "reasoning_content": " pipelines"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " succeeds"
+    },
+    {
+      "reasoning_content": " if"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " matches"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " grep"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "qx"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": " closure"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " if"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": " matches"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " grep"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "qx"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "'"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " match"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " safe"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " grep"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "q"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "^"
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "$"
+    },
+    {
+      "reasoning_content": "'"
+    },
+    {
+      "reasoning_content": " closure"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "g"
+    },
+    {
+      "reasoning_content": "rep"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "qx"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": " closure"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "`.\n\n"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "wd"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " root"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " defaults"
+    },
+    {
+      "reasoning_content": " c"
+    },
+    {
+      "reasoning_content": "wd"
+    },
+    {
+      "reasoning_content": " \".\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " root"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " set"
+    },
+    {
+      "reasoning_content": " c"
+    },
+    {
+      "reasoning_content": "wd"
+    },
+    {
+      "reasoning_content": " explicitly"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Now"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "closure"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " contains"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10087,
+        "output_tokens": 287,
+        "cache_read_input_tokens": 9856,
+        "cache_miss_input_tokens": 231,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 162,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_QcbWdhKWkV7KM896K4T39058",
+          "Function": "verify",
+          "Args": "{\"command\": \"grep -qx READY closure.txt\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"kind\": \"smoke\"}"
+        }
+      ]
+    }
+  ]
+}

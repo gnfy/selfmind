@@ -8,6 +8,18 @@
 
 **Snapshot:** 2026-09-03
 
+Runtime closure update (2026-09-11): completion precondition failures permit
+one evidence-gated correction; the action ceiling reserves verification calls
+when available; verification preserves unhandled shell and pipeline failures;
+watcher syntax errors are distinct from unsupported observations; cumulative
+tool-result bounding also spools medium outputs. Required checks must pass
+before a work unit's completion freezes its evidence window. Missing final
+responses retain a bounded summary of recorded changes and checks.
+Validation: full Go tests and all 66 local-full replay cases passed, including
+three new real-provider recordings. Installed locally as
+`v0.1.0-beta.24-local.daily-closure.1`; managed restart and runtime version were
+verified. Sustained CLI/IM observation remains required.
+
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.

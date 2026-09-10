@@ -1,0 +1,208 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Report"
+    },
+    {
+      "content": "ed"
+    },
+    {
+      "content": " above"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Bottom"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "watch"
+    },
+    {
+      "content": "_command"
+    },
+    {
+      "content": "_s"
+    },
+    {
+      "content": "yntax"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " returned"
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " preparation"
+    },
+    {
+      "content": " phase"
+    },
+    {
+      "content": " (`"
+    },
+    {
+      "content": "not"
+    },
+    {
+      "content": "_dis"
+    },
+    {
+      "content": "pat"
+    },
+    {
+      "content": "ched"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "),"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " call"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " ret"
+    },
+    {
+      "content": "ried"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " wat"
+    },
+    {
+      "content": "cher"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " registered"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " correct"
+    },
+    {
+      "content": " fix"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " quoting"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " literal"
+    },
+    {
+      "content": " argument"
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "("
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": ")`"
+    },
+    {
+      "content": " isn"
+    },
+    {
+      "content": "'t"
+    },
+    {
+      "content": " parsed"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " shell"
+    },
+    {
+      "content": " syntax"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 10285,
+        "output_tokens": 64,
+        "cache_read_input_tokens": 3328,
+        "cache_miss_input_tokens": 6957,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

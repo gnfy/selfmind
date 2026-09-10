@@ -1,0 +1,112 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " created"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " literal"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "File"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " place"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Now"
+    },
+    {
+      "content": " running"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " literal"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10459,
+        "output_tokens": 139,
+        "cache_read_input_tokens": 10240,
+        "cache_miss_input_tokens": 219,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 15,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_btZwihyVN6Pqp6LtRZor6104",
+          "Function": "verify",
+          "Args": "{\"command\": \"false | cat; echo MASKED_SUCCESS\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"kind\": \"custom\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -100,6 +100,7 @@ LLM system prompt: # DURABLE TASK CONTEXT
 - 模型请求发出前统一估算消息正文、多模态内容、原生工具调用参数与工具定义，扣除输出预留后裁剪历史。图像和不同 provider 的协议开销仍是估算，provider 拒绝超窗时保留既有恢复路径。
 - 压缩和确定性裁剪保留当前 Run 的用户目标及后续补充限制；旧 work spine 不作为当前目标。工具调用与结果成组裁剪。必需指令、最新工具结果和工具定义仍超过预算时，返回可行动错误，不静默丢弃用户限制。
 - 摘要调用继承 Run 的取消、截止时间及模型调用归属，只将模型角色改为 `summarizer`；预算以内不增加摘要调用。
+- 工具结果在下一次模型请求之前受累计 32 KiB 预算约束。超过总量时，较早的中等长度结果也先保存为可读回的 artifact，再缩短正文；不只处理单条超限结果。多次缩短保留同一引用，工具调用与结果保持配对。保存失败时保留原文并允许显式超额，不以节省上下文为由丢失证据。
 - Task 切片先保留验证结果与风险，再放去重后的下一步和摘要；Task 与 Handoff 相同的摘要、下一步只注入一次。
 
 回归证据：`internal/kernel/context_safety_test.go`、`internal/kernel/context_engine_test.go` 与 `evalcases/timeline/timeline-iterate.yaml`。

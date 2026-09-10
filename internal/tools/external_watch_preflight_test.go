@@ -50,6 +50,33 @@ func TestExternalWatchStaticValidationRunsBeforeApproval(t *testing.T) {
 	}
 }
 
+func TestExternalWatchSyntaxFailureIsRepairableBeforeApproval(t *testing.T) {
+	called := false
+	execute := ExternalWatchStaticValidationMiddleware()(func(map[string]interface{}) (string, error) {
+		called = true
+		return "ok", nil
+	})
+	_, err := execute(map[string]interface{}{
+		"_tool_name":      "watch_external",
+		"command":         "gcloud builds describe example --format=value(status)",
+		"success_pattern": "SUCCESS",
+	})
+	var stable interface {
+		ToolErrorCode() string
+		ToolRetryability() string
+		ToolEffectState() string
+	}
+	if called || !errors.As(err, &stable) || stable.ToolErrorCode() != "watch_command_syntax" || stable.ToolRetryability() != "corrected_input" || stable.ToolEffectState() != "not_dispatched" {
+		t.Fatalf("syntax failure was reported as unavailable observation: called=%v err=%v", called, err)
+	}
+	if err := validateExternalWatchStatic(map[string]interface{}{
+		"command":         "gcloud builds describe example --format='value(status)'",
+		"success_pattern": "SUCCESS",
+	}); err != nil {
+		t.Fatalf("literal-argument correction rejected: %v", err)
+	}
+}
+
 func preflightArgs(command string) map[string]interface{} {
 	return map[string]interface{}{"_tool_name": "watch_external", "command": command}
 }

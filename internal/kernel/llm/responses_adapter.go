@@ -42,10 +42,18 @@ type responsesRequest struct {
 	Store          *bool                    `json:"store,omitempty"`
 	Reasoning      *responsesReasoning      `json:"reasoning,omitempty"`
 	PromptCacheKey string                   `json:"prompt_cache_key,omitempty"`
+	// Text carries the Responses API's structured-output setting; its format
+	// object is the same {"type":"json_object"} the Chat Completions
+	// response_format field takes, so one request option serves both protocols.
+	Text *responsesText `json:"text,omitempty"`
 }
 
 type responsesReasoning struct {
 	Effort string `json:"effort,omitempty"`
+}
+
+type responsesText struct {
+	Format interface{} `json:"format,omitempty"`
 }
 
 type responsesInputItem struct {
@@ -447,6 +455,11 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 	if effort != "" && !reasoningDisabled(effort) {
 		wire.Reasoning = &responsesReasoning{Effort: effort}
 	}
+	if req.Options != nil {
+		if format, ok := req.Options["response_format"]; ok && format != nil {
+			wire.Text = &responsesText{Format: format}
+		}
+	}
 	// Responses replays assistant function_call items as first-class input
 	// items. A standalone historical function_call is valid replay context, but
 	// a function_call_output without a matching call_id is rejected by the API.
@@ -454,6 +467,13 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 	// the stricter chat/anthropic ledger sanitizer here.
 	messages := req.Messages
 	pendingToolOutputs := map[string]int{}
+	// ChatRequest.SystemPrompt is part of the request contract and this adapter
+	// used to drop it, exactly as the Chat Completions adapter did. Responses
+	// accepts a leading system-role input item for it; a caller that already
+	// leads with its own system or developer item keeps that one.
+	if system := strings.TrimSpace(req.SystemPrompt); system != "" && !leadsWithSystemMessage(messages) {
+		wire.Input = append(wire.Input, responsesInputItem{Role: "system", Content: system})
+	}
 	for _, m := range messages {
 		if m.Role == "tool" {
 			callID := strings.TrimSpace(m.ToolCallID)

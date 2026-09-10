@@ -405,6 +405,30 @@ otherwise read-only.
 
 ## Failure Recovery
 
+Completion precondition failures are typed separately from storage failures.
+One failed `finish_run` may be retried after a genuinely changed plan or a
+successful `verify` call; unchanged retries, rejection, and unknown failures do
+not unlock it. Successful completion remains final and the retry is bounded.
+Closing a work unit with declared required verification is rejected before
+commit if its checks have not passed. The plan and evidence window stay open
+so Main can verify and resubmit the same completed snapshot.
+When a role has `verify` and a sufficiently large action envelope, two calls
+inside the existing hard ceiling are reserved for verification. A bounded
+notice asks Main to finish the current scope and reconcile its plan first.
+This does not widen tool availability, execution authority, or approval grants.
+
+`verify` records deliberate checks; ordinary `terminal` calls remain command
+evidence. Missing structured verification must not be described as proof that
+no command ran. On supported POSIX hosts, verification uses Bash with `-e`
+and `pipefail` so an unhandled failing command or pipeline cannot be hidden by
+a successful footer. Explicit shell conditionals can handle expected failures;
+the runtime does not infer verification success from output prose.
+
+Watcher static validation distinguishes invalid shell syntax from an
+unsupported observation shape. A syntax error permits corrected input before
+execution; corrected commands still pass the same read-only proof, approval,
+environment binding, and preflight gates.
+
 A tool error is evidence, not an automatic stop or a reason to repeat the same
 call. Before retrying, inspect the relevant cwd, project markers, environment,
 authentication state, runtime, and package-manager/workspace configuration.

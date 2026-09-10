@@ -628,6 +628,10 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	outcome.Verification, outcome.Files = verification, evidenceFiles
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
 	outcome = applyVerificationOutcome(outcome)
+	if !hasFinalContent && !structuredOutcome && (selection == nil || !selection.Rejected) {
+		content = missingFinalEvidenceSummary(run.ID, outcome)
+		outcome.Summary = truncate(toOneLine(content), 1000)
+	}
 	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {
 		if watch, watchErr := d.Control.GetExternalWatch(finCtx, identity.TenantID, watchID); watchErr == nil {
 			outcome = reconcileExternalWatchOutcome(outcome, watch)

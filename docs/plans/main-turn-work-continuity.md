@@ -19,8 +19,11 @@ model mutate control state directly.
 - Approved: 2026-09-02
 - Review date: 2026-09-09
 - Status: paused — superseded at the domain-model level by
-  `threaded-work-history-redesign.zh-CN.md`; its remaining real-IM evidence
-  gates carry forward there.
+  `run-centric-work-history.zh-CN.md`; its remaining real-IM evidence gates
+  carry forward there.
+- Review verdict (2026-09-10): remain paused. The owner requested fixes from
+  the daily-driver audit; those repairs follow the existing runtime contracts
+  and do not reactivate this superseded plan or authorize additional scope.
 
 ## Intended outcome
 

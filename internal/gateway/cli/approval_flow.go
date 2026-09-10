@@ -120,7 +120,7 @@ func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 	m.addNotice(noticeWarning, record)
 	// The panel only reaches someone already looking at this terminal, and the
 	// run is stopped until it is answered.
-	m.signalHumanWait(humanWaitApproval, msg.Tool)
+	m.signalAttention(attentionApproval, msg.Tool)
 }
 
 // hasApprovalRequest keeps digest hydration and event replay idempotent. A
@@ -166,6 +166,14 @@ func (m *uiModel) markApprovalParked(id string) {
 		}
 	}
 	m.setStatusNotice(noticeWarning, "Approval is still waiting; the task is parked until you answer.")
+	// Nothing is visibly running any more, so this is the approval most easily
+	// left unanswered. Name the tool only when the parked request is the one
+	// on the panel; a queued one carries no tool the panel has shown yet.
+	tool := ""
+	if m.pendingApprovalID == id {
+		tool = m.pendingApprovalTool
+	}
+	m.signalAttention(attentionParkedApproval, tool)
 }
 
 // armNextQueuedApproval re-arms the panel with the next pending request (FIFO)

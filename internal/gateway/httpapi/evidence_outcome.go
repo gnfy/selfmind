@@ -121,6 +121,17 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, taskID, 
 	}
 
 	result.State, result.Summary = verificationState(result.LatestMutationAt, result.Checks)
+	if result.State == "not_run" {
+		commands := 0
+		for _, item := range evidence {
+			if item.Kind == "command" && item.Command != nil && item.StartedAt >= result.LatestMutationAt {
+				commands++
+			}
+		}
+		if commands > 0 {
+			result.Summary = fmt.Sprintf("%d ordinary command(s) ran after the latest change, but no structured verification evidence was recorded. Use verify for the relevant check; command output alone does not establish verification.", commands)
+		}
+	}
 	return result, files
 }
 
@@ -352,7 +363,7 @@ func verificationNextStep(verification *api.VerificationOutcome) string {
 	case "blocked", "partial":
 		return "Resolve the blocked verification and continue."
 	default:
-		return "Run an appropriate test, build, lint, syntax, or smoke check and continue."
+		return "Use verify to run the relevant test, build, lint, syntax, smoke, or custom check and continue."
 	}
 }
 
@@ -423,7 +434,7 @@ func conciseVerificationNotice(verification *api.VerificationOutcome) string {
 	case "passed":
 		return ""
 	case "not_run":
-		return "Verification incomplete: no check ran after file changes."
+		return "Verification incomplete: no structured check evidence after file changes; use verify for the relevant check."
 	case "stale":
 		return "Verification incomplete: checks ran before the latest file change."
 	case "failed":

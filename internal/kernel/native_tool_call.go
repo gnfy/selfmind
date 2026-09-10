@@ -19,6 +19,7 @@ type toolExecutionResult struct {
 	signature string
 	rawResult string
 	success   bool
+	errorCode string
 }
 
 type toolLifecycleHandoff struct {
@@ -113,6 +114,10 @@ func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrat
 			continue
 		}
 		if remaining <= 0 {
+			dropped++
+			continue
+		}
+		if strategy.MaxActionTools == strategy.ActionToolBudgetLimit && remaining <= strategy.CompletionReserve && call.Function != "verify" {
 			dropped++
 			continue
 		}
@@ -608,6 +613,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			index:     idx,
 			step:      packaged.ModelContent,
 			toolName:  name,
+			errorCode: packaged.ErrorCode,
 			signature: signature,
 			msg: llm.Message{
 				Role:       "tool",

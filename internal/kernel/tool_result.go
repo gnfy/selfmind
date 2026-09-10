@@ -437,27 +437,43 @@ func liveToolResultBytes(messages []llm.Message) int {
 // oldest-first, until the live total fits toolResultTurnBudgetBytes. It returns
 // how many messages it shrank.
 //
-// Shrinking is lossless here: an artifact-backed result stays fully readable
-// through tool_output_view, so the model loses proximity, not evidence. Results
-// with no artifact reference are never touched — their bytes exist nowhere else,
-// and dropping them to make room would trade a context saving for lost
-// evidence. That means a turn full of small unspooled results can still exceed
-// the budget, which is the correct failure direction.
-func enforceToolResultTurnBudget(messages []llm.Message, indexes []int) int {
+// Shrinking is lossless: medium results are saved on demand before being
+// shortened, and existing artifact references survive further shrinking.
+// A missing or failed sink retains the bytes even if that exceeds the budget.
+func enforceToolResultTurnBudget(ctx context.Context, messages []llm.Message) int {
 	total := liveToolResultBytes(messages)
 	if total <= toolResultTurnBudgetBytes {
 		return 0
 	}
 	shrunkCount := 0
-	for _, index := range indexes {
+	toolCount := 0
+	for _, msg := range messages {
+		if msg.Role == "tool" {
+			toolCount++
+		}
+	}
+	limit := min(toolResultAgedBytes, max(512, toolResultTurnBudgetBytes/(toolCount+1)))
+	sink := ToolArtifactSinkFromContext(ctx)
+	for index := range messages {
 		if total <= toolResultTurnBudgetBytes {
 			break
 		}
-		if index < 0 || index >= len(messages) {
+		if messages[index].Role != "tool" || len(messages[index].Content) <= limit {
 			continue
 		}
 		before := len(messages[index].Content)
-		shrunk, ok := shrinkAgedToolResult(messages[index].Content)
+		content := messages[index].Content
+		if !toolArtifactIDPattern.MatchString(content) {
+			if sink == nil {
+				continue
+			}
+			ref, err := sink.SaveToolOutput(ctx, messages[index].Name, content)
+			if err != nil || ref.ID == "" {
+				continue
+			}
+			content += "\n[" + toolArtifactNoteToken + ref.ID + "]"
+		}
+		shrunk, ok := shrinkToolResultToBytes(content, limit)
 		if !ok {
 			continue
 		}
@@ -477,7 +493,11 @@ var toolArtifactIDPattern = regexp.MustCompile(`saved as artifact (art_[A-Za-z0-
 // tool_output_view. Content without an artifact reference is returned
 // unchanged — shrinking is only safe when the full output stays addressable.
 func shrinkAgedToolResult(content string) (string, bool) {
-	if len(content) <= toolResultAgedBytes {
+	return shrinkToolResultToBytes(content, toolResultAgedBytes)
+}
+
+func shrinkToolResultToBytes(content string, limit int) (string, bool) {
+	if len(content) <= limit {
 		return content, false
 	}
 	match := toolArtifactIDPattern.FindStringSubmatch(content)
@@ -485,13 +505,10 @@ func shrinkAgedToolResult(content string) (string, bool) {
 		return content, false
 	}
 	note := fmt.Sprintf(
-		"\n\n... [SelfMind note: this earlier tool output was aged out of the working window to save context; the full output is still readable via tool_output_view with {\"artifact_id\": %q, \"offset_bytes\": N, \"limit_bytes\": M}.] ...\n\n",
-		match[1],
+		"\n\n... [SelfMind note: earlier tool output saved as artifact %s; read the full output via tool_output_view with {\"artifact_id\": %q, \"offset_bytes\": N, \"limit_bytes\": M}.] ...\n\n",
+		match[1], match[1],
 	)
-	keep := (toolResultAgedBytes - len(note)) / 2
-	if keep < 512 {
-		keep = 512
-	}
+	keep := max(0, (limit-len(note))/2)
 	return textutil.HeadTail(content, keep, note), true
 }
 

@@ -76,6 +76,13 @@ const (
 	postRunAnalyzerTokensPerBatchRun = 1280
 	postRunAnalyzerBatchMaxTokens    = 16384
 	maintenanceReasoningEffort       = "none"
+	// maintenanceResponseFormat asks the provider for JSON mode. The contract
+	// used to rely on the system prompt alone, and a small model answered
+	// "task_decision: KEEP\nmemory_decisions: []" — the request echoed as
+	// YAML — on 10 of 10 attempts, so only the largest model in a family could
+	// pass validation as the background route. The probe below mirrors this
+	// request field for field, so it must carry the same setting.
+	maintenanceResponseFormat = "json_object"
 )
 
 // NewConfiguredPostRunAnalyzer uses the stable memory_extract role first and
@@ -346,6 +353,7 @@ func (a *llmPostRunAnalyzer) Analyze(ctx context.Context, req httpapi.PostRunAna
 				"temperature": 0, "maintenance_batch_size": 1,
 				"maintenance_contract_attempt": attempt + 1,
 				"reasoning_effort":             maintenanceReasoningEffort,
+				"response_format":              map[string]interface{}{"type": maintenanceResponseFormat},
 			},
 		})
 		if err != nil {
@@ -429,6 +437,7 @@ func (a *llmPostRunAnalyzer) AnalyzeBatch(ctx context.Context, reqs []httpapi.Po
 				"temperature": 0, "maintenance_batch_size": len(reqs),
 				"maintenance_contract_attempt": attempt + 1,
 				"reasoning_effort":             maintenanceReasoningEffort,
+				"response_format":              map[string]interface{}{"type": maintenanceResponseFormat},
 			},
 		})
 		if err != nil {

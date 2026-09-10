@@ -138,6 +138,9 @@ type TaskStrategy struct {
 	ActionToolBudgetStep  int
 	ActionToolBudgetLimit int
 	MaxBudgetExtensions   int
+	// CompletionReserve is installed from actual tool availability, never
+	// request keywords. It keeps part of the existing hard ceiling for checks.
+	CompletionReserve     int
 	RequireProgressEvents bool
 	ChannelMode           string
 	Reason                string
@@ -353,9 +356,7 @@ func (s TaskStrategy) WithWebEnabled() TaskStrategy {
 
 func (s TaskStrategy) WithActionToolsDisabled() TaskStrategy {
 	s = s.normalized()
-	if s.AllowedTools == nil {
-		s.AllowedTools = map[string]bool{}
-	}
+	s.AllowedTools = map[string]bool{}
 	for _, name := range lifecycleToolNames() {
 		if !s.HiddenTools[name] {
 			s.AllowedTools[name] = true

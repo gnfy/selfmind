@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"selfmind/internal/control"
@@ -93,6 +94,37 @@ func TestEvidenceOutcomeReadsDurableRunEvidence(t *testing.T) {
 	}
 }
 
+func TestOrdinaryCommandsDoNotDisappearOrBecomeVerification(t *testing.T) {
+	store := controltest.NewStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "closure", "Closure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Checks", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "prepare a file")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, evidence := range []kernel.RunEvidence{
+		{ToolName: "write_file", Kind: "mutation", Status: "succeeded", StartedAt: 10, FinishedAt: 20, Files: []kernel.FileEffect{{Path: "report.py", BeforeSHA256: "old", AfterSHA256: "new"}}},
+		{ToolName: "terminal", Kind: "command", Status: "succeeded", StartedAt: 30, FinishedAt: 40, Command: &kernel.CommandEvidence{Command: "custom-check", Kind: "command"}},
+	} {
+		if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "evidence.recorded", Payload: mustJSON(map[string]interface{}{"evidence": evidence})}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{Control: store}
+	got, _ := server.coordinator().evidenceOutcome(ctx, task.TenantID, task.ID, run.ID)
+	if got == nil || got.State != "not_run" || len(got.Checks) != 0 || !strings.Contains(got.Summary, "1 ordinary command(s) ran") {
+		t.Fatalf("ordinary execution was lost or promoted to verification: %+v", got)
+	}
+}
+
 func TestVerificationFailureMakesCodeRunResumable(t *testing.T) {
 	verification := &api.VerificationOutcome{State: "failed", Summary: "one check failed"}
 	if !verificationRequiresResume(verification, []string{"main.go"}) {
@@ -160,7 +192,7 @@ func TestVerificationNoticeIsConciseAndEnglish(t *testing.T) {
 		State:   "not_run",
 		Summary: "Files changed, but no verification command was recorded after the change.",
 	}, nil)
-	want := "Changed the file.\n\nVerification incomplete: no check ran after file changes."
+	want := "Changed the file.\n\nVerification incomplete: no structured check evidence after file changes; use verify for the relevant check."
 	if got != want {
 		t.Fatalf("notice = %q, want %q", got, want)
 	}

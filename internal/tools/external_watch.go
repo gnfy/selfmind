@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"mvdan.cc/sh/v3/syntax"
+
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
 )
@@ -293,6 +295,12 @@ func validateExternalWatchStatic(args map[string]interface{}) error {
 	command := strings.TrimSpace(stringArg(args, "command"))
 	if command == "" {
 		return invalidExternalWatchSpec(fmt.Errorf("command is required"))
+	}
+	if _, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), ""); err != nil {
+		return newStableToolRecoveryError(err, "watch_command_syntax", "syntax",
+			"The observation command has invalid shell syntax; no command was executed.",
+			"Correct the shell syntax, quoting literal arguments containing parentheses or other shell operators. The corrected command still requires read-only validation.",
+			"preparation", "corrected_input", "not_dispatched", false)
 	}
 	if err := validateExternalWatchObservation(args); err != nil {
 		return newStableToolRecoveryError(

@@ -277,6 +277,10 @@ func TestFinishRunRequiresResolvedSharedPlan(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "unresolved plan steps") {
 		t.Fatalf("finish_run should reject an unresolved plan, got: %v", err)
 	}
+	var precondition interface{ ToolErrorCode() string }
+	if !errors.As(err, &precondition) || precondition.ToolErrorCode() != "completion_precondition" {
+		t.Fatalf("completion rejection has no correction contract: %v", err)
+	}
 
 	_, err = plan.Execute(map[string]interface{}{
 		"_tenant_id": base["_tenant_id"],

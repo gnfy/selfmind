@@ -163,9 +163,13 @@ func probeThinkingToolLoop(ctx context.Context, provider llm.Provider, rt modelr
 	if first == nil || len(first.ToolCalls) != 1 {
 		return fmt.Errorf("model did not emit the required tool call")
 	}
-	if strings.TrimSpace(first.ReasoningContent) == "" {
-		return fmt.Errorf("provider did not return reasoning_content for a thinking tool call")
-	}
+	// reasoning_content is a vendor extension the model MAY attach to a tool
+	// call; a trivial request often gets none. This used to fail the probe
+	// right here, turning "the model did not think out loud" into a broken
+	// route — and it was intermittent, so the same model passed one day and
+	// failed the next. The interoperability question is whether the follow-up
+	// turn is accepted with whatever came back, and the second call below is
+	// that test; DeepSeek accepts the replay with the field absent.
 	call := first.ToolCalls[0]
 	secondMessages := append(append([]llm.Message(nil), firstMessages...),
 		llm.Message{Role: "assistant", Content: first.Content, ReasoningContent: first.ReasoningContent, ToolCalls: first.ToolCalls},
@@ -211,6 +215,7 @@ func modelProbeRequest(rt modelruntime.Runtime, includeTools, maintenanceContrac
 		req.Options = map[string]interface{}{
 			"temperature": 0, "maintenance_contract_probe": true,
 			"reasoning_effort": maintenanceReasoningEffort,
+			"response_format":  map[string]interface{}{"type": maintenanceResponseFormat},
 		}
 	}
 	if includeTools {

@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "batch_read instructions.txt work_inspect work_select result.txt verify"
+}

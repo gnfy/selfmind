@@ -1,0 +1,310 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparation"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " complete"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " parked"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "`.\n\n"
+    },
+    {
+      "content": "What"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " found"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "instructions"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "the"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " specifies"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " accepted"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " containing"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " followed"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "What"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " did"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " do"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " un"
+    },
+    {
+      "content": "created"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " requested"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "When"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " write"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "\\n"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " verify"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " byte"
+    },
+    {
+      "content": "-for"
+    },
+    {
+      "content": "-by"
+    },
+    {
+      "content": "te"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 9702,
+        "output_tokens": 98,
+        "cache_read_input_tokens": 3328,
+        "cache_miss_input_tokens": 6374,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

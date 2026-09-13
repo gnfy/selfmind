@@ -65,8 +65,9 @@ func (s *Store) EnqueueSelectedContinuation(ctx context.Context, tenantID, perso
 // RunSelectionEffectBoundary reports whether an implicit historical selection
 // arrived after the current interaction produced material state. Read-only
 // discovery and lifecycle/broker bookkeeping are safe; any other tool effect,
-// approval, clarification, watch, artifact, handoff, or outbound delivery
-// closes the automatic transfer window.
+// approval, clarification, watch, deliverable artifact, handoff, or outbound
+// delivery closes the window. Captured tool output is observation storage;
+// any originating mutation still closes the window through its ledger entry.
 func (s *Store) RunSelectionEffectBoundary(ctx context.Context, tenantID, personID, runID string) (bool, string, error) {
 	if s == nil || s.db == nil {
 		return false, "", fmt.Errorf("control store is unavailable")
@@ -99,7 +100,7 @@ func (s *Store) RunSelectionEffectBoundary(ctx context.Context, tenantID, person
 		{"external_watch", `SELECT COUNT(*) FROM external_watches WHERE tenant_id = ? AND person_id = ? AND run_id = ?`},
 		{"artifact", `SELECT COUNT(*) FROM task_artifacts a
 			JOIN runs r ON r.id = a.run_id AND r.thread_id = a.thread_id
-			WHERE r.tenant_id = ? AND r.person_id = ? AND r.id = ?`},
+			WHERE r.tenant_id = ? AND r.person_id = ? AND r.id = ? AND a.kind <> 'tool_output'`},
 		{"handoff", `SELECT COUNT(*) FROM task_handoffs h
 			JOIN runs r ON r.id = h.run_id AND r.thread_id = h.thread_id
 			WHERE r.tenant_id = ? AND r.person_id = ? AND r.id = ?`},

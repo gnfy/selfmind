@@ -1,0 +1,517 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "-n"
+    },
+    {
+      "reasoning_content": "ote"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " shell"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " checks"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " e"
+    },
+    {
+      "reasoning_content": ".g"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "test"
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "-n"
+    },
+    {
+      "reasoning_content": "ote"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " LOCAL"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " careful"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " hiding"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Simple"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "g"
+    },
+    {
+      "reasoning_content": "rep"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "q"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "^"
+    },
+    {
+      "reasoning_content": "LOC"
+    },
+    {
+      "reasoning_content": "AL"
+    },
+    {
+      "reasoning_content": "$"
+    },
+    {
+      "reasoning_content": "'"
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "-n"
+    },
+    {
+      "reasoning_content": "ote"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "`."
+    },
+    {
+      "reasoning_content": " Or"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "diff"
+    },
+    {
+      "reasoning_content": " \u003c"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "printf"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "LOC"
+    },
+    {
+      "reasoning_content": "AL"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "')"
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "-n"
+    },
+    {
+      "reasoning_content": "ote"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " process"
+    },
+    {
+      "reasoning_content": " substitution"
+    },
+    {
+      "reasoning_content": " may"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " allowed"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " isn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " restricted"
+    },
+    {
+      "reasoning_content": " like"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "-n"
+    },
+    {
+      "reasoning_content": "ote"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " pip"
+    },
+    {
+      "reasoning_content": "ed"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " Sim"
+    },
+    {
+      "reasoning_content": "pler"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "test"
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "-n"
+    },
+    {
+      "reasoning_content": "ote"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "LOC"
+    },
+    {
+      "reasoning_content": "AL"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": "`."
+    },
+    {
+      "reasoning_content": " Command"
+    },
+    {
+      "reasoning_content": " substitution"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " fine"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " kind"
+    },
+    {
+      "reasoning_content": " custom"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " c"
+    },
+    {
+      "reasoning_content": "wd"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " root"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": " needs"
+    },
+    {
+      "content": " recorded"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " evidence"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " write"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12907,
+        "output_tokens": 289,
+        "cache_read_input_tokens": 12672,
+        "cache_miss_input_tokens": 235,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 152,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_InJqSDlvfsFLpU44xABH8247",
+          "Function": "verify",
+          "Args": "{\"command\": \"test \\\"$(cat local-note.txt)\\\" = \\\"LOCAL\\\" \u0026\u0026 echo \\\"local-note.txt content OK\\\"\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"kind\": \"custom\"}"
+        }
+      ]
+    }
+  ]
+}

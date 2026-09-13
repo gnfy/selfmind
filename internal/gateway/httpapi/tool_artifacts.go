@@ -36,7 +36,6 @@ type toolArtifactSink struct {
 	dir      string // person-scoped spool dir
 	store    *control.Store
 	tenantID string
-	taskID   string
 	runID    string
 	tool     string
 
@@ -56,7 +55,6 @@ func (c *RunCoordinator) newToolArtifactSink(identity *control.IdentityContext, 
 		dir:      filepath.Join(d.ToolOutputDir, identity.PersonID),
 		store:    d.Control,
 		tenantID: identity.TenantID,
-		taskID:   task.ID,
 		runID:    run.ID,
 	}
 }
@@ -93,9 +91,17 @@ func (s *toolArtifactSink) SaveToolOutput(ctx context.Context, toolName, content
 	// the read path. A row failure keeps the artifact readable — log, don't
 	// fail the tool call.
 	if s.store != nil {
+		// A direct continuation can move the Run after the sink was created.
+		// Earlier artifact rows move in that transaction; later outputs must
+		// resolve the current owner instead of retaining the old Thread id.
+		run, err := s.store.GetRun(ctx, s.tenantID, s.runID)
+		if err != nil || run == nil {
+			log.Warn("tool artifact owner lookup failed", "artifact", id, "error", err)
+			return kernel.ToolArtifactRef{ID: id, Bytes: len(content)}, nil
+		}
 		if _, err := s.store.SaveArtifact(ctx, control.Artifact{
 			ID:       id,
-			TaskID:   s.taskID,
+			TaskID:   run.TaskID,
 			RunID:    s.runID,
 			Kind:     "tool_output",
 			Name:     toolName,

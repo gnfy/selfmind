@@ -405,6 +405,13 @@ otherwise read-only.
 
 ## Failure Recovery
 
+Dispatch retry classification consumes trusted built-in registration metadata,
+so read-only composite tools receive the same treatment as their constituent
+reads. Metadata-free compatibility backends retain the conservative legacy
+catalogue; unknown and external tools never gain blind retry from model input
+or an external read-only declaration. The exact dispatch classification also
+drives plan-progress accounting and durable continuation checks.
+
 Completion precondition failures are typed separately from storage failures.
 One failed `finish_run` may be retried after a genuinely changed plan or a
 successful `verify` call; unchanged retries, rejection, and unknown failures do

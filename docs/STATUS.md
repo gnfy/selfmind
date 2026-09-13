@@ -15,16 +15,21 @@ watcher syntax errors are distinct from unsupported observations; cumulative
 tool-result bounding also spools medium outputs. Required checks must pass
 before a work unit's completion freezes its evidence window. Missing final
 responses retain a bounded summary of recorded changes and checks.
-Validation: full Go tests and all 66 local-full replay cases passed, including
-three new real-provider recordings. Installed locally as
-`v0.1.0-beta.24-local.daily-closure.1`; managed restart and runtime version were
+Read-only continuation now shares trusted tool registration facts with the
+execution ledger; captured outputs remain recoverable across a direct claim.
+Material effects still block implicit continuation, with a typed refusal and
+final next steps that reflect the actual queue state.
+Validation: full Go tests and all 68 local-full replay cases passed, including
+two new real-provider recordings for read-before-resume and mutation refusal.
+Installed locally as
+`v0.1.0-beta.24-local.read-resume.1`; managed restart and runtime version were
 verified. Sustained CLI/IM observation remains required.
 
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 64 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
+- Release corpus: 68 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
   declare `model_required: false`.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.

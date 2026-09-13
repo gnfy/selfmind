@@ -1,0 +1,28 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 14508,
+        "output_tokens": 303,
+        "cache_read_input_tokens": 14080,
+        "cache_miss_input_tokens": 428,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_kAhxkrqO2wvnRT2qeZxL0320",
+          "Function": "finish_run",
+          "Args": "{\"done\": [\"Re-read instructions.txt: accepted result is result.txt containing exactly \\\"READY\\\" followed by a newline\", \"Resumed the waiting run run_5825e9bf via work_inspect + work_select (committed, direct)\", \"Wrote result.txt with exactly READY + newline (6 bytes)\", \"Verified bytes are 52 45 41 44 59 0a and size is 6\"], \"files\": [\"result.txt\"], \"next_steps\": [], \"risks\": [], \"status\": \"done\", \"summary\": \"Produced result.txt containing exactly \\\"READY\\\\n\\\" in the workspace, byte-verified as 52 45 41 44 59 0a (6 bytes). The previously waiting run was resumed rather than restarted.\", \"tests\": [\"verify (smoke): od hex of result.txt == 52454144590a and wc -c == 6 — exit 0\"]}"
+        }
+      ]
+    }
+  ]
+}

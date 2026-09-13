@@ -1,0 +1,595 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Done"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " exists"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Requirements"
+    },
+    {
+      "content": " re"
+    },
+    {
+      "content": "-check"
+    },
+    {
+      "content": "ed"
+    },
+    {
+      "content": " from"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "instructions"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`:"
+    },
+    {
+      "content": " accepted"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " containing"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " followed"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " prior"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " (`"
+    },
+    {
+      "content": "run"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "582"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "bf"
+    },
+    {
+      "content": "`)"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " inspected"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " resumed"
+    },
+    {
+      "content": " via"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "work"
+    },
+    {
+      "content": "_select"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " returned"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "commit"
+    },
+    {
+      "content": "_mode"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " direct"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " write"
+    },
+    {
+      "content": " happened"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " scope"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " keeping"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "plan"
+    },
+    {
+      "content": " steps"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Write"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "printf"
+    },
+    {
+      "content": " '"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "\\n"
+    },
+    {
+      "content": "'"
+    },
+    {
+      "content": " \u003e"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Verification"
+    },
+    {
+      "content": " (`"
+    },
+    {
+      "content": "verify"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " smoke"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " exit"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "):"
+    },
+    {
+      "content": " hex"
+    },
+    {
+      "content": " dump"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "52"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "45"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "41"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "44"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "59"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " byte"
+    },
+    {
+      "content": " count"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "`.\n\n"
+    },
+    {
+      "content": "Plan"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " fully"
+    },
+    {
+      "content": " resolved"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " finished"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "done"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": " One"
+    },
+    {
+      "content": " note"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " accuracy"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " byte"
+    },
+    {
+      "content": " comparison"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " output"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " evidence"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exit"
+    },
+    {
+      "content": " status"
+    },
+    {
+      "content": " plus"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "od"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "wc"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " checks"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " printed"
+    },
+    {
+      "content": " diff"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 14710,
+        "output_tokens": 193,
+        "cache_read_input_tokens": 3712,
+        "cache_miss_input_tokens": 10998,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

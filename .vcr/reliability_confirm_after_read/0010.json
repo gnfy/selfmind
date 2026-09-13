@@ -1,0 +1,469 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Ver"
+    },
+    {
+      "reasoning_content": "ification"
+    },
+    {
+      "reasoning_content": " passed"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "exit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Update"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " mark"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Also"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " asked"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " give"
+    },
+    {
+      "reasoning_content": " results"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Note"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " asked"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " earlier"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " preparation"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Which"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " we"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": " continues"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "582"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "bf"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "comm"
+    },
+    {
+      "reasoning_content": "itted"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " completes"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " resumed"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " execution"
+    },
+    {
+      "reasoning_content": " scope"
+    },
+    {
+      "reasoning_content": " presumably"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13597,
+        "output_tokens": 508,
+        "cache_read_input_tokens": 13440,
+        "cache_miss_input_tokens": 157,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 147,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_RfXrPmBDS9N3Rr6qh7jw6693",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Read instructions.txt and re-confirm the accepted result\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"success_criteria\": \"Instructions confirmed: result.txt must contain exactly READY followed by a newline\"}, {\"status\": \"completed\", \"step\": \"Resume the waiting run run_5825e9bf via work_inspect + work_select\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\", \"success_criteria\": \"work_select returns committed/direct resume context for that run\"}, {\"status\": \"completed\", \"step\": \"Write result.txt with exactly READY + newline\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\", \"success_criteria\": \"workspace_root/result.txt exists and contains those exact bytes\"}, {\"status\": \"completed\", \"step\": \"Verify result.txt byte-for-byte (52 45 41 44 59 0a)\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_4}}\", \"success_criteria\": \"verify records exit status 0 for a byte-level check matching 52 45 41 44 59 0a\", \"verification_required\": true}]}"
+        }
+      ]
+    }
+  ]
+}

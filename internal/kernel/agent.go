@@ -1632,7 +1632,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					if _, seen := successfulActionEvidence[res.signature]; !seen {
 						successfulActionEvidence[res.signature] = struct{}{}
 						progressVersion++
-						if countsTowardPlanEvidence(res.toolName) {
+						if countsTowardPlanEvidence(res.toolName, res.retryClass) {
 							planEvidenceTools++
 						}
 					}

@@ -1,0 +1,340 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " instructions"
+    },
+    {
+      "reasoning_content": " confirmed"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " containing"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " followed"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Same"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "582"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "bf"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Note"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " current"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "887"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "349"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "_db"
+    },
+    {
+      "reasoning_content": "81"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "597"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " target"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "582"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "bf"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "172"
+    },
+    {
+      "reasoning_content": "27"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Same"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " domain"
+    },
+    {
+      "reasoning_content": " →"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": "-domain"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " claim"
+    },
+    {
+      "reasoning_content": " immediately"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Instructions"
+    },
+    {
+      "content": " match"
+    },
+    {
+      "content": " my"
+    },
+    {
+      "content": " earlier"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Now"
+    },
+    {
+      "content": " res"
+    },
+    {
+      "content": "uming"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11639,
+        "output_tokens": 182,
+        "cache_read_input_tokens": 10112,
+        "cache_miss_input_tokens": 1527,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 91,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_8ZI4eyLoS75ZFg2OigvD1838",
+          "Function": "work_select",
+          "Args": "{\"action\": \"resume\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

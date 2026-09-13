@@ -74,12 +74,12 @@ const planGuidanceEscalationThreshold = 2
 // not work, and a provably read-only observation is not either: a turn that
 // only looks at state may still be a direct answer that needs no visible plan.
 // Everything else — mutation, commands, unknown tools — fails toward "this is
-// real work", matching ClassifyToolRetry's safest-assumption default.
-func countsTowardPlanEvidence(toolName string) bool {
+// real work", using the same dispatch classification as the durable ledger.
+func countsTowardPlanEvidence(toolName string, retryClass ToolRetryClass) bool {
 	if isLifecycleToolName(toolName) {
 		return false
 	}
-	return ClassifyToolRetry(toolName) != ToolRetryReadOnly
+	return retryClass != ToolRetryReadOnly
 }
 
 // WithPlanRequired escalates plan guidance to PlanPolicyRequired. A turn the

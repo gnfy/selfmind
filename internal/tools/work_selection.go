@@ -27,7 +27,7 @@ func NewWorkSelectTool(store *control.Store) *WorkSelectTool {
 func (t *WorkSelectTool) Name() string { return "work_select" }
 
 func (t *WorkSelectTool) Description() string {
-	return "Propose how the current request relates to one exact inspected historical run. Use observe for a read-only status/result question, or resume to continue that work. A same-domain resume is claimed immediately and returns the run's resume context so you continue the work in this turn; otherwise the gateway queues an exact continuation after this turn."
+	return "Propose how the current request relates to one exact inspected historical run. Use observe for a read-only status/result question, or resume to continue that work. A same-domain resume is claimed immediately and returns its context. A scope/checkpoint mismatch proposes a transfer for gateway validation; it is not queued yet. A material effect in this interaction blocks implicit continuation. Only a committed claim or queue receipt proves that work will continue."
 }
 
 func (t *WorkSelectTool) Schema() ToolSchema {
@@ -194,14 +194,17 @@ func (t *WorkSelectTool) tryDirectContinuation(ctx context.Context, tenantID, pe
 		return "", err
 	}
 	if blocked {
-		return workSelectionResult(status, "resume", target.ID, "This interaction already produced effects ("+reason+"), so the historical run cannot be continued in place. The gateway decides after this turn; report what happened and stop expanding the work."), nil
+		message := "This interaction already produced material state (" + reason + "). The historical run was not claimed or queued; it will not continue automatically."
+		return "", newStableToolRecoveryError(fmt.Errorf("%s", message), "work_selection_blocked", "stale_precondition", message,
+			"Report the current interaction's observed effects and the blocked continuation. Ask the user how to proceed; do not retry the selection or promise a background handoff.",
+			"preparation", "after_user_input", "not_dispatched", false)
 	}
 	claimed, err := t.store.ClaimInteractionContinuation(ctx, tenantID, personID, runID, target.ID)
 	switch {
 	case err == nil:
 		return t.directContinuationResult(ctx, tenantID, personID, claimed, target.ID)
 	case errors.Is(err, control.ErrContinuationDomainMismatch), errors.Is(err, control.ErrResumeCheckpointRequired):
-		return workSelectionResult(status, "resume", target.ID, "The selected run lives in a different execution scope or needs its checkpoint restored, so the gateway will queue it as an exact continuation after this turn. Acknowledge briefly and finish this turn; do not perform the target's work here."), nil
+		return workSelectionResult(status, "resume", target.ID, "The selected run needs a different execution scope or checkpoint restoration. A transfer is proposed for gateway validation after this turn; nothing is queued yet. Finish this turn without executing the target's work or promising a successful handoff."), nil
 	default:
 		return "", err
 	}

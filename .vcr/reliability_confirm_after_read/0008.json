@@ -1,0 +1,91 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " printf"
+    },
+    {
+      "reasoning_content": " via"
+    },
+    {
+      "reasoning_content": " terminal"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Now"
+    },
+    {
+      "content": " writing"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13122,
+        "output_tokens": 121,
+        "cache_read_input_tokens": 12672,
+        "cache_miss_input_tokens": 450,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 10,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_TsAxm8PhAI6JbniFOX3s9918",
+          "Function": "terminal",
+          "Args": "{\"command\": \"printf 'READY\\\\n' \u003e result.txt \u0026\u0026 ls -l result.txt\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\"}"
+        }
+      ]
+    }
+  ]
+}

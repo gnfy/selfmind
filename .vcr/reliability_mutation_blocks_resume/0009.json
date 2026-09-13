@@ -1,0 +1,28 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13996,
+        "output_tokens": 464,
+        "cache_read_input_tokens": 13568,
+        "cache_miss_input_tokens": 428,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_WPn7DCNXhNzDbLfoIcxC4044",
+          "Function": "finish_run",
+          "Args": "{\"done\": [\"Created and verified local-note.txt (content LOCAL) in workspace_root\", \"Inspected the waiting run {{SELFMIND_VCR_RUN_2}} ({{SELFMIND_VCR_TASK_2}}, 'Prepared result file', status waiting_user)\", \"Made exactly one work_select resume attempt, which was refused with work_selection_blocked (stale_precondition, effect_state not_dispatched)\"], \"files\": [\"local-note.txt (kept for inspection)\"], \"next_steps\": [\"Decide how to continue the 'Prepared result file' work (create result.txt containing READY)\", \"Option: start a fresh interaction with no prior material effect and confirm the prepared result there, so the continuation can proceed\", \"Or state explicitly that the continuation should not be carried over and let it lapse\"], \"risks\": [\"The earlier waiting run will not continue automatically; nothing was claimed or queued\", \"No result.txt was created; the prepared work remains unexecuted\"], \"status\": \"waiting_user\", \"summary\": \"Created local-note.txt (LOCAL), then inspected the waiting 'Prepared result file' run and attempted one resume. The resume was refused: this interaction already produced material state (the file write), so the historical run was neither claimed nor queued. The boundary refusal is preserved; no retry was made. Your decision is needed on how to continue the prepared result.txt work.\", \"tests\": [\"verify: test \\\"$(cat local-note.txt)\\\" = \\\"LOCAL\\\" -\u003e passed (content matches)\"]}"
+        }
+      ]
+    }
+  ]
+}

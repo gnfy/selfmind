@@ -1,0 +1,223 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Local"
+    },
+    {
+      "reasoning_content": " note"
+    },
+    {
+      "reasoning_content": " verified"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "cc"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "362"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "74"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "cf"
+    },
+    {
+      "reasoning_content": "-a"
+    },
+    {
+      "reasoning_content": "51"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "324"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "087"
+    },
+    {
+      "reasoning_content": "865"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " attempt"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Local"
+    },
+    {
+      "content": " note"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " written"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " verified"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Now"
+    },
+    {
+      "content": " inspecting"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " attempting"
+    },
+    {
+      "content": " resume"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11018,
+        "output_tokens": 128,
+        "cache_read_input_tokens": 10496,
+        "cache_miss_input_tokens": 522,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 49,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_pwkKXVxh0BKu1egWJquE5128",
+          "Function": "work_inspect",
+          "Args": "{\"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

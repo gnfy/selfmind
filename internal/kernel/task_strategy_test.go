@@ -256,17 +256,17 @@ func TestPlanEvidenceExcludesLifecycleAndReadOnlyTools(t *testing.T) {
 	// Lifecycle bookkeeping is not work, and a read-only observation may still
 	// belong to a direct answer.
 	for _, name := range []string{"update_plan", "finish_run", "queue_user_input", "work_select"} {
-		if countsTowardPlanEvidence(name) {
+		if countsTowardPlanEvidence(name, ClassifyToolRetry(name)) {
 			t.Fatalf("lifecycle tool %q must not count as plan evidence", name)
 		}
 	}
 	for _, name := range []string{"read_file", "search_files", "list_files", "process_poll"} {
-		if countsTowardPlanEvidence(name) {
+		if countsTowardPlanEvidence(name, ClassifyToolRetry(name)) {
 			t.Fatalf("read-only tool %q must not count as plan evidence", name)
 		}
 	}
 	for _, name := range []string{"terminal", "write_file", "patch", "some_unregistered_tool"} {
-		if !countsTowardPlanEvidence(name) {
+		if !countsTowardPlanEvidence(name, ClassifyToolRetry(name)) {
 			t.Fatalf("substantive tool %q must count as plan evidence", name)
 		}
 	}

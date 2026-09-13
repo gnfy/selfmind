@@ -154,6 +154,16 @@ explicit /new, /resume, /choose
   (`RetargetInteractionContinuation`). A workspace, execution-root, or
   checkpoint mismatch creates a correctly scoped transfer child at
   finalization, because a Run's execution domain never changes in place.
+- Read-only discovery uses the same trusted registration facts for dispatch,
+  recovery, and plan-progress accounting. Captured `tool_output` artifacts are
+  observation storage and follow the continuing Run; originating mutations
+  still block implicit selection through their execution ledger. Deliverable
+  artifacts and pending human/external control objects retain their guards.
+- A selection blocked by material state returns `work_selection_blocked`, not
+  a successful transfer proposal. A scope/checkpoint transfer remains proposed
+  until the gateway commits its queue receipt. Rejected final outcomes replace
+  speculative next steps with the actual required human decision; no queue
+  receipt means no promised automatic continuation.
 - Active user input is durably steered. Main decides at a safe checkpoint
   whether it updates current work, creates a new plan item, or queues
   independent work. Daemon-originated content never steers from text.

@@ -167,20 +167,21 @@ limitation. It does not mean the area should be redesigned from scratch.
 
 ## Plan Lifecycle
 
-- Active plan: `docs/plans/task-capsule-work-history-redesign.zh-CN.md`, approved
-  in principle by the project owner for review on 2026-09-17. It keeps Run-owned
-  execution and derived Attention, replaces eager per-Run Thread creation with
-  asynchronous, reversible Task Capsules, narrows `resumes_run_id` to exact
-  execution recovery, and makes planning and external waiting completion-driven.
+- Active plan: `docs/plans/run-centric-work-history.zh-CN.md`, approved by
+  the project owner for review on 2026-09-18. It moves work-history authority
+  from Task/Thread to Runs and the person-level Work Journal, keeps exact
+  execution recovery, and includes context economics in the same delivery.
 - Paused plans: `docs/plans/main-turn-work-continuity.md`, approved for review
   on 2026-09-09; `docs/plans/daily-driver-closure.md`, approved for review on
   2026-09-11; and `docs/plans/external-skill-packages.md`, approved for review
-  on 2026-09-25. The continuity plan's remaining real CLI/IM evidence gates are
-  carried by the active Thread plan; the other scopes resume when the active
-  slot frees.
-- Historical plans, including the implemented schema-v11 Thread intermediate,
-  remain discoverable through `docs/README.md` as archived records or decisions.
-  They do not contribute priorities.
+  on 2026-09-25. The 2026-09-10 continuity verdict carries its remaining real
+  CLI/IM evidence gates into the active run-centric plan. The 2026-09-13
+  daily-driver verdict retains all outstanding evidence and acceptance gates
+  while paused; resumption is reassessed when the active slot frees.
+- Historical plans, including the implemented schema-v11 Thread intermediate
+  and the superseded Task Capsule proposal, remain discoverable through
+  `docs/README.md` as archived records or decisions. They do not contribute
+  priorities.
 - `docs/manifest.yaml` is the lifecycle registry. `selfmind docs check` enforces
   complete inventory, UTF-8, local links, translation source hashes, size
   limits, review dates, and the one-active-plan rule.

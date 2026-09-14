@@ -91,6 +91,11 @@ func TestReadyModelsProceedToManagedRuntimeRepairWithoutModelPromptOrProbe(t *te
 			_ = json.NewEncoder(w).Encode(map[string]any{"workspace": map[string]any{
 				"id": "ws-test", "name": "project", "local_path": workspace,
 			}})
+		case "/v1/workspaces/trust":
+			actions = append(actions, "trust workspace")
+			_ = json.NewEncoder(w).Encode(map[string]any{"workspace": map[string]any{
+				"name": "project", "local_path": workspace, "trust_level": "trusted",
+			}})
 		case "/v1/message":
 			actions = append(actions, "set safety")
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
@@ -129,7 +134,12 @@ func TestReadyModelsProceedToManagedRuntimeRepairWithoutModelPromptOrProbe(t *te
 	if code != 0 || got == nil {
 		t.Fatalf("runtime repair code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
-	want := []string{"reconcile managed service", "register workspace", "set safety"}
+	// Setup prints "Repository instructions trusted"; the daemon is the only
+	// place trust lives, so the receipt must follow a real trust decision,
+	// recorded right after registration. Registration alone left every fresh
+	// machine's first session in a workspace the daemon still held as
+	// untrusted.
+	want := []string{"reconcile managed service", "register workspace", "trust workspace", "set safety"}
 	if strings.Join(actions, "|") != strings.Join(want, "|") {
 		t.Fatalf("runtime repair actions = %v, want %v", actions, want)
 	}
@@ -288,6 +298,10 @@ func TestActiveGatewayKeepsForegroundAvailableAsRuntimeDegraded(t *testing.T) {
 		case "/v1/workspaces/register":
 			_ = json.NewEncoder(w).Encode(map[string]any{"workspace": map[string]any{
 				"id": "ws-test", "name": "project", "local_path": workspace,
+			}})
+		case "/v1/workspaces/trust":
+			_ = json.NewEncoder(w).Encode(map[string]any{"workspace": map[string]any{
+				"name": "project", "local_path": workspace, "trust_level": "trusted",
 			}})
 		case "/v1/message":
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})

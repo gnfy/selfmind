@@ -526,6 +526,29 @@ func (a *App) revokeWorkspaceCapability(capability, workspaceID string) int {
 
 func (a *App) setWorkspaceTrust(workspaceID, trustLevel string) int {
 	a.ensureLocalGateway()
+	workspace, err := a.postWorkspaceTrust(workspaceID, trustLevel)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	fmt.Fprintf(a.stdout, "Workspace %s is now %s.\n%s\n", workspace.Name, workspace.TrustLevel, workspace.LocalPath)
+	return 0
+}
+
+// trustedWorkspace is the daemon's view of a workspace after a trust decision.
+type trustedWorkspace struct {
+	Name       string `json:"name"`
+	LocalPath  string `json:"local_path"`
+	TrustLevel string `json:"trust_level"`
+}
+
+// postWorkspaceTrust records a trust decision with the daemon, which is the
+// only place a workspace's trust lives. `selfmind ws trust` and onboarding both
+// go through it: onboarding used to print "Repository instructions trusted"
+// and write a local receipt without ever telling the daemon, so every fresh
+// machine started its first session in a workspace the daemon still held as
+// untrusted.
+func (a *App) postWorkspaceTrust(workspaceID, trustLevel string) (trustedWorkspace, error) {
 	req := api.WorkspaceTrustRequest{
 		TenantID:       os.Getenv("SELF_TENANT_ID"),
 		Platform:       "cli",
@@ -536,36 +559,27 @@ func (a *App) setWorkspaceTrust(workspaceID, trustLevel string) int {
 	body, _ := json.Marshal(req)
 	httpReq, err := http.NewRequestWithContext(a.ctx, http.MethodPost, a.gatewayURL()+"/v1/workspaces/trust", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+		return trustedWorkspace{}, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
 	a.attachLocalControlAuth(httpReq)
 	httpResp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+		return trustedWorkspace{}, err
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
-		return 1
+		return trustedWorkspace{}, fmt.Errorf("%s", gatewayErrorLine(httpResp.Status, data))
 	}
 	var payload struct {
-		Workspace struct {
-			Name       string `json:"name"`
-			LocalPath  string `json:"local_path"`
-			TrustLevel string `json:"trust_level"`
-		} `json:"workspace"`
+		Workspace trustedWorkspace `json:"workspace"`
 	}
 	if err := json.NewDecoder(httpResp.Body).Decode(&payload); err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+		return trustedWorkspace{}, err
 	}
-	fmt.Fprintf(a.stdout, "Workspace %s is now %s.\n%s\n", payload.Workspace.Name, payload.Workspace.TrustLevel, payload.Workspace.LocalPath)
-	return 0
+	return payload.Workspace, nil
 }
 
 func (a *App) attachLocalControlAuth(req *http.Request) {

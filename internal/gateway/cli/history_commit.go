@@ -247,10 +247,18 @@ func (m *uiModel) viewActiveRegion() string {
 	// last screen still carries a stale per-route "validating…" line and an
 	// "Enter continue" footer. Fall through to the ordinary active region so
 	// the animated progress row reports the daemon round trip instead.
-	if m.modelManager != nil && !m.modelApplying && m.approvalPrompt == nil && m.workspaceTrustPrompt == nil {
+	//
+	// The trust question does NOT preempt these overlays. Keys route to the
+	// model manager and the pager before anything else, so whatever they cover
+	// must be what is drawn: on a fresh machine the model manager opens as the
+	// sole screen while the digest arms the trust question, and drawing the
+	// question over the manager left the person pressing answers that a hidden
+	// wizard was consuming. The armed question waits and shows when the
+	// overlay closes.
+	if m.modelManager != nil && !m.modelApplying && m.approvalPrompt == nil {
 		return m.modelManager.View()
 	}
-	if m.pager != nil && m.approvalPrompt == nil && m.workspaceTrustPrompt == nil {
+	if m.pager != nil && m.approvalPrompt == nil {
 		return m.pager.View()
 	}
 	mainW := m.width

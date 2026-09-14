@@ -108,6 +108,13 @@ func (a *App) runOnboardingRuntimeStep(state *onboardingState, options onboardin
 		fmt.Fprintf(a.stderr, "Workspace setup failed: %v\n", err)
 		return 1
 	}
+	// Setup announces "Repository instructions trusted" for the directory the
+	// person chose. Registration alone leaves the daemon's workspace untrusted,
+	// so the receipt below must follow a real trust decision, not precede one.
+	if _, err := a.postWorkspaceTrust(workspace.ID, "trusted"); err != nil {
+		fmt.Fprintf(a.stderr, "Workspace trust setup failed: %v\n", err)
+		return 1
+	}
 	if err := a.setOnboardingApprovalMode(choice.ApprovalMode, workspace.ID); err != nil {
 		fmt.Fprintf(a.stderr, "Safety mode setup failed: %v\n", err)
 		return 1

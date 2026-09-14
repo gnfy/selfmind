@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/ui/components"
 )
 
 // TestTrustIsAskedOnceAtStartup pins the one-time trust question. Before this
@@ -339,6 +340,65 @@ func TestAddDirListingAnswersWithPathAndRelationship(t *testing.T) {
 	for _, want := range []string{"/work/shared  (../shared)", "/work  (contains proj)"} {
 		if !strings.Contains(listing, want) {
 			t.Errorf("/add-dir listing missing %q:\n%s", want, listing)
+		}
+	}
+}
+
+// Whatever is drawn on top must be what receives the keys. On a fresh machine
+// the model manager opens as the sole screen (model readiness missing) while
+// the startup digest arms the trust question; drawing the question over the
+// manager left the person pressing answers a hidden wizard consumed — the
+// onboarding "stuck at workspace trust" report. The question waits its turn.
+func TestTrustQuestionYieldsToOverlaysThatOwnTheKeys(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		open  func(m *uiModel)
+		close func(m *uiModel)
+		shows string
+	}{
+		{"model manager", func(m *uiModel) {
+			m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, nil, m.width, m.height, m.common.Theme)
+		}, func(m *uiModel) { m.modelManager = nil }, "Model Manager"},
+		{"pager", func(m *uiModel) {
+			m.pager = components.NewPager(m.common, m.width, m.height, func(int) string { return "transient page" })
+		}, func(m *uiModel) { m.pager = nil }, "transient page"},
+	} {
+		m := NewController("", "", nil, "").model
+		m.width, m.height = 100, 30
+		tc.open(m)
+		m.sessionWorkspace = &api.DigestWorkspace{ID: "ws_new", Name: "proj", Path: "/work/proj"}
+		if !m.armWorkspaceTrustPrompt() {
+			t.Fatalf("%s: the question did not arm", tc.name)
+		}
+
+		view := stripANSI(m.viewActiveRegion())
+		if strings.Contains(view, "Trust this workspace?") || !strings.Contains(view, tc.shows) {
+			t.Fatalf("%s: the question was drawn over an overlay that owns the keys:\n%s", tc.name, view)
+		}
+		// The keys that the screen invites go to the overlay, and the armed
+		// question is untouched by them.
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+		if m.workspaceTrustPrompt == nil {
+			t.Fatalf("%s: a key meant for the overlay answered the hidden question", tc.name)
+		}
+
+		// When the overlay closes, the question shows and answers.
+		tc.close(m)
+		view = stripANSI(m.viewActiveRegion())
+		if !strings.Contains(view, "Trust this workspace?") {
+			t.Fatalf("%s: the question did not surface after the overlay closed:\n%s", tc.name, view)
+		}
+		sent := ""
+		m.messageProcessor = func(_ context.Context, req api.MessageRequest) (api.MessageResponse, int) {
+			sent = req.Content
+			return api.MessageResponse{Content: "ok"}, 200
+		}
+		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")})
+		if cmd != nil {
+			cmd()
+		}
+		if m.workspaceTrustPrompt != nil || sent != "/ws trust" {
+			t.Fatalf("%s: the surfaced question did not answer: prompt=%v sent=%q", tc.name, m.workspaceTrustPrompt != nil, sent)
 		}
 	}
 }

@@ -1,0 +1,52 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "only"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9560,
+        "output_tokens": 102,
+        "cache_read_input_tokens": 9344,
+        "cache_miss_input_tokens": 216,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 8,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_UiafujbI2sfqijigcckI0132",
+          "Function": "write_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/closure.txt\", \"content\": \"READY\\n\"}"
+        }
+      ]
+    }
+  ]
+}

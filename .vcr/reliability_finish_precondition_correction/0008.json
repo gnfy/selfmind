@@ -1,0 +1,718 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Wait"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " succeeded"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " told"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " =\u003e"
+    },
+    {
+      "reasoning_content": " rejection"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " ret"
+    },
+    {
+      "reasoning_content": "ry"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " did"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " succeeded"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Good"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " final"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": " describing"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " thing"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Write"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": ".\""
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " did"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Good"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Final"
+    },
+    {
+      "reasoning_content": " answer"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Cl"
+    },
+    {
+      "content": "osure"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " done"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "closure"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " written"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": " containing"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " verified"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "g"
+    },
+    {
+      "content": "rep"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "qx"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": " closure"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "exit"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": ")."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " final"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "fin"
+    },
+    {
+      "content": "ish"
+    },
+    {
+      "content": "_run"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " status"
+    },
+    {
+      "content": " done"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " recovery"
+    },
+    {
+      "content": " sequence"
+    },
+    {
+      "content": " behaved"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " expected"
+    },
+    {
+      "content": ":\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " First"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "fin"
+    },
+    {
+      "content": "ish"
+    },
+    {
+      "content": "_run"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " while"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " still"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "in"
+    },
+    {
+      "content": "_pro"
+    },
+    {
+      "content": "gress"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " rejected"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "com"
+    },
+    {
+      "content": "pletion"
+    },
+    {
+      "content": "_pre"
+    },
+    {
+      "content": "condition"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "un"
+    },
+    {
+      "content": "res"
+    },
+    {
+      "content": "olved"
+    },
+    {
+      "content": " durable"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": ").\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Up"
+    },
+    {
+      "content": "dating"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "completed"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "ver"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "required"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " true"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " any"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " rejected"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "plan"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "ver"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "required"
+    },
+    {
+      "content": "`.\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " After"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " passing"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "verify"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " snapshot"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " accepted"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " ret"
+    },
+    {
+      "content": "ried"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "fin"
+    },
+    {
+      "content": "ish"
+    },
+    {
+      "content": "_run"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " returned"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " done"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 11028,
+        "output_tokens": 234,
+        "cache_read_input_tokens": 10368,
+        "cache_miss_input_tokens": 660,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 71,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

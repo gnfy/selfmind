@@ -238,7 +238,7 @@ func TestRunCompletionRequiresDeclaredVerificationEvidence(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
 	projection, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{{
-		Step: "Verify change", Status: "completed", VerificationRequired: true,
+		Step: "Verify change", Status: "in_progress", VerificationRequired: true,
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -246,8 +246,18 @@ func TestRunCompletionRequiresDeclaredVerificationEvidence(t *testing.T) {
 	if err := store.ValidateRunCompletion(ctx, identity.TenantID, run.ID); err == nil {
 		t.Fatal("required verification without evidence must reject completion")
 	}
-	if _, err := store.db.ExecContext(ctx, `UPDATE run_work_units SET verification_state='passed' WHERE run_id=? AND id=?`,
-		run.ID, projection.Plan.Steps[0].WorkUnitID); err != nil {
+	step := RunPlanStepInput{StepID: projection.Plan.Steps[0].StepID, Step: "Verify change", Status: "completed", VerificationRequired: true}
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{step}); err == nil {
+		t.Fatal("a required check must run before the work-unit evidence window closes")
+	}
+	plan, err := store.LatestRunPlan(ctx, identity.TenantID, run.ID)
+	if err != nil || plan.Steps[0].Status != "in_progress" || plan.Version != projection.Plan.Version {
+		t.Fatalf("rejected completion changed the plan: %+v err=%v", plan, err)
+	}
+	if _, err := store.AppendEvent(ctx, Event{RunID: run.ID, Type: "evidence.recorded", Payload: json.RawMessage(`{"evidence":{"kind":"verification","status":"succeeded","started_at_unix_nano":10,"finished_at_unix_nano":11,"command":{"command":"check","kind":"test","cwd":"/workspace"}}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{step}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.ValidateRunCompletion(ctx, identity.TenantID, run.ID); err != nil {

@@ -74,3 +74,17 @@ func TestProjectInteractionTaskHidesOnlySingleRunLabel(t *testing.T) {
 		t.Fatalf("presentation projection must not hide an actively executing Run: %+v", current)
 	}
 }
+
+func TestSelectionBoundaryPreservesDeliverableArtifactGuard(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, run := newRecoveryFixture(t)
+	for _, kind := range []string{"tool_output", "report"} {
+		if _, err := store.SaveArtifact(ctx, Artifact{TaskID: task.ID, RunID: run.ID, Kind: kind, URI: "file:///test/" + kind}); err != nil {
+			t.Fatal(err)
+		}
+		blocked, reason, err := store.RunSelectionEffectBoundary(ctx, identity.TenantID, identity.PersonID, run.ID)
+		if err != nil || blocked != (kind == "report") {
+			t.Fatalf("kind=%s blocked=%v reason=%s err=%v", kind, blocked, reason, err)
+		}
+	}
+}

@@ -8,11 +8,28 @@
 
 **Snapshot:** 2026-09-03
 
+Runtime closure update (2026-09-11): completion precondition failures permit
+one evidence-gated correction; the action ceiling reserves verification calls
+when available; verification preserves unhandled shell and pipeline failures;
+watcher syntax errors are distinct from unsupported observations; cumulative
+tool-result bounding also spools medium outputs. Required checks must pass
+before a work unit's completion freezes its evidence window. Missing final
+responses retain a bounded summary of recorded changes and checks.
+Read-only continuation now shares trusted tool registration facts with the
+execution ledger; captured outputs remain recoverable across a direct claim.
+Material effects still block implicit continuation, with a typed refusal and
+final next steps that reflect the actual queue state.
+Validation: full Go tests and all 68 local-full replay cases passed, including
+two new real-provider recordings for read-before-resume and mutation refusal.
+Installed locally as
+`v0.1.0-beta.24-local.read-resume.1`; managed restart and runtime version were
+verified. Sustained CLI/IM observation remains required.
+
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 64 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
+- Release corpus: 68 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
   declare `model_required: false`.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -150,20 +167,21 @@ limitation. It does not mean the area should be redesigned from scratch.
 
 ## Plan Lifecycle
 
-- Active plan: `docs/plans/task-capsule-work-history-redesign.zh-CN.md`, approved
-  in principle by the project owner for review on 2026-09-17. It keeps Run-owned
-  execution and derived Attention, replaces eager per-Run Thread creation with
-  asynchronous, reversible Task Capsules, narrows `resumes_run_id` to exact
-  execution recovery, and makes planning and external waiting completion-driven.
+- Active plan: `docs/plans/run-centric-work-history.zh-CN.md`, approved by
+  the project owner for review on 2026-09-18. It moves work-history authority
+  from Task/Thread to Runs and the person-level Work Journal, keeps exact
+  execution recovery, and includes context economics in the same delivery.
 - Paused plans: `docs/plans/main-turn-work-continuity.md`, approved for review
   on 2026-09-09; `docs/plans/daily-driver-closure.md`, approved for review on
   2026-09-11; and `docs/plans/external-skill-packages.md`, approved for review
-  on 2026-09-25. The continuity plan's remaining real CLI/IM evidence gates are
-  carried by the active Thread plan; the other scopes resume when the active
-  slot frees.
-- Historical plans, including the implemented schema-v11 Thread intermediate,
-  remain discoverable through `docs/README.md` as archived records or decisions.
-  They do not contribute priorities.
+  on 2026-09-25. The 2026-09-10 continuity verdict carries its remaining real
+  CLI/IM evidence gates into the active run-centric plan. The 2026-09-13
+  daily-driver verdict retains all outstanding evidence and acceptance gates
+  while paused; resumption is reassessed when the active slot frees.
+- Historical plans, including the implemented schema-v11 Thread intermediate
+  and the superseded Task Capsule proposal, remain discoverable through
+  `docs/README.md` as archived records or decisions. They do not contribute
+  priorities.
 - `docs/manifest.yaml` is the lifecycle registry. `selfmind docs check` enforces
   complete inventory, UTF-8, local links, translation source hashes, size
   limits, review dates, and the one-active-plan rule.

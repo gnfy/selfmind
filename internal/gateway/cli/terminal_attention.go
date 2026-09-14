@@ -101,14 +101,24 @@ func sanitizeAttentionMessage(message string) string {
 	return cleaned
 }
 
-// humanWaitKind names a reason a run has stopped and cannot continue until the
-// person answers. Every such surface signals the terminal, and this is the list
-// of them: adding one is a new constant, a subject line, and one call.
-type humanWaitKind string
+// attentionKind names a moment worth pulling the person back to this terminal:
+// a run that has stopped until they answer, or background work that reached
+// the outcome they walked away waiting for. Every such surface signals the
+// terminal, and this is the list of them: adding one is a new constant, a
+// subject line, and one call.
+type attentionKind string
 
 const (
-	humanWaitApproval      humanWaitKind = "approval"
-	humanWaitClarification humanWaitKind = "clarification"
+	attentionApproval      attentionKind = "approval"
+	attentionClarification attentionKind = "clarification"
+	// attentionParkedApproval is an approval whose run has already released its
+	// resources; the answer starts a continuation. It is the easiest one to
+	// miss, because nothing on screen is visibly running any more.
+	attentionParkedApproval attentionKind = "parked_approval"
+	// attentionBackgroundDone is a watcher or daemon-originated run reaching
+	// its outcome. The person delegated it precisely so they could look away.
+	attentionBackgroundDone   attentionKind = "background_done"
+	attentionBackgroundFailed attentionKind = "background_failed"
 )
 
 // attentionSubject is the notification body for one kind.
@@ -119,15 +129,28 @@ const (
 // redaction the transcript applies, so a command, a path, or a model-authored
 // question must never travel in it — and a rule that lives only in a comment
 // at each call site is a rule the next call site will miss.
-func attentionSubject(kind humanWaitKind, detail string) string {
+func attentionSubject(kind attentionKind, detail string) string {
+	name := shortIdentifier(detail)
 	switch kind {
-	case humanWaitApproval:
-		if name := shortIdentifier(detail); name != "" {
+	case attentionApproval:
+		if name != "" {
 			return "SelfMind needs your approval: " + name
 		}
 		return "SelfMind needs your approval"
-	case humanWaitClarification:
+	case attentionParkedApproval:
+		if name != "" {
+			return "SelfMind still needs your approval: " + name
+		}
+		return "SelfMind still needs your approval"
+	case attentionClarification:
 		return "SelfMind is waiting on your answer"
+	case attentionBackgroundDone:
+		if name != "" {
+			return "SelfMind finished background work: " + name
+		}
+		return "SelfMind finished background work"
+	case attentionBackgroundFailed:
+		return "SelfMind background work failed"
 	default:
 		return "SelfMind is waiting on you"
 	}
@@ -151,14 +174,14 @@ func shortIdentifier(value string) string {
 	return value
 }
 
-// signalHumanWait alerts this terminal that a run has parked on the person, and
-// schedules it for after Update returns: arming a prompt is called from several
-// places, some with no command of their own, so the signal rides the same
-// deferral the committed transcript lines use.
+// signalAttention alerts this terminal and schedules the write for after
+// Update returns: the surfaces that call it are reached from several places,
+// some with no command of their own, so the signal rides the same deferral
+// the committed transcript lines use.
 //
-// This is the one entry point. A new human-wait surface calls it with its kind;
-// it does not build a message, choose a sequence, or decide about focus.
-func (m *uiModel) signalHumanWait(kind humanWaitKind, detail string) {
+// This is the one entry point. A new surface calls it with its kind; it does
+// not build a message, choose a sequence, or decide about focus.
+func (m *uiModel) signalAttention(kind attentionKind, detail string) {
 	if cmd := m.notifyTerminalAttention(attentionSubject(kind, detail)); cmd != nil {
 		m.pendingCmds = append(m.pendingCmds, cmd)
 	}

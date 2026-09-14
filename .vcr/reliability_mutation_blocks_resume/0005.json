@@ -1,0 +1,127 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " attempt"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Expect"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " material"
+    },
+    {
+      "reasoning_content": "-effect"
+    },
+    {
+      "reasoning_content": " refusal"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " que"
+    },
+    {
+      "reasoning_content": "ued"
+    },
+    {
+      "reasoning_content": " proposal"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Now"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " resume"
+    },
+    {
+      "content": " attempt"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11404,
+        "output_tokens": 112,
+        "cache_read_input_tokens": 11136,
+        "cache_miss_input_tokens": 268,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 24,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_JEZ2cY04sbnPC5n5VA2h7312",
+          "Function": "work_select",
+          "Args": "{\"action\": \"resume\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

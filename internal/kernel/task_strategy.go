@@ -74,12 +74,12 @@ const planGuidanceEscalationThreshold = 2
 // not work, and a provably read-only observation is not either: a turn that
 // only looks at state may still be a direct answer that needs no visible plan.
 // Everything else — mutation, commands, unknown tools — fails toward "this is
-// real work", matching ClassifyToolRetry's safest-assumption default.
-func countsTowardPlanEvidence(toolName string) bool {
+// real work", using the same dispatch classification as the durable ledger.
+func countsTowardPlanEvidence(toolName string, retryClass ToolRetryClass) bool {
 	if isLifecycleToolName(toolName) {
 		return false
 	}
-	return ClassifyToolRetry(toolName) != ToolRetryReadOnly
+	return retryClass != ToolRetryReadOnly
 }
 
 // WithPlanRequired escalates plan guidance to PlanPolicyRequired. A turn the
@@ -138,6 +138,9 @@ type TaskStrategy struct {
 	ActionToolBudgetStep  int
 	ActionToolBudgetLimit int
 	MaxBudgetExtensions   int
+	// CompletionReserve is installed from actual tool availability, never
+	// request keywords. It keeps part of the existing hard ceiling for checks.
+	CompletionReserve     int
 	RequireProgressEvents bool
 	ChannelMode           string
 	Reason                string
@@ -353,9 +356,7 @@ func (s TaskStrategy) WithWebEnabled() TaskStrategy {
 
 func (s TaskStrategy) WithActionToolsDisabled() TaskStrategy {
 	s = s.normalized()
-	if s.AllowedTools == nil {
-		s.AllowedTools = map[string]bool{}
-	}
+	s.AllowedTools = map[string]bool{}
 	for _, name := range lifecycleToolNames() {
 		if !s.HiddenTools[name] {
 			s.AllowedTools[name] = true

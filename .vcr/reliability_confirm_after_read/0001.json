@@ -1,0 +1,108 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " inspecting"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " find"
+    },
+    {
+      "reasoning_content": " instructions"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " find"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "instructions"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9036,
+        "output_tokens": 107,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9036,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 12,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_4D1p0NLy2QMLf4KQv0Pa8682",
+          "Function": "ls_r",
+          "Args": "{\"path\": \".\", \"recursive\": true}"
+        },
+        {
+          "ID": "call_01_Kfcm634FHzOa0mFR4Fgj2706",
+          "Function": "read_file",
+          "Args": "{\"path\": \"instructions.txt\"}"
+        }
+      ]
+    }
+  ]
+}

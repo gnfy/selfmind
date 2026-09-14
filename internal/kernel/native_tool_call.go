@@ -12,13 +12,15 @@ import (
 )
 
 type toolExecutionResult struct {
-	index     int
-	step      string
-	msg       llm.Message
-	toolName  string
-	signature string
-	rawResult string
-	success   bool
+	index      int
+	step       string
+	msg        llm.Message
+	toolName   string
+	signature  string
+	rawResult  string
+	success    bool
+	errorCode  string
+	retryClass ToolRetryClass
 }
 
 type toolLifecycleHandoff struct {
@@ -113,6 +115,10 @@ func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrat
 			continue
 		}
 		if remaining <= 0 {
+			dropped++
+			continue
+		}
+		if strategy.MaxActionTools == strategy.ActionToolBudgetLimit && remaining <= strategy.CompletionReserve && call.Function != "verify" {
 			dropped++
 			continue
 		}
@@ -502,7 +508,11 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	// hard correctness boundary: if the claim cannot be persisted, or the same
 	// call id was already claimed, do not execute the side effect.
 	var ledgerRunID string
-	retryClass := ClassifyToolRetry(name)
+	var dispatchMetadata []ToolExecutionMetadata
+	if provider, ok := a.backend.(ToolExecutionMetadataProvider); ok {
+		dispatchMetadata = append(dispatchMetadata, provider.ToolExecutionMetadata(name, args))
+	}
+	retryClass := ClassifyToolRetry(name, dispatchMetadata...)
 	recoveryAttempt := recoveryAttemptFromCall(ctx, name, args, signature, retryClass)
 	if policy := RecoveryPolicyFromContext(ctx); policy != nil {
 		if policyErr := policy.BeforeDispatch(recoveryAttempt); policyErr != nil {
@@ -544,8 +554,8 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 
 	if eventCh != nil {
 		payload := map[string]interface{}{}
-		if provider, ok := a.backend.(ToolExecutionMetadataProvider); ok {
-			metadata := provider.ToolExecutionMetadata(name, args)
+		if len(dispatchMetadata) > 0 {
+			metadata := dispatchMetadata[0]
 			payload["tool_origin"] = metadata.Origin
 			payload["tool_category"] = metadata.Category
 			payload["tool_risk_level"] = metadata.RiskLevel
@@ -608,6 +618,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			index:     idx,
 			step:      packaged.ModelContent,
 			toolName:  name,
+			errorCode: packaged.ErrorCode,
 			signature: signature,
 			msg: llm.Message{
 				Role:       "tool",
@@ -639,12 +650,13 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 
 	return toolExecutionResult{
-		index:     idx,
-		step:      toolHistoryStep(name, packaged),
-		toolName:  name,
-		signature: signature,
-		rawResult: result,
-		success:   true,
+		index:      idx,
+		step:       toolHistoryStep(name, packaged),
+		toolName:   name,
+		signature:  signature,
+		rawResult:  result,
+		success:    true,
+		retryClass: retryClass,
 		msg: llm.Message{
 			Role:       "tool",
 			Content:    packaged.ModelContent,

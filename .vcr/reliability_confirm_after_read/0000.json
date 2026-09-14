@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "instructions.txt result.txt finish_run waiting_user brief_plan"
+}

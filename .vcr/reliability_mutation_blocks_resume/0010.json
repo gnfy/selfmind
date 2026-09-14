@@ -1,0 +1,1117 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Done"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " parked"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Here"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " what"
+    },
+    {
+      "content": " actually"
+    },
+    {
+      "content": " happened"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "What"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " did"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " W"
+    },
+    {
+      "content": "rote"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "local"
+    },
+    {
+      "content": "-n"
+    },
+    {
+      "content": "ote"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "LOC"
+    },
+    {
+      "content": "AL"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": "_root"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " verified"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "test"
+    },
+    {
+      "content": " \"$"
+    },
+    {
+      "content": "("
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " local"
+    },
+    {
+      "content": "-n"
+    },
+    {
+      "content": "ote"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": ")\""
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "LOC"
+    },
+    {
+      "content": "AL"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " place"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " inspection"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Insp"
+    },
+    {
+      "content": "ected"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "run"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "cc"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "362"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "74"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "cf"
+    },
+    {
+      "content": "-a"
+    },
+    {
+      "content": "51"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "324"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "087"
+    },
+    {
+      "content": "865"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "task"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "task"
+    },
+    {
+      "content": "_d"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "eb"
+    },
+    {
+      "content": "34"
+    },
+    {
+      "content": "bc"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "fe"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "dc"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "92"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": "618"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "Pre"
+    },
+    {
+      "content": "pared"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "):"
+    },
+    {
+      "content": " status"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " same"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " summary"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "When"
+    },
+    {
+      "content": " confirmed"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " create"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": " containing"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": ".\"\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Attempt"
+    },
+    {
+      "content": "ed"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "work"
+    },
+    {
+      "content": "_select"
+    },
+    {
+      "content": " resume"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " boundary"
+    },
+    {
+      "content": " refusal"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " resume"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " refused"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "work"
+    },
+    {
+      "content": "_se"
+    },
+    {
+      "content": "lection"
+    },
+    {
+      "content": "_block"
+    },
+    {
+      "content": "ed"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " /"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "st"
+    },
+    {
+      "content": "ale"
+    },
+    {
+      "content": "_pre"
+    },
+    {
+      "content": "condition"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "effect"
+    },
+    {
+      "content": "_state"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": "_dis"
+    },
+    {
+      "content": "pat"
+    },
+    {
+      "content": "ched"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " reason"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " this"
+    },
+    {
+      "content": " interaction"
+    },
+    {
+      "content": " had"
+    },
+    {
+      "content": " already"
+    },
+    {
+      "content": " produced"
+    },
+    {
+      "content": " material"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "local"
+    },
+    {
+      "content": "-n"
+    },
+    {
+      "content": "ote"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " write"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " historical"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " claimed"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " que"
+    },
+    {
+      "content": "ued"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " It"
+    },
+    {
+      "content": " will"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " continue"
+    },
+    {
+      "content": " automatically"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " did"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " ret"
+    },
+    {
+      "content": "ry"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " selection"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " promise"
+    },
+    {
+      "content": " any"
+    },
+    {
+      "content": " background"
+    },
+    {
+      "content": " hand"
+    },
+    {
+      "content": "off"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "What"
+    },
+    {
+      "content": " requires"
+    },
+    {
+      "content": " your"
+    },
+    {
+      "content": " decision"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " created"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " prepared"
+    },
+    {
+      "content": " work"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " still"
+    },
+    {
+      "content": " un"
+    },
+    {
+      "content": "exec"
+    },
+    {
+      "content": "uted"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " To"
+    },
+    {
+      "content": " continue"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " clean"
+    },
+    {
+      "content": "est"
+    },
+    {
+      "content": " path"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " fresh"
+    },
+    {
+      "content": " interaction"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " prior"
+    },
+    {
+      "content": " material"
+    },
+    {
+      "content": " effect"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " where"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " prepared"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " resume"
+    },
+    {
+      "content": " can"
+    },
+    {
+      "content": " be"
+    },
+    {
+      "content": " claimed"
+    },
+    {
+      "content": " directly"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Alternatively"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " tell"
+    },
+    {
+      "content": " me"
+    },
+    {
+      "content": " explicitly"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " continuation"
+    },
+    {
+      "content": " should"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " be"
+    },
+    {
+      "content": " carried"
+    },
+    {
+      "content": " over"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " can"
+    },
+    {
+      "content": " lapse"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Note"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " finishing"
+    },
+    {
+      "content": " this"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " does"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " close"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " earlier"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "Pre"
+    },
+    {
+      "content": "pared"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " still"
+    },
+    {
+      "content": " waits"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " your"
+    },
+    {
+      "content": " call"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 14520,
+        "output_tokens": 367,
+        "cache_read_input_tokens": 3456,
+        "cache_miss_input_tokens": 11064,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

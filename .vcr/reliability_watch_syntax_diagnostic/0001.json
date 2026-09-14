@@ -1,0 +1,286 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "printf"
+    },
+    {
+      "reasoning_content": " %"
+    },
+    {
+      "reasoning_content": "s"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": ")`"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " deliberately"
+    },
+    {
+      "reasoning_content": " invalid"
+    },
+    {
+      "reasoning_content": " shell"
+    },
+    {
+      "reasoning_content": " syntax"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " report"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " error"
+    },
+    {
+      "reasoning_content": " code"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " explain"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " quoting"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " literal"
+    },
+    {
+      "reasoning_content": " argument"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " correction"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " make"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " requested"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "watch"
+    },
+    {
+      "content": "_ex"
+    },
+    {
+      "content": "ternal"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " call"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " deliberately"
+    },
+    {
+      "content": " invalid"
+    },
+    {
+      "content": " syntax"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " report"
+    },
+    {
+      "content": " what"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " returns"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9059,
+        "output_tokens": 172,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9059,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 62,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_g5u2mBKbk3zaGjk50QVY8347",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"printf %s (READY)\", \"success_pattern\": \"READY\", \"description\": \"Static-validation exercise: intentionally unquoted printf argument\"}"
+        }
+      ]
+    }
+  ]
+}

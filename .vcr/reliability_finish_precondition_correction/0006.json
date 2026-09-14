@@ -1,0 +1,343 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " returned"
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " presumably"
+    },
+    {
+      "reasoning_content": " succeeded"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": "—"
+    },
+    {
+      "reasoning_content": "it"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Tool"
+    },
+    {
+      "reasoning_content": " ran"
+    },
+    {
+      "reasoning_content": " without"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " errors"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Pres"
+    },
+    {
+      "reasoning_content": "umably"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " want"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " confirm"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " records"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " It"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " errors"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Good"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": " true"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "same"
+    },
+    {
+      "reasoning_content": " snapshot"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": " exists"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "content": "Ver"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Now"
+    },
+    {
+      "content": " completing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " ret"
+    },
+    {
+      "content": "rying"
+    },
+    {
+      "content": " finish"
+    },
+    {
+      "content": "_run"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10709,
+        "output_tokens": 220,
+        "cache_read_input_tokens": 9856,
+        "cache_miss_input_tokens": 853,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 91,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_pPTGRoUXN0j9HZKB1cd01273",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"step\": \"Write closure.txt containing READY\", \"status\": \"completed\", \"success_criteria\": \"closure.txt exists in the workspace and contains exactly READY\", \"verification_required\": true}]}"
+        }
+      ]
+    }
+  ]
+}

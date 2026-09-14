@@ -49,13 +49,22 @@ var idempotentLedgerTools = map[string]struct{}{
 	"update_plan": {}, "finish_run": {}, "queue_user_input": {}, "work_select": {}, "write_file": {}, "patch": {}, "edit": {},
 }
 
-// ClassifyToolRetry grades a tool. The default is the SAFEST assumption
-// (side-effect requiring verification), so an unknown or new tool never earns
-// a blind re-run by omission.
-func ClassifyToolRetry(name string) ToolRetryClass {
+// ClassifyToolRetry uses trusted built-in registration facts when available.
+// The name catalogue is only a compatibility fallback for metadata-free
+// backends. External declarations cannot grant blind replay authority.
+func ClassifyToolRetry(name string, metadata ...ToolExecutionMetadata) ToolRetryClass {
 	name = strings.TrimSpace(name)
-	if _, ok := readOnlyLedgerTools[name]; ok {
-		return ToolRetryReadOnly
+	if len(metadata) > 0 {
+		if metadata[0].Origin != "builtin" {
+			return ToolRetrySideEffect
+		}
+		if metadata[0].ReadOnly {
+			return ToolRetryReadOnly
+		}
+	} else {
+		if _, ok := readOnlyLedgerTools[name]; ok {
+			return ToolRetryReadOnly
+		}
 	}
 	if _, ok := idempotentLedgerTools[name]; ok {
 		return ToolRetryIdempotent

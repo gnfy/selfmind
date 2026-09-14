@@ -1,0 +1,30 @@
+id: reliability_watch_syntax_diagnostic
+title: "Malformed observation commands report syntax rather than missing capability"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+turns:
+  - input: >-
+      This is an isolated static-validation exercise. Call watch_external once
+      with command `printf %s (READY)` and success_pattern READY. Keep that
+      deliberately invalid shell syntax unchanged for this test. Do not retry
+      or register another watcher. Report the returned error code and explain
+      that quoting the literal argument is the correction, not installing a
+      provider or granting more permissions. No external state needs observing.
+expect:
+  status: completed
+  max_tool_errors: 1
+  max_duration_seconds: 120
+  contains: [watch_command_syntax]
+  disallowed_error_category: [capability_unavailable]
+assert_state:
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_code":"watch_command_syntax"'
+    count_gte: 1
+    count_lte: 1
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_provider_stack_dump: true

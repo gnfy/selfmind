@@ -397,6 +397,10 @@ those placeholders from the current request messages; raw recording-time UUIDs
 or `candidate_ref` values are invalid release evidence. This normalization is
 VCR-only and does not weaken production scope validation.
 
+Durable plan step IDs use `{{SELFMIND_VCR_PLAN_STEP_N}}` under the same
+request-aware mapping. Each replay uses the current Run's issued step IDs;
+recording-run IDs must never be copied into a new Run or committed cassette.
+
 ## Architecture
 
 - `internal/eval/case.go` parses YAML fixtures.

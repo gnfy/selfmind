@@ -1074,6 +1074,15 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		maxIterations = 2
 	}
 	actionToolsUsed := 0
+	// Reserve checks only when this role actually has the verification tool.
+	// This is part of the existing hard ceiling, never an extra execution grant.
+	if strategy.normalized().ActionToolBudgetLimit >= 8 {
+		for _, def := range a.llmToolDefinitions(ctx, strategy) {
+			if def.Name == "verify" && !strategy.VerificationOnly {
+				strategy.CompletionReserve = 2
+			}
+		}
+	}
 	actionToolBudget := strategy.normalized().MaxActionTools
 	actionToolBudgetLimit := strategy.normalized().ActionToolBudgetLimit
 	budgetExtensions := 0
@@ -1081,12 +1090,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	progressAtLastBudgetDecision := 0
 	successfulActionEvidence := map[string]struct{}{}
 	toolUseCounts := map[string]int{}
-	// Artifact-backed tool results appended this turn, by message index and
+	// Tool results appended this turn, by stable tool-call id and
 	// the iteration that produced them: after toolResultAgeIterations they are
 	// shrunk in place (losslessly — the artifact keeps the full output
 	// addressable) so old verbatim bodies stop crowding the window.
-	type agedToolMsg struct{ index, iteration int }
-	var artifactToolMsgs []agedToolMsg
+	artifactToolIterations := map[string]int{}
+	closureNoticeIssued := false
 	toolBudgetRepairIssued := false
 	toolBudgetExhausted := false
 	planSeen := false
@@ -1099,6 +1108,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	planEvidenceTools := 0
 	planGuidanceEscalated := false
 	successfulFinishStatus := ""
+	var finishRepair finishCorrection
 	tryExtendToolBudget := func(iteration int) bool {
 		if actionToolBudget <= 0 || actionToolBudget >= actionToolBudgetLimit || budgetExtensions >= strategy.normalized().MaxBudgetExtensions {
 			return false
@@ -1193,6 +1203,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 		iterationStrategy := strategy
 		iterationStrategy.MaxActionTools = actionToolBudget
+		if strategy.CompletionReserve > 0 && actionToolsUsed >= actionToolBudgetLimit-6 && !closureNoticeIssued {
+			closureNoticeIssued = true
+			messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("SelfMind has %d action calls left before the hard limit; the final %d are reserved for verify. Finish the current scope, update the plan to match observed progress, and verify the final changes. Do not expand the work. If incomplete, report the artifacts, actual checks, and exact remaining step.", actionToolBudgetLimit-actionToolsUsed, strategy.CompletionReserve)})
+		}
+		if strategy.CompletionReserve > 0 && actionToolsUsed >= actionToolBudgetLimit-strategy.CompletionReserve {
+			iterationStrategy.AllowedTools = map[string]bool{}
+			for _, name := range append(lifecycleToolNames(), "verify") {
+				if strategy.AllowsTool(name) {
+					iterationStrategy.AllowedTools[name] = true
+				}
+			}
+		}
 		if actionToolBudgetReached(iterationStrategy, actionToolsUsed) {
 			if tryExtendToolBudget(i) {
 				iterationStrategy.MaxActionTools = actionToolBudget
@@ -1538,8 +1560,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			actionToolsUsed += countActionToolCalls(calls)
 			incrementToolUseCounts(toolUseCounts, calls)
 			remainingNestedBudget := actionToolBudget - actionToolsUsed
+			if actionToolBudget == actionToolBudgetLimit {
+				remainingNestedBudget = max(0, remainingNestedBudget-strategy.CompletionReserve)
+			}
 			toolCtx, nestedToolsUsed := WithNestedActionToolBudget(ctx, remainingNestedBudget)
 			results := a.executeToolCalls(toolCtx, tenantID, eventCh, calls)
+			finishRepair.observe(results, toolUseCounts)
 			actionToolsUsed += nestedToolsUsed()
 			for idx, res := range results {
 				if !res.success || idx >= len(calls) {
@@ -1557,26 +1583,14 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			// Age out earlier artifact-backed tool results before appending
 			// fresh evidence: this iteration's output matters more than the
 			// verbatim body of one from 3+ iterations ago.
-			for _, aged := range artifactToolMsgs {
-				if i-aged.iteration < toolResultAgeIterations {
+			for index, msg := range messages {
+				iteration, tracked := artifactToolIterations[msg.ToolCallID]
+				if msg.Role != "tool" || !tracked || i-iteration < toolResultAgeIterations {
 					continue
 				}
-				if shrunk, ok := shrinkAgedToolResult(messages[aged.index].Content); ok {
-					messages[aged.index].Content = shrunk
+				if shrunk, ok := shrinkAgedToolResult(msg.Content); ok {
+					messages[index].Content = shrunk
 				}
-			}
-			// Then the cumulative cap: the age rule is per-result, so a window
-			// of several large results can still dominate the request even
-			// when none of them is individually old enough to shrink.
-			budgetIndexes := make([]int, 0, len(artifactToolMsgs))
-			for _, aged := range artifactToolMsgs {
-				budgetIndexes = append(budgetIndexes, aged.index)
-			}
-			if shrunk := enforceToolResultTurnBudget(messages, budgetIndexes); shrunk > 0 {
-				EmitAgentEvent(eventCh, AgentEvent{Type: "context.tool_results_aged", Payload: map[string]interface{}{
-					"messages": shrunk, "budget_bytes": toolResultTurnBudgetBytes,
-					"live_bytes": liveToolResultBytes(messages), "iteration": i,
-				}})
 			}
 
 			// Append results in order
@@ -1618,14 +1632,22 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					if _, seen := successfulActionEvidence[res.signature]; !seen {
 						successfulActionEvidence[res.signature] = struct{}{}
 						progressVersion++
-						if countsTowardPlanEvidence(res.toolName) {
+						if countsTowardPlanEvidence(res.toolName, res.retryClass) {
 							planEvidenceTools++
 						}
 					}
 				}
 				if res.msg.Role == "tool" && strings.Contains(res.msg.Content, toolArtifactNoteToken) {
-					artifactToolMsgs = append(artifactToolMsgs, agedToolMsg{index: len(messages) - 1, iteration: i})
+					artifactToolIterations[res.msg.ToolCallID] = i
 				}
+			}
+			// Include the fresh batch and spool medium outputs before the next
+			// provider request. Unspooled evidence is retained if saving fails.
+			if shrunk := enforceToolResultTurnBudget(ctx, messages); shrunk > 0 {
+				EmitAgentEvent(eventCh, AgentEvent{Type: "context.tool_results_aged", Payload: map[string]interface{}{
+					"messages": shrunk, "budget_bytes": toolResultTurnBudgetBytes,
+					"live_bytes": liveToolResultBytes(messages), "iteration": i,
+				}})
 			}
 			handoff, handoffReady := lifecycleHandoffFromToolResults(results)
 			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
@@ -1672,15 +1694,19 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				continue
 			}
 			toolBudgetRepairIssued = true
-			toolBudgetExhausted = true
+			reserveAvailable := strategy.CompletionReserve > 0 && actionToolsUsed >= actionToolBudgetLimit-strategy.CompletionReserve && actionToolsUsed < actionToolBudgetLimit
+			toolBudgetExhausted = !reserveAvailable
 			if i+1 >= maxIterations {
 				maxIterations = i + 2
 			}
 			emitAgentActivity(eventCh, "Tool budget reached; finishing from collected evidence", "tool_budget", i)
+			finalizeHint := "SelfMind tool budget for this turn has been reached. Use the remaining lifecycle tools to record the plan and outcome, then write the final answer from collected evidence. If incomplete, state the blocker and exact next action."
+			if reserveAvailable {
+				finalizeHint = "SelfMind reserved the remaining action calls for verify. Use verify for the outstanding checks, then resolve the plan and finish_run according to the evidence. Further implementation calls are unavailable."
+			}
 			messages = append(messages, llm.Message{
-				Role: "user",
-				Content: "SelfMind tool budget for this turn has been reached. Do not call any more tools and do not output TOOL markup. " +
-					"Write the final user-facing answer now from the evidence already collected. If the task cannot be fully completed, state the blocker and the exact next action in plain text.",
+				Role:    "user",
+				Content: finalizeHint,
 			})
 			recordStep(i, StepContinueModel, "budget_exhausted_finalize")
 			continue

@@ -1,0 +1,48 @@
+id: reliability_finish_precondition_correction
+title: "A rejected finish can be corrected after the durable plan changes"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+turns:
+  - input: >-
+      Exercise completion recovery in this isolated workspace. Create a one-step
+      visible plan to write closure.txt containing READY. Write that file, but
+      deliberately leave the plan step in_progress and call finish_run with
+      status done once: its precondition rejection is the behavior being tested.
+      After that rejection, try updating the same step to completed with
+      verification_required true. Its missing-verification rejection is also
+      expected. Use verify to check that closure.txt contains READY, then update
+      the same step to completed and retry finish_run once. Write the file only
+      once. The final result should describe the completed file.
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  verification_state: passed
+  max_tool_errors: 2
+  max_duration_seconds: 180
+assert_state:
+  - on: file
+    path: closure.txt
+    contains: READY
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_code":"plan_verification_required"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_code":"completion_precondition"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: tool.started
+    payload_contains: '"tool":"finish_run"'
+    count_gte: 2
+    count_lte: 2
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

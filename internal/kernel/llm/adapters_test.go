@@ -1118,3 +1118,65 @@ func TestOpenRouterStreamChatKeepsAttributionHeaders(t *testing.T) {
 		})
 	}
 }
+
+// JSON mode is the Chat Completions standard for "answer with a JSON object";
+// asking in the prompt is not one. The option is forwarded verbatim when set
+// and absent from the wire otherwise, so prose callers see no change.
+func TestOpenAIRequestForwardsResponseFormatOnlyWhenAsked(t *testing.T) {
+	format := map[string]interface{}{"type": "json_object"}
+	with := openAIRequestFromChat("m", ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Options:  map[string]interface{}{"response_format": format},
+	}, false)
+	got, _ := with.ResponseFormat.(map[string]interface{})
+	if got["type"] != "json_object" {
+		t.Fatalf("response_format = %#v, want json_object", with.ResponseFormat)
+	}
+	body, err := json.Marshal(with)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"response_format":{"type":"json_object"}`) {
+		t.Fatalf("wire body lacks response_format: %s", body)
+	}
+
+	without := openAIRequestFromChat("m", ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}}, false)
+	body, _ = json.Marshal(without)
+	if without.ResponseFormat != nil || strings.Contains(string(body), "response_format") {
+		t.Fatalf("response_format leaked into a request that did not ask for it: %s", body)
+	}
+}
+
+// ChatRequest.SystemPrompt is part of the request contract. This adapter used
+// to drop it, so every caller that set the field rather than a system-role
+// message ran against OpenAI-compatible providers with no instructions:
+// the maintenance analyzer produced 12-token replies for a week, and a small
+// model asked (in the prompt it never received) for a JSON object answered
+// with a YAML echo on every attempt.
+func TestOpenAIRequestCarriesSystemPromptAsLeadingSystemMessage(t *testing.T) {
+	got := openAIRequestFromChat("m", ChatRequest{
+		SystemPrompt: "Return one JSON object only.",
+		Messages:     []Message{{Role: "user", Content: "hi"}},
+	}, false)
+	if len(got.Messages) != 2 || got.Messages[0].Role != "system" || contentString(got.Messages[0].Content) != "Return one JSON object only." {
+		t.Fatalf("system prompt did not reach the wire: %+v", got.Messages)
+	}
+	if got.Messages[1].Role != "user" {
+		t.Fatalf("user message displaced: %+v", got.Messages)
+	}
+
+	// The agent loop supplies its own system message; it must not get two.
+	own := openAIRequestFromChat("m", ChatRequest{
+		SystemPrompt: "duplicate",
+		Messages:     []Message{{Role: "system", Content: "the real one"}, {Role: "user", Content: "hi"}},
+	}, false)
+	if len(own.Messages) != 2 || contentString(own.Messages[0].Content) != "the real one" {
+		t.Fatalf("a caller-supplied system message was duplicated or replaced: %+v", own.Messages)
+	}
+
+	// No system prompt, no system message.
+	none := openAIRequestFromChat("m", ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}}, false)
+	if len(none.Messages) != 1 || none.Messages[0].Role != "user" {
+		t.Fatalf("an empty system prompt produced a message: %+v", none.Messages)
+	}
+}

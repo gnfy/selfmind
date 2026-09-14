@@ -1,0 +1,28 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13214,
+        "output_tokens": 371,
+        "cache_read_input_tokens": 13056,
+        "cache_miss_input_tokens": 158,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_LvjQjKgrOVEin0BCeZZ71843",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Create local-note.txt containing LOCAL in this new interaction\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"success_criteria\": \"local-note.txt exists in workspace_root with content LOCAL\", \"verification_required\": true}, {\"status\": \"completed\", \"step\": \"Inspect the waiting Prepared result file run\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\", \"success_criteria\": \"Exact run_id and its waiting precondition are confirmed via work_inspect\"}, {\"status\": \"completed\", \"step\": \"Attempt work_select resume once and record the boundary outcome\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\", \"success_criteria\": \"One resume attempt made and its result (claimed/queued/refused) recorded\"}, {\"status\": \"completed\", \"step\": \"Finish as waiting_user with an accurate explanation\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_4}}\", \"success_criteria\": \"finish_run reports waiting_user, states the refusal and the user decision required\"}], \"explanation\": \"Write step verified with file content check; all steps resolved, reporting waiting_user for the blocked continuation.\"}"
+        }
+      ]
+    }
+  ]
+}

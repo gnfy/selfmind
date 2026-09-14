@@ -1,0 +1,49 @@
+id: reliability_confirm_after_read
+title: "Confirmation survives read-only discovery and completes the prepared work"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [ls, od, tr, wc]
+setup:
+  files:
+    instructions.txt: "The accepted result is result.txt containing exactly READY followed by a newline."
+turns:
+  - input: >-
+      Read instructions.txt and prepare a brief plan for producing result.txt.
+      This turn is preparation only: leave result.txt for after my confirmation
+      and use finish_run with waiting_user to record the pending work.
+  - input: >-
+      执行。先用 batch_read 读取 instructions.txt，复核要求，然后通过
+      work_inspect 和 work_select 恢复刚才等待确认的 Run。在本轮完成
+      result.txt，使用 verify 检查内容，完成计划并给出结果。
+expect:
+  status: completed
+  completion_reason: completed
+  verification_state: passed
+  resumable: false
+  max_tool_errors: 0
+  max_duration_seconds: 180
+assert_state:
+  - on: file
+    path: result.txt
+    contains: READY
+  - on: run
+    field: resumes_run_id
+    empty: false
+  - on: events
+    type: work.selection_committed
+    payload_contains: '"commit_mode":"direct"'
+    count_gte: 1
+  - on: events
+    type: work.selection_rejected
+    count_lte: 0
+  - on: events
+    type: tool.started
+    payload_contains: '"tool":"batch_read"'
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_raw_json_leak: true

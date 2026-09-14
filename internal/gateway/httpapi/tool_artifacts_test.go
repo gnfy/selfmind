@@ -39,7 +39,6 @@ func newSinkHarness(t *testing.T) (*toolArtifactSink, *control.Store, string) {
 		dir:      filepath.Join(spool, identity.PersonID),
 		store:    store,
 		tenantID: identity.TenantID,
-		taskID:   task.ID,
 		runID:    run.ID,
 	}
 	return sink, store, task.ID
@@ -91,5 +90,36 @@ func TestToolArtifactSinkPerRunCaps(t *testing.T) {
 	}
 	if _, err := fresh.SaveToolOutput(context.Background(), "terminal", big); err == nil {
 		t.Fatal("byte cap must refuse further spooling")
+	}
+}
+
+func TestToolArtifactSinkFollowsClaimedRunForLaterOutputs(t *testing.T) {
+	ctx := context.Background()
+	sink, store, oldTaskID := newSinkHarness(t)
+	run, err := store.GetRun(ctx, sink.tenantID, sink.runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentTask, err := store.CreateTask(ctx, control.TaskCreate{TenantID: sink.tenantID, PersonID: run.PersonID, Title: "prepared work", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.StartRun(ctx, parentTask, "cli", "prepared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, sink.tenantID, parent.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimInteractionContinuation(ctx, sink.tenantID, run.PersonID, run.ID, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := sink.SaveToolOutput(ctx, "read_file", "read after continuation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := store.ListTaskArtifacts(ctx, parentTask.ID, 10)
+	if err != nil || len(artifacts) != 1 || artifacts[0].ID != ref.ID {
+		t.Fatalf("later output attached to stale task %s: %+v err=%v", oldTaskID, artifacts, err)
 	}
 }

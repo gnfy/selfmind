@@ -1001,7 +1001,7 @@ func (m *uiModel) armClarifyPrompt(req tools.ClarifyRequest, viaGateway bool) {
 	m.clarifyReq = req
 	m.setStatusNotice(noticeWarning, "Answer the question to continue the task.")
 	// A clarification parks the run on the person exactly as an approval does.
-	m.signalHumanWait(humanWaitClarification, "")
+	m.signalAttention(attentionClarification, "")
 }
 
 func (m *uiModel) answerClarifyViaGateway(response string) tea.Cmd {

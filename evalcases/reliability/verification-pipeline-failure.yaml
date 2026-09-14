@@ -1,0 +1,35 @@
+id: reliability_verification_pipeline_failure
+title: "A successful output footer cannot mask a failed verification pipeline"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [cat]
+turns:
+  - input: >-
+      Create check-target.py containing the comment '# verification fixture'.
+      Then use verify exactly once to execute this literal command:
+      false | cat; echo MASKED_SUCCESS
+      This is an intentional failing-check exercise. Keep that literal command
+      unchanged and execute it once. Report the verification as failed and leave the
+      file in place, with the run resumable.
+expect:
+  status: verification_partial
+  completion_reason: verification_failed
+  verification_state: failed
+  resumable: true
+  max_tool_errors: 1
+  max_duration_seconds: 120
+assert_state:
+  - on: file
+    path: check-target.py
+    contains: verification fixture
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"status":"failed"'
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_provider_stack_dump: true

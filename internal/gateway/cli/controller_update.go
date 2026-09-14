@@ -149,6 +149,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			kind := noticeWarning
 			if msg.Success {
 				kind = noticeSuccess
+			} else {
+				// A routine success is not worth a bell; a failure is exactly
+				// what the person needs to hear about while looking elsewhere.
+				m.signalAttention(attentionBackgroundFailed, "")
 			}
 			m.addNotice(kind, content)
 		}
@@ -576,6 +580,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if backgroundRun {
 			m.finishWatcherNotice(backgroundWatchID, msg.Event.Cursor)
 			m.addMessage("notice", backgroundResultNotice(backgroundWatchID, backgroundOrigin, msg.Status, msg.Summary))
+			// The person delegated this so they could look away; its outcome is
+			// the moment to look back.
+			m.signalAttention(attentionBackgroundDone, backgroundWatchID)
 		}
 		if !m.daemonRunActive {
 			return m, spinnerCmd

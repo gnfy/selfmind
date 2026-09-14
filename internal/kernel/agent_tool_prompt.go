@@ -40,6 +40,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 		}
 		if names["verify"] {
 			sb.WriteString("Use verify for checks that establish completion: it executes the command and records verification evidence. A command run through terminal is recorded as ordinary execution, not a verification check. Run the relevant check after the final change.\n")
+			sb.WriteString("Verification shell commands stop on unhandled errors and failed pipelines. Use the tool's timeout instead of assuming a timeout executable is installed; do not hide a check's exit status behind an echo, output filter, or unconditional success.\n")
 		}
 		if names["update_plan"] {
 			sb.WriteString(planToolGuidance(strategy))
@@ -48,7 +49,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 			}
 		}
 		if names["finish_run"] {
-			sb.WriteString("For non-trivial tool-using work that creates durable task state, call finish_run once with the structured outcome after the work and plan are resolved. Skip it for direct answers and ordinary explanations.\n")
+			sb.WriteString("For non-trivial tool-using work that creates durable task state, call finish_run with the structured outcome after the work and plan are resolved. A successful finish is final. If completion preconditions reject it, correct the plan or verification before one bounded retry. Skip it for direct answers and ordinary explanations.\n")
 		}
 		if names["tool_search"] {
 			sb.WriteString("Use tool_search when you need a registered capability that is not currently active. A result activates matching deferred tools for later calls in this run.\n")

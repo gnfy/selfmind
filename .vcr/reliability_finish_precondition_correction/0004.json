@@ -1,0 +1,412 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "As"
+    },
+    {
+      "reasoning_content": " expected"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " precondition"
+    },
+    {
+      "reasoning_content": " rejection"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " try"
+    },
+    {
+      "reasoning_content": " updating"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": " true"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " expecting"
+    },
+    {
+      "reasoning_content": " missing"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "ver"
+    },
+    {
+      "reasoning_content": "ification"
+    },
+    {
+      "reasoning_content": " rejection"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "_id"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "99"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "ff"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "776"
+    },
+    {
+      "reasoning_content": "187"
+    },
+    {
+      "reasoning_content": "349"
+    },
+    {
+      "reasoning_content": "291"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " send"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " snapshot"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " set"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": " true"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Since"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " verified"
+    },
+    {
+      "reasoning_content": " yet"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " rejected"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Expected"
+    },
+    {
+      "content": " rejection"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Next"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " mark"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "ver"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "required"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " true"
+    },
+    {
+      "content": " but"
+    },
+    {
+      "content": " without"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " yet"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " this"
+    },
+    {
+      "content": " should"
+    },
+    {
+      "content": " trigger"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " missing"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "ver"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": " rejection"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9703,
+        "output_tokens": 243,
+        "cache_read_input_tokens": 3328,
+        "cache_miss_input_tokens": 6375,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 92,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_Q18jtWptayLRE3CLKl9G9694",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"step\": \"Write closure.txt containing READY\", \"status\": \"completed\", \"success_criteria\": \"closure.txt exists in the workspace and contains exactly READY\", \"verification_required\": true}]}"
+        }
+      ]
+    }
+  ]
+}

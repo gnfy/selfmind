@@ -616,7 +616,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		outcome.CompletionReason = "work_selection_rejected"
 		outcome.Resumable = true
 		outcome.Summary = selection.Notice
-		outcome.NextSteps = appendUnique(outcome.NextSteps, "Confirm whether to continue the historical work separately.", 8)
+		outcome.NextSteps = []string{"Confirm whether to continue the historical work separately. No continuation was queued."}
 	}
 	if !hasFinalContent && structuredOutcome && strings.TrimSpace(outcome.Summary) != "" {
 		// finish_run is a durable structured result. When a provider ends the
@@ -628,6 +628,10 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	outcome.Verification, outcome.Files = verification, evidenceFiles
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
 	outcome = applyVerificationOutcome(outcome)
+	if !hasFinalContent && !structuredOutcome && (selection == nil || !selection.Rejected) {
+		content = missingFinalEvidenceSummary(run.ID, outcome)
+		outcome.Summary = truncate(toOneLine(content), 1000)
+	}
 	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {
 		if watch, watchErr := d.Control.GetExternalWatch(finCtx, identity.TenantID, watchID); watchErr == nil {
 			outcome = reconcileExternalWatchOutcome(outcome, watch)

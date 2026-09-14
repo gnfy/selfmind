@@ -792,3 +792,45 @@ func TestResponsesAdapterDetailErrorIsReadable(t *testing.T) {
 		t.Fatalf("error should not expose raw JSON: %q", got)
 	}
 }
+
+// The Responses API spells JSON mode as text.format; the format object is the
+// same one Chat Completions takes, so one request option serves both.
+func TestResponsesRequestMapsResponseFormatToTextFormat(t *testing.T) {
+	adapter := &ResponsesAdapter{Model: "m"}
+	format := map[string]interface{}{"type": "json_object"}
+	wire := adapter.requestFromChat(ChatRequest{
+		Messages: []Message{{Role: "user", Content: "hi"}},
+		Options:  map[string]interface{}{"response_format": format},
+	}, false)
+	if wire.Text == nil {
+		t.Fatal("text.format was not set")
+	}
+	got, _ := wire.Text.Format.(map[string]interface{})
+	if got["type"] != "json_object" {
+		t.Fatalf("text.format = %#v", wire.Text.Format)
+	}
+	plain := adapter.requestFromChat(ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}}, false)
+	if plain.Text != nil {
+		t.Fatalf("text set on a request that did not ask for it: %#v", plain.Text)
+	}
+}
+
+// Same contract, same defect, same fix as the Chat Completions adapter: a
+// SystemPrompt set on the request must reach the provider, once.
+func TestResponsesRequestCarriesSystemPromptAsLeadingSystemItem(t *testing.T) {
+	adapter := &ResponsesAdapter{Model: "m"}
+	wire := adapter.requestFromChat(ChatRequest{
+		SystemPrompt: "Return one JSON object only.",
+		Messages:     []Message{{Role: "user", Content: "hi"}},
+	}, false)
+	if len(wire.Input) != 2 || wire.Input[0].Role != "system" || contentString(wire.Input[0].Content) != "Return one JSON object only." {
+		t.Fatalf("system prompt did not reach the wire: %+v", wire.Input)
+	}
+	own := adapter.requestFromChat(ChatRequest{
+		SystemPrompt: "duplicate",
+		Messages:     []Message{{Role: "developer", Content: "the real one"}, {Role: "user", Content: "hi"}},
+	}, false)
+	if len(own.Input) != 2 || contentString(own.Input[0].Content) != "the real one" {
+		t.Fatalf("a caller-supplied instruction was duplicated or replaced: %+v", own.Input)
+	}
+}

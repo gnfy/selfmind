@@ -14,8 +14,11 @@ schema cost through bounded on-demand exposure.
 - Approver: project owner
 - Review date: 2026-09-11
 - Status: paused while
-  [`external-skill-packages.md`](external-skill-packages.md) holds the active
-  slot. The review date stands; no scope item is withdrawn.
+  [`run-centric-work-history.zh-CN.md`](run-centric-work-history.zh-CN.md)
+  holds the active slot.
+- Review verdict (2026-09-13): remain paused; retain all outstanding
+  daily-driver evidence and acceptance gates, and reassess resumption when
+  the active slot is released. No scope item is withdrawn or marked complete.
 
 ## Scope
 

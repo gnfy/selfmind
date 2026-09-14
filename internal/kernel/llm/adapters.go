@@ -72,8 +72,15 @@ type OpenAIRequest struct {
 	Thinking          interface{}              `json:"thinking,omitempty"`
 	ServiceTier       string                   `json:"service_tier,omitempty"`
 	UserID            string                   `json:"user_id,omitempty"`
-	Stream            bool                     `json:"stream,omitempty"`
-	StreamOptions     map[string]interface{}   `json:"stream_options,omitempty"`
+	// ResponseFormat is the Chat Completions JSON-mode field ({"type":
+	// "json_object"}). It is the standard way to make a model emit a JSON
+	// object; asking in the prompt is not one — a small model told "return one
+	// JSON object only" answered with a YAML-shaped echo of the request on
+	// every attempt, while a larger sibling complied. Sent only when a request
+	// asks for it, so callers that want prose are unaffected.
+	ResponseFormat interface{}            `json:"response_format,omitempty"`
+	Stream         bool                   `json:"stream,omitempty"`
+	StreamOptions  map[string]interface{} `json:"stream_options,omitempty"`
 }
 
 // OpenAIResponse OpenAI chat completions 响应体
@@ -94,8 +101,19 @@ func openAIRequestFromChat(model string, req ChatRequest, stream bool) OpenAIReq
 	messages := sanitizeToolMessageLedger(req.Messages)
 	openaiReq := OpenAIRequest{
 		Model:    model,
-		Messages: make([]OpenAIMessage, 0, len(messages)),
+		Messages: make([]OpenAIMessage, 0, len(messages)+1),
 		Stream:   stream,
+	}
+	// ChatRequest.SystemPrompt is part of the request contract, and this adapter
+	// used to drop it: only the Anthropic adapter read the field, so every
+	// caller that set it instead of a system-role message — the maintenance
+	// analyzer, the approval judge, the skill curator, the memory consolidator,
+	// the summarizer, the model probes — ran against OpenAI-compatible
+	// providers with no instructions at all. Chat Completions spells a system
+	// prompt as a leading system-role message; a caller that already supplied
+	// one keeps it, so the agent loop is not sent two.
+	if system := strings.TrimSpace(req.SystemPrompt); system != "" && !leadsWithSystemMessage(messages) {
+		openaiReq.Messages = append(openaiReq.Messages, OpenAIMessage{Role: "system", Content: system})
 	}
 	for _, m := range messages {
 		openaiReq.Messages = append(openaiReq.Messages, openAIMessageFromLLM(m, nativeTools))
@@ -115,8 +133,22 @@ func openAIRequestFromChat(model string, req ChatRequest, stream bool) OpenAIReq
 		if parallel, ok := req.Options["parallel_tool_calls"].(bool); ok {
 			openaiReq.ParallelToolCalls = &parallel
 		}
+		if format, ok := req.Options["response_format"]; ok && format != nil {
+			openaiReq.ResponseFormat = format
+		}
 	}
 	return openaiReq
+}
+
+// leadsWithSystemMessage reports whether the caller already placed its own
+// system or developer instruction first, in which case SystemPrompt is not
+// added on top of it.
+func leadsWithSystemMessage(messages []Message) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	role := strings.ToLower(strings.TrimSpace(messages[0].Role))
+	return role == "system" || role == "developer"
 }
 
 func openAIMessageFromLLM(m Message, nativeTools bool) OpenAIMessage {

@@ -216,6 +216,7 @@ documents:
     language: en
     approved_by: project-owner
     review_by: 2026-09-11
+    verdict: "2026-09-13: remain paused while the run-centric work-history plan holds the active slot; retain all outstanding daily-driver evidence and acceptance gates, and reassess resumption when that slot is released."
   - path: docs/plans/agent-execution-recovery.md
     title: Agent Execution and Recovery Closure
     class: archive
@@ -238,6 +239,7 @@ documents:
     language: en
     approved_by: project-owner
     review_by: 2026-09-09
+    verdict: "2026-09-10: remain paused; continuity evidence carries forward to the active run-centric plan, while daily-driver defects are repaired within existing contracts."
   - path: docs/plans/threaded-work-history-redesign.zh-CN.md
     title: Thread 化工作历史重构方案
     class: archive

@@ -1,0 +1,52 @@
+id: reliability_mutation_blocks_resume
+title: "A material effect blocks implicit continuation with an explicit failure"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [cat]
+setup:
+  task:
+    title: "Prepared result file"
+    parked_runs:
+      - input: "When confirmed, create result.txt containing READY. Currently waiting for confirmation."
+        status: waiting_user
+turns:
+  - input: >-
+      Exercise the continuation boundary. First use write_file to create
+      local-note.txt containing LOCAL in this new interaction. After that write
+      succeeds, inspect the waiting Prepared result file run and try
+      work_select resume once. Preserve the boundary refusal and finish as
+      waiting_user with an accurate explanation of what happened and what
+      requires my decision. Keep the local note for inspection.
+expect:
+  status: waiting_user
+  completion_reason: work_selection_rejected
+  resumable: true
+  # The recording also corrects an early plan close after verifying the note.
+  # The continuation refusal itself is asserted exactly once below.
+  max_tool_errors: 2
+  max_duration_seconds: 120
+assert_state:
+  - on: file
+    path: local-note.txt
+    contains: LOCAL
+  - on: run
+    field: resumes_run_id
+    empty: true
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_code":"work_selection_blocked"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: work.selection_rejected
+    count_gte: 1
+  - on: events
+    type: work.selection_committed
+    count_lte: 0
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_raw_json_leak: true

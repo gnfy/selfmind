@@ -15,6 +15,13 @@ import (
 
 const RunRecoveryContractVersion = 1
 
+// completionPreconditionError distinguishes a correctable verdict from a
+// storage failure. No completion state was committed when this is returned.
+type completionPreconditionError struct{ message string }
+
+func (e *completionPreconditionError) Error() string              { return e.message }
+func (*completionPreconditionError) CompletionPrecondition() bool { return true }
+
 type RunPlanStepInput struct {
 	StepID               string `json:"step_id,omitempty"`
 	Step                 string `json:"step"`
@@ -79,6 +86,14 @@ type StalePlanStepReferenceError struct {
 	Current []string
 }
 
+type planVerificationPreconditionError struct{ step string }
+
+func (e *planVerificationPreconditionError) Error() string {
+	return fmt.Sprintf("plan step %q requires successful verification before its work unit can complete; the previous plan is unchanged", e.step)
+}
+
+func (*planVerificationPreconditionError) PlanVerificationPrecondition() bool { return true }
+
 func (e *StalePlanStepReferenceError) Error() string {
 	return fmt.Sprintf("plan step %s does not belong to run %s", e.StepID, e.RunID)
 }
@@ -139,6 +154,18 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		}
 		steps[start].WorkUnit = true
 		steps[start].WorkUnitID = units[i].ID
+	}
+	// Completing a work unit freezes its evidence window. Reject a premature
+	// close transactionally so a subsequent check can still belong to that unit.
+	for i, step := range steps {
+		if step.Status != "completed" || !step.VerificationRequired {
+			continue
+		}
+		for _, unit := range units {
+			if unit.ID == stepWorkUnits[i] && unit.Status == WorkUnitCompleted && unit.VerificationState != "passed" {
+				return RunPlanProjection{}, &planVerificationPreconditionError{step: step.Step}
+			}
+		}
 	}
 
 	original, err := originalPlanCriteriaTx(ctx, tx, tenant, runID)
@@ -490,7 +517,7 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 		}
 	}
 	if len(unresolved) > 0 {
-		return fmt.Errorf("successful run still has unresolved durable plan steps: %s", strings.Join(unresolved, "; "))
+		return &completionPreconditionError{fmt.Sprintf("successful run still has unresolved durable plan steps: %s", strings.Join(unresolved, "; "))}
 	}
 	var unverified int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_plan_steps p
@@ -503,7 +530,7 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 		return err
 	}
 	if unverified > 0 {
-		return fmt.Errorf("successful run still has %d completed plan step(s) without required verification evidence", unverified)
+		return &completionPreconditionError{fmt.Sprintf("successful run still has %d completed plan step(s) without required verification evidence", unverified)}
 	}
 	var uncertain int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_ledger
@@ -512,7 +539,7 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 		return err
 	}
 	if uncertain > 0 {
-		return fmt.Errorf("successful run still has %d uncertain side effect(s); verify their current state before finishing", uncertain)
+		return &completionPreconditionError{fmt.Sprintf("successful run still has %d uncertain side effect(s); verify their current state before finishing", uncertain)}
 	}
 	return nil
 }

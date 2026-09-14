@@ -1,0 +1,28 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10217,
+        "output_tokens": 59,
+        "cache_read_input_tokens": 9728,
+        "cache_miss_input_tokens": 489,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_dWUMREaqYAPsIzRL7CLL6918",
+          "Function": "write_file",
+          "Args": "{\"path\": \"local-note.txt\", \"content\": \"LOCAL\\n\"}"
+        }
+      ]
+    }
+  ]
+}

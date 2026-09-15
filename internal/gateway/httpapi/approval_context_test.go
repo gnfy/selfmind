@@ -22,7 +22,15 @@ func TestToolApprovalHandlerPublishesDecisionContext(t *testing.T) {
 	ctx := context.Background()
 
 	handler := coordinator.toolApprovalHandler(identity, task, nil, "cli")
-	decided := make(chan tools.ToolApprovalDecision, 1)
+	// The goroutine reports through the channel only. Calling t.Errorf from it
+	// after an early t.Fatal on the main goroutine panics the whole package
+	// binary ("Fail in goroutine after test has completed"), which is how one
+	// flaky assertion took every other httpapi test down with it in CI.
+	type outcome struct {
+		decision tools.ToolApprovalDecision
+		err      error
+	}
+	decided := make(chan outcome, 1)
 	go func() {
 		decision, err := handler(ctx, tools.ToolApprovalRequest{
 			TenantID:      identity.TenantID,
@@ -37,10 +45,7 @@ func TestToolApprovalHandlerPublishesDecisionContext(t *testing.T) {
 			ChangeSummary: "1 file +12/-0",
 			TriageState:   tools.TriageStateUnavailable,
 		})
-		if err != nil {
-			t.Errorf("approval handler: %v", err)
-		}
-		decided <- decision
+		decided <- outcome{decision: decision, err: err}
 	}()
 
 	pending := waitForPendingApproval(t, store, identity)
@@ -82,8 +87,11 @@ func TestToolApprovalHandlerPublishesDecisionContext(t *testing.T) {
 		t.Fatalf("respond: %v", err)
 	}
 	select {
-	case decision := <-decided:
-		if !decision.Approved {
+	case got := <-decided:
+		if got.err != nil {
+			t.Fatalf("approval handler: %v", got.err)
+		}
+		if !got.decision.Approved {
 			t.Fatal("handler should report the approval")
 		}
 	case <-time.After(10 * time.Second):
@@ -155,16 +163,24 @@ func waitForPendingApproval(t *testing.T, store *control.Store, identity *contro
 	return control.ApprovalRequest{}
 }
 
+// findApprovalRequestedEvent waits for the approval.requested event. The
+// handler creates the approval row first and appends the event afterwards, so
+// a caller that has just observed the row may still be ahead of the event; a
+// single lookup here raced that second write on a loaded CI runner.
 func findApprovalRequestedEvent(t *testing.T, store *control.Store, taskID string) control.Event {
 	t.Helper()
-	events, err := store.ListTaskEvents(context.Background(), taskID, 50)
-	if err != nil {
-		t.Fatalf("list events: %v", err)
-	}
-	for _, event := range events {
-		if event.Type == "approval.requested" {
-			return event
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err := store.ListTaskEvents(context.Background(), taskID, 50)
+		if err != nil {
+			t.Fatalf("list events: %v", err)
 		}
+		for _, event := range events {
+			if event.Type == "approval.requested" {
+				return event
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("approval.requested event was never appended")
 	return control.Event{}

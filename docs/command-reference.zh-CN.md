@@ -344,7 +344,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /status
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/diag [memory|context|models|delivery|execution|tools]
+/diag [learning|memory|context|models|delivery|execution|tools]
 /report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]

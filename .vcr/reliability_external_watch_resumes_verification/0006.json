@@ -1,0 +1,229 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Works"
+    },
+    {
+      "reasoning_content": "pace"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " empty"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "only"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " root"
+    },
+    {
+      "reasoning_content": " entry"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " No"
+    },
+    {
+      "reasoning_content": " existing"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " create"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": "_file"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Then"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "cmp"
+    },
+    {
+      "reasoning_content": "`.\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Works"
+    },
+    {
+      "content": "pace"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " empty"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " existing"
+    },
+    {
+      "content": " receipt"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " extend"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Creating"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " deliver"
+    },
+    {
+      "content": "able"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13150,
+        "output_tokens": 124,
+        "cache_read_input_tokens": 12928,
+        "cache_miss_input_tokens": 222,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 49,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_Xu4HBjehZU6qi62704561878",
+          "Function": "write_file",
+          "Args": "{\"path\": \"receipt.txt\", \"content\": \"VERIFIED\\n\"}"
+        }
+      ]
+    }
+  ]
+}

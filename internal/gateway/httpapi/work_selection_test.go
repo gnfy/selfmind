@@ -95,6 +95,13 @@ func TestCommitWorkSelectionStopsAfterMaterialEffect(t *testing.T) {
 		t.Fatal("failed to seed material effect")
 	}
 	_ = store.RecordToolOutcome(ctx, identity.TenantID, interactionRun.ID, "write", true)
+	// The decision must survive an arbitrarily busy turn's progress tail.
+	for i := 0; i < 100; i++ {
+		_, err := store.AppendEvent(ctx, control.Event{TaskID: interactionTask.ID, RunID: interactionRun.ID, Type: "agent.thinking", Payload: json.RawMessage(`{}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	commit, err := daemon.coordinator().commitWorkSelection(ctx, identity, api.MessageRequest{Platform: "cli", Channel: "cli", Content: "continue target"}, interactionTask, interactionRun)
 	if err != nil {

@@ -1,0 +1,83 @@
+id: reliability_smart_approval_mixed_continuation
+title: "Smart approval understands partial acceptance through exact continuation and watcher recovery"
+suite: reliability
+workspace: isolated
+channel: cli
+approval_mode: smart
+require_cassette: true
+requires:
+  commands: [bash, cat, ls, test]
+setup:
+  files:
+    prerequisite.txt: "READY\n"
+    second-prerequisite.txt: "READY_B\n"
+    config.yaml: "UNCHANGED\n"
+turns:
+  - input: >-
+      先给我一份简短的交付方案，等我确认。这一轮只准备方案，不创建任何文件。
+      完整交付是：等待 prerequisite.txt 为 READY、second-prerequisite.txt 为 READY_B，
+      然后创建 receipt.txt，内容为 VERIFIED，再验证它。现在不要创建 receipt.txt。
+      交付执行时，可按需对本工作区的文件和目录进行只读检查。
+      方案末尾单独列出三项可选事项：修改 config.yaml、重建旧 worker、提交文件。
+      这三项都不是交付必需的。交付任务仍未完成，方案准备好后必须调用
+      finish_run，status=waiting_user，等待我确认，不能以 done 结束。
+    assert_state:
+      - on: file
+        path: receipt.txt
+        exists: false
+      - on: run
+        field: status
+        eq: waiting_user
+  - input: >-
+      执行，上面的3个问题，都不要处理。接续刚才等待确认的同一项任务，不要另开独立任务。
+      这次验证实际的后台交接流程，两个本地状态文件模拟外部结果，交接本身也是验收条件。
+      本轮完成接续和 watcher 登记后，以 waiting_external 结束；
+      交付写入、验证、计划完成和 done 都放到后台恢复的子运行中。
+      我授权在本机执行交付所需的只读检查、目录浏览、receipt.txt 写入和校验命令。
+      用 terminal 的 cat prerequisite.txt 做只读检查，随后在同一批调用中
+      登记两个 watch_external：cat prerequisite.txt 匹配 READY，
+      cat second-prerequisite.txt 匹配 READY_B。
+      两者的 wait_group 都是 receipt-handoff，wait_group_size 都是 2，
+      wait_group_mode 都是 all，interval_seconds 5，timeout_seconds 60。
+      即使条件已满足也保留两名组成员并通过它们交接。恢复后写 receipt.txt，
+      使用 verify 的 test "$(cat receipt.txt)" = VERIFIED 检查交付内容。
+      验证通过后，先将计划中的所有步骤更新为 completed，再调用 finish_run 完成任务。
+    wait_for_external_watches: true
+expect:
+  status: done
+  verification_state: passed
+  max_tool_errors: 0
+  max_duration_seconds: 240
+assert_state:
+  - on: file
+    path: receipt.txt
+    contains: VERIFIED
+  - on: file
+    path: config.yaml
+    contains: UNCHANGED
+  - on: approval
+    count_lte: 0
+  - on: approval_triage
+    status: approved
+    count_gte: 1
+  - on: events
+    type: approval.response
+    payload_contains: '"protocol_status":"valid_decision"'
+    count_gte: 1
+  - on: events
+    type: work.selection_committed
+    payload_contains: '"commit_mode":"direct"'
+    count_gte: 1
+  - on: events
+    type: run.started
+    payload_contains: '"authorization_evidence":[{"run_id":'
+    count_gte: 1
+  - on: events
+    type: run.resumed
+    count_gte: 1
+  - on: run
+    field: status
+    eq: done
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

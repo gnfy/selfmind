@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12700,
+        "output_tokens": 57,
+        "cache_read_input_tokens": 12288,
+        "cache_miss_input_tokens": 412,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_LqzimnsiYxgihTOvYbHw2440",
+          "Function": "write_file",
+          "Args": "{\"path\": \"receipt.txt\", \"content\": \"VERIFIED\"}"
+        }
+      ]
+    }
+  ]
+}

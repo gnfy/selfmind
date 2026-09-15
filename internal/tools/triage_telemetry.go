@@ -61,12 +61,13 @@ type triageEntry struct {
 	err     string
 }
 
-const ApprovalTriagePolicyVersion = "smart-v2"
+const ApprovalTriagePolicyVersion = "smart-v3"
 
 // TriageAuditEvent is the non-secret decision envelope persisted by the
 // gateway. It intentionally excludes command text and arguments; those remain
 // in the separately redacted approval request when a human decision is needed.
 type TriageAuditEvent struct {
+	Response      ApprovalResponseMetadata
 	TenantID      string
 	PersonID      string
 	TaskID        string

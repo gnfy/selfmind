@@ -2,6 +2,11 @@
 
 > **Status: current architecture (schema v11).**
 > This document owns work-history, continuation, listing, and recall semantics.
+
+While a Run is active, `/status` selects that exact Run's plan, handoff, and
+bounded progress events. It shows the current model/tool phase and event age;
+a previous Run's watcher handoff or next steps are not current execution state.
+Pending approvals and clarifications remain visible across endpoints.
 > `docs/STATUS.md` owns remaining evidence and priority.
 
 ## Decision
@@ -160,7 +165,11 @@ explicit /new, /resume, /choose
   still block implicit selection through their execution ledger. Deliverable
   artifacts and pending human/external control objects retain their guards.
 - A selection blocked by material state returns `work_selection_blocked`, not
-  a successful transfer proposal. A scope/checkpoint transfer remains proposed
+  a successful transfer proposal. A typed control-plane pause ends the current
+  turn before any further dispatch; ordinary recoverable tool failures do not
+  acquire this authority. Selection lookup is scoped by event type and exact
+  owned Run, so progress volume cannot hide an earlier failed claim.
+  A scope/checkpoint transfer remains proposed
   until the gateway commits its queue receipt. Rejected final outcomes replace
   speculative next steps with the actual required human decision; no queue
   receipt means no promised automatic continuation.

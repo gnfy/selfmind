@@ -119,6 +119,14 @@ func TestMissingFinalResponseCannotCompleteRun(t *testing.T) {
 	}
 }
 
+func TestMissingFinalResponsePreservesKnownBlocker(t *testing.T) {
+	want := api.RunOutcome{Status: "blocked", CompletionReason: "plan_unresolved", Summary: "The required destination check has not passed."}
+	got := reconcileMissingFinalResponse(want, false, false)
+	if got.Status != want.Status || got.CompletionReason != want.CompletionReason || got.Summary != want.Summary || !got.Resumable {
+		t.Fatalf("known blocker was lost: %#v", got)
+	}
+}
+
 func TestMissingFinalSummaryRetainsEvidenceWithoutClaimingCompletion(t *testing.T) {
 	outcome := api.RunOutcome{Files: []string{"report.csv"}, Verification: &api.VerificationOutcome{State: "not_run", Summary: "No structured verification evidence."}}
 	got := missingFinalEvidenceSummary("run_test", outcome)

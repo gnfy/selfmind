@@ -1,0 +1,613 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " given"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": " correctly"
+    },
+    {
+      "reasoning_content": " rejects"
+    },
+    {
+      "reasoning_content": " whole"
+    },
+    {
+      "reasoning_content": "-d"
+    },
+    {
+      "reasoning_content": "ocument"
+    },
+    {
+      "reasoning_content": " matching"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " outputs"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " JSON"
+    },
+    {
+      "reasoning_content": " document"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "SU"
+    },
+    {
+      "reasoning_content": "CCESS"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " would"
+    },
+    {
+      "reasoning_content": " match"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " whole"
+    },
+    {
+      "reasoning_content": " document"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": " since"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " SU"
+    },
+    {
+      "reasoning_content": "CCESS"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " system"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "never"
+    },
+    {
+      "reasoning_content": " match"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " JSON"
+    },
+    {
+      "reasoning_content": " document"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " log"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Lik"
+    },
+    {
+      "reasoning_content": "ely"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": " will"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " rejected"
+    },
+    {
+      "reasoning_content": " because"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": " must"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " whole"
+    },
+    {
+      "reasoning_content": "-value"
+    },
+    {
+      "reasoning_content": " regex"
+    },
+    {
+      "reasoning_content": " over"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " bounded"
+    },
+    {
+      "reasoning_content": " scalar"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " report"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " outcome"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " careful"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " don"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " change"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " ret"
+    },
+    {
+      "reasoning_content": "ry"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Then"
+    },
+    {
+      "reasoning_content": " explain"
+    },
+    {
+      "reasoning_content": " why"
+    },
+    {
+      "reasoning_content": " rejected"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "No"
+    },
+    {
+      "reasoning_content": " preamble"
+    },
+    {
+      "reasoning_content": " needed"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " calls"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " short"
+    },
+    {
+      "reasoning_content": " sentence"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " short"
+    },
+    {
+      "reasoning_content": " preamble"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " register"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " specified"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " report"
+    },
+    {
+      "content": " what"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " validator"
+    },
+    {
+      "content": " does"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9127,
+        "output_tokens": 337,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9127,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 175,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ud1eG4OexVP5G1iG2GeC9615",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"printf '%s' '{\\\"status\\\":\\\"WORKING\\\",\\\"steps\\\":[{\\\"status\\\":\\\"SUCCESS\\\"}]}'\", \"description\": \"Observation-validation check: whole-document JSON with a nested SUCCESS field\", \"success_pattern\": \"SUCCESS\", \"timeout_seconds\": 60, \"interval_seconds\": 5}"
+        }
+      ]
+    }
+  ]
+}

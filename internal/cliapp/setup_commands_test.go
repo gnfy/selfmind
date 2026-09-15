@@ -86,7 +86,7 @@ func TestNonInteractiveSetupRejectsMissingModelWithoutStartingGateway(t *testing
 	}
 }
 
-func TestExplicitSetupRoutesMissingReadinessToSoleModelCommand(t *testing.T) {
+func TestExplicitSetupOpensModelManagerAndCancellationStopsSetup(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	configPath := filepath.Join(home, ".selfmind", "config.yaml")
@@ -96,19 +96,20 @@ func TestExplicitSetupRoutesMissingReadinessToSoleModelCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := &App{
-		ctx:         context.Background(),
-		args:        []string{"selfmind", "setup", "--skip-gateway"},
-		stdout:      &stdout,
-		stderr:      &stderr,
-		configPath:  configPath,
-		interactive: true,
+		ctx:                  context.Background(),
+		args:                 []string{"selfmind", "setup", "--skip-gateway"},
+		stdout:               &stdout,
+		stderr:               &stderr,
+		configPath:           configPath,
+		interactive:          true,
+		onboardingModelSetup: func(*config.Config) (bool, error) { return false, nil },
 	}
 	handled, code := app.runSetupCommandIfRequested()
-	if !handled || code != 1 {
+	if !handled || code != 0 {
 		t.Fatalf("setup = handled:%v code:%d stdout:%q stderr:%q", handled, code, stdout.String(), stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Run `selfmind model`") {
-		t.Fatalf("missing sole Model Manager guidance: %q", stderr.String())
+	if !strings.Contains(stdout.String(), "Opening Model Manager") || stderr.Len() != 0 {
+		t.Fatalf("setup did not open Model Manager directly: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 	if strings.Contains(stdout.String(), "Gateway:") {
 		t.Fatalf("cancelled setup started the gateway: %q", stdout.String())

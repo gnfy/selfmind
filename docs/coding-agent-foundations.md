@@ -53,6 +53,24 @@ fabricated and no completion is blocked. Plans update at meaningful progress or
 scope changes; they do not require a transition around every tool call. Stable
 step IDs preserve work-unit attribution without asking the model to repeat it.
 
+Progress snapshots retain an existing step's acceptance condition and required
+verification flag when omitted; cancellation remains explicit. A changed
+completed criterion returns a bounded original/current comparison to Main.
+Main decides whether a user scope change justifies it. Main also distinguishes
+an explicit user takeover of remaining work from necessary unfinished work with
+no handoff evidence. The former can conclude the agent's agreed scope; the
+latter remains unfinished. Suggested next steps alone never establish takeover.
+A missing final answer preserves an already known execution blocker.
+
+`verify` accepts an optional version-1 `check` binding with a stable `criterion`
+and `target`. To correct a check method, Main supplies `replaces` (the prior
+verification evidence id) and a `reason`, keeping the condition and target
+unchanged. The resolver requires an earlier check in the same open work unit
+and working directory. Run and work-unit outcomes share one projection; the
+original failed attempt remains in history. Structural checks cannot prove
+semantic equivalence: Main must explain why the new method still proves the
+original condition. Unbound historical checks gain no replacement authority.
+
 New Runs opt into a versioned recovery contract. A daemon or provider
 interruption with no external effect may enqueue one idempotent exact-parent
 child Run. An uncertain dispatched effect instead enters verification-only
@@ -62,12 +80,43 @@ specialist owners, and historical Runs never gain automatic execution merely
 because the binary was upgraded. Queued foreground user work has higher
 priority than an automatic recovery that has not started.
 
-Long external waits use a frozen durable observation contract rather than
-model-driven polling. A successful preflight records the command hash,
-environment generation, typed observation adapter, target, deadline, and
-capabilities. The adapter returns `pending`, `succeeded`, or `failed`; provider
-grammar remains in the tools layer. Run-local `all` and `any` wait groups emit
-one aggregate verdict and at most one finalization Run.
+Long external waits preserve the model's original goal, declared acceptance
+criteria, remaining plan, corrections and exact-target evidence. The model owns
+business criteria and the read-only observation method; the runtime owns
+bounded execution, durable scheduling, approvals and recovery. A condition
+match resumes work; it does not prove the whole task complete.
+
+New observation receipts (version 2) require regex checks to select one bounded
+scalar and match the whole value. Documents, logs and nested success markers
+are rejected; the existing typed adapter remains available. The model chooses
+field selection and state mapping through existing commands or an approved
+observation script, without provider-specific logic in the gateway. A preflight
+records the command hash, environment generation, target, deadline and effective
+capabilities. Registration-time terminal observations remain durable members of
+`all`/`any` groups. Handoff waits for every declared member; incomplete groups
+that outlive their creating run or deadline report a check failure, never an
+external failure. Aggregate resolution and continuation stay idempotent.
+
+Version-2 continuations restore Main's ordinary tool and approval path in the
+original execution scope. Main checks the evidence against the remaining
+criteria, obtains missing evidence, performs authorized remaining work and uses
+`verify` for required checks. It cannot silently lower criteria or replay
+completed effects. Historical receipts keep their original matching and
+file-only finalization policy; upgrading never grants them new authority.
+Terminal shell syntax is checked before approval or execution, including before
+any earlier command in a malformed compound statement can run.
+
+Approval evidence distinguishes the user's words from daemon-generated
+continuation instructions. New Runs record a versioned approval-intent snapshot
+in their start event. Version 2 also freezes the proposal shown before a human
+reply and carries up to six attributed human quotations through exact-parent,
+same-workspace/root continuations. Later user requirements remain distinct.
+The judge interprets accepted scope and effects, not an acceptance keyword list;
+its reason identifies the relevant user evidence or missing execution permission.
+System prose cannot invent a user deny or authorize an effect. Incomplete evidence
+is labeled; missing or unsupported historical intent evidence requires
+human confirmation before affected execution. This preserves current policy
+without treating generic quality instructions as blanket operation bans.
 
 Completion is evidence-based:
 

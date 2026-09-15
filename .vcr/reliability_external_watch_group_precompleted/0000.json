@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "two-targets wait_group_size watch_external waiting_external success_pattern"
+}

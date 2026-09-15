@@ -129,6 +129,10 @@ type ExternalWatch struct {
 	FinishedAt          *time.Time
 }
 
+// Version 2 pins scalar matching and ordinary approval-controlled Main continuation.
+// Historical receipts retain their observation and file-only finalization policy.
+const ExternalWatchContinuationReceiptVersion = 2
+
 type ExternalWatchPreflightReceipt struct {
 	Version               int      `json:"version"`
 	CommandHash           string   `json:"command_hash"`
@@ -227,6 +231,8 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 	if err != nil {
 		return nil, fmt.Errorf("encode external watch preflight receipt: %w", err)
 	}
+	initialStatus := watch.Status
+	initialOutput := watch.LastOutput
 	watch.Status = ExternalWatchPending
 	watch.NextCheckAt = now
 	watch.CreatedAt = now
@@ -236,6 +242,21 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if watch.WaitGroupID != "" && watch.PreflightReceipt.Version >= ExternalWatchContinuationReceiptVersion {
+		var allowed, duplicate int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_watch_groups g WHERE g.tenant_id=? AND g.id=? AND g.person_id=? AND g.run_id=? AND g.status='pending' AND (SELECT COUNT(*) FROM external_watches w WHERE w.tenant_id=g.tenant_id AND w.wait_group_id=g.id)<g.expected_count`, watch.TenantID, watch.WaitGroupID, watch.PersonID, watch.RunID).Scan(&allowed); err != nil {
+			return nil, err
+		}
+		if allowed != 1 {
+			return nil, fmt.Errorf("wait group is full, terminal, or outside this run")
+		}
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_watches WHERE tenant_id=? AND wait_group_id=? AND command=? AND cwd=?`, watch.TenantID, watch.WaitGroupID, watch.Command, watch.CWD).Scan(&duplicate); err != nil {
+			return nil, err
+		}
+		if duplicate > 0 {
+			return nil, fmt.Errorf("this observation is already registered in the wait group; register a distinct missing target")
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO external_watches (
 		id, tenant_id, person_id, workspace_id, thread_id, run_id, channel,
 		description, cwd, command, success_pattern, failure_pattern,
@@ -257,6 +278,25 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		watch.EnvironmentFingerprint, watch.CredentialSourceHash, string(bindingJSON),
 		now.Unix(), now.Unix()); err != nil {
 		return nil, err
+	}
+	if watch.PreflightReceipt.Version >= ExternalWatchContinuationReceiptVersion && (initialStatus == ExternalWatchSucceeded || initialStatus == ExternalWatchFailed) {
+		if strings.TrimSpace(initialOutput) == "" {
+			return nil, fmt.Errorf("terminal preflight requires recorded observation evidence")
+		}
+		// Persist the already-observed member in the same transaction as registration:
+		// a daemon must never poll it between insert and terminal writeback.
+		operation := watch.OperationStatus
+		if operation == "" {
+			operation = WatchOperationSucceeded
+			if initialStatus == ExternalWatchFailed {
+				operation = WatchOperationFailed
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE external_watches SET status=?, checker_status=?, operation_status=?, last_output=?, last_output_hash=?, finished_at=? WHERE id=? AND tenant_id=?`, initialStatus, WatchCheckerOK, operation, initialOutput, fmt.Sprintf("%x", sha256.Sum256([]byte(initialOutput))), now.Unix(), watch.ID, watch.TenantID); err != nil {
+			return nil, err
+		}
+		watch.Status, watch.LastOutput, watch.CheckerStatus, watch.OperationStatus = initialStatus, initialOutput, WatchCheckerOK, operation
+		watch.FinishedAt = &now
 	}
 	// A live watcher is durable work evidence: list the Run's Thread now
 	// rather than only at finalization.

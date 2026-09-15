@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11251,
+        "output_tokens": 148,
+        "cache_read_input_tokens": 10880,
+        "cache_miss_input_tokens": 371,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_2HMeo4l2Iq8ZLsAp4H2q8154",
+          "Function": "batch_read",
+          "Args": "{\"operations\": [{\"tool\": \"ls_r\", \"path\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"recursive\": true, \"max_entries\": 200}, {\"tool\": \"read_file\", \"path\": \"{{SELFMIND_VCR_WORKSPACE}}/draft.txt\"}]}"
+        }
+      ]
+    }
+  ]
+}

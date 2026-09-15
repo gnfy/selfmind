@@ -3,6 +3,7 @@
 package tools
 
 import (
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -20,4 +21,22 @@ func applySandboxLimits(cmd *exec.Cmd) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.Setpgid = true
+}
+
+// Cancel the command's own process group, including pipeline children which
+// otherwise keep inherited output pipes open after the shell is killed.
+func configureCommandCancellation(cmd *exec.Cmd) {
+	applySandboxLimits(cmd)
+	if cmd.Cancel != nil {
+		cmd.Cancel = func() error {
+			if cmd.Process == nil {
+				return os.ErrProcessDone
+			}
+			err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			if err == syscall.ESRCH {
+				return os.ErrProcessDone
+			}
+			return err
+		}
+	}
 }

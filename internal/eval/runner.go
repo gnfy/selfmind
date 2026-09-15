@@ -51,15 +51,16 @@ type RunResult struct {
 }
 
 type runtimeHarness struct {
-	cfg          *config.Config
-	mem          *memory.MemoryManager
-	controlStore *control.Store
-	cronStop     func()
-	mcpClose     func()
-	server       *httpapi.Server
-	tenantID     string
-	provider     string
-	model        string
+	stopApprovalTelemetry func()
+	cfg                   *config.Config
+	mem                   *memory.MemoryManager
+	controlStore          *control.Store
+	cronStop              func()
+	mcpClose              func()
+	server                *httpapi.Server
+	tenantID              string
+	provider              string
+	model                 string
 	// deliverySender is set only for cases that seed deliveries; it records what
 	// the recovery path actually pushed.
 	deliverySender *evalDeliverySender
@@ -263,6 +264,15 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	if identity != nil && identity.PersonID != "" {
 		seenPersons[identity.PersonID] = true
 	}
+	backgroundCtx, cancelBackground := context.WithCancel(evalTurnVCRContext(httpapi.WithStreamObserver(ctx, rec.ObserveStreamEvent), c.ID, workspace))
+	defer func() {
+		cancelBackground()
+		deadline := time.Now().Add(5 * time.Second)
+		for h.server.ActiveRunCount() > 0 && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	h.server.BackgroundRunContext = backgroundCtx
 	// VCR hygiene, once per case execution: reset the per-session call counter
 	// so numbering always starts at 0000 (the counter is process-global and a
 	// prior run of the same case in this process would otherwise leave a 0001+
@@ -278,6 +288,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	// resolve to the exact run that earlier turn started (a turn that starts
 	// no run — queued, candidates, control command — leaves its slot empty).
 	turnRunIDs := make([]string, len(c.Turns))
+	var turnChecks []CheckResult
 	for i, turn := range c.Turns {
 		turnStart := time.Now()
 		channel := firstNonEmpty(turn.Channel, c.Channel, "cli")
@@ -315,10 +326,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			ClientCWD:             workspace,
 			ClientAdditionalRoots: append([]string{}, turn.AdditionalRoots...),
 			WorkspaceID:           workspaceID,
-			// Eval has no human sitting on the approval waiter. Run autonomously
-			// inside the case workspace; workspace scope and the hard deny floor
-			// remain active, so dangerous operations are still rejected.
-			ApprovalMode: string(tools.ApprovalFullAuto),
+			// Cases default to full-auto; smart cases exercise the real judge.
+			// Workspace scope and the hard deny floor remain active in both.
+			ApprovalMode: firstNonEmpty(c.ApprovalMode, string(tools.ApprovalFullAuto)),
 		})
 		cancelTurn()
 		if turn.WaitForMaintenance {
@@ -361,6 +371,30 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		}
 		lastHTTPStatus = status
 		rec.FinishTurn(i, status, resp.Content, resp.Error, resp.Usage.InputTokens, resp.Usage.OutputTokens, turnStart)
+		if len(turn.AssertState) > 0 {
+			world := CollectWorldState(ctx, h.controlStore, h.mem, resp.Identity, lastNonEmpty(taskIDs), lastNonEmpty(runIDs), workspace)
+			for _, check := range EvaluateStatePredicates(turn.AssertState, world) {
+				check.Name = fmt.Sprintf("turn-%d:%s", i+1, check.Name)
+				turnChecks = append(turnChecks, check)
+			}
+		}
+		if turn.WaitForExternalWatches {
+			waitCtx, cancelWait := context.WithTimeout(backgroundCtx, turnBudget(c, opts))
+			child, outcome, continuationUsage, waitErr := h.waitForExternalWatchContinuation(waitCtx, resp, c.ApprovalMode)
+			cancelWait()
+			if waitErr != nil {
+				return nil, waitErr
+			}
+			inputTokens += continuationUsage.InputTokens
+			outputTokens += continuationUsage.OutputTokens
+			runIDs = append(runIDs, child.ID)
+			createdRunIDs = append(createdRunIDs, child.ID)
+			lastStatus, lastOutcome = outcome.Status, outcome.Status
+			lastCompletionReason, lastResumable = outcome.CompletionReason, outcome.Resumable
+			if outcome.Verification != nil {
+				lastVerificationState = outcome.Verification.State
+			}
+		}
 	}
 	// Every eval turn is synchronous, so its run must be terminal once
 	// ProcessMessage returns. Anything still `running` here is a finalization
@@ -383,7 +417,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	snap.CompletionReason = lastCompletionReason
 	snap.Resumable = lastResumable
 	snap.VerificationState = lastVerificationState
-	checks := EvaluateCase(c, snap)
+	checks := append(EvaluateCase(c, snap), turnChecks...)
 	if finalizationCheck, ok := forcedRunFinalizationCheck(forceFinalized); ok {
 		// Cleanup keeps the eval database reusable, but the case must fail: a
 		// synchronous turn returning with a running run is a product regression.
@@ -713,6 +747,11 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// path inside the isolated data dir.
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
+	if c.ApprovalMode == "smart" {
+		server.ApprovalJudge = appcore.NewConfiguredApprovalJudge(mem, cfg, tenantID)
+		// No human is attached to eval. An unexpected ask must fail promptly.
+		server.ApprovalWait, server.ApprovalWaitUnattended = 100*time.Millisecond, 100*time.Millisecond
+	}
 	if caseNeedsPostRunMaintenance(c) {
 		server.PostRunAnalyzer = appcore.NewConfiguredPostRunAnalyzer(mem, cfg, tenantID, evalPrompts, controlStore)
 		server.PostRunMaintenance = httpapi.PostRunMaintenanceOptions{
@@ -744,6 +783,9 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		tenantID: tenantID,
 		provider: firstNonEmpty(displayProvider, provider, "default"),
 		model:    firstNonEmpty(displayModel, model, "default"),
+	}
+	if c.ApprovalMode == "smart" {
+		harness.stopApprovalTelemetry = appcore.InstallApprovalTelemetry(controlStore)
 	}
 	// Delivery is opt-in per case: wiring it always would give every case a push
 	// surface and change which notification paths its runs take.
@@ -1029,6 +1071,9 @@ func isolatedEvalConfig(cfg *config.Config, dataDir string) {
 func (h *runtimeHarness) Close() {
 	if h == nil {
 		return
+	}
+	if h.stopApprovalTelemetry != nil {
+		h.stopApprovalTelemetry()
 	}
 	if h.cronStop != nil {
 		h.cronStop()

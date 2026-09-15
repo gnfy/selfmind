@@ -216,6 +216,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/watchers" || strings.HasPrefix(lower, "/watchers "):
 		reply, err := d.watchersCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
 		return true, reply, nil, err
+	case lower == "/diag learning":
+		reply, err := d.learningDiagReply(ctx, identity)
+		return true, reply, nil, err
 	case lower == "/diag memory":
 		reply, err := d.memoryDiagReply(ctx, identity)
 		return true, reply, nil, err
@@ -778,6 +781,7 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 	if active != nil && active.TaskID != "" {
 		// Best-effort lookup: a missing/errored row falls back to the pointer.
 		task, _ = d.Control.GetTask(ctx, identity.TenantID, active.TaskID)
+		exactRunID = active.RunID
 	}
 	if task == nil {
 		var err error
@@ -811,6 +815,13 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 	if task == nil {
 		return "No active task.", nil
 	}
+	if active != nil && task.ID == active.TaskID {
+		current := *task
+		current.Status = "running"
+		current.CurrentSummary = ""
+		current.NextSteps = nil
+		task = &current
+	}
 	var handoff *control.Handoff
 	var plan []taskPlanStep
 	if exactRunID != "" {
@@ -821,7 +832,10 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		plan = d.latestPlanForTask(ctx, task.ID)
 	}
 	card := formatTaskStatus(task, handoff, active, plan)
-	if recovery := d.latestRecoveryHandoffForTask(ctx, identity, task.ID); recovery != nil {
+	if active != nil {
+		card += "\n\n" + d.activeProgress(ctx, identity, active)
+	}
+	if recovery := d.latestRecoveryHandoffForTask(ctx, identity, task.ID); recovery != nil && active == nil {
 		card += "\n\n" + formatRecoveryHandoff(recovery)
 	}
 	// A run blocked on an approval looks "stuck" unless the card says the run

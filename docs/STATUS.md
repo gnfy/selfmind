@@ -29,7 +29,7 @@ verified. Sustained CLI/IM observation remains required.
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 68 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
+- Release corpus: 76 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
   declare `model_required: false`.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -57,6 +57,75 @@ verified. Sustained CLI/IM observation remains required.
 | Phase-1 continuity | Partial | CLI-to-IM approval has process-level presence, detached-immediate/T1 escalation, parked answerability, and daemon-restart continuation recovery. Natural language now reaches one audited Main path: active input durably steers; idle input can progressively search/inspect/select person-scoped work; a validated same-domain resume is claimed in the same turn before any effect (one Main Run, no queue) while a workspace, execution-root, or checkpoint mismatch transfers to a correctly scoped exact-parent child with its durable inherited plan established before Main starts, and explicit bound-endpoint delivery overrides survive restart. Repeat the full live scenarios across real IM transports, restart, correction, and stranger isolation. |
 | npm beta distribution | Partial | Clean tagged release through GitHub Actions plus install/update/daemon-restart verification on Linux and macOS. |
 | SaaS / enterprise | Deferred | No implementation until maintainers approve a dedicated strategy decision and its evidence gates. |
+
+External observation closure update (2026-09-14): new versioned receipts require
+whole-value scalar matching, retain already-observed group members, and restore
+Main with normal scoped tools and approvals after a condition match. Incomplete
+groups cannot silently hand off, and abandoned incomplete contracts surface as
+check failures. Historical receipts retain their original authority. Terminal
+syntax is checked before approval; daily reports include current wait-group
+backlog and missing-member counts. Real-provider/replay coverage now resumes Main
+through the production worker to create and verify the deliverable. Versioned
+approval intent preserves user prohibitions without parsing system instructions
+as user bans. `/diag learning` exposes bounded workspace evidence and gate reasons;
+learning and daily diagnostics explain memory shadow mode and scheduler state.
+Approved host observations retain only the capability proven by their preflight,
+bound to the frozen command and watcher deadline. Validation (2026-09-15): full
+Go tests and all 72 local-full cases passed. An isolated real-provider daemon
+preserved one ready and one pending prerequisite across process restart, resumed
+Main exactly once, and produced a deliverable with two passing verification
+checks. Installed locally as `v0.1.0-beta.26-local.closure.2`; managed restart,
+schema v14 health, and learning/memory diagnostics passed. Live IM delivery and
+sustained daily-driver observation remain required.
+
+Approval and liveness correction (2026-09-15): version-2 approval snapshots
+preserve attributed human requests, preceding proposals, and ordered corrections
+across same-scope resumes. The judge evaluates accepted scope without inventing
+new grants; model reasons are visible in approval summaries. Model decisions
+are reused only for identical actions, human evidence, and environment within a
+Run, instead of granting a command class. Active `/status`
+uses the exact Run's plan and progress, not an earlier watcher handoff. Foreground
+Unix cancellation kills the managed process group and bounds output draining,
+fixing pipe descendants delaying a 90-second timeout for several minutes.
+Full Go checks, all 72 local-full evals, focused race checks, and an isolated
+real-provider process-restart scenario passed, including retained authorization
+evidence, active progress, and a verified deliverable. Installed locally as
+`v0.1.0-beta.26-local.closure.4`; managed restart and schema v14 health passed.
+Real approval-frequency improvement remains a daily-driver observation gate.
+
+Semantic approval correction (2026-09-15): new version-3 snapshots retain
+complete bounded human quotations and stop deriving keyword prohibitions.
+Smart mode reviews effect authorization even for scoped writes; unrelated
+exclusions do not block accepted work, and applicable refusals remain refusals.
+Historical policy evidence is not widened. Direct claims and watcher resumes
+preserve exact-parent authorization, including claims made after Run start.
+A refused continuation pauses the turn before further dispatch; selection
+lookup no longer depends on the progress-event tail. The new real-model smart
+case checks preparation without writes, partial acceptance, exact continuation,
+watcher recovery, verified delivery, zero human asks, and positive judge audit.
+Unanswered approvals pause before further dispatch. Cheap-role review uses
+structured JSON and bounded low reasoning; invalid output still asks the human.
+Full Go/doc checks, all 73 local-full evals, focused race checks, and the real
+configured smart flow passed (18 tools, zero errors and human asks), including
+watcher recovery. Installed as `v0.1.0-beta.26-local.closure.5`; managed restart,
+healthy heartbeat, zero active Runs, and schema v14 were verified.
+
+Current P0/P1 implementation retains versioned approval response diagnostics
+and refuses incomplete provider output without inventing authorization. Bound
+verification corrections preserve criterion, target, scope, and failure history;
+Run/work-unit verification shares one projection. Invocation middleware retains
+actual exit codes and evidence references. Plan progress preserves existing
+acceptance requirements, changed criteria return to Main for review, and missing
+final answers retain known blockers. Main owns explicit user-takeover semantics;
+necessary unfinished work without handoff evidence stays unfinished. Three new
+real-provider cases cover corrected checks and both handoff outcomes, including
+an exact continuation of the prior waiting plan. Approval-frequency improvement
+and the cause of the previously unclassified production parse failures still
+need live observation; 24 protocol probes did not reproduce those failures.
+Validation: full Go/doc checks, all 76 local-full evals, and focused race checks
+passed. A real smart-mode flow passed with 22 tools, zero tool errors, and zero
+human asks. Local `v0.1.0-beta.26-local.closure.6` matches the tested binary;
+managed restart, healthy heartbeat, zero active Runs, and schema v14 passed.
 
 Natural-language continuation uses the ordinary Main turn for every phrasing;
 explicit commands and structured replies retain deterministic execution binding.
@@ -96,7 +165,7 @@ resume separately covers restoration of an already bound Skill.
 | External watchers | Partial | Durable registration accepts only proven read-only observations, statically rejects unsupported command/spec shapes before approval, performs its bounded real preflight after authorization, freezes a typed receipt with command hash/environment/adapter/target/deadline/capabilities, and automatically hands a successful registration off as `waiting_external` without another model turn. Spec v3 consumes registry-owned `pending`/`succeeded`/`failed` observations; historical regex specs retain frozen compatibility. Run-local `all`/`any` groups settle through one transactional aggregate verdict and at most one finalization Run. Unsupported registration reports `not_dispatched` plus generic alternative strategies rather than forcing repeated watcher attempts. Polling survives restart without holding the person's active run; terminal writeback is a separate idempotent background finalization with distinct agent/external outcomes, concise TUI state, person-scoped numbered `/watchers` controls, and delivery-confirmed stable-ID notifications. Keep validating provider-specific terminal behavior and live delivery. |
 | IM delivery | Partial | Weixin and other adapters share durable outbound state, delivery diagnostics, session refresh classification, bounded catch-up, preferred-channel routing, desk-first/phone-first approval surfaces, and idempotent resolution follow-ups. Old `pending_session` final results can be replaced by one exact-platform-account-and-channel recap; only confirmed recap delivery dismisses the exact summarized rows, while explicit no-send dismissal remains available. Live platform behavior remains an external dependency. |
 | TUI | Done | Daemon event stream, call-id-routed and semantically colored tool cells with terminal cleanup, CommonMark/GFM assistant rendering with adaptive narrow-screen tables, and a bounded single-owner process surface exist. A resolved semantic theme is injected across transcript, Markdown, Approval, Composer, notices, pagers, session browsing, and Model Manager; `tui.theme` supports `auto`, `dark`, `light`, and `mono`, respects terminal color capability and `NO_COLOR`, keeps mainline prose on the terminal's default foreground, and never paints an Approval or Composer background. The startup identity band and historical/active input use open full-width boundaries without side rails; Main, Background, and explicit role overrides include readable responsibility descriptions, while values wrap losslessly. The Composer grows to at most six rows/one third of the terminal, exposes history and visible-line position, uses payload-free `[Paste #N · size]` / `[Image #N · name]` tokens, and shows width-adaptive `Ctrl+J` newline plus `Ctrl+V` image guidance with a live attachment count. An image token is the only attachment state committed to the draft: deleting it detaches the outgoing image without leaving a transcript notice. Action narration uses normal-contrast multilingual text; correlated tools nest beneath it, unknown phases stay neutral until a boundary, closed Markdown blocks render stably while incomplete tails remain literal, and the measured ten-row cap preserves the Composer and status line. The Dot waiting animation runs one 10 FPS tick chain from structured `thinking` through `model_wait`, reserves one activity row beside a live Plan, refreshes elapsed text once per second, and has zero idle ticks. Codex-style queued approval decisions use a keyboard-owning active-region panel with losslessly wrapped action targets, explicit cancel, and cross-endpoint resolution; typed transient notices, bottom plan panel, pagers, and a single-owner Composer remain intact. Composer history uses strict empty/boundary navigation, suppresses completion while recalling slash entries, restores rich paste/image drafts within the process, and persists only safe person-local text. Subsequent terminal resizes clean and repaint the bounded inline region so terminal reflow cannot duplicate Composer/status rows; committed history remains native scrollback. Resume transcript, build-fingerprint detection, and the sole interactive Model Manager also exist. Syntax highlighting, user-defined palettes, named theme packs, runtime `/theme`, and committed-history resize reflow remain deferred. |
-| Distribution and updates | Partial | npm platform packages, launcher, resumable runtime/first-use setup, unified `selfmind update` notices, equal-version package refresh, feedback, and per-user macOS launchd/Linux systemd service management exist. Managed service definitions preserve only exact credential-free standard proxy variables from the installing shell, including `ALL_PROXY` fallback for Go transports, without adding provider configuration; `selfmind env refresh --restart` safely rewrites and verifies that environment instead of requiring a separate reinstall command. Managed readiness uses a non-secret service generation plus running job, version, configuration identity, and effective-route fingerprint; replacement drains active work without force, waits for runtime ownership release, and performs at most one proven-safe bootstrap retry. Compatible active Gateways remain usable as Runtime Degraded rather than being force-killed or falsely reported healthy. `control.db` has an explicit compatibility version, verified pre-migration backups, historical-state invariants, a restore command, and strict post-restart build/schema health. Public beta still requires released-version upgrade fixtures plus Linux/macOS rollback evidence. |
+| Distribution and updates | Partial | npm platform packages, launcher, continuous keyboard-driven model/runtime setup with optional role overrides and explicit Background-to-Main inheritance, resumable first-use progress, unified `selfmind update` notices, equal-version package refresh, feedback, and per-user macOS launchd/Linux systemd service management exist. Managed service definitions preserve only exact credential-free standard proxy variables from the installing shell, including `ALL_PROXY` fallback for Go transports, without adding provider configuration; `selfmind env refresh --restart` safely rewrites and verifies that environment instead of requiring a separate reinstall command. Managed readiness uses a non-secret service generation plus running job, version, configuration identity, and effective-route fingerprint; replacement drains active work without force, waits for runtime ownership release, and performs at most one proven-safe bootstrap retry. Compatible active Gateways remain usable as Runtime Degraded rather than being force-killed or falsely reported healthy. `control.db` has an explicit compatibility version, verified pre-migration backups, historical-state invariants, a restore command, and strict post-restart build/schema health. Public beta still requires released-version upgrade fixtures plus Linux/macOS rollback evidence. |
 
 `Done` means the capability is implemented and covered at its current personal
 edition boundary. `Partial` means usable with a known evidence gap or platform

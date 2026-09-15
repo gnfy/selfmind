@@ -1,0 +1,107 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " supplied"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Now"
+    },
+    {
+      "content": " running"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " supplied"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": " evidence"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " bound"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " actual"
+    },
+    {
+      "content": " acceptance"
+    },
+    {
+      "content": " criterion"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10980,
+        "output_tokens": 166,
+        "cache_read_input_tokens": 10368,
+        "cache_miss_input_tokens": 612,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 9,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_SqAsI5HM8LxcGizLsZhj3278",
+          "Function": "verify",
+          "Args": "{\"check\": {\"criterion\": \"state.txt contains exactly READY\", \"target\": \"state.txt\"}, \"kind\": \"custom\", \"command\": \"sh check.sh\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,687 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " try"
+    },
+    {
+      "reasoning_content": " registering"
+    },
+    {
+      "reasoning_content": " both"
+    },
+    {
+      "reasoning_content": " wat"
+    },
+    {
+      "reasoning_content": "chers"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " turn"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " parallel"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Two"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " calls"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "two"
+    },
+    {
+      "reasoning_content": "-target"
+    },
+    {
+      "reasoning_content": "s"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " size"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": " mode"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Each"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " interval"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " timeout"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "60"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Wait"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": " hands"
+    },
+    {
+      "reasoning_content": " off"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " every"
+    },
+    {
+      "reasoning_content": " declared"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Target"
+    },
+    {
+      "reasoning_content": " A"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " already"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "printf"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "D"
+    },
+    {
+      "reasoning_content": "ONE"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "'),"
+    },
+    {
+      "reasoning_content": " target"
+    },
+    {
+      "reasoning_content": " B"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " make"
+    },
+    {
+      "reasoning_content": " both"
+    },
+    {
+      "reasoning_content": " calls"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " They"
+    },
+    {
+      "reasoning_content": "'re"
+    },
+    {
+      "reasoning_content": " independent"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " can"
+    },
+    {
+      "reasoning_content": " batch"
+    },
+    {
+      "reasoning_content": " them"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " block"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " careful"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " note"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " repeatedly"
+    },
+    {
+      "reasoning_content": " poll"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "after"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " both"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " block"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": " might"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " subtle"
+    },
+    {
+      "reasoning_content": "ty"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": "_group"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": " size"
+    },
+    {
+      "reasoning_content": " must"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " filled"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Both"
+    },
+    {
+      "reasoning_content": " calls"
+    },
+    {
+      "reasoning_content": " together"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " try"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " make"
+    },
+    {
+      "reasoning_content": " both"
+    },
+    {
+      "reasoning_content": " calls"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " single"
+    },
+    {
+      "reasoning_content": " block"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " register"
+    },
+    {
+      "content": " both"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": "-only"
+    },
+    {
+      "content": " wat"
+    },
+    {
+      "content": "chers"
+    },
+    {
+      "content": " together"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "two"
+    },
+    {
+      "content": "-target"
+    },
+    {
+      "content": "s"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " group"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " each"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "s"
+    },
+    {
+      "content": " interval"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "60"
+    },
+    {
+      "content": "s"
+    },
+    {
+      "content": " timeout"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " let"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " da"
+    },
+    {
+      "content": "emon"
+    },
+    {
+      "content": " hand"
+    },
+    {
+      "content": " off"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": "_ex"
+    },
+    {
+      "content": "ternal"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9159,
+        "output_tokens": 572,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9159,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 175,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_lt7rInunYksxt9kyecgL7905",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"printf 'DONE\\\\n'\", \"description\": \"Target A: already-satisfied read-only observation (expects DONE)\", \"success_pattern\": \"DONE\", \"interval_seconds\": 5, \"timeout_seconds\": 60, \"wait_group\": \"two-targets\", \"wait_group_mode\": \"all\", \"wait_group_size\": 2}"
+        },
+        {
+          "ID": "call_01_UJRQl2utOdh3gd7cQDfM9159",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"printf 'PENDING\\\\n'\", \"description\": \"Target B: pending read-only observation (expects DONE)\", \"success_pattern\": \"DONE\", \"interval_seconds\": 5, \"timeout_seconds\": 60, \"wait_group\": \"two-targets\", \"wait_group_mode\": \"all\", \"wait_group_size\": 2}"
+        }
+      ]
+    }
+  ]
+}

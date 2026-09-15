@@ -1,0 +1,470 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "交付"
+    },
+    {
+      "content": "已完成"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "后台"
+    },
+    {
+      "content": "交接"
+    },
+    {
+      "content": "流程"
+    },
+    {
+      "content": "验证"
+    },
+    {
+      "content": "通过"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "恢复"
+    },
+    {
+      "content": "后的"
+    },
+    {
+      "content": "子"
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "完成了"
+    },
+    {
+      "content": "剩余"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "：\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "前置"
+    },
+    {
+      "content": "条件"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "pr"
+    },
+    {
+      "content": "erequisite"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "second"
+    },
+    {
+      "content": "-pr"
+    },
+    {
+      "content": "erequisite"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "_B"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": " cat"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "）\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "交付"
+    },
+    {
+      "content": "产物"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "创建"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "内容"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "VER"
+    },
+    {
+      "content": "IFIED"
+    },
+    {
+      "content": "`\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "校验"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "test"
+    },
+    {
+      "content": " \"$"
+    },
+    {
+      "content": "("
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " receipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": ")\""
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " VER"
+    },
+    {
+      "content": "IFIED"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "通过"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "退出"
+    },
+    {
+      "content": "码"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "记录"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " verify"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "证据"
+    },
+    {
+      "content": "）\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "计划"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "四个"
+    },
+    {
+      "content": "步骤"
+    },
+    {
+      "content": "全部"
+    },
+    {
+      "content": "标记"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "completed"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "以"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "done"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "结束"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "三项"
+    },
+    {
+      "content": "可选"
+    },
+    {
+      "content": "事项"
+    },
+    {
+      "content": "按要求"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "修改"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "config"
+    },
+    {
+      "content": ".yaml"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "重建"
+    },
+    {
+      "content": "旧"
+    },
+    {
+      "content": " worker"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "提交"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "需要"
+    },
+    {
+      "content": "时可以"
+    },
+    {
+      "content": "单独"
+    },
+    {
+      "content": "让我"
+    },
+    {
+      "content": "做"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 13815,
+        "output_tokens": 151,
+        "cache_read_input_tokens": 3712,
+        "cache_miss_input_tokens": 10103,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

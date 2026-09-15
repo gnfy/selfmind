@@ -1661,7 +1661,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					"tests":             handoff.Tests,
 					"risks":             handoff.Risks,
 					"need_approve":      handoff.NeedApprove,
-					"completion_reason": "waiting_external",
+					"completion_reason": handoff.CompletionReason,
 				}
 				EmitAgentEvent(eventCh, AgentEvent{Type: "run.outcome", Payload: payload})
 				answer := strings.TrimSpace(handoff.Message)
@@ -1670,8 +1670,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				history.Outcome = answer
 				a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, answer, messages)
 				a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
-				completion := resolveTurnCompletion(completionSignals{FinishStatus: "waiting_external"})
-				recordStep(i, StepCompleteTurn, "waiting_external")
+				completion := resolveTurnCompletion(completionSignals{FinishStatus: handoff.Status})
+				recordStep(i, StepCompleteTurn, handoff.Status)
 				emitTurnCompleted(eventCh, answer, completion)
 				return answer, totalUsage, nil
 			}

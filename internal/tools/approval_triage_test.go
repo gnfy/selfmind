@@ -254,11 +254,8 @@ func runSmartInOneRun(t *testing.T, scope ExecutionScope, personKey string, cmds
 	return errs
 }
 
-// TestSmartTriageApproveRunsAndGrantsClass: an APPROVE verdict auto-runs the op
-// AND records a RUN-scope class grant, so a second same-class op in the same
-// run does NOT consult the judge again. Run scope is the point: the judge's
-// verdict controls cost within one run and never becomes durable authority.
-func TestSmartTriageApproveRunsAndGrantsClass(t *testing.T) {
+// Only a byte-identical action can reuse the model decision in this run.
+func TestSmartTriageApproveReusesOnlyExactAction(t *testing.T) {
 	withExecSandboxPolicy(t, true, true, false)
 	store := newFakeGrantStore()
 	judge := &fakeJudge{reply: "APPROVE"}
@@ -270,14 +267,14 @@ func TestSmartTriageApproveRunsAndGrantsClass(t *testing.T) {
 			return ToolApprovalDecision{}, nil
 		},
 	}
-	errs := runSmartInOneRun(t, scope, "person-a", "chmod 777 a.sh", "chmod +x other.sh")
+	errs := runSmartInOneRun(t, scope, "person-a", "chmod 777 a.sh", "chmod 777 a.sh", "chmod +x other.sh")
 	for i, err := range errs {
 		if err != nil {
 			t.Fatalf("command %d must auto-run: %v", i, err)
 		}
 	}
-	if judge.calls != 1 {
-		t.Fatalf("the second same-class op must reuse the run grant; calls=%d", judge.calls)
+	if judge.calls != 2 {
+		t.Fatalf("changed action needs its own judgment; calls=%d", judge.calls)
 	}
 	// The judge's verdict must not have written any durable grant.
 	for key := range store.granted {
@@ -291,7 +288,7 @@ func TestSmartTriageApproveRunsAndGrantsClass(t *testing.T) {
 	if errs := runSmartInOneRun(t, fresh, "person-a", "chmod 777 a.sh"); errs[0] != nil {
 		t.Fatalf("new run must still auto-run: %v", errs[0])
 	}
-	if judge.calls != 2 {
+	if judge.calls != 3 {
 		t.Fatalf("a new run must re-consult the judge; calls=%d", judge.calls)
 	}
 }
@@ -458,13 +455,14 @@ func TestJudgeContractSeparatesEscalateFromDenyByCause(t *testing.T) {
 	}
 	for _, want := range []string{
 		// The cause that routes to a human, stated as a cause.
-		"unclear or absent authorization",
+		"evidence or authorization for the actual effects is missing or uncertain",
 		// The cause that routes to a denial, stated as a property of the action.
-		"prohibited on its own terms",
+		"intrinsically forbidden",
+		"conflicts with a clear applicable human restriction",
 		// The case that produced every historical denial, ruled out explicitly.
-		"is never on its own a reason to deny",
+		"Unknown authority is not a denial",
 		// The existing default must survive the split.
-		`outcome must be "escalate"`,
+		"When uncertain, escalate.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("judge contract missing %q:\n%s", want, prompt)

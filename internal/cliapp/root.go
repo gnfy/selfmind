@@ -77,7 +77,12 @@ type App struct {
 	modelRecoveryWait  func() error
 	// modelManagerOnly makes `selfmind model` open the same transient manager
 	// as `/model`, then exit instead of entering a chat session.
-	modelManagerOnly bool
+	modelManagerOnly       bool
+	modelManagerSetup      bool
+	modelSetupComplete     bool
+	modelSetupErr          error
+	onboardingModelSetup   func(*config.Config) (bool, error)
+	onboardingRuntimeDraft *onboardingRuntimeChoice
 }
 
 var Version = buildinfo.Version
@@ -276,7 +281,7 @@ func (a *App) runTUI() int {
 	}
 
 	cfg, code := a.prepareTUIConfig(cfg)
-	if code != 0 {
+	if code != 0 || cfg == nil {
 		return code
 	}
 

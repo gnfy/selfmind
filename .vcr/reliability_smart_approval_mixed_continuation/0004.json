@@ -1,0 +1,203 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "方案"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "提交"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "交付"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "停在"
+    },
+    {
+      "content": "等待"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "），"
+    },
+    {
+      "content": "本轮"
+    },
+    {
+      "content": "没有"
+    },
+    {
+      "content": "创建"
+    },
+    {
+      "content": "任何"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "我会"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "重新"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "两个"
+    },
+    {
+      "content": "前置"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "创建"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "内容"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "VER"
+    },
+    {
+      "content": "IFIED"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "）"
+    },
+    {
+      "content": "→"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "比对"
+    },
+    {
+      "content": "验证"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "报告"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 11768,
+        "output_tokens": 62,
+        "cache_read_input_tokens": 3328,
+        "cache_miss_input_tokens": 8440,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

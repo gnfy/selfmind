@@ -219,12 +219,12 @@ func (s *Store) RunSteeringRequirements(ctx context.Context, tenantID, runID str
 		limit = 10
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`WITH RECURSIVE lineage(id, person_id, parent_id, depth) AS (
-			SELECT id, person_id, resumes_run_id, 0 FROM runs WHERE tenant_id=? AND id=?
+		`WITH RECURSIVE lineage(id, person_id, parent_id, workspace_id, roots, depth) AS (
+			SELECT id, person_id, resumes_run_id, COALESCE(workspace_id, ''), execution_roots_json, 0 FROM runs WHERE tenant_id=? AND id=?
 			UNION ALL
-			SELECT r.id, r.person_id, r.resumes_run_id, l.depth+1
+			SELECT r.id, r.person_id, r.resumes_run_id, COALESCE(r.workspace_id, ''), r.execution_roots_json, l.depth+1
 			FROM runs r JOIN lineage l ON r.id=l.parent_id AND r.person_id=l.person_id
-			WHERE r.tenant_id=? AND l.depth<7
+			WHERE r.tenant_id=? AND l.depth<7 AND COALESCE(r.workspace_id, '')=l.workspace_id AND r.execution_roots_json=l.roots
 		)
 		SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
 			COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),

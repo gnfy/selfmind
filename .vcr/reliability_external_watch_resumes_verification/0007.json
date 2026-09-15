@@ -1,0 +1,223 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " cmp"
+    },
+    {
+      "reasoning_content": " against"
+    },
+    {
+      "reasoning_content": " printf"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "'.\n\n"
+    },
+    {
+      "reasoning_content": "verify"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "printf"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "'"
+    },
+    {
+      "reasoning_content": " |"
+    },
+    {
+      "reasoning_content": " cmp"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "`\n\n"
+    },
+    {
+      "reasoning_content": "Also"
+    },
+    {
+      "reasoning_content": " could"
+    },
+    {
+      "reasoning_content": " add"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " extra"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " cmp"
+    },
+    {
+      "reasoning_content": " does"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Now"
+    },
+    {
+      "content": " verifying"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " byte"
+    },
+    {
+      "content": "-for"
+    },
+    {
+      "content": "-by"
+    },
+    {
+      "content": "te"
+    },
+    {
+      "content": " comparison"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13339,
+        "output_tokens": 161,
+        "cache_read_input_tokens": 13184,
+        "cache_miss_input_tokens": 155,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 52,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_vLzZ575eU9g9F6ZtICXk1979",
+          "Function": "verify",
+          "Args": "{\"command\": \"printf 'VERIFIED\\\\n' | cmp - receipt.txt\", \"cwd\": \".\", \"kind\": \"smoke\", \"timeout\": 30}"
+        }
+      ]
+    }
+  ]
+}

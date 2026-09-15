@@ -1,0 +1,197 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Exit"
+    },
+    {
+      "reasoning_content": " code"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "no"
+    },
+    {
+      "reasoning_content": " error"
+    },
+    {
+      "reasoning_content": " reported"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " confirm"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": "-back"
+    },
+    {
+      "reasoning_content": " too"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " succeeded"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " final"
+    },
+    {
+      "reasoning_content": "ize"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Update"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "校验"
+    },
+    {
+      "content": "通过"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "退出"
+    },
+    {
+      "content": "码"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "）。"
+    },
+    {
+      "content": "更新"
+    },
+    {
+      "content": "计划"
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "结束"
+    },
+    {
+      "content": "交付"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12922,
+        "output_tokens": 388,
+        "cache_read_input_tokens": 12672,
+        "cache_miss_input_tokens": 250,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 40,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_Q4gVuUVxOI9dw8wzVfrM1678",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"只读确认 prerequisite.txt 与 second-prerequisite.txt 状态\", \"success_criteria\": \"两个前置文件分别为 READY 和 READY_B\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\"}, {\"status\": \"completed\", \"step\": \"创建 receipt.txt，内容为 VERIFIED\", \"success_criteria\": \"工作区存在 receipt.txt 且内容为 VERIFIED\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"completed\", \"step\": \"校验 receipt.txt 内容\", \"success_criteria\": \"test \\\"$(cat receipt.txt)\\\" = VERIFIED 退出码为 0\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\", \"verification_required\": true}, {\"status\": \"completed\", \"step\": \"更新计划并结束交付任务\", \"success_criteria\": \"所有步骤标记 completed 且 finish_run status=done\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_4}}\"}]}"
+        }
+      ]
+    }
+  ]
+}

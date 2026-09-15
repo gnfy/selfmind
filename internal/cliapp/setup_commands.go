@@ -28,9 +28,16 @@ func (a *App) runSetupCommandIfRequested() (bool, int) {
 	}
 	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
 	_ = checkModel
-	_, code := a.ensureOnboarding(cfg, onboardingOptions{
+	cfg, code := a.ensureOnboarding(cfg, onboardingOptions{
 		Explicit: true, NonInteractive: *nonInteractive,
 		SkipModel: *skipModel, SkipGateway: *skipGateway,
 	})
+	if code == 0 && cfg != nil && a.interactive && !*nonInteractive && !*skipModel && !*skipGateway {
+		var connected bool
+		code, connected = a.tryRunTUIClient(cfg)
+		if !connected {
+			return true, 1
+		}
+	}
 	return true, code
 }

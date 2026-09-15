@@ -29,6 +29,19 @@ selfmind eval clean [--yes]        # remove historic eval residue (control.db ro
 `eval run` writes JSONL logs under `evalruns/YYYY-MM-DD/` by default. The
 directory is intentionally ignored by git.
 
+Cases may opt into `approval_mode: smart`. The harness then installs the same
+cheap-role approval judge as the daemon and preserves smart mode for external
+watch continuations. Existing cases default to full-auto. An
+`assert_state` predicate with `on: approval_triage`, `status: approved`, and
+`count_gte: 1` proves that the model funnel ran; `on: approval` with
+`count_lte: 0` detects unexpected human asks. Triage counts cover the isolated
+case person's turns, not the operator's account. Each turn may also declare
+`assert_state`, checked immediately after that foreground turn, so a later
+success cannot hide an effect performed before confirmation. New cassettes
+version their plan-ID binding and prefer the newest plan evidence, keeping
+old tool-result aging from shifting current step IDs. Existing cassettes retain
+their original binding contract.
+
 ## Data Isolation (default)
 
 Every eval run — record and replay alike — uses a **throwaway temp data dir**
@@ -239,6 +252,16 @@ turns:
     channel: weixin
     platform_user_id: "eval-stranger"   # a different person; must see nothing
 ```
+
+A turn may set `wait_for_external_watches: true` in an isolated workspace/data
+case. After a real `waiting_external` handoff the harness starts the production
+watch worker and waits for its exact-parent Main continuation to finish. Detached
+provider calls share the case's VCR/telemetry context; real file and process tools
+still execute. The isolated identity uses the same full-auto preference as its
+foreground eval turns, with the safety floor intact. The final state assertions
+inspect the continuation Run and original Thread events. This proves execution
+closure, not external IM delivery; approval and restart mechanics have separate
+Go coverage. Other cases do not start a watch worker.
 
 Every model-backed case under `evalcases/` requires a committed cassette. This
 is derived from `model_required` (default `true`), not from whether somebody

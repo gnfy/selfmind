@@ -15,7 +15,7 @@ import (
 // llmApprovalJudge implements tools.ApprovalJudge over a cheap role-routed
 // provider. It is the concrete judge the smart-mode triage step (H2) calls: the
 // provider is a role model (kept OFF the run's main coding provider), the reply
-// is bounded to a single word, and the temperature is pinned to 0 for a
+// is bounded structured JSON, and the temperature is pinned to 0 for a
 // deterministic verdict. This lives in the app layer (not internal/tools) so the
 // triage logic stays model-agnostic and the concrete model choice is injected.
 type llmApprovalJudge struct {
@@ -28,8 +28,8 @@ type llmApprovalJudge struct {
 // guardian prompt. Keeping both layers aligned prevents a system-level
 // one-word instruction from silently discarding risk, authorization, and the
 // rationale shown to the person.
-const judgeSystemPrompt = `You are a command-safety triage judge. Reply with exactly one JSON object and no other text:
-{"risk_level":"low|medium|high|critical","user_authorization":"unknown|low|medium|high","outcome":"approve|deny|escalate","rationale":"one short sentence"}
+const judgeSystemPrompt = `You decide whether this tool operation needs additional human confirmation by evaluating its actual effects, safety, and human authorization. A flag requesting review does not itself require human confirmation; your decision is the smart-mode operation review, subject to independently enforced safety boundaries. Reply with exactly one JSON object and no other text:
+{"outcome":"approve|deny|escalate","risk_level":"low|medium|high|critical","user_authorization":"unknown|low|medium|high","rationale":"one short sentence"}
 When uncertain, choose escalate.`
 
 // judgeMaxTokens must cover both the compact JSON verdict and any hidden
@@ -89,6 +89,11 @@ func configuredApprovalJudgeProvider(mem *memory.MemoryManager, cfg *config.Conf
 }
 
 func (j *llmApprovalJudge) Judge(ctx context.Context, prompt string) (string, error) {
+	result, err := j.JudgeResponse(ctx, prompt)
+	return result.Content, err
+}
+
+func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (tools.ApprovalResponse, error) {
 	resp, err := j.provider.Chat(ctx, llm.ChatRequest{
 		SystemPrompt: judgeSystemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
@@ -96,13 +101,40 @@ func (j *llmApprovalJudge) Judge(ctx context.Context, prompt string) (string, er
 		// temperature 0 for a deterministic verdict; adapters that ignore the
 		// option simply fall back to their default, which triage tolerates
 		// (unrecognized replies escalate).
-		Options: map[string]interface{}{"temperature": 0, "reasoning_effort": "none"},
+		Options: map[string]interface{}{"temperature": 0, "reasoning_effort": "low", "response_format": map[string]interface{}{"type": "json_object"}},
 	})
+	result := tools.ApprovalResponse{ApprovalResponseMetadata: tools.ApprovalResponseMetadata{Version: 1}}
 	if err != nil {
-		return "", err
+		result.ProtocolStatus = "provider_error"
+		return result, err
 	}
-	if resp == nil {
-		return "", nil
+	if resp != nil {
+		result.Content = strings.TrimSpace(resp.Content)
+		result.FinishReason = tools.RedactSensitive(resp.FinishReason)
+		if len(result.FinishReason) > 80 {
+			result.FinishReason = "unrecognized"
+		}
+		result.ResponseBytes = len(resp.Content)
+		result.OutputTokens = resp.Usage.OutputTokens
+		result.ReasoningTokens = resp.Usage.ReasoningOutputTokens
 	}
-	return strings.TrimSpace(resp.Content), nil
+	switch {
+	case resp == nil || result.Content == "":
+		result.ProtocolStatus = "empty_output"
+	default:
+		result.ProtocolStatus = "received"
+	}
+	if resp != nil {
+		switch strings.ToLower(strings.TrimSpace(resp.FinishReason)) {
+		case "length", "max_tokens", "max_output_tokens", "incomplete":
+			result.ProtocolStatus = "output_limit"
+		}
+		if len(resp.ToolCalls) > 0 {
+			result.ProtocolStatus = "unexpected_tool_call"
+		}
+	}
+	if result.ProtocolStatus != "received" {
+		return result, &tools.ApprovalResponseError{Class: result.ProtocolStatus, Metadata: result.ApprovalResponseMetadata}
+	}
+	return result, nil
 }

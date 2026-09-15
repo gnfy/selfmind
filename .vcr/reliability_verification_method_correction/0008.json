@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13943,
+        "output_tokens": 469,
+        "cache_read_input_tokens": 13696,
+        "cache_miss_input_tokens": 247,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_zjJMNsLd0xF7Rjyx9SSl4908",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Run supplied check.sh through verify bound to criterion \\\"state.txt contains exactly READY\\\" on target state.txt, and capture the first result\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"success_criteria\": \"A verify invocation of ./check.sh is recorded with criterion \\\"state.txt contains exactly READY\\\" on target state.txt and its exit status is known\", \"verification_required\": true}, {\"status\": \"completed\", \"step\": \"If it failed, inspect check.sh and state.txt to diagnose whether the failure is a defect in the check or a genuine mismatch of the input\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\", \"success_criteria\": \"The cause of the failure is identified from the observed command file and the input bytes, distinguishing check defect from real content mismatch\", \"verification_required\": false}, {\"status\": \"completed\", \"step\": \"Correct only the observation command (not the acceptance condition) and re-run verify, citing the original evidence as replaced\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\", \"success_criteria\": \"A corrected observation of state.txt is recorded with the same criterion \\\"state.txt contains exactly READY\\\", referencing the prior verification evidence id\", \"verification_required\": true}, {\"status\": \"completed\", \"step\": \"Report what the evidence establishes, including the first failure and any residual uncertainty\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_4}}\", \"success_criteria\": \"Report states the first failure cause, the corrected result, and the exact evidence establishing state.txt exactly equals READY, with no files modified\", \"verification_required\": false}]}"
+        }
+      ]
+    }
+  ]
+}

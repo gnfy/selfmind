@@ -67,17 +67,21 @@ selfmind
 ```
 
 The first interactive `selfmind` launch opens the sole Model Manager when Model
-Readiness is missing. After its transaction is applied, the next launch resumes
-runtime/first-use setup without reconfirming models. Linux and macOS use the
+Readiness is missing. After its transaction is applied and the daemon is healthy,
+the same invocation continues into workspace setup and chat. Linux and macOS use the
 same flow, and completed stages are not repeated. Platform service names stay
-out of the primary flow. `selfmind setup` re-enters runtime reconciliation,
+out of the primary flow. Interactive `selfmind setup` reopens the model summary
+and runtime settings, then enters chat; non-interactive setup never opens a TUI,
 while `selfmind doctor` reports detailed configuration and runtime diagnostics.
 
 `selfmind setup`:
 
 - creates missing configuration;
-- directs the person to `selfmind model` if Model Readiness is missing instead
-  of maintaining a second picker or probe path;
+- opens a compact presentation of the existing Model Manager, with Main,
+  Background, optional Advanced roles, and Validate & continue; advanced
+  reasoning and service-tier controls remain in `selfmind model`;
+- offers Same as Main or a separate Background model, including another
+  Provider; credentials are reused across selections on the same connection;
 - relies on the Model Manager transaction and the daemon's actual environment
   to validate the primary, background, and optional role routes;
 - stores accepted API credentials in `~/.selfmind/auth.json` with mode `0600`,
@@ -85,8 +89,8 @@ while `selfmind doctor` reports detailed configuration and runtime diagnostics.
 - confirms one canonical project workspace, grants trust only through the
   authenticated local-control path, and refuses `/` or the home directory as
   implicit workspace defaults;
-- confirms the approval mode and managed-background/on-demand choice in one
-  second fast-path confirmation;
+- uses arrow keys, Enter, and Esc for the workspace, trust, approval mode, and
+  Start at login choices; Back to models preserves the proposed runtime choices;
 - preserves existing credentials, values, and unknown keys;
 - starts or reuses the local daemon;
 - installs and starts a per-user launchd service on macOS or per-user systemd

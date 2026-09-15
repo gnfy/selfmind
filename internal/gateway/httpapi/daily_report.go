@@ -327,6 +327,10 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	}
 	stats := collectDailyQualityStats(events)
 	var evidenceGaps []string
+	waits, waitsErr := d.Control.ExternalWaitBacklogForPerson(ctx, identity.TenantID, identity.PersonID)
+	if waitsErr != nil {
+		evidenceGaps = append(evidenceGaps, "external wait backlog")
+	}
 	backlog, backlogErr := d.Control.ApprovalBacklog(ctx, identity.TenantID, identity.PersonID)
 	if backlogErr != nil {
 		evidenceGaps = append(evidenceGaps, "approval backlog")
@@ -391,6 +395,14 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		formatCountMap(stats.RecoveryStatuses), formatCountMap(stats.RecoveryGuardrails))
 	fmt.Fprintf(&sb, "Durable waits: groups %s; post-failure approvals %d\n",
 		formatCountMap(stats.WaitGroupOutcomes), stats.PostFailureApprovals)
+	if waitsErr == nil {
+		oldest := "none"
+		if !waits.OldestGroupAt.IsZero() {
+			oldest = generatedAt.Sub(waits.OldestGroupAt).Round(time.Second).String()
+		}
+		fmt.Fprintf(&sb, "External wait backlog now: pending groups %d, incomplete groups %d, oldest group %s; terminal members awaiting finalization %d\n", waits.PendingGroups, waits.IncompleteGroups, oldest, waits.UnfinalizedMembers)
+	}
+
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
 	if stats.ContextSamples > 0 {
@@ -440,6 +452,8 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		stats.RecallSelected, formatCountMap(stats.RecallSelectedSources),
 		stats.RecallOverlap, formatCountMap(stats.RecallOverlapSources), formatCountMap(stats.RecallSkipped))
 	fmt.Fprintf(&sb, "Memory disposition: %s\n", formatCountMap(stats.MemoryDisposition))
+	sb.WriteString(d.memoryGovernanceDiagLines(ctx, identity) + "\n")
+	sb.WriteString("Skill learning evidence and skip reasons: /diag learning (current default workspace)\n")
 	if maintenanceErr != nil || healthErr != nil {
 		usage := "unavailable"
 		if maintenanceErr == nil {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"selfmind/internal/kernel"
+	"selfmind/internal/verification"
 )
 
 type evidenceFileSnapshot struct {
@@ -25,6 +26,11 @@ func EvidenceMiddleware() Middleware {
 			toolName, _ := args["_tool_name"].(string)
 			if toolName != "write_file" && toolName != "patch" && toolName != "terminal" && toolName != "verify" {
 				return next(args)
+			}
+			if toolName == "verify" {
+				if err := prepareVerificationBinding(args); err != nil {
+					return "", newStableToolError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use a verification evidence id from the current open work unit and preserve its criterion, target and working directory.")
+				}
 			}
 
 			started := time.Now()
@@ -56,7 +62,8 @@ func EvidenceMiddleware() Middleware {
 				if kind == "" {
 					kind = evidenceKind(toolName)
 				}
-				evidence.Command = &kernel.CommandEvidence{
+				binding, _ := args["_verification_binding"].(*verification.Binding)
+				evidence.Command = &kernel.CommandEvidence{Binding: binding,
 					Command:  RedactSensitive(stringArg(args, "command")),
 					CWD:      stringArg(args, "cwd"),
 					Kind:     kind,
@@ -64,6 +71,9 @@ func EvidenceMiddleware() Middleware {
 				}
 			}
 			emitEvidence(args, evidence)
+			if evidence.Command != nil && evidence.Command.Binding != nil {
+				result += "\nVerification evidence: " + evidence.ToolCallID
+			}
 			return result, err
 		}
 	}

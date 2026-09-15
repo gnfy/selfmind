@@ -1,0 +1,79 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " contents"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Let"
+    },
+    {
+      "content": " me"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " writing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " deliver"
+    },
+    {
+      "content": "able"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12933,
+        "output_tokens": 88,
+        "cache_read_input_tokens": 12416,
+        "cache_miss_input_tokens": 517,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 5,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_lrsLD0kmFu2KIqn93qWf4523",
+          "Function": "ls_r",
+          "Args": "{\"path\": \".\", \"recursive\": true, \"max_entries\": 100}"
+        }
+      ]
+    }
+  ]
+}

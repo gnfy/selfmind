@@ -315,6 +315,8 @@ next-due。一次 pass 只处理有界批次；若当前 judge 版本仍有 back
 完整扫描才进入正常 24 小时周期。checkpoint 写入失败或候选/判决读取失败会进入
 失败退避，不能吞掉后误报成功。`/diag memory` 同时显示 scheduler 的上次尝试/成功、下次 due、延期原因，
 以及 consolidation 报告的生成时间和年龄，避免把陈旧 shadow 报告当成当前状态。
+`/diag learning` 和日报复用相同的治理状态。shadow 的说明明确区分“整理评估不自动
+合并、归档”和独立运行的偏好 intake、用户显式记忆写入；空候选不等于后台未运行。
 
 ### 4.4 上限治理
 

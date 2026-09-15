@@ -1,0 +1,46 @@
+id: reliability_completion_user_takeover
+title: "An explicit user takeover narrows the agent's remaining responsibility"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [bash, cat, test]
+setup:
+  files:
+    draft.txt: "Draft ready\n"
+turns:
+  - input: >-
+      Review draft.txt and deliver it to a recipient I will specify later.
+      Delivery remains part of the requested outcome, so record a plan that
+      preserves that outstanding work. Read the file now, but do not guess the
+      recipient or send anything. Record your outcome while waiting for me.
+    assert_state:
+      - on: run
+        field: status
+        eq: waiting_user
+  - input: >-
+      Originally I wanted you to review draft.txt and distribute it to the team.
+      I have changed the scope: I will handle distribution myself, including
+      choosing recipients and sending it. Your remaining work is to read the
+      draft and tell me whether it is empty, then hand it back to me. You can
+      finish your part after that review. Do not send messages or create files.
+      Record the outcome with finish_run and explain the agreed handoff.
+expect:
+  status: done
+  max_tool_errors: 0
+  max_duration_seconds: 150
+assert_state:
+  - on: run
+    field: status
+    eq: done
+  - on: events
+    type: work.selection_committed
+    payload_contains: '"commit_mode":"direct"'
+    count_gte: 1
+  - on: file
+    path: draft.txt
+    contains: Draft ready
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

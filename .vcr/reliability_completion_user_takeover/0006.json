@@ -1,0 +1,842 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Update"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " final"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Then"
+    },
+    {
+      "reasoning_content": " report"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Note"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": " parked"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " returned"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Do"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " Guidance"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " final"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " unresolved"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Since"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " accepted"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "not"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " fine"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": " left"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " better"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " mark"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " leave"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Is"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " allowed"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "After"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " nothing"
+    },
+    {
+      "reasoning_content": " forb"
+    },
+    {
+      "reasoning_content": "ids"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "fin"
+    },
+    {
+      "reasoning_content": "ish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " ..."
+    },
+    {
+      "reasoning_content": " A"
+    },
+    {
+      "reasoning_content": " successful"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " final"
+    },
+    {
+      "reasoning_content": ".\""
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " calling"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " might"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " fine"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " risky"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " marking"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " worthwhile"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " attribution"
+    },
+    {
+      "reasoning_content": " consistency"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " post"
+    },
+    {
+      "reasoning_content": "-fin"
+    },
+    {
+      "reasoning_content": "ish"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " shows"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " unresolved"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Given"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " parked"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "not"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " leaving"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " mismatch"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " final"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " marking"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " risk"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " snapshot"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " lifecycle"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " du"
+    },
+    {
+      "reasoning_content": "plic"
+    },
+    {
+      "reasoning_content": "ating"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Then"
+    },
+    {
+      "reasoning_content": " final"
+    },
+    {
+      "reasoning_content": " answer"
+    },
+    {
+      "reasoning_content": " text"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13994,
+        "output_tokens": 486,
+        "cache_read_input_tokens": 3456,
+        "cache_miss_input_tokens": 10538,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 271,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_rlTMdjAlZcpKzZjw8b6b1506",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Read and review draft.txt in the workspace\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"verification_required\": true}, {\"status\": \"completed\", \"step\": \"Record the outcome and keep delivery pending on the user-specified recipient\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"pending\", \"step\": \"Deliver the reviewed draft to the recipient once the user provides it\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}]}"
+        }
+      ]
+    }
+  ]
+}

@@ -12,6 +12,8 @@ import (
 )
 
 type Case struct {
+	// Smart cases exercise the production judge; existing cases retain full-auto.
+	ApprovalMode  string `yaml:"approval_mode,omitempty" json:"approval_mode,omitempty"`
 	ID            string `yaml:"id" json:"id"`
 	Title         string `yaml:"title" json:"title,omitempty"`
 	Suite         string `yaml:"suite" json:"suite,omitempty"`
@@ -90,9 +92,10 @@ var validCIPlatforms = map[string]struct{}{
 }
 
 type Turn struct {
-	Input           string   `yaml:"input" json:"input"`
-	Channel         string   `yaml:"channel" json:"channel,omitempty"`
-	AdditionalRoots []string `yaml:"additional_roots,omitempty" json:"additional_roots,omitempty"`
+	AssertState     []StatePredicate `yaml:"assert_state,omitempty" json:"assert_state,omitempty"`
+	Input           string           `yaml:"input" json:"input"`
+	Channel         string           `yaml:"channel" json:"channel,omitempty"`
+	AdditionalRoots []string         `yaml:"additional_roots,omitempty" json:"additional_roots,omitempty"`
 	// PlatformUserID overrides the eval identity for this turn only. It lets a
 	// case simulate a *different* platform user (a "stranger") mid-case to assert
 	// identity isolation: person-scoped task/run state must not leak across
@@ -111,6 +114,9 @@ type Turn struct {
 	// historical case would change the model-call cassette contract. Use it for
 	// scenarios whose next turn must observe asynchronous preference intake.
 	WaitForMaintenance bool `yaml:"wait_for_maintenance,omitempty" json:"wait_for_maintenance,omitempty"`
+	// Opt-in daemon worker execution in an isolated case, including its queued
+	// continuation and real tools. The turn budget bounds the wait.
+	WaitForExternalWatches bool `yaml:"wait_for_external_watches,omitempty" json:"wait_for_external_watches,omitempty"`
 }
 
 type Expectations struct {
@@ -206,6 +212,9 @@ func (c *Case) normalize() error {
 		return fmt.Errorf("at least one turn is required")
 	}
 	for i, turn := range c.Turns {
+		if turn.WaitForExternalWatches && (c.SharedData || !needsWorkspaceIsolation(c)) {
+			return fmt.Errorf("wait_for_external_watches requires an isolated workspace and data directory")
+		}
 		if turn.ReplyToTurn < 0 || turn.ReplyToTurn > i {
 			return fmt.Errorf("turn %d: reply_to_turn must name an earlier turn (1..%d)", i+1, i)
 		}
@@ -221,6 +230,10 @@ func (c *Case) normalize() error {
 	}
 	if err := c.normalizeCI(); err != nil {
 		return err
+	}
+	c.ApprovalMode = strings.TrimSpace(c.ApprovalMode)
+	if c.ApprovalMode != "" && c.ApprovalMode != "smart" && c.ApprovalMode != "full-auto" {
+		return fmt.Errorf("approval_mode must be smart or full-auto")
 	}
 	if err := c.normalizeRequirements(); err != nil {
 		return err
@@ -323,6 +336,9 @@ func (c *Case) validateTextEncoding() error {
 		return err
 	}
 	for i, turn := range c.Turns {
+		if turn.WaitForExternalWatches && (c.SharedData || !needsWorkspaceIsolation(c)) {
+			return fmt.Errorf("wait_for_external_watches requires an isolated workspace and data directory")
+		}
 		if err := check(fmt.Sprintf("turns[%d].input", i), turn.Input); err != nil {
 			return err
 		}

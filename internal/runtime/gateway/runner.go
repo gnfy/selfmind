@@ -233,19 +233,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 				"instance", previousUnclean.InstanceID, "reason", previousUnclean.ExitReason)
 		}
 	}
-	stopTriageTelemetry := tools.SetTriageTelemetrySink(func(event tools.TriageAuditEvent) {
-		// Diagnostics are best-effort and must never turn a busy SQLite writer
-		// into approval latency on the foreground tool path.
-		writeCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-		defer cancel()
-		_ = controlStore.RecordApprovalTriageAudit(writeCtx, control.ApprovalTriageEvent{
-			TenantID: event.TenantID, PersonID: event.PersonID, TaskID: event.TaskID, RunID: event.RunID,
-			ToolName: event.ToolName, Outcome: string(event.Outcome), RiskLevel: event.RiskLevel,
-			UserAuthorization: event.Authorization, GrantKey: event.GrantKey, ProviderRoute: event.ProviderRoute,
-			LatencyMS: event.Latency.Milliseconds(), ErrorClass: event.ErrorClass, PolicyVersion: event.PolicyVersion,
-			Rationale: event.Rationale, LastError: event.RedactedError, At: event.At,
-		})
-	})
+	stopTriageTelemetry := app.InstallApprovalTelemetry(controlStore)
 	defer stopTriageTelemetry()
 	if pruned, pruneErr := controlStore.PruneApprovalTriageEvents(context.Background(), time.Now().Add(-14*24*time.Hour)); pruneErr != nil {
 		log.Warn("gateway: prune approval triage history failed", "error", pruneErr)

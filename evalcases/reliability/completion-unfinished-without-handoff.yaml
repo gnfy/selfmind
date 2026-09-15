@@ -1,0 +1,32 @@
+id: reliability_completion_unfinished_without_handoff
+title: "A required result stays unfinished without evidence of user takeover"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [bash, cat, test]
+setup:
+  files:
+    draft.txt: "Draft ready\n"
+turns:
+  - input: >-
+      Please review draft.txt and deliver it to the recipient I will specify
+      later. Delivery is part of the required outcome. You may read the draft
+      now, but I have not supplied the recipient and I am not taking over delivery.
+      Do not guess a recipient or send anything. Finish this turn with a
+      structured outcome and tell me what remains necessary to finish the work.
+expect:
+  status: waiting_user
+  max_tool_errors: 0
+  max_duration_seconds: 90
+assert_state:
+  - on: run
+    field: status
+    eq: waiting_user
+  - on: file
+    path: draft.txt
+    contains: Draft ready
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

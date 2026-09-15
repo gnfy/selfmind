@@ -133,6 +133,14 @@ Migrate the CLI/TUI from "app-owned full-viewport re-render" to a
   input, and temporarily preempts a pager without hiding the active process,
   Plan, draft, or status context.
 
+Guided setup reuses Model Manager with a compact Main/Background summary and a
+visible optional Advanced roles entry. Arrow keys choose, Enter confirms, and
+Esc returns to the preceding page (or cancels at the summary). Selections do
+not force reasoning/service-tier pages. Validate & continue shows per-route
+daemon evidence before applying; the configured daemon must become healthy
+before the same invocation enters the keyboard-driven workspace/trust/safety/
+Start at login page and chat. Back to models never authorizes runtime writes.
+
 After guided setup, the startup identity band shows Main, Background, every
 explicit role-model override, and the logical workspace without exposing
 launchd/systemd details. Each displayed route includes one normal-contrast

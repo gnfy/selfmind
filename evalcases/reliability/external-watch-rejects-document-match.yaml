@@ -1,0 +1,32 @@
+id: reliability_external_watch_rejects_document_match
+title: "A nested success marker cannot establish an observation's success"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+turns:
+  - input: >-
+      This is a deliberate observation-validation test, not a real external task.
+      Call watch_external exactly once with command
+      printf '%s' '{"status":"WORKING","steps":[{"status":"SUCCESS"}]}'
+      and success_pattern SUCCESS. Do not change the command or retry the watch.
+      Explain why this whole-document observation is rejected and why the nested
+      SUCCESS is not evidence of overall completion. No external service is involved.
+expect:
+  status: completed
+  require_tool_events: true
+  min_tool_calls: 1
+  max_tool_errors: 1
+  max_duration_seconds: 120
+assert_state:
+  - on: events
+    type: external_watch.created
+    count_lte: 0
+  - on: events
+    type: tool.completed
+    payload_contains: 'observation must be one bounded scalar'
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_provider_stack_dump: true

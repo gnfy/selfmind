@@ -117,6 +117,11 @@ func needsWorkspaceIsolation(c *Case) bool {
 	if c == nil {
 		return false
 	}
+	for _, turn := range c.Turns {
+		if len(turn.AssertState) > 0 {
+			return true
+		}
+	}
 	if c.Setup != nil || len(c.AssertState) > 0 {
 		return true
 	}

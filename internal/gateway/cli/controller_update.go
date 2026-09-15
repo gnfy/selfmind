@@ -51,7 +51,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Hybrid: commit the startup card to scrollback once, now that the width
 		// is known, so it persists at the top of history (like Codex) instead of
 		// vanishing when the first message scrolls the active region.
-		if !m.startupCommitted && msg.Width > 0 {
+		if !m.modelSetup && !m.startupCommitted && msg.Width > 0 {
 			m.startupCommitted = true
 			if card := strings.TrimRight(strings.Join(m.renderStartupCard(msg.Width), "\n"), "\n"); card != "" {
 				m.pendingPrintln = append(m.pendingPrintln, card)
@@ -165,6 +165,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.modelManager == nil {
 			return m, nil
 		}
+		if msg.Route == components.SetupValidationRoute {
+			m.finishSetupValidation(msg)
+			return m, nil
+		}
 		if msg.Err != nil {
 			m.modelManager.SetRouteValidation(msg.Route, false, msg.Err.Error(), "")
 			return m, nil
@@ -234,12 +238,16 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Response.RestartScheduled {
 			m.addMessage("notice", fmt.Sprintf("Model change %s validated and saved. Running remains %s until the safe restart is healthy.", change.ID, m.displayModelName()))
-			if m.modelManagerOnly {
+			if m.modelManagerOnly && !m.modelSetup {
 				return m, m.quitNow()
 			}
 			return m, m.observeModelChange(false, 100*time.Millisecond)
 		} else {
 			m.addMessage("notice", fmt.Sprintf("Model change %s validated and saved. Run `selfmind gateway restart --drain` to apply it.", change.ID))
+			if m.modelSetup {
+				m.modelSetupError = fmt.Errorf("model change is saved but could not schedule a restart; run `selfmind gateway restart --drain`, then resume setup")
+				return m, m.quitNow()
+			}
 		}
 		if m.modelManagerOnly {
 			return m, m.quitNow()
@@ -260,6 +268,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		observedID := m.modelChangeID
 		status := msg.Observation.Status
 		m.applyModelStatus(status)
+		if m.modelSetup && observedID != "" && status.Pending == nil {
+			if cmd, handled := m.completeModelSetup(observedID, msg.Observation); handled {
+				return m, cmd
+			}
+		}
 		if status.Pending != nil {
 			m.modelGatewayOffline = !msg.Observation.GatewayReachable &&
 				(status.Pending.Status == modelchange.StatusDraining || status.Pending.Status == modelchange.StatusRestarting || status.Pending.Status == modelchange.StatusStarting)
@@ -269,6 +282,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if status.Pending.Status == modelchange.StatusRecoveryRequired {
 				m.addErrorMessage(fmt.Sprintf("Model change %s requires recovery: %s", status.Pending.ID, status.Pending.Failure))
+				if m.modelSetup {
+					m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
+					m.modelManager.SetSetupMode()
+				}
 			} else {
 				if msg.OpenManager {
 					m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
@@ -303,7 +320,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.addMessage("notice", "Model recovery action accepted: "+msg.Action+".")
-		if m.modelManagerOnly {
+		if m.modelManagerOnly && !m.modelSetup {
 			return m, m.quitNow()
 		}
 		return m, m.observeModelChange(false, 100*time.Millisecond)
@@ -314,18 +331,33 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activityText = ""
 		if msg.Err != nil {
 			m.addErrorMessage("Could not load model routes: " + msg.Err.Error())
+			if m.modelSetup {
+				m.modelSetupError = msg.Err
+				return m, m.quitNow()
+			}
 			return m, nil
 		}
 		if msg.Response.Status == nil {
 			m.addErrorMessage("Could not load model routes: the daemon returned no status.")
+			if m.modelSetup {
+				m.modelSetupError = fmt.Errorf("the daemon returned no model status")
+				return m, m.quitNow()
+			}
 			return m, nil
 		}
 		if msg.Response.ProtocolVersion < api.ModelControlProtocolVersion {
 			m.addErrorMessage("The running SelfMind service is too old for Provider connections. Run `selfmind gateway restart --drain`, then reopen Model Manager.")
+			if m.modelSetup {
+				m.modelSetupError = fmt.Errorf("the running daemon needs an update; run `selfmind gateway restart --drain`, then resume setup")
+				return m, m.quitNow()
+			}
 			return m, nil
 		}
-		m.modelManagerStatus = modelManagerStatusFrom(*msg.Response.Status)
+		m.applyModelStatus(*msg.Response.Status)
 		m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
+		if m.modelSetup {
+			m.modelManager.SetSetupMode()
+		}
 		return m, nil
 
 	case tea.FocusMsg:
@@ -342,6 +374,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.noteInputActivity(time.Now())
 		if m.approvalPrompt != nil {
 			return m.handleKey(msg)
+		}
+		if m.modelSetup && m.modelManager == nil {
+			if msg.String() == "ctrl+c" {
+				return m, m.quitNow()
+			}
+			return m, nil
 		}
 		if m.modelManager != nil {
 			// An apply is a multi-second daemon round trip. Swallow keys until

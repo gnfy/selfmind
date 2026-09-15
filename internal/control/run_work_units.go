@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"selfmind/internal/verification"
 	"strings"
 	"time"
 
@@ -300,6 +301,7 @@ func maxRunEventCursorTx(ctx context.Context, tx *sql.Tx, runID string) (int64, 
 }
 
 type workUnitEvidence struct {
+	ToolCallID string `json:"tool_call_id"`
 	Kind       string `json:"kind"`
 	Status     string `json:"status"`
 	StartedAt  int64  `json:"started_at_unix_nano"`
@@ -309,9 +311,10 @@ type workUnitEvidence struct {
 		AfterSHA256  string `json:"after_sha256"`
 	} `json:"files"`
 	Command *struct {
-		Command string `json:"command"`
-		CWD     string `json:"cwd"`
-		Kind    string `json:"kind"`
+		Binding *verification.Binding `json:"binding,omitempty"`
+		Command string                `json:"command"`
+		CWD     string                `json:"cwd"`
+		Kind    string                `json:"kind"`
 	} `json:"command"`
 }
 
@@ -324,8 +327,7 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 	}
 	defer rows.Close()
 	latestMutation := int64(0)
-	checks := map[string]workUnitEvidence{}
-	order := []string{}
+	checks := []verification.Check{}
 	for rows.Next() {
 		var raw string
 		if rows.Scan(&raw) != nil {
@@ -348,48 +350,21 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 		if evidence.Kind != "verification" || evidence.Command == nil {
 			continue
 		}
-		key := strings.Join([]string{evidence.Command.Kind, evidence.Command.Command, evidence.Command.CWD}, "\x00")
-		if _, ok := checks[key]; !ok {
-			order = append(order, key)
-		}
-		if previous, ok := checks[key]; !ok || evidence.StartedAt >= previous.StartedAt {
-			checks[key] = evidence
-		}
+		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: evidence.Command.Binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
 	}
-	passed, failed, blocked := 0, 0, 0
-	refs := make([]string, 0, len(order))
-	for _, key := range order {
-		check := checks[key]
-		if check.StartedAt < latestMutation {
-			continue
-		}
-		if command := strings.TrimSpace(check.Command.Command); command != "" {
-			refs = append(refs, command)
-		}
-		switch check.Status {
-		case "succeeded":
-			passed++
-		case "blocked":
-			blocked++
-		default:
-			failed++
+	state, _ := verification.State(latestMutation, checks)
+	refs := []string{}
+	for _, check := range verification.Latest(checks) {
+		if check.StartedAt >= latestMutation && strings.TrimSpace(check.Command) != "" {
+			refs = append(refs, check.Command)
 		}
 	}
 	refsJSON, _ := json.Marshal(refs)
-	switch {
-	case failed > 0:
-		return "failed", string(refsJSON)
-	case passed > 0 && blocked == 0:
-		return "passed", string(refsJSON)
-	case passed == 0 && blocked > 0:
-		return "blocked", string(refsJSON)
-	case passed > 0 && blocked > 0:
-		return "partial", string(refsJSON)
-	case latestMutation > 0:
-		return "not_run", string(refsJSON)
-	default:
-		return "not_applicable", string(refsJSON)
+	// The work-unit API historically calls stale evidence not_run.
+	if state == "stale" {
+		state = "not_run"
 	}
+	return state, string(refsJSON)
 }
 
 func (s *Store) ListRunWorkUnits(ctx context.Context, tenantID, runID string) ([]RunWorkUnit, error) {

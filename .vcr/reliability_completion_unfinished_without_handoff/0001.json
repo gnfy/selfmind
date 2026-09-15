@@ -1,0 +1,346 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " inspecting"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " find"
+    },
+    {
+      "reasoning_content": " draft"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " review"
+    },
+    {
+      "reasoning_content": " draft"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " deliver"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " recipient"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " specified"
+    },
+    {
+      "reasoning_content": " later"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " User"
+    },
+    {
+      "reasoning_content": " explicitly"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " draft"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " recipient"
+    },
+    {
+      "reasoning_content": " supplied"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " they"
+    },
+    {
+      "reasoning_content": " are"
+    },
+    {
+      "reasoning_content": " NOT"
+    },
+    {
+      "reasoning_content": " taking"
+    },
+    {
+      "reasoning_content": " over"
+    },
+    {
+      "reasoning_content": " delivery"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Don"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " guess"
+    },
+    {
+      "reasoning_content": " recipient"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " don"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " send"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Finish"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " structured"
+    },
+    {
+      "reasoning_content": " outcome"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " tell"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " remains"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "wait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " outcome"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " draft"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " review"
+    },
+    {
+      "reasoning_content": " portion"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " draft"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9501,
+        "output_tokens": 205,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9501,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 92,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_0Qstf8MQFydlqNYpfvcq7910",
+          "Function": "ls_r",
+          "Args": "{\"path\": \".\", \"recursive\": true, \"max_entries\": 100}"
+        },
+        {
+          "ID": "call_01_zOPYJCgQeOtPs6a4CKaZ5014",
+          "Function": "read_file",
+          "Args": "{\"path\": \"draft.txt\"}"
+        }
+      ]
+    }
+  ]
+}

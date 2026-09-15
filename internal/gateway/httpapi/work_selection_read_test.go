@@ -120,8 +120,8 @@ func TestReadBeforeResumeUsesActualDispatcherEffectClassification(t *testing.T) 
 				if resp.Run.ResumesRunID != "" {
 					t.Fatal("mutation allowed an implicit scope transfer")
 				}
-				if !strings.Contains(provider.selectionResult, "work_selection_blocked") {
-					t.Fatalf("blocked selection was not a typed tool failure: %s", provider.selectionResult)
+				if provider.calls != 2 || resp.Outcome == nil || resp.Outcome.Status != "waiting_user" {
+					t.Fatalf("refused continuation allowed another model turn: calls=%d run=%+v", provider.calls, resp.Run)
 				}
 				events, err := store.ListRunEvents(ctx, identity.TenantID, identity.PersonID, resp.Task.ID, resp.Run.ID, 100)
 				if err != nil {

@@ -3,6 +3,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 )
 
 type toolExecutionResult struct {
+	pause      *toolLifecycleHandoff
 	index      int
 	step       string
 	msg        llm.Message
@@ -24,15 +26,16 @@ type toolExecutionResult struct {
 }
 
 type toolLifecycleHandoff struct {
-	Status      string
-	Summary     string
-	Message     string
-	Done        []string
-	NextSteps   []string
-	Files       []string
-	Tests       []string
-	Risks       []string
-	NeedApprove bool
+	CompletionReason string
+	Status           string
+	Summary          string
+	Message          string
+	Done             []string
+	NextSteps        []string
+	Files            []string
+	Tests            []string
+	Risks            []string
+	NeedApprove      bool
 }
 
 type parallelToolSupport interface {
@@ -331,6 +334,11 @@ func isolateExternalWatchHandoffCalls(calls []llm.ToolCall) ([]llm.ToolCall, int
 // successful trusted built-in watcher results. External tools and arbitrary
 // model-visible JSON can never end a run through this path.
 func lifecycleHandoffFromToolResults(results []toolExecutionResult) (toolLifecycleHandoff, bool) {
+	for _, result := range results {
+		if result.pause != nil {
+			return *result.pause, true
+		}
+	}
 	var out toolLifecycleHandoff
 	registered := 0
 	for _, result := range results {
@@ -364,6 +372,7 @@ func lifecycleHandoffFromToolResults(results []toolExecutionResult) (toolLifecyc
 		}
 		registered++
 		out.Status = "waiting_external"
+		out.CompletionReason = "waiting_external"
 		out.Summary = decoded.Handoff.Summary
 		out.Message = decoded.Message
 		out.Done = append(out.Done, decoded.Handoff.Done...)
@@ -419,8 +428,14 @@ func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh c
 		return results
 	}
 
+	var paused bool
 	for idx, call := range calls {
+		if paused {
+			results[idx] = a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, fmt.Errorf("run paused at a control-plane boundary; this call was not executed"))
+			continue
+		}
 		results[idx] = a.executeSingleToolCall(ctx, tenantID, eventCh, idx, call)
+		paused = results[idx].pause != nil
 	}
 	return results
 }
@@ -614,7 +629,14 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		if eventCh != nil {
 			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err, completedMetadata...)
 		}
+		var pause *toolLifecycleHandoff
+		var boundary interface{ ToolRunPause() (string, string, bool) }
+		if errors.As(err, &boundary) {
+			reason, message, needApproval := boundary.ToolRunPause()
+			pause = &toolLifecycleHandoff{Status: "waiting_user", CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
+		}
 		return toolExecutionResult{
+			pause:     pause,
 			index:     idx,
 			step:      packaged.ModelContent,
 			toolName:  name,

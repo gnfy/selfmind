@@ -1,0 +1,262 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Done"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " wait"
+    },
+    {
+      "content": " group"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": "-pr"
+    },
+    {
+      "content": "erequisites"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "mode"
+    },
+    {
+      "content": " all"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " size"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " resolved"
+    },
+    {
+      "content": " successfully"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " both"
+    },
+    {
+      "content": " prerequisites"
+    },
+    {
+      "content": " were"
+    },
+    {
+      "content": " satisfied"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Del"
+    },
+    {
+      "content": "iver"
+    },
+    {
+      "content": "able"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " containing"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "VER"
+    },
+    {
+      "content": "IFIED"
+    },
+    {
+      "content": "`.\n\n"
+    },
+    {
+      "content": "Ver"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "printf"
+    },
+    {
+      "content": " '"
+    },
+    {
+      "content": "VER"
+    },
+    {
+      "content": "IFIED"
+    },
+    {
+      "content": "\\n"
+    },
+    {
+      "content": "'"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " cmp"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " receipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " exited"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " differences"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " reading"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " back"
+    },
+    {
+      "content": " shows"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "VER"
+    },
+    {
+      "content": "IFIED"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 14767,
+        "output_tokens": 82,
+        "cache_read_input_tokens": 3712,
+        "cache_miss_input_tokens": 11055,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

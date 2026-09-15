@@ -56,7 +56,13 @@ type DenyScope struct {
 // evidence before an approval judge sees them. GoalSummary is advisory context;
 // none of these fields bypasses deterministic approval floors or stored grants.
 type RunIntentSnapshot struct {
-	RawUserText string `json:"raw_user_text,omitempty"`
+	AuthorizationParentRunID string `json:"authorization_parent_run_id,omitempty"`
+	// Version-3 runs require semantic authorization review for effects in smart
+	// mode. Historical snapshots retain their earlier deterministic contract.
+	ModelAuthorization              bool                    `json:"model_authorization,omitempty"`
+	AuthorizationEvidence           []AuthorizationEvidence `json:"authorization_evidence,omitempty"`
+	AuthorizationEvidenceIncomplete bool                    `json:"authorization_evidence_incomplete,omitempty"`
+	RawUserText                     string                  `json:"raw_user_text,omitempty"`
 	// PriorAssistantOffer is what the assistant said immediately before
 	// RawUserText, in the same channel. A person's reply is often only
 	// meaningful against it: "2" answering a numbered list of next steps is a
@@ -73,12 +79,15 @@ type RunIntentSnapshot struct {
 	// mid-run — or a narrowing one — was invisible to the judge while the main
 	// model was already acting on it.
 	AddedRequirements []string `json:"added_requirements,omitempty"`
-	GoalSummary       string   `json:"goal_summary,omitempty"`
-	WorkKey           string   `json:"work_key,omitempty"`
-	WorkspaceID       string   `json:"workspace_id,omitempty"`
-	Source            string   `json:"source,omitempty"`
-	ExplicitAllow     []string `json:"explicit_allow,omitempty"`
-	ExplicitDeny      []string `json:"explicit_deny,omitempty"`
+	// IDs preserve chronology: repeated words in a new message may revoke an
+	// intervening instruction and must not be deduplicated by text.
+	AddedRequirementIDs []string `json:"added_requirement_ids,omitempty"`
+	GoalSummary         string   `json:"goal_summary,omitempty"`
+	WorkKey             string   `json:"work_key,omitempty"`
+	WorkspaceID         string   `json:"workspace_id,omitempty"`
+	Source              string   `json:"source,omitempty"`
+	ExplicitAllow       []string `json:"explicit_allow,omitempty"`
+	ExplicitDeny        []string `json:"explicit_deny,omitempty"`
 	// DenyScopes is the structured form of ExplicitDeny. When it is empty but
 	// ExplicitDeny is not, the snapshot came from a caller that predates
 	// scoping and keeps the old blanket behavior.

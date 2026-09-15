@@ -457,11 +457,10 @@ func EvaluateModeDecision(ctx context.Context, mode ApprovalMode, projectRoot, t
 //     model is told this is a safety-policy block (do not retry), not a user
 //     decision it might reword.
 //  2. Mode bypass (approvalNeeded): full-auto/auto-edit/etc. skip the ask.
-//  3. Class-level allowlist (scope.Grants): a prior "approve this class" for the
-//     task (session) or person (persistent) suppresses the ask. This is the key
-//     fatigue reducer — approving one chmod approves the chmod CLASS.
-//  4. LLM triage (H2), smart mode only: a cheap judge triages the dangerous op
-//     (APPROVE auto-runs + grants the class for the task; DENY blocks as a
+//  3. Grants: exact unchanged model decisions may be reused. Version-3 smart
+//     effects still require authorization review despite older capability grants.
+//  4. LLM triage (H2), smart mode only: a cheap judge reviews the actual effect
+//     (APPROVE auto-runs + records an exact run decision; DENY blocks as a
 //     do-not-retry decision; ESCALATE / no judge / any error / timeout falls
 //     through to the human ask). It fails SAFE — never auto-approves without a
 //     clear APPROVE from an installed judge — and sits strictly below the hard
@@ -543,8 +542,13 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				operationClassesFor(toolName, args, dangerous),
 				operationTargetsFor(args),
 			)
+			// Scope containment and older grants describe capabilities, not whether
+			// this effect agrees with the person's current request. No language
+			// parser chooses this review: every effect in the new smart contract
+			// is judged, including an otherwise in-scope file write.
+			semanticReview := mode == ApprovalSmart && intentSnapshot.ModelAuthorization && (isWriteTool(toolName) || isExecTool(toolName) || dangerous)
 			contained := containment.AutoApprove() && !denyForcesHuman
-			if !denyForcesHuman && !externalUnknown && !approvalNeeded(mode, toolName, dangerous, contained) {
+			if !semanticReview && !denyForcesHuman && !externalUnknown && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
 					recordScopeTriage(scope, toolName, "", TriageOutcomeContained, TriageAssessment{}, 0, nil)
 					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason, "assessment", containment.Summary())
@@ -569,6 +573,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			ruleCandidates := approvalRuleCandidates(toolName, args, scope, reason)
 			targetKeys := approvalTargetRuleKeys(toolName, args, scope)
 			resumeFingerprint := approvalResumeFingerprint(toolName, args, scope, containment.Summary())
+			decisionKey := triageDecisionKey(resumeFingerprint, scope, intentSnapshot, mode)
 			isRunGranted := func(key string) bool {
 				return hasScope && scope.runGrants != nil && scope.runGrants.has(key)
 			}
@@ -579,6 +584,11 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			case externalUnknown:
 				// External unknown effects are deliberately once-only. Historical
 				// broad grants and live run grants cannot release them.
+			case isRunGranted(decisionKey):
+				recordScopeTriage(scope, toolName, decisionKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
+				return next(args)
+			case semanticReview:
+				// An old capability grant cannot interpret a new human restriction.
 			case isRunGranted(patternKey):
 				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
@@ -618,7 +628,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					return next(args)
 				}
 			}
-			if !denyForcesHuman && !externalUnknown && hasScope && scope.Grants != nil {
+			if !semanticReview && !denyForcesHuman && !externalUnknown && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
 					if key == "" {
@@ -643,10 +653,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			}
 
 			// Layer 4 (H2): LLM triage, smart mode only. Sits ABOVE the human ask
-			// and BELOW the hard floor (hardline ops returned already) and the
-			// class-grant allowlist (a granted class returned already), so triage
-			// is asked at most once per class per run. Only a dangerous
-			// (non-hardline) op reaches here in smart mode. Fails SAFE: with no
+			// and BELOW the hard floor (hardline ops returned already). Version-3
+			// smart effects reach this review unless the exact action, evidence,
+			// and environment decision is unchanged. Fails SAFE: with no
 			// judge, or on ESCALATE / any error / timeout, we fall through to the
 			// human ask — never an auto-approval.
 			// triageState travels to the human ask so the surface can say WHY it is
@@ -658,7 +667,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			triageRisk := ""
 			triageAuthorization := ""
 			decisionPolicy := ""
-			if externalUnknown || denyForcesHuman || containment.Filesystem == containmentFilesystemHost ||
+			if semanticReview || externalUnknown || denyForcesHuman || containment.Filesystem == containmentFilesystemHost ||
 				(containment.Credentials == containmentCredentialsSelected && !containment.ObservationOnly) {
 				decisionPolicy = ApprovalDecisionPolicyOnceOnly
 			}
@@ -683,6 +692,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					ctx := contextFromArgs(args)
 					triageStarted := time.Now()
 					verdict, assessment, terr := triageApprovalWithIntent(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intentSnapshot, containment)
+					assessment.Response.ToolCallID = stringArg(args, "_tool_call_id")
 					triageLatency := time.Since(triageStarted)
 					triageRationale = assessment.Rationale
 					triageRisk = assessment.Risk
@@ -692,14 +702,10 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					}
 					switch verdict {
 					case TriageApprove:
-						// Record a RUN-scope class grant so the judge is consulted at
-						// most once per class per run, then proceed. Run scope is
-						// deliberate: a cheap judge's auto-approval controls cost, it
-						// does not mint durable authority. It used to write a durable
-						// task-scoped row, which outlived the run and rested on the
-						// judgment that a set of runs is one piece of work.
-						if patternKey != "" {
-							recordApprovalGrant(ctx, scope, "run", patternKey, time.Time{})
+						// Reuse only this action under unchanged human evidence and
+						// environment. A model verdict cannot grant a command class.
+						if decisionKey != "" {
+							recordApprovalGrant(ctx, scope, "run", decisionKey, time.Time{})
 						}
 						recordScopeTriage(scope, toolName, patternKey, TriageOutcomeApproved, assessment, triageLatency, nil)
 						clearTriageDenials(scope.RunID)
@@ -727,6 +733,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						clearTriageDenials(scope.RunID)
 						if terr != nil {
 							triageState = TriageStateUnavailable
+							triageRationale = "Automatic review did not produce a valid decision. Human confirmation is required."
 							decisionPolicy = ApprovalDecisionPolicyOnceOnly
 							recordScopeTriage(scope, toolName, patternKey, TriageOutcomeUnavailable, assessment, triageLatency, terr)
 							log.Debug("smart approval: triage escalated on error", "tool", toolName, "error", terr)
@@ -784,10 +791,13 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					// second means nobody answered. Both stop the call, but only
 					// the rejection carries the do-not-retry user-decision
 					// contract that kernel's isUserRejectionErr matches; a timeout
-					// must read as "the person is not here", so the model parks
-					// the work instead of trying a variant.
+					// returns a typed pause so kernel parks before any further
+					// dispatch, independently of the model reading the message.
 					if decision.Outcome == ApprovalOutcomeTimedOut {
-						return "", fmt.Errorf("approval timed out with no answer: %s (nobody is at the keyboard; do not retry a variant, finish waiting_user)", fallbackReason(decision.Reason, "no answer before the approval expired"))
+						return "", &runPauseError{
+							cause:  fmt.Errorf("approval timed out with no answer: %s (nobody is at the keyboard; do not retry a variant, finish waiting_user)", fallbackReason(decision.Reason, "no answer before the approval expired")),
+							reason: "waiting_user", message: "Work is paused because this action still needs your approval.", needApproval: true,
+						}
 					}
 					if decision.Reason != "" {
 						return "", fmt.Errorf("operation rejected: %s", decision.Reason)
@@ -850,8 +860,11 @@ func recordScopeTriage(scope ExecutionScope, toolName, grantKey string, outcome 
 		route = strings.TrimSpace(routed.ApprovalJudgeRoute())
 	}
 	errorClass := ""
+	var responseError interface{ ApprovalErrorClass() string }
 	if err != nil {
 		switch {
+		case errors.As(err, &responseError):
+			errorClass = responseError.ApprovalErrorClass()
 		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			errorClass = "timeout"
 		default:
@@ -865,7 +878,7 @@ func recordScopeTriage(scope ExecutionScope, toolName, grantKey string, outcome 
 		ToolName: toolName, Outcome: outcome, RiskLevel: assessment.Risk,
 		Authorization: assessment.Authorization, GrantKey: grantKey, ProviderRoute: route,
 		Latency: latency, ErrorClass: errorClass, Rationale: assessment.Rationale,
-		PolicyVersion: ApprovalTriagePolicyVersion,
+		PolicyVersion: ApprovalTriagePolicyVersion, Response: assessment.Response,
 	}, err)
 }
 

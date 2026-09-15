@@ -1,5 +1,7 @@
 package kernel
 
+import "selfmind/internal/verification"
+
 // RunEvidence is a durable, provider-neutral observation produced by the tool
 // runtime. It deliberately contains observed facts only; model claims remain in
 // RunOutcome and are compared with this evidence during finalization.
@@ -24,8 +26,9 @@ type FileEffect struct {
 }
 
 type CommandEvidence struct {
-	Command  string `json:"command"`
-	CWD      string `json:"cwd,omitempty"`
-	Kind     string `json:"kind,omitempty"`
-	ExitCode int    `json:"exit_code"`
+	Binding  *verification.Binding `json:"binding,omitempty"`
+	Command  string                `json:"command"`
+	CWD      string                `json:"cwd,omitempty"`
+	Kind     string                `json:"kind,omitempty"`
+	ExitCode int                   `json:"exit_code"`
 }

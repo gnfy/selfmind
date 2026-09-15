@@ -321,7 +321,10 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	stopHeartbeat := c.startRunHeartbeat(ctx, run, req.QueueID, req.QueueClaimToken)
 	defer stopHeartbeat()
 	c.updateActive(identity.PersonID, task, run)
-	startedPayload := map[string]string{"input": truncate(req.Content, 500)}
+	startedPayload := map[string]interface{}{
+		"input":           truncate(req.Content, 500),
+		"approval_intent": persistedApprovalIntent{Version: 3, Snapshot: c.intentSnapshotWithOffer(ctx, identity, task, run, workspace, req, req.Channel)},
+	}
 	if queueID := strings.TrimSpace(req.QueueID); queueID != "" {
 		startedPayload["queue_id"] = queueID
 	}
@@ -809,7 +812,11 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}
 	}
 
-	runCtx, cancelCause := context.WithCancelCause(context.Background())
+	baseCtx := c.srv.BackgroundRunContext
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	runCtx, cancelCause := context.WithCancelCause(baseCtx)
 	runCancel := func() { cancelCause(context.Canceled) }
 	runCtx = kernel.WithSteeringInputs(runCtx, active.Steer)
 	active.Cancel = runCancel
@@ -1055,8 +1062,11 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		EffectKey:       next.IdempotencyKey,
 	}
 	if strings.HasPrefix(next.IdempotencyKey, "external-watch:") {
-		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
 		req.WatchID = externalWatchIDFromFinalizationKey(next.IdempotencyKey)
+		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
+		if watch, err := c.srv.Control.GetExternalWatch(ctx, next.TenantID, req.WatchID); err == nil && watch != nil {
+			req.ExecutionProfile = externalWatchContinuationProfile(*watch)
+		}
 		req.Origin = runOriginWatch
 	} else if strings.HasPrefix(next.IdempotencyKey, "run-recovery:") {
 		req.Origin = runOriginRecovery

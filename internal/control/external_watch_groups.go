@@ -123,14 +123,35 @@ func (s *Store) ResolveExternalWatchGroup(ctx context.Context, tenantID, groupID
 	}
 	var registered, active, succeeded, failed int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),
-		SUM(CASE WHEN status IN ('pending','running') THEN 1 ELSE 0 END),
-		SUM(CASE WHEN status='succeeded' THEN 1 ELSE 0 END),
-		SUM(CASE WHEN status IN ('failed','timed_out','blocked_environment','cancelled') THEN 1 ELSE 0 END)
+		COALESCE(SUM(CASE WHEN status IN ('pending','running') THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN status='succeeded' THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN status IN ('failed','timed_out','blocked_environment','cancelled') THEN 1 ELSE 0 END),0)
 		FROM external_watches WHERE tenant_id=? AND wait_group_id=?`, tenantID, groupID).Scan(&registered, &active, &succeeded, &failed); err != nil {
 		return resolution, err
 	}
+	// New groups cannot settle while the creating run is still registering
+	// members. If it leaves an incomplete contract, close the CHECK, not the
+	// external operation. Older contracts never acquire new continuation rights.
+	var modern, deadline int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MIN(json_extract(preflight_receipt_json,'$.version')),0), COALESCE(MIN(timeout_at),0) FROM external_watches WHERE tenant_id=? AND wait_group_id=?`, tenantID, groupID).Scan(&modern, &deadline); err != nil {
+		return resolution, err
+	}
 	status := ""
-	if group.Mode == ExternalWatchGroupAny {
+	if modern >= ExternalWatchContinuationReceiptVersion {
+		var runStatus string
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE tenant_id=? AND id=?`, tenantID, group.RunID).Scan(&runStatus); err != nil {
+			return resolution, err
+		}
+		if runStatus == "running" && deadline > time.Now().Unix() {
+			return resolution, tx.Commit()
+		}
+		if registered < group.ExpectedCount {
+			status = ExternalWatchBlocked
+		}
+	}
+	if status != "" {
+		// An incomplete group is not a failed business operation.
+	} else if group.Mode == ExternalWatchGroupAny {
 		if succeeded > 0 {
 			status = ExternalWatchSucceeded
 		} else if registered >= group.ExpectedCount && active == 0 && failed == registered {
@@ -174,4 +195,50 @@ func (s *Store) ResolveExternalWatchGroup(ctx context.Context, tenantID, groupID
 	resolution.Won = won == 1
 	resolution.Status = status
 	return resolution, nil
+}
+
+// IncompleteRunWatchGroups is also the handoff guard: registration is not a
+// successful lifecycle handoff while any promised target has no durable member.
+func (s *Store) IncompleteRunWatchGroups(ctx context.Context, tenantID, runID string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT g.group_key, g.expected_count, COUNT(w.id)
+ FROM external_watch_groups g LEFT JOIN external_watches w ON w.tenant_id=g.tenant_id AND w.wait_group_id=g.id
+ WHERE g.tenant_id=? AND g.run_id=? AND g.status='pending'
+ GROUP BY g.id HAVING COUNT(w.id)<g.expected_count ORDER BY g.group_key`, normalizeTenant(tenantID), runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var missing []string
+	for rows.Next() {
+		var key string
+		var expected, actual int
+		if err := rows.Scan(&key, &expected, &actual); err != nil {
+			return nil, err
+		}
+		missing = append(missing, fmt.Sprintf("group %s has %d/%d members", key, actual, expected))
+	}
+	return missing, rows.Err()
+}
+
+// ExternalWaitBacklog is a stock, independent of the report's event window.
+type ExternalWaitBacklog struct {
+	PendingGroups, IncompleteGroups, UnfinalizedMembers int
+	OldestGroupAt                                       time.Time
+}
+
+func (s *Store) ExternalWaitBacklogForPerson(ctx context.Context, tenantID, personID string) (ExternalWaitBacklog, error) {
+	var out ExternalWaitBacklog
+	var oldest int64
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*),COALESCE(SUM(members<expected_count),0),COALESCE(MIN(created_at),0) FROM (
+ SELECT g.expected_count,g.created_at,COUNT(w.id) members FROM external_watch_groups g
+ LEFT JOIN external_watches w ON w.tenant_id=g.tenant_id AND w.wait_group_id=g.id
+ WHERE g.tenant_id=? AND g.person_id=? AND g.status='pending' GROUP BY g.id)`, normalizeTenant(tenantID), personID).Scan(&out.PendingGroups, &out.IncompleteGroups, &oldest)
+	if err != nil {
+		return out, err
+	}
+	if oldest > 0 {
+		out.OldestGroupAt = time.Unix(oldest, 0)
+	}
+	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_watches WHERE tenant_id=? AND person_id=? AND finalized=0 AND status IN ('succeeded','failed','timed_out','blocked_environment')`, normalizeTenant(tenantID), personID).Scan(&out.UnfinalizedMembers)
+	return out, err
 }

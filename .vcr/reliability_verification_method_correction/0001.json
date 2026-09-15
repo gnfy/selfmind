@@ -1,0 +1,169 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " exploring"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " list"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " files"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " start"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " inspecting"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " see"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "check"
+    },
+    {
+      "content": ".sh"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "state"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9544,
+        "output_tokens": 127,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9544,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 27,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_lY1iQvJBC9eShr6ND7YY6122",
+          "Function": "ls_r",
+          "Args": "{\"path\": \".\", \"recursive\": true}"
+        },
+        {
+          "ID": "call_01_YFSditKrgbwqzgp2EjHg2499",
+          "Function": "read_file",
+          "Args": "{\"path\": \"check.sh\"}"
+        }
+      ]
+    }
+  ]
+}

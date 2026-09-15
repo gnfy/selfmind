@@ -1,6 +1,7 @@
 package api
 
 import (
+	"selfmind/internal/verification"
 	"time"
 
 	"selfmind/internal/control"
@@ -12,7 +13,7 @@ import (
 const (
 	LocalControlTokenHeader        = "X-SelfMind-Local-Control-Token"
 	ShutdownReasonServiceReconcile = "service_reconcile"
-	ModelControlProtocolVersion    = 2
+	ModelControlProtocolVersion    = 3
 )
 
 type ActiveRunStatus struct {
@@ -436,15 +437,7 @@ type VerificationOutcome struct {
 	Checks           []VerificationCheck `json:"checks,omitempty"`
 }
 
-type VerificationCheck struct {
-	Kind       string `json:"kind,omitempty"`
-	Command    string `json:"command,omitempty"`
-	CWD        string `json:"cwd,omitempty"`
-	Status     string `json:"status"`
-	ExitCode   int    `json:"exit_code"`
-	StartedAt  int64  `json:"started_at_unix_nano,omitempty"`
-	FinishedAt int64  `json:"finished_at_unix_nano,omitempty"`
-}
+type VerificationCheck = verification.Check
 
 // DigestResponse is the attach digest (GET /v1/digest): a bounded,
 // person-scoped summary of what happened since the requesting endpoint's last

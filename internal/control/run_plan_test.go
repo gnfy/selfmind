@@ -264,3 +264,19 @@ func TestRunCompletionRequiresDeclaredVerificationEvidence(t *testing.T) {
 		t.Fatalf("declared verification evidence rejected completion: %v", err)
 	}
 }
+
+func TestRunPlanProgressPreservesAcceptance(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "start", []RunPlanStepInput{{Step: "Export records", Status: "in_progress", SuccessCriteria: "Every input row is present in report.csv", VerificationRequired: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "still working", []RunPlanStepInput{{StepID: first.Plan.Steps[0].StepID, Step: "Export records", Status: "in_progress"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Plan.Steps[0].SuccessCriteria != first.Plan.Steps[0].SuccessCriteria || !next.Plan.Steps[0].VerificationRequired {
+		t.Fatalf("progress erased acceptance: %+v", next.Plan.Steps[0])
+	}
+}

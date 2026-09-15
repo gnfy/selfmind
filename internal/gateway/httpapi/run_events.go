@@ -21,6 +21,13 @@ func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run
 		return func() {}
 	}
 	store := c.srv.Control
+	// The goroutine holds the run's identity as values, never the *control.Run.
+	// A run's tenant and id are fixed for its life, but the struct behind the
+	// pointer is not: refreshDirectContinuation rewrites it in place when
+	// work_select moves the interaction onto the parent's thread, and it does
+	// so while this heartbeat is still ticking. Reading through the pointer
+	// here raced that write (CI, -race, 2026-09-15).
+	tenantID, runID := run.TenantID, run.ID
 	done := make(chan struct{})
 	go func() {
 		// runHeartbeatInterval is shared with the stuck-run sweeper's staleness
@@ -34,16 +41,16 @@ func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = store.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
+				_ = store.UpdateRunHeartbeat(context.Background(), tenantID, runID)
 				if queueID != "" && claimToken != "" {
-					_, _ = store.RenewQueuedClaim(context.Background(), run.TenantID, queueID, claimToken, 0)
+					_, _ = store.RenewQueuedClaim(context.Background(), tenantID, queueID, claimToken, 0)
 				}
 			}
 		}
 	}()
 	return func() {
 		close(done)
-		_ = store.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
+		_ = store.UpdateRunHeartbeat(context.Background(), tenantID, runID)
 	}
 }
 

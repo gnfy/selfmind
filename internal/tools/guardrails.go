@@ -36,6 +36,13 @@ func (g *ToolGuardrails) Middleware(next ToolExecutor) ToolExecutor {
 			return next(args)
 		}
 		toolName, _ := args["_tool_name"].(string)
+		if toolName == "terminal" {
+			command := stringArg(args, "command")
+			if _, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), ""); err != nil {
+				return "", newStableToolRecoveryError(err, "command_syntax", "syntax", "Command has invalid shell syntax; nothing was executed.", "Correct the syntax before requesting execution; keep the target and intended effect unchanged.", "preparation", "corrected_input", "not_dispatched", false)
+			}
+		}
+
 		if reason := activeTurnPollingReason(toolName, args); reason != "" {
 			return "", guardrailRefusal("active_turn_polling",
 				fmt.Sprintf("%s; choose a supported durable watch_external check, provider-native wait, or one bounded status observation; if none is available, park with an actionable blocker", reason),

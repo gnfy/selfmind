@@ -351,6 +351,16 @@ Durable activations and terminal work-unit outcomes are the canonical source
 for Skill use, completion, fallback, and failure statistics. Sidecar usage files
 are inventory-recency hints only; legacy metric rows are historical.
 
+`/diag learning` explains the current default workspace's bounded learning
+window: evidence coverage, procedural and explicitly verified successes, largest
+independent creation cohort, and the production evidence gate's reason for each
+anchor. These are current-window diagnostics, not reconstructed historical gate
+results or publication eligibility. It also shows attributed version states,
+curator job states, managed activations, and person-scoped curator calls over
+24 hours. Missing storage or an expired query budget reports unavailable rather
+than zero. Diagnostics never call a model, enqueue curation, or change evidence.
+The overview and daily report point to this detail view.
+
 Doctor reports front-matter keys this runtime does not model, naming the owning
 file and the keys. They stay ignored, but a constraint an external author
 declared must not disappear without a trace.

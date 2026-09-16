@@ -1,0 +1,1064 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "Verified"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "state"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " contains"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "52"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "45"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "41"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "44"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "59"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " (`"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " plus"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " trailing"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": ").\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": " failure"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " input"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " supplied"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "check"
+    },
+    {
+      "content": ".sh"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "```\n"
+    },
+    {
+      "content": "test"
+    },
+    {
+      "content": " \"$"
+    },
+    {
+      "content": "("
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": ")\""
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " RUN"
+    },
+    {
+      "content": "NING"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "```\n\n"
+    },
+    {
+      "content": "It"
+    },
+    {
+      "content": " compares"
+    },
+    {
+      "content": " against"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " literal"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "RUN"
+    },
+    {
+      "content": "NING"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " exits"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " any"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " input"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Run"
+    },
+    {
+      "content": " under"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " criterion"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "state"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": " contains"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "state"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " failed"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "evidence"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "call"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "_S"
+    },
+    {
+      "content": "q"
+    },
+    {
+      "content": "As"
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "HM"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "L"
+    },
+    {
+      "content": "xc"
+    },
+    {
+      "content": "G"
+    },
+    {
+      "content": "iz"
+    },
+    {
+      "content": "Ls"
+    },
+    {
+      "content": "Zh"
+    },
+    {
+      "content": "j"
+    },
+    {
+      "content": "327"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": ")."
+    },
+    {
+      "content": " Insp"
+    },
+    {
+      "content": "ecting"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " input"
+    },
+    {
+      "content": " confirmed"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " never"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " problem"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "state"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "\\n"
+    },
+    {
+      "content": "`.\n\n"
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": " corrected"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " observation"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " leaving"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " acceptance"
+    },
+    {
+      "content": " condition"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " unchanged"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " re"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "ran"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " replacement"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " prior"
+    },
+    {
+      "content": " attempt"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "```\n"
+    },
+    {
+      "content": "test"
+    },
+    {
+      "content": " \"$"
+    },
+    {
+      "content": "("
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": ")\""
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "```\n\n"
+    },
+    {
+      "content": "That"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "evidence"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "call"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "ET"
+    },
+    {
+      "content": "_K"
+    },
+    {
+      "content": "mb"
+    },
+    {
+      "content": "LT"
+    },
+    {
+      "content": "bc"
+    },
+    {
+      "content": "Mg"
+    },
+    {
+      "content": "Jo"
+    },
+    {
+      "content": "26"
+    },
+    {
+      "content": "n"
+    },
+    {
+      "content": "th"
+    },
+    {
+      "content": "as"
+    },
+    {
+      "content": "P"
+    },
+    {
+      "content": "334"
+    },
+    {
+      "content": "32"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": ")."
+    },
+    {
+      "content": " It"
+    },
+    {
+      "content": " uses"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " same"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "$("
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " ..."
+    },
+    {
+      "content": ")`"
+    },
+    {
+      "content": " normalization"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " original"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " intended"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " semantics"
+    },
+    {
+      "content": " are"
+    },
+    {
+      "content": " identical"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": " equal"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " trailing"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": " ignored"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "No"
+    },
+    {
+      "content": " files"
+    },
+    {
+      "content": " were"
+    },
+    {
+      "content": " modified"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "state"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " still"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "check"
+    },
+    {
+      "content": ".sh"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " still"
+    },
+    {
+      "content": " byte"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "identical"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "33"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " its"
+    },
+    {
+      "content": " original"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "One"
+    },
+    {
+      "content": " residual"
+    },
+    {
+      "content": " note"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "check"
+    },
+    {
+      "content": ".sh"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " shipped"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " defective"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "gu"
+    },
+    {
+      "content": "ards"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "RUN"
+    },
+    {
+      "content": "NING"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": ")."
+    },
+    {
+      "content": " Per"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": "-mod"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": " constraint"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " place"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " fix"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " separate"
+    },
+    {
+      "content": " change"
+    },
+    {
+      "content": " if"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " meant"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " assert"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 15883,
+        "output_tokens": 349,
+        "cache_read_input_tokens": 3456,
+        "cache_miss_input_tokens": 12427,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

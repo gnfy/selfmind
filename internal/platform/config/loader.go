@@ -852,6 +852,9 @@ type ModelsConfig struct {
 // foreground conversation; auxiliary supplies the default for bounded
 // background roles. Provider connections own transport/authentication.
 type ModelSelectionConfig struct {
+	// FollowPrimary is an explicit Background choice. Omission preserves older
+	// independently configured routes, even when their model matches Main.
+	FollowPrimary bool   `mapstructure:"follow_primary" yaml:"follow_primary,omitempty" json:"FollowPrimary,omitempty"`
 	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
 	Model         string `mapstructure:"model" yaml:"model,omitempty"`
 	Reasoning     string `mapstructure:"reasoning" yaml:"reasoning,omitempty"`
@@ -1460,7 +1463,7 @@ func (c *Config) EffectiveAuxiliary() ModelSelectionConfig {
 	}
 	auxiliary.Provider = strings.TrimSpace(auxiliary.Provider)
 	auxiliary.Model = strings.TrimSpace(auxiliary.Model)
-	if auxiliary.Provider == "" && auxiliary.Model == "" {
+	if auxiliary.FollowPrimary || (auxiliary.Provider == "" && auxiliary.Model == "") {
 		primary := c.EffectivePrimary()
 		auxiliary.Provider = primary.Provider
 		auxiliary.Model = primary.Model

@@ -92,6 +92,9 @@ type uiModel struct {
 	pager              *components.Pager
 	modelManager       *components.ModelManager
 	modelManagerOnly   bool
+	modelSetup         bool
+	modelSetupComplete bool
+	modelSetupError    error
 	modelApplying      bool
 	// terminalFocused is true only while this terminal has reported having the
 	// person's attention. The false zero value deliberately means "not known to
@@ -782,6 +785,9 @@ func (m *uiModel) openModelManager() tea.Cmd {
 	processor := m.modelChangeProcessor
 	if processor == nil {
 		m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
+		if m.modelSetup {
+			m.modelManager.SetSetupMode()
+		}
 		return nil
 	}
 	m.thinking = true
@@ -872,12 +878,19 @@ func modelManagerProviderPatches(draft []components.ModelManagerProviderSubmissi
 
 func (m *uiModel) validateModelManager(route string, draft []components.ModelManagerSubmission, providers []components.ModelManagerProviderSubmission, credentialStage string) tea.Cmd {
 	processor := m.modelChangeProcessor
+	routes := []string{route}
+	if route == components.SetupValidationRoute {
+		routes = []string{"primary", "background"}
+		for _, role := range modelchange.ManagedRoleRoutes() {
+			routes = append(routes, string(role))
+		}
+	}
 	return func() tea.Msg {
 		if processor == nil {
 			return MsgModelValidationDone{Route: route, Err: fmt.Errorf("model management is unavailable in this client")}
 		}
 		response, err := processor(context.Background(), api.ModelChangeRequest{
-			Action: "validate", Patches: modelManagerPatches(draft), ValidateRoutes: []string{route},
+			Action: "validate", Patches: modelManagerPatches(draft), ValidateRoutes: routes,
 			CredentialStage: credentialStage, ProviderPatches: modelManagerProviderPatches(providers),
 		})
 		return MsgModelValidationDone{Route: route, Response: response, Err: err}

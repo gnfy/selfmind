@@ -15,8 +15,9 @@ import (
 // judgeCaptureProvider records the request the judge sends so tests can pin the
 // output budget and determinism settings.
 type judgeCaptureProvider struct {
-	last  llm.ChatRequest
-	reply string
+	last     llm.ChatRequest
+	reply    string
+	response *llm.ChatResponse
 }
 
 func (p *judgeCaptureProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
@@ -25,6 +26,9 @@ func (p *judgeCaptureProvider) ChatCompletion(ctx context.Context, messages []ll
 
 func (p *judgeCaptureProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	p.last = req
+	if p.response != nil {
+		return p.response, nil
+	}
 	return &llm.ChatResponse{Content: p.reply}, nil
 }
 
@@ -48,6 +52,13 @@ func TestApprovalJudgeBudgetCoversReasoning(t *testing.T) {
 	}
 	if _, err := judge.Judge(context.Background(), "Tool: terminal\nCommand: git status"); err != nil {
 		t.Fatalf("judge: %v", err)
+	}
+	if provider.last.Options["reasoning_effort"] != "low" {
+		t.Fatalf("authorization review must retain bounded reasoning: %#v", provider.last.Options)
+	}
+	format, ok := provider.last.Options["response_format"].(map[string]interface{})
+	if !ok || format["type"] != "json_object" {
+		t.Fatalf("approval judge must request structured JSON output: %#v", provider.last.Options)
 	}
 	if provider.last.MaxTokens < 512 {
 		t.Fatalf("MaxTokens = %d: too small for a reasoning model's thinking plus verdict", provider.last.MaxTokens)
@@ -134,5 +145,20 @@ func TestApprovalJudgeNilProviderStaysNil(t *testing.T) {
 	var judge tools.ApprovalJudge = NewApprovalJudge(nil)
 	if judge != nil {
 		t.Fatal("nil judge must satisfy the tools contract as nil")
+	}
+}
+
+func TestApprovalJudgeRejectsIncompleteDecision(t *testing.T) {
+	for _, reason := range []string{"length", "max_tokens"} {
+		t.Run(reason, func(t *testing.T) {
+			provider := &judgeCaptureProvider{response: &llm.ChatResponse{
+				Content:      `{"outcome":"approve","risk_level":"low","user_authorization":"high","rationale":"Allowed"}`,
+				FinishReason: reason, Usage: llm.UsageStats{OutputTokens: 1024, ReasoningOutputTokens: 1000},
+			}}
+			_, err := NewApprovalJudge(provider).Judge(context.Background(), "review")
+			if err == nil || !strings.Contains(err.Error(), "output_limit") {
+				t.Fatalf("incomplete decision must not authorize execution: %v", err)
+			}
+		})
 	}
 }

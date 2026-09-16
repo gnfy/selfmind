@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func TestWatchContinuationEvalRequiresIsolation(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		c := &Case{ID: "watch-isolation", Workspace: ".", SharedData: shared, Turns: []Turn{{Input: "watch", WaitForExternalWatches: true}}}
+		if err := c.normalize(); err == nil {
+			t.Fatal("background eval accepted without isolated storage/workspace")
+		}
+	}
+}
+
 func TestLoadCaseAppliesDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "case.yaml")

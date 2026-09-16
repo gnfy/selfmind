@@ -86,10 +86,10 @@ type StalePlanStepReferenceError struct {
 	Current []string
 }
 
-type planVerificationPreconditionError struct{ step string }
+type planVerificationPreconditionError struct{ step, criterion, state string }
 
 func (e *planVerificationPreconditionError) Error() string {
-	return fmt.Sprintf("plan step %q requires successful verification before its work unit can complete; the previous plan is unchanged", e.step)
+	return fmt.Sprintf("plan step %q requires successful verification before its work unit can complete; the previous plan is unchanged. Criterion: %q; current verification: %s", e.step, e.criterion, e.state)
 }
 
 func (*planVerificationPreconditionError) PlanVerificationPrecondition() bool { return true }
@@ -163,7 +163,7 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		}
 		for _, unit := range units {
 			if unit.ID == stepWorkUnits[i] && unit.Status == WorkUnitCompleted && unit.VerificationState != "passed" {
-				return RunPlanProjection{}, &planVerificationPreconditionError{step: step.Step}
+				return RunPlanProjection{}, &planVerificationPreconditionError{step: step.Step, criterion: step.SuccessCriteria, state: unit.VerificationState}
 			}
 		}
 	}
@@ -321,6 +321,14 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 		}
 		if item.StepID == "" {
 			item.StepID = "step_" + uuid.NewString()
+		}
+		// Progress snapshots preserve the established acceptance obligation.
+		// Omission is not a user decision to remove verification or erase criteria.
+		if old, ok := byID[item.StepID]; ok {
+			if item.SuccessCriteria == "" {
+				item.SuccessCriteria = old.SuccessCriteria
+			}
+			item.VerificationRequired = item.VerificationRequired || old.VerificationRequired
 		}
 		// Execution attribution is already known for an existing step. A
 		// normal progress update need not repeat the work-unit identity.

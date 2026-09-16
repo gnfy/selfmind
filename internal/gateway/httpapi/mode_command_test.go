@@ -103,7 +103,7 @@ func TestApprovalModeLiveLookupMidRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	judge := &recordingJudge{reply: "APPROVE"}
+	judge := &recordingJudge{reply: `{"outcome":"approve","risk_level":"low","user_authorization":"high","rationale":"The test user authorized this bounded cleanup."}`}
 	daemon := &Server{Control: store, DefaultTenantID: "default", ApprovalJudge: judge}
 	coord := daemon.coordinator()
 

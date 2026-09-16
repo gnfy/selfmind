@@ -190,17 +190,24 @@ for compatible private endpoints.
 For local onboarding, an enabled auxiliary selection with no provider/model
 defaults to the primary provider/model. It can instead be explicitly disabled
 with `models.auxiliary.enabled: false`. When foreground readiness is absent, a bare
-interactive launch opens the same Model Manager as `selfmind model`; explicit
-`selfmind setup` points to that entry rather than implementing another picker.
-The Manager first exposes Provider connections, then shows and validates Main
-and Background routes. Its initial transaction materializes enabled slots. The
+interactive launch opens a compact presentation of the same Model Manager used
+by `selfmind model`. Interactive `selfmind setup` also opens this summary.
+Main, Background, optional Advanced roles, and Validate & continue are visible
+together. Provider connections remain accessible from the provider picker;
+reasoning and service tier use their compatible defaults without extra pages.
+Setup's Same as Main choice writes `models.auxiliary.follow_primary: true`:
+Background follows later Main provider/model changes, while retaining its own
+background tuning policy. Choosing a named Background model clears this flag,
+even if that model currently matches Main. Existing explicit selections do not
+gain inheritance automatically, and legacy snapshot fingerprints remain stable.
+The
 applied transaction in `model-state.json` is the sole authority for foreground
 and background readiness.
 Onboarding does not copy route or verification facts, so a
 later applied route change cannot reopen an unrelated workspace or background
 service stage. A valid legacy setup receipt is accepted once as migration
 evidence and backed up before its model fields are retired.
-After auxiliary is explicit, changing primary never overwrites it. Logical
+After auxiliary is independently configured, changing primary never overwrites it. Logical
 background roles remain available as advanced `models.roles.<role>` overrides
 and inherit auxiliary when omitted.
 
@@ -291,7 +298,11 @@ reasoning and service-tier settings survive a model selection only when known
 compatible. Unknown compatibility resets the affected setting to provider
 `auto` with a notice. Explicit values are authoritative.
 
-Validation has two boundaries. The Model Manager automatically sends the
+Validation has two boundaries. Setup keeps selections in an editable draft until
+Validate & continue probes Main, Background, and all six managed roles using
+their effective selections. It displays per-route results, refuses missing or
+failed evidence, and offers retry or return to the draft. The full Model Manager
+automatically sends the
 appropriate bounded contract probe after each completed selection: a foreground
 probe for Main and a background or maintenance-JSON probe for Background and
 its six managed roles. The final daemon transaction resolves and probes the
@@ -300,7 +311,10 @@ This prevents a shell credential from appearing healthy while the background
 runtime cannot use it. A newly entered API key stays in an opaque staged auth
 record during validation and is never written to YAML; service definitions
 contain paths and non-credential environment only. A failed probe keeps the
-draft editable and never masquerades as verified.
+draft editable and never masquerades as verified. Setup waits for the exact
+transaction's applied result and a reachable healthy daemon, reloads the applied
+configuration, then continues into runtime setup and chat in the same invocation.
+Cancelling the model summary does not install a service or trust a workspace.
 
 For Anthropic Messages, `thinking_mode: anthropic` maps an explicit reasoning
 effort to an enabled thinking budget (`low=4096`, `medium/default=8192`,

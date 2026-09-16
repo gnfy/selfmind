@@ -310,33 +310,60 @@ explicit product decision and focused tests.
 
 ## Smart Approval Triage
 
-Smart-mode triage is below the hard floor and class grants and above the human
-prompt. It uses a configured cheap role, not the run's coding model, and may
+Smart-mode triage is below the hard floor and above the human prompt.
+Historical approval contracts may reuse their earlier class grants. It uses a configured cheap role, not the run's coding model, and may
 return APPROVE, DENY, or ESCALATE.
 
-The judge receives a typed `RunIntentSnapshot`, not one blended prose intent:
-raw user text is authoritative; deterministic allow/deny evidence and
-control-plane workspace/source/work-key facts are separate fields; the task
-summary is advisory context only. An explicit deny disables containment-based
-auto-approval and forces a human decision even in full-auto or when a durable
-grant exists.
+The judge receives typed `RunIntentSnapshot` evidence: the person's original
+request, the complete preceding proposal within a bounded quotation budget,
+and ordered later corrections. Workspace/source/work-key facts remain separate;
+task summaries and system wake-ups are not human authorization. New version-3
+snapshots do not infer permissions or prohibitions with word lists, sentence
+splitting, or operation-class matching. Main follows the person's constraints.
+Version-3 smart execution reviews writes
+and process operations even when containment or an older capability grant would
+otherwise bypass triage. The cheap judge resolves references, exceptions, timing,
+and scope from that evidence; only an unchanged action/evidence decision is
+reused. A clear applicable refusal is respected without
+asking to override it; uncertainty escalates with the missing evidence stated.
+The judge makes the smart-mode operation decision; a risk flag is a reason for
+review, not proof that a separate human grant is missing. Explicit execution
+restrictions and the control-plane safety floor remain independently enforced.
+The provider request enables structured JSON output and bounded low reasoning;
+forcing reasoning off misread complete, explicitly named authorization in live
+review. The existing output and timeout budgets still bound the call. Version-3 review requires
+all four decision fields; malformed or incomplete output is an auditable model
+failure and falls back to the human, never a verdict inferred from prose. New
+audit records identify the policy as `smart-v3`.
 
-A deny constrains the operation it names, not every side-effecting tool in the
-run. Prohibitions are extracted deterministically (no model call), bound to the
-clause they appear in, and resolved to operation classes — write, delete,
-exec.in_turn, exec.delegated, network — plus any literal path or command
-fragment the clause names. A pending call is compared in that vocabulary, so
-"do not modify files" no longer stops a read-only probe, and a prohibition
-qualified as directly/yourself/manually resolves to `exec.in_turn` and leaves a
-durable delegation alone. An unqualified execution ban still covers both
-shapes. Narrowing applies only to what can be read: a prohibition that cannot
-be classified keeps the blanket effect, and the dangerous-op heuristic alone
-never activates an unrelated deny. Prohibitions that do not match still reach
-the judge as the person's stated limits — they simply no longer force the ask
-by themselves. The hard floor remains unconditional, so this snapshot cannot
-grant an otherwise forbidden capability.
+A version-1 `approval.response` event retains finish reason, response byte count,
+output/reasoning token usage, and protocol status without storing model text or
+private reasoning. Output-limit termination is unavailable even when the partial
+text parses. Empty output, unexpected tool calls, malformed JSON, incomplete
+decisions, and provider failures stay distinct from a valid `escalate` decision.
+All unavailable paths still require human confirmation; transport success alone
+never authorizes execution. Existing injected legacy judges remain supported
+without fabricating response metadata.
 
-- APPROVE from smart triage may cache its deterministic decision for the task.
+An unanswered approval returns a typed Run pause: kernel records `waiting_user`
+and stops the remaining calls before another model turn. The model cannot treat
+a parked human decision as an ordinary tool failure and proceed with a variant.
+
+Version-1/2 persisted prohibitions retain their original deterministic guards
+when historical work resumes; upgrading the daemon does not widen old pending
+permissions. Explicit human approval/rejection, ownership, workspace bounds,
+and the unconditional safety floor remain control-plane facts.
+
+Each human quotation is bounded to 16 KiB, with 48 KiB for the complete evidence
+bundle and at most six ancestor quotations. Omitted evidence, including overflow
+or unavailable ancestry, is marked incomplete at collection and prompt building.
+A partial bundle cannot yield automatic model approval: escalation identifies
+the missing context instead of silently ignoring a trailing restriction.
+
+- APPROVE from smart triage may reuse a decision only within the same Run for
+  identical action arguments, authorization evidence, and execution environment.
+  It never grants a command class; changed user requirements invalidate reuse
+  without needing a matching prohibition keyword.
   A human ask is narrower: it approves once, or records one explicitly offered
   run-local rule. Host escape, credential access, explicit-deny overrides, high
   risk, and unavailable triage never create remembered authority.
@@ -372,6 +399,22 @@ pending request; daemon or waiter loss parks it. On daemon restart, an approval
 already answered but not yet consumed gets one idempotent queued continuation.
 None of this changes the OUTCOME contract: unanswered is never rejection and
 never approval.
+
+Daemon-generated continuation prose is not a user prohibition. New Run start
+events freeze version-3 approval intent, including the preceding proposal shown
+to the person. Exact-parent, same-workspace/root continuations retain bounded,
+attributed human requests and accepted-proposal context, prohibitions, and later
+user requirements. This supplies judgment evidence, never inherited grants.
+The judge weighs scope and effects rather than command-word matches, and explains
+which human evidence applies or which execution permission remains missing.
+Version-1 evidence remains readable without fabricating missing proposals. Missing or
+unsupported historical intent fails closed to confirmation. This evidence never
+grants new execution authority or replaces the current approval mode.
+
+Foreground command cancellation terminates the managed Unix process group.
+After cancellation, output draining has a 250 ms bound before readers close;
+detached descendants cannot keep a Run waiting for pipe EOF. Normal completion
+still drains before reaping so short commands retain their complete output.
 
 Treat command text as untrusted data in the judge prompt. Strip irrelevant
 comments and delimit the command rather than interpolating it as an instruction.
@@ -571,6 +614,12 @@ failure mode being prevented is not an error but a check that SUCCEEDS against a
 different account. A watch whose identity no longer matches is stopped with
 `environment_changed`; watches registered before identity existed are
 grandfathered rather than stranded.
+
+A successful host preflight records its actual shared-network execution boundary.
+When the host approval already covers that boundary, the watcher retains it as
+registration-scoped authority expiring at its deadline; this also applies in an
+untrusted workspace. It creates no workspace grant or credential permission.
+Trust- and grant-derived capabilities keep their existing revocation rules.
 
 Registration also proves that the frozen check is runnable before ownership
 moves to the daemon. The first check must exit 0 and emit a non-empty bounded

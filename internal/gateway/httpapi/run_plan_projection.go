@@ -7,6 +7,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
 	"selfmind/internal/tools"
+	"selfmind/internal/verification"
 )
 
 // controlRunPlanProjection is the production adapter at the Run-plan seam. It
@@ -43,12 +44,16 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	if err != nil {
 		return tools.PlanProjectionResult{}, err
 	}
+	review := []string{}
 	// A step that arrives completed under a different acceptance bar than the
 	// one that declared it is how a false completion stays invisible: the plan
 	// still resolves, and the bar it resolved against is gone. Record the pair
 	// so an audit can see the bar move; nothing here judges the change, because
 	// restating a criterion can be honest replanning.
 	for _, change := range projection.CriteriaRestated {
+		if len(review) < 8 {
+			review = append(review, fmt.Sprintf("Step %s changed acceptance from %q to %q. Judge this against the original user scope and explain any authorized scope change before finishing.", change.StepID, boundedReviewCriterion(change.From), boundedReviewCriterion(change.To)))
+		}
 		_, _ = p.coordinator.srv.Control.AppendEvent(ctx, control.Event{
 			RunID:      p.run.ID,
 			Type:       "plan.criteria_restated",
@@ -99,7 +104,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 		}
 		workUnits = append(workUnits, identity)
 	}
-	return tools.PlanProjectionResult{Plan: plan, Version: projection.Plan.Version, Changed: projection.Changed, WorkUnits: workUnits}, nil
+	return tools.PlanProjectionResult{AcceptanceReview: review, Plan: plan, Version: projection.Plan.Version, Changed: projection.Changed, WorkUnits: workUnits}, nil
 }
 
 func (p *controlRunPlanProjection) ValidateCompletion(ctx context.Context) error {
@@ -107,4 +112,16 @@ func (p *controlRunPlanProjection) ValidateCompletion(ctx context.Context) error
 		return fmt.Errorf("run plan projection is unavailable")
 	}
 	return p.coordinator.srv.Control.ValidateRunCompletion(ctx, p.identity.TenantID, p.run.ID)
+}
+
+func (p *controlRunPlanProjection) ValidateVerification(ctx context.Context, binding verification.Binding, cwd string) error {
+	return p.coordinator.srv.Control.ValidateVerificationReplacement(ctx, p.identity.TenantID, p.run.ID, binding, cwd)
+}
+
+func boundedReviewCriterion(value string) string {
+	runes := []rune(value)
+	if len(runes) > 500 {
+		return string(runes[:500]) + "…"
+	}
+	return value
 }

@@ -55,24 +55,42 @@ func (a *App) ensureOnboarding(cfg *config.Config, options onboardingOptions) (*
 		fmt.Fprintln(a.stdout)
 	}
 
-	if !modelsReady && !options.SkipModel {
-		if options.Explicit || options.NonInteractive || !a.interactive {
+	if (!modelsReady || (options.Explicit && a.interactive && !options.NonInteractive)) && !options.SkipModel {
+		if options.NonInteractive || !a.interactive {
 			fmt.Fprintln(a.stderr, "Model Readiness is missing. Run `selfmind model` in an interactive terminal.")
 			return nil, 1
 		}
-		fmt.Fprintln(a.stdout, "Model Readiness is required. Opening Model Manager...")
+		fmt.Fprintln(a.stdout, "Opening Model Manager...")
 		fmt.Fprintln(a.stdout)
-		a.modelManagerOnly = true
-		return cfg, 0
+		var code int
+		cfg, code = a.finishOnboardingModels(cfg)
+		if code != 0 || cfg == nil {
+			return cfg, code
+		}
+		modelsReady = true
 	} else if modelsReady && !runtimeReady {
 		fmt.Fprintln(a.stdout, "  ✓ Models ready")
 		fmt.Fprintln(a.stdout)
 	}
 
-	if !runtimeReady && !options.SkipGateway {
+	for (!runtimeReady || (options.Explicit && !options.NonInteractive)) && !options.SkipGateway {
 		runtimeOptions := options
 		runtimeOptions.SkipModel = true
 		if code := a.runOnboardingRuntimeStep(&state, runtimeOptions); code != 0 {
+			if code == onboardingCancelled {
+				return nil, 0
+			}
+			if code == onboardingBackToModels {
+				if options.SkipModel {
+					return nil, 0
+				}
+				cfg, code = a.finishOnboardingModels(cfg)
+				if code != 0 || cfg == nil {
+					return cfg, code
+				}
+				modelsReady = true
+				continue
+			}
 			_ = saveOnboardingState(statePath, state)
 			return nil, code
 		}
@@ -81,11 +99,12 @@ func (a *App) ensureOnboarding(cfg *config.Config, options onboardingOptions) (*
 			return nil, 1
 		}
 		runtimeReady = state.runtimeReady() && a.expectedBackgroundStateReady(state)
+		break // A verified foreground daemon may continue with degraded startup.
 	}
 
 	a.onboarding = &state
 	if modelsReady && runtimeReady {
-		if options.Explicit {
+		if options.Explicit && options.NonInteractive {
 			fmt.Fprintln(a.stdout, "Setup complete. Run `selfmind` to start the CLI.")
 		} else {
 			fmt.Fprintln(a.stdout, "Setup ready.")
@@ -96,6 +115,43 @@ func (a *App) ensureOnboarding(cfg *config.Config, options onboardingOptions) (*
 		fmt.Fprintln(a.stdout, "Setup is incomplete. Run `selfmind setup` to continue.")
 	}
 	return cfg, 0
+}
+
+func (a *App) finishOnboardingModels(cfg *config.Config) (*config.Config, int) {
+	completed, err := a.configureOnboardingModels(cfg)
+	if err != nil {
+		fmt.Fprintf(a.stderr, "Model setup failed: %v\n", err)
+		return nil, 1
+	}
+	if !completed {
+		return nil, 0
+	}
+	// Reload the applied transaction instead of resuming with a stale config.
+	updated, err := config.LoadConfig(config.Options{Path: cfg.Path})
+	ready := false
+	if err == nil {
+		ready, err = a.modelReadiness(updated, nil)
+	}
+	if err != nil || !ready {
+		fmt.Fprintln(a.stderr, "The model transaction is not ready; resume setup after repairing Model Manager.")
+		return nil, 1
+	}
+	return updated, 0
+}
+
+func (a *App) configureOnboardingModels(cfg *config.Config) (bool, error) {
+	if a.onboardingModelSetup != nil {
+		return a.onboardingModelSetup(cfg)
+	}
+	previousOnly, previousSetup := a.modelManagerOnly, a.modelManagerSetup
+	a.modelManagerOnly, a.modelManagerSetup = true, true
+	a.modelSetupComplete, a.modelSetupErr = false, nil
+	defer func() { a.modelManagerOnly, a.modelManagerSetup = previousOnly, previousSetup }()
+	code, connected := a.tryRunTUIClient(cfg)
+	if !connected || code != 0 {
+		return false, fmt.Errorf("could not run Model Manager; check `selfmind gateway status`")
+	}
+	return a.modelSetupComplete, a.modelSetupErr
 }
 
 func (a *App) modelReadiness(cfg *config.Config, state *onboardingState) (bool, error) {

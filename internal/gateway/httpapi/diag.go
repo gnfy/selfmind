@@ -166,7 +166,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		return "Diagnostics unavailable.", nil
 	}
 	var sb strings.Builder
-	sb.WriteString("SelfMind diagnostics\n")
+	sb.WriteString("SelfMind diagnostics\nLearning evidence and skip reasons: /diag learning\n")
 
 	// Active run.
 	active := d.coordinator().currentActive(identity.PersonID)
@@ -608,28 +608,7 @@ func (d *Server) memoryDiagReply(ctx context.Context, identity *control.Identity
 	if err != nil {
 		return "", err
 	}
-	mode := "disabled"
-	if d.MemoryConsolidator != nil {
-		mode = d.MemoryConsolidator.Mode()
-	}
-	reply := strings.TrimSpace(result) + "\nGovernance mode: " + mode
-	// Optional capability (W2): consolidation progress from the durable
-	// judgement checkpoints, when the consolidator implements it.
-	if summarizer, ok := d.MemoryConsolidator.(interface {
-		PassSummary(ctx context.Context, personID string) string
-	}); ok {
-		if line := summarizer.PassSummary(ctx, identity.PersonID); line != "" {
-			reply += "\n" + line
-		}
-	}
-	if schedule, ok, scheduleErr := d.Control.MemoryGovernanceScheduleForPerson(ctx, identity.TenantID, identity.PersonID); scheduleErr != nil {
-		reply += "\nGovernance scheduler: unavailable"
-	} else if !ok {
-		reply += "\nGovernance scheduler: not initialized; startup catch-up pending"
-	} else {
-		reply += "\n" + memoryGovernanceScheduleSummary(schedule, time.Now())
-	}
-	return reply, nil
+	return strings.TrimSpace(result) + "\n" + d.memoryGovernanceDiagLines(ctx, identity), nil
 }
 
 func memoryGovernanceScheduleSummary(schedule control.MemoryGovernanceSchedule, now time.Time) string {

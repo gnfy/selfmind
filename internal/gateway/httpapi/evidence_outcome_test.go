@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -243,5 +244,21 @@ func TestVerificationOutcomeReplacesGenericFailureReason(t *testing.T) {
 	}
 	if got.CompletionReason != "verification_failed" {
 		t.Fatalf("completion reason = %q, want verification_failed", got.CompletionReason)
+	}
+}
+
+func TestVerificationCorrectionPreservesCriterion(t *testing.T) {
+	// JSON drives the persisted event contract, including legacy readers that
+	// currently discard the association and incorrectly retain the old failure.
+	var checks []api.VerificationCheck
+	raw := `[
+ {"tool_call_id":"bad-check","kind":"custom","command":"incorrect check","cwd":"/workspace","status":"failed","started_at_unix_nano":10,"finished_at_unix_nano":20,"binding":{"version":1,"criterion":"all rows exported","target":"report.csv"}},
+ {"tool_call_id":"fixed-check","kind":"custom","command":"corrected check","cwd":"/workspace","status":"succeeded","started_at_unix_nano":30,"finished_at_unix_nano":40,"binding":{"version":1,"criterion":"all rows exported","target":"report.csv","replaces":"bad-check","reason":"The original parser counted the header as a data row; the row completeness criterion is unchanged."}}
+ ]`
+	if err := json.Unmarshal([]byte(raw), &checks); err != nil {
+		t.Fatal(err)
+	}
+	if state, _ := verificationState(0, checks); state != "passed" {
+		t.Fatalf("corrected proof of the same criterion remains stuck: %s", state)
 	}
 }

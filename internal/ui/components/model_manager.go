@@ -33,6 +33,7 @@ type ModelManagerStatus struct {
 	BackgroundReasoning   string
 	BackgroundServiceTier string
 	BackgroundEnabled     bool
+	BackgroundFollowsMain bool
 	ForegroundReady       bool
 	BackgroundReady       bool
 	ReadinessDegraded     bool
@@ -112,6 +113,8 @@ const (
 	modelScreenConnectionURL
 	modelScreenConnectionProtocol
 	modelScreenConnectionAuth
+	modelScreenSetupBackground
+	modelScreenSetupValidation
 )
 
 // ModelManager owns one transient, multi-route draft. The daemon remains the
@@ -142,6 +145,11 @@ type ModelManager struct {
 	connectionEditing  ModelManagerProviderSubmission
 	width              int
 	height             int
+	setup              bool
+	setupValidating    bool
+	setupValidated     bool
+	setupValidation    []ModelSetupProbe
+	setupError         string
 }
 
 func NewModelManager(status ModelManagerStatus, providers []ModelManagerProvider, width, height int) *ModelManager {
@@ -217,6 +225,12 @@ func (m *ModelManager) SetRouteValidation(route string, ok bool, message, creden
 func (m *ModelManager) CredentialStage() string { return m.credentialStage }
 
 func (m *ModelManager) Update(msg tea.KeyMsg) ModelManagerAction {
+	if m.setupValidating {
+		if msg.String() == "ctrl+c" {
+			return ModelManagerAction{Closed: true}
+		}
+		return ModelManagerAction{}
+	}
 	if m.status.RecoveryRequired {
 		switch msg.String() {
 		case "q", "esc", "ctrl+c":
@@ -238,7 +252,13 @@ func (m *ModelManager) Update(msg tea.KeyMsg) ModelManagerAction {
 		return m.updateCredential(msg)
 	}
 	switch msg.String() {
-	case "q", "esc", "ctrl+c":
+	case "esc":
+		if m.setup && m.screen != modelScreenMenu {
+			m.back()
+			return ModelManagerAction{}
+		}
+		return ModelManagerAction{Closed: true}
+	case "q", "ctrl+c":
 		return ModelManagerAction{Closed: true}
 	case "up", "k":
 		m.move(-1)
@@ -290,6 +310,10 @@ func (m *ModelManager) updateCustomModel(msg tea.KeyMsg) ModelManagerAction {
 			m.model = len(provider.Models) - 1
 			m.editingCustomModel = false
 			m.customModelInput = nil
+			if m.setup {
+				m.alignTuningOptions()
+				return m.finishSetupSelection()
+			}
 			m.screen = modelScreenReasoning
 			m.index = 0
 		}
@@ -306,6 +330,11 @@ func (m *ModelManager) updateCustomModel(msg tea.KeyMsg) ModelManagerAction {
 }
 
 func (m *ModelManager) choose() ModelManagerAction {
+	if m.setup {
+		if action, handled := m.chooseSetup(); handled {
+			return action
+		}
+	}
 	switch m.screen {
 	case modelScreenMenu:
 		switch m.index {
@@ -416,6 +445,8 @@ func (m *ModelManager) beginRoute(route string) {
 }
 
 func (m *ModelManager) setDraft(submission ModelManagerSubmission) {
+	m.setupValidated = false
+	m.setupError = ""
 	submission.Route = normalizeManagerRoute(submission.Route)
 	baseline := m.configuredSelection(submission.Route)
 	if submissionsEqual(submission, baseline) && strings.TrimSpace(submission.APIKey) == "" {
@@ -425,6 +456,9 @@ func (m *ModelManager) setDraft(submission ModelManagerSubmission) {
 	}
 	m.draft[submission.Route] = submission
 	m.validation[submission.Route] = "validating…"
+	if m.setup {
+		m.validation[submission.Route] = "not yet validated"
+	}
 }
 
 func submissionsEqual(a, b ModelManagerSubmission) bool {
@@ -463,6 +497,9 @@ func (m *ModelManager) ProviderDraft() []ModelManagerProviderSubmission {
 }
 
 func (m *ModelManager) draftAction(route string) ModelManagerAction {
+	if m.setup {
+		return ModelManagerAction{}
+	}
 	return ModelManagerAction{Draft: m.Draft(), ProviderDraft: m.ProviderDraft(), ValidationRoute: route}
 }
 
@@ -618,6 +655,9 @@ func (m *ModelManager) option(options []string, index int) string {
 }
 
 func (m *ModelManager) effectiveSelection(route string) ModelManagerSubmission {
+	if m.setup {
+		return m.setupSelection(normalizeManagerRoute(route))
+	}
 	if draft, ok := m.draft[normalizeManagerRoute(route)]; ok && !draft.Reset {
 		return draft
 	}
@@ -631,7 +671,7 @@ func (m *ModelManager) configuredSelection(route string) ModelManagerSubmission 
 		return ModelManagerSubmission{Route: route, Provider: m.status.PrimaryProvider, Model: m.status.PrimaryModel, Reasoning: autoOption(m.status.PrimaryReasoning), ServiceTier: autoOption(m.status.PrimaryServiceTier)}
 	case "background":
 		enabled := m.status.BackgroundEnabled
-		return ModelManagerSubmission{Route: route, Provider: m.status.BackgroundProvider, Model: m.status.BackgroundModel, Reasoning: autoOption(m.status.BackgroundReasoning), ServiceTier: autoOption(m.status.BackgroundServiceTier), Enabled: &enabled}
+		return ModelManagerSubmission{Route: route, Provider: m.status.BackgroundProvider, Model: m.status.BackgroundModel, Reasoning: autoOption(m.status.BackgroundReasoning), ServiceTier: autoOption(m.status.BackgroundServiceTier), Enabled: &enabled, Reset: m.status.BackgroundFollowsMain}
 	default:
 		if selection, ok := m.status.RoleOverrides[route]; ok {
 			selection.Route = route
@@ -687,6 +727,9 @@ func (m *ModelManager) alignTuningOptions() {
 }
 
 func (m *ModelManager) back() {
+	if m.setup && m.backSetup() {
+		return
+	}
 	switch m.screen {
 	case modelScreenMenu:
 		return
@@ -735,6 +778,11 @@ func (m *ModelManager) move(delta int) {
 }
 
 func (m *ModelManager) options() []string {
+	if m.setup {
+		if options, ok := m.setupOptions(); ok {
+			return options
+		}
+	}
 	switch m.screen {
 	case modelScreenMenu:
 		return []string{
@@ -830,6 +878,9 @@ func (m *ModelManager) routeSummary(route string) string {
 		selection = m.configuredSelection(route)
 	}
 	if selection.Reset {
+		if route == "background" {
+			return "Same as Main → " + m.setupRouteLabel("primary")
+		}
 		return "Uses background model"
 	}
 	if route == "background" && !submissionEnabled(selection) {
@@ -865,10 +916,14 @@ func (m *ModelManager) View() string {
 	muted := lipgloss.NewStyle().Foreground(m.theme.Color(uitheme.TextSecondary))
 	selected := lipgloss.NewStyle().Bold(true).Foreground(m.theme.Color(uitheme.SelectionText)).Background(m.theme.Color(uitheme.SelectionBackground))
 	lines := []string{"", title.Render("Model Manager")}
-	lines = append(lines,
-		muted.Render("Running main:       ")+emptyAsDash(m.status.RunningPrimary),
-		muted.Render("Running background: ")+emptyAsDash(m.status.RunningBackground),
-	)
+	if m.setup {
+		lines = []string{"", title.Render("SelfMind setup · Models"), muted.Render("Main handles your tasks. Background handles memory and upkeep.")}
+	} else {
+		lines = append(lines,
+			muted.Render("Running main:       ")+emptyAsDash(m.status.RunningPrimary),
+			muted.Render("Running background: ")+emptyAsDash(m.status.RunningBackground),
+		)
+	}
 	if m.status.ReadinessDegraded {
 		lines = append(lines, accent.Render("Readiness: foreground ready · background degraded"))
 	}
@@ -883,6 +938,9 @@ func (m *ModelManager) View() string {
 		return strings.Join(append(lines, "", "  r  retry the committed candidate", "  b  restore the last healthy model", "", muted.Render("r/b choose  Esc close")), "\n")
 	}
 	lines = append(lines, "", accent.Render(m.screenTitle()))
+	if m.setup {
+		lines = append(lines, m.setupDetailLines()...)
+	}
 	if m.editingCustomModel {
 		return strings.Join(append(lines, "", "  "+string(m.customModelInput)+"█", "", muted.Render("Enter save  Esc cancel")), "\n")
 	}
@@ -929,7 +987,13 @@ func (m *ModelManager) View() string {
 			"",
 		)
 	}
-	for i, option := range m.options() {
+	options := m.options()
+	start, end := 0, len(options)
+	if m.setup {
+		start, end = m.setupOptionWindow(len(lines), len(options))
+	}
+	for i := start; i < end; i++ {
+		option := options[i]
 		line := "  " + option
 		if i == m.index {
 			line = selected.Render("› " + option)
@@ -940,7 +1004,14 @@ func (m *ModelManager) View() string {
 	if m.screen == modelScreenMenu {
 		footer = "↑/↓ choose  Enter open  Esc close"
 	}
-	return strings.Join(append(lines, "", muted.Render(footer)), "\n")
+	if m.setup {
+		footer = "↑/↓ move  Enter select  Esc back (close from summary)"
+	}
+	view := strings.Join(append(lines, "", muted.Render(footer)), "\n")
+	if m.setup && m.width > 4 {
+		return lipgloss.NewStyle().Width(m.width - 2).Render(view)
+	}
+	return view
 }
 
 func managerReadinessLabel(ready bool, reason string) string {
@@ -961,6 +1032,11 @@ func managerBackgroundReadinessLabel(status ModelManagerStatus) string {
 }
 
 func (m *ModelManager) screenTitle() string {
+	if m.setup {
+		if title, ok := m.setupScreenTitle(); ok {
+			return title
+		}
+	}
 	switch m.screen {
 	case modelScreenMenu:
 		return "Settings"

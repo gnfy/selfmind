@@ -8,3 +8,5 @@ import "os/exec"
 // resource limits use a different API surface (job objects) and are tracked as
 // follow-up work. See the unix implementation for the security caveat.
 func applySandboxLimits(cmd *exec.Cmd) {}
+
+func configureCommandCancellation(cmd *exec.Cmd) {}

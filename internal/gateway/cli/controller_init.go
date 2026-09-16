@@ -29,7 +29,7 @@ import (
 // installed by the caller (SetClientMode wiring); there is no in-process
 // agent or gateway fallback.
 func NewController(providerName, modelName string, cfg *config.Config, tenantID string) *Controller {
-	c := common.New(resolveTUITheme(cfg))
+	c := common.New(ResolveTheme(cfg))
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(c.Theme.Color(uitheme.TextDecorative))
@@ -80,7 +80,8 @@ func NewController(providerName, modelName string, cfg *config.Config, tenantID 
 	}
 }
 
-func resolveTUITheme(cfg *config.Config) uitheme.Theme {
+// ResolveTheme shares the terminal appearance between startup and chat.
+func ResolveTheme(cfg *config.Config) uitheme.Theme {
 	configured := "auto"
 	if cfg != nil {
 		configured = cfg.TUI.Theme
@@ -220,6 +221,7 @@ func modelManagerStatusFrom(status modelchange.Status) components.ModelManagerSt
 		BackgroundReasoning:   status.Configured.Auxiliary.Reasoning,
 		BackgroundServiceTier: status.Configured.Auxiliary.ServiceTier,
 		BackgroundEnabled:     status.Configured.Auxiliary.Enabled == nil || *status.Configured.Auxiliary.Enabled,
+		BackgroundFollowsMain: status.Configured.Auxiliary.FollowPrimary,
 		ForegroundReady:       status.ForegroundReady(),
 		BackgroundReady:       status.BackgroundReady(),
 		ReadinessDegraded:     status.Readiness.Degraded,

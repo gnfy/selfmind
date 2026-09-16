@@ -105,27 +105,23 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 			return "", fmt.Errorf("target run is no longer resumable")
 		}
 	}
-	events, err := t.store.ListRunEvents(ctx, scope.ControlTenantID, scope.PersonID, auditThreadID, scope.RunID, 50)
+	raw, err := t.store.RunWorkSelection(ctx, scope.ControlTenantID, scope.PersonID, scope.RunID)
 	if err != nil {
 		return "", err
 	}
 	var previousAction, previousRunID string
 	repeated := false
-	for _, event := range events {
-		if event.Type != "work.selection" {
-			continue
-		}
+	if len(raw) > 0 {
 		var existing struct {
 			Action string `json:"action"`
 			RunID  string `json:"run_id"`
 		}
-		if json.Unmarshal(event.Payload, &existing) != nil {
+		if json.Unmarshal(raw, &existing) != nil {
 			return "", fmt.Errorf("the existing work selection audit is invalid")
 		}
 		previousAction = strings.ToLower(strings.TrimSpace(existing.Action))
 		previousRunID = strings.TrimSpace(existing.RunID)
 		repeated = previousAction == action && previousRunID == targetRunID
-		break
 	}
 	if previousRunID != "" && !repeated {
 		blocked, reason, err := t.store.RunSelectionEffectBoundary(ctx, scope.ControlTenantID, scope.PersonID, scope.RunID)
@@ -195,9 +191,9 @@ func (t *WorkSelectTool) tryDirectContinuation(ctx context.Context, tenantID, pe
 	}
 	if blocked {
 		message := "This interaction already produced material state (" + reason + "). The historical run was not claimed or queued; it will not continue automatically."
-		return "", newStableToolRecoveryError(fmt.Errorf("%s", message), "work_selection_blocked", "stale_precondition", message,
-			"Report the current interaction's observed effects and the blocked continuation. Ask the user how to proceed; do not retry the selection or promise a background handoff.",
-			"preparation", "after_user_input", "not_dispatched", false)
+		return "", &runPauseError{cause: newStableToolRecoveryError(fmt.Errorf("%s", message), "work_selection_blocked", "stale_precondition", message,
+			"Report the current interaction's observed effects and the blocked continuation; no background handoff was created.",
+			"preparation", "after_user_input", "not_dispatched", false), reason: "work_selection_rejected", message: message + " Resume the historical run explicitly after reviewing this interaction's effects."}
 	}
 	claimed, err := t.store.ClaimInteractionContinuation(ctx, tenantID, personID, runID, target.ID)
 	switch {

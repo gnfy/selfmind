@@ -58,6 +58,7 @@ func BuildCandidate(current Snapshot, patch SelectionPatch) (CandidateResult, er
 	modelChanged := !strings.EqualFold(selection.Provider, patch.Provider) || selection.Model != patch.Model
 	selection.Provider = patch.Provider
 	selection.Model = patch.Model
+	selection.FollowPrimary = false
 	var notices []string
 	selection.Reasoning, notices = reconcileOption(
 		"reasoning", selection.Reasoning, patch.Reasoning, modelChanged,
@@ -81,6 +82,10 @@ func BuildCandidate(current Snapshot, patch SelectionPatch) (CandidateResult, er
 // background role. Advanced YAML-only transport fields remain owned by config
 // and are preserved when the snapshot is applied.
 func ResetRoleCandidate(current Snapshot, route Route) (CandidateResult, error) {
+	if route == RouteAuxiliary {
+		current.Auxiliary = config.ModelSelectionConfig{FollowPrimary: true}
+		return CandidateResult{Snapshot: normalizeSnapshot(current)}, nil
+	}
 	if !IsManagedRoleRoute(route) {
 		return CandidateResult{}, fmt.Errorf("%s is not a background role", route)
 	}

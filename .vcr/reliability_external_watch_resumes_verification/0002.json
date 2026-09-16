@@ -1,0 +1,69 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Register"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": " both"
+    },
+    {
+      "content": " prerequisite"
+    },
+    {
+      "content": " wat"
+    },
+    {
+      "content": "chers"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " all"
+    },
+    {
+      "content": "-group"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10040,
+        "output_tokens": 401,
+        "cache_read_input_tokens": 9600,
+        "cache_miss_input_tokens": 440,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_iqqXTLbjyw8bz8z7b6kG3262",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"printf 'READY_A\\\\n'\", \"cwd\": \".\", \"description\": \"Watch prerequisite A (READY_A) before delivering receipt.txt\", \"success_pattern\": \"READY_A\", \"interval_seconds\": 5, \"timeout_seconds\": 60, \"wait_group\": \"receipt-prerequisites\", \"wait_group_mode\": \"all\", \"wait_group_size\": 2}"
+        },
+        {
+          "ID": "call_01_ET_ySexf9JF9iWkO9uRuVzn8527",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"printf 'READY_B\\\\n'\", \"cwd\": \".\", \"description\": \"Watch prerequisite B (READY_B) before delivering receipt.txt\", \"success_pattern\": \"READY_B\", \"interval_seconds\": 5, \"timeout_seconds\": 60, \"wait_group\": \"receipt-prerequisites\", \"wait_group_mode\": \"all\", \"wait_group_size\": 2}"
+        }
+      ]
+    }
+  ]
+}

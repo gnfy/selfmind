@@ -1,0 +1,875 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " parked"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " nothing"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " sent"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " recipient"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " guessed"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "What"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " found"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " holds"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`.\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Its"
+    },
+    {
+      "content": " entire"
+    },
+    {
+      "content": " contents"
+    },
+    {
+      "content": " are"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "D"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": " ready"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "12"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": ")."
+    },
+    {
+      "content": " Conf"
+    },
+    {
+      "content": "irmed"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " both"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "read"
+    },
+    {
+      "content": "_file"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " draft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": " \u0026\u0026"
+    },
+    {
+      "content": " w"
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "lc"
+    },
+    {
+      "content": " draft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "exit"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": ").\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Review"
+    },
+    {
+      "content": " note"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " there"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " substantive"
+    },
+    {
+      "content": " prose"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " review"
+    },
+    {
+      "content": " yet"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " status"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " document"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " structure"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " claims"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " can"
+    },
+    {
+      "content": " critique"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Anything"
+    },
+    {
+      "content": " beyond"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "the"
+    },
+    {
+      "content": " draft"
+    },
+    {
+      "content": " exists"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " readable"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": " would"
+    },
+    {
+      "content": " be"
+    },
+    {
+      "content": " invention"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Record"
+    },
+    {
+      "content": "ed"
+    },
+    {
+      "content": " outcome"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Run"
+    },
+    {
+      "content": " status"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "`.\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Done"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " inspected"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " full"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " review"
+    },
+    {
+      "content": " recorded"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Still"
+    },
+    {
+      "content": " outstanding"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " delivery"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " part"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " requested"
+    },
+    {
+      "content": " outcome"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " have"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " treated"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " complete"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " recipient"
+    },
+    {
+      "content": " named"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " send"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " address"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " channel"
+    },
+    {
+      "content": " chosen"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Next"
+    },
+    {
+      "content": " steps"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " name"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " recipient"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " channel"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "address"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " if"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " isn"
+    },
+    {
+      "content": "'t"
+    },
+    {
+      "content": " implied"
+    },
+    {
+      "content": "),"
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " deliver"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " reviewed"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " send"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " real"
+    },
+    {
+      "content": " evidence"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "One"
+    },
+    {
+      "content": " thing"
+    },
+    {
+      "content": " worth"
+    },
+    {
+      "content": " flag"
+    },
+    {
+      "content": "ging"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " pick"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " recipient"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " if"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " expected"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " contain"
+    },
+    {
+      "content": " actual"
+    },
+    {
+      "content": " draft"
+    },
+    {
+      "content": " text"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " this"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " may"
+    },
+    {
+      "content": " be"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " wrong"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " placeholder"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " say"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " word"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " look"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " another"
+    },
+    {
+      "content": " candidate"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 14816,
+        "output_tokens": 286,
+        "cache_read_input_tokens": 14464,
+        "cache_miss_input_tokens": 352,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

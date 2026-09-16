@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -506,7 +507,16 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	baseIntent := c.intentSnapshotWithOffer(ctx, identity, task, run, workspace, req, scope.Channel)
 	runID := scope.RunID
 	scope.IntentSnapshot = func() tools.RunIntentSnapshot {
-		return c.intentWithAddedRequirements(ctx, identity, baseIntent, runID)
+		intent := baseIntent
+		if c.srv != nil && c.srv.Control != nil {
+			current, err := c.srv.Control.GetRun(ctx, identity.TenantID, runID)
+			if err != nil {
+				intent.AuthorizationEvidenceIncomplete = true
+			} else if current != nil && current.ResumesRunID != "" && current.ResumesRunID != intent.AuthorizationParentRunID {
+				intent = c.continuationApprovalIntent(ctx, identity, current, intent)
+			}
+		}
+		return c.intentWithAddedRequirements(ctx, identity, intent, runID)
 	}
 	// Grants back class-level approval memory (session/persistent allowlist);
 	// the control store satisfies tools.ApprovalGrantStore structurally.
@@ -550,7 +560,7 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 // widens execution authority — the judge still rules, and a rejection still
 // parks the work.
 func (c *RunCoordinator) intentWithAddedRequirements(ctx context.Context, identity *control.IdentityContext, base tools.RunIntentSnapshot, runID string) tools.RunIntentSnapshot {
-	if !base.UserAuthored() || c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || strings.TrimSpace(runID) == "" {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || strings.TrimSpace(runID) == "" {
 		return base
 	}
 	added, err := c.srv.Control.RunSteeringRequirements(ctx, identity.TenantID, runID, 10)
@@ -562,24 +572,37 @@ func (c *RunCoordinator) intentWithAddedRequirements(ctx context.Context, identi
 		return base
 	}
 	overlaid := base
-	overlaid.AddedRequirements = make([]string, 0, len(added))
+	overlaid.AddedRequirements = append([]string(nil), base.AddedRequirements...)
+	overlaid.AddedRequirementIDs = make([]string, len(overlaid.AddedRequirements))
+	copy(overlaid.AddedRequirementIDs, base.AddedRequirementIDs)
 	for _, message := range added {
 		text := strings.TrimSpace(message.Content)
 		if text == "" {
 			continue
 		}
-		overlaid.AddedRequirements = append(overlaid.AddedRequirements, truncate(tools.RedactSensitive(text), triageIntentMaxChars))
-		// A narrowing arrives the same way an addition does. Prohibitions the
-		// person states mid-run must constrain the rest of the run, not only the
-		// turn that carried them.
-		deny, scopes := extractDenyScopes(strings.ToLower(text))
-		overlaid.ExplicitDeny = append(overlaid.ExplicitDeny, deny...)
-		overlaid.DenyScopes = append(overlaid.DenyScopes, scopes...)
+		quotation := tools.RedactSensitive(text)
+		found := false
+		for _, prior := range overlaid.AddedRequirementIDs {
+			if prior == message.ID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			overlaid.AddedRequirements = append(overlaid.AddedRequirements, quotation)
+			overlaid.AddedRequirementIDs = append(overlaid.AddedRequirementIDs, message.ID)
+		}
+
 	}
-	return overlaid
+	if len(overlaid.AddedRequirements) > 10 {
+		overlaid.AddedRequirements = overlaid.AddedRequirements[len(overlaid.AddedRequirements)-10:]
+		overlaid.AddedRequirementIDs = overlaid.AddedRequirementIDs[len(overlaid.AddedRequirementIDs)-10:]
+		overlaid.AuthorizationEvidenceIncomplete = true
+	}
+	return tools.BoundApprovalEvidence(overlaid)
 }
 
-// intentSnapshotWithOffer builds the approval-evidence snapshot and attaches// intentSnapshotWithOffer builds the approval-evidence snapshot and attaches
+// intentSnapshotWithOffer builds the approval-evidence snapshot and attaches
 // what the person was answering.
 //
 // A reply like "2" against a numbered list of next steps is a complete
@@ -589,7 +612,18 @@ func (c *RunCoordinator) intentWithAddedRequirements(ctx context.Context, identi
 // they had just accepted it. The judge prompt withholds it again for the same
 // reason — this gate also keeps a system run from making the query at all.
 func (c *RunCoordinator) intentSnapshotWithOffer(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace, req api.MessageRequest, channel string) tools.RunIntentSnapshot {
+	// Runtime dispatch reuses the exact evidence frozen at Run start. A later
+	// channel message must not silently change what an earlier "yes" accepted.
+	if c != nil && c.srv != nil && c.srv.Control != nil && identity != nil && run != nil {
+		var frozen persistedApprovalIntent
+		if raw, err := c.srv.Control.RunApprovalIntent(ctx, identity.TenantID, identity.PersonID, run.ID); err == nil && json.Unmarshal(raw, &frozen) == nil && (frozen.Version == 2 || frozen.Version == 3) {
+			return frozen.Snapshot
+		}
+	}
 	snapshot := runIntentSnapshot(req, task, run, workspace)
+	if c != nil && c.srv != nil && c.srv.Control != nil && identity != nil {
+		snapshot = c.continuationApprovalIntent(ctx, identity, run, snapshot)
+	}
 	if !snapshot.UserAuthored() || c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
 		return snapshot
 	}
@@ -599,9 +633,9 @@ func (c *RunCoordinator) intentSnapshotWithOffer(ctx context.Context, identity *
 		return snapshot
 	}
 	if trimmed := strings.TrimSpace(offer); trimmed != "" {
-		snapshot.PriorAssistantOffer = truncate(tools.RedactSensitive(trimmed), triageIntentMaxChars)
+		snapshot.PriorAssistantOffer = tools.RedactSensitive(trimmed)
 	}
-	return snapshot
+	return tools.BoundApprovalEvidence(snapshot)
 }
 
 func (c *RunCoordinator) materializeExecutionLease(ctx context.Context, identity *control.IdentityContext, run *control.Run, workspace *control.Workspace) (*executionenv.Lease, error) {

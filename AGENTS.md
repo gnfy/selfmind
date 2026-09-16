@@ -84,6 +84,34 @@ daemon must not expose that directory as a product runtime Skill.
    capability or priority changes. Change this file only when a cross-cutting
    invariant changes.
 
+## Harness Design Standard
+
+- **Fix the mechanism.** Before editing, identify the failure layer and violated
+  invariant. Separate facts from hypotheses. Model tuning and prompt examples
+  alone do not establish a general fix. Keep compatibility
+  in protocol/capability adapters, not model-name or scenario branches.
+- **Separate judgment from authority.** The model interprets goals, applicable
+  constraints, acceptance criteria, and evidence sufficiency. The runtime owns
+  observed effects, identity, scope, permissions, and durable transitions.
+  Valid structure alone proves neither authorization nor goal completion.
+- **Preserve failure meaning.** Distinguish a model decision from unavailable
+  or malformed output, execution failure, failed verification, and human wait.
+  Preserve diagnostic metadata, effect certainty, and fail-closed policy.
+  Bounded recovery exposes the unresolved condition and evidence; uncertain
+  effects require observation before retry.
+- **Ground evidence.** Associate each check with its criterion, target, and
+  state, separately from its command. Preserve failed attempts and
+  replacement reasons; success cannot erase unrelated failure or lower the bar.
+- **Reduce state burden.** Reuse existing plans and evidence projections.
+  Derive runtime-owned state rather than asking models to duplicate it. Carry
+  the goal and corrections across waits and resumes; Main assesses completed
+  operations against that goal.
+- **Test generality.** Pair the incident regression with changed wording,
+  targets, or paths that preserve the invariant, plus a constraint that must
+  change the result. Test runtime guarantees with injected failures and model
+  behavior with real-provider evals. Claims across models require independent
+  model/protocol evidence; report untested coverage.
+
 ## Architecture and Runtime
 
 - `selfmind` is the only binary. Keep `cmd/selfmind/main.go` thin; command

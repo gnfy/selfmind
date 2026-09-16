@@ -27,10 +27,14 @@ import (
 )
 
 type Server struct {
-	Control         *control.Store
-	Gateway         *router.Gateway
-	Delivery        *delivery.Service
-	DefaultTenantID string
+	// BackgroundRunContext is an optional embedding-owned lifetime/telemetry root
+	// for detached work. It must be installed before serving and never come from
+	// a client request. Nil preserves the standalone daemon background lifetime.
+	BackgroundRunContext context.Context
+	Control              *control.Store
+	Gateway              *router.Gateway
+	Delivery             *delivery.Service
+	DefaultTenantID      string
 	// PromptSnapshotHash pins durable background jobs to the static prompt
 	// revision active when their evidence was materialized.
 	PromptSnapshotHash string

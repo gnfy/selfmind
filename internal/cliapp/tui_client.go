@@ -66,6 +66,7 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	ctrl := tui.NewController(displayProvider, displayModel, cfg, tenantID)
 	ctrl.SetModelManagerOnly(a.modelManagerOnly)
+	ctrl.SetModelSetup(a.modelManagerSetup)
 	if state := a.onboarding; state != nil {
 		auxiliary := cfg.EffectiveAuxiliary()
 		statePath := onboardingStatePath(cfg, a.configPath)
@@ -168,6 +169,10 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	defer stopPresence()
 
 	ctrl.Start()
+	if a.modelManagerSetup {
+		a.modelSetupComplete, a.modelSetupErr = ctrl.ModelSetupResult()
+		return 0, true
+	}
 	if a.resumeChannel != "" || ctrl.HasConversationHistory() {
 		printResumeHint(a.stdout, ctrl.SessionChannel())
 	}

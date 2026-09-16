@@ -1,0 +1,116 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "test"
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "`."
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "写入"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "现在"
+    },
+    {
+      "content": "按要求"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "校验"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12821,
+        "output_tokens": 90,
+        "cache_read_input_tokens": 12672,
+        "cache_miss_input_tokens": 149,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 15,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_lmUke9G0NKGqyiSn5KWU0382",
+          "Function": "verify",
+          "Args": "{\"command\": \"test \\\"$(cat receipt.txt)\\\" = VERIFIED\", \"kind\": \"test\"}"
+        }
+      ]
+    }
+  ]
+}

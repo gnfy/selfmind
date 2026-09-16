@@ -235,11 +235,12 @@ type recordedEvent struct {
 }
 
 type cassette struct {
-	Method     string          `json:"method"`
-	Error      string          `json:"error,omitempty"`
-	Events     []recordedEvent `json:"events,omitempty"`
-	Chat       *ChatResponse   `json:"chat,omitempty"`
-	Completion string          `json:"completion,omitempty"`
+	PlanBindingVersion int             `json:"plan_binding_version,omitempty"`
+	Method             string          `json:"method"`
+	Error              string          `json:"error,omitempty"`
+	Events             []recordedEvent `json:"events,omitempty"`
+	Chat               *ChatResponse   `json:"chat,omitempty"`
+	Completion         string          `json:"completion,omitempty"`
 }
 
 func (v *vcrProvider) nextKey(ctx context.Context) (string, bool) {
@@ -262,7 +263,10 @@ func (v *vcrProvider) load(ctx context.Context, path string, messages []Message)
 		return nil, err
 	}
 	c = rewriteCassette(c, vcrWorkspacePlaceholder, vcrWorkspaceFromContext(ctx))
-	for i, id := range vcrOpaqueIDs(messages, vcrPlanStepIDPattern) {
+	if c.PlanBindingVersion > 1 {
+		return nil, fmt.Errorf("unsupported cassette plan binding version %d", c.PlanBindingVersion)
+	}
+	for i, id := range vcrPlanStepIDs(messages, c.PlanBindingVersion) {
 		c = rewriteCassette(c, vcrPlanStepPlaceholder(i), id)
 	}
 	for i, id := range vcrWorkUnitIDs(messages) {
@@ -312,7 +316,8 @@ func (v *vcrProvider) save(ctx context.Context, path string, c cassette, message
 	}
 	_ = os.Chmod(dir, 0o700)
 	c = rewriteCassette(c, vcrWorkspaceFromContext(ctx), vcrWorkspacePlaceholder)
-	for i, id := range vcrOpaqueIDs(messages, vcrPlanStepIDPattern) {
+	c.PlanBindingVersion = 1
+	for i, id := range vcrPlanStepIDs(messages, c.PlanBindingVersion) {
 		c = rewriteCassette(c, id, vcrPlanStepPlaceholder(i))
 	}
 	for i, id := range vcrWorkUnitIDs(messages) {

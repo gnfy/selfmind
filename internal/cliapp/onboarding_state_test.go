@@ -600,13 +600,11 @@ func TestOnboardingMissingReadinessOpensSoleModelManager(t *testing.T) {
 	app := &App{
 		ctx: context.Background(), stdout: &stdout, stderr: &stderr,
 		configPath: configPath, interactive: true,
+		onboardingModelSetup: func(*config.Config) (bool, error) { return false, nil },
 	}
 	got, code := app.ensureOnboarding(cfg, onboardingOptions{SkipGateway: true})
-	if code != 0 || got == nil {
+	if code != 0 || got != nil {
 		t.Fatalf("missing readiness cfg=%v code=%d stdout=%q stderr=%q", got != nil, code, stdout.String(), stderr.String())
-	}
-	if !app.modelManagerOnly {
-		t.Fatal("onboarding did not route missing readiness into the sole Model Manager")
 	}
 	if !strings.Contains(stdout.String(), "Opening Model Manager") || strings.Contains(stdout.String(), "Continue with these models?") {
 		t.Fatalf("model manager handoff output = %q", stdout.String())

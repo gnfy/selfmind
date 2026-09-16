@@ -57,12 +57,8 @@ func (s *Store) ReadySkillEvidenceDigestsForRun(ctx context.Context, tenantID, r
 		if err != nil {
 			return nil, err
 		}
-		createReady := cohort.TargetSkillKey == "" && independentWorkflowRuns(cohort.SuccessObservations) >= 3
-		repairReady := cohort.TargetSkillKey != "" && cohort.TargetSkillName != "" && cohort.TargetActiveContent != "" &&
-			cohort.ParentVersionHash == anchor.VersionHash && digestHasVerifiedRepairIncidentForObservation(cohort, anchor.ID) &&
-			SkillRepairCandidateEvidenceReady(cohort)
-		if !createReady && !repairReady {
-			if reason := repairEvidenceSkipReason(cohort, anchor.ID); reason != "" {
+		if reason := skillEvidenceReadinessReason(cohort, anchor); reason != "ready" {
+			if anchor.SkillKey != "" {
 				log.Info("skill repair evidence skipped", "run", anchor.RunID, "work_unit", anchor.WorkUnitID, "reason", reason)
 			}
 			continue
@@ -130,6 +126,8 @@ const workflowObservationSelect = `SELECT id, identity_tenant_id, control_tenant
 	verification_state, tool_sequence_json, tool_failures, provider_calls, duration_ms,
 	input_tokens, output_tokens, user_corrected, evidence_role, created_at`
 
+const workflowCohortWindow = 48
+
 type workflowCohortSource struct {
 	candidates []WorkflowObservation
 	origins    map[string]string
@@ -139,7 +137,7 @@ type workflowCohortSource struct {
 func (s *Store) loadWorkflowCohortSource(ctx context.Context, anchor WorkflowObservation) (workflowCohortSource, error) {
 	rows, err := s.db.QueryContext(ctx, workflowObservationSelect+`
 		FROM workflow_observations WHERE identity_tenant_id=? AND person_id=? AND workspace_id=?
-		ORDER BY created_at DESC LIMIT 48`, anchor.IdentityTenantID, anchor.PersonID, anchor.WorkspaceID)
+		ORDER BY created_at DESC LIMIT ?`, anchor.IdentityTenantID, anchor.PersonID, anchor.WorkspaceID, workflowCohortWindow)
 	if err != nil {
 		return workflowCohortSource{}, err
 	}

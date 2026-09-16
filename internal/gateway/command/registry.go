@@ -63,7 +63,7 @@ var entries = []Entry{
 	{Name: "/status", Usage: "/status", Summary: "Show what is happening right now.", SyncControl: true, Scope: Gateway},
 	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
 	{Name: "/watchers", Usage: "/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]", Summary: "List, inspect, or cancel durable external watchers.", SyncControl: true, Scope: Gateway},
-	{Name: "/diag", Usage: "/diag [memory|context|models|delivery|execution|tools]", Summary: "Show runtime and subsystem diagnostics, including tool-schema health.", SyncControl: true, Scope: Gateway},
+	{Name: "/diag", Usage: "/diag [learning|memory|context|models|delivery|execution|tools]", Summary: "Show runtime and subsystem diagnostics, including tool-schema health.", SyncControl: true, Scope: Gateway},
 	{Name: "/report", Usage: "/report daily [--since 24h]", Summary: "Show a model-free execution quality and cost report.", SyncControl: true, Scope: Gateway},
 	{Name: "/events", Usage: "/events", Summary: "List recent events for the current run.", SyncControl: true, Scope: Gateway},
 	{Name: "/approvals", Usage: "/approvals [grants|revoke <n>]", Summary: "List pending approvals; grants lists remembered classes and revoke withdraws one.", SyncControl: true, Scope: Gateway},

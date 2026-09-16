@@ -231,10 +231,16 @@ func reconcileMissingFinalResponse(outcome api.RunOutcome, structured, hasFinalC
 	if structured || hasFinalContent {
 		return outcome
 	}
-	outcome.Status = "interrupted"
-	outcome.CompletionReason = "missing_final_response"
+	// A missing answer is an additional delivery fact, not a replacement for
+	// an already established execution blocker.
+	if outcome.Status == "" || outcome.Status == "done" {
+		outcome.Status = "interrupted"
+	}
+	if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+		outcome.CompletionReason = "missing_final_response"
+		outcome.Summary = "The model stopped without producing a final response."
+	}
 	outcome.Resumable = true
-	outcome.Summary = "The model stopped without producing a final response."
 	outcome.NextSteps = appendUnique(outcome.NextSteps, "Reply \"continue\" to resume from the collected evidence.", 8)
 	return outcome
 }
@@ -298,6 +304,10 @@ func reconcileExternalWatchOutcome(outcome api.RunOutcome, watch *control.Extern
 		OperationStatus:    strings.TrimSpace(watch.OperationStatus),
 		VerificationStatus: strings.TrimSpace(watch.VerificationStatus),
 		Summary:            truncate(toOneLine(firstNonEmpty(watch.LastError, watch.LastOutput)), 500),
+	}
+
+	if watch.PreflightReceipt.Version >= control.ExternalWatchContinuationReceiptVersion {
+		return outcome
 	}
 
 	// A structured finalizer historically reported the watched operation's

@@ -32,26 +32,20 @@ func (c *RunCoordinator) latestWorkSelection(ctx context.Context, identity *cont
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil {
 		return nil, nil
 	}
-	events, err := c.srv.Control.ListRunEvents(ctx, identity.TenantID, identity.PersonID, task.ID, run.ID, 50)
-	if err != nil {
+	raw, err := c.srv.Control.RunWorkSelection(ctx, identity.TenantID, identity.PersonID, run.ID)
+	if err != nil || len(raw) == 0 {
 		return nil, err
 	}
-	for _, event := range events {
-		if event.Type != "work.selection" {
-			continue
-		}
-		var proposal workSelectionProposal
-		if json.Unmarshal(event.Payload, &proposal) != nil {
-			return nil, fmt.Errorf("invalid work selection payload")
-		}
-		proposal.Action = strings.ToLower(strings.TrimSpace(proposal.Action))
-		proposal.RunID = strings.TrimSpace(proposal.RunID)
-		if (proposal.Action != "observe" && proposal.Action != "resume") || proposal.RunID == "" {
-			return nil, fmt.Errorf("invalid work selection proposal")
-		}
-		return &proposal, nil
+	var proposal workSelectionProposal
+	if json.Unmarshal(raw, &proposal) != nil {
+		return nil, fmt.Errorf("invalid work selection payload")
 	}
-	return nil, nil
+	proposal.Action = strings.ToLower(strings.TrimSpace(proposal.Action))
+	proposal.RunID = strings.TrimSpace(proposal.RunID)
+	if (proposal.Action != "observe" && proposal.Action != "resume") || proposal.RunID == "" {
+		return nil, fmt.Errorf("invalid work selection proposal")
+	}
+	return &proposal, nil
 }
 
 // commitWorkSelection is the authority boundary after Main has interpreted the
@@ -87,9 +81,11 @@ func (c *RunCoordinator) commitWorkSelection(ctx context.Context, identity *cont
 		if blocked {
 			commit.Rejected = true
 			commit.Notice = "I found the historical work, but this interaction already produced effects (" + reason + "). I stopped before attaching or expanding that work. Please confirm whether to keep the observed effects and continue the historical run separately."
-			c.appendWorkSelectionEvent(ctx, task, run, req.Channel, "work.selection_rejected", map[string]interface{}{
+			if err := c.appendWorkSelectionEvent(ctx, task, run, req.Channel, "work.selection_rejected", map[string]interface{}{
 				"action": proposal.Action, "run_id": target.ID, "reason": reason,
-			})
+			}); err != nil {
+				return nil, err
+			}
 			return commit, nil
 		}
 		// Main interpreted this interaction before it had the selected Run's
@@ -108,18 +104,21 @@ func (c *RunCoordinator) commitWorkSelection(ctx context.Context, identity *cont
 		commit.QueueID = queued.ID
 		commit.Notice = "The historical work was validated and queued as the next exact continuation."
 	}
-	c.appendWorkSelectionEvent(ctx, task, run, req.Channel, "work.selection_committed", map[string]interface{}{
+	if err := c.appendWorkSelectionEvent(ctx, task, run, req.Channel, "work.selection_committed", map[string]interface{}{
 		"action": proposal.Action, "run_id": target.ID, "queue_id": commit.QueueID, "commit_mode": "transfer",
-	})
+	}); err != nil {
+		return nil, err
+	}
 	return commit, nil
 }
 
-func (c *RunCoordinator) appendWorkSelectionEvent(ctx context.Context, task *control.Task, run *control.Run, channel, eventType string, payload map[string]interface{}) {
+func (c *RunCoordinator) appendWorkSelectionEvent(ctx context.Context, task *control.Task, run *control.Run, channel, eventType string, payload map[string]interface{}) error {
 	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil || run == nil {
-		return
+		return fmt.Errorf("work selection event store unavailable")
 	}
-	_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
+	_, err := c.srv.Control.AppendEvent(ctx, control.Event{
 		TaskID: task.ID, RunID: run.ID, Type: eventType, Visibility: "task", Channel: channel,
 		Payload: mustJSON(payload), IdempotencyKey: eventType + ":" + run.ID,
 	})
+	return err
 }

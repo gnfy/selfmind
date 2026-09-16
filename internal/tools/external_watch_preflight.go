@@ -30,7 +30,16 @@ import (
 //	non-terminal       → register the watch.
 const preflightMaxTimeout = 120 * time.Second
 
+type externalWatchPreflightObservation struct {
+	Output            string
+	Status            string
+	OperationStatus   string
+	HostNetworkShared bool
+}
+
 type externalWatchPreflightPatterns struct {
+	Scalar          bool
+	Observation     *externalWatchPreflightObservation
 	Adapter         string
 	Success         string
 	Failure         string
@@ -81,6 +90,22 @@ func preflightExternalWatchPatterns(
 		ToolProfile:    ToolProfile{Class: executionClass, MaxTimeout: timeout, HeartbeatInterval: time.Second},
 	}, args)
 	output := strings.TrimSpace(RedactSensitive(result.Output))
+	if patterns.Observation != nil {
+		patterns.Observation.Output = output
+		// This is engine evidence after the registration approval, never a
+		// capability inferred from model arguments or workspace trust.
+		patterns.Observation.HostNetworkShared = runErr == nil && result.ExitCode == 0 && result.Plan.Mode == SandboxHost && result.Plan.NetworkMode == "shared"
+	}
+	observed := func(status string) {
+		if patterns.Observation != nil {
+			patterns.Observation.Status = status
+			patterns.Observation.OperationStatus = status
+		}
+	}
+	matches := preflightMatches
+	if patterns.Scalar {
+		matches = MatchExternalWatchScalar
+	}
 	if strings.EqualFold(strings.TrimSpace(result.FailureClass), "timeout") {
 		return "", fmt.Errorf(
 			"watch not registered: its first check exceeded the %s registration budget. "+
@@ -125,6 +150,11 @@ func preflightExternalWatchPatterns(
 			"watch not registered: its first check output shows a check-definition failure. Detail: %s\n%s",
 			truncatePreflight(output), errorClassHints[class])
 	}
+	if patterns.Scalar && patterns.Adapter == "" {
+		if err := ValidateExternalWatchScalar(output); err != nil {
+			return "", fmt.Errorf("watch not registered: %w", err)
+		}
+	}
 	if strings.TrimSpace(patterns.Adapter) != "" {
 		state, err := ClassifyExternalWatchObservation(patterns.Adapter, output)
 		if err != nil {
@@ -132,8 +162,10 @@ func preflightExternalWatchPatterns(
 		}
 		switch state {
 		case ExternalWatchObservationSucceeded:
+			observed("succeeded")
 			return preflightObservedSuccess(output), nil
 		case ExternalWatchObservationFailed:
+			observed("failed")
 			return "", preflightObservedFailure(output)
 		case ExternalWatchObservationPending:
 			return "", nil
@@ -142,23 +174,35 @@ func preflightExternalWatchPatterns(
 
 	// V2 terminal failures are authoritative and evaluated before success or a
 	// desired handoff state. V1 keeps its historical success-first behavior.
-	if patterns.TerminalFailure != "" && preflightMatches(patterns.TerminalFailure, output) {
+	if patterns.Scalar && patterns.Failure != "" && matches(patterns.Failure, output) {
+		observed("failed")
 		return "", preflightObservedFailure(output)
 	}
-	if result.ExitCode == 0 && preflightMatches(patterns.TerminalSuccess, output) {
+	if patterns.TerminalFailure != "" && matches(patterns.TerminalFailure, output) {
+		observed("failed")
+		return "", preflightObservedFailure(output)
+	}
+	if result.ExitCode == 0 && matches(patterns.TerminalSuccess, output) {
+		observed("succeeded")
 		return preflightObservedSuccess(output), nil
 	}
-	if result.ExitCode == 0 && preflightMatches(patterns.Target, output) {
+	if result.ExitCode == 0 && matches(patterns.Target, output) {
+		observed("succeeded")
+		if patterns.Observation != nil {
+			patterns.Observation.OperationStatus = "running"
+		}
 		return fmt.Sprintf(
 			"Watch not registered: the check already reports the desired handoff state. Observed output: %s\nContinue from that state in the current run.",
 			truncatePreflight(output)), nil
 	}
 
 	// L2/L3 V1 compatibility: only a clean exit may declare success.
-	if result.ExitCode == 0 && preflightMatches(patterns.Success, output) {
+	if result.ExitCode == 0 && matches(patterns.Success, output) {
+		observed("succeeded")
 		return preflightObservedSuccess(output), nil
 	}
-	if patterns.Failure != "" && preflightMatches(patterns.Failure, output) {
+	if patterns.Failure != "" && matches(patterns.Failure, output) {
+		observed("failed")
 		return "", preflightObservedFailure(output)
 	}
 	return "", nil
@@ -167,7 +211,7 @@ func preflightExternalWatchPatterns(
 func preflightObservedSuccess(output string) string {
 	return fmt.Sprintf(
 		"Watch not registered: the check already reports the success condition, so there is nothing to wait for. "+
-			"Observed output: %s\nTreat the operation as complete and finish the task normally.",
+			"Observed output: %s\nThe observation condition is satisfied. Check the original completion criteria and continue any remaining work; this alone does not complete the task.",
 		truncatePreflight(output))
 }
 

@@ -81,7 +81,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: cb333532e05e2286
+    source_hash: 91107f7dbc73893d
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -95,7 +95,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: f5fca18e8aae6640
+    source_hash: 4b7982be5254e929
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -273,7 +273,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: 914cba440bfbac47
+    source_hash: 5768e99736f3e972
   - path: docs/skill-learning-and-repair.md
     title: Skill Learning, Automatic Promotion, and Repair
     class: decision

@@ -1,0 +1,51 @@
+id: reliability_verification_method_correction
+title: "Correcting a verification method preserves its acceptance condition and failure history"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [bash, sh, cat, test]
+setup:
+  files:
+    state.txt: "READY\n"
+    check.sh: 'test "$(cat state.txt)" = RUNNING'
+turns:
+  - input: >-
+      Verify that state.txt contains exactly READY. Do not modify any files.
+      Keep diagnostics within the supplied workspace files; do not inspect runtime storage.
+      The supplied check.sh may have a defect; first run it with verify, with a
+      check binding whose criterion is "state.txt contains exactly READY" and
+      target is "state.txt". Keep one work unit open for this investigation.
+      If it fails, inspect the check and the input to diagnose the cause. Correct
+      the observation command without changing the acceptance condition, and
+      use the original verification evidence reference when replacing its attempt.
+      Then report what the evidence establishes, including the first failure.
+      Use a durable plan with success criteria and required verification.
+expect:
+  status: done
+  verification_state: passed
+  max_tool_errors: 1
+  max_tool_calls: 18
+  max_duration_seconds: 180
+assert_state:
+  - on: file
+    path: state.txt
+    contains: READY
+  - on: file
+    path: check.sh
+    contains: RUNNING
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"status":"failed"'
+    count_gte: 1
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"replaces":'
+    count_gte: 1
+  - on: run
+    field: status
+    eq: done
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

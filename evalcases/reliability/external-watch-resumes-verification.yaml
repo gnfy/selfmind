@@ -1,0 +1,50 @@
+id: reliability_external_watch_resumes_verification
+title: "Watcher completion restores Main to finish and verify the original deliverable"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [bash, cat, test]
+turns:
+  - input: >-
+      Deliver receipt.txt containing exactly VERIFIED after two prerequisites
+      complete. First establish a plan with a waiting step and a remaining
+      delivery step requiring verification. Register exactly two read-only
+      watch_external observations in one all group named receipt-prerequisites,
+      wait_group_size 2: command printf 'READY_A\n' with success_pattern READY_A,
+      and command printf 'READY_B\n' with success_pattern READY_B. Both may
+      already be ready; still register both as group members. Use interval_seconds
+      5 and timeout_seconds 60. Let registration hand off. When the daemon resumes
+      this work, create receipt.txt and use verify to check its exact content,
+      reconcile the plan and finish. These commands only observe prerequisites;
+      receipt.txt is the actual deliverable. Work only in this workspace.
+    wait_for_external_watches: true
+expect:
+  status: done
+  verification_state: passed
+  require_tool_events: true
+  max_tool_errors: 0
+  max_duration_seconds: 180
+assert_state:
+  - on: events
+    type: run.started
+    payload_contains: '"authorization_evidence":[{"run_id":'
+    count_gte: 1
+  - on: file
+    path: receipt.txt
+    contains: VERIFIED
+  - on: run
+    field: status
+    eq: done
+  - on: events
+    type: run.resumed
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: external_watch.created
+    count_gte: 2
+    count_lte: 2
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

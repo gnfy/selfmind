@@ -27,10 +27,11 @@ type PlanWorkUnitIdentity struct {
 }
 
 type PlanProjectionResult struct {
-	Plan      PlanState              `json:"plan"`
-	Version   int                    `json:"version"`
-	Changed   bool                   `json:"changed"`
-	WorkUnits []PlanWorkUnitIdentity `json:"work_units,omitempty"`
+	AcceptanceReview []string               `json:"acceptance_review,omitempty"`
+	Plan             PlanState              `json:"plan"`
+	Version          int                    `json:"version"`
+	Changed          bool                   `json:"changed"`
+	WorkUnits        []PlanWorkUnitIdentity `json:"work_units,omitempty"`
 }
 
 // RunPlanProjection is the deep persistence seam for plan versioning,
@@ -148,7 +149,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"success_criteria": {
 									Type:        "string",
-									Description: "Observable condition that proves this step is complete. State what would be true, not what you will do. You will be asked to judge the step against it before finishing, so do not weaken it later to fit what happened.",
+									Description: "Observable condition that proves this step is complete. State what would be true, not what you will do. Omission preserves this step's existing criterion. Judge completion against the original condition; explain a user-authorized scope change instead of weakening it to fit the result.",
 								},
 								// The wording used to be "True ONLY when this step
 								// cannot be considered complete without executable
@@ -226,6 +227,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	changed := true
 	planVersion := 0
 	var workUnits []PlanWorkUnitIdentity
+	var acceptanceReview []string
 	projection := runPlanProjectionFromArgs(args)
 	if projection != nil {
 		projected, projectionErr := projection.Project(ContextFromArgs(args), state)
@@ -234,7 +236,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			var verification interface{ PlanVerificationPrecondition() bool }
 			if errors.As(err, &verification) && verification.PlanVerificationPrecondition() {
 				return "", newStableToolError(err, "plan_verification_required", "stale_precondition", err.Error(),
-					"Keep the current work unit open, use verify for its required checks, then submit the completed plan snapshot. Preserve the declared acceptance criteria.")
+					"Keep the current work unit open and inspect the failed check. Use verify for required checks; when correcting a bound check, preserve check.criterion and check.target, cite its evidence id in check.replaces and explain the method correction in check.reason. Then submit the completed plan snapshot.")
 			}
 			var staleStep interface{ CurrentPlanStepIDs() []string }
 			if errors.As(err, &staleStep) {
@@ -272,6 +274,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		changed = projected.Changed
 		planVersion = projected.Version
 		workUnits = projected.WorkUnits
+		acceptanceReview = projected.AcceptanceReview
 		currentStepID := ""
 		for _, step := range steps {
 			if step.Status == "in_progress" {
@@ -300,10 +303,11 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	data, _ := json.Marshal(struct {
 		PlanState
-		Changed     bool                   `json:"changed"`
-		PlanVersion int                    `json:"plan_version,omitempty"`
-		WorkUnits   []PlanWorkUnitIdentity `json:"work_units,omitempty"`
-	}{PlanState: state, Changed: changed, PlanVersion: planVersion, WorkUnits: workUnits})
+		Changed          bool                   `json:"changed"`
+		PlanVersion      int                    `json:"plan_version,omitempty"`
+		AcceptanceReview []string               `json:"acceptance_review,omitempty"`
+		WorkUnits        []PlanWorkUnitIdentity `json:"work_units,omitempty"`
+	}{PlanState: state, Changed: changed, PlanVersion: planVersion, WorkUnits: workUnits, AcceptanceReview: acceptanceReview})
 	return string(data), nil
 }
 

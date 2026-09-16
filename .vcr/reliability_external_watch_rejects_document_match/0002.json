@@ -1,0 +1,2164 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " rejected"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " expected"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " explain"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Don"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " ret"
+    },
+    {
+      "reasoning_content": "ry"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Provide"
+    },
+    {
+      "reasoning_content": " explanation"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Should"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " validation"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " non"
+    },
+    {
+      "reasoning_content": "-tr"
+    },
+    {
+      "reasoning_content": "ivial"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "using"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " creating"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " don"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": " didn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " succeed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " It"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " borderline"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " structured"
+    },
+    {
+      "reasoning_content": " outcome"
+    },
+    {
+      "reasoning_content": " seems"
+    },
+    {
+      "reasoning_content": " reasonable"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " asked"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " explanation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " since"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " deliberate"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " calling"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " could"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " fine"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " include"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " brief"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "For"
+    },
+    {
+      "reasoning_content": " non"
+    },
+    {
+      "reasoning_content": "-tr"
+    },
+    {
+      "reasoning_content": "ivial"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "using"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " creates"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": ".\""
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " validation"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " skip"
+    },
+    {
+      "reasoning_content": " heavy"
+    },
+    {
+      "reasoning_content": " ceremony"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " had"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " already"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " think"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " acceptable"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " low"
+    },
+    {
+      "reasoning_content": "-risk"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " over"
+    },
+    {
+      "reasoning_content": "-c"
+    },
+    {
+      "reasoning_content": "alling"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " da"
+    },
+    {
+      "reasoning_content": "emon"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "After"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": ".\""
+    },
+    {
+      "reasoning_content": " Registration"
+    },
+    {
+      "reasoning_content": " did"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " happen"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " record"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " outcome"
+    },
+    {
+      "reasoning_content": " since"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " eval"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " simple"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " answer"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " eval"
+    },
+    {
+      "reasoning_content": " might"
+    },
+    {
+      "reasoning_content": " expect"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " proper"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " rejected"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " validation"
+    },
+    {
+      "content": " intended"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " did"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " ret"
+    },
+    {
+      "content": "ry"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Why"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " registration"
+    },
+    {
+      "content": " failed"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " output"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " JSON"
+    },
+    {
+      "content": " document"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " scalar"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "printf"
+    },
+    {
+      "content": " '%"
+    },
+    {
+      "content": "s"
+    },
+    {
+      "content": "'"
+    },
+    {
+      "content": " '"
+    },
+    {
+      "content": "{\""
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "\":\""
+    },
+    {
+      "content": "WORK"
+    },
+    {
+      "content": "ING"
+    },
+    {
+      "content": "\",\""
+    },
+    {
+      "content": "steps"
+    },
+    {
+      "content": "\":["
+    },
+    {
+      "content": "{\""
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "\":\""
+    },
+    {
+      "content": "SU"
+    },
+    {
+      "content": "CCESS"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "}]"
+    },
+    {
+      "content": "}'"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " emits"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " structured"
+    },
+    {
+      "content": " object"
+    },
+    {
+      "content": " containing"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " field"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " an"
+    },
+    {
+      "content": " array"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " objects"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " wat"
+    },
+    {
+      "content": "cher"
+    },
+    {
+      "content": " contract"
+    },
+    {
+      "content": " requires"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " select"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " bounded"
+    },
+    {
+      "content": " scalar"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "success"
+    },
+    {
+      "content": "_pattern"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " whole"
+    },
+    {
+      "content": "-value"
+    },
+    {
+      "content": " regex"
+    },
+    {
+      "content": " applied"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " scalar"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " explicitly"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "never"
+    },
+    {
+      "content": " match"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " JSON"
+    },
+    {
+      "content": " document"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " log"
+    },
+    {
+      "content": ".\""
+    },
+    {
+      "content": " So"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " pattern"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "SU"
+    },
+    {
+      "content": "CCESS"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " being"
+    },
+    {
+      "content": " applied"
+    },
+    {
+      "content": " against"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " entire"
+    },
+    {
+      "content": " document"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " validator"
+    },
+    {
+      "content": " refused"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " ever"
+    },
+    {
+      "content": " registered"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Why"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " nested"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "SU"
+    },
+    {
+      "content": "CCESS"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " evidence"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " overall"
+    },
+    {
+      "content": " completion"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "It"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " an"
+    },
+    {
+      "content": " inner"
+    },
+    {
+      "content": " array"
+    },
+    {
+      "content": " element"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " selected"
+    },
+    {
+      "content": " observable"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Three"
+    },
+    {
+      "content": " independent"
+    },
+    {
+      "content": " reasons"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " cannot"
+    },
+    {
+      "content": " serve"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " completion"
+    },
+    {
+      "content": " signal"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Wrong"
+    },
+    {
+      "content": " scope"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "steps"
+    },
+    {
+      "content": "\":["
+    },
+    {
+      "content": "{\""
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "\":\""
+    },
+    {
+      "content": "SU"
+    },
+    {
+      "content": "CCESS"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "}]"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " describes"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " while"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " top"
+    },
+    {
+      "content": "-level"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "\":\""
+    },
+    {
+      "content": "WORK"
+    },
+    {
+      "content": "ING"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " says"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " overall"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " still"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " progress"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " document"
+    },
+    {
+      "content": " literally"
+    },
+    {
+      "content": " asserts"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "not"
+    },
+    {
+      "content": " finished"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " level"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " matters"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Wrong"
+    },
+    {
+      "content": " signal"
+    },
+    {
+      "content": " path"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " pattern"
+    },
+    {
+      "content": " never"
+    },
+    {
+      "content": " reached"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " field"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " would"
+    },
+    {
+      "content": " have"
+    },
+    {
+      "content": " been"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " substring"
+    },
+    {
+      "content": " match"
+    },
+    {
+      "content": " against"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " serial"
+    },
+    {
+      "content": "ized"
+    },
+    {
+      "content": " document"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " would"
+    },
+    {
+      "content": " also"
+    },
+    {
+      "content": " have"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "matched"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "\":\""
+    },
+    {
+      "content": "WORK"
+    },
+    {
+      "content": "ING"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " text"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "steps"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " any"
+    },
+    {
+      "content": " future"
+    },
+    {
+      "content": " log"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": " containing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " word"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " match"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " document"
+    },
+    {
+      "content": " shape"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " object"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Wrong"
+    },
+    {
+      "content": " semantics"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " even"
+    },
+    {
+      "content": " if"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " field"
+    },
+    {
+      "content": " were"
+    },
+    {
+      "content": " correctly"
+    },
+    {
+      "content": " selected"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": "-level"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "SU"
+    },
+    {
+      "content": "CCESS"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " proves"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " succeeded"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " external"
+    },
+    {
+      "content": " goal"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Terminal"
+    },
+    {
+      "content": " success"
+    },
+    {
+      "content": " must"
+    },
+    {
+      "content": " be"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " from"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " field"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " expresses"
+    },
+    {
+      "content": " terminal"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " both"
+    },
+    {
+      "content": " terminal"
+    },
+    {
+      "content": " patterns"
+    },
+    {
+      "content": " defined"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " diagnostic"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " validator"
+    },
+    {
+      "content": " returned"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " actionable"
+    },
+    {
+      "content": " fix"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " select"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " object"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " field"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": "-only"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "for"
+    },
+    {
+      "content": " example"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " scalar"
+    },
+    {
+      "content": "-producing"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " such"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " extracting"
+    },
+    {
+      "content": " `."
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " from"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " response"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " use"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " typed"
+    },
+    {
+      "content": " observation"
+    },
+    {
+      "content": " adapter"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "_json"
+    },
+    {
+      "content": ".v"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": " Notably"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " under"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " adapter"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " same"
+    },
+    {
+      "content": " document"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " fine"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " because"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " adapter"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " regex"
+    },
+    {
+      "content": " over"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " raw"
+    },
+    {
+      "content": " text"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " responsible"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " mapping"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " bounded"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " No"
+    },
+    {
+      "content": " external"
+    },
+    {
+      "content": " service"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " involved"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " registration"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " recorded"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9594,
+        "output_tokens": 996,
+        "cache_read_input_tokens": 9344,
+        "cache_miss_input_tokens": 250,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 254,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_C5o24tHLOoEWUhXXOB0G3109",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"done\", \"summary\": \"Called watch_external once with the specified whole-document JSON command and success_pattern SUCCESS; it was rejected as expected because the observation is not one bounded scalar. No retry was made.\", \"done\": [\"Invoked watch_external exactly once with the given command and success_pattern\", \"Recorded the validator rejection: observation must be one bounded scalar, not a document or log\", \"Explained that the nested step-level SUCCESS is not evidence of overall completion\"], \"tests\": [\"watch_external registration attempt returned: 'watch not registered: observation must be one bounded scalar, not a document or log'\"], \"risks\": [\"None: no watch is active, no external service was contacted, and no state was changed\"], \"next_steps\": [\"If a real watch is ever needed, select the exact object's scalar field in the read-only command or use the status_json.v1 adapter\"]}"
+        }
+      ]
+    }
+  ]
+}

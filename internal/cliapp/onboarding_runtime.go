@@ -47,41 +47,17 @@ func (a *App) runOnboardingRuntimeStep(state *onboardingState, options onboardin
 		fmt.Fprintf(a.stderr, "Workspace setup failed: %v\n", err)
 		return 1
 	}
-	if onboardingWorkspaceNeedsExplicitChoice(choice.WorkspacePath) {
-		if options.NonInteractive {
-			fmt.Fprintln(a.stderr, "A project workspace must be selected explicitly; the filesystem root and home directory are not safe defaults.")
-			return 1
+	if !options.NonInteractive {
+		var code int
+		choice, code = a.chooseOnboardingRuntime(choice)
+		if code != 0 {
+			return code
 		}
-		workspace, promptErr := a.promptInput("Project workspace", "")
-		if promptErr != nil {
-			fmt.Fprintln(a.stderr, promptErr)
-			return 1
-		}
-		choice.WorkspacePath, err = canonicalOnboardingWorkspace(workspace)
-		if err != nil || onboardingWorkspaceNeedsExplicitChoice(choice.WorkspacePath) {
-			if err == nil {
-				err = fmt.Errorf("choose a project directory instead of the filesystem root or home directory")
-			}
-			fmt.Fprintf(a.stderr, "Workspace setup failed: %v\n", err)
-			return 1
-		}
+	} else if onboardingWorkspaceNeedsExplicitChoice(choice.WorkspacePath) {
+		fmt.Fprintln(a.stderr, "A project workspace must be selected explicitly; the filesystem root and home directory are not safe defaults.")
+		return 1
 	}
 	a.printRuntimeChoice(choice)
-	if !options.NonInteractive {
-		accepted, promptErr := a.promptConfirm("Start SelfMind with these settings?", true)
-		if promptErr != nil {
-			fmt.Fprintln(a.stderr, promptErr)
-			return 1
-		}
-		if !accepted {
-			choice, err = a.customizeOnboardingRuntimeChoice(choice)
-			if err != nil {
-				fmt.Fprintln(a.stderr, err)
-				return 1
-			}
-			a.printRuntimeChoice(choice)
-		}
-	}
 
 	fmt.Fprintln(a.stdout, "Setting up SelfMind...")
 	receipt, err := a.prepareOnboardingGateway(choice.BackgroundMode)
@@ -141,6 +117,9 @@ func (a *App) runOnboardingRuntimeStep(state *onboardingState, options onboardin
 }
 
 func (a *App) defaultOnboardingRuntimeChoice(state onboardingState) (onboardingRuntimeChoice, error) {
+	if a.onboardingRuntimeDraft != nil {
+		return *a.onboardingRuntimeDraft, nil
+	}
 	workspace := strings.TrimSpace(state.WorkspacePath)
 	if workspace == "" {
 		cwd, err := os.Getwd()
@@ -179,40 +158,8 @@ func (a *App) printRuntimeChoice(choice onboardingRuntimeChoice) {
 	if choice.BackgroundMode == "managed" {
 		background = "Enabled"
 	}
-	fmt.Fprintf(a.stdout, "  Background: %s\n", background)
+	fmt.Fprintf(a.stdout, "  Start at login: %s\n", background)
 	fmt.Fprintln(a.stdout)
-}
-
-func (a *App) customizeOnboardingRuntimeChoice(current onboardingRuntimeChoice) (onboardingRuntimeChoice, error) {
-	workspace, err := a.promptInput("Workspace", current.WorkspacePath)
-	if err != nil {
-		return current, err
-	}
-	current.WorkspacePath, err = canonicalOnboardingWorkspace(workspace)
-	if err != nil {
-		return current, err
-	}
-	modeIndex, err := a.promptChoice("Safety mode:", []string{
-		"Cautious (on-request)",
-		"Smart (recommended)",
-		"Automatic edits (auto-edit)",
-	})
-	if err != nil {
-		return current, err
-	}
-	current.ApprovalMode = []string{"on-request", "smart", "auto-edit"}[modeIndex]
-	if gatewayServiceSupported() {
-		managed, confirmErr := a.promptConfirm("Enable background startup?", true)
-		if confirmErr != nil {
-			return current, confirmErr
-		}
-		if managed {
-			current.BackgroundMode = "managed"
-		} else {
-			current.BackgroundMode = "on-demand"
-		}
-	}
-	return current, nil
 }
 
 func onboardingProtectionSummary() string {

@@ -270,7 +270,7 @@ func TestMidRunNarrowingReachesApprovalEvidence(t *testing.T) {
 			api.MessageRequest{Content: "tidy the build outputs", Channel: "cli"}, "cli"),
 		run.ID)
 
-	if !live.HasExplicitDeny() {
+	if len(live.AddedRequirements) != 1 || live.AddedRequirements[0] != "不要删除文件" || live.HasExplicitDeny() {
 		t.Fatalf("a mid-run prohibition did not reach the run's evidence: %+v", live)
 	}
 }

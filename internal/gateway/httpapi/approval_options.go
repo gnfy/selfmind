@@ -3,9 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
-	"sync"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
@@ -136,9 +134,9 @@ func approvalOptionByShortcut(options []approvalDecisionOption, letter string) (
 	return approvalDecisionOption{}, false
 }
 
-// triageIntentMaxChars bounds the instruction handed to the judge. The
-// authorization question needs what the person asked for, not the whole message.
-const triageIntentMaxChars = 1200
+// Only advisory summaries use this small cap. Human evidence is bounded as a
+// complete quotation bundle by tools.BoundApprovalEvidence.
+const triageSummaryBytes = 1200
 
 // triageIntentFromRequest prepares the person's own words for the triage judge:
 // gateway decoration is already absent from req.Content, and the text is
@@ -150,22 +148,22 @@ func triageIntentFromRequest(content string) string {
 	if trimmed == "" {
 		return ""
 	}
-	return truncate(tools.RedactSensitive(trimmed), triageIntentMaxChars)
+	return tools.RedactSensitive(trimmed)
 }
 
 // runIntentSnapshot captures approval evidence once at run start. Task text is
-// advisory context; deterministic user allow/deny signals remain separate so a
-// model-generated summary can never silently become authorization.
+// advisory context. Human language is evidence for the model, never a keyword
+// permission rule; actual control-plane decisions remain separate.
 func runIntentSnapshot(req api.MessageRequest, task *control.Task, run *control.Run, workspace *control.Workspace) tools.RunIntentSnapshot {
 	raw := triageIntentFromRequest(req.Content)
-	snapshot := tools.RunIntentSnapshot{RawUserText: raw, Source: "direct"}
+	snapshot := tools.RunIntentSnapshot{RawUserText: raw, Source: "direct", ModelAuthorization: true}
 	if origin := strings.TrimSpace(req.Origin); origin != "" {
 		snapshot.Source = "system:" + origin
 	} else if req.ExecutionProfile != "" {
 		snapshot.Source = "system:" + req.ExecutionProfile
 	}
 	if task != nil {
-		snapshot.GoalSummary = truncate(tools.RedactSensitive(strings.TrimSpace(task.Title+"\n"+task.CurrentSummary)), triageIntentMaxChars)
+		snapshot.GoalSummary = truncate(tools.RedactSensitive(strings.TrimSpace(task.Title+"\n"+task.CurrentSummary)), triageSummaryBytes)
 	}
 	if run != nil {
 		snapshot.WorkKey = run.WorkKey
@@ -173,218 +171,8 @@ func runIntentSnapshot(req api.MessageRequest, task *control.Task, run *control.
 	if workspace != nil {
 		snapshot.WorkspaceID = workspace.ID
 	}
-	// A phrase list used to sit here, turning a fixed set of spellings
-	// ("continue", "开始执行", "同意", …) into an explicit_allow signal. It was a
-	// keyword taxonomy pretending to be authorization evidence, and it failed
-	// exactly where it mattered: on 2026-09-07 "开始执行" was recognized and "2",
-	// answering a numbered list of next steps, was not, so the same day
-	// produced both a working authorization and an unauthorized-looking one for
-	// the same intent. The judge now receives what the person was answering
-	// (PriorAssistantOffer) and reads the reply against it, which covers every
-	// spelling and every shape of acceptance instead of a list of them.
-	compact := strings.ToLower(strings.Trim(strings.TrimSpace(raw), "。.!！?？ \t\r\n"))
-	snapshot.ExplicitDeny, snapshot.DenyScopes = extractDenyScopes(compact)
-	return snapshot
-}
 
-// denyMarkers are the prohibition phrases we recognize. Scanning for them over
-// a whole message was the original defect: one "不要修改文件" made every write,
-// exec, and dangerous call in the run demand a human decision.
-var denyMarkers = []string{"不要", "不得", "禁止", "别执行", "别改", "do not", "don't", "must not", "never"}
-
-// denyClassWords map a clause's own words to what it forbids. Order matters
-// only in that every entry is tested; a clause may forbid several classes.
-var denyClassWords = []struct {
-	words   []string
-	classes []tools.OperationClass
-}{
-	// Single-character Chinese verbs matter: "不要改代码" and "不要写文件" are
-	// how people actually phrase this, and matching only the two-character
-	// compounds left both unclassified — which meant the blanket fail-safe, so
-	// the most ordinary "don't touch the code" blocked every tool in the run.
-	{[]string{"修改", "改动", "更改", "改", "编辑", "写入", "写", "覆盖", "modify", "edit", "write", "overwrite", "change"}, []tools.OperationClass{tools.OpClassWrite}},
-	{[]string{"删除", "移除", "删", "rm ", "delete", "remove"}, []tools.OperationClass{tools.OpClassDelete}},
-	// A bare "do not execute yet" normally forbids the side-effecting action,
-	// not the read-only probe needed to inspect it. Explicit command/shell words
-	// retain the parent exec class and therefore cover observations too.
-	{[]string{"执行", "运行", "跑", "run", "rerun", "re-run", "execute", "invoke"}, []tools.OperationClass{tools.OpClassExecInTurn}},
-	{[]string{"命令", "调用命令", "command", "commands", "shell", "terminal"}, []tools.OperationClass{tools.OpClassExec}},
-	{[]string{"联网", "下载", "上传", "访问网络", "network", "download", "upload", "curl", "fetch"}, []tools.OperationClass{tools.OpClassNetwork}},
-}
-
-// mannerWords qualify HOW something must not be done rather than whether it
-// may happen at all. "Do not execute the polling command directly" asks for
-// delegation; reading it as a blanket execution ban inverts the instruction.
-var mannerWords = []string{"直接", "自己", "亲自", "手动", "本轮", "前台", "directly", "yourself", "manually", "in this turn", "by hand", "foreground", "in the foreground"}
-
-// repetitionWords qualify a prohibition as "not AGAIN". "Run the command once,
-// do not rerun it" authorizes the first execution and forbids the second, so
-// blocking the call the person just asked for inverts the instruction. The
-// middleware cannot count executions, and it does not need to: repeated
-// identical calls are already stopped by ToolGuardrails.
-var repetitionWords = []string{"重新", "再次", "又一次", "第二次", "rerun", "re-run", "retry", "again", "repeat", "once more", "a second time"}
-
-// clauseSplitter ends a clause at sentence and list punctuation, in both
-// scripts. A prohibition binds to the clause it appears in.
-//
-// Only "." needs a lookahead: splitting on every one of them tore
-// "config.yaml" in half and left the prohibition with no object to protect.
-// The rest split unconditionally, because an ASCII comma inside Chinese text
-// is usually written without a trailing space.
-var clauseSplitter = regexp.MustCompile(`[。！？；，\n\r,;!?]|\.(?:\s|$)`)
-
-const denyClauseMaxChars = 300
-
-// extractDenyScopes turns a lowercased message into prohibition records bound
-// to their own clauses. It is deterministic string work — no model call — and
-// a clause it cannot classify is recorded unresolved, which keeps the old
-// blanket effect for that prohibition.
-func extractDenyScopes(compact string) ([]string, []tools.DenyScope) {
-	var markers []string
-	var scopes []tools.DenyScope
-	seenMarker := map[string]bool{}
-	for _, clause := range clauseSplitter.Split(compact, -1) {
-		clause = strings.TrimSpace(clause)
-		if clause == "" {
-			continue
-		}
-		for _, marker := range denyMarkers {
-			if !strings.Contains(clause, marker) {
-				continue
-			}
-			if !seenMarker[marker] {
-				seenMarker[marker] = true
-				markers = append(markers, marker)
-			}
-			scopes = append(scopes, denyScopeForClause(marker, clause))
-		}
-	}
-	return markers, scopes
-}
-
-func denyScopeForClause(marker, clause string) tools.DenyScope {
-	scope := tools.DenyScope{Marker: marker, Clause: truncate(clause, denyClauseMaxChars)}
-	// A prohibition governs what FOLLOWS it. "Finish the run as waiting_user
-	// and do not invent or resolve that input" forbids inventing input; reading
-	// the whole clause let the noun "run" ahead of the marker classify it as an
-	// execution ban and block the tool the person was asking for.
-	governed := clause
-	if idx := strings.Index(clause, marker); idx >= 0 {
-		governed = clause[idx+len(marker):]
-	}
-	manner := containsAnyWord(governed, mannerWords)
-	scope.Repetition = containsAnyWord(governed, repetitionWords)
-	for _, entry := range denyClassWords {
-		if !containsAnyWord(governed, entry.words) {
-			continue
-		}
-		for _, class := range entry.classes {
-			if class == tools.OpClassExec && manner {
-				// Qualified as "directly"/"yourself"/"foreground": the person is
-				// ruling out the agent running it in this turn, not ruling out
-				// handing it to the daemon.
-				class = tools.OpClassExecInTurn
-			}
-			if class == tools.OpClassExecInTurn && manner {
-				class = tools.OpClassExecInTurn
-			}
-			scope.Classes = appendUniqueOperationClass(scope.Classes, class)
-		}
-	}
-	scope.Resolved = len(scope.Classes) > 0
-	if scope.Resolved {
-		scope.Targets = denyClauseTargets(governed)
-	}
-	return scope
-}
-
-func appendUniqueOperationClass(classes []tools.OperationClass, candidate tools.OperationClass) []tools.OperationClass {
-	for _, existing := range classes {
-		if existing == candidate {
-			return classes
-		}
-	}
-	return append(classes, candidate)
-}
-
-// containsAnyWord matches CJK needles as substrings (the script has no word
-// boundaries) and ASCII needles only on word boundaries. Plain substring
-// matching made "run" fire inside "rerun" and inside the noun "the run", which
-// is how prohibitions came to block operations they never named.
-func containsAnyWord(text string, needles []string) bool {
-	for _, needle := range needles {
-		if needle == "" {
-			continue
-		}
-		if !isASCIIWord(needle) {
-			if strings.Contains(text, needle) {
-				return true
-			}
-			continue
-		}
-		if asciiWordRegexp(needle).MatchString(text) {
-			return true
-		}
-	}
-	return false
-}
-
-func isASCIIWord(s string) bool {
-	for _, r := range s {
-		if r > 127 {
-			return false
-		}
-	}
-	return true
-}
-
-var (
-	asciiWordCacheMu sync.Mutex
-	asciiWordCache   = map[string]*regexp.Regexp{}
-)
-
-func asciiWordRegexp(needle string) *regexp.Regexp {
-	asciiWordCacheMu.Lock()
-	defer asciiWordCacheMu.Unlock()
-	if re, ok := asciiWordCache[needle]; ok {
-		return re
-	}
-	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(needle) + `\b`)
-	asciiWordCache[needle] = re
-	return re
-}
-
-// denyClauseTargets picks out literal objects named in the clause: paths, file
-// names, and quoted command fragments. A prohibition with no literal object
-// covers its whole class, which is the conservative reading.
-func denyClauseTargets(clause string) []string {
-	var targets []string
-	for _, quoted := range quotedFragments(clause) {
-		targets = append(targets, quoted)
-	}
-	for _, field := range strings.Fields(clause) {
-		field = strings.Trim(field, "\"'`,()[]{}：:。，")
-		if field == "" {
-			continue
-		}
-		if strings.ContainsAny(field, "/\\") || (strings.Contains(field, ".") && !strings.HasSuffix(field, ".")) {
-			targets = append(targets, field)
-		}
-	}
-	return targets
-}
-
-func quotedFragments(clause string) []string {
-	var out []string
-	for _, quote := range []string{"\"", "'", "`"} {
-		parts := strings.Split(clause, quote)
-		for i := 1; i < len(parts); i += 2 {
-			if fragment := strings.TrimSpace(parts[i]); fragment != "" {
-				out = append(out, fragment)
-			}
-		}
-	}
-	return out
+	return tools.BoundApprovalEvidence(snapshot)
 }
 
 // fallbackApprovalReason prefers the person's own refusal words over a generic

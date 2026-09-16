@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,7 +34,7 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 	t := &ExternalWatchTool{store: store, planStore: planStore}
 	t.BaseTool = BaseTool{
 		name:        "watch_external",
-		description: "Register a durable daemon-side read-only check for external CI/CD or deployment state. The command must be PROVABLY read-only by static inspection before registration is attempted — see the command field. Successful registration automatically hands off the current run as waiting_external; do not call finish_run afterward.",
+		description: "Register a durable daemon-side read-only observation of state that gates later work, including external operations and local readiness signals. The command must be PROVABLY read-only by static inspection before registration is attempted — see the command field. Define completion criteria and remaining verification before waiting. Select the exact object and field; a condition match only resumes the task, not proves the whole goal. Registration hands off as waiting_external once every declared group is fully registered; incomplete groups must be filled in this run. Grouped registration retains already-satisfied members, so an explicitly requested group can establish a handoff even when every member is ready.",
 		schema: ToolSchema{
 			Type: "object",
 			Properties: map[string]PropertyDef{
@@ -51,7 +52,7 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 				// it in every request. The internal "V1/V2/V3" spec vocabulary
 				// was leaking too: the model never needed to know which
 				// generation of the evaluator it was addressing.
-				"success_pattern":          {Type: "string", Description: "Regular expression that marks the watch successful"},
+				"success_pattern":          {Type: "string", Description: "Whole-value regular expression over one bounded scalar selected by command; never match a JSON document or log"},
 				"failure_pattern":          {Type: "string", Description: "Regular expression that marks the watch failed"},
 				"target_pattern":           {Type: "string", Description: "Intermediate state to watch for, such as PENDING_APPROVAL"},
 				"terminal_success_pattern": {Type: "string", Description: "Terminal success state"},
@@ -151,6 +152,7 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	//
 	// It adds no approval surface: registration already passed approval, and the
 	// same command was going to run unattended seconds later.
+	observed := externalWatchPreflightObservation{}
 	patterns := externalWatchPreflightPatterns{Success: successPattern, Failure: failurePattern}
 	if specVersion >= 3 {
 		patterns = externalWatchPreflightPatterns{Adapter: observationAdapter}
@@ -159,11 +161,13 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 			Target: targetPattern, TerminalSuccess: terminalSuccessPattern, TerminalFailure: terminalFailurePattern,
 		}
 	}
+	patterns.Scalar = observationAdapter == ""
+	patterns.Observation = &observed
 	verdict, err := preflightExternalWatchPatterns(args, command, cwd, patterns, commandTimeout)
-	if err != nil {
+	if err != nil && !(waitGroupKey != "" && observed.Status != "") {
 		return "", err
 	}
-	if verdict != "" {
+	if verdict != "" && waitGroupKey == "" {
 		return verdict, nil
 	}
 
@@ -194,6 +198,14 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		return "", fmt.Errorf("freeze external watch capabilities: %w", err)
 	}
 	capabilities := externalWatchEffectiveCapabilities(args, scope, activeGrants)
+	// Host preflight has already crossed the normal approval boundary, which
+	// includes host networking. Preserve that exact registration's authority
+	// when middleware had no separate network decision (notably untrusted
+	// macOS workspaces). Provenance below bounds it to this watch's deadline;
+	// no workspace grant or credential capability is created.
+	if observed.HostNetworkShared && !slices.Contains(capabilities, executionenv.CapabilityNetworkShared) {
+		capabilities = append(capabilities, executionenv.CapabilityNetworkShared)
+	}
 	binding := executionenv.BindingFromLease("", *lease, scope.TrustLevel, capabilities, identity)
 	binding.CapabilityBindings = externalWatchCapabilityBindings(
 		binding.ExecutionCapabilities, scope, activeGrants, timeoutAt)
@@ -224,11 +236,14 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		TerminalFailurePattern: terminalFailurePattern,
 		ObservationAdapter:     observationAdapter,
 		PreflightReceipt: control.ExternalWatchPreflightReceipt{
-			Version: 1, CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))),
+			Version: control.ExternalWatchContinuationReceiptVersion, CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))),
 			EnvironmentGeneration: identity.Generation, Adapter: observationAdapter,
 			Target: firstNonEmptyPreflight(targetPattern, description), DeadlineUnix: timeoutAt.Unix(),
 			Capabilities: append([]string(nil), capabilities...),
 		},
+		Status:                observed.Status,
+		OperationStatus:       observed.OperationStatus,
+		LastOutput:            observed.Output,
 		WaitGroupID:           waitGroupID,
 		IntervalSeconds:       interval,
 		CommandTimeoutSeconds: commandTimeout,
@@ -244,13 +259,16 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	if err != nil {
 		return "", err
 	}
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, err := json.Marshal(map[string]interface{}{
 		"watch_id":         watch.ID,
 		"description":      watch.Description,
 		"interval_seconds": watch.IntervalSeconds,
 		"timeout_at":       watch.TimeoutAt.Format(time.RFC3339),
 	})
-	_, _ = t.store.AppendEvent(context.Background(), control.Event{
+	if err != nil {
+		return "", err
+	}
+	_, err = t.store.AppendEvent(context.Background(), control.Event{
 		TaskID:     watch.TaskID,
 		RunID:      watch.RunID,
 		Type:       "external_watch.created",
@@ -258,6 +276,16 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		Channel:    watch.Channel,
 		Payload:    payload,
 	})
+	if err != nil {
+		return "", fmt.Errorf("record external watch registration: %w", err)
+	}
+	incomplete, err := t.store.IncompleteRunWatchGroups(context.Background(), scope.TenantID, scope.RunID)
+	if err != nil {
+		return "", err
+	}
+	if len(incomplete) > 0 {
+		return fmt.Sprintf("Watcher %s recorded (observed state: %s). No lifecycle handoff yet: %s. Register the missing distinct targets before leaving this run.", watch.ID, watch.Status, strings.Join(incomplete, "; ")), nil
+	}
 	// Successful registration ends this run without a second model-authored
 	// finish_run call. Purge the shared in-memory plan here so the automatic
 	// lifecycle handoff has the same bounded plan-store lifetime as finish_run.

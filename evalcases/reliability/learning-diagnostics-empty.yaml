@@ -1,0 +1,19 @@
+id: reliability_learning_diagnostics_empty
+title: "Learning diagnostics distinguish no evidence from a running curator"
+suite: reliability
+workspace: isolated
+model_required: false
+turns:
+  - input: /diag learning
+expect:
+  require_no_run: true
+  contains:
+    - "Selection window: 0 / 48"
+    - "Largest creation cohort: 0 independent successful runs; 3 required"
+    - "No workflow observations in this workspace."
+    - "Curator provider calls (person, 24h): 0"
+    - "Governance mode: disabled"
+  max_tool_calls: 0
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

@@ -4,11 +4,43 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestRunCommandStreamingBoundsPipelineTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix process groups")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/bash", "-c", "printf READY; sleep 2 | cat")
+	start := time.Now()
+	out, err := runCommandStreaming(ctx, cmd, "pipeline", "terminal", "timeout")
+	if err == nil || time.Since(start) > time.Second {
+		t.Fatalf("timeout did not bound pipeline: elapsed=%s err=%v", time.Since(start), err)
+	}
+	if out != "READY" {
+		t.Fatalf("lost captured output: %q", out)
+	}
+}
+
+func TestRunCommandStreamingCancellationBoundsUnclosedPipes(t *testing.T) {
+	// Model a detached descendant retaining the pipe after cancellation. The
+	// reader must stop independently of that writer, without losing its tail.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	runner := &drainOrderRunner{payload: "captured-tail", holdWriters: 2 * time.Second}
+	start := time.Now()
+	out, err := runCommandStreaming(ctx, runner, "detached writer", "terminal", "cancel")
+	if err == nil || time.Since(start) > time.Second || out != "captured-tail" {
+		t.Fatalf("cancel drain: elapsed=%s out=%q err=%v", time.Since(start), out, err)
+	}
+}
 
 // drainOrderRunner imitates the one property of os/exec that made the real
 // defect possible: Wait tears the pipes down. It records whether Wait was

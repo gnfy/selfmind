@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "receipt-prerequisites READY_A wait-group durable-external-observation resume"
+}

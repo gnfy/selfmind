@@ -50,9 +50,13 @@ func (d *Server) startExternalWatchWorker(ctx context.Context, interval time.Dur
 	if d == nil || d.Control == nil || interval <= 0 {
 		return func() {}
 	}
+	workerCtx, cancel := context.WithCancel(ctx)
+	ctx = workerCtx
 	done := make(chan struct{})
+	exited := make(chan struct{})
 	var once sync.Once
 	go func() {
+		defer close(exited)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		d.recoverExternalWatchVerdicts(ctx)
@@ -68,7 +72,7 @@ func (d *Server) startExternalWatchWorker(ctx context.Context, interval time.Dur
 			}
 		}
 	}()
-	return func() { once.Do(func() { close(done) }) }
+	return func() { once.Do(func() { cancel(); close(done) }); <-exited }
 }
 
 func (d *Server) runExternalWatchPass(ctx context.Context) {
@@ -119,6 +123,12 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 	errText := ""
 	if commandErr != nil {
 		errText = tools.RedactSensitive(commandErr.Error())
+	}
+	if watch.PreflightReceipt.Version >= control.ExternalWatchContinuationReceiptVersion && watch.ObservationAdapter == "" && commandErr == nil && result.ExitCode == 0 {
+		if err := tools.ValidateExternalWatchScalar(output); err != nil {
+			d.parkExternalWatch(ctx, watch, watchCheckVerdict{Action: watchCheckPark, Layer: "observation", Reason: watchReasonInvalidCheck, Detail: err.Error()}, "check_definition", output, err.Error())
+			return
+		}
 	}
 	if watch.SpecVersion >= 3 && commandErr == nil && result.ExitCode == 0 {
 		state, adapterErr := tools.ClassifyExternalWatchObservation(watch.ObservationAdapter, output)
@@ -264,10 +274,10 @@ func statusErrText(status, errText string) string {
 
 func operationStatusFromOutput(watch control.ExternalWatch, output string) string {
 	if watch.SpecVersion >= 2 {
-		if watch.TerminalFailurePattern != "" && matchesExternalWatchPattern(watch.TerminalFailurePattern, output) {
+		if watch.TerminalFailurePattern != "" && matchesExternalWatchContractPattern(watch, watch.TerminalFailurePattern, output) {
 			return control.WatchOperationFailed
 		}
-		if watch.TerminalSuccessPattern != "" && matchesExternalWatchPattern(watch.TerminalSuccessPattern, output) {
+		if watch.TerminalSuccessPattern != "" && matchesExternalWatchContractPattern(watch, watch.TerminalSuccessPattern, output) {
 			return control.WatchOperationSucceeded
 		}
 	}
@@ -503,6 +513,13 @@ func classifyStoredExternalWatchOutput(watch control.ExternalWatch) string {
 // a status CLI may exit non-zero while reporting a genuine terminal failure, but
 // a "success" printed by a check that itself failed is self-contradictory
 // evidence, and accepting it would let a broken check close a release.
+func matchesExternalWatchContractPattern(watch control.ExternalWatch, pattern, output string) bool {
+	if watch.PreflightReceipt.Version >= control.ExternalWatchContinuationReceiptVersion {
+		return tools.MatchExternalWatchScalar(pattern, output)
+	}
+	return matchesExternalWatchPattern(pattern, output)
+}
+
 func classifyExternalWatchOutput(watch control.ExternalWatch, output string, exitCode int) string {
 	if watch.SpecVersion >= 3 {
 		if exitCode != 0 {
@@ -522,21 +539,24 @@ func classifyExternalWatchOutput(watch control.ExternalWatch, output string, exi
 		}
 	}
 	if watch.SpecVersion >= 2 {
-		if watch.TerminalFailurePattern != "" && matchesExternalWatchPattern(watch.TerminalFailurePattern, output) {
+		if watch.TerminalFailurePattern != "" && matchesExternalWatchContractPattern(watch, watch.TerminalFailurePattern, output) {
 			return control.ExternalWatchFailed
 		}
-		if exitCode == 0 && watch.TerminalSuccessPattern != "" && matchesExternalWatchPattern(watch.TerminalSuccessPattern, output) {
+		if exitCode == 0 && watch.TerminalSuccessPattern != "" && matchesExternalWatchContractPattern(watch, watch.TerminalSuccessPattern, output) {
 			return control.ExternalWatchSucceeded
 		}
-		if exitCode == 0 && watch.TargetPattern != "" && matchesExternalWatchPattern(watch.TargetPattern, output) {
+		if exitCode == 0 && watch.TargetPattern != "" && matchesExternalWatchContractPattern(watch, watch.TargetPattern, output) {
 			return control.ExternalWatchSucceeded
 		}
 		return ""
 	}
-	if exitCode == 0 && matchesExternalWatchPattern(watch.SuccessPattern, output) {
+	if watch.PreflightReceipt.Version >= control.ExternalWatchContinuationReceiptVersion && matchesExternalWatchContractPattern(watch, watch.FailurePattern, output) {
+		return control.ExternalWatchFailed
+	}
+	if exitCode == 0 && matchesExternalWatchContractPattern(watch, watch.SuccessPattern, output) {
 		return control.ExternalWatchSucceeded
 	}
-	if watch.FailurePattern != "" && matchesExternalWatchPattern(watch.FailurePattern, output) {
+	if watch.FailurePattern != "" && matchesExternalWatchContractPattern(watch, watch.FailurePattern, output) {
 		return control.ExternalWatchFailed
 	}
 	return ""
@@ -846,6 +866,9 @@ func (d *Server) externalWatchFinalizationTarget(ctx context.Context, watch cont
 }
 
 func externalWatchFinalizationContent(watch control.ExternalWatch, summary string) string {
+	if watch.PreflightReceipt.Version >= control.ExternalWatchContinuationReceiptVersion {
+		return externalWatchContinuationContent(watch, summary)
+	}
 	evidence := truncateExternalWatchOutput(strings.TrimSpace(watch.LastOutput))
 	if utf8.RuneCountInString(evidence) > 1200 {
 		runes := []rune(evidence)

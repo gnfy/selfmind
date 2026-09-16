@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel/memory"
@@ -16,16 +17,18 @@ import (
 // predicates evaluate against this snapshot — an oracle the agent cannot game
 // the way it can game its own narration (control.db rows / real files / memory).
 type WorldState struct {
-	Task          *control.Task
-	Run           *control.Run
-	Handoff       *control.Handoff
-	Events        []control.Event
-	Artifacts     []control.Artifact
-	Approvals     []control.ApprovalRequest
-	Facts         map[string][]memory.Fact // keyed by target
-	WorkspaceRoot string
-	subjectTaskID string
-	subjectRunID  string
+	ApprovalTriage      map[string]int
+	approvalTriageError error
+	Task                *control.Task
+	Run                 *control.Run
+	Handoff             *control.Handoff
+	Events              []control.Event
+	Artifacts           []control.Artifact
+	Approvals           []control.ApprovalRequest
+	Facts               map[string][]memory.Fact // keyed by target
+	WorkspaceRoot       string
+	subjectTaskID       string
+	subjectRunID        string
 }
 
 // CollectWorldState pulls the post-run state once so predicates evaluate
@@ -49,6 +52,8 @@ func CollectWorldState(ctx context.Context, store *control.Store, mem *memory.Me
 			w.subjectRunID = runs[0].ID
 		}
 	}
+	triage, triageErr := store.ApprovalTriageStatsSince(ctx, identity.TenantID, identity.PersonID, time.Unix(0, 0))
+	w.ApprovalTriage, w.approvalTriageError = triage.Counts, triageErr
 	w.Approvals, _ = store.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "", 50)
 	if mem != nil {
 		// Person memory is person-partitioned; the tenant partition is only a
@@ -109,6 +114,11 @@ func dispatchPredicate(p StatePredicate, w WorldState) (bool, string) {
 		return evalCount(p, countEvents(w.Events, p.Type, p.PayloadContains))
 	case "artifact", "artifacts":
 		return evalArtifacts(p, w.Artifacts)
+	case "approval_triage":
+		if w.approvalTriageError != nil {
+			return false, w.approvalTriageError.Error()
+		}
+		return evalCount(p, w.ApprovalTriage[p.Status])
 	case "approval", "approvals":
 		return evalCount(p, countApprovals(w.Approvals, p.Status))
 	case "run":

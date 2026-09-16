@@ -12,6 +12,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
+	"selfmind/internal/verification"
 )
 
 type recordedEvidencePayload struct {
@@ -110,6 +111,7 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, taskID, 
 			continue
 		}
 		result.Checks = append(result.Checks, api.VerificationCheck{
+			ToolCallID: item.ToolCallID, Binding: item.Command.Binding,
 			Kind:       item.Command.Kind,
 			Command:    item.Command.Command,
 			CWD:        item.Command.CWD,
@@ -161,71 +163,11 @@ func pathExists(path string) bool {
 }
 
 func verificationState(latestMutation int64, checks []api.VerificationCheck) (string, string) {
-	if len(checks) == 0 {
-		if latestMutation == 0 {
-			return "not_applicable", "No code mutation or verification was recorded."
-		}
-		return "not_run", "Files changed, but no verification command was recorded after the change."
-	}
-
-	current := checks
-	if latestMutation > 0 {
-		current = nil
-		for _, check := range checks {
-			if check.StartedAt >= latestMutation {
-				current = append(current, check)
-			}
-		}
-		if len(current) == 0 {
-			return "stale", "Verification exists, but it ran before the latest file change."
-		}
-	}
-
-	current = latestVerificationAttempts(current)
-	passed, failed, blocked := 0, 0, 0
-	for _, check := range current {
-		switch check.Status {
-		case "succeeded":
-			passed++
-		case "blocked":
-			blocked++
-		default:
-			failed++
-		}
-	}
-	switch {
-	case failed > 0:
-		return "failed", fmt.Sprintf("%d current verification check(s) failed.", failed)
-	case passed > 0 && blocked == 0:
-		return "passed", fmt.Sprintf("%d current verification check(s) passed.", passed)
-	case passed == 0 && blocked > 0:
-		return "blocked", fmt.Sprintf("%d verification check(s) were blocked.", blocked)
-	default:
-		return "partial", fmt.Sprintf("%d verification check(s) passed and %d were blocked.", passed, blocked)
-	}
+	return verification.State(latestMutation, checks)
 }
 
-// latestVerificationAttempts lets a corrected retry of the same check replace
-// its earlier result. Distinct commands remain independent so a lightweight
-// fallback cannot hide a failed build or test suite.
 func latestVerificationAttempts(checks []api.VerificationCheck) []api.VerificationCheck {
-	latest := make(map[string]api.VerificationCheck, len(checks))
-	order := make([]string, 0, len(checks))
-	for _, check := range checks {
-		key := strings.TrimSpace(check.Kind) + "\x00" + strings.TrimSpace(check.Command) + "\x00" + strings.TrimSpace(check.CWD)
-		previous, exists := latest[key]
-		if !exists {
-			order = append(order, key)
-		}
-		if !exists || check.FinishedAt >= previous.FinishedAt {
-			latest[key] = check
-		}
-	}
-	result := make([]api.VerificationCheck, 0, len(latest))
-	for _, key := range order {
-		result = append(result, latest[key])
-	}
-	return result
+	return verification.Latest(checks)
 }
 
 func verificationClaimMismatches(outcome api.RunOutcome) []string {

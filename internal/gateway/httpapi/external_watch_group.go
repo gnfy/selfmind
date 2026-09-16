@@ -25,6 +25,9 @@ func (d *Server) externalWatchAggregate(ctx context.Context, watch control.Exter
 		return watch, false
 	}
 	watch.Status = group.Status
+	if group.Status == control.ExternalWatchBlocked {
+		watch.LastError = parkedWatchReason(watchReasonInvalidCheck, "wait group is missing declared members; no aggregate external outcome was established", "")
+	}
 	watch.Description = fmt.Sprintf("wait group %s (%s)", group.Group.GroupKey, group.Group.Mode)
 	if group.Status == control.ExternalWatchFailed && strings.TrimSpace(watch.LastError) == "" {
 		watch.LastError = "the aggregate wait-group condition could not be satisfied"

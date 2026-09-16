@@ -1,0 +1,50 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13187,
+        "output_tokens": 224,
+        "cache_read_input_tokens": 12928,
+        "cache_miss_input_tokens": 259,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 7,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_7LHZ3XsudQBwG65CXdre4648",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Read and review draft.txt in the workspace\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"verification_required\": true}, {\"status\": \"in_progress\", \"step\": \"Record the outcome and keep delivery pending on the user-specified recipient\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"pending\", \"step\": \"Deliver the reviewed draft to the recipient once the user provides it\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}]}"
+        }
+      ]
+    }
+  ]
+}

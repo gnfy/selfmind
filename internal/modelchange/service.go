@@ -1949,6 +1949,7 @@ func normalizeSnapshot(snapshot Snapshot) Snapshot {
 	}
 	snapshot.Primary = normalize(snapshot.Primary)
 	snapshot.Primary.Enabled = nil
+	snapshot.Primary.FollowPrimary = false
 	snapshot.Auxiliary = normalize(snapshot.Auxiliary)
 	if snapshot.Auxiliary.Enabled != nil {
 		if *snapshot.Auxiliary.Enabled {
@@ -1957,9 +1958,14 @@ func normalizeSnapshot(snapshot Snapshot) Snapshot {
 			snapshot.Auxiliary.Enabled = &disabledAuxiliary
 		}
 	}
+	if snapshot.Auxiliary.FollowPrimary && (snapshot.Auxiliary.Enabled == nil || *snapshot.Auxiliary.Enabled) {
+		snapshot.Auxiliary.Provider = snapshot.Primary.Provider
+		snapshot.Auxiliary.Model = snapshot.Primary.Model
+	}
 	for _, route := range ManagedRoleRoutes() {
 		selection := normalize(selectionForRoute(snapshot, route))
 		selection.Enabled = nil
+		selection.FollowPrimary = false
 		setSelectionForRoute(&snapshot, route, selection)
 	}
 	return snapshot

@@ -87,12 +87,28 @@ func WithSkillStorage(args map[string]interface{}, storage *SkillStorage) map[st
 	return out
 }
 
-// SkillStorageMiddleware injects one immutable root into a dispatcher without
-// mutating the caller's argument map or a process-global setting.
+// SkillStorageMiddleware injects one immutable root for this invocation. Keep
+// the invocation envelope shared so execution facts written by the tool reach
+// outer evidence and recovery middleware. Restore only this injected key.
 func SkillStorageMiddleware(storage *SkillStorage) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
-			return next(WithSkillStorage(args, storage))
+			if storage == nil {
+				return next(args)
+			}
+			if args == nil {
+				args = map[string]interface{}{}
+			}
+			previous, existed := args[skillStorageArg]
+			args[skillStorageArg] = storage
+			defer func() {
+				if existed {
+					args[skillStorageArg] = previous
+				} else {
+					delete(args, skillStorageArg)
+				}
+			}()
+			return next(args)
 		}
 	}
 }

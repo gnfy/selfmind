@@ -179,14 +179,18 @@ SelfMind 区分两个容易混淆的字段：
 
 本地初始化时，已启用但未填写 provider/model 的 auxiliary 默认使用 primary 的
 provider/model；也可用 `models.auxiliary.enabled: false` 显式关闭后台模型工作。
-缺少前台就绪证据时，直接交互启动会打开与 `selfmind model` 相同的
-Model Manager；显式运行 `selfmind setup` 只会引导到该入口，不会实现另一套选择器。
-Model Manager 先提供 Provider connections，再展示并校验 Main 与 Background 路由；
-首次事务只把启用的槽位明确落盘。
+缺少前台就绪证据时，直接交互启动会打开 `selfmind model` 所用 Model Manager 的
+精简设置界面；交互式 `selfmind setup` 也会打开此摘要。Main、Background、可选的
+Advanced roles 与 Validate & continue 同时可见。Provider 选择页保留连接管理入口，
+reasoning 与 service tier 使用兼容默认值，不再强制经过额外页面。
+设置中的 Same as Main 会写入 `models.auxiliary.follow_primary: true`，使 Background
+随之后 Main 的 provider/model 修改而变化，同时保留自身的后台调优策略。选择具体的
+Background 模型会清除此标记，即使它暂时与 Main 相同。旧的显式选择不会自动变成
+继承，历史快照的指纹保持稳定。
 `model-state.json` 中已应用的事务是前台/后台就绪状态的唯一权威；onboarding 不再复制
 路由或验证事实，因此之后成功应用的路由变更不会重新打开无关的工作区或后台服务
 步骤。有效的旧设置回执只会作为一次性迁移证据，并在移除其中的模型字段前备份。
-auxiliary 一旦显式配置，
+auxiliary 一旦独立配置，
 修改 primary 就不会覆盖它。逻辑后台角色继续作为高级 `models.roles.<role>` 覆盖
 存在；未配置角色覆盖时继承 auxiliary。
 
@@ -246,12 +250,16 @@ Gateway 状态公开有效路由快照的不含秘密哈希和分离的 readines
 契约探测。只有已知兼容时才会保留原 reasoning 和 service tier；兼容性未知时只把
 受影响选项恢复为 provider `auto` 并提示。显式输入始终优先。
 
-校验分为两个边界。模型管理器在每一项选择完成后自动发送相应的有界契约探测：主模型
+校验分为两个边界。精简设置界面保留可编辑草稿，直到 Validate & continue 按实际生效
+选择探测 Main、Background 和全部六个细分角色。界面显示每条路由的结果，拒绝缺失或
+失败的证据，并允许重试或返回修改。完整模型管理器在每一项选择完成后自动发送相应的有界契约探测：主模型
 使用前台探测，后台模型及六个受管理角色使用后台或维护 JSON 探测。最终 daemon 事务
 会在修改服务状态前，在 daemon 自己的环境中再次解析并探测整份草稿。这样可以避免
 只在 shell 中存在的凭据被误判为后台运行也可用。新输入的 API key 在校验期间只保存在
 不透明的暂存 auth 记录中，绝不会写入 YAML；服务定义只包含路径和非凭据环境。探测失败
-会保留可编辑草稿，绝不会伪装成已验证。
+会保留可编辑草稿，绝不会伪装成已验证。引导会等待此次事务已应用且 daemon 健康可达，
+重新读取已应用配置，在同一次启动中继续运行环境设置并进入对话。取消模型摘要不会
+安装服务或信任工作区。
 
 Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级映射为 thinking
 预算：`low=4096`、`medium/default=8192`、`high=16384`、

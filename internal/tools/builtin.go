@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -474,6 +475,7 @@ func NewVerifyTool() *VerifyTool {
 		schema: ToolSchema{
 			Type: "object",
 			Properties: map[string]PropertyDef{
+				"check":           verificationBindingProperty(),
 				"command":         {Type: "string", Description: "Full verification command to execute"},
 				"cwd":             {Type: "string", Description: "Working directory", Default: "."},
 				"timeout":         {Type: "integer", Description: "Timeout in seconds", Default: 120},
@@ -499,6 +501,9 @@ func NewVerifyTool() *VerifyTool {
 func (t *VerifyTool) Execute(args map[string]interface{}) (string, error) {
 	if strings.TrimSpace(stringArg(args, "command")) == "" {
 		return "", fmt.Errorf("command is required")
+	}
+	if err := prepareVerificationBinding(args); err != nil {
+		return "", err
 	}
 	return executeForegroundCommand(args, "verify", 120)
 }
@@ -558,6 +563,10 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, stan
 }
 
 func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolName, toolCallID string, profiles ...ToolProfile) (string, error) {
+	if process, ok := cmd.(*exec.Cmd); ok {
+		configureCommandCancellation(process)
+		process.WaitDelay = 250 * time.Millisecond
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -634,7 +643,15 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolNa
 				"elapsed_seconds": time.Since(start).Seconds(),
 			}, "")
 		case <-ctx.Done():
+			// A descendant may detach from the process group while retaining a
+			// pipe. Give buffered output a bounded drain, then close our readers
+			// so cancellation cannot wait for an unrelated descendant's EOF.
+			drain := time.AfterFunc(250*time.Millisecond, func() {
+				_ = stdout.Close()
+				_ = stderr.Close()
+			})
 			err := <-done
+			drain.Stop()
 			mu.Lock()
 			result := output.String()
 			mu.Unlock()

@@ -1,0 +1,161 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Confirmed"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "79"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "549"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " next"
+    },
+    {
+      "reasoning_content": " steps"
+    },
+    {
+      "reasoning_content": " matching"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Confirmed"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " matching"
+    },
+    {
+      "content": " hand"
+    },
+    {
+      "content": "off"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Claim"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " continuation"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13720,
+        "output_tokens": 122,
+        "cache_read_input_tokens": 12544,
+        "cache_miss_input_tokens": 1176,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 26,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_Qgo0goebVTQi6SDVo4wj3994",
+          "Function": "work_select",
+          "Args": "{\"action\": \"resume\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

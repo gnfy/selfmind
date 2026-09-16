@@ -1,0 +1,32 @@
+id: reliability_external_watch_group_precompleted
+title: "An already observed target remains a member of a durable wait group"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+turns:
+  - input: >-
+      Register exactly two independent read-only observations in one all wait group
+      named two-targets, with wait_group_size 2. Target A uses command printf 'DONE\n'
+      and success_pattern DONE; it is already complete. Target B uses command
+      printf 'PENDING\n' and success_pattern DONE; it is still pending.
+      Use a 5 second interval and 60 second timeout for each. Register both through
+      watch_external in this turn. An already satisfied target must still count
+      toward the group. The complete registration should hand off as waiting_external;
+      do not claim the overall work is done or execute either command directly.
+expect:
+  status: waiting_external
+  completion_reason: waiting_external
+  require_tool_events: true
+  min_tool_calls: 2
+  max_tool_errors: 0
+  max_duration_seconds: 120
+assert_state:
+  - on: events
+    type: external_watch.created
+    count_gte: 2
+    count_lte: 2
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_mojibake: true

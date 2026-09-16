@@ -420,7 +420,7 @@ before normal agent dispatch.
 /status
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/diag [memory|context|models|delivery|execution|tools]
+/diag [learning|memory|context|models|delivery|execution|tools]
 /report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]

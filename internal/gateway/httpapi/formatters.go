@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/platform/textutil"
+	"selfmind/internal/tools"
 )
 
 // Control-command and status response formatters, extracted from server.go to
@@ -182,6 +183,11 @@ func approvalSummaryLine(approval control.ApprovalRequest, taskTitle string) str
 	}
 	if reason := strings.TrimSpace(p.Reason); reason != "" {
 		sb.WriteString(" — " + textutil.Truncate(toOneLine(reason), 120))
+	}
+	if rationale := strings.TrimSpace(p.TriageRationale); rationale != "" {
+		sb.WriteString(" | Model review: " + textutil.Truncate(toOneLine(rationale), 240))
+	} else if p.TriageState == tools.TriageStateUnavailable {
+		sb.WriteString(" | Model review unavailable; human decision required")
 	}
 	if title := strings.TrimSpace(taskTitle); title != "" {
 		fmt.Fprintf(&sb, " (task: %s)", textutil.Truncate(toOneLine(title), 30))

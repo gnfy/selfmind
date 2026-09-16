@@ -114,7 +114,12 @@ Current P0/P1 implementation retains versioned approval response diagnostics
 and refuses incomplete provider output without inventing authorization. Bound
 verification corrections preserve criterion, target, scope, and failure history;
 Run/work-unit verification shares one projection. Invocation middleware retains
-actual exit codes and evidence references. Plan progress preserves existing
+actual exit codes and evidence references through one typed result pipeline;
+unknown process exit status cannot become zero, and failed outcome persistence
+retains observed output and requires observation before retry. Fault-injection
+coverage spans dispatch claims, partial effects, result storage, and notification
+after commit. New dispatch interfaces use Run scope; storage migration remains
+with the active Run + Work Journal plan. Plan progress preserves existing
 acceptance requirements, changed criteria return to Main for review, and missing
 final answers retain known blockers. Main owns explicit user-takeover semantics;
 necessary unfinished work without handoff evidence stays unfinished. Three new

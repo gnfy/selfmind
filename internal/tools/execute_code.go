@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
 )
 
@@ -62,9 +63,14 @@ func NewExecuteCodeTool() *ExecuteCodeTool {
 }
 
 func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
+	result, err := t.ExecuteResult(args)
+	return result.Output, err
+}
+
+func (t *ExecuteCodeTool) ExecuteResult(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
 	code, ok := args["code"].(string)
 	if !ok || code == "" {
-		return "", fmt.Errorf("code is required")
+		return kernel.ToolDispatchResult{}, fmt.Errorf("code is required")
 	}
 
 	language, _ := args["language"].(string)
@@ -74,7 +80,7 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 
 	profile, profileErr := resolveToolProfile(args, 300)
 	if profileErr != nil {
-		return "", profileErr
+		return kernel.ToolDispatchResult{}, profileErr
 	}
 	timeout := int(profile.Timeout / time.Second)
 	args["_execution_class"] = string(profile.Class)
@@ -85,7 +91,7 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	}
 
 	if language != "python" {
-		return "", fmt.Errorf("only python is supported currently")
+		return kernel.ToolDispatchResult{}, fmt.Errorf("only python is supported currently")
 	}
 
 	home := os.Getenv("HOME")
@@ -97,10 +103,10 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	tmpDir, err := filepath.Abs(filepath.Join(home, ".selfmind", "code_sandbox"))
 	if err != nil {
-		return "", fmt.Errorf("resolve sandbox dir: %w", err)
+		return kernel.ToolDispatchResult{}, fmt.Errorf("resolve sandbox dir: %w", err)
 	}
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
-		return "", fmt.Errorf("create sandbox dir: %w", err)
+		return kernel.ToolDispatchResult{}, fmt.Errorf("create sandbox dir: %w", err)
 	}
 
 	scriptPath := filepath.Join(tmpDir, fmt.Sprintf("script_%d.py", time.Now().UnixNano()))
@@ -111,7 +117,7 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	// Python. Running the file directly is both safer and gives accurate
 	// tracebacks/line numbers.
 	if err := os.WriteFile(scriptPath, []byte(code), 0o600); err != nil {
-		return "", fmt.Errorf("write script: %w", err)
+		return kernel.ToolDispatchResult{}, fmt.Errorf("write script: %w", err)
 	}
 	defer os.Remove(scriptPath)
 
@@ -120,7 +126,7 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 
 	requestedMode, modeErr := requestedSandboxMode(args)
 	if modeErr != nil {
-		return "", enrichToolFailure("execute_code", modeErr, "")
+		return kernel.ToolDispatchResult{}, enrichToolFailure("execute_code", modeErr, "")
 	}
 	// Same engine entry as the shell tools: an argv request instead of a shell
 	// one. Routing it separately is how execute_code previously missed the run's
@@ -142,19 +148,18 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	result, execErr := Execute(ctx, request, args)
 	decision := SandboxDecision{Mode: result.Plan.Mode, NetworkShared: result.Plan.NetworkMode == "shared"}
 	args["_sandbox_mode"] = string(decision.Mode)
-	args["_command_exit_code"] = result.ExitCode
-	args["_recovery_outcome"] = result.RecoveryOutcome
 	if decision.Mode == SandboxHost {
 		sandboxWarnOnce.Do(func() {
 			log.Warn("execute_code is running on the host without OS isolation", "reason", decision.Reason)
 		})
 	}
 	if execErr != nil {
-		return result.Output, execErr
+		return processToolResult(result), execErr
 	}
 	output := result.Output
 	if len(output) > 50*1024 {
 		output = output[:50*1024] + "\n... (output truncated)"
 	}
-	return output, nil
+	result.Output = output
+	return processToolResult(result), nil
 }

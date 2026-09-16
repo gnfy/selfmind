@@ -662,6 +662,15 @@ Event `error_category` comes from the structured class the tools layer already
 appended, not from re-reading the prose hint. Do not add a second classifier
 that parses enriched error text.
 
+Human waits and human decisions use the same structured class. A parked
+approval reaches the model and the event stream as `human_wait` (code
+`approval_parked`, `effect_state: not_dispatched`); a refusal by the person, by
+safety triage, or by a capability policy is `rejected`, with a code naming the
+source (`approval_rejected`, `triage_denied`, `capability_denied`,
+`approval_scope_rejected`). Neither is a tool failure: the recovery policy does
+not count them against the strategy, and the `operation rejected` wording stays
+the cross-package do-not-retry contract kernel matches.
+
 ## Known Gaps
 
 - A durable `EnvironmentLease` is materialized once per run and reused by

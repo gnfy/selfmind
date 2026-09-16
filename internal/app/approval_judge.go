@@ -19,9 +19,10 @@ import (
 // deterministic verdict. This lives in the app layer (not internal/tools) so the
 // triage logic stays model-agnostic and the concrete model choice is injected.
 type llmApprovalJudge struct {
-	provider llm.Provider
-	route    string
-	timeout  time.Duration
+	provider  llm.Provider
+	route     string
+	timeout   time.Duration
+	reasoning string
 }
 
 // judgeSystemPrompt reinforces the same structured contract as the per-call
@@ -33,11 +34,21 @@ const judgeSystemPrompt = `You decide whether this tool operation needs addition
 When uncertain, choose escalate.`
 
 // judgeMaxTokens must cover both the compact JSON verdict and any hidden
-// reasoning emitted by cheap reasoning models. A tiny cap can produce an HTTP
-// 200 response with no usable text, which safely escalates but silently turns
-// smart mode into on-request. The parser still accepts only the bounded JSON
-// contract, regardless of the provider's internal reasoning behavior.
-const judgeMaxTokens = 1024
+// reasoning a provider still emits. A tight cap produces an HTTP 200 with no
+// usable text, which safely escalates but silently turns smart mode into
+// on-request: observed live on 2026-09-16, 51 of 58 human asks in one day were
+// finish=length with 1024 reasoning tokens and zero verdict bytes. The parser
+// still accepts only the bounded JSON contract, regardless of the provider's
+// internal reasoning behavior.
+const judgeMaxTokens = 4096
+
+// judgeDefaultReasoning asks the provider not to reason. The verdict is a
+// bounded classification, the same shape as post-run maintenance, which also
+// runs at "none". Requesting "low" is not bounded on every provider: DeepSeek
+// has no low tier, so the adapter maps it to the high tier with thinking
+// enabled, and that reasoning consumed the whole output budget above. An
+// explicit models.roles.<judge role>.reasoning still wins.
+const judgeDefaultReasoning = "none"
 
 // NewApprovalJudge builds a tools.ApprovalJudge backed by the given cheap role
 // provider. Returns nil when the provider is nil so callers can wire it
@@ -47,7 +58,7 @@ func NewApprovalJudge(provider llm.Provider) tools.ApprovalJudge {
 	if provider == nil {
 		return nil
 	}
-	return &llmApprovalJudge{provider: provider, timeout: config.DefaultApprovalTriageTimeout}
+	return &llmApprovalJudge{provider: provider, timeout: config.DefaultApprovalTriageTimeout, reasoning: judgeDefaultReasoning}
 }
 
 func NewConfiguredApprovalJudge(mem *memory.MemoryManager, cfg *config.Config, tenantID string) tools.ApprovalJudge {
@@ -60,10 +71,33 @@ func NewConfiguredApprovalJudge(mem *memory.MemoryManager, cfg *config.Config, t
 		log.Info("smart approval judge using legacy background_review role; configure models.auxiliary or models.roles.fast_classifier for lower latency")
 	}
 	return &llmApprovalJudge{
-		provider: provider,
-		route:    string(role),
-		timeout:  cfg.Agent.ApprovalTriageTimeoutDuration(),
+		provider:  provider,
+		route:     string(role),
+		timeout:   cfg.Agent.ApprovalTriageTimeoutDuration(),
+		reasoning: approvalJudgeReasoning(cfg, role),
 	}
+}
+
+// approvalJudgeReasoning honors an explicit reasoning setting on the judge's
+// own role entry. The inherited models.auxiliary reasoning is not applied: it
+// is tuned for the other background roles, and a thinking tier there would
+// recreate the exhausted-budget failure the default exists to prevent.
+func approvalJudgeReasoning(cfg *config.Config, role llm.ModelRole) string {
+	if cfg != nil {
+		if explicit, ok := cfg.Models.Roles[string(role)]; ok {
+			if value := explicit.EffectiveReasoning(); value != "" {
+				return value
+			}
+		}
+	}
+	return judgeDefaultReasoning
+}
+
+func (j *llmApprovalJudge) reasoningEffort() string {
+	if j == nil || strings.TrimSpace(j.reasoning) == "" {
+		return judgeDefaultReasoning
+	}
+	return j.reasoning
 }
 
 func (j *llmApprovalJudge) ApprovalJudgeRoute() string { return j.route }
@@ -101,7 +135,7 @@ func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (to
 		// temperature 0 for a deterministic verdict; adapters that ignore the
 		// option simply fall back to their default, which triage tolerates
 		// (unrecognized replies escalate).
-		Options: map[string]interface{}{"temperature": 0, "reasoning_effort": "low", "response_format": map[string]interface{}{"type": "json_object"}},
+		Options: map[string]interface{}{"temperature": 0, "reasoning_effort": j.reasoningEffort(), "response_format": map[string]interface{}{"type": "json_object"}},
 	})
 	result := tools.ApprovalResponse{ApprovalResponseMetadata: tools.ApprovalResponseMetadata{Version: 1}}
 	if err != nil {

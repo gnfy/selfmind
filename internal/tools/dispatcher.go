@@ -81,7 +81,7 @@ type Registry struct {
 	schemas   map[string]compiledToolSchema
 	clarifyFn ClarifyHandler
 	// middleware 链
-	middleware []Middleware
+	middleware []ResultMiddleware
 	// attributionFn observes completed calls so implicit Skill use can be
 	// recorded. It is not a middleware: middlewares govern whether and how a
 	// call runs, while this only watches what already ran.
@@ -170,25 +170,30 @@ func (r *Registry) List() []string {
 // Dispatch is the single registry execution path shared by Dispatcher and
 // direct compatibility callers.
 func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, error) {
+	result, err := r.DispatchResult(name, args)
+	return result.Output, err
+}
+
+func (r *Registry) DispatchResult(name string, args map[string]interface{}) (kernel.ToolDispatchResult, error) {
 	originalArgs := args
 	if err := r.schemaAvailabilityError(name); err != nil {
-		return "", err
+		return kernel.ToolDispatchResult{Invoked: new(bool)}, err
 	}
 	t, ok := r.Get(name)
 	if !ok {
-		return "", fmt.Errorf("tool %s not found", name)
+		return kernel.ToolDispatchResult{Invoked: new(bool)}, fmt.Errorf("tool %s not found", name)
 	}
 	if len(t.Schema().Properties) > 0 {
 		coerced, coerceErr := CoerceArgs(t.Schema(), args)
 		if coerceErr != nil {
-			return "", fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr)
+			return kernel.ToolDispatchResult{Invoked: new(bool)}, fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr)
 		}
 		args = coerced
 	}
 	if err := ValidateArgs(t.Schema(), args); err != nil {
-		return "", fmt.Errorf("argument validation failed for %s: %w", name, err)
+		return kernel.ToolDispatchResult{Invoked: new(bool)}, fmt.Errorf("argument validation failed for %s: %w", name, err)
 	}
-	exec := r.Wrap(t, r.Middlewares())
+	exec := r.wrapResult(t, r.Middlewares())
 	result, err := exec(args)
 	if err == nil {
 		if observe := r.skillAttributionObserver(); observe != nil {
@@ -366,28 +371,14 @@ type ToolExecutor func(args map[string]interface{}) (string, error)
 
 // Wrap wraps a handler with middleware chain
 func (r *Registry) Wrap(t Tool, mw []Middleware) ToolExecutor {
-	exec := func(args map[string]interface{}) (string, error) {
-		if contextual, ok := t.(ContextTool); ok {
-			return contextual.ExecuteContext(ContextFromArgs(args), args)
-		}
-		return t.Execute(args)
+	typed := make([]ResultMiddleware, len(mw))
+	for i, middleware := range mw {
+		typed[i] = adaptMiddleware(middleware)
 	}
-	// 逆序应用 middleware（从最外层到最内层）
-	for i := len(mw) - 1; i >= 0; i-- {
-		exec = mw[i](exec)
-	}
-	// 返回注入元数据的最终执行器
+	exec := r.wrapResult(t, typed)
 	return func(args map[string]interface{}) (string, error) {
-		if args == nil {
-			args = make(map[string]interface{})
-		}
-		args["_tool_name"] = t.Name()
-		args["_registry"] = r
-		args[toolExecutionPolicyArg] = executionPolicyForTool(t)
-		if clarifyFn := r.ClarifyHandler(); clarifyFn != nil {
-			args["_clarify_fn"] = clarifyFn
-		}
-		return exec(args)
+		result, err := exec(args)
+		return result.Output, err
 	}
 }
 
@@ -395,7 +386,7 @@ func (r *Registry) Wrap(t Tool, mw []Middleware) ToolExecutor {
 func (r *Registry) UseMiddleware(mw Middleware) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.middleware = append(r.middleware, mw)
+	r.middleware = append(r.middleware, adaptMiddleware(mw))
 }
 
 func (r *Registry) SetClarifyHandler(fn ClarifyHandler) {
@@ -411,10 +402,10 @@ func (r *Registry) ClarifyHandler() ClarifyHandler {
 }
 
 // Middlewares returns a stable snapshot of the registry middleware chain.
-func (r *Registry) Middlewares() []Middleware {
+func (r *Registry) Middlewares() []ResultMiddleware {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return append([]Middleware{}, r.middleware...)
+	return append([]ResultMiddleware{}, r.middleware...)
 }
 
 // ---- Dispatcher ----

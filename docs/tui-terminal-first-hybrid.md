@@ -436,6 +436,10 @@ substrate). Document results in this file.
   per-watcher terminal cursors reject older observation replay while allowing
   a newer revised verdict. A delayed background result is still reported after
   a foreground Run starts, without resetting that Run's activity state.
+- Answering a background Run's approval locally or from another endpoint does
+  not start foreground thinking or animation. The background status and final
+  result retain their own lifecycle; an outstanding local request keeps its
+  activity until its own response arrives.
 - Regression coverage: `event_identity_test.go`, `attach_digest_test.go`, and
   the targeted watcher tests in `gateway/client/client_test.go` and
   `gateway/cli/daemon_queue_test.go`.

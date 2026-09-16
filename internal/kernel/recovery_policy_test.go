@@ -183,6 +183,7 @@ func TestVerificationOnlyRecoveryHidesAndRefusesMutation(t *testing.T) {
 		t.Fatalf("verification-only definitions=%+v", defs)
 	}
 	ctx := WithToolInvocationScope(context.Background(), ToolInvocationScope{RunID: "run-recovery", RecoveryMode: "verify_only"})
+	ctx = WithToolLedger(ctx, &capturingToolLedger{})
 	refused := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{ID: "mutate-1", Function: "mutate", Args: `{}`})
 	if refused.success || len(backend.calls) != 0 || !strings.Contains(refused.msg.Content, "error_code: verification_only_mutation_refused") {
 		t.Fatalf("mutation escaped verification-only recovery: result=%+v calls=%v", refused, backend.calls)

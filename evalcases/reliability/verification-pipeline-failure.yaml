@@ -29,6 +29,11 @@ assert_state:
     type: evidence.recorded
     payload_contains: '"status":"failed"'
     count_gte: 1
+  # The actual dispatcher carries the observed status independently of text.
+  - on: events
+    type: tool.completed
+    payload_contains: '"process":{"exit_code":1,'
+    count_gte: 1
 checks:
   no_empty_response: true
   no_mojibake: true

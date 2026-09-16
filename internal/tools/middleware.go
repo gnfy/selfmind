@@ -515,10 +515,10 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// user-decision contract, so the model cannot retry command variants.
 			if hasScope && scope.ExecutionProfile == ExecutionProfileWatchFinalization {
 				if isExecTool(toolName) {
-					return "", fmt.Errorf("operation rejected: unattended watcher finalization cannot run shell or terminal commands; use recorded watcher evidence and file tools, or finish waiting_user if evidence is insufficient")
+					return "", rejectOperation(rejectionCodeCapability, "operation rejected: unattended watcher finalization cannot run shell or terminal commands; use recorded watcher evidence and file tools, or finish waiting_user if evidence is insufficient")
 				}
 				if dangerous {
-					return "", fmt.Errorf("operation rejected: unattended watcher finalization cannot perform privileged or out-of-workspace operations; finish waiting_user instead")
+					return "", rejectOperation(rejectionCodeCapability, "operation rejected: unattended watcher finalization cannot perform privileged or out-of-workspace operations; finish waiting_user instead")
 				}
 				return next(args)
 			}
@@ -723,9 +723,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						log.Warn("smart approval: blocked by safety triage", "tool", toolName, "reason", reason,
 							"risk", assessment.Risk, "breaker_tripped", tripped)
 						if assessment.Rationale != "" {
-							return "", fmt.Errorf("operation rejected: blocked by safety triage: %s", assessment.Rationale)
+							return "", rejectOperation(rejectionCodeTriage, "operation rejected: blocked by safety triage: "+assessment.Rationale)
 						}
-						return "", fmt.Errorf("operation rejected: blocked by safety triage")
+						return "", rejectOperation(rejectionCodeTriage, "operation rejected: blocked by safety triage")
 					default:
 						// ESCALATE (and any error/timeout) → fall through to the human
 						// ask. An error is NOT an escalation: it means the funnel did
@@ -800,15 +800,15 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						}
 					}
 					if decision.Reason != "" {
-						return "", fmt.Errorf("operation rejected: %s", decision.Reason)
+						return "", rejectOperation(rejectionCodeApproval, "operation rejected: "+decision.Reason)
 					}
-					return "", fmt.Errorf("operation rejected by approval %s", decision.ApprovalID)
+					return "", rejectOperation(rejectionCodeApproval, "operation rejected by approval "+decision.ApprovalID)
 				}
 				if decision.Scope != "" && decision.Scope != "run" {
-					return "", fmt.Errorf("operation rejected: approval scope %q was not offered for this request", decision.Scope)
+					return "", rejectOperation(rejectionCodeScope, fmt.Sprintf("operation rejected: approval scope %q was not offered for this request", decision.Scope))
 				}
 				if decisionPolicy == ApprovalDecisionPolicyOnceOnly && (decision.Scope != "" || strings.TrimSpace(decision.GrantKey) != "") {
-					return "", fmt.Errorf("operation rejected: this sensitive request can only be approved once")
+					return "", rejectOperation(rejectionCodeScope, "operation rejected: this sensitive request can only be approved once")
 				}
 				// Remember what the human actually chose (batch B2): a rule they
 				// picked, else the action class. A rule key is honored ONLY when

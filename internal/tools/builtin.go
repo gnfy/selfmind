@@ -399,9 +399,14 @@ func NewExecuteCommandTool() *ExecuteCommandTool {
 }
 
 func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error) {
+	result, err := t.ExecuteResult(args)
+	return result.Output, err
+}
+
+func (t *ExecuteCommandTool) ExecuteResult(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
 	cmdStr, _ := args["command"].(string)
 	if cmdStr == "" {
-		return "", fmt.Errorf("command is required")
+		return kernel.ToolDispatchResult{}, fmt.Errorf("command is required")
 	}
 	cwd, _ := args["cwd"].(string)
 	if cwd == "" {
@@ -411,10 +416,10 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 	if background {
 		mode, err := requestedSandboxMode(args)
 		if err != nil {
-			return "", err
+			return kernel.ToolDispatchResult{}, err
 		}
 		if mode != SandboxHost {
-			return "", fmt.Errorf("background commands require sandbox=host and approval; use watch_external for durable unattended waits")
+			return kernel.ToolDispatchResult{}, fmt.Errorf("background commands require sandbox=host and approval; use watch_external for durable unattended waits")
 		}
 		// A background command belongs to its run: it gets the run's environment
 		// binding, scratch space, and tool state overlays like any other command.
@@ -422,7 +427,7 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		// on whether it was backgrounded.
 		material := execMaterialForArgs(args, absoluteCWD(cwd))
 		if material.ProfileError != nil {
-			return "", enrichToolFailure("terminal", fmt.Errorf("prepare execution environment: %w", material.ProfileError), "")
+			return kernel.ToolDispatchResult{}, enrichToolFailure("terminal", fmt.Errorf("prepare execution environment: %w", material.ProfileError), "")
 		}
 		runCtx := contextFromArgs(args)
 		emitProfilePreparation(runCtx, "terminal", stringArg(args, "_tool_call_id"), material)
@@ -433,7 +438,7 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		ceiling := backgroundProcessCeiling(args)
 		id, err := registry.StartProcess(cmdStr, cwd, material.Env, ceiling)
 		if err != nil {
-			return "", err
+			return kernel.ToolDispatchResult{}, err
 		}
 		// Background execution is host execution by contract above, so it is
 		// recorded as such: an unattributed host escape is invisible to the
@@ -457,7 +462,7 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 			"ceiling_seconds":    int(ceiling / time.Second),
 			"host_escape_reason": HostEscapeHostWrite,
 		}, string(decision.Mode))
-		return fmt.Sprintf("Started background process with ID: %s", id), nil
+		return kernel.ToolDispatchResult{Output: fmt.Sprintf("Started background process with ID: %s", id), Process: &kernel.ToolProcessResult{Started: true, SandboxMode: string(plan.Mode)}}, nil
 	}
 
 	return executeForegroundCommand(args, "terminal", 30)
@@ -499,28 +504,33 @@ func NewVerifyTool() *VerifyTool {
 }
 
 func (t *VerifyTool) Execute(args map[string]interface{}) (string, error) {
+	result, err := t.ExecuteResult(args)
+	return result.Output, err
+}
+
+func (t *VerifyTool) ExecuteResult(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
 	if strings.TrimSpace(stringArg(args, "command")) == "" {
-		return "", fmt.Errorf("command is required")
+		return kernel.ToolDispatchResult{}, fmt.Errorf("command is required")
 	}
-	if err := prepareVerificationBinding(args); err != nil {
-		return "", err
+	if _, err := prepareVerificationBinding(args); err != nil {
+		return kernel.ToolDispatchResult{}, err
 	}
 	return executeForegroundCommand(args, "verify", 120)
 }
 
 // executeForegroundCommand is the thin adapter between a tool's argument map and
 // the execution engine. It builds an ExecutionRequest, runs it, and converts the
-// ExecutionResult back into the (output, error) pair tools return.
+// ExecutionResult into typed output and observed process facts.
 //
 // Everything the sandbox needs now travels in the request; args remains only the
 // dispatcher-side envelope (approval decisions, event ids, and the fields the
 // middleware writes back). That separation is what makes the engine movable: a
 // remote execution node receives a request and returns a result, and nothing
 // about this function's callers changes.
-func executeForegroundCommand(args map[string]interface{}, toolName string, standardDefaultSeconds int) (string, error) {
+func executeForegroundCommand(args map[string]interface{}, toolName string, standardDefaultSeconds int) (kernel.ToolDispatchResult, error) {
 	profile, profileErr := resolveToolProfile(args, standardDefaultSeconds)
 	if profileErr != nil {
-		return "", profileErr
+		return kernel.ToolDispatchResult{}, profileErr
 	}
 	cwd, _ := args["cwd"].(string)
 	if cwd == "" {
@@ -528,7 +538,7 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, stan
 	}
 	requestedMode, modeErr := requestedSandboxMode(args)
 	if modeErr != nil {
-		return "", enrichToolFailure(toolName, modeErr, "")
+		return kernel.ToolDispatchResult{}, enrichToolFailure(toolName, modeErr, "")
 	}
 	timeoutSeconds := int(profile.Timeout / time.Second)
 	args["_execution_class"] = string(profile.Class)
@@ -554,12 +564,10 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, stan
 		ToolProfile:    profile,
 	}
 	result, err := Execute(contextFromArgs(args), request, args)
-	args["_command_exit_code"] = result.ExitCode
-	args["_recovery_outcome"] = result.RecoveryOutcome
 	if result.Plan.Mode != "" {
 		args["_sandbox_mode"] = string(result.Plan.Mode)
 	}
-	return result.Output, err
+	return processToolResult(result), err
 }
 
 func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolName, toolCallID string, profiles ...ToolProfile) (string, error) {

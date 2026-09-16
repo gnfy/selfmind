@@ -172,7 +172,7 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 	if err != nil {
 		return RunPlanProjection{}, err
 	}
-	restated := restatedCompletedCriteria(original, steps)
+	restated := restatedCompletedCriteria(original, previous, steps)
 	hash := hashRunPlanSteps(steps, stepWorkUnits)
 	if previous != nil && previous.ContentHash == hash {
 		if err := promoteThreadForRunTx(ctx, tx, tenant, runID); err != nil {
@@ -249,18 +249,31 @@ func originalPlanCriteriaTx(ctx context.Context, tx *sql.Tx, tenant, runID strin
 }
 
 // restatedCompletedCriteria reports steps that arrive completed under a
-// different acceptance bar than the one first declared for them. Only completed
-// steps qualify: moving the bar for work still in flight is ordinary
-// replanning, while completing against a moved bar is the shape that let a
-// false completion resolve a plan cleanly.
-func restatedCompletedCriteria(original map[string]string, steps []RunPlanStep) []RunPlanCriteriaChange {
+// different acceptance bar than the one first declared for them. The baseline
+// stays the ORIGINAL bar (see originalPlanCriteriaTx). Each moved bar is
+// reported once, when the step first arrives completed under it: a later
+// snapshot that repeats the same completed text is the plan being echoed, not
+// the bar moving again. Observed live: one write-back run re-reported three
+// reworded completed steps on every update_plan, seventeen review lines in
+// total, and the model reopened finished steps in response.
+func restatedCompletedCriteria(original map[string]string, previous *RunPlan, steps []RunPlanStep) []RunPlanCriteriaChange {
 	var changed []RunPlanCriteriaChange
+	before := map[string]RunPlanStep{}
+	if previous != nil {
+		for _, step := range previous.Steps {
+			before[step.StepID] = step
+		}
+	}
 	for _, step := range steps {
 		first, ok := original[step.StepID]
 		if !ok || step.Status != "completed" {
 			continue
 		}
 		if normalizeRunPlanText(first) == normalizeRunPlanText(step.SuccessCriteria) {
+			continue
+		}
+		if prior, seen := before[step.StepID]; seen && prior.Status == "completed" &&
+			normalizeRunPlanText(prior.SuccessCriteria) == normalizeRunPlanText(step.SuccessCriteria) {
 			continue
 		}
 		changed = append(changed, RunPlanCriteriaChange{

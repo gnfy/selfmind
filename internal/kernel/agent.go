@@ -610,6 +610,19 @@ func (a *Agent) Analyze(imageBase64, mimeType, question string) (string, error) 
 
 func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, result ToolResultEnvelope, duration float64, err error, metadata ...ToolExecutionMetadata) {
 	metadataPayload := func(payload map[string]interface{}) map[string]interface{} {
+		if result.Invoked != nil {
+			payload["invoked"] = *result.Invoked
+		}
+		if result.Process != nil {
+			payload["process"] = result.Process
+			delete(payload, "exit_code")
+			if result.Process.ExitCode != nil {
+				payload["exit_code"] = *result.Process.ExitCode
+			}
+		}
+		if len(result.EvidenceRefs) > 0 {
+			payload["evidence_refs"] = result.EvidenceRefs
+		}
 		if len(metadata) == 0 {
 			return payload
 		}
@@ -1028,11 +1041,39 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		Type:    "context.breakdown",
 		Payload: breakdownPayload,
 	})
+	history := TaskHistory{
+		Goal:  initialPrompt,
+		Steps: []string{},
+	}
+	steerCh := steeringFromContext(ctx)
 	emitProviderCallContext := func(iteration int, transport string, callMessages []llm.Message, callStrategy TaskStrategy) ([]llm.Message, error) {
 		toolDefinitions := a.llmToolDefinitions(ctx, callStrategy)
 		prepared, err := a.contextEngine.PrepareRequest(ctx, callMessages, toolDefinitions)
 		if err != nil {
 			return nil, err
+		}
+		// Compaction may wait on a model. Take the input snapshot after that
+		// wait, including recovery requests, then fit it without another LLM
+		// call so continuous steering cannot create an endless preparation loop.
+		guidance := drainSteering(steerCh)
+		for _, input := range guidance {
+			prepared = append(prepared, llm.Message{Role: "user", Content: steeringContentForMain(input)})
+		}
+		if len(guidance) > 0 {
+			prepared, err = a.contextEngine.fitRequest(ctx, prepared, toolDefinitions)
+			if err != nil {
+				return nil, err
+			}
+			for _, input := range guidance {
+				// Recovery requests use a temporary slice. Keep accepted guidance
+				// in the continuing conversation as well as that request.
+				messages = append(messages, llm.Message{Role: "user", Content: steeringContentForMain(input)})
+				history.Steps = append(history.Steps, "user added guidance mid-turn")
+				EmitAgentEvent(eventCh, AgentEvent{Type: "agent.steering", Payload: map[string]interface{}{
+					"steering_id": input.ID, "content_hash": input.ContentHash,
+					"input_length": len([]rune(input.Content)),
+				}})
+			}
 		}
 		payload := ProviderCallContextBreakdown(promptSections, prepared, toolDefinitions)
 		payload["tool_schemas"] = a.contextEngine.tokenizer.CountTools(toolDefinitions)
@@ -1060,10 +1101,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		return prepared, nil
 	}
 
-	history := TaskHistory{
-		Goal:  initialPrompt,
-		Steps: []string{},
-	}
 	var continuedAnswer strings.Builder
 
 	maxIterations := a.maxIterations
@@ -1137,7 +1174,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		emitAgentActivity(eventCh, fmt.Sprintf("New evidence found; extending the tool budget from %d to %d", previous, actionToolBudget), "tool_budget", iteration)
 		return true
 	}
-	steerCh := steeringFromContext(ctx)
 	// Mid-loop state machine (P0-B): each iteration ends in exactly one typed
 	// StepOutcome, emitted as an agent.step event so the loop's control flow is
 	// an explicit, observable state machine (execute_tools → continue_model →
@@ -1168,21 +1204,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 	}
 	for i := 0; i < maxIterations; i++ {
-		// Mid-turn steering: fold any follow-up the user typed while this turn was
-		// running into the conversation before the next model call, so the agent
-		// adjusts course in-flight instead of the input being rejected or lost.
-		for _, guidance := range drainSteering(steerCh) {
-			messages = append(messages, llm.Message{Role: "user", Content: steeringContentForMain(guidance)})
-			history.Steps = append(history.Steps, "user added guidance mid-turn")
-			EmitAgentEvent(eventCh, AgentEvent{
-				Type: "agent.steering",
-				Payload: map[string]interface{}{
-					"steering_id":  guidance.ID,
-					"content_hash": guidance.ContentHash,
-					"input_length": len([]rune(guidance.Content)),
-				},
-			})
-		}
 		// Mid-turn compaction (P0-C): recompute the window budget every
 		// iteration and compact WITHIN the run before the next model call,
 		// instead of letting it grow until a provider context-window rejection
@@ -1277,7 +1298,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		pendingStreamPhase := llm.AssistantPhaseUnspecified
 		suppressLegacyToolStream := false
 		legacyToolSeen := false
-		legacyToolReady := false
 		nativeToolActivityAnnounced := false
 		emitAgentActivity(eventCh, activityForIteration(i), "thinking", i)
 		emitStream := func(content string, phase llm.AssistantPhase) {
@@ -1453,11 +1473,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						}
 						nativeCalls = append(nativeCalls, event.ToolCalls...)
 					}
-					if len(nativeCalls) == 0 && len(ExtractReadyToolCalls(fullResp.String())) > 0 {
-						legacyToolReady = true
-						streamCancel()
-						break streamLoop
-					}
 				case <-waitTicker.C:
 					emitAgentActivity(eventCh, modelWaitActivity(i, time.Since(streamStarted), sawModelEvent), "model_wait", i)
 				case <-ctx.Done():
@@ -1468,15 +1483,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			waitTicker.Stop()
 			streamCancel()
 			streamStatus := "succeeded"
-			if streamErr != nil && !legacyToolReady {
+			if streamErr != nil {
 				streamStatus = "failed"
 			}
 			emitProviderCallUsage(i, "stream", streamStatus, streamCallStarted, streamCallUsage)
 
 			if streamErr != nil {
-				if legacyToolReady {
-					streamErr = nil
-				} else if ctx.Err() != nil {
+				if ctx.Err() != nil {
 					return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
 				}
 				if streamErr != nil {
@@ -1495,6 +1508,17 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						// the recovery response must emit a complete call before execution.
 						nativeCalls = nil
 						reasoningResp.Reset()
+						finishReason = ""
+						if marker := legacyToolMarkerIndex(fullResp.String()); marker >= 0 {
+							// Compatibility markup is executable input too. Preserve
+							// only preceding prose, including for an unfinished call;
+							// recovery must not complete stale argument fragments.
+							prose := fullResp.String()[:marker]
+							fullResp.Reset()
+							fullResp.WriteString(prose)
+							pendingStream.Reset()
+							suppressLegacyToolStream = false
+						}
 						emitAgentActivity(eventCh, "Model stream interrupted; continuing from the partial response", phase, i)
 					} else {
 						emitAgentActivity(eventCh, "Model stream interrupted; retrying the response", phase, i)
@@ -1520,25 +1544,32 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		resp := textutil.CleanUTF8(fullResp.String())
 		legacyMarkupPresent := legacyToolMarkerIndex(resp) >= 0
 		nativeCalls = normalizeToolCallIDs(nativeCalls, i)
-		calls, droppedForBudget := filterToolCallsByStrategyAndBudget(nativeCalls, iterationStrategy, actionToolsUsed)
-		var droppedForLifecycle int
-		calls, droppedForLifecycle = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
-		droppedForBudget += droppedForLifecycle
-		if len(calls) == 0 {
-			var legacyDropped int
-			calls, legacyDropped = filterToolCallsByStrategyAndBudget(legacyToolCallsToLLM(ExtractToolCalls(resp), i), iterationStrategy, actionToolsUsed)
-			var legacyLifecycleDropped int
-			calls, legacyLifecycleDropped = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
-			droppedForBudget += legacyDropped
-			droppedForBudget += legacyLifecycleDropped
+		outputLimited := responseStoppedForOutputLimit(finishReason)
+		calls := nativeCalls
+		var droppedForBudget, deferredAcrossWorkUnitBoundary, deferredAcrossWatchHandoff int
+		if outputLimited {
+			if len(calls) == 0 {
+				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i)
+			}
+		} else {
+			calls, droppedForBudget = filterToolCallsByStrategyAndBudget(nativeCalls, iterationStrategy, actionToolsUsed)
+			var droppedForLifecycle int
+			calls, droppedForLifecycle = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
+			droppedForBudget += droppedForLifecycle
+			if len(calls) == 0 {
+				var legacyDropped int
+				calls, legacyDropped = filterToolCallsByStrategyAndBudget(legacyToolCallsToLLM(ExtractToolCalls(resp), i), iterationStrategy, actionToolsUsed)
+				var legacyLifecycleDropped int
+				calls, legacyLifecycleDropped = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
+				droppedForBudget += legacyDropped
+				droppedForBudget += legacyLifecycleDropped
+			}
+			if len(calls) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
+				droppedForBudget = 1
+			}
+			calls, deferredAcrossWorkUnitBoundary = isolateWorkUnitBoundaryCall(calls)
+			calls, deferredAcrossWatchHandoff = isolateExternalWatchHandoffCalls(calls)
 		}
-		if len(calls) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
-			droppedForBudget = 1
-		}
-		var deferredAcrossWorkUnitBoundary int
-		calls, deferredAcrossWorkUnitBoundary = isolateWorkUnitBoundaryCall(calls)
-		var deferredAcrossWatchHandoff int
-		calls, deferredAcrossWatchHandoff = isolateExternalWatchHandoffCalls(calls)
 		assistantContent := resp
 		if len(calls) > 0 || droppedForBudget > 0 || legacyMarkupPresent {
 			assistantContent = toolBudgetSafeAssistantContent(resp)
@@ -1553,7 +1584,14 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// Sync turn to external memory providers after each assistant response
 		a.syncTurn(ctx, tenantID, messages)
 
-		if len(calls) > 0 {
+		if outputLimited {
+			for idx, call := range calls {
+				result := a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, incompleteToolResponseError{})
+				messages = append(messages, result.msg)
+				history.Steps = append(history.Steps, result.step)
+			}
+		}
+		if len(calls) > 0 && !outputLimited {
 			if !nativeToolActivityAnnounced {
 				emitAgentActivity(eventCh, toolCallActivity(calls), "tool_selection", i)
 			}
@@ -1720,20 +1758,27 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			messages[len(messages)-1].Content = resp
 		}
 
-		if responseStoppedForOutputLimit(finishReason) {
-			if resp != "" {
+		if outputLimited {
+			continuationHint := "Continue from the exact point where your previous answer stopped. Do not repeat earlier content. Finish the remaining answer completely."
+			if len(calls) > 0 || legacyMarkupPresent {
+				resp = "The model reached its output limit before the tool request was complete. No tools from that response were executed."
+				continuationHint = "Your previous response was cut off. None of its tool calls were executed. Re-issue only the still-needed calls with complete arguments; do not continue partial arguments."
+			} else if resp != "" {
 				continuedAnswer.WriteString(resp)
 			}
 			if i+1 < maxIterations {
 				emitAgentActivity(eventCh, "Continuing because the model reached its output limit", "continuation", i)
 				messages = append(messages, llm.Message{
 					Role:    "user",
-					Content: "Continue from the exact point where your previous answer stopped. Do not repeat earlier content. Finish the remaining answer completely.",
+					Content: continuationHint,
 				})
 				recordStep(i, StepContinueModel, "output_limit_continue")
 				continue
 			}
 			history.Outcome = continuedAnswer.String()
+			if len(calls) > 0 || legacyMarkupPresent {
+				history.Outcome = strings.TrimSpace(history.Outcome + "\n" + resp)
+			}
 			completion := resolveTurnCompletion(completionSignals{OutputLimited: true})
 			recordStep(i, StepCompleteTurn, completion.Reason)
 			emitTurnCompleted(eventCh, history.Outcome, completion, "finish_reason", finishReason)

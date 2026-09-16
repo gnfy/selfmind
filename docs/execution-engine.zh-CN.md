@@ -172,6 +172,8 @@ type ExecutionRequest struct {
 }
 
 type ExecutionResult struct {
+    Started           bool
+    ExitCodeKnown     bool
     ExitCode          int
     Output            string
     Plan              SandboxPlan
@@ -197,6 +199,29 @@ type ExecutionResult struct {
   会把节点本地路径写进 `control.db`，换节点即失配。路径由执行节点从 handle 解析。
 - **环境值不进 `SandboxPlan`**：`ProcessMaterial` 不可序列化，使"打印/序列化
   plan"这一最常见的泄漏动作在类型层被堵住。
+
+### 5.3 工具结果的单一路径（2026-09-16）
+
+`ExecutionResult → ToolDispatchResult → ToolResultEnvelope` 分别负责执行观察、
+跨中间件传输和模型/UI 展示。Registry 只维护一条类型化执行链；旧的字符串工具与
+审批中间件在 Registry 边界适配，`Dispatch` 也进入同一条链。`terminal`、`verify`
+和 `execute_code` 直接返回类型化结果，文件工具的变更观察由 EvidenceMiddleware
+加入结果。参数转换、审批和脱敏不得丢失进程事实、失败语义或证据引用。
+
+- `Invoked` 表示工具体是否进入；缺失表示旧 backend 无法证明。它不代表副作用完成。
+- `Process.Started` 与可选 `ExitCode` 来自真实进程；无法获得退出码时保持未知，
+  不默认成功。既有持久命令证据格式使用 `-1` 表达未知，不修改历史行或数据库结构。
+- 退出码、验证绑定和恢复结果不再借可变参数的私有字段回传。验证绑定先校验，
+  再由证据中间件局部持有。失败仍可同时带有输出和实际文件变更。
+- 外部工具不能声明本地进程/验证事实；Registry 丢弃这类声明。类型化结果不包含
+  执行权限或重试许可，执行账本与恢复策略仍拥有这些约束。
+- 工具返回后若结果落库失败，保留已观察输出，报告 `tool_outcome_unrecorded` /
+  `outcome_recording`，要求先观察效果。不能伪装成“尚未执行”，也不能直接重放。
+
+新增接口不携带 Task/Thread。账本从可信 `ToolInvocationScope.RunID` 取执行身份；
+旧 `TaskRuntimeContext.RunID` 的兼容读取集中在一个接缝，两者冲突则派发前拒绝。
+存储迁移继续由既有 Run + Work Journal active plan 管理；这里不新增 Session/Lane
+对象，不用结果类型承担持久迁移，也不将兼容层的存在视为迁移完成。
 
 ## 6. 环境快照与三指纹
 
@@ -745,6 +770,24 @@ L2 可见 / 可撤销 | `/approvals list` 渲染人类可读、不含 raw hash�
 **配置面** | 断言 `config.yaml` 顶层键数与 `exec_sandbox` 键数**不增加** |
 
 最后一条是"不增加配置复杂度"这条约束的唯一可执行保障。
+
+### 14.1 每批执行链变更的故障矩阵
+
+每批变更同时维护下列故障边界；检查输入保留、效果不被盲目重复、未完成状态不被
+覆盖。注入失败证明运行时约束，真实 provider eval 验证模型行为，两者不互相替代。
+
+| 边界 | 故障与应保留事实 | 当前回归入口 |
+| --- | --- | --- |
+| 派发前 | 审批拒绝或持久 claim 失败：工具执行次数为零；已接受输入仍归原 Run | `tools/TestTypedFactsSurviveRedactionAndApprovalRefusal`、`kernel/TestTypedDispatchFailureMatrix`、`control/TestSteeringDeferralAndBootRecovery` |
+| 效果发生后 | 取消进程或文件写入后返回失败：保留已启动、退出码未知/非零、文件前后哈希；失败不能擦掉实际变更 | `tools/TestTypedCancellationPreservesPartialEffects`、`tools/TestLegacyFileFailurePreservesObservedEffect` |
+| 结果保存前 | 结果写库失败保留不确定 claim 和输出；新 Agent 不能重放同一调用；artifact 保存失败不重执行工具 | `kernel/TestTypedDispatchFailureMatrix`、`control/TestToolLedgerUncertainWindow` |
+| 最终提交时 | 原子提交失败不能留下半套完成状态；不同 Run 的未完成工作不被覆盖 | `control/TestMaterializeRunFinalizationRollsBackMismatchedTask`、`control/TestSameKeyUnfinishedWorkSurvivesCompletion` |
+| 提交后通知前 | 已提交后通知失败：只修复投递；重放提交不产生第二份结果，工具不重开，待消费输入与 `waiting_user` 原样保留 | `delivery/TestNotificationFailurePreservesCommittedRunAndToolOutcome` |
+| 投递效果不确定 | `sent_unconfirmed` 不盲目重发，入站触发补投仍有界 | `delivery/TestUnconfirmedDeliveryIsTerminalButDistinct`、`delivery/TestCatchUpStillUnconfirmedNeverLoops` |
+
+类型链另覆盖成功/非零退出、参数转换、进程未启动、脱敏、外部伪造结果、旧 backend
+未知事实与 Run 身份冲突。`reliability/verification-pipeline-failure.yaml` 从生产派发
+事件检查观察到的非零退出，且 Run 仍为可恢复的 `verification_partial`。
 
 ## 15. 指标与埋点
 

@@ -13,7 +13,7 @@ func TestVerifyPreservesFailedCommandBeforeSuccessfulOutput(t *testing.T) {
 			events := make(chan string, 32)
 			ctx := kernel.WithEventChannel(context.Background(), events)
 			args := map[string]interface{}{"_context": ctx, "_tool_name": "verify", "command": command, "cwd": t.TempDir()}
-			_, err := EvidenceMiddleware()(NewVerifyTool().Execute)(args)
+			_, err := EvidenceMiddleware()(NewVerifyTool().ExecuteResult)(args)
 			if err == nil {
 				t.Fatal("a failed check was masked by a later successful command")
 			}

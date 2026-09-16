@@ -217,11 +217,11 @@ func (d *Server) resolveUnresolvedRunReference(ctx context.Context, identity *co
 	}
 	switch len(matches) {
 	case 0:
-		return nil, "Run not found or no longer resumable. Use /tasks and /task <task_id> runs to inspect waiting work.", nil
+		return nil, "Run not found or no longer resumable. Run /resume to list what needs attention, or /search to find older work.", nil
 	case 1:
 		return &matches[0], "", nil
 	default:
-		return nil, "That run reference is ambiguous; copy the longer run id from /task <task_id> runs.", nil
+		return nil, "That run reference is ambiguous. Run /resume and use the number, or paste the full run id.", nil
 	}
 }
 

@@ -59,8 +59,48 @@ func (d *Server) attentionListReply(ctx context.Context, identity *control.Ident
 	if total > len(items) {
 		fmt.Fprintf(&sb, "... and %d more\n", total-len(items))
 	}
-	sb.WriteString("Use /resume <number> to continue one exactly, or /stop <number> to clear it without running it.")
+	sb.WriteString(attentionListActions(items))
 	return sb.String(), nil
+}
+
+// attentionListActions names every operation that applies to the list just
+// rendered, one per line.
+//
+// One sentence naming two of them left the rest invisible: that the run id
+// printed on each row is a reference in its own right, that continuing is a
+// SELECTION whose work starts with the next message rather than immediately,
+// how to put down the item that is running, and how to refresh. A line appears
+// only when the list holds an item it applies to, so the block never offers an
+// action that would answer "there is nothing to do that to".
+//
+// The lines are a Markdown bullet list because the terminal renders this reply
+// through a CommonMark parser: indented lines under a text line are lazy
+// paragraph continuations and get folded into one long line, which is already
+// visible above, where each item and its metadata line arrive joined.
+func attentionListActions(items []control.AttentionItem) string {
+	lines := []string{
+		"",
+		"Actions:",
+		"",
+		"- `/resume <n|run_id>` continues that run; your next message goes to it",
+		"- `/stop <n|run_id>` clears that item without running it",
+	}
+	if attentionListHasActivity(items, control.ThreadActivityActive) {
+		lines = append(lines, "- `/stop` cancels the run that is running now")
+	}
+	if attentionListHasActivity(items, control.ThreadActivityMonitoring) {
+		lines = append(lines, "- `/watchers` lists or cancels a background watcher")
+	}
+	return strings.Join(append(lines, "- `/resume` refreshes this list"), "\n")
+}
+
+func attentionListHasActivity(items []control.AttentionItem, activity string) bool {
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.Activity), activity) {
+			return true
+		}
+	}
+	return false
 }
 
 // attentionActivityLabel says why an item is asking for the person, in their

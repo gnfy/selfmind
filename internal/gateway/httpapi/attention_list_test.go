@@ -344,3 +344,95 @@ func TestListingsHideMeaninglessChannelIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+// TestAttentionListNamesEveryActionThatApplies: the listing has to say what
+// the person can do with it. One sentence naming /resume <n> and /stop <n>
+// left the rest invisible — that each row's run id is a reference, that
+// continuing SELECTS a run rather than starting it, and how to refresh.
+func TestAttentionListNamesEveryActionThatApplies(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	seedTask(t, store, identity, "release waiting for confirmation", "waiting_user", 1)
+
+	listed := controlReply(t, daemon, "/resume")
+	for _, want := range []string{
+		"Actions:",
+		"/resume <n|run_id>",
+		"your next message goes to it",
+		"/stop <n|run_id>",
+		"clears that item without running it",
+		"`/resume` refreshes this list",
+	} {
+		if !strings.Contains(listed, want) {
+			t.Fatalf("attention list does not offer %q:\n%s", want, listed)
+		}
+	}
+	// The terminal renders this reply as Markdown, so the actions have to be a
+	// list: indented lines would fold into one paragraph, exactly as each item
+	// and its metadata line already do.
+	if !strings.Contains(listed, "\n- `/resume <n|run_id>`") {
+		t.Fatalf("actions must survive Markdown rendering as a list:\n%s", listed)
+	}
+	// Nothing is executing and nothing is being watched, so neither line may
+	// appear: an offered action that answers "there is nothing to do that to"
+	// teaches the person to stop reading the block.
+	if strings.Contains(listed, "cancels the run that is running now") || strings.Contains(listed, "/watchers") {
+		t.Fatalf("an inapplicable action was offered:\n%s", listed)
+	}
+}
+
+// TestAttentionListActionsFollowTheItemsPresent: the two conditional actions
+// belong to item kinds. Bare /stop cancels an execution, so it is offered only
+// with a running item; /watchers acts on a background observation, so it is
+// offered only with one being watched.
+func TestAttentionListActionsFollowTheItemsPresent(t *testing.T) {
+	running := []control.AttentionItem{{RunID: "run_a", Activity: control.ThreadActivityActive}}
+	watching := []control.AttentionItem{{RunID: "run_b", Activity: control.ThreadActivityMonitoring}}
+	parked := []control.AttentionItem{{RunID: "run_c", Activity: control.ThreadActivityResumable}}
+
+	if actions := attentionListActions(running); !strings.Contains(actions, "cancels the run that is running now") {
+		t.Fatalf("a running item must offer bare /stop:\n%s", actions)
+	} else if strings.Contains(actions, "/watchers") {
+		t.Fatalf("a running item must not offer /watchers:\n%s", actions)
+	}
+	if actions := attentionListActions(watching); !strings.Contains(actions, "/watchers") {
+		t.Fatalf("a watched item must offer /watchers:\n%s", actions)
+	} else if strings.Contains(actions, "cancels the run that is running now") {
+		t.Fatalf("a watched item must not offer bare /stop:\n%s", actions)
+	}
+	// Every list keeps the actions that always apply.
+	for _, items := range [][]control.AttentionItem{running, watching, parked} {
+		actions := attentionListActions(items)
+		if !strings.Contains(actions, "/resume <n|run_id>") || !strings.Contains(actions, "/stop <n|run_id>") {
+			t.Fatalf("the always-available actions went missing:\n%s", actions)
+		}
+	}
+}
+
+// TestStopAcceptsTheShortRunIDTheListPrints: `/stop <n|run_id>` advertises a
+// run id and the rows print SHORT ones, so the id a person can actually see
+// has to resolve — /resume already accepts it.
+func TestStopAcceptsTheShortRunIDTheListPrints(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	ctx := context.Background()
+	task := seedTask(t, store, identity, "release waiting for confirmation", "waiting_user", 1)
+	runs, err := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, task.ID, 5)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs=%d err=%v", len(runs), err)
+	}
+	short := shortRunID(runs[0].ID)
+	if short == runs[0].ID {
+		t.Fatalf("fixture run id is not shortened: %s", short)
+	}
+	if listed := controlReply(t, daemon, "/resume"); !strings.Contains(listed, short) {
+		t.Fatalf("the list did not print the short id under test:\n%s", listed)
+	}
+
+	reply := controlReply(t, daemon, "/stop "+short)
+	if strings.Contains(reply, "not yours or no longer exists") {
+		t.Fatalf("the id printed by the list did not resolve: %s", reply)
+	}
+	remaining := controlReply(t, daemon, "/resume")
+	if strings.Contains(remaining, short) {
+		t.Fatalf("the item was not dismissed:\n%s", remaining)
+	}
+}

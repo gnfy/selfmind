@@ -396,11 +396,17 @@ each of them for forks and proxies.
 ## DeepSeek V4
 
 The built-in `deepseek` profile uses the OpenAI-compatible transport and
-enables DeepSeek's thinking/tool contract. `models.primary.reasoning: high`
-is sent as `thinking.type=enabled` with level `high`; `xhigh` maps to the
-provider's `max` level. When a thinking response calls a tool, the adapter
-preserves and replays `reasoning_content` with the assistant tool call before
-the matching tool result. Dropping it makes the next provider request invalid.
+enables DeepSeek's thinking/tool contract. DeepSeek has no low reasoning tier,
+so the adapter maps the standard efforts onto the tiers it offers: `none`
+(also `off`, `disabled`) is sent as `thinking.type=disabled`; `low`, `medium`,
+and `high` are sent as `thinking.type=enabled` with level `high`; `xhigh` and
+`max` map to the provider's `max` level; no configured effort leaves thinking
+enabled at the provider default. A caller that needs a bounded reply must
+therefore request `none` rather than `low`: the smart-approval judge and
+post-run maintenance both do. When a thinking response calls a tool, the
+adapter preserves and replays `reasoning_content` with the assistant tool call
+before the matching tool result. Dropping it makes the next provider request
+invalid.
 
 DeepSeek requests also carry an optional `user_id`. SelfMind never sends a raw
 person, tenant, channel, email, or platform ID. `StableProviderUserID` derives

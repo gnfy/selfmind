@@ -98,7 +98,7 @@ func ExecutionCapabilityMiddleware() Middleware {
 
 func approveNetworkCapability(args map[string]interface{}, scope ExecutionScope, fingerprint string) error {
 	if scope.Approval == nil {
-		return fmt.Errorf("operation rejected: network:shared requires approval")
+		return rejectOperation(rejectionCodeCapability, "operation rejected: network:shared requires approval")
 	}
 	decision, approvalErr := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
 		TenantID: scope.TenantID,
@@ -119,10 +119,10 @@ func approveNetworkCapability(args map[string]interface{}, scope ExecutionScope,
 		return approvalErr
 	}
 	if !decision.Approved {
-		return fmt.Errorf("operation rejected: network:shared was not approved")
+		return rejectOperation(rejectionCodeCapability, "operation rejected: network:shared was not approved")
 	}
 	if decision.Scope != "" && decision.Scope != "run" {
-		return fmt.Errorf("operation rejected: approval scope %q was not offered for network:shared", decision.Scope)
+		return rejectOperation(rejectionCodeScope, fmt.Sprintf("operation rejected: approval scope %q was not offered for network:shared", decision.Scope))
 	}
 	if decision.Scope == "run" && scope.runGrants != nil {
 		scope.runGrants.add(executionCapabilityRunGrantKey(executionenv.CapabilityNetworkShared, fingerprint))
@@ -280,7 +280,7 @@ func commandNeedsOperatorCredentials(toolName string, args map[string]interface{
 
 func approveCredentialCapability(args map[string]interface{}, scope ExecutionScope, toolName, fingerprint string) error {
 	if scope.Approval == nil {
-		return fmt.Errorf("operation rejected: credential:read requires approval")
+		return rejectOperation(rejectionCodeCapability, "operation rejected: credential:read requires approval")
 	}
 	safeObservation := scope.runGrants != nil && credentialSafeObservation(toolName, args)
 	decisionPolicy := ApprovalDecisionPolicyOnceOnly
@@ -309,13 +309,13 @@ func approveCredentialCapability(args map[string]interface{}, scope ExecutionSco
 		return approvalErr
 	}
 	if !decision.Approved {
-		return fmt.Errorf("operation rejected: credential:read was not approved")
+		return rejectOperation(rejectionCodeCapability, "operation rejected: credential:read was not approved")
 	}
 	if strings.TrimSpace(decision.GrantKey) != "" {
-		return fmt.Errorf("operation rejected: credential access does not accept a rule grant")
+		return rejectOperation(rejectionCodeScope, "operation rejected: credential access does not accept a rule grant")
 	}
 	if decision.Scope != "" && (!safeObservation || decision.Scope != "run") {
-		return fmt.Errorf("operation rejected: approval scope %q was not offered for credential access", decision.Scope)
+		return rejectOperation(rejectionCodeScope, fmt.Sprintf("operation rejected: approval scope %q was not offered for credential access", decision.Scope))
 	}
 	if decision.Scope == "run" && scope.runGrants != nil {
 		scope.runGrants.add(executionCapabilityRunGrantKey(executionenv.CapabilityCredentialRead, fingerprint))

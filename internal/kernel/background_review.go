@@ -305,6 +305,13 @@ func (b *restrictedReviewBackend) Dispatch(name string, args map[string]interfac
 	return b.inner.Dispatch(name, args)
 }
 
+func (b *restrictedReviewBackend) DispatchResult(name string, args map[string]interface{}) (ToolDispatchResult, error) {
+	if !b.allowed[name] {
+		return ToolDispatchResult{Invoked: new(bool)}, fmt.Errorf("background review cannot use tool %s", name)
+	}
+	return DispatchToolResult(b.inner, name, args)
+}
+
 func (b *restrictedReviewBackend) ToolExecutionMetadata(name string, args map[string]interface{}) ToolExecutionMetadata {
 	if b == nil || !b.allowed[name] {
 		return ToolExecutionMetadata{}

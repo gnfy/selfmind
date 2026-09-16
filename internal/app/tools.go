@@ -36,7 +36,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.WorkspaceScopeMiddleware())
 	disp.InjectMiddleware(tools.NewToolGuardrails().Middleware)
 	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware())
-	disp.InjectMiddleware(tools.EvidenceMiddleware())
+	disp.InjectResultMiddleware(tools.EvidenceMiddleware())
 	disp.InjectMiddleware(tools.SkillStorageMiddleware(storage))
 	// Static watcher proof belongs before approval: impossible registrations
 	// should not ask a person. The real network/credential preflight remains in

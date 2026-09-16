@@ -123,14 +123,14 @@ func (d *Server) resolveTaskReference(ctx context.Context, identity *control.Ide
 	if ordinal, convErr := strconv.Atoi(ref); convErr == nil {
 		if taskID, runID, count, found := d.taskLists.resolveRun(identity, firstString(channels), ordinal, time.Now()); found {
 			if taskID == "" {
-				return nil, fmt.Sprintf("No task number %d in the last list; it showed %d (run /tasks to refresh).", ordinal, count), nil
+				return nil, fmt.Sprintf("No item number %d in the last list; it showed %d (run /resume to refresh).", ordinal, count), nil
 			}
 			task, err := d.findTaskByRef(ctx, identity, taskID)
 			if err != nil {
 				return nil, "", err
 			}
 			if task == nil {
-				return nil, "That numbered task is no longer available. Run /tasks to refresh the list.", nil
+				return nil, "That numbered item is no longer available. Run /resume to refresh the list.", nil
 			}
 			task.ResumeRunID = runID
 			return task, "", nil
@@ -140,10 +140,10 @@ func (d *Server) resolveTaskReference(ctx context.Context, identity *control.Ide
 			return nil, "", err
 		}
 		if len(tasks) == 0 {
-			return nil, "Nothing currently needs attention; see /tasks or use a thread id.", nil
+			return nil, "Nothing currently needs attention. Use /search to find earlier work, or name a thread id.", nil
 		}
 		if ordinal < 1 || ordinal > len(tasks) {
-			return nil, fmt.Sprintf("No attention item number %d; %d shown (see /tasks).", ordinal, len(tasks)), nil
+			return nil, fmt.Sprintf("No attention item number %d; %d shown (run /resume).", ordinal, len(tasks)), nil
 		}
 		d.taskLists.remember(identity, firstString(channels), tasks, time.Now())
 		return &tasks[ordinal-1], "", nil
@@ -153,7 +153,7 @@ func (d *Server) resolveTaskReference(ctx context.Context, identity *control.Ide
 		return nil, "", err
 	}
 	if task == nil {
-		return nil, "Task not found. Run /tasks to list ids.", nil
+		return nil, "Not found. Run /resume to list what needs attention, or /search to find older work.", nil
 	}
 	return task, "", nil
 }

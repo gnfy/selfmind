@@ -209,8 +209,8 @@ func (m *uiModel) handleControlPassthrough(command string, args []string) tea.Cm
 }
 
 // handleResumeSelect backs /resume. With a reference it is a plain relay. Bare,
-// it turns into a picker: the daemon owns task ordering, so the TUI relays
-// /tasks and presents that reply as the menu rather than numbering a list of
+// it turns into a picker: the daemon owns the ordering, so the TUI relays
+// /resume and presents that reply as the menu rather than numbering a list of
 // its own — a locally numbered menu would drift from the resolver that
 // /resume <n> actually uses. armResumePicker makes the next bare number expand
 // to /resume <n>.
@@ -226,9 +226,20 @@ func (m *uiModel) handleResumeSelect(args []string) tea.Cmd {
 		if !ok || strings.TrimSpace(done.Response) == "" {
 			return msg
 		}
+		// An empty listing has nothing to number. Arming the picker there left
+		// the next bare number resolving against a list that was never
+		// remembered, and the line below would offer an action that does
+		// nothing.
+		if !strings.Contains(done.Response, "\n1. ") {
+			return done
+		}
 		m.resumePickerArmed = true
+		// Only the affordance this client adds, aligned into the daemon's own
+		// action block. The reply already names every command that acts on the
+		// list, and naming an id kind here contradicted it: the rows print RUN
+		// ids, not task ids.
 		done.Response = strings.TrimRight(done.Response, "\n") +
-			"\n\nType a number to resume that task (or /resume <task_id>)."
+			"\n- a bare number picks one without typing `/resume`"
 		return done
 	}
 }

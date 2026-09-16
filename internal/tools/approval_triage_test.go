@@ -316,6 +316,10 @@ func TestSmartTriageDenyBlocksAsRejection(t *testing.T) {
 	if !strings.Contains(strings.ToLower(err.Error()), "operation rejected") {
 		t.Fatalf("DENY must use the user-rejection contract string, got: %v", err)
 	}
+	facts := decisionFacts(t, err)
+	if facts.ToolErrorCode() != rejectionCodeTriage || facts.ToolErrorCategory() != toolErrorCategoryRejected || facts.ToolEffectState() != "not_dispatched" {
+		t.Fatalf("DENY must be a typed decision: code=%q category=%q effect=%q", facts.ToolErrorCode(), facts.ToolErrorCategory(), facts.ToolEffectState())
+	}
 }
 
 // TestSmartTriageEscalateFallsThroughToHuman: an ESCALATE verdict must reach the

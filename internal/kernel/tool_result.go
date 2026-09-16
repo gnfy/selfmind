@@ -37,6 +37,9 @@ const (
 // different contracts: raw execution output, concise UI/event preview, and the
 // bounded content sent back to the model.
 type ToolResultEnvelope struct {
+	Invoked             *bool
+	Process             *ToolProcessResult
+	EvidenceRefs        []string
 	Raw                 string
 	Preview             string
 	DisplayError        string

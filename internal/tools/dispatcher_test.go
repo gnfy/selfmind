@@ -357,7 +357,7 @@ func TestMiddlewareChain(t *testing.T) {
 	}
 	reg.Register(tool)
 
-	exec := reg.Wrap(tool, reg.middleware)
+	exec := reg.wrapResult(tool, reg.middleware)
 	_, err := exec(map[string]interface{}{})
 	if err != nil {
 		t.Fatalf("exec failed: %v", err)

@@ -22,21 +22,18 @@ func verificationBindingProperty() PropertyDef {
 	}, Required: []string{"criterion", "target"}}
 }
 
-func prepareVerificationBinding(args map[string]interface{}) error {
-	if _, prepared := args["_verification_binding"].(*verification.Binding); prepared {
-		return nil
-	}
+func prepareVerificationBinding(args map[string]interface{}) (*verification.Binding, error) {
 	raw, ok := args["check"]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	encoded, err := json.Marshal(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var b verification.Binding
 	if err = json.Unmarshal(encoded, &b); err != nil {
-		return fmt.Errorf("invalid verification check: %w", err)
+		return nil, fmt.Errorf("invalid verification check: %w", err)
 	}
 	b.Version = 1
 	b.Criterion = strings.TrimSpace(b.Criterion)
@@ -44,20 +41,19 @@ func prepareVerificationBinding(args map[string]interface{}) error {
 	b.Replaces = strings.TrimSpace(b.Replaces)
 	b.Reason = strings.TrimSpace(b.Reason)
 	if !verification.ValidBinding(&b) || len(b.Criterion) > 2000 || len(b.Target) > 1000 || len(b.Reason) > 2000 || len(b.Replaces) > 256 {
-		return fmt.Errorf("verification check needs a bounded nonempty criterion and target")
+		return nil, fmt.Errorf("verification check needs a bounded nonempty criterion and target")
 	}
 	if b.Replaces != "" {
 		if b.Reason == "" {
-			return fmt.Errorf("replacing verification needs a reason explaining the unchanged criterion")
+			return nil, fmt.Errorf("replacing verification needs a reason explaining the unchanged criterion")
 		}
 		validator, ok := runPlanProjectionFromArgs(args).(verificationBindingValidator)
 		if !ok {
-			return fmt.Errorf("verification replacement is unavailable without a durable run evidence resolver")
+			return nil, fmt.Errorf("verification replacement is unavailable without a durable run evidence resolver")
 		}
 		if err := validator.ValidateVerification(ContextFromArgs(args), b, stringArg(args, "cwd")); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	args["_verification_binding"] = &b
-	return nil
+	return &b, nil
 }

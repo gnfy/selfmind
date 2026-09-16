@@ -59,6 +59,24 @@ func TestGatewayModelChangeEndpointReturnsStructuredPreview(t *testing.T) {
 func TestGatewayModelCancelResumesWorkParkedByReadiness(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)
 	service, _ := testModelChangeService(t)
+	t.Cleanup(func() {
+		// A claimed queue item is no longer queued but can still be starting
+		// its worker. Quiesce both phases before TempDir removes model state.
+		daemon.beginDraining("test cleanup")
+		daemon.StopBackgroundServices()
+		coord := daemon.coordinator()
+		deadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(deadline) {
+			coord.mu.Lock()
+			busy := coord.active[identity.PersonID] != nil || coord.draining[identity.PersonID]
+			coord.mu.Unlock()
+			if !busy {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Error("model readiness test worker did not stop before cleanup")
+	})
 	if _, err := service.AcceptMigrationReadiness(); err != nil {
 		t.Fatal(err)
 	}

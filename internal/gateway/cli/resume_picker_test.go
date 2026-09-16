@@ -36,11 +36,40 @@ func TestBareResumeArmsPickerFromDaemonList(t *testing.T) {
 	if !strings.Contains(msg.Response, "1. Fix parser") {
 		t.Fatalf("picker must show the daemon list: %q", msg.Response)
 	}
-	if !strings.Contains(msg.Response, "Type a number") {
+	// The daemon's reply already names every command that acts on the list, so
+	// this client adds only its own affordance — and it must not name an id
+	// kind of its own: it used to say "/resume <task_id>" while the rows print
+	// RUN ids.
+	if !strings.Contains(msg.Response, "a bare number picks one") {
 		t.Fatalf("picker must tell the user how to choose: %q", msg.Response)
+	}
+	if strings.Contains(msg.Response, "task_id") {
+		t.Fatalf("the picker must not name an id kind the list does not print: %q", msg.Response)
 	}
 	if !model.resumePickerArmed {
 		t.Fatal("bare /resume must arm the numeric picker")
+	}
+}
+
+// TestBareResumeOnEmptyListLeavesPickerDisarmed: with nothing listed there is
+// nothing to number. Arming the picker anyway left the next bare number
+// resolving against a list the daemon never remembered, and printed an
+// affordance for an action that does nothing.
+func TestBareResumeOnEmptyListLeavesPickerDisarmed(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.width, model.height = 100, 30
+	var relayed []string
+	model.messageProcessor = fakeControlProcessor(&relayed, "Nothing needs attention.")
+
+	msg, ok := model.handleResumeSelect(nil)().(MsgAgentDone)
+	if !ok {
+		t.Fatal("bare /resume must answer with a reply")
+	}
+	if strings.Contains(msg.Response, "a bare number picks one") {
+		t.Fatalf("an empty listing must not offer a number to pick: %q", msg.Response)
+	}
+	if model.resumePickerArmed {
+		t.Fatal("an empty listing must leave the picker disarmed")
 	}
 }
 

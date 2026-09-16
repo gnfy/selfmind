@@ -732,6 +732,18 @@ func (d *Server) dismissAttentionByReference(ctx context.Context, identity *cont
 	if err != nil {
 		return "Could not dismiss attention: " + err.Error()
 	}
+	if run == nil {
+		// The list prints SHORT run ids and this command advertises
+		// `/stop <n|run_id>`, so the id a person can actually see has to
+		// resolve here exactly as it already does for /resume. Expansion is
+		// bounded to what currently needs attention, which is the only set
+		// this command can act on anyway.
+		if expanded := d.expandAttentionRunRef(ctx, identity, channel, runID); expanded != "" {
+			if run, err = d.Control.GetRun(ctx, identity.TenantID, expanded); err != nil {
+				return "Could not dismiss attention: " + err.Error()
+			}
+		}
+	}
 	if run == nil || run.PersonID != identity.PersonID {
 		return "That run is not yours or no longer exists."
 	}
@@ -749,6 +761,27 @@ func (d *Server) dismissAttentionByReference(ctx context.Context, identity *cont
 		return fmt.Sprintf("Run %s is not current attention (already dismissed or superseded).", shortRunID(run.ID))
 	}
 	return d.reportDismissedAttentionRun(ctx, identity, run.TaskID, run.ID, "user dismissed an attention item by reference")
+}
+
+// expandAttentionRunRef resolves a shortened run reference against what
+// currently needs attention. An ambiguous prefix resolves to nothing: a
+// dismissal must name one exact Run, never the first of several matches.
+func (d *Server) expandAttentionRunRef(ctx context.Context, identity *control.IdentityContext, channel, ref string) string {
+	items, _, err := d.openAttentionPage(ctx, identity, "", channel, attentionListLimit, 0)
+	if err != nil {
+		return ""
+	}
+	matched := ""
+	for _, item := range items {
+		if item.RunID != ref && shortRunID(item.RunID) != ref && !strings.HasPrefix(item.RunID, ref) {
+			continue
+		}
+		if matched != "" && matched != item.RunID {
+			return ""
+		}
+		matched = item.RunID
+	}
+	return matched
 }
 
 // reportDismissedAttentionRun records the exact-run dismissal and names it.

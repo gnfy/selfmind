@@ -136,18 +136,30 @@ func (s *Store) ResolveExternalWatchGroup(ctx context.Context, tenantID, groupID
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MIN(json_extract(preflight_receipt_json,'$.version')),0), COALESCE(MIN(timeout_at),0) FROM external_watches WHERE tenant_id=? AND wait_group_id=?`, tenantID, groupID).Scan(&modern, &deadline); err != nil {
 		return resolution, err
 	}
+	var runStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE tenant_id=? AND id=?`, tenantID, group.RunID).Scan(&runStatus); err != nil && err != sql.ErrNoRows {
+		return resolution, err
+	}
 	status := ""
 	if modern >= ExternalWatchContinuationReceiptVersion {
-		var runStatus string
-		if err := tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE tenant_id=? AND id=?`, tenantID, group.RunID).Scan(&runStatus); err != nil {
-			return resolution, err
-		}
 		if runStatus == "running" && deadline > time.Now().Unix() {
 			return resolution, tx.Commit()
 		}
 		if registered < group.ExpectedCount {
 			status = ExternalWatchBlocked
 		}
+	} else if runStatus != "running" && registered < group.ExpectedCount {
+		// A pre-continuation group keeps its original settlement while its run
+		// is still registering members. Once that run has left running no
+		// member can ever be added, and an incomplete `all` group would stay
+		// pending forever: its finished member is never finalized, nothing
+		// tells the person, and the Run sits in waiting_external outside every
+		// Attention set (observed live: a version-1 group declaring two
+		// members, one refused at preflight, pending for two days). Close the
+		// CHECK as blocked, the same settlement modern groups receive. The
+		// finalization that follows still runs under the legacy finalization
+		// profile, so this grants no new continuation rights.
+		status = ExternalWatchBlocked
 	}
 	if status != "" {
 		// An incomplete group is not a failed business operation.

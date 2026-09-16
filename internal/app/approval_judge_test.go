@@ -53,15 +53,19 @@ func TestApprovalJudgeBudgetCoversReasoning(t *testing.T) {
 	if _, err := judge.Judge(context.Background(), "Tool: terminal\nCommand: git status"); err != nil {
 		t.Fatalf("judge: %v", err)
 	}
-	if provider.last.Options["reasoning_effort"] != "low" {
-		t.Fatalf("authorization review must retain bounded reasoning: %#v", provider.last.Options)
+	// "none" is the only effort every adapter can bound: a provider without a
+	// low tier maps "low" upward (DeepSeek: high with thinking enabled) and the
+	// reasoning then consumed the whole cap (observed 2026-09-16: 51 of 58
+	// human asks in one day were empty verdicts).
+	if provider.last.Options["reasoning_effort"] != "none" {
+		t.Fatalf("authorization review must not request provider reasoning by default: %#v", provider.last.Options)
 	}
 	format, ok := provider.last.Options["response_format"].(map[string]interface{})
 	if !ok || format["type"] != "json_object" {
 		t.Fatalf("approval judge must request structured JSON output: %#v", provider.last.Options)
 	}
-	if provider.last.MaxTokens < 512 {
-		t.Fatalf("MaxTokens = %d: too small for a reasoning model's thinking plus verdict", provider.last.MaxTokens)
+	if provider.last.MaxTokens < 2048 {
+		t.Fatalf("MaxTokens = %d: too small to survive a provider that still reasons at its default tier", provider.last.MaxTokens)
 	}
 	if !strings.Contains(provider.last.SystemPrompt, `"risk_level"`) || !strings.Contains(provider.last.SystemPrompt, `"rationale"`) {
 		t.Fatal("the structured guardian contract must be reinforced at the system level")
@@ -133,6 +137,35 @@ func TestConfiguredApprovalJudgeUsesConfiguredTimeout(t *testing.T) {
 	}
 	if got := timed.ApprovalJudgeTimeout(); got != 45*time.Second {
 		t.Fatalf("ApprovalJudgeTimeout = %v, want 45s", got)
+	}
+}
+
+// TestConfiguredApprovalJudgeReasoningFollowsExplicitRoleOnly: the judge's own
+// role entry may opt into a reasoning tier; the inherited auxiliary reasoning
+// is tuned for other background work and must not leak into the verdict path.
+func TestConfiguredApprovalJudgeReasoningFollowsExplicitRoleOnly(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "openai", Model: "primary-model"}
+	cfg.Models.Auxiliary = config.ModelSelectionConfig{Provider: "openai", Model: "aux-model", Reasoning: "high"}
+	cfg.Providers.OpenAI.APIKey = "test-key"
+	cfg.Normalize()
+	judge, ok := NewConfiguredApprovalJudge(nil, cfg, "default").(*llmApprovalJudge)
+	if !ok || judge == nil {
+		t.Fatalf("configured judge = %T", judge)
+	}
+	if got := judge.reasoningEffort(); got != "none" {
+		t.Fatalf("auxiliary reasoning leaked into the judge: %q", got)
+	}
+	cfg.Models.Roles = map[string]config.ModelRoleConfig{
+		string(llm.RoleFastClassifier): {Provider: "openai", Model: "fast-model", APIKey: "test-key", Reasoning: "low"},
+	}
+	cfg.Normalize()
+	judge, ok = NewConfiguredApprovalJudge(nil, cfg, "default").(*llmApprovalJudge)
+	if !ok || judge == nil {
+		t.Fatalf("configured judge = %T", judge)
+	}
+	if got := judge.reasoningEffort(); got != "low" {
+		t.Fatalf("explicit role reasoning must win: %q", got)
 	}
 }
 

@@ -432,8 +432,11 @@ OpenRouter adapter 自己的请求构造，adapter 里设置的归因头因此�
 ## DeepSeek V4
 
 内置 `deepseek` profile 使用 OpenAI-compatible transport，并启用 DeepSeek 的
-思考/工具调用契约。`models.primary.reasoning: high` 会发送
-`thinking.type=enabled` 和 `level=high`；`xhigh` 会映射为 provider 的 `max`。
+思考/工具调用契约。DeepSeek 没有低推理档位，adapter 把标准 effort 映射到它提供的
+档位：`none`（以及 `off`、`disabled`）发送 `thinking.type=disabled`；`low`、
+`medium`、`high` 发送 `thinking.type=enabled` 且 `level=high`；`xhigh`、`max`
+映射为 provider 的 `max`；未配置 effort 时按 provider 默认开启思考。因此需要有界
+回复的调用方必须请求 `none` 而不是 `low`：智能审批裁决和 post-run 维护都是这样做的。
 当思考响应调用工具时，adapter 会把 `reasoning_content` 与 assistant tool call
 一起保存，并在 tool result 之前原样回放；缺少这段内容会使下一次 provider 请求无效。
 

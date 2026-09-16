@@ -32,3 +32,6 @@ checks:
   no_mojibake: true
   no_empty_response: true
   no_raw_json_leak: true
+  # The loop reads through the final provider event before dispatch, including
+  # text-tool compatibility responses; waiting for it must not expose markup.
+  no_tool_xml_leak: true

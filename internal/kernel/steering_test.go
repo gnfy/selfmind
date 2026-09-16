@@ -26,6 +26,25 @@ func TestDrainSteering(t *testing.T) {
 	}
 }
 
+func TestDrainSteeringClosedSourcesPreserveBufferedInput(t *testing.T) {
+	inputs := make(chan SteeringInput, 2)
+	legacy := make(chan string, 2)
+	inputs <- SteeringInput{ID: "one", Content: "same text"}
+	inputs <- SteeringInput{ID: "two", Content: "same text"}
+	legacy <- "old caller"
+	legacy <- "next correction"
+	close(inputs)
+	close(legacy)
+	channels := steeringChannels{inputs: inputs, legacy: legacy}
+	got := drainSteering(channels)
+	if len(got) != 4 || got[0].ID != "one" || got[1].ID != "two" || got[3].Content != "next correction" {
+		t.Fatalf("buffered input = %+v", got)
+	}
+	if got := drainSteering(channels); len(got) != 0 {
+		t.Fatalf("closed sources yielded input: %+v", got)
+	}
+}
+
 func TestSteeringContextRoundTrip(t *testing.T) {
 	ch := make(chan string, 1)
 	ctx := WithSteering(context.Background(), ch)

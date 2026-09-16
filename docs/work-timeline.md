@@ -222,8 +222,18 @@ Settled is a query result, never a stored status.
 
 - A bare `/resume` shows current Attention as exact Runs, and is the numbered
   list every ordinal resolves against.
-- `/resume <n|run_id>` continues one Run exactly. A Thread id is still accepted
-  when it has exactly one unresolved Run.
+- `/resume <n|run_id>` continues one Run exactly, by selecting it: the
+  person's next message goes to that Run. A Thread id is still accepted when it
+  has exactly one unresolved Run. `/stop <n|run_id>` clears one item without
+  running it; both reference forms accept the shortened Run id the rows print.
+- The listing states the actions that apply to it rather than a sentence naming
+  two of them. Bare `/stop` (cancel the Run executing now) and `/watchers`
+  appear only when the list holds an item of that kind, so no offered action
+  answers "there is nothing to do that to". The block is a Markdown list: the
+  terminal renders this reply through a CommonMark parser, where indented lines
+  fold into the preceding paragraph. Endpoint-local affordances, such as the
+  terminal's bare-number picker, are added by that client and never restate the
+  shared block; the picker is armed only by a listing with items in it.
 - `/search [query]` searches complete retained history on every endpoint,
   including titles, Run input summaries, handoffs, and changed paths. It is not
   limited to a recent-five or seven-day window. In the terminal, `/search

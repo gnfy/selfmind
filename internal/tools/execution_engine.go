@@ -136,6 +136,8 @@ type ExecutionRequest struct {
 // ExecutionResult reports what happened, including the evidence the metrics and
 // diagnostics surfaces need.
 type ExecutionResult struct {
+	Started           bool
+	ExitCodeKnown     bool
 	ExitCode          int
 	Output            string
 	Plan              SandboxPlan
@@ -363,11 +365,16 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 
 		out, err = runCommandStreaming(runCtx, cmd, payloadForDiagnostics, req.ToolName, req.ToolCallID, req.ToolProfile)
 		result.Output = out
+		result.Started = result.Started || cmd.Process != nil
+		result.ExitCodeKnown = cmd.ProcessState != nil && cmd.ProcessState.ExitCode() >= 0
 		result.ExitCode = 0
 		if exitErr, ok := err.(interface{ ExitCode() int }); ok {
 			result.ExitCode = exitErr.ExitCode()
 		} else if err != nil {
 			result.ExitCode = -1
+		}
+		if result.ExitCodeKnown {
+			result.ExitCode = cmd.ProcessState.ExitCode()
 		}
 		if attempt == 1 && shouldRecoverExecution(decision, material, result.ExitCode, err, out, runCtx) {
 			result.RecoveryAttempted = true

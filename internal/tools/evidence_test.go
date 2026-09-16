@@ -16,8 +16,8 @@ func TestEvidenceMiddlewareRecordsObservedFileMutation(t *testing.T) {
 	events := make(chan string, 1)
 	ctx := kernel.WithEventChannel(context.Background(), events)
 
-	exec := EvidenceMiddleware()(func(args map[string]interface{}) (string, error) {
-		return "written", os.WriteFile(path, []byte("after"), 0644)
+	exec := EvidenceMiddleware()(func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
+		return kernel.ToolDispatchResult{Output: "written"}, os.WriteFile(path, []byte("after"), 0644)
 	})
 	result, err := exec(map[string]interface{}{
 		"_context":      ctx,
@@ -25,8 +25,8 @@ func TestEvidenceMiddlewareRecordsObservedFileMutation(t *testing.T) {
 		"_tool_call_id": "call-1",
 		"path":          path,
 	})
-	if err != nil || result != "written" {
-		t.Fatalf("execute: result=%q err=%v", result, err)
+	if err != nil || result.Output != "written" {
+		t.Fatalf("execute: result=%q err=%v", result.Output, err)
 	}
 
 	evidence := readEvidenceEvent(t, events)
@@ -46,9 +46,9 @@ func TestEvidenceMiddlewareRecordsFailedVerificationExitCode(t *testing.T) {
 	ctx := kernel.WithEventChannel(context.Background(), events)
 	expectedErr := errors.New("command failed")
 
-	exec := EvidenceMiddleware()(func(args map[string]interface{}) (string, error) {
-		args["_command_exit_code"] = 2
-		return "failed output", expectedErr
+	exec := EvidenceMiddleware()(func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
+		code := 2
+		return kernel.ToolDispatchResult{Output: "failed output", Process: &kernel.ToolProcessResult{Started: true, ExitCode: &code}}, expectedErr
 	})
 	_, err := exec(map[string]interface{}{
 		"_context":      ctx,
@@ -75,9 +75,9 @@ func TestEvidenceMiddlewareRecordsTerminalAsCommandEvidence(t *testing.T) {
 	events := make(chan string, 1)
 	ctx := kernel.WithEventChannel(context.Background(), events)
 
-	exec := EvidenceMiddleware()(func(args map[string]interface{}) (string, error) {
-		args["_command_exit_code"] = 0
-		return "/workspace/go.mod", nil
+	exec := EvidenceMiddleware()(func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
+		code := 0
+		return kernel.ToolDispatchResult{Output: "/workspace/go.mod", Process: &kernel.ToolProcessResult{Started: true, ExitCode: &code}}, nil
 	})
 	result, err := exec(map[string]interface{}{
 		"_context":      ctx,
@@ -86,8 +86,8 @@ func TestEvidenceMiddlewareRecordsTerminalAsCommandEvidence(t *testing.T) {
 		"command":       "go env GOMOD",
 		"cwd":           "/workspace",
 	})
-	if err != nil || result != "/workspace/go.mod" {
-		t.Fatalf("execute: result=%q err=%v", result, err)
+	if err != nil || result.Output != "/workspace/go.mod" {
+		t.Fatalf("execute: result=%q err=%v", result.Output, err)
 	}
 
 	evidence := readEvidenceEvent(t, events)

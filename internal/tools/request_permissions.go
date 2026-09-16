@@ -113,7 +113,7 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 		return "Already granted: " + describePermissionRules(already) + ". Proceed without asking again.", nil
 	}
 	if scope.Approval == nil {
-		return "", fmt.Errorf("operation rejected: these permissions need approval and no approval surface is attached to this run")
+		return "", rejectOperation(rejectionCodeCapability, "operation rejected: these permissions need approval and no approval surface is attached to this run")
 	}
 
 	// ONE ask for the whole bundle. The candidates travel with it, so the person's
@@ -145,14 +145,14 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 		if decision.Outcome == ApprovalOutcomeTimedOut {
 			return "", fmt.Errorf("approval timed out with no answer: nobody is at the keyboard; finish waiting_user instead of retrying")
 		}
-		return "", fmt.Errorf("operation rejected: %s", fallbackReason(decision.Reason, "the requested permissions were refused"))
+		return "", rejectOperation(rejectionCodeApproval, "operation rejected: "+fallbackReason(decision.Reason, "the requested permissions were refused"))
 	}
 
 	// Scope: the person's answer decides how long. An empty scope means "this once",
 	// which for a pre-declared bundle is a task-scoped grant — the work it
 	// authorizes is this task's work.
 	if decision.Scope != "run" || strings.TrimSpace(decision.GrantKey) != "" {
-		return "", fmt.Errorf("operation rejected: the permission bundle was not approved for this run")
+		return "", rejectOperation(rejectionCodeApproval, "operation rejected: the permission bundle was not approved for this run")
 	}
 	grantScope := "run"
 	for _, rule := range pending {

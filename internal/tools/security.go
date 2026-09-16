@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"errors"
 	"regexp"
 	"sort"
 	"strings"
@@ -173,14 +172,7 @@ func RedactionMiddleware() Middleware {
 		return func(args map[string]interface{}) (string, error) {
 			output, err := next(args)
 			output = RedactSensitive(output)
-			if err == nil {
-				return output, nil
-			}
-			redacted := RedactSensitive(err.Error())
-			if redacted == err.Error() {
-				return output, err
-			}
-			return output, errors.New(redacted)
+			return output, redactToolFailure(err)
 		}
 	}
 }

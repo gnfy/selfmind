@@ -440,6 +440,13 @@ func removeApprovalRequest(queue []MsgApprovalRequest, id, tool string) ([]MsgAp
 // resumeAfterApproval puts the UI back into the working state: the blocked run
 // resumes as soon as the decision lands on the daemon.
 func (m *uiModel) resumeAfterApproval() {
+	// Answering an approval does not turn daemon-originated work into a
+	// foreground turn. Its progress is suppressed and its completion only
+	// publishes a result, so creating thinking state here would never clear it.
+	// Leave any outstanding local request's activity under its own lifecycle.
+	if m.backgroundDaemonRunActive() {
+		return
+	}
 	m.thinking = true
 	m.runStatus = "working"
 	m.thinkingStart = time.Now()

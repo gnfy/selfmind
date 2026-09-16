@@ -4,8 +4,23 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"strings"
 )
+
+// New dispatches take their Run from execution authority. Keep the historical
+// context DTO fallback here only, instead of spreading it into result types.
+func toolLedgerRunID(ctx context.Context) (string, error) {
+	scope, _ := ToolInvocationScopeFromContext(ctx)
+	legacy, _ := TaskRuntimeContextFromContext(ctx)
+	if scope.RunID != "" && legacy.RunID != "" && scope.RunID != legacy.RunID {
+		return "", fmt.Errorf("tool execution Run does not match its runtime context")
+	}
+	if scope.RunID != "" {
+		return scope.RunID, nil
+	}
+	return legacy.RunID, nil
+}
 
 // Tool execution ledger (Loop Engineering ACTIVE PLAN P0-B, first slice). The
 // dangerous window is: a side-effectful tool succeeds (a build is triggered, a

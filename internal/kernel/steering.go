@@ -58,36 +58,47 @@ func steeringFromContext(ctx context.Context) steeringChannels {
 	return steeringChannels{}
 }
 
-// drainSteering non-blockingly collects all pending steering messages.
+// drainSteering takes a bounded snapshot of pending input. New arrivals beyond
+// this snapshot wait for the next request; a busy producer must not keep model
+// preparation running forever. A closed channel is exhausted, not blank input.
 func drainSteering(ch steeringChannels) []SteeringInput {
 	if ch.inputs == nil && ch.legacy == nil {
 		return nil
 	}
 	var out []SteeringInput
-	for {
-		if ch.inputs != nil {
-			select {
-			case m := <-ch.inputs:
-				m.Content = strings.TrimSpace(m.Content)
-				if m.Content != "" {
-					out = append(out, m)
-				}
-				continue
-			default:
-			}
-		}
-		if ch.legacy == nil {
-			return out
-		}
+	// Snapshot both buffered lengths before reading either source. Unbuffered callers
+	// get one non-blocking receive opportunity.
+	inputCount, legacyCount := max(1, len(ch.inputs)), max(1, len(ch.legacy))
+inputs:
+	for i := 0; i < inputCount; i++ {
 		select {
-		case m := <-ch.legacy:
+		case m, ok := <-ch.inputs:
+			if !ok {
+				break inputs
+			}
+			m.Content = strings.TrimSpace(m.Content)
+			if m.Content != "" {
+				out = append(out, m)
+			}
+		default:
+			break inputs
+		}
+	}
+legacy:
+	for i := 0; i < legacyCount; i++ {
+		select {
+		case m, ok := <-ch.legacy:
+			if !ok {
+				break legacy
+			}
 			if s := strings.TrimSpace(m); s != "" {
 				out = append(out, SteeringInput{Content: s})
 			}
 		default:
-			return out
+			break legacy
 		}
 	}
+	return out
 }
 
 // steeringContentForMain keeps legacy embedders byte-compatible while giving

@@ -20,16 +20,19 @@ type evidenceFileSnapshot struct {
 
 // EvidenceMiddleware records facts observed by the runtime. It does not decide
 // whether a run succeeded and it never asks a model for a verdict.
-func EvidenceMiddleware() Middleware {
-	return func(next ToolExecutor) ToolExecutor {
-		return func(args map[string]interface{}) (string, error) {
+func EvidenceMiddleware() ResultMiddleware {
+	return func(next ResultExecutor) ResultExecutor {
+		return func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
 			toolName, _ := args["_tool_name"].(string)
 			if toolName != "write_file" && toolName != "patch" && toolName != "terminal" && toolName != "verify" {
 				return next(args)
 			}
+			var binding *verification.Binding
 			if toolName == "verify" {
-				if err := prepareVerificationBinding(args); err != nil {
-					return "", newStableToolError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use a verification evidence id from the current open work unit and preserve its criterion, target and working directory.")
+				var err error
+				binding, err = prepareVerificationBinding(args)
+				if err != nil {
+					return kernel.ToolDispatchResult{Invoked: new(bool)}, newStableToolError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use a verification evidence id from the current open work unit and preserve its criterion, target and working directory.")
 				}
 			}
 
@@ -57,12 +60,14 @@ func EvidenceMiddleware() Middleware {
 				})
 			}
 			if toolName == "terminal" || toolName == "verify" {
-				exitCode, _ := args["_command_exit_code"].(int)
+				exitCode := -1
+				if result.Process != nil && result.Process.ExitCode != nil {
+					exitCode = *result.Process.ExitCode
+				}
 				kind := stringArg(args, "kind")
 				if kind == "" {
 					kind = evidenceKind(toolName)
 				}
-				binding, _ := args["_verification_binding"].(*verification.Binding)
 				evidence.Command = &kernel.CommandEvidence{Binding: binding,
 					Command:  RedactSensitive(stringArg(args, "command")),
 					CWD:      stringArg(args, "cwd"),
@@ -70,9 +75,10 @@ func EvidenceMiddleware() Middleware {
 					ExitCode: exitCode,
 				}
 			}
+			result.Evidence = append(result.Evidence, evidence)
 			emitEvidence(args, evidence)
 			if evidence.Command != nil && evidence.Command.Binding != nil {
-				result += "\nVerification evidence: " + evidence.ToolCallID
+				result.Output += "\nVerification evidence: " + evidence.ToolCallID
 			}
 			return result, err
 		}

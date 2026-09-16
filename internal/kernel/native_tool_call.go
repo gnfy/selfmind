@@ -539,8 +539,10 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	if invocationScope, ok := ToolInvocationScopeFromContext(ctx); ok {
 		environmentGeneration = invocationScope.EnvironmentGeneration
 	}
-	if rt, ok := TaskRuntimeContextFromContext(ctx); ok {
-		ledgerRunID = rt.RunID
+	var runErr error
+	ledgerRunID, runErr = toolLedgerRunID(ctx)
+	if runErr != nil {
+		return a.toolDispatchRefused(eventCh, idx, call, signature, runErr)
 	}
 	ledger := ToolLedgerFromContext(ctx)
 	if ledgerRunID != "" {
@@ -589,7 +591,8 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 
 	startTime := time.Now()
-	result, err := a.backend.Dispatch(name, args)
+	dispatch, err := DispatchToolResult(a.backend, name, args)
+	result := dispatch.Output
 	duration := time.Since(startTime).Seconds()
 	var completedMetadata []ToolExecutionMetadata
 	if provider, ok := a.backend.(ToolExecutionMetadataProvider); ok {
@@ -610,15 +613,18 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		}
 	}
 
+	if ledgerErr != nil && retryClass != ToolRetryReadOnly {
+		err = &toolOutcomePersistenceError{cause: errors.Join(err, ledgerErr)}
+	} else if err != nil && ledgerErr != nil {
+		err = fmt.Errorf("%w; durable outcome recording also failed: %v", err, ledgerErr)
+	}
 	if err != nil {
-		if ledgerErr != nil {
-			err = fmt.Errorf("%w; durable outcome recording also failed: %v", err, ledgerErr)
-		}
 		metadata := ToolExecutionMetadata{}
 		if len(completedMetadata) > 0 {
 			metadata = completedMetadata[0]
 		}
 		packaged := packageDispatchedToolFailureCtx(ctx, name, result, err, metadata)
+		applyDispatchFacts(&packaged, dispatch)
 		if policy := RecoveryPolicyFromContext(ctx); policy != nil {
 			policy.RecordFailure(RecoveryFailure{
 				Attempt: recoveryAttempt, ErrorCode: packaged.ErrorCode, FailureClass: packaged.ErrorCategory,
@@ -650,13 +656,9 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			},
 		}
 	}
-	if ledgerErr != nil && retryClass != ToolRetryReadOnly {
-		return a.toolDispatchRefused(eventCh, idx, call, signature,
-			fmt.Errorf("%s returned, but its durable outcome could not be recorded; external state is uncertain and must be verified before any retry: %w", name, ledgerErr))
-	}
-
 	modelResult := modelVisibleSkillToolResult(name, result)
 	packaged := packageToolResultCtx(ctx, name, modelResult)
+	applyDispatchFacts(&packaged, dispatch)
 	if policy := RecoveryPolicyFromContext(ctx); policy != nil {
 		policy.RecordSuccess(recoveryAttempt)
 	}

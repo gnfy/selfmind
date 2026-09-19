@@ -75,7 +75,6 @@ type Task struct {
 	Status         string     `json:"status"`
 	Kind           string     `json:"kind,omitempty"`
 	Visibility     string     `json:"visibility,omitempty"`
-	Pinned         bool       `json:"pinned,omitempty"`
 	CurrentSummary string     `json:"current_summary,omitempty"`
 	NextSteps      []string   `json:"next_steps,omitempty"`
 	BlockedReason  string     `json:"blocked_reason,omitempty"`
@@ -179,7 +178,6 @@ type TaskCreate struct {
 	Channel     string
 	Kind        string
 	Visibility  string
-	Pinned      bool
 }
 
 func OpenStore(dataDir string) (*Store, error) {
@@ -427,37 +425,6 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(tenant_id, task_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_person_status ON task_runs(tenant_id, person_id, status, started_at);
-CREATE TABLE IF NOT EXISTS task_references (
-	id TEXT PRIMARY KEY,
-	tenant_id TEXT NOT NULL,
-	person_id TEXT NOT NULL,
-	task_id TEXT NOT NULL,
-	workspace_id TEXT NOT NULL DEFAULT '',
-	class TEXT NOT NULL,
-	raw_value TEXT NOT NULL,
-	normalized_value TEXT NOT NULL,
-	status TEXT NOT NULL DEFAULT 'shadow',
-	user_confirmed INTEGER NOT NULL DEFAULT 0,
-	created_at INTEGER NOT NULL,
-	updated_at INTEGER NOT NULL,
-	UNIQUE(tenant_id, person_id, normalized_value, task_id)
-);
-CREATE INDEX IF NOT EXISTS idx_task_references_owner_value
-	ON task_references(tenant_id, person_id, normalized_value, status);
-CREATE INDEX IF NOT EXISTS idx_task_references_task
-	ON task_references(tenant_id, task_id, status, updated_at);
-CREATE TABLE IF NOT EXISTS task_reference_evidence (
-	id TEXT PRIMARY KEY,
-	reference_id TEXT NOT NULL,
-	run_id TEXT NOT NULL DEFAULT '',
-	provenance TEXT NOT NULL,
-	source_ref TEXT NOT NULL DEFAULT '',
-	evidence_hash TEXT NOT NULL,
-	observed_at INTEGER NOT NULL,
-	UNIQUE(reference_id, run_id, provenance, evidence_hash)
-);
-CREATE INDEX IF NOT EXISTS idx_task_reference_evidence_ref
-	ON task_reference_evidence(reference_id, provenance, observed_at);
 CREATE TABLE IF NOT EXISTS task_resolution_events (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -2051,16 +2018,12 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 	}
 	kind := normalizeTaskKind(req.Kind)
 	visibility := normalizeTaskVisibility(req.Visibility)
-	pinned := 0
-	if req.Pinned {
-		pinned = 1
-	}
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO threads (id, tenant_id, person_id, workspace_id, title, summary, kind, visibility,
-		 pinned, last_activity_at, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?)`,
+		 last_activity_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?)`,
 		id, req.TenantID, req.PersonID, req.WorkspaceID, req.Title, kind, visibility,
-		pinned, now, now, now)
+		now, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -2161,7 +2124,7 @@ type threadTaskRowScanner interface {
 // and failure are Run facts and never appear here.
 var legacyThreadTaskSelectSQL = `SELECT t.id, t.tenant_id, t.person_id, COALESCE(t.workspace_id, ''), t.title,
 	` + threadDerivedStatusSQL("done") + `,
-	COALESCE(t.kind, 'work'), COALESCE(t.visibility, 'listed'), COALESCE(t.pinned, 0),
+	COALESCE(t.kind, 'work'), COALESCE(t.visibility, 'listed'),
 	COALESCE(t.summary, ''), COALESCE((SELECT h.next_steps_json FROM task_handoffs h
 	 WHERE h.thread_id=t.id ORDER BY h.created_at DESC, h.id DESC LIMIT 1), '[]'), '',
 	COALESCE((SELECT r.id FROM runs r WHERE r.tenant_id=t.tenant_id AND r.thread_id=t.id AND r.status='running'
@@ -2174,17 +2137,15 @@ var legacyThreadTaskSelectSQL = `SELECT t.id, t.tenant_id, t.person_id, COALESCE
 func scanLegacyThreadTask(scanner threadTaskRowScanner) (*Task, error) {
 	var task Task
 	var nextSteps string
-	var pinned int
 	var archived sql.NullInt64
 	var created, updated, lastActivity int64
 	if err := scanner.Scan(&task.ID, &task.TenantID, &task.PersonID, &task.WorkspaceID, &task.Title,
-		&task.Status, &task.Kind, &task.Visibility, &pinned, &task.CurrentSummary, &nextSteps,
+		&task.Status, &task.Kind, &task.Visibility, &task.CurrentSummary, &nextSteps,
 		&task.BlockedReason, &task.ActiveRunID, &task.LastChannel, &archived, &lastActivity,
 		&created, &updated); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal([]byte(nextSteps), &task.NextSteps)
-	task.Pinned = pinned != 0
 	if archived.Valid {
 		at := time.Unix(archived.Int64, 0)
 		task.ArchivedAt = &at

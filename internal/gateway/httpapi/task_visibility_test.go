@@ -197,7 +197,7 @@ func TestStatusPrefersActiveRunTask(t *testing.T) {
 	reply := statusReply()
 	// Keep the stable status-card markers (`Task:` / `Status:`) pinned by the
 	// continuity eval suite while asserting the active run's task wins.
-	if !strings.Contains(reply, "Task: "+activeTask.Title) || !strings.Contains(reply, "Status:") {
+	if !strings.Contains(reply, "Work: "+activeTask.Title) || !strings.Contains(reply, "Status:") {
 		t.Fatalf("status during active run = %q, want task %q", reply, activeTask.Title)
 	}
 	// The card is conversational: it shows the running state but no run hash
@@ -208,7 +208,7 @@ func TestStatusPrefersActiveRunTask(t *testing.T) {
 
 	daemon.coordinator().endActive(identity.PersonID)
 	reply = statusReply()
-	if !strings.Contains(reply, "Task: "+activeTask.Title) {
+	if !strings.Contains(reply, "Work: "+activeTask.Title) {
 		t.Fatalf("status after registry release should still derive the running Run: %q", reply)
 	}
 }

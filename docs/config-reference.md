@@ -321,7 +321,8 @@ gateway:
 `automatic_run_recovery: false` is the fail-closed operational rollback for
 daemon/provider interruption continuation. It does not discard durable plans,
 effect evidence, or recovery handoffs, and it does not alter historical rows.
-The person reviews `/task` and uses the exact `/resume <run_id>` path instead.
+The person reviews the `/resume` listing and uses the exact `/resume <run_id>`
+path instead.
 
 Each IM platform is a subsection under `gateway`, all disabled by default:
 

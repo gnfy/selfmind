@@ -705,20 +705,6 @@ func TestProjectInteractionTaskNeverLowersPromotedVisibility(t *testing.T) {
 		setup func(ctx context.Context, t *testing.T, store *Store, timeline *WorkTimeline, identity *IdentityContext, thread *Thread, run *Run)
 	}{
 		{
-			name: "pinned thread",
-			setup: func(ctx context.Context, t *testing.T, store *Store, timeline *WorkTimeline, identity *IdentityContext, thread *Thread, run *Run) {
-				if err := store.SetTaskPinned(ctx, identity.TenantID, thread.ID, true); err != nil {
-					t.Fatal(err)
-				}
-				if err := timeline.Promote(ctx, identity.TenantID, identity.PersonID, thread.ID); err != nil {
-					t.Fatal(err)
-				}
-				if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
 			name: "run with work evidence",
 			setup: func(ctx context.Context, t *testing.T, store *Store, timeline *WorkTimeline, identity *IdentityContext, thread *Thread, run *Run) {
 				if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{

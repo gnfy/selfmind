@@ -81,7 +81,7 @@ func (d *Server) watcherDetailReply(ctx context.Context, identity *control.Ident
 	fmt.Fprintf(&sb, "Status: %s\n", watch.Status)
 	fmt.Fprintf(&sb, "Description: %s\n", watcherDescription(*watch))
 	if task != nil {
-		fmt.Fprintf(&sb, "Task: %s (%s)\n", textutil.Truncate(toOneLine(task.Title), 54), shortTaskID(task.ID))
+		fmt.Fprintf(&sb, "Work: %s (%s)\n", textutil.Truncate(toOneLine(task.Title), 54), shortTaskID(task.ID))
 		fmt.Fprintf(&sb, "Task status: %s\n", task.Status)
 	}
 	if workspace != nil {

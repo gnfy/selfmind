@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 14
+const CurrentControlSchemaVersion = 16
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -455,6 +455,44 @@ CREATE INDEX IF NOT EXISTS idx_run_delivery_overrides_person
 			return migrateDurableAttachments(ctx, db)
 		},
 	},
+	{
+		Version: 15,
+		Name:    "drop-task-references",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// The task-reference feature existed to ADDRESS a Task by a
+			// human-facing name. Task is no longer a domain object, so there is
+			// nothing left for a reference to point at, and the code that read
+			// these tables went with it: no production path has written either
+			// one since. What remained was schema plus two `NOT EXISTS` guards
+			// that could only ever be true, which read as conditions on two
+			// DELETE statements that in fact had none.
+			//
+			// Dropping them is safe for any install: with no writer, every
+			// existing table is empty by construction.
+			_, err := db.ExecContext(ctx, `
+DROP TABLE IF EXISTS task_reference_evidence;
+DROP TABLE IF EXISTS task_references;`)
+			return err
+		},
+	},
+	{
+		Version: 16,
+		Name:    "drop-thread-pin",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// A pin was a display flag that decided what counts as work: it
+			// kept a Thread listed and exempt from automatic archival. That is
+			// the same mistake v13 corrected when it stopped ranking Attention
+			// by Thread columns — the Run owns "what needs me now", and a
+			// presentation bit must not override evidence.
+			//
+			// Its writer had no production caller, so no Thread has been pinned
+			// since; what remained were three guards that could only ever pass
+			// and a `/diag` counter that could only ever read zero. Dropping
+			// the column removes the concept rather than leaving it inert for
+			// the next reader to reintroduce.
+			return dropMigrationColumn(ctx, db, "threads", "pinned")
+		},
+	},
 }
 
 // migrateDurableAttachments gives parked and steered work somewhere to keep its
@@ -682,6 +720,31 @@ func migrationTableExistsTx(ctx context.Context, tx *sql.Tx, table string) (bool
 	var count int
 	err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&count)
 	return count == 1, err
+}
+
+// dropMigrationColumn removes a column that is no longer read, and is a no-op
+// when the database never had it. Tolerance is the same rule the rename helper
+// follows: a migration describes the END state, and a database that already
+// matches it is not an error. Without this an install whose aggregate predates
+// the column would fail the whole upgrade on a column it never carried.
+func dropMigrationColumn(ctx context.Context, db *sql.DB, table, column string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	tableExists, err := migrationTableExistsTx(ctx, tx, table)
+	if err != nil || !tableExists {
+		return err
+	}
+	columnExists, err := migrationColumnExistsTx(ctx, tx, table, column)
+	if err != nil || !columnExists {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+` DROP COLUMN `+column); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func migrationColumnExistsTx(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {

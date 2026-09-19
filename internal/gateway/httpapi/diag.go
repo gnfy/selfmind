@@ -187,8 +187,8 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	fmt.Fprintf(&sb, "Queued: %d\n", queued)
 	writeProviderNetworkDiag(&sb, llm.CurrentProviderNetworkStatus())
 	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
-		fmt.Fprintf(&sb, "Tasks: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
-			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
+		fmt.Fprintf(&sb, "Work: open %d, terminal %d, archived %d, inbox runs %d\n",
+			stats.Open, stats.Terminal, stats.Archived, stats.InboxRuns)
 	}
 	if health, err := d.Control.EvolutionHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil {
 		candidateTotal := health.Statuses["candidate"] + health.Statuses["shadow"] + health.Statuses["eligible"] + health.Statuses["enabled"] + health.Statuses["degraded"]

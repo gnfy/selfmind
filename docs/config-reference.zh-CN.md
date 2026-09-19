@@ -275,7 +275,7 @@ gateway:
 
 `automatic_run_recovery: false` 是 daemon/provider 中断自动续跑的 fail-closed
 运维回滚开关。它不会丢弃持久计划、effect 证据或 recovery handoff，也不会改变
-历史数据语义。用户可先通过 `/task` 审查，再使用精确的 `/resume <run_id>` 路径。
+历史数据语义。用户可先通过 `/resume` 列表审查，再使用精确的 `/resume <run_id>` 路径。
 
 每个 IM 平台是 `gateway` 下的子段，默认全部关闭：
 

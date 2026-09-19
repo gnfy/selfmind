@@ -49,8 +49,8 @@ Attention = projection(Runs, approvals, clarifications, watchers)
   progress, project state, or transcript archives.
 
 Historical `task_*` ids are still accepted as references for continuity with
-older transcripts, but the `/tasks` and `/task` commands are gone: they
-presented a Thread list, and Attention derives per exact Run.
+older transcripts, but the tasks and task commands are gone: they presented a
+Thread list, and Attention derives per exact Run.
 
 ## Why the old Task lifecycle was removed
 
@@ -102,7 +102,7 @@ language-independent evidence exists:
 
 Lifecycle tools (`finish_run`, `update_plan`, `work_select`,
 `queue_user_input`) and read-only tools are not evidence. An OBSERVE
-projection never demotes a pinned or evidence-bearing Thread.
+projection never demotes an evidence-bearing Thread.
 
 A tool-free direct answer remains unlisted by default. Promotion is monotonic
 for automation: it never hides a listed Thread and never reopens an archived
@@ -200,19 +200,20 @@ queue. Prose such as “resume after approval” has no routing authority.
    plan, a non-lifecycle side-effect tool row, an approval, clarification, or
    watcher, a resume edge, or next steps).
 
-Items are person-partitioned; same-channel items rank first, then pinned
-Threads and stronger live signals outrank recency. `/status`, the attach
+Items are person-partitioned; same-channel items rank first, then stronger
+live signals outrank recency. `/status`, the attach
 digest, task cards, and the compatibility `Task.status` projection all read
 this one derivation instead of judging status separately.
 
-`/task <number|id> complete` means “dismiss this exact Run's Attention,” not
-“rewrite Runs to done.” It refuses a running Run, and it refuses while that Run
-still has a pending approval, a pending clarification, or a live watcher: an
-object that still needs an answer is answered, rejected, or cancelled, never
-hidden. It preserves approvals, watcher history, handoffs, and artifacts, and
-can be reversed by explicit resume. `/stop` without an active Run dismisses
-only the exact pinned Run under the same rule. `/task ... archive` changes
-presentation only and does not cancel effects or resolve pending input.
+Dismissal means “dismiss this exact Run's Attention,” not “rewrite Runs to
+done.” It refuses a running Run, and it refuses while that Run still has a
+pending approval, a pending clarification, or a live watcher: an object that
+still needs an answer is answered, rejected, or cancelled, never hidden. It
+preserves approvals, watcher history, handoffs, and artifacts, and can be
+reversed by explicit resume. `/stop` without an active Run is the surviving
+spelling and dismisses only the exact pinned Run under that rule. Archiving
+changes presentation only and does not cancel effects or resolve pending
+input.
 
 A Thread is settled when it is listed and has no undismissed running Run,
 pending approval/clarification, active watcher, or unclaimed resumable Run.
@@ -278,7 +279,10 @@ user message is the authoritative instruction.
 
 ## Retention, governance, and reset
 
-Automatic retention may archive only an old, unpinned, listed, settled Thread.
+Automatic retention may archive only an old, listed, settled Thread. What
+protects one is evidence — a live Run or unanswered human input — never a
+display flag: Thread pinning was removed in schema v16 because it let a
+presentation bit decide what counts as work.
 The final archive write repeats every live-fact predicate in its transaction so
 a concurrently created Run, approval, clarification, watcher, or resumable
 outcome cannot be hidden.

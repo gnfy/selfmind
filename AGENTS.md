@@ -220,7 +220,8 @@ daemon must not expose that directory as a product runtime Skill.
   model.
 - Automatic retention may archive stale, settled Threads with no live Run or
   pending human input. It never deletes Run/artifact history, touches Attention,
-  reopens an archive, or overrides a pin.
+  reopens an archive. What protects a Thread from it is evidence — a live Run
+  or unanswered human input — never a display flag.
 
 ## Models and Agent Loop
 

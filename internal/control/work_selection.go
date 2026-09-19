@@ -121,9 +121,11 @@ func (s *Store) RunSelectionEffectBoundary(ctx context.Context, tenantID, person
 // ProjectInteractionTask keeps an OBSERVE turn auditable while removing its
 // synthetic one-run label from ordinary task views. It fails closed if the
 // task has accumulated any other Run, because such a label may be user-owned.
-// Automation only moves visibility upward: a pinned Thread, a Run that did
-// work, or a Thread listed by promotion evidence keeps its place, and only a
-// tool-free interaction folds back into unlisted history.
+// Automation only moves visibility upward, and every protection rests on
+// EVIDENCE: a Run that did work, or a Run whose status still needs something,
+// keeps its Thread listed. Only a tool-free interaction folds back into
+// unlisted history. A pin used to be a fourth protection here — a display flag
+// deciding what counts as work — and nothing could set it.
 func (s *Store) ProjectInteractionTask(ctx context.Context, tenantID, personID, taskID, runID string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("control store is unavailable")
@@ -153,16 +155,12 @@ func (s *Store) ProjectInteractionTask(ctx context.Context, tenantID, personID, 
 	if exact != 1 {
 		return fmt.Errorf("interaction run does not belong to the task")
 	}
-	var pinned int
 	var visibility, status string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(t.pinned, 0), COALESCE(t.visibility, 'listed'), r.status
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(t.visibility, 'listed'), r.status
 		FROM threads t JOIN runs r ON r.tenant_id = t.tenant_id AND r.thread_id = t.id
 		WHERE t.tenant_id = ? AND t.person_id = ? AND t.id = ? AND r.id = ?`,
-		tenantID, personID, taskID, runID).Scan(&pinned, &visibility, &status); err != nil {
+		tenantID, personID, taskID, runID).Scan(&visibility, &status); err != nil {
 		return fmt.Errorf("interaction task not found: %w", err)
-	}
-	if pinned != 0 {
-		return nil
 	}
 	if evidence, err := runHasWorkEvidenceTx(ctx, tx, tenantID, runID); err != nil {
 		return err

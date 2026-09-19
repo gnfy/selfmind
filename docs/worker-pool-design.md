@@ -219,7 +219,7 @@ the dispatch-backed subcommands —
 `/skills` (history/undo/catalog/install/audit/delete/pin/reload), `/memory`
 (history/remove/undo/pin), `/bundles`, `/checkpoint`. Commands backed by
 tenant-scoped local helpers (`/skills list/view/search/archive`, `/curator`)
-already work client-side; `/status` and `/tasks` route through the message
+already work client-side; `/status` and `/resume` route through the message
 processor. The dispatch safelist is read/curate/learning-management tools only —
 **workspace-mutating / code-executing tools are refused** (HTTP 403) so
 `/v1/dispatch` is not a backdoor around workspace scope, approval, and run

@@ -337,7 +337,7 @@ func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *acti
 			statusText = task.Status + " (turn finished — reply to continue, or /new)"
 		}
 	}
-	fmt.Fprintf(&sb, "Task: %s\nStatus: %s\n", task.Title, statusText)
+	fmt.Fprintf(&sb, "Work: %s\nStatus: %s\n", task.Title, statusText)
 	if active != nil {
 		fmt.Fprintf(&sb, "\nRunning: %s elapsed\n", time.Since(active.StartedAt).Round(time.Second))
 	}

@@ -127,7 +127,7 @@ selfmind new [title]
   endpoint last displayed; a Thread id is accepted only when the Thread has
   exactly one unresolved Run.
 - `ws` is the whole workspace surface. There is no `workspace`, `workspaces`,
-  `ws list`, or `ws use` spelling: bare `ws` lists, and a bare number or id
+  ws list, or ws use spelling: bare `ws` lists, and a bare number or id
   selects.
 
 ```text

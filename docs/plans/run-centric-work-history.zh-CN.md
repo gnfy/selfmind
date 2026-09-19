@@ -378,7 +378,7 @@ object 写法也不成立：它保留 51 个声称需要 `*control.Task` 的签�
 | --- | --- |
 | `MergeTasks` 及重复检测 | 零生产调用方；`/task merge` 已随 `/task` 删除 |
 | `ReassignRun` | 零生产调用方；把 Run 在标签之间搬动是标签列表才需要的 |
-| 整个 task-reference 功能 | reference 是用来**定位 Task** 的；Task 消失后它无处可指。实测 0 行、0 次使用，`/task references` 已删。含 control 四个文件、gateway 路由与标注钩子、post-run 分析器的 wire 与**提示词段落**、CLI 迁移命令 |
+| 整个 task-reference 功能 | reference 是用来**定位 Task** 的；Task 消失后它无处可指。实测 0 行、0 次使用，`/task references` 已删。含 control 四个文件、gateway 路由与标注钩子、post-run 分析器的 wire 与**提示词段落**、CLI 迁移命令。**2026-09-19 收尾**：表结构（`task_references` / `task_reference_evidence`）、两处恒真的 `NOT EXISTS` 守卫、reset 管线与治理文档段落此前都还在，已随 schema v15 删除；升级 fixture 改为断言两张表被移除。post-run 分析器的 `task_decision` / `task_references` wire 字段**保留**，它们是冻结提案的解码兼容，代码注释已说明 |
 | `LatestIncompleteLoopCheckpoint` | 零生产调用方，而它的查询是 `tenant_id = ? AND thread_id = ?`——**连 person 都不过滤**，正是 §8.1 描述的最危险碰撞 |
 
 第二阶段引入 `ResumeLineRunIDs`：**一条工作线 = 一条 resume 链的全部 Run**，从任一成员都能取到，

@@ -182,9 +182,8 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 	// The interaction placeholder is empty now. Remove it unless a governed
 	// reference still points at it; then keep it as unlisted history.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM threads WHERE tenant_id = ? AND person_id = ? AND id = ?
-		AND NOT EXISTS (SELECT 1 FROM runs WHERE tenant_id = ? AND thread_id = ?)
-		AND NOT EXISTS (SELECT 1 FROM task_references WHERE tenant_id = ? AND thread_id = ?)`,
-		tenantID, personID, source.threadID, tenantID, source.threadID, tenantID, source.threadID); err != nil {
+		AND NOT EXISTS (SELECT 1 FROM runs WHERE tenant_id = ? AND thread_id = ?)`,
+		tenantID, personID, source.threadID, tenantID, source.threadID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE threads SET visibility = 'unlisted', updated_at = ?

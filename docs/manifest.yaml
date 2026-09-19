@@ -95,7 +95,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 4b7982be5254e929
+    source_hash: 70621859a712e232
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -109,7 +109,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: 62bf7cf97eee5354
+    source_hash: 884aae355de14c66
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -259,7 +259,8 @@ documents:
     state: active
     language: zh-CN
     approved_by: project-owner
-    review_by: 2026-09-18
+    review_by: 2026-10-10
+    verdict: "2026-09-19: continue. The core goal is met — Task holds no authority: execution belongs to Run, attention derives from control objects, approval grants are person-plus-class, and retrieval is keyed by run lineage. What remains is renaming and table drops, which the plan itself gates behind re-keying the thread-keyed store queries (74 at the start, 46 at the last review, 38 now; 11 still lack a person or run filter). That work does not affect the two lines the risk budget protects — task quality and cross-endpoint continuity — so it continues rather than blocking. Closed since the last review: the task-reference feature (schema v15) and Thread pinning (v16), both dead paths whose remaining guards could only ever pass. Next review 2026-10-10."
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference

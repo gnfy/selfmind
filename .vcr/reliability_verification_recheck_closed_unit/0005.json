@@ -1,0 +1,320 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " change"
+    },
+    {
+      "reasoning_content": " setting"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": " +"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Then"
+    },
+    {
+      "reasoning_content": " rever"
+    },
+    {
+      "reasoning_content": "ify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " criterion"
+    },
+    {
+      "reasoning_content": "/t"
+    },
+    {
+      "reasoning_content": "arget"
+    },
+    {
+      "reasoning_content": "/d"
+    },
+    {
+      "reasoning_content": "eps"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " replaces"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "call"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": "_k"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "DO"
+    },
+    {
+      "reasoning_content": "l"
+    },
+    {
+      "reasoning_content": "AJ"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "g"
+    },
+    {
+      "reasoning_content": "WD"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "n"
+    },
+    {
+      "reasoning_content": "q"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "n"
+    },
+    {
+      "reasoning_content": "GL"
+    },
+    {
+      "reasoning_content": "WR"
+    },
+    {
+      "reasoning_content": "202"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "These"
+    },
+    {
+      "reasoning_content": " are"
+    },
+    {
+      "reasoning_content": " dependent"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " change"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " sequential"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " patch"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Use"
+    },
+    {
+      "reasoning_content": " patch"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " setting"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " replace"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Work"
+    },
+    {
+      "content": " unit"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " closed"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " changing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " re"
+    },
+    {
+      "content": "-running"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " same"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12486,
+        "output_tokens": 192,
+        "cache_read_input_tokens": 11904,
+        "cache_miss_input_tokens": 582,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 76,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_qZuBvFfSkB1egc5EOEJ95860",
+          "Function": "patch",
+          "Args": "{\"patch\": \"*** Begin Patch\\n*** Update File: {{SELFMIND_VCR_WORKSPACE}}/setting.txt\\n@@\\n-7\\n+8\\n*** End Patch\"}"
+        }
+      ]
+    }
+  ]
+}

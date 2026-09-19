@@ -1,0 +1,452 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "Both"
+    },
+    {
+      "content": " deliverables"
+    },
+    {
+      "content": " are"
+    },
+    {
+      "content": " complete"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "source"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " contains"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " followed"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Verification"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "verify"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " tool"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " bound"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " criterion"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "source"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": " equals"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "source"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " local"
+    },
+    {
+      "content": "_d"
+    },
+    {
+      "content": "ependencies"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "[\""
+    },
+    {
+      "content": "source"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "\"]"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": " Command"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "test"
+    },
+    {
+      "content": " \"$"
+    },
+    {
+      "content": "("
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " source"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": ")\""
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " exited"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "evidence"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "call"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "ov"
+    },
+    {
+      "content": "Ov"
+    },
+    {
+      "content": "ow"
+    },
+    {
+      "content": "K"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "MW"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "es"
+    },
+    {
+      "content": "BY"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "M"
+    },
+    {
+      "content": "GI"
+    },
+    {
+      "content": "084"
+    },
+    {
+      "content": "06"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": ")."
+    },
+    {
+      "content": " Not"
+    },
+    {
+      "content": " repeated"
+    },
+    {
+      "content": " after"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " report"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".md"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " explains"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " verified"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " binding"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " back"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " written"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": " matches"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "No"
+    },
+    {
+      "content": " executable"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "result"
+    },
+    {
+      "content": ".md"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " per"
+    },
+    {
+      "content": " your"
+    },
+    {
+      "content": " instruction"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 12837,
+        "output_tokens": 145,
+        "cache_read_input_tokens": 3456,
+        "cache_miss_input_tokens": 9381,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

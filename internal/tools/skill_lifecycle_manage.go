@@ -102,12 +102,16 @@ func (t *SkillLifecycleManageTool) Execute(args map[string]interface{}) (string,
 
 func (t *SkillLifecycleManageTool) createCandidate(args map[string]interface{}, tenantID string) (string, error) {
 	skillKey := strings.TrimSpace(taskStringArg(args, "skill_key"))
-	name := kernel.SanitizeSkillName(taskStringArg(args, "name"))
+	// Validate the RAW name. SanitizeSkillName always yields a usable directory
+	// name and substitutes "unnamed-skill" for empty input, so checking its
+	// result can never detect a missing argument.
+	requestedName := strings.TrimSpace(taskStringArg(args, "name"))
 	content := strings.TrimSpace(taskStringArg(args, "content"))
 	evidenceSetHash := strings.TrimSpace(taskStringArg(args, "evidence_set_hash"))
-	if skillKey == "" || name == "" || content == "" || evidenceSetHash == "" {
+	if skillKey == "" || requestedName == "" || content == "" || evidenceSetHash == "" {
 		return "", fmt.Errorf("candidate_create requires skill_key, name, content, and evidence_set_hash")
 	}
+	name := kernel.SanitizeSkillName(requestedName)
 	var observationIDs []string
 	switch raw := args["observation_ids"].(type) {
 	case []string:
@@ -163,7 +167,13 @@ func (t *SkillLifecycleManageTool) listCandidates(args map[string]interface{}, t
 	if err != nil {
 		return "", err
 	}
-	name := kernel.SanitizeSkillName(taskStringArg(args, "name"))
+	// Sanitize only a filter that was actually given: SanitizeSkillName turns
+	// empty input into "unnamed-skill", so sanitizing first made the optional
+	// filter unconditional and no candidate could ever be listed.
+	name := ""
+	if requested := strings.TrimSpace(taskStringArg(args, "name")); requested != "" {
+		name = kernel.SanitizeSkillName(requested)
+	}
 	var lines []string
 	for _, version := range versions {
 		if name != "" && kernel.SanitizeSkillName(version.SkillName) != name {
@@ -297,8 +307,27 @@ func writeLifecycleVersionFile(store *control.Store, tenantID string, version *c
 		if key != version.SkillKey {
 			return "", fmt.Errorf("resolved Skill identity changed; refusing to overwrite %s", info.Path)
 		}
-		if info.Source != SkillSourceAgentCreated || info.Pinned || !info.Writable {
-			return "", fmt.Errorf("automatic lifecycle writes require a writable, unpinned, agent-created Skill")
+		// Two different authorities reach this write.
+		//
+		// The curator writes an asset this runtime authored and owns, and it
+		// must stay confined to those: automatic curation governs writable,
+		// unpinned, agent-created assets only.
+		//
+		// A person applying a reviewed candidate to their own repository's
+		// Skill is not that. The evidence still had to reach the class
+		// threshold to produce the candidate; what the person adds is the
+		// authority to write into their working tree, which no amount of
+		// evidence confers. Only /v1/dispatch sets direct_active, and the model
+		// cannot reach skill_lifecycle_manage at all, so this branch is only
+		// ever taken for a command the person typed.
+		if info.Pinned {
+			return "", fmt.Errorf("skill %q is pinned; unpin it before applying a new version", info.Name)
+		}
+		if info.Source != SkillSourceAgentCreated || !info.Writable {
+			scope, ok := InvocationScopeFromArgs(args)
+			if !ok || strings.TrimSpace(scope.SkillMutationMode) != kernel.SkillMutationDirect {
+				return "", fmt.Errorf("skill %q is yours to change; apply this version with /skills promote", info.Name)
+			}
 		}
 		if version.PackageHash != "" {
 			currentPackage, err := ReadSkillPackageForTenant(tenantID, version.SkillName, args)

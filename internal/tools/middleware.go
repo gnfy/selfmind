@@ -488,6 +488,10 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			}
 
 			dangerous, reason := dangerousToolCall(effectiveRoot, toolName, args)
+			// Kept separate because `reason` is overwritten below for the deny
+			// and mode paths, and the standing-grant guard must read what the
+			// DANGER detector said, not the latest message written for display.
+			dangerousReason := reason
 			externalUnknown := unclassifiedExternalToolCall(args)
 			// Live mode lookup: the mode is resolved PER ASK, not frozen at run
 			// start, so a /mode change from any endpoint governs the in-flight
@@ -631,10 +635,10 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			if !semanticReview && !denyForcesHuman && !externalUnknown && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
-					if key == "" {
+					if key == "" || !scope.StandingGrants.Allowed {
 						return false
 					}
-					granted, _ := scope.Grants.IsApprovalGranted(grantCtx, scope.TenantID, scope.PersonID, key)
+					granted, _ := scope.Grants.IsApprovalGranted(grantCtx, scope.TenantID, scope.PersonID, scope.WorkspaceID, key, scope.StandingGrants.NotAfter)
 					return granted
 				}
 				switch {
@@ -667,7 +671,47 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			triageRisk := ""
 			triageAuthorization := ""
 			decisionPolicy := ""
-			if semanticReview || externalUnknown || denyForcesHuman || containment.Filesystem == containmentFilesystemHost ||
+			// Host execution alone no longer forces a one-shot decision.
+			//
+			// It used to, and on a platform with no sandbox that is every exec
+			// call: 478 approvals over one week were all once-only and produced
+			// zero remembered decisions, so the person answered 9.5 times for
+			// each unit of work they had already accepted. The floor, not the
+			// filesystem, is what decides whether a class can bound a standing
+			// permission — and the class is now a verb-bounded prefix scoped to
+			// one workspace, so remembering `aws codebuild batch-get-builds`
+			// cannot release `aws codebuild start-build`.
+			//
+			// An uncontained payload keeps its one-shot decision in two cases.
+			//
+			// The floor refuses to classify it: `execute_code` runs a
+			// model-authored program, so there is nothing narrower than
+			// "arbitrary code" to remember and no reuse is safe.
+			//
+			// Or the dangerous-op heuristic flagged the COMMAND. Those classes —
+			// chmod, chown, mv, kill — are deliberately left OUT of the floor's
+			// banned set so they can be remembered under an ENFORCED sandbox,
+			// where the blast radius is the workspace. On the host there is no
+			// such bound, and a standing `chmod` would cover every path the
+			// person can reach.
+			//
+			// The reason has to be read, not just the flag: dangerousToolCall
+			// returns true with HostEscapeApprovalReason for EVERY host request,
+			// so treating the bare flag as "this command is destructive" would
+			// put every host call back on a one-shot decision and quietly undo
+			// the standing answer entirely.
+			//
+			// The test is "not provably isolated", not "host": an exec call
+			// whose sandbox mode failed to resolve is annotated with neither,
+			// and an unresolved mode is not evidence of containment.
+			hostWithoutClass := false
+			if isExecTool(toolName) && containment.Filesystem != containmentFilesystemIsolated {
+				destructive := dangerous && strings.TrimSpace(dangerousReason) != HostEscapeApprovalReason
+				if _, eligible := grantCommandPrefix(toolName, args); !eligible || destructive {
+					hostWithoutClass = true
+				}
+			}
+			if semanticReview || externalUnknown || denyForcesHuman || hostWithoutClass ||
 				(containment.Credentials == containmentCredentialsSelected && !containment.ObservationOnly) {
 				decisionPolicy = ApprovalDecisionPolicyOnceOnly
 			}
@@ -804,7 +848,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					}
 					return "", rejectOperation(rejectionCodeApproval, "operation rejected by approval "+decision.ApprovalID)
 				}
-				if decision.Scope != "" && decision.Scope != "run" {
+				if decision.Scope != "" && decision.Scope != "run" && decision.Scope != "workspace" {
 					return "", rejectOperation(rejectionCodeScope, fmt.Sprintf("operation rejected: approval scope %q was not offered for this request", decision.Scope))
 				}
 				if decisionPolicy == ApprovalDecisionPolicyOnceOnly && (decision.Scope != "" || strings.TrimSpace(decision.GrantKey) != "") {
@@ -998,6 +1042,13 @@ func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScop
 		if scope.runGrants != nil {
 			scope.runGrants.add(patternKey)
 		}
+	case "workspace":
+		// The key already carries the workspace fingerprint, so the scope row is
+		// what makes the grant reviewable and revocable by workspace rather than
+		// what bounds it.
+		if scope.Grants != nil && scope.PersonID != "" && strings.TrimSpace(scope.WorkspaceID) != "" {
+			_ = scope.Grants.GrantApproval(ctx, "workspace", scope.TenantID, scope.PersonID, scope.WorkspaceID, patternKey, expiresAt)
+		}
 	case "person":
 		if scope.Grants != nil && scope.PersonID != "" {
 			_ = scope.Grants.GrantApproval(ctx, "person", scope.TenantID, scope.PersonID, scope.PersonID, patternKey, expiresAt)
@@ -1005,20 +1056,23 @@ func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScop
 	}
 }
 
-// approvalGrantTTL bounds a remembered class. Host execution is the broadest
-// boundary a grant can authorize, so it is always time-bounded no matter which
-// scope the human chose; a person-scope grant is bounded because it outlives
-// every task. A task-scope grant of a sandboxed class stays unbounded because
-// the task id already bounds it and the task is durable, visible state.
-//
-// The 8h person window matches the execution-capability policy so the two
-// ledgers cannot disagree about how long "remember this" lasts.
+// approvalGrantPersonTTL bounds a PERSON-scope class, which outlives every
+// workspace and every unit of work and is therefore the one scope a deadline
+// is the right instrument for. The 8h window matches the execution-capability
+// policy so the two ledgers cannot disagree about how long "remember this"
+// lasts.
 const approvalGrantPersonTTL = 8 * time.Hour
 
+// approvalGrantExpiry leaves a workspace-scope class unbounded on purpose.
+//
+// Host execution used to force an 8h deadline on every remembered class. On a
+// platform with no sandbox that made the feature useless rather than safer: the
+// same release workflow re-asked the same questions the next morning, so a
+// deadline shorter than the work it covers is a deadline the person pays for
+// twice. What actually bounds a workspace class is that it is narrow (a
+// verb-bounded prefix), scoped (one workspace), listed (`/approvals rules`),
+// revocable, and re-checked against the floor whenever the floor changes.
 func approvalGrantExpiry(decisionScope string, args map[string]interface{}) time.Time {
-	if effectiveSandboxModeArg(args) == SandboxHost {
-		return time.Now().Add(approvalGrantPersonTTL)
-	}
 	if strings.EqualFold(strings.TrimSpace(decisionScope), "person") {
 		return time.Now().Add(approvalGrantPersonTTL)
 	}
@@ -1044,7 +1098,7 @@ func approvalPatternKeyForScope(toolName string, args map[string]interface{}, da
 	if isExecTool(toolName) {
 		// Floor first: a payload whose class cannot bound what will run is
 		// approvable once but never remembered (see grant_floor.go).
-		if _, eligible := grantCommandFamily(toolName, args); !eligible {
+		if _, eligible := grantCommandPrefix(toolName, args); !eligible {
 			return ""
 		}
 		base := "exec:" + toolName
@@ -1091,9 +1145,12 @@ func approvalResourceFingerprint(scope ExecutionScope, toolName string, args map
 // disagree with the eligibility decision: an ineligible payload has no family,
 // and approvalPatternKeyForScope has already refused a reusable key by the time
 // this is reached.
+//
+// The family is the whole verb-bounded prefix, so a remembered
+// `aws codebuild batch-get-builds` cannot release `aws codebuild start-build`.
 func execCommandFamily(toolName string, args map[string]interface{}) string {
-	if family, ok := grantCommandFamily(toolName, args); ok {
-		return family
+	if prefix, ok := grantCommandPrefix(toolName, args); ok {
+		return grantPrefixLabel(prefix)
 	}
 	return "unknown"
 }

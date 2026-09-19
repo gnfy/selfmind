@@ -1,0 +1,377 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " single"
+    },
+    {
+      "reasoning_content": " bound"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " checks"
+    },
+    {
+      "reasoning_content": " source"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": " equals"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Bind"
+    },
+    {
+      "reasoning_content": " criterion"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " target"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "ependencies"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Command"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "test"
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " source"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " don"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " hide"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " behind"
+    },
+    {
+      "reasoning_content": " echo"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " simple"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Actually"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " records"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "test"
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " source"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": "`.\n\n"
+    },
+    {
+      "reasoning_content": "That"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " fine"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Exit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " if"
+    },
+    {
+      "reasoning_content": " equal"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Bind"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " criterion"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "source"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": " equals"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " target"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "source"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "ependencies"
+    },
+    {
+      "reasoning_content": " [\""
+    },
+    {
+      "reasoning_content": "source"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "\"]."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10544,
+        "output_tokens": 221,
+        "cache_read_input_tokens": 10368,
+        "cache_miss_input_tokens": 176,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 116,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ovOvowK9MW2esBY2MGI08406",
+          "Function": "verify",
+          "Args": "{\"command\": \"test \\\"$(cat source.txt)\\\" = \\\"7\\\"\", \"check\": {\"criterion\": \"source value equals 7\", \"target\": \"source.txt\", \"local_dependencies\": [\"source.txt\"]}, \"kind\": \"custom\"}"
+        }
+      ]
+    }
+  ]
+}

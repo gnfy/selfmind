@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "setting.txt criterion target local_dependencies replaces"
+}

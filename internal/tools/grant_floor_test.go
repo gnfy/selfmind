@@ -15,7 +15,7 @@ func TestGrantFloorRejectsUnboundedClasses(t *testing.T) {
 	}{
 		// The two live leaks: a person-scope host grant keyed `command:set` and
 		// `command:for` authorised every script that merely started that way.
-		{"leading set builtin keeps the real family", "set -euo pipefail\ngcloud builds list --project p", "gcloud", true},
+		{"leading set builtin keeps the real family", "set -euo pipefail\ngcloud builds list --project p", "gcloud builds list", true},
 		{"for loop is control flow, not a family", "for t in a b c; do gcloud builds describe t --project p; done", "", false},
 		{"if block is control flow", "if gcloud auth list; then gcloud config list; fi", "", false},
 		{"set with two programs is not a family", "set -euo pipefail\nmkdir p\ngcloud builds list", "", false},
@@ -29,7 +29,7 @@ func TestGrantFloorRejectsUnboundedClasses(t *testing.T) {
 		// A shell wrapper we CAN see through keys on the unwrapped program, which
 		// is narrower than codex's literal-prefix model: `bash -lc 'rm -rf /'`
 		// still resolves to a banned program and is refused below.
-		{"transparent shell wrapper keys on the payload", "bash -lc 'gcloud builds list'", "gcloud", true},
+		{"transparent shell wrapper keys on the payload", "bash -lc 'gcloud builds list'", "gcloud builds list", true},
 		{"transparent wrapper around a banned program", "bash -lc 'rm -rf /tmp/x'", "", false},
 
 		// Ordinary dangerous operations stay approvable classes.
@@ -44,19 +44,21 @@ func TestGrantFloorRejectsUnboundedClasses(t *testing.T) {
 		{"heredoc", "kubectl apply -f - <<EOF\nkind: Pod\nEOF", "", false},
 
 		// Plain single-program invocations remain grantable.
-		{"plain gcloud", "gcloud builds list --project p --region us-east4", "gcloud", true},
-		{"same program twice", "gcloud config list && gcloud auth list", "gcloud", true},
+		{"plain gcloud", "gcloud builds list --project p --region us-east4", "gcloud builds list", true},
+		{"same program twice", "gcloud config list && gcloud config list", "gcloud config list", true},
+		{"same program, different operations", "gcloud config list && gcloud auth list", "", false},
 		{"two distinct programs", "gcloud auth list && kubectl get ns", "", false},
 		{"empty payload", "", "", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			family, ok := grantCommandFamily("terminal", execArgs(tc.command))
+			prefix, ok := grantCommandPrefix("terminal", execArgs(tc.command))
+			family := grantPrefixLabel(prefix)
 			if ok != tc.ok {
-				t.Fatalf("grantCommandFamily(%q) eligible = %v (family %q), want %v", tc.command, ok, family, tc.ok)
+				t.Fatalf("grantCommandPrefix(%q) eligible = %v (prefix %q), want %v", tc.command, ok, family, tc.ok)
 			}
 			if ok && family != tc.family {
-				t.Fatalf("grantCommandFamily(%q) family = %q, want %q", tc.command, family, tc.family)
+				t.Fatalf("grantCommandPrefix(%q) prefix = %q, want %q", tc.command, family, tc.family)
 			}
 		})
 	}
@@ -65,7 +67,7 @@ func TestGrantFloorRejectsUnboundedClasses(t *testing.T) {
 // execute_code runs a model-authored program: there is no class narrower than
 // "arbitrary code", so approving it must never be remembered.
 func TestGrantFloorRefusesExecuteCode(t *testing.T) {
-	if _, ok := grantCommandFamily("execute_code", map[string]interface{}{
+	if _, ok := grantCommandPrefix("execute_code", map[string]interface{}{
 		"_tool_name": "execute_code",
 		"code":       "print(1)",
 	}); ok {

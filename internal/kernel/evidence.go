@@ -20,6 +20,7 @@ type RunEvidence struct {
 
 type FileEffect struct {
 	Path         string `json:"path"`
+	ResolvedPath string `json:"resolved_path,omitempty"`
 	Operation    string `json:"operation"`
 	BeforeSHA256 string `json:"before_sha256,omitempty"`
 	AfterSHA256  string `json:"after_sha256,omitempty"`

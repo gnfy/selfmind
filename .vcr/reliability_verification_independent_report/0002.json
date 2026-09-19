@@ -1,0 +1,254 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " create"
+    },
+    {
+      "reasoning_content": " source"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " create"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " using"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": "_file"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Care"
+    },
+    {
+      "reasoning_content": "ful"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": "_file"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " ensure"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " followed"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Then"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " create"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " separate"
+    },
+    {
+      "reasoning_content": " since"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " depends"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " existing"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10353,
+        "output_tokens": 131,
+        "cache_read_input_tokens": 9728,
+        "cache_miss_input_tokens": 625,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 75,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_HEc7kvSsP3dXiVBan4Zb4014",
+          "Function": "write_file",
+          "Args": "{\"path\": \"source.txt\", \"content\": \"7\\n\"}"
+        }
+      ]
+    }
+  ]
+}

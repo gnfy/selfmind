@@ -82,3 +82,40 @@ func TestCorrectedVerificationCanCloseRequiredWorkUnit(t *testing.T) {
 		t.Fatalf("history lost: %d %v", count, err)
 	}
 }
+
+func TestDeclaredVerificationCanBeRecheckedAfterUnitCloses(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	plan, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "check", []RunPlanStepInput{{Step: "Inspect input", Status: "in_progress"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := []string{"/workspace/source"}
+	b := verification.Binding{Version: 2, Criterion: "value matches", Target: "source", LocalDependencies: &deps}
+	payload, _ := json.Marshal(map[string]interface{}{"evidence": map[string]interface{}{"tool_call_id": "original", "kind": "verification", "status": "succeeded", "started_at_unix_nano": 10, "finished_at_unix_nano": 20, "command": map[string]interface{}{"command": "check", "cwd": "/workspace", "binding": b}}})
+	if _, err := store.AppendEvent(ctx, Event{RunID: run.ID, Type: "evidence.recorded", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "checked", []RunPlanStepInput{{StepID: plan.Plan.Steps[0].StepID, Step: "Inspect input", Status: "completed"}}); err != nil {
+		t.Fatal(err)
+	}
+	b.Replaces, b.Reason = "original", "recheck unchanged criterion after input changed"
+	if err := store.ValidateVerificationReplacement(ctx, identity.TenantID, run.ID, b, "/workspace"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ValidateVerificationReplacement(ctx, "foreign", run.ID, b, "/workspace"); err == nil {
+		t.Fatal("cross-tenant evidence accepted")
+	}
+	if err := store.ValidateVerificationReplacement(ctx, identity.TenantID, "another-run", b, "/workspace"); err == nil {
+		t.Fatal("cross-Run evidence accepted")
+	}
+	units, err := store.ListRunWorkUnits(ctx, identity.TenantID, run.ID)
+	if err != nil || len(units) != 1 || units[0].Status != WorkUnitCompleted || units[0].VerificationState != "passed" {
+		t.Fatalf("historical unit changed: %+v %v", units, err)
+	}
+	empty := []string{}
+	b.LocalDependencies = &empty
+	if err := store.ValidateVerificationReplacement(ctx, identity.TenantID, run.ID, b, "/workspace"); err == nil {
+		t.Fatal("dropped dependency accepted")
+	}
+}

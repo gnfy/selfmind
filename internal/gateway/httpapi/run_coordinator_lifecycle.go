@@ -76,7 +76,7 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		if recorded, ok := c.latestStructuredRunOutcome(finCtx, task.ID, run.ID); ok {
 			structured = true
 			outcome = reconcileStructuredOutcome(recorded)
-			verification, evidenceFiles := c.evidenceOutcome(finCtx, task.TenantID, task.ID, run.ID)
+			verification, evidenceFiles := c.evidenceOutcome(finCtx, task.TenantID, run.ID)
 			outcome.Verification, outcome.Files = verification, evidenceFiles
 			outcome = applyVerificationOutcome(outcome)
 		}
@@ -415,6 +415,11 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 		TenantID:         identity.TenantID,
 		PersonID:         identity.PersonID,
 		ExecutionProfile: req.ExecutionProfile,
+		// Which remembered classes this run may consume. A person's own turn,
+		// and the daemon-started continuations of it (an answered approval, a
+		// finished watcher, a recovered run), carry their decisions. A schedule
+		// carries only what existed when the person created it.
+		StandingGrants: standingGrantPolicy(ctx, req),
 	}
 	if workspace != nil {
 		scope.WorkspaceID = workspace.ID

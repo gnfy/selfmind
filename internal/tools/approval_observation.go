@@ -14,9 +14,47 @@ type observationRule struct {
 	reject         []string
 	anyArgs        bool
 	credentialSafe bool
+	// verify is an extra predicate for a program whose read/write split is not
+	// expressible as a leading subcommand plus a list of forbidden substrings.
+	// It runs after reject and before prefix matching, and it must fail closed.
+	verify func(args []string) bool
 }
 
 var observationRules = []observationRule{
+	// Shell builtins that produce no effect of their own. They are here because
+	// a payload's FIRST segment is usually one of them: 64% of one week's real
+	// commands led with `cd`, and an unknown program fails the whole check at
+	// that first segment, so what followed was never even classified.
+	//
+	// This set is deliberately NARROWER than grant_floor.go's shellNeutralWords,
+	// which answers a different question ("may this word name a remembered
+	// class"). `trap` can carry a command body, and `read`/`declare`/`local`
+	// bind names a later segment may expand, so neither belongs here: this list
+	// must mean "runs and changes nothing outside the shell".
+	{program: "cd", anyArgs: true}, {program: "set", anyArgs: true},
+	{program: "export", anyArgs: true}, {program: "umask", anyArgs: true},
+	{program: "true", anyArgs: true}, {program: "false", anyArgs: true},
+	{program: "test", anyArgs: true}, {program: "[", anyArgs: true}, {program: ":", anyArgs: true},
+	{program: "which", anyArgs: true},
+	// Ordinary read-only filters. They dominate the middle of a pipeline, and
+	// without them a single `| head` disqualified an otherwise provable command.
+	// Each one that CAN write names the flag that does so in reject.
+	{program: "tr", anyArgs: true}, {program: "cut", anyArgs: true},
+	{program: "nl", anyArgs: true}, {program: "seq", anyArgs: true},
+	{program: "paste", anyArgs: true}, {program: "comm", anyArgs: true},
+	{program: "column", anyArgs: true}, {program: "diff", anyArgs: true},
+	{program: "od", anyArgs: true},
+	{program: "shasum", anyArgs: true}, {program: "sha256sum", anyArgs: true},
+	{program: "md5", anyArgs: true}, {program: "md5sum", anyArgs: true},
+	{program: "sort", anyArgs: true, reject: []string{"-o", "--output"}},
+	{program: "base64", anyArgs: true, reject: []string{"-o", "--output"}},
+	{program: "date", anyArgs: true, reject: []string{"-s", "--set"}},
+	// `uniq`, `tee` and `xxd` are deliberately absent: uniq and xxd write to a
+	// second positional argument and tee writes to every one, and the rule shape
+	// here cannot express "no positional output". `xxd in out` and especially
+	// `xxd -r dump.hex out.bin` write an arbitrary file with no flag to reject,
+	// and this catalog also decides what a durable watcher may re-run unattended.
+	// `od` stays because every operand it takes is an input.
 	{program: "ls", anyArgs: true}, {program: "pwd", anyArgs: true},
 	{program: "printf", anyArgs: true}, {program: "echo", anyArgs: true}, {program: "sleep", anyArgs: true},
 	{program: "cat", anyArgs: true}, {program: "head", anyArgs: true},
@@ -32,7 +70,13 @@ var observationRules = []observationRule{
 	{program: "aws", credentialSafe: true, prefixes: [][]string{{"sts", "get-caller-identity"}, {"codebuild", "batch-get-builds"}, {"codebuild", "batch-get-projects"}, {"codebuild", "list-builds"}, {"codebuild", "list-builds-for-project"}, {"codepipeline", "get-pipeline-execution"}, {"codepipeline", "list-pipeline-executions"}, {"iam", "get-role"}, {"iam", "get-role-policy"}, {"iam", "get-policy"}, {"iam", "get-policy-version"}, {"iam", "list-roles"}, {"iam", "list-policies"}, {"iam", "list-role-policies"}, {"iam", "list-attached-role-policies"}, {"iam", "simulate-principal-policy"}, {"kms", "describe-key"}, {"kms", "get-key-policy"}, {"kms", "list-keys"}, {"kms", "list-aliases"}, {"ssm", "describe-parameters"}}},
 	{program: "kubectl", credentialSafe: true, prefixes: [][]string{{"get"}, {"describe"}, {"diff"}, {"logs"}, {"version"}, {"cluster-info"}, {"auth", "can-i"}}, reject: []string{"secret", "secrets", "--raw"}},
 	{program: "helm", credentialSafe: true, prefixes: [][]string{{"list"}, {"status"}, {"history"}, {"show"}, {"search"}, {"template"}, {"lint"}, {"env"}, {"version"}}},
-	{program: "gh", credentialSafe: true, prefixes: [][]string{{"pr", "view"}, {"pr", "list"}, {"pr", "status"}, {"run", "view"}, {"run", "list"}, {"repo", "view"}, {"status"}}},
+	// `gh api` defaults to GET but can perform every method through the same
+	// subcommand, so the verb decides whether this is an observation. A
+	// substring reject list is not enough to decide that: it read `-X=DELETE`
+	// and `-XDELETE` as GETs. ghObservationSafe parses the verb with the same
+	// function the class derivation uses. A request body still disqualifies the
+	// call outright, whatever its verb.
+	{program: "gh", credentialSafe: true, verify: ghObservationSafe, reject: []string{"--input", "--field", "-f ", "-f=", "--raw-field", "-f'"}, prefixes: [][]string{{"pr", "view"}, {"pr", "list"}, {"pr", "status"}, {"run", "view"}, {"run", "list"}, {"repo", "view"}, {"status"}, {"api"}}},
 	{program: "argocd", credentialSafe: true, prefixes: [][]string{{"app", "get"}, {"app", "list"}, {"app", "diff"}, {"app", "manifests"}, {"version"}, {"account", "get-user-info"}}},
 }
 
@@ -73,8 +117,26 @@ func deterministicObservationExec(toolName string, args map[string]interface{}) 
 		if !ok || !rule.matches(commandArgs) || (credentialed && program == "jq" && !credentialSafeJQ(commandArgs)) {
 			return false
 		}
+		if rule.verify != nil && !rule.verify(commandArgs) {
+			return false
+		}
 	}
 	return true
+}
+
+// ghObservationSafe rejects a `gh api` call that is not provably a read. Every
+// other gh subcommand in the catalog names its own read-only operation, so only
+// `api` needs the check. An unresolvable verb is a mutation.
+func ghObservationSafe(args []string) bool {
+	if len(args) == 0 || strings.ToLower(strings.Trim(strings.TrimSpace(args[0]), `"'`)) != "api" {
+		return true
+	}
+	method, ok := apiMethodFromArgs(args)
+	if !ok {
+		return false
+	}
+	_, read := apiReadMethods[method]
+	return read
 }
 
 // credentialSafeJQ permits the common "cloud CLI | jq 'literal-filter'" shape

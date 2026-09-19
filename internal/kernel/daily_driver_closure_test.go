@@ -19,16 +19,50 @@ func (*mediumResultBackend) Dispatch(_ string, args map[string]interface{}) (str
 type mediumResultProvider struct {
 	multiToolProvider
 	maxBytes int
+	// seen records each tool result the FIRST time a request carried it, keyed
+	// by tool-call id, so a later request that changed one is detectable.
+	seen     map[string]string
+	rewrites []string
 }
 
 func (p *mediumResultProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	if n := liveToolResultBytes(req.Messages); n > p.maxBytes {
 		p.maxBytes = n
 	}
+	if p.seen == nil {
+		p.seen = map[string]string{}
+	}
+	for _, msg := range req.Messages {
+		if msg.Role != "tool" {
+			continue
+		}
+		if before, ok := p.seen[msg.ToolCallID]; ok {
+			if before != msg.Content {
+				p.rewrites = append(p.rewrites, msg.ToolCallID)
+			}
+			continue
+		}
+		p.seen[msg.ToolCallID] = msg.Content
+	}
 	return p.multiToolProvider.StreamChat(ctx, req)
 }
 
-func TestRunBoundsCumulativeMediumToolResults(t *testing.T) {
+// TestRunNeverRewritesASentToolResult is the prompt-cache contract. A tool
+// result's bytes are decided when it is packaged; changing them afterwards
+// moves the request prefix, and the provider's cache breaks from the first
+// changed message onward. Five results that each fit the per-result cap but
+// together exceed the old 32 KiB rolling window must therefore reach the
+// provider whole and stay byte-identical for the rest of the turn.
+//
+// Measured on 2026-09-18, live tool results averaged 71 KiB per run against
+// that 32 KiB window, so it fired on nearly every turn: 166 of 192 cold
+// provider calls immediately followed one of its rewrites, and cold calls
+// carried 7.7M of the day's 9.2M uncached input tokens. The window bought back
+// tens of kilobytes of cached tokens by making hundreds of kilobytes uncached.
+//
+// The spool_failure branch keeps the original incident's guard: evidence that
+// could not be made addressable is never shortened.
+func TestRunNeverRewritesASentToolResult(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint("spool_failure=", fail), func(t *testing.T) {
 			provider := &mediumResultProvider{multiToolProvider: multiToolProvider{toolTurns: 5}}
@@ -38,11 +72,16 @@ func TestRunBoundsCumulativeMediumToolResults(t *testing.T) {
 			if _, _, err := agent.RunConversation(ctx, "test", "cli", "inspect five files"); err != nil {
 				t.Fatal(err)
 			}
-			if !fail && (provider.maxBytes > toolResultTurnBudgetBytes || len(sink.saved) == 0) {
-				t.Fatalf("medium results escaped cumulative budget: max=%d saved=%d", provider.maxBytes, len(sink.saved))
+			if len(provider.rewrites) != 0 {
+				t.Fatalf("results were rewritten after being sent, breaking the prefix: %v", provider.rewrites)
 			}
-			if fail && provider.maxBytes < 5*16000 {
-				t.Fatalf("unrecoverable evidence was discarded: max=%d", provider.maxBytes)
+			// Whole, not shrunk: five 16000-byte results are the ordinary
+			// working size and must simply be carried.
+			if provider.maxBytes < 5*16000 {
+				t.Fatalf("a result was shortened before the reclaim ceiling: max=%d", provider.maxBytes)
+			}
+			if provider.maxBytes > toolResultReclaimCeilingBytes {
+				t.Fatalf("the reclaim ceiling was not enforced: max=%d", provider.maxBytes)
 			}
 		})
 	}

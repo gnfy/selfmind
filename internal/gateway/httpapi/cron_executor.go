@@ -68,6 +68,12 @@ func (e *CronExecutor) RunCronJob(ctx context.Context, job cron.CronJob) error {
 		// it as a result line instead of replaying its progress (run.started
 		// carries the origin; the ctx tag below does not survive an async run).
 		Origin: runOriginCron,
+		// The person authorised this work when they created the schedule, so
+		// the turn may use the remembered classes that existed at that instant
+		// and no later ones. A job with no authorisation instant uses none and
+		// asks, which is what an unattended fire did before standing classes
+		// existed.
+		StandingGrantsAuthorizedAt: job.AuthorizedAt,
 	}
 	// Stable label binding (W6): a learned task id rides the request as
 	// explicit attach evidence, so every fire of a daily job lands on the

@@ -1,0 +1,314 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": "'ve"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": " middle"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " found"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "R"
+    },
+    {
+      "reasoning_content": "BP"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "841"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "-M"
+    },
+    {
+      "reasoning_content": "ID"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " at"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_select"
+    },
+    {
+      "reasoning_content": "(res"
+    },
+    {
+      "reasoning_content": "ume"
+    },
+    {
+      "reasoning_content": ")"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_f"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "bd"
+    },
+    {
+      "reasoning_content": "151"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "779"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "47"
+    },
+    {
+      "reasoning_content": "bd"
+    },
+    {
+      "reasoning_content": "-a"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "fa"
+    },
+    {
+      "reasoning_content": "-f"
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": "aa"
+    },
+    {
+      "reasoning_content": "ed"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "833"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Found"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "MARK"
+    },
+    {
+      "content": "ER"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "CODE"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " R"
+    },
+    {
+      "content": "BP"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "841"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "-M"
+    },
+    {
+      "content": "ID"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "150"
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Now"
+    },
+    {
+      "content": " claiming"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " continuation"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " Run"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 17221,
+        "output_tokens": 172,
+        "cache_read_input_tokens": 11136,
+        "cache_miss_input_tokens": 6085,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 62,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_Ns6poIjXTWPDQ6LqlSyr7319",
+          "Function": "work_select",
+          "Args": "{\"action\": \"resume\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

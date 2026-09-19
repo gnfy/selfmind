@@ -21,10 +21,10 @@ const (
 	// the middle is dropped at intake and exists nowhere (not even in the
 	// artifact spool). Protects daemon memory from a runaway command.
 	toolResultRawCapBytes = 2 << 20 // 2 MiB
-	// toolResultAgedBytes is the shrink target for artifact-backed tool
-	// results that have aged out of the recent iterations of the SAME turn:
-	// the model can read the full output back by reference at any time, so
-	// aging them down is lossless (unlike codex, where the middle is gone).
+	// toolResultAgedBytes is the shrink target the reclaim safety valve uses
+	// for one artifact-backed result: the model can read the full output back
+	// by reference at any time, so shrinking it is lossless. Content with no
+	// artifact reference is never shrunk, because that would lose evidence.
 	toolResultAgedBytes = 4096
 	// toolArtifactNoteToken marks a model-surface truncation note that carries
 	// an artifact reference. The aged-shrink pass in the agent loop only
@@ -409,20 +409,38 @@ func toolResultModelContent(raw string) (string, bool) {
 	return textutil.HeadTail(raw, keep, marker), true
 }
 
-// toolResultAgeIterations is how many agent-loop iterations an artifact-backed
-// tool result stays verbatim before shrinkAgedToolResult ages it down.
-const toolResultAgeIterations = 3
-
-// toolResultTurnBudgetBytes bounds the TOTAL live tool-result bytes in one
-// turn's working window.
+// A tool result's bytes are decided ONCE, when the result is packaged, and are
+// never rewritten afterwards.
 //
-// Per-result bounding and the age rule are both per-result, so several results
-// just under toolResultModelBytes could legitimately coexist inside the age
-// window: five of them is more context than the entire tool catalogue. Measured
-// on real traffic, current_tool_results averaged about as much as tool_schemas
-// and peaked far higher, which is a cumulative problem no per-result cap can
-// see. This is the cumulative cap.
-const toolResultTurnBudgetBytes = 32768
+// packageToolResultCtx caps the model surface at toolResultModelBytes and spills
+// the remainder to an artifact the model can read back by range, so the bound is
+// paid at production and the message is immutable from that moment. Rewriting a
+// result after it has been sent changes the request prefix, and the provider's
+// cache breaks from the first changed message onward: every later turn re-sends
+// everything from there uncached. Measured on 2026-09-18, 166 of 192 cold calls
+// immediately followed such a rewrite, and cold calls carried 7.7M of the day's
+// 9.2M uncached input tokens.
+//
+// Two rewrite passes used to run inside the turn: an age rule that shrank every
+// result three iterations after it arrived, and a 32 KiB cumulative window. The
+// same day's traffic shows why both were the wrong trade: live tool results
+// averaged 71 KiB per run and peaked at 143 KiB, so the window was below the
+// ordinary working size and fired on nearly every turn. It bought back tens of
+// kilobytes of CACHED tokens by making hundreds of kilobytes uncached.
+//
+// What remains is a safety valve, not a window. It exists only so one runaway
+// run cannot crowd the window before ordinary context compaction notices, and
+// its ceiling sits well above the observed peak so normal work never pays. When
+// it does fire it is a deliberate, logged cache reset, in the same class as
+// compaction.
+const toolResultReclaimCeilingBytes = 256 << 10
+
+// toolResultReclaimTargetBytes is how far one reclaim trims once the ceiling is
+// crossed. Trimming to exactly the ceiling would leave no headroom and fire
+// again on the next result; trimming deeper costs nothing extra, because the
+// oldest oversized result is rewritten either way and the cache therefore
+// breaks at the same point.
+const toolResultReclaimTargetBytes = 192 << 10
 
 // liveToolResultBytes totals the tool-result bytes currently replayed to the
 // model.
@@ -436,32 +454,52 @@ func liveToolResultBytes(messages []llm.Message) int {
 	return total
 }
 
-// enforceToolResultTurnBudget ages artifact-backed tool results down,
-// oldest-first, until the live total fits toolResultTurnBudgetBytes. It returns
-// how many messages it shrank.
+// reclaimToolResultBytes is the safety valve described above: it does nothing
+// until live tool results cross toolResultReclaimCeilingBytes, then shrinks
+// artifact-backed results oldest-first down to toolResultReclaimTargetBytes and
+// returns how many messages it rewrote. A caller that gets 0 back knows the
+// request prefix is unchanged.
 //
 // Shrinking is lossless: medium results are saved on demand before being
 // shortened, and existing artifact references survive further shrinking.
-// A missing or failed sink retains the bytes even if that exceeds the budget.
-func enforceToolResultTurnBudget(ctx context.Context, messages []llm.Message) int {
+// A missing or failed sink retains the bytes even if that exceeds the ceiling.
+func reclaimToolResultBytes(ctx context.Context, messages []llm.Message) int {
 	total := liveToolResultBytes(messages)
-	if total <= toolResultTurnBudgetBytes {
+	if total <= toolResultReclaimCeilingBytes {
 		return 0
 	}
-	shrunkCount := 0
-	toolCount := 0
-	for _, msg := range messages {
+	toolCount, newest := 0, -1
+	for index, msg := range messages {
 		if msg.Role == "tool" {
 			toolCount++
+			newest = index
 		}
 	}
-	limit := min(toolResultAgedBytes, max(512, toolResultTurnBudgetBytes/(toolCount+1)))
+	limit := min(toolResultAgedBytes, max(512, toolResultReclaimCeilingBytes/(toolCount+1)))
 	sink := ToolArtifactSinkFromContext(ctx)
+	// The result this turn just received is the evidence the model is about to
+	// reason over, so reclaiming must not consume it. Trim the older results to
+	// the target first; only if the window still exceeds the CEILING without it
+	// does the newest result give way too.
+	shrunkCount, total := ageToolResultsTo(ctx, messages, sink, limit, toolResultReclaimTargetBytes, total, newest)
+	if total > toolResultReclaimCeilingBytes {
+		lastResort, _ := ageToolResultsTo(ctx, messages, sink, limit, toolResultReclaimCeilingBytes, total, -1)
+		shrunkCount += lastResort
+	}
+	return shrunkCount
+}
+
+// ageToolResultsTo shrinks artifact-backed results oldest-first until the live
+// total reaches stopAt, leaving the message at skipIndex untouched. It returns
+// how many messages it shrank and the resulting live total. A result that
+// cannot be made addressable is left whole, so the total may stay above stopAt.
+func ageToolResultsTo(ctx context.Context, messages []llm.Message, sink ToolArtifactSink, limit, stopAt, total, skipIndex int) (int, int) {
+	shrunkCount := 0
 	for index := range messages {
-		if total <= toolResultTurnBudgetBytes {
+		if total <= stopAt {
 			break
 		}
-		if messages[index].Role != "tool" || len(messages[index].Content) <= limit {
+		if index == skipIndex || messages[index].Role != "tool" || len(messages[index].Content) <= limit {
 			continue
 		}
 		before := len(messages[index].Content)
@@ -484,20 +522,10 @@ func enforceToolResultTurnBudget(ctx context.Context, messages []llm.Message) in
 		total -= before - len(shrunk)
 		shrunkCount++
 	}
-	return shrunkCount
+	return shrunkCount, total
 }
 
 var toolArtifactIDPattern = regexp.MustCompile(`saved as artifact (art_[A-Za-z0-9_-]+)`)
-
-// shrinkAgedToolResult ages one artifact-backed tool result out of the working
-// window (codex-style history re-truncation, made lossless by the artifact
-// spool): the head/tail shrink to toolResultAgedBytes around a note that keeps
-// the artifact id readable, so the model can still fetch any byte range via
-// tool_output_view. Content without an artifact reference is returned
-// unchanged — shrinking is only safe when the full output stays addressable.
-func shrinkAgedToolResult(content string) (string, bool) {
-	return shrinkToolResultToBytes(content, toolResultAgedBytes)
-}
 
 func shrinkToolResultToBytes(content string, limit int) (string, bool) {
 	if len(content) <= limit {

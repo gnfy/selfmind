@@ -28,8 +28,8 @@ const (
 
 	// developerAgentOnlySkillMarker lets a repository keep Agent Skills for
 	// coding assistants under .agents/skills without exposing those instructions
-	// to SelfMind's product runtime. The marker is intentionally local to one
-	// directory-form Skill; it never hides an entire root.
+	// to SelfMind's product runtime. The marker is local to one directory-form
+	// Skill; it never hides an entire root.
 	developerAgentOnlySkillMarker = ".selfmind-developer-only"
 )
 
@@ -225,7 +225,7 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 		// workspace Skills. Ancestor discovery is only for direct local callers
 		// whose cwd may be a subdirectory of the project.
 		if workspaceStart != "" {
-			workspaceDirs = []string{workspaceStart}
+			workspaceDirs = skillRootSearchDirs(workspaceStart)
 		}
 	} else if cwd, err := os.Getwd(); err == nil {
 		// Outside an active run (for example a local TUI slash command), the
@@ -241,6 +241,11 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 			addExistingRoot(filepath.Join(dir, ".selfmind", "skills"), SkillScopeWorkspace, "workspace", SkillProvenanceFirstParty, true, priority)
 			priority += 10
 			addExistingRoot(filepath.Join(dir, ".agents", "skills"), SkillScopeWorkspace, "codex-compatible", SkillProvenanceFirstParty, false, priority)
+			priority += 10
+			// The other cross-vendor convention. Repositories commonly keep one
+			// real directory and symlink the other, so a package found through
+			// both is deduplicated by resolved path, not by root.
+			addExistingRoot(filepath.Join(dir, ".claude", "skills"), SkillScopeWorkspace, "claude-compatible", SkillProvenanceFirstParty, false, priority)
 			priority += 10
 			addExistingRoot(filepath.Join(dir, "skills"), SkillScopeWorkspace, "workspace", SkillProvenanceFirstParty, false, priority)
 			priority += 10
@@ -294,6 +299,79 @@ func activeSkillWorkspaceUntrusted(tenantID string, invocation ...map[string]int
 	}
 	scope, ok := currentExecutionScopeAny(args)
 	return ok && scope.TrustLevel == executionenv.TrustUntrusted
+}
+
+// skillRootSearchDirs returns the directories under a workspace root that may
+// carry their own Skill directories: the root itself plus a bounded descent.
+//
+// A workspace is often a container of several repositories, each with its own
+// `.agents/skills`; a workspace that IS one repository is the depth-0 case of
+// the same rule. Expressing both as one bounded descent avoids inferring a
+// "layout mode", which would be a scenario branch in generic discovery code.
+//
+// The descent never follows symlinks and never enters a skill container
+// directory: the children of `.agents/skills` are packages, not further search
+// roots.
+func skillRootSearchDirs(start string) []string {
+	start = filepath.Clean(start)
+	dirs := []string{start}
+	var walk func(dir string, depth int)
+	walk = func(dir string, depth int) {
+		if depth >= skillRootSearchMaxDepth || len(dirs) >= skillRootSearchMaxDirs {
+			return
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return
+		}
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			// entry.IsDir() is false for a symlink, which is what we want here:
+			// a linked directory is reachable through its real parent.
+			if !entry.IsDir() {
+				continue
+			}
+			// Dot directories are never descended. The convention directories
+			// are themselves dot directories and are reached by name, not by
+			// descent, so this costs nothing and removes the need for a skip
+			// list that would have to keep pace with every tool's cache dir.
+			if strings.HasPrefix(entry.Name(), ".") {
+				continue
+			}
+			if _, skip := skillRootSearchSkipDirs[entry.Name()]; skip {
+				continue
+			}
+			names = append(names, entry.Name())
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			if len(dirs) >= skillRootSearchMaxDirs {
+				return
+			}
+			child := filepath.Join(dir, name)
+			dirs = append(dirs, child)
+			walk(child, depth+1)
+		}
+	}
+	walk(start, 0)
+	return dirs
+}
+
+// skillRootSearchMaxDepth covers `<workspace>/<repo>/<area>` — deep enough for a
+// repository that files its Skills under a subdirectory, shallow enough that
+// discovery stays a bounded read.
+const (
+	skillRootSearchMaxDepth = 3
+	skillRootSearchMaxDirs  = 512
+)
+
+// skillRootSearchSkipDirs are the non-dot directories never descended into:
+// dependency and build trees that cannot own a repository's Skills, plus the
+// plain `skills` convention directory, whose children are packages rather than
+// search roots. Dot directories are excluded by rule, not by name.
+var skillRootSearchSkipDirs = map[string]struct{}{
+	"node_modules": {}, "dist": {}, "build": {}, "vendor": {}, "target": {},
+	"venv": {}, "__pycache__": {}, "coverage": {}, "skills": {},
 }
 
 func skillRootAncestors(start string) []string {
@@ -395,9 +473,83 @@ func dedupeSkillRoots(roots []SkillRoot) []SkillRoot {
 	return out
 }
 
+// skillConventionDirs are the per-repository directories a Skill package can be
+// published under. They are siblings of one repository directory, and the same
+// Skill commonly exists under two of them: a canonical body under one and a
+// thin compatibility entrypoint for another coding agent under the other.
+var skillConventionDirs = [][]string{
+	{".selfmind", "skills"}, {".agents", "skills"}, {".claude", "skills"}, {"skills"},
+}
+
+// isDeveloperAgentOnlySkill reports whether the repository that owns this Skill
+// has withheld it from the product runtime.
+//
+// The marker is a statement about a Skill NAME made by its repository, not
+// about one directory. Only the canonical body usually carries it, so checking
+// the discovered directory alone exposes the compatibility entrypoint — and
+// through it the very instructions the marker withheld. That gap only became
+// reachable when discovery began enumerating a second convention, which is why
+// the check is answered per repository rather than per directory.
 func isDeveloperAgentOnlySkill(path string) bool {
+	if developerOnlyMarkerPresent(path) {
+		return true
+	}
+	base, name, ok := skillConventionBase(path)
+	if !ok {
+		return false
+	}
+	for _, convention := range skillConventionDirs {
+		parts := append([]string{base}, convention...)
+		sibling := filepath.Join(append(parts, name)...)
+		if sibling == filepath.Clean(path) {
+			continue
+		}
+		if developerOnlyMarkerPresent(sibling) {
+			return true
+		}
+	}
+	return false
+}
+
+func developerOnlyMarkerPresent(path string) bool {
 	st, err := os.Stat(filepath.Join(path, developerAgentOnlySkillMarker))
 	return err == nil && !st.IsDir()
+}
+
+// skillConventionBase splits a package path into the repository directory that
+// owns it and the package name, or reports that the path is not published under
+// a known convention (an external or managed root, which has no siblings).
+func skillConventionBase(path string) (string, string, bool) {
+	clean := filepath.Clean(path)
+	name := filepath.Base(clean)
+	if name == "." || name == string(filepath.Separator) {
+		return "", "", false
+	}
+	container := filepath.Dir(clean)
+	for _, convention := range skillConventionDirs {
+		base := container
+		matched := true
+		for i := len(convention) - 1; i >= 0; i-- {
+			if filepath.Base(base) != convention[i] {
+				matched = false
+				break
+			}
+			base = filepath.Dir(base)
+		}
+		if matched {
+			return base, name, true
+		}
+	}
+	return "", "", false
+}
+
+// firstInvocationArgs returns the invocation map a variadic Skill helper was
+// called with, so a guard can read the trusted dispatcher metadata on it.
+func firstInvocationArgs(invocation []map[string]interface{}) map[string]interface{} {
+	if len(invocation) > 0 && invocation[0] != nil {
+		return invocation[0]
+	}
+	return nil
 }
 
 func ensureWritableSkill(info SkillInfo, action string) error {
@@ -405,6 +557,31 @@ func ensureWritableSkill(info SkillInfo, action string) error {
 		return nil
 	}
 	return fmt.Errorf("skill %q is from a read-only %s root (%s); copy it to a writable skill root before %s", info.Name, emptyDefault(info.Scope, "unknown"), info.Path, action)
+}
+
+// ensureSkillEditAuthorized guards rewriting a Skill's own body.
+//
+// Root writability answers "may this runtime write here on its own", which is
+// the right question for automatic curation and the wrong one for a person
+// applying a reviewed change to their own repository's Skill. The escape hatch
+// the read-only error suggests — copy it to a writable root — produces a second
+// Skill answering the same bare name, which `matchSkillsByName` then refuses as
+// ambiguous: the workaround breaks the Skill it was meant to preserve.
+//
+// A pin still refuses: it is the person saying this content is not to be
+// rewritten. So does every other mutation (delete, archive, support files):
+// those are not needed to apply a repair and are not opened here.
+func ensureSkillEditAuthorized(info SkillInfo, action string, args map[string]interface{}) error {
+	if info.Writable {
+		return nil
+	}
+	if info.Pinned {
+		return fmt.Errorf("skill %q is pinned; unpin it before %s", info.Name, action)
+	}
+	if scope, ok := InvocationScopeFromArgs(args); ok && strings.TrimSpace(scope.SkillMutationMode) == kernel.SkillMutationDirect {
+		return nil
+	}
+	return fmt.Errorf("skill %q lives in %s and is yours to change; apply the reviewed version with /skills promote instead of %s", info.Name, info.Path, action)
 }
 
 func truncateMetadata(s string, max int) string {

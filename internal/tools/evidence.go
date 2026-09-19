@@ -13,9 +13,10 @@ import (
 )
 
 type evidenceFileSnapshot struct {
-	path      string
-	operation string
-	before    string
+	path         string
+	resolvedPath string
+	operation    string
+	before       string
 }
 
 // EvidenceMiddleware records facts observed by the runtime. It does not decide
@@ -32,12 +33,17 @@ func EvidenceMiddleware() ResultMiddleware {
 				var err error
 				binding, err = prepareVerificationBinding(args)
 				if err != nil {
-					return kernel.ToolDispatchResult{Invoked: new(bool)}, newStableToolError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use a verification evidence id from the current open work unit and preserve its criterion, target and working directory.")
+					return kernel.ToolDispatchResult{Invoked: new(bool)}, newStableToolError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use check.replaces and check.reason to inherit an eligible recorded obligation. Preserve its working directory. The runtime supplies omitted criterion, target and dependencies; historical unbound checks cannot acquire replacement authority.")
 				}
 			}
 
 			started := time.Now()
 			files := evidenceSnapshots(toolName, args)
+			for i := range files {
+				if canonical, err := canonicalContainmentPath(files[i].path); err == nil {
+					files[i].resolvedPath = canonical
+				}
+			}
 			result, err := next(args)
 			finished := time.Now()
 			evidence := kernel.RunEvidence{
@@ -54,6 +60,7 @@ func EvidenceMiddleware() ResultMiddleware {
 			for _, snapshot := range files {
 				evidence.Files = append(evidence.Files, kernel.FileEffect{
 					Path:         snapshot.path,
+					ResolvedPath: snapshot.resolvedPath,
 					Operation:    snapshot.operation,
 					BeforeSHA256: snapshot.before,
 					AfterSHA256:  fileSHA256(snapshot.path),
@@ -79,6 +86,9 @@ func EvidenceMiddleware() ResultMiddleware {
 			emitEvidence(args, evidence)
 			if evidence.Command != nil && evidence.Command.Binding != nil {
 				result.Output += "\nVerification evidence: " + evidence.ToolCallID
+				if len(binding.UnresolvedLocalDependencies) > 0 {
+					result.Output += "\nDependency identity unresolved: " + strings.Join(binding.UnresolvedLocalDependencies, ", ") + ". Relative paths use tool cwd, not shell-internal cd. This check conservatively depends on all local changes; inspect and correct the declared inputs before relying on independence."
+				}
 			}
 			return result, err
 		}

@@ -1,0 +1,497 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "Marker"
+    },
+    {
+      "content": " extracted"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "R"
+    },
+    {
+      "content": "BP"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "841"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "-M"
+    },
+    {
+      "content": "ID"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "**\n\n"
+    },
+    {
+      "content": "How"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " obtained"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " resumed"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "run"
+    },
+    {
+      "content": "_f"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "bd"
+    },
+    {
+      "content": "151"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "779"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "47"
+    },
+    {
+      "content": "bd"
+    },
+    {
+      "content": "-a"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "fa"
+    },
+    {
+      "content": "-f"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "aa"
+    },
+    {
+      "content": "ed"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "833"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "the"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": "),"
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " middle"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " its"
+    },
+    {
+      "content": " saved"
+    },
+    {
+      "content": " output"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "art"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "634"
+    },
+    {
+      "content": "820"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "614"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "13"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "887"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "06"
+    },
+    {
+      "content": "ac"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "cd"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " via"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "tool"
+    },
+    {
+      "content": "_output"
+    },
+    {
+      "content": "_view"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "bytes"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "800"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "–"
+    },
+    {
+      "content": "104"
+    },
+    {
+      "content": "000"
+    },
+    {
+      "content": ")."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " marker"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": " sits"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "150"
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " brack"
+    },
+    {
+      "content": "eted"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "149"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "150"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " awk"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " re"
+    },
+    {
+      "content": "-exec"
+    },
+    {
+      "content": "uted"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " created"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " belonged"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " resumed"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Task"
+    },
+    {
+      "content": " finished"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " status"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "done"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 18268,
+        "output_tokens": 160,
+        "cache_read_input_tokens": 3968,
+        "cache_miss_input_tokens": 14300,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

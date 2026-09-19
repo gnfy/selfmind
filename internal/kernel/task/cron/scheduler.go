@@ -32,6 +32,15 @@ type CronJob struct {
 	// Web allows a job to enable web tools for this turn (e.g. a market summary
 	// that must look things up), overriding the default web-off policy.
 	Web bool
+	// AuthorizedAt is the instant a person authorised this schedule, and it
+	// freezes which remembered approval classes the job may use to the ones
+	// that existed then. Zero means the job uses none and asks, which is what
+	// an unattended fire did before standing classes existed.
+	//
+	// It is a snapshot rather than a live reference on purpose: a job created
+	// in January must not silently gain the classes its owner accepts in June
+	// for unrelated interactive work.
+	AuthorizedAt time.Time
 	// SystemKey marks a daemon-registered system job (for example a health
 	// canary). Non-empty keys are unique via a partial index;
 	// user-created jobs leave it empty. Names under the skill-pruner-* prefix
@@ -138,11 +147,12 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 	// Idempotent migration for proactive-delivery columns. SQLite has no
 	// "ADD COLUMN IF NOT EXISTS", so probe the table and add what is missing.
 	if err := s.migrateColumns(ctx, map[string]string{
-		"platform":   "TEXT NOT NULL DEFAULT ''",
-		"deliver_to": "TEXT NOT NULL DEFAULT ''",
-		"web":        "INTEGER NOT NULL DEFAULT 0",
-		"once":       "INTEGER NOT NULL DEFAULT 0",
-		"task_id":    "TEXT NOT NULL DEFAULT ''",
+		"platform":      "TEXT NOT NULL DEFAULT ''",
+		"deliver_to":    "TEXT NOT NULL DEFAULT ''",
+		"web":           "INTEGER NOT NULL DEFAULT 0",
+		"authorized_at": "INTEGER NOT NULL DEFAULT 0",
+		"once":          "INTEGER NOT NULL DEFAULT 0",
+		"task_id":       "TEXT NOT NULL DEFAULT ''",
 		// system_key identifies daemon-registered system jobs so they can be
 		// deduplicated by a partial unique index without constraining users'
 		// freedom to create same-named jobs of their own (system_key stays
@@ -238,10 +248,10 @@ func (s *Scheduler) AddJob(ctx context.Context, job *CronJob) (int64, error) {
 	}
 
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, enabled, system_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, enabled, system_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.Name, job.CronExpr, job.Prompt, job.TenantID, job.Channel,
-		job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Once), btoi(job.Enabled), job.SystemKey)
+		job.Platform, job.DeliverTo, btoi(job.Web), unixOrZero(job.AuthorizedAt), btoi(job.Once), btoi(job.Enabled), job.SystemKey)
 	if err != nil {
 		return 0, fmt.Errorf("insert cron job: %w", err)
 	}
@@ -294,9 +304,9 @@ func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) 
 	}
 	id := ids[0]
 	if _, err := s.db.ExecContext(ctx, `
-		UPDATE cron_jobs SET name = ?, tenant_id = ?, cron_expr = ?, prompt = ?, channel = ?, platform = ?, deliver_to = ?, web = ?, once = ?, enabled = ?, system_key = ?
+		UPDATE cron_jobs SET name = ?, tenant_id = ?, cron_expr = ?, prompt = ?, channel = ?, platform = ?, deliver_to = ?, web = ?, authorized_at = ?, once = ?, enabled = ?, system_key = ?
 		WHERE id = ?`,
-		job.Name, job.TenantID, job.CronExpr, job.Prompt, job.Channel, job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Once), btoi(job.Enabled), job.SystemKey, id); err != nil {
+		job.Name, job.TenantID, job.CronExpr, job.Prompt, job.Channel, job.Platform, job.DeliverTo, btoi(job.Web), unixOrZero(job.AuthorizedAt), btoi(job.Once), btoi(job.Enabled), job.SystemKey, id); err != nil {
 		return id, err
 	}
 	for _, duplicateID := range ids[1:] {
@@ -331,7 +341,7 @@ func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) 
 // ListJobs returns all cron jobs for a tenant.
 func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, enabled,
+		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, enabled,
 		       last_run, next_run, created_at, COALESCE(task_id, '')
 		FROM cron_jobs WHERE tenant_id = ? ORDER BY id`,
 		tenantID)
@@ -344,13 +354,15 @@ func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, e
 	for rows.Next() {
 		var j CronJob
 		var web, once int
+		var authorizedAt int64
 		var lastRun, nextRun sql.NullInt64
 		var createdAt int64
 		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID,
-			&j.Channel, &j.Platform, &j.DeliverTo, &web, &once, &j.Enabled, &lastRun, &nextRun, &createdAt, &j.TaskID); err != nil {
+			&j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.Enabled, &lastRun, &nextRun, &createdAt, &j.TaskID); err != nil {
 			return nil, err
 		}
 		j.Web = itob(web)
+		j.AuthorizedAt = timeOrZero(authorizedAt)
 		j.Once = itob(once)
 		if lastRun.Valid {
 			t := time.Unix(lastRun.Int64, 0)
@@ -383,13 +395,15 @@ func (s *Scheduler) RemoveJob(ctx context.Context, id int64) error {
 func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error {
 	// Reload job to get cron expr
 	row := s.db.QueryRowContext(ctx,
-		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, COALESCE(task_id, '') FROM cron_jobs WHERE id = ?", id)
+		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, COALESCE(task_id, '') FROM cron_jobs WHERE id = ?", id)
 	var j CronJob
 	var web, once int
-	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &once, &j.TaskID); err != nil {
+	var authorizedAt int64
+	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.TaskID); err != nil {
 		return err
 	}
 	j.Web = itob(web)
+	j.AuthorizedAt = timeOrZero(authorizedAt)
 	j.Once = itob(once)
 	j.Enabled = enabled
 
@@ -420,7 +434,7 @@ func (s *Scheduler) SetTaskID(ctx context.Context, id int64, taskID string) erro
 func (s *Scheduler) Start(ctx context.Context) error {
 	// Load and schedule all enabled jobs
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, COALESCE(task_id, '') FROM cron_jobs WHERE enabled = 1`)
+		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, COALESCE(task_id, '') FROM cron_jobs WHERE enabled = 1`)
 	if err != nil {
 		return err
 	}
@@ -430,11 +444,13 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	for rows.Next() {
 		var j CronJob
 		var web, once int
-		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &once, &j.TaskID); err != nil {
+		var authorizedAt int64
+		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.TaskID); err != nil {
 			s.mu.Unlock()
 			return err
 		}
 		j.Web = itob(web)
+		j.AuthorizedAt = timeOrZero(authorizedAt)
 		j.Once = itob(once)
 		if err := s.scheduleJobLocked(j.ID, &j); err != nil {
 			log.Debug("cron: failed to schedule job", "job_id", j.ID, "job_name", j.Name, "error", err)
@@ -729,4 +745,21 @@ func firstNonEmptyCron(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// unixOrZero and timeOrZero move an authorisation instant across the durable
+// boundary. Zero means "this schedule was never granted standing classes", so
+// an unattended fire asks exactly as it did before they existed.
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+func timeOrZero(unix int64) time.Time {
+	if unix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
 }

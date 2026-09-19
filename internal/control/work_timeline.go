@@ -42,7 +42,6 @@ type Thread struct {
 	Visibility     string
 	Title          string
 	Summary        string
-	Pinned         bool
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	LastActivityAt time.Time
@@ -389,15 +388,15 @@ const attentionSelectSQL = `SELECT COALESCE(t.id, ''), r.tenant_id, r.person_id,
        COALESCE(t.workspace_id, r.workspace_id, ''),
        COALESCE(t.kind, 'work'), COALESCE(t.visibility, 'visible'),
        COALESCE(t.title, r.input_summary, ''),
-       COALESCE(t.summary, ''), COALESCE(t.pinned, 0), COALESCE(t.created_at, r.started_at),
+       COALESCE(t.summary, ''), COALESCE(t.created_at, r.started_at),
        COALESCE(t.updated_at, r.started_at),
        COALESCE(t.last_activity_at, t.updated_at, r.started_at), ranked.run_id,
        COALESCE(r.input_summary, ''), r.status, COALESCE(r.channel, ''), ranked.activity`
 
 // attentionFromSQL reads the Thread row for display only, and LEFT so a Run
 // without one cannot vanish. No Thread column filters or orders Attention any
-// more: visibility and pinning let a display row decide "what needs me now",
-// and the Run already owns that. Dismissal on the exact Run is the only hide,
+// more: visibility let a display row decide "what needs me now", and the Run
+// already owns that. Pinning is gone entirely. Dismissal on the exact Run is the only hide,
 // and v13 converted every hidden/archived Thread into the bulk dismissal it
 // effectively was.
 const attentionFromSQL = `
@@ -437,7 +436,7 @@ func (w *WorkTimeline) Attention(ctx context.Context, tenantID, personID string,
 }
 
 // AttentionForChannel is Attention with same-channel preference: within one
-// pinned and priority band, Runs whose channel equals preferChannel sort
+// priority band, Runs whose channel equals preferChannel sort
 // before other channels, then recency decides. An empty preferChannel is plain
 // Attention. It reads the first page only, bounded by attentionMaxPageLimit; a
 // caller that must reach further, or that must report how much work exists,
@@ -498,17 +497,15 @@ func (w *WorkTimeline) attentionItems(ctx context.Context, tenantID, personID, p
 	var items []AttentionItem
 	for rows.Next() {
 		var item AttentionItem
-		var pinned int
 		var created, updated, activity int64
 		if err := rows.Scan(&item.Thread.ID, &item.Thread.TenantID, &item.Thread.PersonID,
 			&item.Thread.WorkspaceID, &item.Thread.Kind, &item.Thread.Visibility,
-			&item.Thread.Title, &item.Thread.Summary, &pinned, &created, &updated,
+			&item.Thread.Title, &item.Thread.Summary, &created, &updated,
 			&activity, &item.RunID, &item.RunSummary, &item.RunStatus, &item.Channel, &item.Activity); err != nil {
 			return nil, err
 		}
 		item.Thread.Kind = normalizeThreadKind(item.Thread.Kind)
 		item.Thread.Visibility = normalizeThreadVisibility(item.Thread.Visibility)
-		item.Thread.Pinned = pinned != 0
 		item.Thread.CreatedAt = time.Unix(created, 0)
 		item.Thread.UpdatedAt = time.Unix(updated, 0)
 		item.Thread.LastActivityAt = time.Unix(activity, 0)
@@ -660,7 +657,7 @@ func (w *WorkTimeline) List(ctx context.Context, tenantID, personID string, quer
 	}
 	selectArgs := append(append([]any(nil), args...), query.Limit, query.Offset)
 	rows, err := w.store.db.QueryContext(ctx, threadSelectSQL+where.String()+`
-		ORDER BY COALESCE(pinned, 0) DESC, COALESCE(last_activity_at, updated_at) DESC, id ASC
+		ORDER BY COALESCE(last_activity_at, updated_at) DESC, id ASC
 		LIMIT ? OFFSET ?`, selectArgs...)
 	if err != nil {
 		return ThreadPage{}, err
@@ -709,7 +706,7 @@ func (w *WorkTimeline) Search(ctx context.Context, tenantID, personID, query str
 
 const threadSelectSQL = `SELECT id, tenant_id, person_id, COALESCE(workspace_id, ''),
 	COALESCE(kind, 'work'), COALESCE(visibility, 'visible'), title,
-	COALESCE(summary, ''), COALESCE(pinned, 0), created_at, updated_at,
+	COALESCE(summary, ''), created_at, updated_at,
 	COALESCE(last_activity_at, updated_at) FROM threads`
 
 func normalizeThreadQuery(query ThreadQuery) ThreadQuery {
@@ -745,16 +742,14 @@ func scanThreads(rows *sql.Rows) ([]Thread, error) {
 	var threads []Thread
 	for rows.Next() {
 		var thread Thread
-		var pinned int
 		var created, updated, activity int64
 		if err := rows.Scan(&thread.ID, &thread.TenantID, &thread.PersonID, &thread.WorkspaceID,
-			&thread.Kind, &thread.Visibility, &thread.Title, &thread.Summary, &pinned,
+			&thread.Kind, &thread.Visibility, &thread.Title, &thread.Summary,
 			&created, &updated, &activity); err != nil {
 			return nil, err
 		}
 		thread.Kind = normalizeThreadKind(thread.Kind)
 		thread.Visibility = normalizeThreadVisibility(thread.Visibility)
-		thread.Pinned = pinned != 0
 		thread.CreatedAt = time.Unix(created, 0)
 		thread.UpdatedAt = time.Unix(updated, 0)
 		thread.LastActivityAt = time.Unix(activity, 0)
@@ -792,7 +787,7 @@ func (t Thread) legacyTask() *Task {
 	return &Task{
 		ID: t.ID, TenantID: t.TenantID, PersonID: t.PersonID,
 		WorkspaceID: t.WorkspaceID, Title: t.Title, Kind: t.Kind,
-		Visibility: t.Visibility, Pinned: t.Pinned, CurrentSummary: t.Summary,
+		Visibility: t.Visibility, CurrentSummary: t.Summary,
 		CreatedAt: t.CreatedAt, UpdatedAt: t.UpdatedAt, LastActivityAt: t.LastActivityAt,
 	}
 }
@@ -802,7 +797,7 @@ func threadFromTask(task Task) Thread {
 		ID: task.ID, TenantID: task.TenantID, PersonID: task.PersonID,
 		WorkspaceID: task.WorkspaceID, Kind: normalizeThreadKind(task.Kind),
 		Visibility: normalizeThreadVisibility(task.Visibility), Title: task.Title,
-		Summary: task.CurrentSummary, Pinned: task.Pinned, CreatedAt: task.CreatedAt,
+		Summary: task.CurrentSummary, CreatedAt: task.CreatedAt,
 		UpdatedAt: task.UpdatedAt, LastActivityAt: task.LastActivityAt,
 	}
 }

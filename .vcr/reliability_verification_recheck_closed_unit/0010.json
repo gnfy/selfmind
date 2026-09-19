@@ -1,0 +1,668 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "Both"
+    },
+    {
+      "content": " work"
+    },
+    {
+      "content": " units"
+    },
+    {
+      "content": " are"
+    },
+    {
+      "content": " done"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "setting"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " ends"
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Work"
+    },
+    {
+      "content": " unit"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "closed"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " second"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " ran"
+    },
+    {
+      "content": ")\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Created"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "setting"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Verified"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " holds"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " positive"
+    },
+    {
+      "content": " integer"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " criterion"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "setting"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " positive"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "setting"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " local"
+    },
+    {
+      "content": "_d"
+    },
+    {
+      "content": "ependencies"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "[\""
+    },
+    {
+      "content": "setting"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "\"]"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " evidence"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "call"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "_k"
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": "DO"
+    },
+    {
+      "content": "l"
+    },
+    {
+      "content": "AJ"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "g"
+    },
+    {
+      "content": "WD"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "n"
+    },
+    {
+      "content": "q"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "n"
+    },
+    {
+      "content": "GL"
+    },
+    {
+      "content": "WR"
+    },
+    {
+      "content": "202"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "`.\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Mark"
+    },
+    {
+      "content": "ed"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " unit"
+    },
+    {
+      "content": " complete"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " touching"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " again"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Work"
+    },
+    {
+      "content": " unit"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Changed"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "confirmed"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": ").\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Re"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "ran"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " identical"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " same"
+    },
+    {
+      "content": " criterion"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " local"
+    },
+    {
+      "content": " dependencies"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " referencing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": " evidence"
+    },
+    {
+      "content": " through"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "re"
+    },
+    {
+      "content": "places"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " reason"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " input"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": " changed"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " evidence"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "call"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "ET"
+    },
+    {
+      "content": "_Q"
+    },
+    {
+      "content": "AB"
+    },
+    {
+      "content": "Be"
+    },
+    {
+      "content": "46"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "Q"
+    },
+    {
+      "content": "j"
+    },
+    {
+      "content": "TX"
+    },
+    {
+      "content": "A"
+    },
+    {
+      "content": "q"
+    },
+    {
+      "content": "06"
+    },
+    {
+      "content": "W"
+    },
+    {
+      "content": "bn"
+    },
+    {
+      "content": "p"
+    },
+    {
+      "content": "671"
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "`.\n\n"
+    },
+    {
+      "content": "No"
+    },
+    {
+      "content": " risks"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " follow"
+    },
+    {
+      "content": "-ups"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " artifact"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " its"
+    },
+    {
+      "content": " final"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " verified"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 14659,
+        "output_tokens": 217,
+        "cache_read_input_tokens": 3456,
+        "cache_miss_input_tokens": 11203,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

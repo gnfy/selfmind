@@ -535,3 +535,99 @@ func repairSkillContent(name, procedure, recovery string) string {
 		"## Failure Guards\nDo not guess the layout.\n\n## Recovery\n" + recovery + "\n\n" +
 		"## Verification\nRead the updated record and verify its fields."
 }
+
+// The dangerous-op heuristic is a call-side fallback, not a capability. It
+// reports every host exec as dangerous wherever an enforced sandbox cannot be
+// proven, so consulting it here made publication eligibility depend on the
+// operating system: the only candidate this deployment ever produced carried
+// ["exec.in_turn","dangerous"] on every terminal step and could never publish,
+// while the identical procedure on a sandboxed host would have.
+//
+// The classes that remain are specific and platform-independent.
+func TestHostExecutionDoesNotBlockAutomaticPublication(t *testing.T) {
+	builtin := func(name string, classes ...string) control.WorkflowToolEvidence {
+		return control.WorkflowToolEvidence{Name: name, Origin: "builtin", Category: "general", OperationClasses: classes}
+	}
+	hostExec := control.WorkflowObservation{
+		ToolSequence: []string{"batch.read", "terminal"},
+		ToolEvidence: []control.WorkflowToolEvidence{
+			builtin("batch_read", "observe"),
+			builtin("terminal", "exec.in_turn", "dangerous"),
+			// The heuristic even marks a provably read-only exec dangerous.
+			builtin("terminal", "observe", "dangerous"),
+		},
+	}
+	if !automaticObservationPublicationEligible(hostExec) {
+		t.Fatal("host execution must not block automatic publication by itself")
+	}
+
+	// The constraints that must still change the result.
+	for _, class := range []string{"delete", "network", "exec.delegated"} {
+		blocked := control.WorkflowObservation{
+			ToolSequence: []string{"terminal"},
+			ToolEvidence: []control.WorkflowToolEvidence{builtin("terminal", "exec.in_turn", class)},
+		}
+		if automaticObservationPublicationEligible(blocked) {
+			t.Errorf("%q must still block automatic publication", class)
+		}
+	}
+	external := control.WorkflowObservation{
+		ToolSequence: []string{"mcp.call"},
+		ToolEvidence: []control.WorkflowToolEvidence{{Name: "mcp_call", Origin: "mcp", Category: "mcp"}},
+	}
+	if automaticObservationPublicationEligible(external) {
+		t.Error("an external tool must still block automatic publication")
+	}
+	for _, name := range []string{"watch_external", "delegate", "skill_manage", "skill_lifecycle_manage"} {
+		blocked := control.WorkflowObservation{
+			ToolSequence: []string{name},
+			ToolEvidence: []control.WorkflowToolEvidence{builtin(name)},
+		}
+		if automaticObservationPublicationEligible(blocked) {
+			t.Errorf("%q must still block automatic publication", name)
+		}
+	}
+}
+
+// A cohort whose every run reached the same existing Skill is not virgin
+// territory, even when none of them activated it. The one candidate this
+// deployment ever produced had exactly that shape: three runs that read a
+// release Skill by hand because discovery could not see it, and the proposal
+// would have been "how to look that Skill up".
+//
+// An activated cohort needs no rule of its own: activation sets
+// TargetSkillKey, so it takes the repair branch and a successful run proposes
+// nothing. That path is asserted here too, because the two together are what
+// make "no CREATE over claimed work" complete.
+func TestCreateRefusesCohortAlreadyCoveredByAnExistingSkill(t *testing.T) {
+	observation := func(runID string) control.WorkflowObservation {
+		return control.WorkflowObservation{
+			RunID: runID, WorkUnitID: "wu-" + runID, EvidenceRole: "success_path",
+			VerificationState: "passed", OutcomeStatus: control.WorkUnitCompleted,
+			ToolSequence: []string{"file.read"},
+		}
+	}
+	base := control.SkillEvidenceDigest{
+		EvidenceSetHash: "evidence-1",
+		SuccessObservations: []control.WorkflowObservation{
+			observation("run-1"), observation("run-2"), observation("run-3"),
+		},
+	}
+	if !skillCurationProposalEligible(base) {
+		t.Fatal("an uncovered cohort of three verified runs must still propose")
+	}
+
+	covered := base
+	covered.CoveringSkillKeys = []string{"skill:aws-codebuild-release"}
+	if skillCurationProposalEligible(covered) {
+		t.Fatal("a cohort every run already reached an existing Skill for must not mint a second one")
+	}
+
+	// The activated-and-successful case: no incident, so the repair branch
+	// proposes nothing and CREATE is never reached.
+	activated := base
+	activated.TargetSkillKey = "skill:aws-codebuild-release"
+	if skillCurationProposalEligible(activated) {
+		t.Fatal("a successful run that used a Skill has nothing to propose")
+	}
+}

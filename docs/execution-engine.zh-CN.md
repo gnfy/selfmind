@@ -223,6 +223,30 @@ type ExecutionResult struct {
 存储迁移继续由既有 Run + Work Journal active plan 管理；这里不新增 Session/Lane
 对象，不用结果类型承担持久迁移，也不将兼容层的存在视为迁移完成。
 
+### 5.4 完成前检查与证据依赖（2026-09-17）
+
+`finish_run(done)` 在既有 Run 计划与执行账本检查之后，调用最终化使用的同一份
+持久证据投影。缺口在 Main 仍能修复时返回；最终化仍重读证据，不能把早先的通过
+当成对后来变更的豁免。证据查询失败或记录损坏保留 blocked，不能当作无验证需求。
+
+`verify.check.local_dependencies` 由 Main 声明判据依赖的本地文件/目录，运行时
+归一化并约束路径，再按实际文件变更判断新鲜度。显式空数组只适用于不依赖本地
+文件的判据；省略该字段保留全 Run 文件变更失效规则。版本 2 只赋予新声明依赖
+语义；旧绑定不升级、不重写历史结果。判据充分性仍由 Main 判断，声明本身不授予
+权限，也不证明目标完成。
+
+新声明的检查可在原工作单元关闭之后，在同一个归属明确的 Run 内替代重验；工作
+单元的历史快照保持不变。旧绑定仍限制在当前打开的工作单元，不能借重验升级权限。
+输入目录覆盖其子项，符号链接同时保留调用路径与实际目标。失败的写操作只要留下
+不同哈希也使相关证据过期。替代检查必须保留原判据、目标、cwd 与依赖；无关检查
+成功不能擦掉其他失败或过期义务。报告、配置、脚本与源文件使用同一规则，没有
+扩展名、场景或模型白名单。只覆盖当前工具证据链实际观察到的变更；不声称能检测
+任意 Shell 或外部进程产生的全部文件/远端变化，也不替代持久事件传输保障。
+
+`/resume` 按精确 Run 读取终止说明和下一步，区分等待用户决定与验证未完成；这
+只是证据展示，不调用模型、不自动清理 Attention、不修改历史交接或审批状态。
+验证未完成的 Run 优先展示运行时缺口，避免模型先前的可选下一步掩盖真正的阻塞。
+
 ## 6. 环境快照与三指纹
 
 ### 6.1 Lease 扩展
@@ -782,12 +806,36 @@ L2 可见 / 可撤销 | `/approvals list` 渲染人类可读、不含 raw hash�
 | 效果发生后 | 取消进程或文件写入后返回失败：保留已启动、退出码未知/非零、文件前后哈希；失败不能擦掉实际变更 | `tools/TestTypedCancellationPreservesPartialEffects`、`tools/TestLegacyFileFailurePreservesObservedEffect` |
 | 结果保存前 | 结果写库失败保留不确定 claim 和输出；新 Agent 不能重放同一调用；artifact 保存失败不重执行工具 | `kernel/TestTypedDispatchFailureMatrix`、`control/TestToolLedgerUncertainWindow` |
 | 最终提交时 | 原子提交失败不能留下半套完成状态；不同 Run 的未完成工作不被覆盖 | `control/TestMaterializeRunFinalizationRollsBackMismatchedTask`、`control/TestSameKeyUnfinishedWorkSurvivesCompletion` |
+| 完成检查前后 | 无关输出保留验证；相关部分写入即使失败仍阻止完成；修复并重验可解除；新增效果或损坏证据不能沿用先前的通过 | `httpapi/TestCompletionPreflightMatchesFinalEvidence`、`httpapi/TestCompletionPreflightRecoveryAndNewEffects`、`verification/TestDeclaredInputsBoundInvalidation` |
 | 提交后通知前 | 已提交后通知失败：只修复投递；重放提交不产生第二份结果，工具不重开，待消费输入与 `waiting_user` 原样保留 | `delivery/TestNotificationFailurePreservesCommittedRunAndToolOutcome` |
 | 投递效果不确定 | `sent_unconfirmed` 不盲目重发，入站触发补投仍有界 | `delivery/TestUnconfirmedDeliveryIsTerminalButDistinct`、`delivery/TestCatchUpStillUnconfirmedNeverLoops` |
 
 类型链另覆盖成功/非零退出、参数转换、进程未启动、脱敏、外部伪造结果、旧 backend
 未知事实与 Run 身份冲突。`reliability/verification-pipeline-failure.yaml` 从生产派发
 事件检查观察到的非零退出，且 Run 仍为可恢复的 `verification_partial`。
+`reliability/verification-independent-report.yaml` 使用真实 provider 录制，检查验证
+源输入之后写独立报告能完成，且不为报告重复执行源检查；
+`reliability/verification-recheck-closed-unit.yaml` 录制工作单元关闭后变更输入并
+替代重验的闭环。相关输入改变必须阻止直接完成的反向约束由运行时注入测试覆盖。
+单一 provider 的记录不代表跨模型覆盖。
+
+### 14.2 验证义务与检查方法
+
+Main 声明验收标准，运行时解析当前 Run 的证据引用。`verify.check.replaces`
+与 `reason` 可以继承原检查的标准、目标、依赖与版本；显式修改这些身份仍须
+通过原约束。历史无绑定证据不自动获得替换权限。未声明 `check` 时，仅在当前
+步骤明确要求验证且有标准时生成保守绑定；只有显式 `step_id` 使用版本 3 的
+步骤归属。运行时不猜测一次检查在语义上覆盖哪些其他步骤。
+
+拒绝完成返回有界的阻塞证据 ID、标准、目标与 cwd。步骤归属与 Run 最终检查
+均保留未解决失败。依赖路径始终以工具 cwd 为基准，不解释 shell 内部的 cd；
+不存在或无法读取的依赖按所有本地变化保守失效，并向 Main 暴露解析问题。
+这允许验证“目标应不存在”，但不能凭错误路径声明与真实输入无关。
+
+本批回归包括 `httpapi/TestReadBeforeResumeUsesActualDispatcherEffectClassification`
+的 artifact 读取与真实写入反向约束、`tools/TestMissingDependencyCannotClaimUnrelatedMutation`、
+`control/TestVerificationResolutionAndExactBlocker` 的事务回滚、引用隔离和失败历史保留。
+既有派发、部分效果、落库与通知故障矩阵继续共同执行。
 
 ## 15. 指标与埋点
 

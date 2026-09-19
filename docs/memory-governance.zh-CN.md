@@ -434,11 +434,10 @@ environment 目标并指向仓库约定文件。存量 environment 行继续可�
 `selfmind maintenance memory-archive-environment [--apply]` 可逆归档
 （pinned/用户确认行不动）。
 
-Task Reference 的自动激活已冻结（P2）：run 支持只能到 `candidate`（召回
-信号），仅用户确认激活；同一 value 出现多个确认绑定进入 `conflicted` 弃权。
-标题、摘要、recall 结果和模型生成文本都不算证据。引用不再路由消息、不加载
-任务上下文、不改变 current task、workspace、权限或生命周期。
-用户可通过 `/task <id> references`、`reference add|remove` 查看和裁决。
+Task Reference 已整体移除（schema v15）。它的作用是用一个人可读的名字去**指向
+一个 Task**；Task 不再是领域对象之后，它没有可指的东西，读它的代码也随之消失。
+留下的只有表结构和两处恒真的 `NOT EXISTS` 守卫——那让两条 DELETE 看起来带条件，
+其实没有。没有写入方，所以任何安装上的这两张表都必然是空的，直接删除。
 
 Workspace knowledge 不复制整份文档到 canonical memory，也不调用额外模型。
 它复用项目上下文扫描的授权边界，并作为独立 `RecallSource` 与 task/session/

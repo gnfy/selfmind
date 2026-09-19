@@ -65,10 +65,6 @@ func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
 	}
 
 	staleDone, _ := create("stale done", "done")
-	pinned, _ := create("pinned done", "done")
-	if err := store.SetTaskPinned(ctx, identity.TenantID, pinned.ID, true); err != nil {
-		t.Fatal(err)
-	}
 	pending, pendingRun := create("cancelled with approval", "cancelled")
 	if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
 		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: pending.ID, RunID: pendingRun.ID,
@@ -76,15 +72,9 @@ func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	open, _ := create("still open", "interrupted")
-	unpinned, _ := create("old work with recent governance change", "done")
+	alsoStale, _ := create("older settled work", "done")
 	old := time.Now().Add(-45 * 24 * time.Hour).Unix()
 	if _, err := store.db.ExecContext(ctx, `UPDATE threads SET updated_at = ?, last_activity_at = ?`, old, old); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetTaskPinned(ctx, identity.TenantID, unpinned.ID, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetTaskPinned(ctx, identity.TenantID, unpinned.ID, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -96,8 +86,8 @@ func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
 	for _, task := range archived {
 		archivedIDs[task.TaskID] = true
 	}
-	if len(archived) != 2 || !archivedIDs[staleDone.ID] || !archivedIDs[unpinned.ID] {
-		t.Fatalf("archived=%+v, want stale done and recently unpinned old work", archived)
+	if len(archived) != 2 || !archivedIDs[staleDone.ID] || !archivedIDs[alsoStale.ID] {
+		t.Fatalf("archived=%+v, want both settled threads", archived)
 	}
 	assertVisibility := func(task *Task, want string) {
 		t.Helper()
@@ -107,10 +97,11 @@ func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {
 		}
 	}
 	assertVisibility(staleDone, ThreadVisibilityArchived)
-	assertVisibility(pinned, ThreadVisibilityListed)
+	assertVisibility(alsoStale, ThreadVisibilityArchived)
+	// What still protects a Thread from automatic archival is live work or
+	// unanswered human input — never a display flag.
 	assertVisibility(pending, ThreadVisibilityListed)
 	assertVisibility(open, ThreadVisibilityListed)
-	assertVisibility(unpinned, ThreadVisibilityArchived)
 }
 
 func TestSearchTasksFindsOlderCJKRunAndHandoff(t *testing.T) {

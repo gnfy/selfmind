@@ -159,8 +159,7 @@ func (s *Store) DeleteEmptyTask(ctx context.Context, tenantID, personID, taskID 
 		   AND NOT EXISTS (SELECT 1 FROM task_artifacts a WHERE a.thread_id = threads.id)
 		   AND NOT EXISTS (SELECT 1 FROM task_handoffs h WHERE h.thread_id = threads.id)
 		   AND NOT EXISTS (SELECT 1 FROM approval_requests p WHERE p.thread_id = threads.id)
-		   AND NOT EXISTS (SELECT 1 FROM clarify_requests q WHERE q.thread_id = threads.id)
-		   AND NOT EXISTS (SELECT 1 FROM task_references r WHERE r.tenant_id = threads.tenant_id AND r.thread_id = threads.id)`,
+		   AND NOT EXISTS (SELECT 1 FROM clarify_requests q WHERE q.thread_id = threads.id)`,
 		tenantID, strings.TrimSpace(personID), strings.TrimSpace(taskID))
 	if err != nil {
 		return false, err
@@ -173,23 +172,6 @@ func (s *Store) DeleteEmptyTask(ctx context.Context, tenantID, personID, taskID 
 		return false, err
 	}
 	return n > 0, nil
-}
-
-func (s *Store) SetTaskPinned(ctx context.Context, tenantID, taskID string, pinned bool) error {
-	value := 0
-	if pinned {
-		value = 1
-	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE threads SET pinned = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		value, time.Now().Unix(), normalizeTenant(tenantID), taskID)
-	if err != nil {
-		return err
-	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		return fmt.Errorf("task not found: %s", taskID)
-	}
-	return nil
 }
 
 // SearchTasks searches the complete visible task history for one person. It
@@ -352,7 +334,7 @@ func taskFromAttentionItem(item AttentionItem) Task {
 	task := Task{
 		ID: thread.ID, TenantID: thread.TenantID, PersonID: thread.PersonID,
 		WorkspaceID: thread.WorkspaceID, Title: thread.Title, Status: item.Activity,
-		Kind: thread.Kind, Visibility: thread.Visibility, Pinned: thread.Pinned,
+		Kind: thread.Kind, Visibility: thread.Visibility,
 		CurrentSummary: thread.Summary, ResumeRunID: item.RunID,
 		CreatedAt: thread.CreatedAt, UpdatedAt: thread.UpdatedAt, LastActivityAt: thread.LastActivityAt,
 	}
@@ -393,7 +375,6 @@ type TaskGovernanceStats struct {
 	Open      int
 	Terminal  int
 	Archived  int
-	Pinned    int
 	InboxRuns int
 }
 
@@ -418,9 +399,7 @@ func (s *Store) ReadTaskGovernanceStats(ctx context.Context, tenantID, personID 
 		return stats, err
 	}
 	stats.Terminal, stats.Archived = settled.Total, archived.Total
-	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM threads WHERE tenant_id=? AND person_id=? AND pinned=1`,
-		normalizeTenant(tenantID), strings.TrimSpace(personID)).Scan(&stats.Pinned)
-	return stats, err
+	return stats, nil
 }
 
 type ArchivedTaskRef struct {
@@ -440,7 +419,7 @@ func (s *Store) ArchiveStaleTasks(ctx context.Context, now time.Time, doneAfter,
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, 'settled', last_activity_at
 		 FROM threads
-		 WHERE visibility = 'listed' AND pinned = 0
+		 WHERE visibility = 'listed'
 		   AND NOT EXISTS (SELECT 1 FROM runs r WHERE r.thread_id=threads.id AND r.status='running')
 		   AND NOT EXISTS (SELECT 1 FROM approval_requests a JOIN runs r ON r.id=a.run_id
 		     WHERE a.thread_id=threads.id AND a.status='pending' AND COALESCE(r.attention_dismissed_at,0)=0)
@@ -496,7 +475,7 @@ func (s *Store) ArchiveStaleTasks(ctx context.Context, now time.Time, doneAfter,
 			`UPDATE threads SET visibility = 'archived', updated_at = ?
 			 WHERE tenant_id = ? AND id = ?
 			   AND last_activity_at <= ?
-			   AND visibility = 'listed' AND pinned = 0
+			   AND visibility = 'listed'
 			   AND NOT EXISTS (SELECT 1 FROM runs r
 			                   WHERE r.thread_id = threads.id AND r.status = 'running')
 			   AND NOT EXISTS (SELECT 1 FROM approval_requests a JOIN runs r ON r.id = a.run_id

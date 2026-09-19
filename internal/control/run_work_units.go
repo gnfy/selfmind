@@ -232,7 +232,7 @@ func upsertProjectedWorkUnitTx(ctx context.Context, tx *sql.Tx, unit *RunWorkUni
 		if !workUnitTerminal(status) {
 			if unit.PlanStatus == "completed" {
 				status = WorkUnitCompleted
-				verification, refs = workUnitEvidenceProjectionTx(ctx, tx, unit.RunID, startedCursor, finishCursor)
+				verification, refs, _ = workUnitEvidenceProjectionTx(ctx, tx, unit.RunID, startedCursor, finishCursor)
 			} else {
 				status = WorkUnitCancelled
 				verification, refs = "", "[]"
@@ -307,6 +307,8 @@ type workUnitEvidence struct {
 	StartedAt  int64  `json:"started_at_unix_nano"`
 	FinishedAt int64  `json:"finished_at_unix_nano"`
 	Files      []struct {
+		Path         string `json:"path"`
+		ResolvedPath string `json:"resolved_path"`
 		BeforeSHA256 string `json:"before_sha256"`
 		AfterSHA256  string `json:"after_sha256"`
 	} `json:"files"`
@@ -318,44 +320,53 @@ type workUnitEvidence struct {
 	} `json:"command"`
 }
 
-func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64) (string, string) {
+func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64, stepIDs ...string) (string, string, string) {
 	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(payload_json,'{}') FROM task_events
 		WHERE run_id=? AND COALESCE(cursor,0)>? AND COALESCE(cursor,0)<=? AND type='evidence.recorded'
 		ORDER BY COALESCE(cursor,0), rowid`, runID, startedCursor, finishedCursor)
 	if err != nil {
-		return "", "[]"
+		return "blocked", "[]", "Verification evidence is unavailable."
 	}
 	defer rows.Close()
-	latestMutation := int64(0)
+	var mutations []verification.Mutation
 	checks := []verification.Check{}
 	for rows.Next() {
 		var raw string
 		if rows.Scan(&raw) != nil {
-			continue
+			return "blocked", "[]", "Verification evidence is unreadable."
 		}
 		var payload struct {
 			Evidence workUnitEvidence `json:"evidence"`
 		}
-		if json.Unmarshal([]byte(raw), &payload) != nil {
-			continue
+		if json.Unmarshal([]byte(raw), &payload) != nil || payload.Evidence.Kind == "" || (payload.Evidence.Kind == "verification" && payload.Evidence.Command == nil) {
+			return "blocked", "[]", "Verification evidence is malformed."
 		}
 		evidence := payload.Evidence
-		if evidence.Kind == "mutation" && evidence.Status == "succeeded" {
+		if evidence.Kind == "mutation" {
 			for _, file := range evidence.Files {
-				if file.BeforeSHA256 != file.AfterSHA256 && evidence.FinishedAt > latestMutation {
-					latestMutation = evidence.FinishedAt
+				if file.BeforeSHA256 != file.AfterSHA256 {
+					mutations = append(mutations, verification.Mutation{Path: file.Path, FinishedAt: evidence.FinishedAt})
+					if file.ResolvedPath != "" && file.ResolvedPath != file.Path {
+						mutations = append(mutations, verification.Mutation{Path: file.ResolvedPath, FinishedAt: evidence.FinishedAt})
+					}
 				}
 			}
 		}
 		if evidence.Kind != "verification" || evidence.Command == nil {
 			continue
 		}
+		if len(stepIDs) > 0 && evidence.Command.Binding != nil && evidence.Command.Binding.Version == 3 && evidence.Command.Binding.StepID != stepIDs[0] {
+			continue
+		}
 		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: evidence.Command.Binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
 	}
-	state, _ := verification.State(latestMutation, checks)
+	if err := rows.Err(); err != nil {
+		return "blocked", "[]", "Verification evidence is unavailable."
+	}
+	state, summary := verification.StateWithMutations(mutations, checks)
 	refs := []string{}
 	for _, check := range verification.Latest(checks) {
-		if check.StartedAt >= latestMutation && strings.TrimSpace(check.Command) != "" {
+		if check.StartedAt >= verification.RelevantMutationAt(check, mutations) && strings.TrimSpace(check.Command) != "" {
 			refs = append(refs, check.Command)
 		}
 	}
@@ -364,7 +375,7 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 	if state == "stale" {
 		state = "not_run"
 	}
-	return state, string(refsJSON)
+	return state, string(refsJSON), summary
 }
 
 func (s *Store) ListRunWorkUnits(ctx context.Context, tenantID, runID string) ([]RunWorkUnit, error) {

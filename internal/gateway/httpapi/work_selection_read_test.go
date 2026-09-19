@@ -50,7 +50,7 @@ func TestReadBeforeResumeUsesActualDispatcherEffectClassification(t *testing.T) 
 	for _, tc := range []struct {
 		name          string
 		mutate, large bool
-	}{{name: "batch_read"}, {name: "large_read", large: true}, {name: "write_file", mutate: true}} {
+	}{{name: "batch_read"}, {name: "large_read", large: true}, {name: "artifact_read"}, {name: "write_file", mutate: true}} {
 		t.Run(tc.name, func(t *testing.T) {
 			mutate := tc.mutate
 			ctx := context.Background()
@@ -88,10 +88,23 @@ func TestReadBeforeResumeUsesActualDispatcherEffectClassification(t *testing.T) 
 				provider.firstTool = "write_file"
 				args = map[string]interface{}{"path": path, "content": "changed"}
 			}
+			artifactDir := t.TempDir()
+			if tc.name == "artifact_read" {
+				personDir := filepath.Join(artifactDir, identity.PersonID)
+				if err := os.MkdirAll(personDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(personDir, "art_readback123.txt"), []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+				provider.firstTool = "tool_output_view"
+				args = map[string]interface{}{"artifact_id": "art_readback123"}
+			}
 			raw, _ := json.Marshal(args)
 			provider.firstArgs = string(raw)
 			dispatcher := tools.NewDispatcherWithRegistry(tools.NewRegistry())
 			dispatcher.RegisterTool(tools.NewReadFileTool())
+			dispatcher.RegisterTool(tools.NewToolOutputViewTool(artifactDir))
 			dispatcher.RegisterTool(tools.NewWriteFileTool())
 			dispatcher.RegisterTool(tools.NewBatchReadTool(dispatcher.Dispatch, dispatcher.ToolExecutionMetadata))
 			dispatcher.RegisterTool(tools.NewWorkSelectTool(store))

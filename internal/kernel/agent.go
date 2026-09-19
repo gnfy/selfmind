@@ -786,6 +786,46 @@ func toolFailureHintForClass(class string) string {
 	}
 }
 
+// exposedToolNameSet is the set of tool names one provider call offers.
+func exposedToolNameSet(definitions []llm.ToolDefinition) map[string]bool {
+	names := make(map[string]bool, len(definitions))
+	for _, def := range definitions {
+		names[def.Name] = true
+	}
+	return names
+}
+
+// toolCatalogDelta reports how the exposed tool set changed since the previous
+// call of the same turn. A nil previous set means this is the first call, which
+// has nothing to compare against and is not a change.
+func toolCatalogDelta(previous, current map[string]bool) (added, removed []string) {
+	if previous == nil {
+		return nil, nil
+	}
+	for name := range current {
+		if !previous[name] {
+			added = append(added, name)
+		}
+	}
+	for name := range previous {
+		if !current[name] {
+			removed = append(removed, name)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	return added, removed
+}
+
+func sortedNames(set map[string]bool) []string {
+	names := make([]string, 0, len(set))
+	for name := range set {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
 func emitToolEndEvent(ch chan string, name, result string, err error) {
 	if err != nil {
 		emitToolEndEventWithDuration(ch, name, "", packageToolError(name, err), 0, err)
@@ -1046,6 +1086,17 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		Steps: []string{},
 	}
 	steerCh := steeringFromContext(ctx)
+	// The exposed tool set is part of the provider's cached prefix, so changing
+	// it re-uploads the whole prompt from the first byte — measured at about
+	// 43,000 extra uncached tokens per change against a 3,000-token baseline for
+	// an ordinary incremental call.
+	//
+	// The breakdown recorded only a count and a hash, so four days of traffic
+	// showed 52 such changes with no way to attribute a single one: nothing said
+	// WHICH tool joined or left. The first call of a turn records the whole set
+	// and every later change records its difference, which is the evidence the
+	// deferral cohort and the exposure rules have to be tuned against.
+	var previousToolNames map[string]bool
 	emitProviderCallContext := func(iteration int, transport string, callMessages []llm.Message, callStrategy TaskStrategy) ([]llm.Message, error) {
 		toolDefinitions := a.llmToolDefinitions(ctx, callStrategy)
 		prepared, err := a.contextEngine.PrepareRequest(ctx, callMessages, toolDefinitions)
@@ -1082,6 +1133,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		payload["transport"] = transport
 		payload["tool_schema_count"] = len(toolDefinitions)
 		payload["activated_deferred_tools"] = activatedToolCount(ctx)
+		currentToolNames := exposedToolNameSet(toolDefinitions)
+		added, removed := toolCatalogDelta(previousToolNames, currentToolNames)
+		if previousToolNames == nil || len(added) > 0 || len(removed) > 0 {
+			payload["tool_names"] = sortedNames(currentToolNames)
+		}
+		if len(added) > 0 || len(removed) > 0 {
+			payload["tool_catalog_added"] = added
+			payload["tool_catalog_removed"] = removed
+		}
+		previousToolNames = currentToolNames
 		request := llm.ChatRequest{
 			Messages:       prepared,
 			Tools:          toolDefinitions,
@@ -1127,11 +1188,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	progressAtLastBudgetDecision := 0
 	successfulActionEvidence := map[string]struct{}{}
 	toolUseCounts := map[string]int{}
-	// Tool results appended this turn, by stable tool-call id and
-	// the iteration that produced them: after toolResultAgeIterations they are
-	// shrunk in place (losslessly — the artifact keeps the full output
-	// addressable) so old verbatim bodies stop crowding the window.
-	artifactToolIterations := map[string]int{}
 	closureNoticeIssued := false
 	toolBudgetRepairIssued := false
 	toolBudgetExhausted := false
@@ -1618,19 +1674,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				}
 			}
 
-			// Age out earlier artifact-backed tool results before appending
-			// fresh evidence: this iteration's output matters more than the
-			// verbatim body of one from 3+ iterations ago.
-			for index, msg := range messages {
-				iteration, tracked := artifactToolIterations[msg.ToolCallID]
-				if msg.Role != "tool" || !tracked || i-iteration < toolResultAgeIterations {
-					continue
-				}
-				if shrunk, ok := shrinkAgedToolResult(msg.Content); ok {
-					messages[index].Content = shrunk
-				}
-			}
-
 			// Append results in order
 			if shouldExpireActiveSkillContext(ctx, calls, results) {
 				expireActiveSkillToolResults(messages)
@@ -1675,16 +1718,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						}
 					}
 				}
-				if res.msg.Role == "tool" && strings.Contains(res.msg.Content, toolArtifactNoteToken) {
-					artifactToolIterations[res.msg.ToolCallID] = i
-				}
 			}
-			// Include the fresh batch and spool medium outputs before the next
-			// provider request. Unspooled evidence is retained if saving fails.
-			if shrunk := enforceToolResultTurnBudget(ctx, messages); shrunk > 0 {
-				EmitAgentEvent(eventCh, AgentEvent{Type: "context.tool_results_aged", Payload: map[string]interface{}{
-					"messages": shrunk, "budget_bytes": toolResultTurnBudgetBytes,
-					"live_bytes": liveToolResultBytes(messages), "iteration": i,
+			// Safety valve only: a tool result's bytes were already decided when
+			// it was packaged, and rewriting a sent result breaks the request
+			// prefix. This fires for a runaway run; a zero return means every
+			// message is byte-identical and the cached prefix survives.
+			if shrunk := reclaimToolResultBytes(ctx, messages); shrunk > 0 {
+				EmitAgentEvent(eventCh, AgentEvent{Type: "context.tool_results_reclaimed", Payload: map[string]interface{}{
+					"messages": shrunk, "ceiling_bytes": toolResultReclaimCeilingBytes,
+					"target_bytes": toolResultReclaimTargetBytes,
+					"live_bytes":   liveToolResultBytes(messages), "iteration": i,
 				}})
 			}
 			handoff, handoffReady := lifecycleHandoffFromToolResults(results)

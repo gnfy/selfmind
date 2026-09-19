@@ -440,7 +440,7 @@ func TestVersionTenFixtureMigratesRowsToThreadedWorkHistory(t *testing.T) {
 		t.Helper()
 		for table, want := range map[string]int{
 			"threads": 4, "runs": 4, "task_events": 4, "task_handoffs": 1, "task_artifacts": 1,
-			"approval_requests": 1, "clarify_requests": 1, "task_queue": 1, "task_references": 1,
+			"approval_requests": 1, "clarify_requests": 1, "task_queue": 1,
 		} {
 			var got int
 			if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table).Scan(&got); err != nil || got != want {
@@ -449,7 +449,16 @@ func TestVersionTenFixtureMigratesRowsToThreadedWorkHistory(t *testing.T) {
 		}
 	}
 	assertFixtureCounts(store.db)
-	for _, retired := range []string{"tasks", "task_runs", "current_task"} {
+	// task_references/task_reference_evidence carried a seeded row into this
+	// upgrade on purpose: a reference addressed a Task by a human-facing name,
+	// and with Task gone there is nothing for it to point at. The upgrade
+	// removes the tables rather than migrating a pointer to nowhere.
+	var pinColumns int
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('threads') WHERE name = 'pinned'`).Scan(&pinColumns); err != nil || pinColumns != 0 {
+		t.Fatalf("threads.pinned columns=%d err=%v, want the pin dropped", pinColumns, err)
+	}
+	for _, retired := range []string{"tasks", "task_runs", "current_task", "task_references", "task_reference_evidence"} {
 		var count int
 		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, retired).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("retired table %s count=%d err=%v", retired, count, err)
@@ -468,27 +477,28 @@ func TestVersionTenFixtureMigratesRowsToThreadedWorkHistory(t *testing.T) {
 	}
 	for id, want := range map[string]struct {
 		kind, visibility string
-		pinned           int
 	}{
-		"task_hidden":    {ThreadKindInteraction, ThreadVisibilityUnlisted, 0},
-		"task_pinned":    {ThreadKindWork, ThreadVisibilityListed, 1},
-		"task_recurring": {ThreadKindRecurring, ThreadVisibilityListed, 0},
-		"task_archived":  {ThreadKindWork, ThreadVisibilityArchived, 0},
+		// The v10 fixture seeds a pinned label. The upgrade keeps its kind and
+		// visibility — those are evidence about the work — and drops the pin
+		// itself, which was a display flag that decided what counts as work.
+		"task_hidden":    {ThreadKindInteraction, ThreadVisibilityUnlisted},
+		"task_pinned":    {ThreadKindWork, ThreadVisibilityListed},
+		"task_recurring": {ThreadKindRecurring, ThreadVisibilityListed},
+		"task_archived":  {ThreadKindWork, ThreadVisibilityArchived},
 	} {
 		var kind, visibility string
-		var pinned int
-		if err := store.db.QueryRowContext(ctx, `SELECT kind, visibility, pinned FROM threads WHERE id = ?`, id).Scan(&kind, &visibility, &pinned); err != nil {
+		if err := store.db.QueryRowContext(ctx, `SELECT kind, visibility FROM threads WHERE id = ?`, id).Scan(&kind, &visibility); err != nil {
 			t.Fatalf("thread %s: %v", id, err)
 		}
-		if kind != want.kind || visibility != want.visibility || pinned != want.pinned {
-			t.Fatalf("thread %s kind=%q visibility=%q pinned=%d, want %+v", id, kind, visibility, pinned, want)
+		if kind != want.kind || visibility != want.visibility {
+			t.Fatalf("thread %s kind=%q visibility=%q, want %+v", id, kind, visibility, want)
 		}
 	}
 	var summary string
 	if err := store.db.QueryRowContext(ctx, `SELECT summary FROM threads WHERE id = 'task_hidden'`).Scan(&summary); err != nil || summary != "inbox summary" {
 		t.Fatalf("summary=%q err=%v", summary, err)
 	}
-	for _, table := range []string{"runs", "task_events", "task_handoffs", "task_artifacts", "approval_requests", "clarify_requests", "task_queue", "task_references"} {
+	for _, table := range []string{"runs", "task_events", "task_handoffs", "task_artifacts", "approval_requests", "clarify_requests", "task_queue"} {
 		var orphans int
 		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE COALESCE(thread_id, '') <> '' AND thread_id NOT IN (SELECT id FROM threads)`).Scan(&orphans); err != nil || orphans != 0 {
 			t.Fatalf("%s orphans=%d err=%v", table, orphans, err)

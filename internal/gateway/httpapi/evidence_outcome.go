@@ -21,20 +21,20 @@ type recordedEvidencePayload struct {
 
 // evidenceOutcome derives a verification verdict from durable runtime events.
 // Model prose is intentionally not an input to the verdict.
-func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, taskID, runID string) (*api.VerificationOutcome, []string) {
-	if c == nil || c.srv == nil || c.srv.Control == nil || taskID == "" || runID == "" {
-		return nil, nil
+func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID string) (*api.VerificationOutcome, []string) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || runID == "" {
+		return &api.VerificationOutcome{State: "blocked", Summary: "Verification evidence is unavailable; inspect the durable Run before completing."}, nil
 	}
 	run, err := c.srv.Control.GetRun(ctx, tenantID, runID)
-	if err != nil || run == nil || run.TaskID != taskID {
-		return nil, nil
+	if err != nil || run == nil {
+		return &api.VerificationOutcome{State: "blocked", Summary: "Verification evidence is unavailable; inspect the durable Run before completing."}, nil
 	}
 	var events []control.Event
 	var before int64
 	for {
 		page, err := c.srv.Control.ListRunEvidenceEvents(ctx, run.TenantID, run.ID, before, 200)
 		if err != nil {
-			return nil, nil
+			return &api.VerificationOutcome{State: "blocked", Summary: "Verification evidence is unavailable; inspect the durable Run before completing."}, nil
 		}
 		events = append(events, page...)
 		if len(page) < 200 {
@@ -62,10 +62,10 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, taskID, 
 		}
 		var payload recordedEvidencePayload
 		if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.Evidence.ToolName == "" {
-			continue
+			return &api.VerificationOutcome{State: "blocked", Summary: "Recorded verification evidence is malformed; inspect the durable Run before completing."}, changed
 		}
 		evidence = append(evidence, payload.Evidence)
-		if payload.Evidence.Kind == "mutation" && payload.Evidence.Status == "succeeded" {
+		if payload.Evidence.Kind == "mutation" {
 			for _, effect := range payload.Evidence.Files {
 				if prev, known := firstSeen[effect.Path]; !known || payload.Evidence.StartedAt < prev.at {
 					firstSeen[effect.Path] = firstTouch{at: payload.Evidence.StartedAt, created: effect.BeforeSHA256 == ""}
@@ -103,9 +103,17 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, taskID, 
 	sort.Slice(evidence, func(i, j int) bool { return evidence[i].StartedAt < evidence[j].StartedAt })
 
 	result := &api.VerificationOutcome{}
+	var mutations []verification.Mutation
 	for _, item := range evidence {
-		if item.Kind == "mutation" && item.Status == "succeeded" && evidenceChangedFiles(item.Files, transient) && item.FinishedAt > result.LatestMutationAt {
-			result.LatestMutationAt = item.FinishedAt
+		if item.Kind == "mutation" && evidenceChangedFiles(item.Files, transient) {
+			for _, effect := range item.Files {
+				if !transient[effect.Path] && effect.BeforeSHA256 != effect.AfterSHA256 {
+					mutations = append(mutations, verification.Mutation{Path: effect.Path, FinishedAt: item.FinishedAt})
+					if effect.ResolvedPath != "" && effect.ResolvedPath != effect.Path {
+						mutations = append(mutations, verification.Mutation{Path: effect.ResolvedPath, FinishedAt: item.FinishedAt})
+					}
+				}
+			}
 		}
 		if item.Kind != "verification" || item.Command == nil {
 			continue
@@ -122,7 +130,8 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, taskID, 
 		})
 	}
 
-	result.State, result.Summary = verificationState(result.LatestMutationAt, result.Checks)
+	result.LatestMutationAt = verification.RelevantMutationAt(verification.Check{}, mutations)
+	result.State, result.Summary = verification.StateWithMutations(mutations, result.Checks)
 	if result.State == "not_run" {
 		commands := 0
 		for _, item := range evidence {
@@ -139,10 +148,7 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, taskID, 
 
 func evidenceChangedFiles(files []kernel.FileEffect, transient map[string]bool) bool {
 	for _, effect := range files {
-		if transient[effect.Path] {
-			continue
-		}
-		if effect.BeforeSHA256 != effect.AfterSHA256 {
+		if !transient[effect.Path] && effect.BeforeSHA256 != effect.AfterSHA256 {
 			return true
 		}
 	}

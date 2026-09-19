@@ -55,7 +55,7 @@ func (d *Server) renderApprovalGrants(ctx context.Context, identity *control.Ide
 	for i, grant := range grants {
 		fmt.Fprintf(&sb, "%d. %s\n", i+1, describeApprovalGrant(grant, now))
 	}
-	sb.WriteString("Withdraw one with /approvals revoke <n>.")
+	sb.WriteString("Withdraw one with /approvals revoke <n>. A withdrawn class asks again on its next use.")
 	return sb.String()
 }
 
@@ -83,8 +83,11 @@ func (d *Server) revokeApprovalGrantByOrdinal(ctx context.Context, identity *con
 // describeApprovalGrant renders one remembered class in plain words.
 func describeApprovalGrant(grant control.ApprovalGrant, now time.Time) string {
 	scope := "this task"
-	if grant.ScopeKind == "person" {
+	switch grant.ScopeKind {
+	case "person":
 		scope = "you, across tasks"
+	case "workspace":
+		scope = "this workspace"
 	}
 	window := "no expiry"
 	if !grant.ExpiresAt.IsZero() {

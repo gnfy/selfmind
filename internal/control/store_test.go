@@ -331,7 +331,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	const pk = "exec:invokes dangerous command: chmod"
 
 	// Nothing granted yet.
-	if ok, err := store.IsApprovalGranted(ctx, tenant, person, pk); err != nil || ok {
+	if ok, err := store.IsApprovalGranted(ctx, tenant, person, "", pk, time.Time{}); err != nil || ok {
 		t.Fatalf("expected no grant initially, ok=%v err=%v", ok, err)
 	}
 
@@ -340,7 +340,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk, time.Time{}); err != nil {
 		t.Fatalf("GrantApproval person: %v", err)
 	}
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, pk); !ok {
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "", pk, time.Time{}); !ok {
 		t.Fatal("person grant should authorize its class")
 	}
 
@@ -355,7 +355,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	}
 
 	// A different pattern key is still ungranted.
-	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "exec:invokes dangerous command: rm"); ok {
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "", "exec:invokes dangerous command: rm", time.Time{}); ok {
 		t.Fatal("unrelated class must not be granted")
 	}
 
@@ -368,7 +368,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := store.IsApprovalGranted(ctx, other.TenantID, other.PersonID, pk); ok {
+	if ok, _ := store.IsApprovalGranted(ctx, other.TenantID, other.PersonID, "", pk, time.Time{}); ok {
 		t.Fatal("a grant must not cross persons")
 	}
 }

@@ -9,7 +9,12 @@ import (
 	"selfmind/internal/platform/log"
 )
 
-func (c *llmSkillCurator) recordSkillCurationEvents(ctx context.Context, digest control.SkillEvidenceDigest, proposal skillCuratorWire, skillKey, name, versionHash, parent string, promoted bool) {
+// recordSkillCurationEvents writes the durable, structured record of one
+// curation outcome. blockedReason names why an eligible candidate was not
+// promoted, and is empty otherwise: without it the event says only that nothing
+// was promoted, which is not actionable, and the surfaces downstream would have
+// to parse the summary prose to say anything useful.
+func (c *llmSkillCurator) recordSkillCurationEvents(ctx context.Context, digest control.SkillEvidenceDigest, proposal skillCuratorWire, skillKey, name, versionHash, parent string, promoted bool, blockedReason string) {
 	observation := curationEventObservation(digest, proposal.Action)
 	if observation == nil {
 		return
@@ -29,7 +34,8 @@ func (c *llmSkillCurator) recordSkillCurationEvents(ctx context.Context, digest 
 		"parent_version_hash": parent, "evidence_set_hash": digest.EvidenceSetHash,
 		"action": proposal.Action, "reason": strings.TrimSpace(proposal.Reason),
 		"changed_sections": proposal.ChangedSections, "promoted": promoted,
-		"repair_class": repairClassForCurationObservation(observation),
+		"blocked_reason": strings.TrimSpace(blockedReason),
+		"repair_class":   repairClassForCurationObservation(observation),
 	})
 	if _, err := c.store.AppendEvent(eventCtx, control.Event{
 		TaskID: taskID, RunID: observation.RunID, Type: "skill.candidate.created",

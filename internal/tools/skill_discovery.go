@@ -91,6 +91,17 @@ func scanSkillRoot(rootPath string) ([]discoveredSkillPath, error) {
 			}
 			path := filepath.Join(dir, name)
 			if !entry.IsDir() {
+				if entry.Type()&os.ModeSymlink != 0 {
+					// Cross-vendor layouts symlink each package, for example
+					// `.claude/skills/x -> ../../.agents/skills/x`. Accept the
+					// target when it is a package, but never walk INTO it: the
+					// real directory is discovered under its own root, and
+					// following the link could revisit the same tree.
+					if isSkillPackageDir(path) {
+						out = append(out, discoveredSkillPath{Path: path, Format: "dir"})
+					}
+					continue
+				}
 				// A bare Markdown Skill is recognized only at the top level of
 				// a root. Deeper Markdown files are package resources or
 				// ordinary documents.

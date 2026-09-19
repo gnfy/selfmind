@@ -512,5 +512,8 @@ func (d *Server) runSkillCurationPass(ctx context.Context) {
 		}
 		digest := sha256.Sum256([]byte(summary))
 		_ = d.Control.CompleteMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, hex.EncodeToString(digest[:8]))
+		// The job digest is an idempotency record, not a report. What the pass
+		// actually did reaches the person from the curator's durable events.
+		d.notifySkillCurationOutcome(ctx, job.TenantID, job.RunID)
 	}
 }

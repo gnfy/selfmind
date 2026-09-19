@@ -1,0 +1,71 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "All"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Mark"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11956,
+        "output_tokens": 315,
+        "cache_read_input_tokens": 11776,
+        "cache_miss_input_tokens": 180,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 14,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_k5fN8eHL1oWpvohE9dGM2846",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Create source.txt with exactly '7' plus trailing newline\", \"success_criteria\": \"source.txt exists containing the byte string '7\\\\n'\", \"verification_required\": true, \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\"}, {\"status\": \"completed\", \"step\": \"Run the single bound verify check on source.txt (criterion 'source value equals 7')\", \"success_criteria\": \"verify records one successful check with criterion 'source value equals 7', target 'source.txt', local_dependencies ['source.txt']\", \"verification_required\": true, \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"completed\", \"step\": \"Write result.md explaining the verified value and read it back\", \"success_criteria\": \"result.md exists explaining the verified value, and its content is confirmed by reading it\", \"verification_required\": true, \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}]}"
+        }
+      ]
+    }
+  ]
+}

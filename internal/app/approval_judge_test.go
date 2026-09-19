@@ -195,3 +195,12 @@ func TestApprovalJudgeRejectsIncompleteDecision(t *testing.T) {
 		})
 	}
 }
+
+func TestApprovalJudgePreservesFullUsage(t *testing.T) {
+	p := &judgeCaptureProvider{response: &llm.ChatResponse{Content: `{"outcome":"escalate"}`, Usage: llm.UsageStats{InputTokens: 100, OutputTokens: 20, CacheReadInputTokens: 70, CacheMissInputTokens: 30, ReasoningOutputTokens: 5, CacheUsageReported: true}}}
+	j := NewApprovalJudge(p).(tools.StructuredApprovalJudge)
+	r, err := j.JudgeResponse(context.Background(), "review")
+	if err != nil || r.Usage == nil || r.Usage.InputTokens != 100 || r.Usage.CacheReadInputTokens != 70 || !r.Usage.CacheUsageReported || r.OutputTokens != 20 {
+		t.Fatalf("usage lost: %+v %v", r, err)
+	}
+}

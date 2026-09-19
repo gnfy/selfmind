@@ -101,13 +101,14 @@ func TestToolResultCaptureCap(t *testing.T) {
 	}
 }
 
-// TestShrinkAgedToolResult: only artifact-backed content shrinks, and the
-// shrunk form keeps the artifact id readable.
-func TestShrinkAgedToolResult(t *testing.T) {
+// TestShrinkToolResultToAgedBytes: only artifact-backed content shrinks, and
+// the shrunk form keeps the artifact id readable. This is the primitive the
+// reclaim safety valve uses; shrinking anything else would be lossy.
+func TestShrinkToolResultToAgedBytes(t *testing.T) {
 	head := strings.Repeat("a", 12000)
 	tail := strings.Repeat("b", 12000)
 	withRef := head + "[SelfMind note: ... " + toolArtifactNoteToken + "art_abcd1234 ...]" + tail
-	shrunk, ok := shrinkAgedToolResult(withRef)
+	shrunk, ok := shrinkToolResultToBytes(withRef, toolResultAgedBytes)
 	if !ok {
 		t.Fatal("artifact-backed content must shrink")
 	}
@@ -119,11 +120,11 @@ func TestShrinkAgedToolResult(t *testing.T) {
 	}
 
 	withoutRef := head + tail
-	if _, ok := shrinkAgedToolResult(withoutRef); ok {
+	if _, ok := shrinkToolResultToBytes(withoutRef, toolResultAgedBytes); ok {
 		t.Fatal("content without an artifact reference must never shrink (lossy)")
 	}
 	small := "tiny " + toolArtifactNoteToken + "art_abcd1234"
-	if _, ok := shrinkAgedToolResult(small); ok {
+	if _, ok := shrinkToolResultToBytes(small, toolResultAgedBytes); ok {
 		t.Fatal("already-small content must not shrink")
 	}
 }

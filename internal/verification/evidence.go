@@ -15,6 +15,18 @@ type Binding struct {
 	Target    string `json:"target"`
 	Replaces  string `json:"replaces,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	// Version 3 binds an explicitly selected, server-issued plan step.
+	StepID string `json:"step_id,omitempty"`
+	// Nil keeps the historical whole-run invalidation rule. Version 2 makes
+	// Main's local dependency declaration explicit; an empty list means the
+	// criterion does not depend on local files. This is not execution authority.
+	LocalDependencies *[]string `json:"local_dependencies,omitempty"`
+	// Runtime-observed referents at check time. These may change on a recheck
+	// without changing Main's declared input paths (for example a retargeted link).
+	ResolvedLocalDependencies []string `json:"resolved_local_dependencies,omitempty"`
+	// Missing or unreadable declarations cannot prove independence from other
+	// file changes. Retain the declaration for diagnosis and use conservative invalidation.
+	UnresolvedLocalDependencies []string `json:"unresolved_local_dependencies,omitempty"`
 }
 
 type Check struct {
@@ -30,7 +42,7 @@ type Check struct {
 }
 
 func ValidBinding(b *Binding) bool {
-	return b != nil && b.Version == 1 && strings.TrimSpace(b.Criterion) != "" && strings.TrimSpace(b.Target) != ""
+	return b != nil && (b.Version == 1 || (b.Version == 2 && b.LocalDependencies != nil) || (b.Version == 3 && b.StepID != "")) && strings.TrimSpace(b.Criterion) != "" && strings.TrimSpace(b.Target) != ""
 }
 
 // CanReplace checks reference integrity, not semantic equivalence. Main must
@@ -39,6 +51,8 @@ func CanReplace(old, next Check) bool {
 	return ValidBinding(old.Binding) && ValidBinding(next.Binding) &&
 		old.ToolCallID != "" && next.Binding.Replaces == old.ToolCallID && strings.TrimSpace(next.Binding.Reason) != "" &&
 		old.Binding.Criterion == next.Binding.Criterion && old.Binding.Target == next.Binding.Target && old.CWD == next.CWD &&
+		old.Binding.StepID == next.Binding.StepID &&
+		sameDependencies(old.Binding, next.Binding) &&
 		old.FinishedAt <= next.StartedAt && old.ToolCallID != next.ToolCallID
 }
 
@@ -85,6 +99,10 @@ func Latest(checks []Check) []Check {
 }
 
 func State(latestMutation int64, checks []Check) (string, string) {
+	return state(latestMutation, checks, func(Check) int64 { return latestMutation })
+}
+
+func state(latestMutation int64, checks []Check, affectedAt func(Check) int64) (string, string) {
 	if len(checks) == 0 {
 		if latestMutation == 0 {
 			return "not_applicable", "No code mutation or verification was recorded."
@@ -92,9 +110,12 @@ func State(latestMutation int64, checks []Check) (string, string) {
 		return "not_run", "Files changed, but no verification command was recorded after the change."
 	}
 	current := []Check{}
-	for _, c := range checks {
-		if c.StartedAt >= latestMutation {
+	stale := 0
+	for _, c := range Latest(checks) {
+		if c.StartedAt >= affectedAt(c) {
 			current = append(current, c)
+		} else {
+			stale++
 		}
 	}
 	if len(current) == 0 {
@@ -114,6 +135,8 @@ func State(latestMutation int64, checks []Check) (string, string) {
 	switch {
 	case failed > 0:
 		return "failed", fmt.Sprintf("%d current verification check(s) failed.", failed)
+	case stale > 0:
+		return "stale", fmt.Sprintf("%d verification check(s) need review after changes to their inputs.", stale)
 	case passed > 0 && blocked == 0:
 		return "passed", fmt.Sprintf("%d current verification check(s) passed.", passed)
 	case passed == 0 && blocked > 0:

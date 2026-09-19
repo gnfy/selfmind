@@ -1,0 +1,149 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "test"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": " absent"
+    },
+    {
+      "reasoning_content": "-read"
+    },
+    {
+      "reasoning_content": "er"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " omit"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " binds"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " active"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Now"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " intentionally"
+    },
+    {
+      "content": " unavailable"
+    },
+    {
+      "content": " reader"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " bound"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " active"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10280,
+        "output_tokens": 113,
+        "cache_read_input_tokens": 9984,
+        "cache_miss_input_tokens": 296,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 28,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_TD1vKrb8tz2HK2aUkcuY3126",
+          "Function": "verify",
+          "Args": "{\"command\": \"test -f absent-reader\", \"cwd\": \".\", \"kind\": \"custom\"}"
+        }
+      ]
+    }
+  ]
+}

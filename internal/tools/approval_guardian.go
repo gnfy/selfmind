@@ -27,7 +27,8 @@ import (
 // TriageAssessment is the judge's structured answer. Empty fields mean the judge
 // did not supply them (e.g. a legacy one-word reply), which is not an error.
 type TriageAssessment struct {
-	Response ApprovalResponseMetadata `json:"-"`
+	Response    ApprovalResponseMetadata `json:"-"`
+	Restriction *RestrictionEvidence     `json:"restriction,omitempty"`
 	// Risk is low|medium|high|critical.
 	Risk string `json:"risk_level"`
 	// Authorization is unknown|low|medium|high: how directly the person's own

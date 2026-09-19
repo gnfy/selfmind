@@ -23,8 +23,25 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 			{Kind: tools.ApprovalRuleKindCommandPrefix, Key: "rule:exec_prefix:git status", Label: "commands that start with `git status`"},
 		},
 	})
-	if len(options) != 3 {
-		t.Fatalf("expected once + one run-local rule + deny, got %+v", options)
+	if len(options) != 4 {
+		t.Fatalf("expected once + one run-local rule + the standing answer + deny, got %+v", options)
+	}
+	// The standing answer exists because a run-scoped reuse dies with the run:
+	// over one week the same release workflow re-answered the same classes every
+	// morning, 478 approvals across 56 runs for 121 distinct classes. It is
+	// offered only when the floor minted a class, and its label names exactly
+	// what it widens.
+	var standing approvalDecisionOption
+	for _, option := range options {
+		if option.Scope == "workspace" {
+			standing = option
+		}
+	}
+	if standing.ID != "workspace" || standing.Key != "a" || !strings.Contains(standing.Label, `"git" commands`) {
+		t.Fatalf("the standing answer must name its class: %+v", standing)
+	}
+	if standing.Decision != "approved" {
+		t.Fatalf("standing answer decision = %q", standing.Decision)
 	}
 	if options[0].ID != "once" || options[0].Key != "y" {
 		t.Fatalf("the narrowest answer must come first: %+v", options[0])

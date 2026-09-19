@@ -1,0 +1,43 @@
+id: reliability_verification_independent_report
+title: "Writing a report preserves a check of independent declared inputs"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [cat]
+turns:
+  - input: >-
+      Create source.txt containing exactly 7 followed by a newline. Verify its
+      contents with the verify tool exactly once. Bind the check to the criterion
+      "source value equals 7" and target "source.txt", with local_dependencies
+      ["source.txt"]. After that check passes, create result.md explaining the
+      verified value, then read result.md to confirm the written explanation.
+      The report is an output of this observation, not an input to the source
+      check. Do not repeat the source verification just because the report was
+      written. No executable report check is required. Complete both deliverables
+      and report the result.
+expect:
+  status: completed
+  max_tool_errors: 0
+  max_duration_seconds: 180
+assert_state:
+  - on: file
+    path: source.txt
+    contains: "7"
+  - on: file
+    path: result.md
+    contains: "7"
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"local_dependencies":'
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_tool_xml_leak: true

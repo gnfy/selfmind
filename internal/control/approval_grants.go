@@ -12,9 +12,14 @@ import (
 )
 
 // Approval grants are the durable backing for class-level approval memory. A
-// grant says "this action CLASS (pattern_key) is pre-approved" for a scope, and
-// "person" is the only durable scope: scope_id is a person id and the grant
-// applies to all of that person's work. Person plus pattern_key IS the
+// grant says "this action CLASS (pattern_key) is pre-approved" for a scope.
+//
+// Two durable scopes exist. "person" (scope_id = person id) applies to all of
+// that person's work. "workspace" (scope_id = workspace id) is the standing
+// answer inside one workspace and is the narrower of the two: it releases
+// nothing outside the workspace that minted it, and it is what a release
+// workflow needs, because a run-scoped reuse dies with the run and the same
+// questions returned the next morning. Scope plus pattern_key IS the
 // category-scoped grant — it needs no container.
 //
 // A "task" scope used to exist as session memory, surviving across runs of one
@@ -63,15 +68,22 @@ func (g ApprovalGrant) Revoked() bool { return !g.RevokedAt.IsZero() }
 // Active reports whether the grant can still authorize its class.
 func (g ApprovalGrant) Active(now time.Time) bool { return !g.Revoked() && !g.Expired(now) }
 
-// GrantApproval records (or refreshes) a class-level approval grant. scopeKind
-// must be "person" (scopeID = person id). expiresAt bounds the grant; a zero
-// value means no deadline. Re-granting an existing class refreshes both
-// timestamps and clears a previous revocation, because the caller has just made
-// a fresh human decision.
+// GrantApproval records (or refreshes) a class-level approval grant.
+//
+// scopeKind is "person" (scopeID = person id) or "workspace" (scopeID =
+// workspace id). A workspace class is the standing answer to an ask inside one
+// workspace, which is what a release workflow needs: a run-scoped reuse dies
+// with the run, so the same questions returned every morning. It is narrower
+// than a person class by construction, because it releases nothing outside the
+// workspace that minted it.
+//
+// expiresAt bounds the grant; a zero value means no deadline. Re-granting an
+// existing class refreshes both timestamps and clears a previous revocation,
+// because the caller has just made a fresh human decision.
 func (s *Store) GrantApproval(ctx context.Context, scopeKind, tenantID, personID, scopeID, patternKey string, expiresAt time.Time) error {
 	scopeKind = normalizeGrantScope(scopeKind)
-	if scopeKind != "person" {
-		return fmt.Errorf("grant scope must be person")
+	if scopeKind != "person" && scopeKind != "workspace" {
+		return fmt.Errorf("grant scope must be person or workspace")
 	}
 	tenantID = normalizeTenant(tenantID)
 	personID = strings.TrimSpace(personID)
@@ -96,14 +108,29 @@ func (s *Store) GrantApproval(ctx context.Context, scopeKind, tenantID, personID
 	return err
 }
 
-// IsApprovalGranted reports whether patternKey is already approved for the
-// person. Expired and revoked grants never match.
-func (s *Store) IsApprovalGranted(ctx context.Context, tenantID, personID, patternKey string) (bool, error) {
+// IsApprovalGranted reports whether a remembered class releases this call.
+// Expired and revoked grants never match.
+//
+// A workspace-scoped class is matched only against its own workspace: the
+// pattern key for a host escape already embeds a workspace fingerprint, but a
+// sandboxed class does not, so the scope row is what keeps one workspace's
+// standing answer out of another.
+//
+// notAfter bounds which classes a caller may consume by when they were granted.
+// A zero value means no bound. It exists so scheduled work can be frozen to the
+// rules that existed when a person created it, rather than inheriting every
+// rule they accept later for unrelated interactive work.
+func (s *Store) IsApprovalGranted(ctx context.Context, tenantID, personID, workspaceID, patternKey string, notAfter time.Time) (bool, error) {
 	tenantID = normalizeTenant(tenantID)
 	personID = strings.TrimSpace(personID)
+	workspaceID = strings.TrimSpace(workspaceID)
 	patternKey = strings.TrimSpace(patternKey)
 	if personID == "" || patternKey == "" {
 		return false, nil
+	}
+	cutoff := int64(0)
+	if !notAfter.IsZero() {
+		cutoff = notAfter.Unix()
 	}
 	var one int
 	err := s.db.QueryRowContext(ctx,
@@ -111,9 +138,11 @@ func (s *Store) IsApprovalGranted(ctx context.Context, tenantID, personID, patte
 		 WHERE tenant_id = ? AND person_id = ? AND pattern_key = ?
 		   AND revoked_at = 0
 		   AND (expires_at = 0 OR expires_at > ?)
-		   AND scope_kind = 'person' AND scope_id = ?
+		   AND (? = 0 OR created_at <= ?)
+		   AND ((scope_kind = 'person' AND scope_id = ?)
+		        OR (scope_kind = 'workspace' AND scope_id = ? AND ? != ''))
 		 LIMIT 1`,
-		tenantID, personID, patternKey, time.Now().Unix(), personID).Scan(&one)
+		tenantID, personID, patternKey, time.Now().Unix(), cutoff, cutoff, personID, workspaceID, workspaceID).Scan(&one)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil

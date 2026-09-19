@@ -164,15 +164,15 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
    choice metadata remains exact for 24 hours.
 6. **Messages resolved as NEW own a fresh root task** (simplification P2,
    2026-08-31 — supersedes the 2026-07-06 pre-label guess). A message with no
-   prior-work match, structured edge, explicit task id, or pin creates its own
-   task; async dispatches,
+   prior-work match, structured edge, explicit task id, or resume pin creates
+   its own task; async dispatches,
    queued-task drains, and cron turns follow the same rule, and
    daemon-originated text never steers the active run via cues. Grouping is
-   display-only (labels never gate context), the default `/tasks` view ranks
-   by derived display priority, and there is no post-run relabeling. An
-   explicit `/resume <task_id>` is continuation evidence for exactly the NEXT
-   agent-bound message (a one-shot pin, consumed on use) and is the only way
-   to reopen an ARCHIVED label (`/task <id> archive` shelves one)
+   display-only (labels never gate context), the bare `/resume` attention
+   listing ranks by derived display priority, and there is no post-run
+   relabeling. An explicit `/resume <task_id>` is continuation evidence for
+   exactly the NEXT agent-bound message (a one-shot pin, consumed on use) and
+   is the only way to reopen an archived label
    (`internal/gateway/httpapi` `resolveTask`).
 
 ### Main-turn continuity implementation

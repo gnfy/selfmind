@@ -107,8 +107,9 @@ type ToolApprovalDecision struct {
 	// conservative default.
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
 	// Scope records how long the approval should be remembered: "" (this call
-	// only), "run" (in-memory for the live run), "task" (grant the action's class
-	// for the current task) or "person" (grant it for the person across tasks).
+	// only), "run" (in-memory for the live run), "workspace" (the standing
+	// answer inside one workspace, durable until withdrawn) or "person" (grant
+	// it for the person across tasks, time-bounded).
 	// It drives class-level approval
 	// memory in SmartApprovalMiddleware — the key approval-fatigue reducer.
 	Scope string `json:"scope,omitempty"`
@@ -144,6 +145,6 @@ type ToolApprovalHandler func(ctx context.Context, req ToolApprovalRequest) (Too
 // deadline, which is only appropriate for a class already bounded by a
 // narrower scope.
 type ApprovalGrantStore interface {
-	IsApprovalGranted(ctx context.Context, tenantID, personID, patternKey string) (bool, error)
+	IsApprovalGranted(ctx context.Context, tenantID, personID, workspaceID, patternKey string, notAfter time.Time) (bool, error)
 	GrantApproval(ctx context.Context, scopeKind, tenantID, personID, scopeID, patternKey string, expiresAt time.Time) error
 }

@@ -103,8 +103,8 @@ selfmind new [title]
 - `resume` 接受列表序号、稳定的 Thread 兼容 task id 或完整 run id。序号解析为
   该端点最近展示快照中的精确 Run；Thread id 只在该 Thread 恰有一个未解决 Run
   时被接受。
-- `ws` 就是工作区操作的全部入口。不再有 `workspace`、`workspaces`、`ws list`
-  或 `ws use` 这些写法：不带参数即列出，直接给序号或 id 即选中。
+- `ws` 就是工作区操作的全部入口。不再有 workspace、workspaces、ws list
+  或 ws use 这些写法：不带参数即列出，直接给序号或 id 即选中。
 
 ```text
 selfmind ws

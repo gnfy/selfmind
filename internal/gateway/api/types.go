@@ -224,6 +224,11 @@ type MessageRequest struct {
 	// system work. It is never accepted from the wire. Ordinary user turns leave
 	// it empty; watcher finalization uses a constrained unattended profile.
 	ExecutionProfile string `json:"-"`
+	// StandingGrantsAuthorizedAt freezes which remembered approval classes a
+	// SCHEDULED turn may use to the ones that existed when a person authorised
+	// the schedule. It is never accepted from the wire: a caller that could set
+	// it could widen its own authority. Zero means the turn uses none.
+	StandingGrantsAuthorizedAt time.Time `json:"-"`
 	// WatchID identifies internal work materialized from one durable external
 	// watcher. It is never accepted from the wire; the queue drain derives it
 	// from the stable watcher finalization key so clients can render a concise

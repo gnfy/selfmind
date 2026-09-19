@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/tools"
 )
 
 const (
@@ -30,6 +31,13 @@ type dailyQualityStats struct {
 	RecoveryGuardrails      map[string]int
 	PostFailureApprovals    int
 	WaitGroupOutcomes       map[string]int
+	ApprovalModelCalls      int
+	ApprovalUsageMissing    int
+	ApprovalInputTokens     int64
+	ApprovalOutputTokens    int64
+	ApprovalCacheReadTokens int64
+	ApprovalCacheMissTokens int64
+	ApprovalUsageByRole     map[string]int
 	ProviderCalls           int
 	InputTokens             int64
 	OutputTokens            int64
@@ -90,6 +98,7 @@ func parseDailyReportWindow(input string) (time.Duration, error) {
 func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 	stats := dailyQualityStats{
 		RunStatuses:            make(map[string]int),
+		ApprovalUsageByRole:    make(map[string]int),
 		CompletionReasons:      make(map[string]int),
 		ExternalStatuses:       make(map[string]int),
 		RecoveryScheduled:      make(map[string]int),
@@ -157,6 +166,27 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			}
 			if event.RunID != "" {
 				terminalRuns[event.RunID] = true
+			}
+		case "approval.response":
+			var p struct {
+				Response tools.ApprovalResponseMetadata `json:"response"`
+			}
+			if json.Unmarshal(event.Payload, &p) == nil {
+				stats.ApprovalModelCalls++
+				role := p.Response.Role
+				if role == "" {
+					role = "unattributed"
+				}
+				stats.ApprovalUsageByRole[role]++
+				if p.Response.Usage == nil {
+					stats.ApprovalUsageMissing++
+				} else {
+					u := p.Response.Usage
+					stats.ApprovalInputTokens += int64(u.InputTokens)
+					stats.ApprovalOutputTokens += int64(u.OutputTokens)
+					stats.ApprovalCacheReadTokens += int64(u.CacheReadInputTokens)
+					stats.ApprovalCacheMissTokens += int64(max(u.CacheMissInputTokens, u.InputTokens-u.CacheReadInputTokens))
+				}
 			}
 		case "provider.call.usage":
 			var p struct {
@@ -405,6 +435,7 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
+	fmt.Fprintf(&sb, "Approval model (separate from Main and maintenance): %d responses, input %d, cache read %d, uncached %d, output %d; usage unavailable for %d responses; roles %s\n", stats.ApprovalModelCalls, stats.ApprovalInputTokens, stats.ApprovalCacheReadTokens, stats.ApprovalCacheMissTokens, stats.ApprovalOutputTokens, stats.ApprovalUsageMissing, formatCountMap(stats.ApprovalUsageByRole))
 	if stats.ContextSamples > 0 {
 		avgRequest := stats.ContextEstimatedTokens / int64(stats.ContextSamples)
 		avgSchemas := stats.ContextToolSchemaTokens / int64(stats.ContextSamples)

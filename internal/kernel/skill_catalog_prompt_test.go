@@ -15,15 +15,19 @@ func TestSkillCandidateCatalogPreservesExistenceBeforeDescriptions(t *testing.T)
 		})
 	}
 
-	prompt, report := renderSkillCandidateCatalog(candidates, 1400)
+	// The budget is expressed relative to the fixed header: these cases assert
+	// how the REMAINING bytes are allocated, so a constant tuned to one prompt
+	// revision would fail on any wording change without a behaviour change.
+	budget := len(skillCandidateCatalogHeader) + 1225
+	prompt, report := renderSkillCandidateCatalog(candidates, budget)
 	if report.Included != len(candidates) || report.Omitted != 0 {
 		t.Fatalf("catalog lost existence before descriptions: %+v\n%s", report, prompt)
 	}
 	if report.Full == 0 || report.Shortened == 0 {
 		t.Fatalf("expected ranked full descriptions plus fair shortened descriptions under budget: %+v", report)
 	}
-	if len(prompt) > 1400 {
-		t.Fatalf("catalog bytes = %d, want <= 1400", len(prompt))
+	if len(prompt) > budget {
+		t.Fatalf("catalog bytes = %d, want <= %d", len(prompt), budget)
 	}
 	for _, candidate := range candidates {
 		if !strings.Contains(prompt, "- "+candidate.Name) {
@@ -87,8 +91,13 @@ func TestSkillCandidateCatalogOmissionIsDeterministic(t *testing.T) {
 		{Name: "ranked-second", Scope: "user", Source: "manual"},
 		{Name: "ranked-third", Scope: "user", Source: "manual"},
 	}
-	first, firstReport := renderSkillCandidateCatalog(candidates, 330)
-	second, secondReport := renderSkillCandidateCatalog(candidates, 330)
+	// One byte short of rendering everything. Derived rather than a constant so
+	// the case keeps asserting the allocation rule when the fixed header or the
+	// status line changes length.
+	full, _ := renderSkillCandidateCatalog(candidates, 1<<20)
+	budget := len(full) - 1
+	first, firstReport := renderSkillCandidateCatalog(candidates, budget)
+	second, secondReport := renderSkillCandidateCatalog(candidates, budget)
 	if first != second || firstReport != secondReport {
 		t.Fatalf("catalog allocation is not deterministic:\n%+v\n%+v", firstReport, secondReport)
 	}
@@ -124,5 +133,31 @@ func TestSkillCandidateCatalogCapsIssuedSurfaceAtWorkUnitLimit(t *testing.T) {
 	_, report := renderSkillCandidateCatalogWithinBudget(candidates, 20000, 10000)
 	if report.Included != SkillCatalogCandidateLimit || report.Omitted != 20 {
 		t.Fatalf("candidate limit not enforced: %+v", report)
+	}
+}
+
+// The catalog's default direction is load-bearing, not wording. "Select only
+// when it CLEARLY FITS; otherwise continue without a skill" made skipping the
+// default, and a Skill is not a shortcut for work the model cannot do — it
+// carries the conventions, preconditions and verification this workspace
+// expects. A future edit that restores a capability-based bar reintroduces the
+// silent skip, so the contract is pinned here rather than left to prose.
+func TestSkillCatalogDefaultsToSelectingAnApplicableSkill(t *testing.T) {
+	header := strings.ToLower(skillCandidateCatalogHeader)
+	if strings.Contains(header, "clearly fits") {
+		t.Error("the bar must be applicability, not a judgement that it clearly fits")
+	}
+	if !strings.Contains(header, "applies to this work unit") {
+		t.Error("the header must state the applicability bar")
+	}
+	if !strings.Contains(header, "not a reason to skip it") {
+		t.Error("the header must say that being able to do the work is not a reason to skip the Skill")
+	}
+	// Still at most one per work unit, and inspection is still not use.
+	if !strings.Contains(header, "at most one") {
+		t.Error("one Skill per work unit remains the contract")
+	}
+	if !strings.Contains(header, "does not count as use") {
+		t.Error("skill_view must stay distinct from selection")
 	}
 }

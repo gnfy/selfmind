@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11503,
+        "output_tokens": 148,
+        "cache_read_input_tokens": 11136,
+        "cache_miss_input_tokens": 367,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_RoPcH06P05udGtfQbuAq5232",
+          "Function": "write_file",
+          "Args": "{\"path\": \"result.md\", \"content\": \"# Result\\n\\n`source.txt` contains exactly the value `7`, followed by a single trailing newline.\\n\\n## Verification\\n\\nThe file was checked once with the `verify` tool, bound to:\\n\\n- criterion: source value equals 7\\n- target: `source.txt`\\n- local_dependencies: `[\\\"source.txt\\\"]`\\n\\nThe check command `test \\\"$(cat source.txt)\\\" = \\\"7\\\"` exited successfully, confirming the stored value is `7`.\\n\"}"
+        }
+      ]
+    }
+  ]
+}

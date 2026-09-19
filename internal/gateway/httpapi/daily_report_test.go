@@ -87,3 +87,15 @@ func TestCollectDailyQualityStats(t *testing.T) {
 		t.Fatalf("tool names were not read from durable event payload: %+v", stats.ToolCallsByName)
 	}
 }
+
+func TestApprovalUsageDoesNotDoubleCountMainOrInventHistoricalInput(t *testing.T) {
+	events := []control.Event{
+		{Type: "provider.call.usage", Payload: []byte(`{"input_tokens":100,"output_tokens":10}`)},
+		{Type: "approval.response", Payload: []byte(`{"response":{"version":2,"role":"fast_classifier","usage":{"input_tokens":50,"output_tokens":5,"cache_read_input_tokens":30,"cache_miss_input_tokens":20}}}`)},
+		{Type: "approval.response", Payload: []byte(`{"response":{"version":1,"output_tokens":7}}`)},
+	}
+	s := collectDailyQualityStats(events)
+	if s.ProviderCalls != 1 || s.InputTokens != 100 || s.ApprovalModelCalls != 2 || s.ApprovalUsageMissing != 1 || s.ApprovalInputTokens != 50 || s.ApprovalOutputTokens != 5 || s.ApprovalCacheReadTokens != 30 || s.ApprovalCacheMissTokens != 20 {
+		t.Fatalf("accounting=%+v", s)
+	}
+}

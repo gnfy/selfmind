@@ -466,7 +466,7 @@ func grantScopeNote(scope string) string {
 
 func grantScopeNoteWithClass(scope, grantClass string) string {
 	switch scope {
-	case "task", "person":
+	case "task", "person", "workspace":
 	default:
 		return ""
 	}
@@ -474,8 +474,13 @@ func grantScopeNoteWithClass(scope, grantClass string) string {
 		return " (not remembered: this command's class cannot be reused)"
 	}
 	window := "for this task"
-	if scope == "person" {
+	switch scope {
+	case "person":
 		window = "for you across tasks, 8h"
+	case "workspace":
+		// No deadline: what bounds a workspace class is that it is narrow,
+		// listed by /approvals grants, and revocable.
+		window = "in this workspace until you withdraw it"
 	}
 	return fmt.Sprintf(" (remembered %s: %s)", window, textutil.Truncate(toOneLine(grantClass), 80))
 }

@@ -25,6 +25,7 @@ turns:
 expect:
   status: completed
   min_tool_calls: 1
+  max_tool_errors: 0
   contains:
     - "QLX-7734-MID"
 

@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "source.txt result.md verify local_dependencies source_value_equals_7"
+}

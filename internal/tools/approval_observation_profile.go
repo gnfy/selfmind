@@ -93,7 +93,10 @@ func approvedObservationScript(toolName string, args map[string]interface{}) boo
 		if scope.runGrants != nil && scope.runGrants.has(key) {
 			return true
 		}
-		granted, _ := scope.Grants.IsApprovalGranted(ctx, scope.TenantID, scope.PersonID, key)
+		if !scope.StandingGrants.Allowed {
+			return false
+		}
+		granted, _ := scope.Grants.IsApprovalGranted(ctx, scope.TenantID, scope.PersonID, scope.WorkspaceID, key, scope.StandingGrants.NotAfter)
 		if granted {
 			return true
 		}

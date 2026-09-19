@@ -126,7 +126,7 @@ func TestApprovalPatternKeyStability(t *testing.T) {
 }
 
 func TestHostApprovalPatternIsScopedToWorkspaceAndCommandFamily(t *testing.T) {
-	args := map[string]interface{}{"command": "curl https://example.com", "sandbox": "host"}
+	args := map[string]interface{}{"command": "chmod 755 script.sh", "sandbox": "host"}
 	_, reason := dangerousToolCall("", "terminal", args)
 	scopeA := ExecutionScope{WorkspaceID: "ws-a", WorkspaceRoot: "/work/a"}
 	scopeB := ExecutionScope{WorkspaceID: "ws-b", WorkspaceRoot: "/work/b"}
@@ -140,8 +140,18 @@ func TestHostApprovalPatternIsScopedToWorkspaceAndCommandFamily(t *testing.T) {
 	if keyA == keyB {
 		t.Fatalf("host approval leaked across workspaces: %q", keyA)
 	}
-	if !strings.Contains(keyA, "command:curl") {
+	if !strings.Contains(keyA, "command:chmod") {
 		t.Fatalf("host key must retain the effective command family: %q", keyA)
+	}
+	// An arbitrary network client takes its method, its target and its output
+	// file as arguments, so no leading token bounds what a standing permission
+	// would authorise. It stays approvable once and is never remembered.
+	for _, command := range []string{"curl https://example.com", "wget https://example.com/x"} {
+		netArgs := map[string]interface{}{"command": command, "sandbox": "host"}
+		_, netReason := dangerousToolCall("", "terminal", netArgs)
+		if key := approvalPatternKeyForScope("terminal", netArgs, netReason, scopeA, true); key != "" {
+			t.Fatalf("%q must not mint a reusable key, got %q", command, key)
+		}
 	}
 	if got := approvalPatternKeyForScope("terminal", args, reason, ExecutionScope{}, false); got != "" {
 		t.Fatalf("host request without a durable scope must not be remembered: %q", got)
@@ -165,7 +175,7 @@ func newFakeGrantStore() *fakeGrantStore { return &fakeGrantStore{granted: map[s
 
 func (f *fakeGrantStore) key(kind, scopeID, pk string) string { return kind + "|" + scopeID + "|" + pk }
 
-func (f *fakeGrantStore) IsApprovalGranted(ctx context.Context, tenantID, personID, patternKey string) (bool, error) {
+func (f *fakeGrantStore) IsApprovalGranted(ctx context.Context, tenantID, personID, workspaceID, patternKey string, notAfter time.Time) (bool, error) {
 	return f.granted[f.key("person", personID, patternKey)], nil
 }
 
@@ -191,7 +201,7 @@ func TestTaskScopedGrantNeverSuppressesAnAsk(t *testing.T) {
 	install := func(taskID string) func() {
 		return SetExecutionScope("person-g", ExecutionScope{
 			TenantID: "tenant-g", PersonID: "person-g", TaskID: taskID,
-			ApprovalMode: ApprovalOnRequest, Approval: handler, Grants: store,
+			ApprovalMode: ApprovalOnRequest, Approval: handler, Grants: store, StandingGrants: InteractiveStandingGrants(),
 		})
 	}
 	run := func(cmd string) {
@@ -232,7 +242,7 @@ func TestHistoricalPersonGrantRemainsReadable(t *testing.T) {
 	install := func(taskID string) func() {
 		return SetExecutionScope("person-p", ExecutionScope{
 			TenantID: "tenant-p", PersonID: "person-p", TaskID: taskID,
-			ApprovalMode: ApprovalOnRequest, Approval: handler, Grants: store,
+			ApprovalMode: ApprovalOnRequest, Approval: handler, Grants: store, StandingGrants: InteractiveStandingGrants(),
 		})
 	}
 	run := func(cmd string) {
@@ -268,7 +278,7 @@ func TestOnceApprovalGrantsNothing(t *testing.T) {
 	}
 	cleanup := SetExecutionScope("person-o", ExecutionScope{
 		TenantID: "tenant-o", PersonID: "person-o", TaskID: "task-1",
-		ApprovalMode: ApprovalOnRequest, Approval: handler, Grants: store,
+		ApprovalMode: ApprovalOnRequest, Approval: handler, Grants: store, StandingGrants: InteractiveStandingGrants(),
 	})
 	defer cleanup()
 	run := func(cmd string) {

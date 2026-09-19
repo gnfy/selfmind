@@ -32,7 +32,7 @@ expect:
   max_tool_errors: 2
   max_duration_seconds: 300
   contains:
-    - "Task:"
+    - "Work:"
     - "Status: waiting_user"
   must_not_contain:
     - "No active task."

@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "work_select(resume) tool_output_view waiting Run extraction"
+}

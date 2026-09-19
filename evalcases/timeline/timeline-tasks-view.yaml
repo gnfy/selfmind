@@ -21,7 +21,7 @@ expect:
   status: completed
   max_tool_calls: 0
   max_duration_seconds: 60
-  contains: ["Needs attention:", "执行验证并等待确认", "run_"]
+  contains: ["Needs attention:", "执行验证并等待确认", "waiting for your decision", "run_"]
   must_not_contain: ["Unknown command"]
 
 checks:

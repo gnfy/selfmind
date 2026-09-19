@@ -627,7 +627,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		// the router's generic missing-response fallback as a successful answer.
 		content = strings.TrimSpace(outcome.Summary)
 	}
-	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.TenantID, task.ID, run.ID)
+	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.TenantID, run.ID)
 	outcome.Verification, outcome.Files = verification, evidenceFiles
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
 	outcome = applyVerificationOutcome(outcome)

@@ -161,13 +161,28 @@ func (c *RunCoordinator) resolveBoundSkill(ctx context.Context, identity *contro
 		if occurrences >= 2 {
 			_ = c.srv.Control.SetTaskSkillBindingState(ctx, identity.TenantID, identity.PersonID, task.ID, control.TaskSkillBindingSuspended, "repeated known failure guard")
 		}
+		// Recurrence is where a cohort-published version is withdrawn. The
+		// incident path withdraws a repair version on its first attributable
+		// failure, but a parentless version rests on three verified runs and
+		// has no parent to fall back to; suspending one task's binding leaves
+		// it active for every other. This is the only place the count grows,
+		// because a matched guard stops the activation that would produce a
+		// fresh incident.
+		withdrawn, withdrawErr := c.srv.Control.WithdrawCohortSkillVersionOnRepeatedFailure(ctx, identity.TenantID, key, versionHash, occurrences)
+		if withdrawErr != nil {
+			log.Warn("skill cohort version withdrawal failed", "task_id", task.ID, "error", withdrawErr)
+		}
+		action := "ordinary_planning_without_skill"
+		if withdrawn {
+			action = "version_withdrawn_after_repeated_failure"
+		}
 		_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
 			TaskID: task.ID, RunID: run.ID, Type: "skill.guard.matched", Visibility: "task", Channel: run.Channel,
 			Payload: mustJSON(map[string]interface{}{
 				"skill_key": key, "name": info.Name, "version_hash": versionHash,
 				"failure_signature": guard.FailureSignature, "failed_step_id": guard.FailedStepID,
 				"error_category": guard.ErrorCategory, "occurrence_count": occurrences,
-				"action": "ordinary_planning_without_skill",
+				"action": action,
 			}),
 			IdempotencyKey: "skill-guard-match:" + run.ID + ":" + guard.FailureSignature,
 		})

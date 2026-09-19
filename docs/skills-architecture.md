@@ -69,21 +69,48 @@ mutation authority themselves.
 Discovery flows through the shared Skill service. Visible roots, in precedence
 order, are:
 
-1. Workspace `.selfmind/skills` at the typed execution-scope root.
+1. Workspace `.selfmind/skills`.
 2. Workspace `.agents/skills` for Agent Skills-compatible repository guidance.
-3. Workspace `skills/`.
-4. The control-managed learned-Skill root for the authenticated logical
+3. Workspace `.claude/skills`, the other cross-vendor convention.
+4. Workspace `skills/`.
+5. The control-managed learned-Skill root for the authenticated logical
    `WorkspaceID`. It lives under the SelfMind asset base, not in the repository.
-5. Read-only roots from `SELFMIND_SKILLS_ROOTS`.
-6. The optional writable root from `SELFMIND_SKILLS_DIR`.
-7. The control-tenant user root under the configured SelfMind asset base.
-8. Read-only `~/.agents/skills`, the cross-vendor Agent Skills location. It
+6. Read-only roots from `SELFMIND_SKILLS_ROOTS`.
+7. The optional writable root from `SELFMIND_SKILLS_DIR`.
+8. The control-tenant user root under the configured SelfMind asset base.
+9. Read-only `~/.agents/skills`, the cross-vendor Agent Skills location. It
    follows the writable user root so an explicit install is never shadowed by a
    default location.
+
+The four workspace locations are looked for at the workspace root AND at each
+directory of a bounded descent beneath it. A workspace is commonly a container
+of several repositories, each carrying its own Skill directory one level down;
+a workspace that IS one repository is the depth-zero case of the same rule.
+Expressing both as one bounded descent keeps discovery free of a layout mode,
+which would be a scenario branch. The descent stops at a fixed depth, at a fixed
+exclusion set of dependency and build trees, and at the Skill container
+directories themselves, whose children are packages rather than search roots.
 
 Typed execution scope is the hard workspace ancestor boundary. Discovery does
 not walk above it and relabel home-level assets as workspace Skills. Listing,
 selection-reference issuance, viewing, and activation use the same resolver.
+
+A package is identified by its RESOLVED path. The two cross-vendor conventions
+are commonly the same directory seen twice, because a repository keeps one real
+directory and symlinks the other. Keyed lexically, such a package is discovered
+under both roots, a bare name then matches two Skills, and name resolution
+reports that as ambiguous rather than picking one — so enumerating the second
+convention without resolving symlinks would make every Skill in that repository
+uncallable by its own name. The scanner accepts a symlinked package but never
+walks into it: the real directory is discovered under its own root.
+
+The developer-only marker is a statement about a Skill NAME made by the
+repository that owns it, not about one directory. A repository commonly
+publishes the canonical body under one convention and a thin compatibility
+entrypoint for another coding agent under the other, and only the canonical body
+carries the marker. The marker is therefore answered across the sibling
+convention directories of the same repository; a per-directory check would
+expose the entrypoint and, through it, the instructions the marker withheld.
 
 Each root is enumerated one of two ways. A read-only root that declares a
 package manifest yields exactly the packages that manifest lists: the manifest
@@ -266,6 +293,16 @@ from selection references and cannot be reconciled back to active merely
 because its file remains present. Rollback restores a stored previous package
 and affects future activations only.
 
+Withdrawal difficulty matches publication difficulty. A repair version can
+publish on as little as one verified recovery, so one attributable incident
+withdraws it and its parent returns. A cohort version rests on three
+independent verified runs, so one incident must not overturn it — but it cannot
+be unwithdrawable either: it has no parent to fall back to, and idle decay is a
+tool action with no scheduler behind it. It is withdrawn when its known failure
+RECURS often enough, which is the only signal that keeps growing: a matched
+failure guard stops the activation that would otherwise produce a fresh
+incident. Person-authored versions are outside this policy entirely.
+
 The lifecycle module enforces mutation authority:
 
 - `candidate_only` may create an immutable proposal but cannot promote, bind,
@@ -277,6 +314,18 @@ The lifecycle module enforces mutation authority:
 Manual, catalog-installed, bundled, pinned, external, workspace read-only, and
 otherwise protected Skills are never rewritten automatically.
 
+They are still REPAIRED — proposed, not applied. Withholding the proposal
+withheld improvement from exactly the Skills a person actually uses: their own,
+in their own repository, which are activated and accumulate incidents and
+verified recoveries like any other. Evidence decides whether a repair is right;
+it does not confer authority to write into the person's working tree. The
+candidate therefore stands with its evidence, automatic promotion is blocked
+with that reason, and the person applies it with `/skills promote`, which is
+reachable only through the authenticated management surface and never by the
+model. The write lands in place, under the Skill's own name: forking it into a
+writable root would make the bare name ambiguous and break both copies. A pin
+outranks this path, and deletion and archiving stay closed.
+
 ## Automatic Creation
 
 Terminal work units become immutable workflow observations. Task/run events
@@ -285,11 +334,26 @@ cohort with at least three independent runs for the same person, workspace,
 environment, and comparable workflow. Each success path must contain procedural
 tool evidence; tool-free success cannot teach a procedure.
 
+A cohort whose every success observation reached the same existing Skill
+without activating it is not new territory. Its work is already claimed, and
+minting a second Skill for it is how a library becomes competing near-duplicates
+answering one bare name. An ACTIVATED cohort needs no rule of its own:
+activation sets the repair target, so a successful run takes the repair branch
+and proposes nothing.
+
 Automatic publication additionally requires every success observation to have
 passed structured verification and to use attributable built-in tool metadata.
-External-origin tools, MCP tools, network/delete/dangerous classes, delegation,
+External-origin tools, MCP tools, network/delete/delegated classes, delegation,
 Skill management, and external watchers block automatic publication. They may
 still produce a version candidate for explicit review.
+
+The dangerous-op class is deliberately NOT consulted here. The runtime declares
+it a call-side fallback for "no more specific class applies", and the deny path
+already refuses to act on it. It reports every host execution as dangerous
+wherever an enforced sandbox cannot be proven, so consulting it made publication
+eligibility depend on the operating system rather than on the procedure. The
+classes that remain are specific and platform-independent, and the cohort behind
+a publication is three verified runs whose commands the person approved.
 
 The curator extracts stable common procedure, parameters, preconditions,
 failure guards, recovery, and verification. It does not concatenate runs or
@@ -297,6 +361,14 @@ copy raw logs, credentials, absolute user paths, or session artifacts. The
 canonical main contains Applicability, Inputs, Preconditions, Procedure,
 Failure Guards, Recovery, and Verification. Optional detail belongs in lazy
 references.
+
+Every curation outcome is told to the person: a Skill published, or a candidate
+withheld together with the reason that withheld it. The record is the curator's
+durable events, never its summary prose, so a background job's wording cannot
+become a user-facing contract, and a pass that changed nothing says nothing. A
+learning loop whose terminal states are invisible cannot be observed and
+therefore cannot be corrected — every later change to it would be invisible
+too.
 
 CREATE freezes `publication_scope` with the evidence. A single-workspace cohort
 defaults to the control-managed workspace root, which avoids dirtying the

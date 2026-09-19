@@ -36,13 +36,24 @@ func (r SkillCatalogRenderReport) WithinBudget() bool {
 // baseline. Remaining bytes then complete descriptions in ranking order.
 // Ranking is represented by input order and is therefore also the deterministic
 // omission order when even minimum lines do not fit.
+// skillCandidateCatalogHeader is fixed overhead in every prompt that carries a
+// catalog, so its wording is budgeted, not free.
+//
+// The default direction is deliberate. "Select only when it CLEARLY FITS;
+// otherwise continue without a skill" made skipping the default, and a Skill is
+// not a shortcut for work the model cannot do: it carries this workspace's
+// conventions, preconditions and verification, none of which the model can
+// derive from the task. Being able to do the work is therefore not a reason to
+// skip the Skill that defines how the work is done here.
+const skillCandidateCatalogHeader = "## Skill Candidates for Current Work Unit\n" +
+	"Metadata only. Select at most one with skill_select(candidate_ref) when one applies to this work unit; being able to do the work without it is not a reason to skip it. Otherwise continue without a skill. skill_view only inspects and does not count as use.\n"
+
 func renderSkillCandidateCatalog(candidates []SkillCandidateContext, maxBytes int) (string, SkillCatalogRenderReport) {
 	report := SkillCatalogRenderReport{Total: len(candidates), Budget: maxBytes}
 	if len(candidates) == 0 || maxBytes <= 0 {
 		return "", report
 	}
-	header := "## Skill Candidates for Current Work Unit\n" +
-		"Metadata only. Select at most one with skill_select(candidate_ref) when it clearly fits; otherwise continue without a skill. skill_view only inspects and does not count as use.\n"
+	header := skillCandidateCatalogHeader
 	// Reserve a worst-case status line up front so included/shortened/omitted is
 	// never itself lost to the budget it explains.
 	statusReserve := len(fmt.Sprintf("\n[Skill catalog: included %d/%d, full descriptions %d, shortened %d, omitted %d.]\n",

@@ -1,0 +1,719 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "Done"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " acceptance"
+    },
+    {
+      "content": " condition"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "value"
+    },
+    {
+      "content": " contains"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " verified"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "value"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`.\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Step"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "step"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "24"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "319"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " success"
+    },
+    {
+      "content": " criterion"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "value"
+    },
+    {
+      "content": " contains"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "\","
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "ver"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "required"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " true"
+    },
+    {
+      "content": "`.\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " intentionally"
+    },
+    {
+      "content": " unavailable"
+    },
+    {
+      "content": " reader"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "test"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": " absent"
+    },
+    {
+      "content": "-read"
+    },
+    {
+      "content": "er"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " failed"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " exit"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "evidence"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "call"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "_T"
+    },
+    {
+      "content": "D"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "v"
+    },
+    {
+      "content": "K"
+    },
+    {
+      "content": "rb"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "tz"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "HK"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "Uk"
+    },
+    {
+      "content": "cu"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "312"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "`)"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " never"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " artifact"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " corrected"
+    },
+    {
+      "content": " reader"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "test"
+    },
+    {
+      "content": " \"$"
+    },
+    {
+      "content": "("
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": ")\""
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "evidence"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "call"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "_v"
+    },
+    {
+      "content": "G"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "G"
+    },
+    {
+      "content": "q"
+    },
+    {
+      "content": "Z"
+    },
+    {
+      "content": "Ps"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "bl"
+    },
+    {
+      "content": "69"
+    },
+    {
+      "content": "R"
+    },
+    {
+      "content": "g"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "k"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "AK"
+    },
+    {
+      "content": "052"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "),"
+    },
+    {
+      "content": " replacing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "check"
+    },
+    {
+      "content": ".re"
+    },
+    {
+      "content": "places"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "check"
+    },
+    {
+      "content": ".re"
+    },
+    {
+      "content": "ason"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " criterion"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " dependencies"
+    },
+    {
+      "content": " were"
+    },
+    {
+      "content": " inherited"
+    },
+    {
+      "content": " unchanged"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Both"
+    },
+    {
+      "content": " checks"
+    },
+    {
+      "content": " ran"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " same"
+    },
+    {
+      "content": " c"
+    },
+    {
+      "content": "wd"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "No"
+    },
+    {
+      "content": " files"
+    },
+    {
+      "content": " were"
+    },
+    {
+      "content": " modified"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " One"
+    },
+    {
+      "content": " honesty"
+    },
+    {
+      "content": " note"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " accepted"
+    },
+    {
+      "content": " reader"
+    },
+    {
+      "content": " uses"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " substitution"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " proves"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": " equals"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": " but"
+    },
+    {
+      "content": " does"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " itself"
+    },
+    {
+      "content": " prove"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " trailing"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": " mentioned"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " title"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " part"
+    },
+    {
+      "content": " rests"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " mandated"
+    },
+    {
+      "content": " corrected"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " an"
+    },
+    {
+      "content": " independent"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": " assertion"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 12422,
+        "output_tokens": 234,
+        "cache_read_input_tokens": 3456,
+        "cache_miss_input_tokens": 8966,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

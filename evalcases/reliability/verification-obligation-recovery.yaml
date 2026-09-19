@@ -1,0 +1,50 @@
+id: reliability_verification_obligation_recovery
+title: "A failed check can change method while preserving the durable plan criterion"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [test, cat]
+setup:
+  files:
+    value.txt: "READY\n"
+turns:
+  - input: >-
+      Verify that value.txt contains READY followed by a newline. Make one plan
+      step in_progress, with success_criteria "value contains READY" and
+      verification_required true. This is a recovery exercise: first call verify
+      with command "test -f absent-reader" and omit check. That unavailable reader
+      is an intentionally failed method for the same acceptance condition.
+      Keep the plan open. Correct the method with verify using
+      "test \"$(cat value.txt)\" = READY", and supply only check.replaces with
+      the first verification evidence id and check.reason explaining why the
+      corrected reader checks the unchanged condition. Do not repeat criterion,
+      target, or dependencies: they must be inherited from the recorded obligation.
+      Use the same cwd for both checks. Complete the plan and finish after the
+      corrected verification passes. Do not modify files or weaken the criterion.
+expect:
+  status: completed
+  verification_state: passed
+  max_tool_errors: 1
+  max_duration_seconds: 180
+assert_state:
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 2
+    count_lte: 2
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"replaces":'
+    count_gte: 1
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"status":"failed"'
+    count_gte: 1
+  - on: file
+    path: value.txt
+    contains: READY
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

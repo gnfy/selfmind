@@ -16,7 +16,7 @@ func (c *llmSkillCurator) repairPreflightReason(tenantID string, digest control.
 	if err := validateCuratedSkillContent(digest.TargetActiveContent, digest.TargetSkillName); err != nil {
 		return "active Skill is not eligible for deterministic narrow repair: " + err.Error()
 	}
-	if ok, reason := c.automaticRepairTargetEligible(tenantID, digest); !ok {
+	if ok, reason := c.repairTargetEligible(tenantID, digest); !ok {
 		return reason
 	}
 	return ""
@@ -62,6 +62,19 @@ func skillCurationProposalEligible(digest control.SkillEvidenceDigest) bool {
 	}
 	if digest.TargetSkillKey != "" {
 		return digestHasVerifiedRepairIncident(digest) && control.SkillRepairCandidateEvidenceReady(digest)
+	}
+	// A cohort whose every run reached the same existing Skill is not virgin
+	// territory, even when none of them activated it. Minting a second Skill
+	// for claimed work is how a library turns into competing near-duplicates
+	// that answer the same bare name — and the one candidate this deployment
+	// ever produced was exactly that shape: three runs that read a release
+	// Skill by hand and would have learned "how to look it up".
+	//
+	// An activated cohort needs no rule here: activation sets TargetSkillKey,
+	// so it takes the repair branch above and a successful run proposes
+	// nothing.
+	if len(digest.CoveringSkillKeys) > 0 {
+		return false
 	}
 	if len(digest.SuccessObservations) < 3 {
 		return false
@@ -114,7 +127,23 @@ func automaticObservationPublicationEligible(observation control.WorkflowObserva
 		}
 		for _, class := range tool.OperationClasses {
 			switch class {
-			case "delete", "network", "exec.delegated", "dangerous":
+			// "dangerous" is deliberately absent. The runtime declares it a
+			// call-side FALLBACK for the dangerous-op heuristic "when no more
+			// specific class applies", and the deny path already refuses to act
+			// on it because "this looked risky" is not something the person
+			// said. Publication eligibility must not be the one consumer that
+			// treats it as authoritative: the heuristic reports every host exec
+			// as dangerous wherever an enforced sandbox cannot be proven, which
+			// is every exec on a platform without one. That made publication
+			// eligibility depend on the operating system — over three days not
+			// one of 378 approvals came from the heuristic itself, while every
+			// terminal step in the only candidate ever produced carried the
+			// class and blocked it.
+			//
+			// The classes kept here are specific and platform-independent, and
+			// the cohort behind a publication is three verified runs whose
+			// commands the person approved.
+			case "delete", "network", "exec.delegated":
 				return false
 			}
 		}
@@ -122,19 +151,49 @@ func automaticObservationPublicationEligible(observation control.WorkflowObserva
 	return true
 }
 
-func (c *llmSkillCurator) automaticRepairTargetEligible(tenantID string, digest control.SkillEvidenceDigest) (bool, string) {
+// repairTargetEligible decides whether a repair may be PROPOSED for the active
+// Skill, not whether it may be applied.
+//
+// Proposal used to be refused for anything the curator could not also rewrite,
+// which withheld it from exactly the Skills a person actually uses: their own,
+// in their own repository. Those Skills are activated, they accumulate
+// incidents and verified recoveries like any other, and none of it went
+// anywhere — the evidence was collected and then never acted on.
+//
+// A pinned Skill is still refused: a pin is the person saying this content is
+// not to be reworked, and a proposal against it is noise.
+func (c *llmSkillCurator) repairTargetEligible(tenantID string, digest control.SkillEvidenceDigest) (bool, string) {
 	if c == nil || c.skillStorage == nil {
 		return false, "Skill storage is unavailable"
 	}
-	args := c.skillInvocationArgs(context.Background(), tenantID, digest.WorkspaceID, digest.PublicationScope, kernel.SkillMutationCandidateOnly)
-	info, _, _, err := tools.ReadSkillPayloadForTenant(tenantID, digest.TargetSkillName, "", args)
+	info, err := c.skillInfoForName(tenantID, digest.WorkspaceID, digest.PublicationScope, digest.TargetSkillName)
 	if err != nil {
 		return false, "active Skill is unavailable"
 	}
-	if info.Source != tools.SkillSourceAgentCreated || info.Pinned || !info.Writable {
-		return false, "only writable, unpinned, agent-created Skills can be repaired automatically"
+	if info.Pinned {
+		return false, "a pinned Skill is not reworked automatically"
 	}
 	return true, ""
+}
+
+// repairTargetIsPersonOwned reports whether applying a repair would rewrite an
+// asset the person owns — their repository's own Skill, or any Skill this
+// runtime did not author. Those are proposed but never applied automatically:
+// the write lands in the person's working tree, and that authority comes from
+// the person, not from evidence.
+func (c *llmSkillCurator) repairTargetIsPersonOwned(tenantID, workspaceID, publicationScope, name string) bool {
+	info, err := c.skillInfoForName(tenantID, workspaceID, publicationScope, name)
+	if err != nil {
+		// Fail closed: an unreadable target is never rewritten automatically.
+		return true
+	}
+	return info.Source != tools.SkillSourceAgentCreated || info.Pinned || !info.Writable
+}
+
+func (c *llmSkillCurator) skillInfoForName(tenantID, workspaceID, publicationScope, name string) (tools.SkillInfo, error) {
+	args := c.skillInvocationArgs(context.Background(), tenantID, workspaceID, publicationScope, kernel.SkillMutationCandidateOnly)
+	info, _, _, err := tools.ReadSkillPayloadForTenant(tenantID, name, "", args)
+	return info, err
 }
 
 func (c *llmSkillCurator) automaticCandidatePromotionBlockedReason(ctx context.Context, tenantID, workspaceID string, version *control.SkillVersion) (string, error) {
@@ -148,6 +207,14 @@ func (c *llmSkillCurator) automaticCandidatePromotionBlockedReason(ctx context.C
 		}
 		if !ready {
 			return "class-specific repair evidence threshold is not met", nil
+		}
+		// Evidence decides whether a repair is RIGHT. It does not decide
+		// whether this runtime may write it into an asset the person owns:
+		// that write lands in their working tree and is theirs to make. The
+		// candidate stands with its evidence and is applied with /skills
+		// promote.
+		if c.repairTargetIsPersonOwned(tenantID, workspaceID, c.versionPublicationScope(tenantID, workspaceID, version), version.SkillName) {
+			return "the Skill is yours to change; apply it with /skills promote", nil
 		}
 		return "", nil
 	}

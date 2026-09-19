@@ -75,7 +75,7 @@ func editSkill(tenantID, name, content, description string, invocation ...map[st
 	if err != nil {
 		return "", err
 	}
-	if err := ensureWritableSkill(info, "editing it"); err != nil {
+	if err := ensureSkillEditAuthorized(info, "editing it", firstInvocationArgs(invocation)); err != nil {
 		return "", err
 	}
 	content = ensureFrontMatter(content, info.Name, description)

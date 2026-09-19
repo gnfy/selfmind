@@ -1,0 +1,107 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "File"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Good"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13381,
+        "output_tokens": 325,
+        "cache_read_input_tokens": 13056,
+        "cache_miss_input_tokens": 325,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 26,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_0Dq2Byrk6o25xFsHCnPM3442",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Work unit 1: create setting.txt containing 7 + newline, then verify it holds a positive integer (criterion \\\"setting is positive\\\", target \\\"setting.txt\\\", local_dependencies [\\\"setting.txt\\\"]).\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"success_criteria\": \"setting.txt exists with content 7 + newline and a recorded verification proves the positive-integer condition.\", \"verification_required\": true, \"work_unit\": true}, {\"status\": \"completed\", \"step\": \"Work unit 2: change setting.txt to 8 + newline, then reverify the same condition with identical criterion/target/local_dependencies, using replaces to cite the first evidence id and explaining the input changed.\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\", \"success_criteria\": \"setting.txt contains 8 + newline and a second verification with the same criterion/target/dependencies passes, citing the first evidence id via replaces.\", \"verification_required\": true, \"work_unit\": true}]}"
+        }
+      ]
+    }
+  ]
+}

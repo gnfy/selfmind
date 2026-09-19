@@ -210,6 +210,57 @@ func (s *Store) MatchSkillFailureGuardForWorkUnit(ctx context.Context, tenantID,
 	return &guard, nil
 }
 
+// SkillCohortVersionWithdrawalOccurrences is how many times a known failure must
+// recur before a version published from a comparable cohort is withdrawn.
+//
+// Withdrawal difficulty matches publication difficulty. A repair version rests
+// on as little as one verified recovery, so one attributable incident withdraws
+// it and the parent returns. A cohort version rests on three independent
+// verified runs, so a single incident must not overturn it — but it cannot be
+// unwithdrawable either, because it has no parent to fall back to and nothing
+// else removes it: idle decay is a tool action with no scheduler behind it.
+//
+// Recurrence is the proportional signal. The first fallback records the guard;
+// every later work unit of the same shape and environment that would have
+// selected this version bumps the count instead of running it. Reaching this
+// many means the version is repeatedly wrong for work it claims to cover.
+//
+// This counts ONE failure signature. A version failing in several distinct ways
+// has a guard per signature, and each of those is a separately attributable
+// incident that the repair path already acts on. What has no other exit — and
+// what this covers — is the same failure returning while its class cannot
+// auto-publish a repair.
+const SkillCohortVersionWithdrawalOccurrences = 3
+
+// WithdrawCohortSkillVersionOnRepeatedFailure quarantines a parentless
+// curator-published version once its known failure has recurred often enough.
+// It reports whether this call performed the withdrawal.
+//
+// Person-authored Skills are never withdrawn automatically: the runtime does
+// not disable an asset its owner published.
+func (s *Store) WithdrawCohortSkillVersionOnRepeatedFailure(ctx context.Context, tenantID, skillKey, versionHash string, occurrences int) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("control store is required")
+	}
+	if occurrences < SkillCohortVersionWithdrawalOccurrences {
+		return false, nil
+	}
+	skillKey = strings.TrimSpace(skillKey)
+	versionHash = strings.TrimSpace(versionHash)
+	if skillKey == "" || versionHash == "" {
+		return false, nil
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE skill_versions SET state='quarantined'
+		WHERE control_tenant_id=? AND skill_key=? AND version_hash=? AND state='active'
+		  AND parent_version_hash='' AND created_by='skill_curator'`,
+		normalizeTenant(tenantID), skillKey, versionHash)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected > 0, err
+}
+
 func (s *Store) RecordSkillFailureGuardMatch(ctx context.Context, guard SkillFailureGuard) (int, error) {
 	now := time.Now().Unix()
 	result, err := s.db.ExecContext(ctx, `UPDATE skill_failure_guards SET occurrence_count=occurrence_count+1,

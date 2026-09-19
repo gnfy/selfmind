@@ -1,0 +1,167 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Ver"
+    },
+    {
+      "reasoning_content": "ification"
+    },
+    {
+      "reasoning_content": " passed"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "exit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": ".md"
+    },
+    {
+      "reasoning_content": " explaining"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " verified"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " back"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " repeat"
+    },
+    {
+      "reasoning_content": " source"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Update"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " mark"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " progress"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10799,
+        "output_tokens": 349,
+        "cache_read_input_tokens": 10624,
+        "cache_miss_input_tokens": 175,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 46,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_c5EK3jS0z0Nq5Lqz9gZI4300",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Create source.txt with exactly '7' plus trailing newline\", \"success_criteria\": \"source.txt exists containing the byte string '7\\\\n'\", \"verification_required\": true, \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\"}, {\"status\": \"completed\", \"step\": \"Run the single bound verify check on source.txt (criterion 'source value equals 7')\", \"success_criteria\": \"verify records one successful check with criterion 'source value equals 7', target 'source.txt', local_dependencies ['source.txt']\", \"verification_required\": true, \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"in_progress\", \"step\": \"Write result.md explaining the verified value and read it back\", \"success_criteria\": \"result.md exists explaining the verified value, and its content is confirmed by reading it\", \"verification_required\": true, \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}]}"
+        }
+      ]
+    }
+  ]
+}

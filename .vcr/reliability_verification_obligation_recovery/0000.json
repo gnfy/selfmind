@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "value.txt READY absent-reader check.replaces check.reason"
+}

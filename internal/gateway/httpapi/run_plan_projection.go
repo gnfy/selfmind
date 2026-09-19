@@ -111,7 +111,14 @@ func (p *controlRunPlanProjection) ValidateCompletion(ctx context.Context) error
 	if p == nil || p.coordinator == nil || p.coordinator.srv == nil || p.coordinator.srv.Control == nil || p.identity == nil || p.run == nil {
 		return fmt.Errorf("run plan projection is unavailable")
 	}
-	return p.coordinator.srv.Control.ValidateRunCompletion(ctx, p.identity.TenantID, p.run.ID)
+	if err := p.coordinator.srv.Control.ValidateRunCompletion(ctx, p.identity.TenantID, p.run.ID); err != nil {
+		return err
+	}
+	verdict, files := p.coordinator.evidenceOutcome(ctx, p.identity.TenantID, p.run.ID)
+	if verificationRequiresResume(verdict, files) {
+		return fmt.Errorf("completion requires verification: %s %s", verdict.Summary, verificationNextStep(verdict))
+	}
+	return nil
 }
 
 func (p *controlRunPlanProjection) ValidateVerification(ctx context.Context, binding verification.Binding, cwd string) error {
@@ -124,4 +131,8 @@ func boundedReviewCriterion(value string) string {
 		return string(runes[:500]) + "…"
 	}
 	return value
+}
+
+func (p *controlRunPlanProjection) ResolveVerification(ctx context.Context, binding verification.Binding, cwd string) (*verification.Binding, error) {
+	return p.coordinator.srv.Control.ResolveVerificationBinding(ctx, p.identity.TenantID, p.run.ID, binding, cwd)
 }

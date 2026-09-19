@@ -31,6 +31,7 @@ func NewToolOutputViewTool(baseDir string) *ToolOutputViewTool {
 	return &ToolOutputViewTool{
 		BaseTool: BaseTool{
 			name:        "tool_output_view",
+			metadata:    ToolMetadata{ReadOnly: true, SupportsParallel: true, RiskLevel: ToolRiskLow},
 			description: "Read a byte range of a previously truncated tool output by artifact id (from a '[SelfMind note: ... saved as artifact art_...]' truncation note). Use this to inspect omitted middle content instead of re-running the command.",
 			schema: ToolSchema{
 				Type: "object",

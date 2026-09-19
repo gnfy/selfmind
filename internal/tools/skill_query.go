@@ -281,10 +281,21 @@ func matchSkillsByPath(skills []SkillInfo, path string) []SkillInfo {
 	return matches
 }
 
+// skillPathKey identifies one package on disk. It resolves symlinks because the
+// two cross-vendor conventions are commonly the same directory seen twice:
+// `.claude/skills/x -> ../../.agents/skills/x`. Keyed lexically, that package is
+// discovered under both roots, and a bare name then matches two Skills, which
+// `matchSkillsByName` reports as ambiguous rather than resolving — so every
+// Skill in such a repository would become uncallable by its own name.
+//
+// A path that cannot be resolved (it may not exist yet) keeps its lexical form.
 func skillPathKey(path string) string {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		abs = path
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil && resolved != "" {
+		abs = resolved
 	}
 	return strings.ToLower(filepath.Clean(abs))
 }
@@ -317,6 +328,16 @@ func readSkillInfo(path, format string, usage map[string]SkillUsageRecord, root 
 		return SkillInfo{}, false
 	}
 	def, _, _ := parseFrontMatter(string(data))
+	if format == "file" && strings.TrimSpace(def.Name) == "" {
+		// A directory package declares itself by containing SKILL.md. The bare
+		// Markdown form has no such structural declaration, so front matter is
+		// the only thing separating a Skill from a document that happens to sit
+		// in the same folder — a README describing the directory, or a note
+		// kept beside the package that supersedes it. Admitting those by
+		// filename put a README in the catalog and made a real Skill's bare
+		// name ambiguous against a document of the same stem.
+		return SkillInfo{}, false
+	}
 	name := def.Name
 	if name == "" {
 		name = strings.TrimSuffix(filepath.Base(path), ".md")

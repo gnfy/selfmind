@@ -1,0 +1,314 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " create"
+    },
+    {
+      "reasoning_content": " setting"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": " +"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": "_file"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": "_file"
+    },
+    {
+      "reasoning_content": " writes"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " literally"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Content"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " actual"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Provide"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " actual"
+    },
+    {
+      "reasoning_content": " string"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Better"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " printf"
+    },
+    {
+      "reasoning_content": " via"
+    },
+    {
+      "reasoning_content": " terminal"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " guarantee"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": "_file"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " JSON"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'d"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " becomes"
+    },
+    {
+      "reasoning_content": " actual"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " That"
+    },
+    {
+      "reasoning_content": " works"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": "_file"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10799,
+        "output_tokens": 189,
+        "cache_read_input_tokens": 10240,
+        "cache_miss_input_tokens": 559,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 95,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_3op5hTjHQ0Q60RJOftzA4503",
+          "Function": "write_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/setting.txt\", \"content\": \"7\\n\"}"
+        }
+      ]
+    }
+  ]
+}

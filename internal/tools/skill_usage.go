@@ -85,6 +85,12 @@ func saveSkillUsageForDir(skillsDir string, records map[string]SkillUsageRecord)
 }
 
 func updateSkillUsageForDir(skillsDir, name string, mutator func(*SkillUsageRecord)) error {
+	if strings.TrimSpace(skillsDir) == "" {
+		// No sidecar location: the Skill lives on a root this runtime does not
+		// own. Recording is skipped rather than redirected, because a record
+		// filed under another root would claim a Skill that is not there.
+		return nil
+	}
 	records, err := loadSkillUsageForDir(skillsDir)
 	if err != nil {
 		return err
@@ -210,6 +216,13 @@ func SetSkillState(tenantID, name, state string, invocation ...map[string]interf
 func existingSkillUsageDir(tenantID, name string, invocation ...map[string]interface{}) (string, error) {
 	info, err := findSkill(tenantID, name, invocation...)
 	if err == nil && strings.TrimSpace(info.Root) != "" {
+		if !info.Writable {
+			// A read-only root belongs to the repository, not to this runtime.
+			// Usage for those Skills is carried by skill_attributions in the
+			// control store (see overlayAttributionRecency); writing a sidecar
+			// here would leave an untracked file in the person's working tree.
+			return "", nil
+		}
 		return info.Root, nil
 	}
 	return getSkillsDir(tenantID, invocation...)

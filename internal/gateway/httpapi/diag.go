@@ -794,7 +794,8 @@ func promptPrefixStabilityLine(events []control.Event) string {
 		if hashes[0] == hashes[1] {
 			return fmt.Sprintf("Provider prompt prefix: stable across the last two calls (%s)\n", hashes[0])
 		}
-		return fmt.Sprintf("Provider prompt prefix: changed between the last two calls (%s -> %s)\n", hashes[1], hashes[0])
+		return fmt.Sprintf("Provider prompt prefix: changed between the last two calls (%s -> %s)%s\n",
+			hashes[1], hashes[0], latestToolCatalogChangeSuffix(events))
 	}
 	hashes := promptPrefixHashes(events, "context.breakdown", "stable_prefix_hash")
 	if len(hashes) == 0 {
@@ -886,6 +887,37 @@ func contextBreakdownDetail(events []control.Event) string {
 			sb.WriteString("\n")
 		}
 		return sb.String()
+	}
+	return ""
+}
+
+// latestToolCatalogChangeSuffix names the tools whose arrival or departure
+// moved the prefix. The prefix line reported THAT it changed, which is the part
+// a person can already see in the bill; what they cannot see is why, and the
+// exposed tool set is the one prefix block that actually varies mid-run.
+func latestToolCatalogChangeSuffix(events []control.Event) string {
+	for _, event := range events {
+		if event.Type != "provider.call.context_breakdown" {
+			continue
+		}
+		var p struct {
+			Added   []string `json:"tool_catalog_added"`
+			Removed []string `json:"tool_catalog_removed"`
+		}
+		if json.Unmarshal(event.Payload, &p) != nil {
+			continue
+		}
+		if len(p.Added) == 0 && len(p.Removed) == 0 {
+			continue
+		}
+		parts := make([]string, 0, 2)
+		if len(p.Added) > 0 {
+			parts = append(parts, "+"+strings.Join(p.Added, ","))
+		}
+		if len(p.Removed) > 0 {
+			parts = append(parts, "-"+strings.Join(p.Removed, ","))
+		}
+		return " | tool catalog " + strings.Join(parts, " ")
 	}
 	return ""
 }

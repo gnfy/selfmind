@@ -86,7 +86,7 @@ func TestEvidenceOutcomeReadsDurableRunEvidence(t *testing.T) {
 	}
 
 	server := &Server{Control: store, DefaultTenantID: "default"}
-	got, files := server.coordinator().evidenceOutcome(ctx, task.TenantID, task.ID, run.ID)
+	got, files := server.coordinator().evidenceOutcome(ctx, task.TenantID, run.ID)
 	if got == nil || got.State != "passed" || len(got.Checks) != 1 {
 		t.Fatalf("outcome = %+v", got)
 	}
@@ -120,7 +120,7 @@ func TestOrdinaryCommandsDoNotDisappearOrBecomeVerification(t *testing.T) {
 		}
 	}
 	server := &Server{Control: store}
-	got, _ := server.coordinator().evidenceOutcome(ctx, task.TenantID, task.ID, run.ID)
+	got, _ := server.coordinator().evidenceOutcome(ctx, task.TenantID, run.ID)
 	if got == nil || got.State != "not_run" || len(got.Checks) != 0 || !strings.Contains(got.Summary, "1 ordinary command(s) ran") {
 		t.Fatalf("ordinary execution was lost or promoted to verification: %+v", got)
 	}

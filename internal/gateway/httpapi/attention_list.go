@@ -36,12 +36,19 @@ func (d *Server) attentionListReply(ctx context.Context, identity *control.Ident
 	// Why a run stopped is the part a person needs to decide whether to
 	// continue it. Best-effort: a failed lookup costs the reason, never the
 	// list.
-	outcomes, _ := d.Control.LatestRunOutcomesByPerson(ctx, identity.TenantID, identity.PersonID)
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.RunID)
+	}
+	outcomes, _ := d.Control.RunAttentionOutcomes(ctx, identity.TenantID, identity.PersonID, ids)
 
 	var sb strings.Builder
 	sb.WriteString("Needs attention:\n")
 	for i, item := range items {
 		summary := strings.TrimSpace(item.RunSummary)
+		if outcome := outcomes[item.RunID]; strings.TrimSpace(outcome.Summary) != "" {
+			summary = strings.TrimSpace(outcome.Summary)
+		}
 		if summary == "" {
 			summary = strings.TrimSpace(item.Thread.Title)
 		}
@@ -55,6 +62,11 @@ func (d *Server) attentionListReply(ctx context.Context, identity *control.Ident
 		}
 		meta = append(meta, shortRunID(item.RunID))
 		fmt.Fprintf(&sb, "   %s\n", strings.Join(meta, " · "))
+		if gap := strings.TrimSpace(outcomes[item.RunID].VerificationSummary); item.RunStatus == "verification_partial" && gap != "" {
+			fmt.Fprintf(&sb, "   Verification: %s\n", textutil.Truncate(toOneLine(gap), 180))
+		} else if next := outcomes[item.RunID].NextSteps; len(next) > 0 && strings.TrimSpace(next[0]) != "" {
+			fmt.Fprintf(&sb, "   Next: %s\n", textutil.Truncate(toOneLine(next[0]), 180))
+		}
 	}
 	if total > len(items) {
 		fmt.Fprintf(&sb, "... and %d more\n", total-len(items))
@@ -117,13 +129,18 @@ func attentionActivityLabel(item control.AttentionItem, outcomes map[string]cont
 		return "watching"
 	case "resumable":
 		if strings.EqualFold(strings.TrimSpace(item.RunStatus), "interrupted") {
-			if outcome, ok := outcomes[item.Thread.ID]; ok {
+			if outcome, ok := outcomes[item.RunID]; ok {
 				return interruptedTaskSuffix(outcome)
 			}
 			return "interrupted"
 		}
-		if explicitResumeRunStatus(item.RunStatus) {
-			return "resumable"
+		switch strings.ToLower(strings.TrimSpace(item.RunStatus)) {
+		case "waiting_user":
+			return "waiting for your decision"
+		case "verification_partial":
+			return "verification incomplete"
+		case "blocked":
+			return "blocked; action required"
 		}
 		return strings.TrimSpace(item.RunStatus)
 	}

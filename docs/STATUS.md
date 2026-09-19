@@ -8,28 +8,26 @@
 
 **Snapshot:** 2026-09-03
 
-Runtime closure update (2026-09-11): completion precondition failures permit
-one evidence-gated correction; the action ceiling reserves verification calls
-when available; verification preserves unhandled shell and pipeline failures;
-watcher syntax errors are distinct from unsupported observations; cumulative
-tool-result bounding also spools medium outputs. Required checks must pass
-before a work unit's completion freezes its evidence window. Missing final
-responses retain a bounded summary of recorded changes and checks.
-Read-only continuation now shares trusted tool registration facts with the
-execution ledger; captured outputs remain recoverable across a direct claim.
-Material effects still block implicit continuation, with a typed refusal and
-final next steps that reflect the actual queue state.
-Validation: full Go tests and all 68 local-full replay cases passed, including
-two new real-provider recordings for read-before-resume and mutation refusal.
-Installed locally as
-`v0.1.0-beta.24-local.read-resume.1`; managed restart and runtime version were
-verified. Sustained CLI/IM observation remains required.
+Daily-driver closure update (2026-09-18): artifact readback carries trusted
+read-only registration facts into continuation. Verification corrections can
+inherit the recorded obligation; explicit plan-step bindings attribute failures
+to the correct criterion. Unresolved dependency paths retain conservative
+invalidation. Completion failures expose exact blocking evidence. Approval
+review rejects incomplete action input and requires attributed restriction
+citations for new provider-backed denials. Response usage includes input/cache
+accounting, with historical gaps kept visible separately from Main/maintenance.
+Two new real-provider cases cover readback-before-resume and method correction;
+four live approval probes cover changed wording/targets and opposing constraints.
+Full selfcheck passed all 80 cases, with focused race coverage and an isolated
+packed-npm daemon lifecycle smoke. Local installation is
+`v0.1.0-beta.26-local.run-evidence.1`; real multi-day and cross-model behavior
+remain observation gates. Historical unfinished Runs are not rewritten.
 
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 76 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
+- Release corpus: 80 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
   declare `model_required: false`.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -145,6 +143,22 @@ Execution evidence is paged independently of transcript volume, and answer-only
 file mentions no longer create changed-file metadata or file artifacts.
 Default tool guidance identifies `verify` as the executable verification evidence
 entrypoint.
+Completion evidence update (2026-09-17): `finish_run(done)` and finalization use
+the same Run evidence verdict. New version-2 checks may declare local input
+dependencies; unrelated outputs preserve them, related partial writes invalidate
+them, and replacements cannot drop dependencies. Omitted declarations retain
+conservative invalidation. Unavailable or malformed evidence blocks completion.
+`/resume` shows each exact Run's own outcome and next step, with distinct labels
+for user decisions and incomplete verification. Historical Runs are not rewritten.
+Two new real-provider recordings cover independent report output and rechecking
+changed inputs after the original work unit closes, without rewriting that unit.
+Cross-model and sustained live coverage remain outstanding. Approval
+judgment quality and stale plan-reference recovery remain follow-up work.
+Validation: full selfcheck passed all 78 local-full cases, with two new live
+recordings and focused race coverage. Local npm now runs
+`v0.1.0-beta.26-local.verify-closure.2`; installed binary hash matches the tested
+build, managed restart is healthy on schema v14, and both historical attention
+records retain their own reason. Cross-model evidence is not claimed.
 Natural in-place Skill selection still needs live quality observation: a release
 lookup completed with unnecessary calls and invalid Skill references. Explicit
 resume separately covers restoration of an already bound Skill.

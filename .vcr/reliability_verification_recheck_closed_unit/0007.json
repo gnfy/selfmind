@@ -1,0 +1,113 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Both"
+    },
+    {
+      "reasoning_content": " ver"
+    },
+    {
+      "reasoning_content": "ifications"
+    },
+    {
+      "reasoning_content": " passed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " confirm"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " quickly"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " confirm"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13033,
+        "output_tokens": 93,
+        "cache_read_input_tokens": 12800,
+        "cache_miss_input_tokens": 233,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 28,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_Y9zvyerSOwQNT4hZYiD05603",
+          "Function": "batch_read",
+          "Args": "{\"operations\": [{\"path\": \"setting.txt\", \"tool\": \"read_file\"}, {\"path\": \".\", \"tool\": \"ls_r\"}]}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,406 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "No"
+    },
+    {
+      "reasoning_content": " results"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " try"
+    },
+    {
+      "reasoning_content": " attention"
+    },
+    {
+      "reasoning_content": " mode"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " prior"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " mentioned"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " semantic"
+    },
+    {
+      "reasoning_content": " recall"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "76"
+    },
+    {
+      "reasoning_content": "ad"
+    },
+    {
+      "reasoning_content": "948"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "cc"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "477"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "-b"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "84"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "bf"
+    },
+    {
+      "reasoning_content": "48"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "bc"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " That"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "prior"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " session"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " artifacts"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Also"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " semantic"
+    },
+    {
+      "reasoning_content": " recall"
+    },
+    {
+      "reasoning_content": " mentions"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "795"
+    },
+    {
+      "reasoning_content": "08"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "ae"
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": "-run"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_id"
+    },
+    {
+      "reasoning_content": " isn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " given"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " try"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_in"
+    },
+    {
+      "reasoning_content": "spect"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "76"
+    },
+    {
+      "reasoning_content": "ad"
+    },
+    {
+      "reasoning_content": "948"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "cc"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "477"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "-b"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "84"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "bf"
+    },
+    {
+      "reasoning_content": "48"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "bc"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_search"
+    },
+    {
+      "reasoning_content": " attention"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13445,
+        "output_tokens": 233,
+        "cache_read_input_tokens": 13184,
+        "cache_miss_input_tokens": 261,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 124,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_f8XyWjqR0oEQmWyo0J815962",
+          "Function": "work_search",
+          "Args": "{\"mode\": \"attention\", \"limit\": 8}"
+        },
+        {
+          "ID": "call_01_st9YyQOdd2b4QEiJXRot2892",
+          "Function": "work_inspect",
+          "Args": "{\"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -32,7 +32,7 @@ func TestHashBoundObservationScriptProfile(t *testing.T) {
 	}
 	cleanup := SetExecutionScope("person-1", ExecutionScope{
 		TenantID: "tenant-1", PersonID: "person-1", WorkspaceID: "ws-1", WorkspaceRoot: root,
-		AllowedRoots: []string{root}, TrustLevel: executionenv.TrustTrusted, Grants: grants,
+		AllowedRoots: []string{root}, TrustLevel: executionenv.TrustTrusted, Grants: grants, StandingGrants: InteractiveStandingGrants(),
 	})
 	defer cleanup()
 	args := map[string]interface{}{
@@ -83,7 +83,7 @@ func TestObservationScriptProfileRequiresTrustedWorkspaceAndDeclaredEnvironment(
 	}
 	cleanup := SetExecutionScope("person-1", ExecutionScope{
 		TenantID: "tenant-1", PersonID: "person-1", WorkspaceID: "ws-1", WorkspaceRoot: root,
-		AllowedRoots: []string{root}, TrustLevel: executionenv.TrustUntrusted, Grants: grants,
+		AllowedRoots: []string{root}, TrustLevel: executionenv.TrustUntrusted, Grants: grants, StandingGrants: InteractiveStandingGrants(),
 	})
 	if observationOnlyExec("terminal", args) {
 		t.Fatal("untrusted workspace must not redeem an observation profile")
@@ -91,7 +91,7 @@ func TestObservationScriptProfileRequiresTrustedWorkspaceAndDeclaredEnvironment(
 	cleanup()
 	cleanup = SetExecutionScope("person-1", ExecutionScope{
 		TenantID: "tenant-1", PersonID: "person-1", WorkspaceID: "ws-1", WorkspaceRoot: root,
-		AllowedRoots: []string{root}, TrustLevel: executionenv.TrustTrusted, Grants: grants,
+		AllowedRoots: []string{root}, TrustLevel: executionenv.TrustTrusted, Grants: grants, StandingGrants: InteractiveStandingGrants(),
 	})
 	defer cleanup()
 	if observationOnlyExec("terminal", args) {

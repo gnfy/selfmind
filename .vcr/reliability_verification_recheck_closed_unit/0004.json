@@ -1,0 +1,275 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "First"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": " id"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": "_k"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "DO"
+    },
+    {
+      "reasoning_content": "l"
+    },
+    {
+      "reasoning_content": "AJ"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "g"
+    },
+    {
+      "reasoning_content": "WD"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "n"
+    },
+    {
+      "reasoning_content": "q"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "n"
+    },
+    {
+      "reasoning_content": "GL"
+    },
+    {
+      "reasoning_content": "WR"
+    },
+    {
+      "reasoning_content": "202"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " unit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " marking"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Then"
+    },
+    {
+      "reasoning_content": " change"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " rever"
+    },
+    {
+      "reasoning_content": "ify"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " replaces"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " close"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " unit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " second"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " runs"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11598,
+        "output_tokens": 383,
+        "cache_read_input_tokens": 11392,
+        "cache_miss_input_tokens": 206,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 82,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_4L6eWIWxV7jz8aSwZmTO7008",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Work unit 1: create setting.txt containing 7 + newline, then verify it holds a positive integer (criterion \\\"setting is positive\\\", target \\\"setting.txt\\\", local_dependencies [\\\"setting.txt\\\"]).\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"success_criteria\": \"setting.txt exists with content 7 + newline and a recorded verification proves the positive-integer condition.\", \"verification_required\": true, \"work_unit\": true}, {\"status\": \"in_progress\", \"step\": \"Work unit 2: change setting.txt to 8 + newline, then reverify the same condition with identical criterion/target/local_dependencies, using replaces to cite the first evidence id and explaining the input changed.\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\", \"success_criteria\": \"setting.txt contains 8 + newline and a second verification with the same criterion/target/dependencies passes, citing the first evidence id via replaces.\", \"verification_required\": true, \"work_unit\": true}]}"
+        }
+      ]
+    }
+  ]
+}

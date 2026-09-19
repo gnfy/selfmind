@@ -38,7 +38,7 @@ func TestCassettesCarryNoMachineAbsolutePaths(t *testing.T) {
 	// /tmp (mine did), and nothing else would have caught a path leaking from
 	// there into a committed cassette.
 	markers := []string{"/home/", "/Users/", "/mnt/", "/root/", "/tmp/"}
-	windowsDrivePath := regexp.MustCompile(`(?i)[a-z]:[\\/]`)
+	windowsDrivePath := regexp.MustCompile(`(?i)\b[a-z]:[\\/]`)
 	for _, file := range vcrCorpusFiles(t) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
@@ -59,6 +59,20 @@ func TestCassettesCarryNoMachineAbsolutePaths(t *testing.T) {
 				t.Errorf("%s contains the recording machine's Windows path prefix %q; use %s", file, match, vcrWorkspacePlaceholder)
 			}
 		}
+	}
+}
+
+func TestCassetteWindowsPathBoundary(t *testing.T) {
+	pattern := regexp.MustCompile(`(?i)\b[a-z]:[\\/]`)
+	for _, value := range []string{`C:\Users\person\file`, `"path":"d:\\project\\file"`, `z:/project/file`} {
+		if !pattern.MatchString(value) {
+			t.Errorf("missed Windows path %q", value)
+		}
+	}
+	// Tool arguments are JSON inside a cassette string. A prose colon before
+	// its escaped newline is not a drive letter at the end of the word.
+	if pattern.MatchString(`{"content":"bound to:\n- criterion"}`) {
+		t.Fatal("prose was read as a machine path")
 	}
 }
 

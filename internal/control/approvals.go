@@ -867,6 +867,8 @@ func normalizeGrantScope(scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
 	case "run":
 		return "run"
+	case "workspace":
+		return "workspace"
 	case "person", "always", "persistent":
 		return "person"
 	default:

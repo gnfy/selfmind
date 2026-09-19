@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11897,
+        "output_tokens": 455,
+        "cache_read_input_tokens": 11648,
+        "cache_miss_input_tokens": 249,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_tJbErfzK9LpKyb2zwWbB5602",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"done\", \"summary\": \"Verified value.txt's value against the READY acceptance condition. The first reader (test -f absent-reader, evidence call_00_TD1vKrb8tz2HK2aUkcuY3126) failed because it targeted a nonexistent sentinel rather than the artifact. The corrected reader (test \\\"$(cat value.txt)\\\" = READY, evidence call_00_vG4GqZPs9bl69RgYk8AK0523) inherited the same criterion, target, and dependencies via check.replaces and passed. Plan step completed; no files modified.\", \"done\": [\"Created one plan step with success_criteria \\\"value contains READY\\\" and verification_required true\", \"Ran the intentionally unavailable reader (test -f absent-reader), which failed as expected\", \"Corrected the method with test \\\"$(cat value.txt)\\\" = READY, supplying only check.replaces and check.reason so criterion/target/dependencies were inherited\", \"Corrected verification passed; plan step marked completed\"], \"tests\": [\"verify: test -f absent-reader -\u003e exit 1 (evidence call_00_TD1vKrb8tz2HK2aUkcuY3126), intentionally failing method\", \"verify: test \\\"$(cat value.txt)\\\" = READY -\u003e passed (evidence call_00_vG4GqZPs9bl69RgYk8AK0523), replaces the first check with reason\"], \"risks\": [\"The accepted reader uses command substitution, which strips trailing newlines, so it proves the value equals READY but does not independently prove a trailing newline is present.\"], \"files\": [\"value.txt (read only, unmodified)\"]}"
+        }
+      ]
+    }
+  ]
+}

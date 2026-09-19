@@ -2,7 +2,6 @@ package tools
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -40,6 +39,13 @@ var bannedGrantPrograms = map[string]struct{}{
 	"nohup": {}, "setsid": {}, "timeout": {}, "nice": {}, "ionice": {}, "stdbuf": {}, "xargs": {},
 	// General-purpose execution through a non-obvious door.
 	"git": {}, "find": {}, "make": {},
+	// Arbitrary network clients: the method, the target and the output file are
+	// all arguments, so no leading token bounds what a standing permission
+	// would authorise.
+	"curl": {}, "wget": {}, "httpie": {}, "http": {},
+	// Same shape without the network: xxd's output path is a bare positional
+	// operand, so a standing `xxd` would authorise writing anywhere.
+	"xxd": {},
 	// Irreversible by nature: a standing permission for these cannot be
 	// undone by inspecting the next invocation. Ordinary dangerous operations
 	// (chmod, chown, mv, kill, ...) deliberately stay OUT of this set: they
@@ -100,10 +106,11 @@ func DescribeGrantClass(toolName, dangerousReason string, args map[string]interf
 	if !isExecTool(toolName) {
 		return patternReasonBucket(dangerousReason)
 	}
-	family, eligible := grantCommandFamily(toolName, args)
+	prefix, eligible := grantCommandPrefix(toolName, args)
 	if !eligible {
 		return ""
 	}
+	family := grantPrefixLabel(prefix)
 	if effectiveSandboxModeArg(args) == SandboxHost {
 		return fmt.Sprintf("host execution of %q in this workspace", family)
 	}
@@ -146,12 +153,19 @@ func ReviewPersistedGrantKey(patternKey string) (family string, keep bool) {
 }
 
 // IsGrantableCommandFamily reports whether a command family may back a reusable
-// grant. It is the same floor grantCommandFamily applies when minting a key,
+// grant. It is the same floor grantCommandPrefix applies when minting a key,
 // exposed so already-persisted keys can be re-checked.
+//
+// A key minted before prefixes carries one token; a current one carries the
+// whole prefix. Only the leading program decides eligibility — the trailing
+// subcommand words narrow a class, they never rescue a banned one.
 func IsGrantableCommandFamily(family string) bool {
 	family = strings.ToLower(strings.TrimSpace(family))
 	if family == "" || family == "unknown" {
 		return false
+	}
+	if head, _, multi := strings.Cut(family, " "); multi {
+		family = strings.TrimSpace(head)
 	}
 	if _, banned := bannedGrantPrograms[family]; banned {
 		return false
@@ -163,66 +177,6 @@ func IsGrantableCommandFamily(family string) bool {
 		return false
 	}
 	return true
-}
-
-// grantCommandFamily derives the reusable class for an exec payload, or
-// ("", false) when no reusable grant may be created. The boolean is the floor:
-// callers must fall back to a one-time approval when it is false.
-func grantCommandFamily(toolName string, args map[string]interface{}) (string, bool) {
-	// execute_code runs a model-authored program. There is no class narrower
-	// than "arbitrary code", so it is approved per call and never remembered.
-	if strings.EqualFold(strings.TrimSpace(toolName), "execute_code") {
-		return "", false
-	}
-	payload := strings.TrimSpace(execCommandPayload(toolName, args))
-	if payload == "" {
-		return "", false
-	}
-	for _, marker := range grantComplexShellMarkers {
-		if strings.Contains(payload, marker) {
-			return "", false
-		}
-	}
-	segments, unparsed := expandCommandSegments(payload, 0)
-	if unparsed {
-		// A wrapper whose payload could not be read cannot be classified.
-		return "", false
-	}
-	family := ""
-	for _, fields := range segments {
-		progIdx, ok := segmentProgram(fields)
-		if !ok {
-			// Only environment assignments: the class would be derived from
-			// tokens that never execute.
-			return "", false
-		}
-		base := strings.ToLower(strings.TrimSpace(filepath.Base(fields[progIdx])))
-		if base == "" {
-			return "", false
-		}
-		if _, control := shellControlKeywords[base]; control {
-			return "", false
-		}
-		if _, neutral := shellNeutralWords[base]; neutral {
-			continue
-		}
-		if _, banned := bannedGrantPrograms[base]; banned {
-			return "", false
-		}
-		if family == "" {
-			family = base
-			continue
-		}
-		if family != base {
-			// Several distinct programs in one payload: no single family
-			// describes what a grant would authorise.
-			return "", false
-		}
-	}
-	if family == "" {
-		return "", false
-	}
-	return family, true
 }
 
 // grantClassForDecision reports the class a "remember this" decision would

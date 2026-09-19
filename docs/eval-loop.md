@@ -64,6 +64,11 @@ Two related knobs:
 
 VCR cassettes are unaffected: they live under `.vcr/<case-id>/` (or
 `SELFMIND_EVAL_VCR_DIR`) keyed by case ID, independent of the data dir.
+Artifact references are rebound from the current request during recording and
+replay, like Run identities. Corpus checks reject literal recording-time artifact
+IDs; artifact-read cases must also assert zero tool errors so an answer in a
+cassette cannot hide a failed read.
+
 Offline replay establishes readiness only for that throwaway model state so the
 production gateway can reach the cassette provider boundary. A missing or
 misordered cassette still fails closed and never falls through to a live

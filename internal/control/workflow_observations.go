@@ -203,6 +203,13 @@ func (s *Store) recordSkillVersionObservationHealth(ctx context.Context, observa
 	}
 	switch ClassifySkillRepairIncident(incident) {
 	case SkillRepairClassDeterministicInterface, SkillRepairClassStablePrecondition, SkillRepairClassSemantic:
+		// One attributable incident withdraws a REPAIR version, which can rest
+		// on as little as one verified recovery, and its parent returns.
+		//
+		// A parentless cohort version rests on three independent verified runs,
+		// so one incident must not overturn it. It is withdrawn by recurrence
+		// instead — see WithdrawCohortSkillVersionOnRepeatedFailure, which the
+		// selector applies when the known failure keeps coming back.
 		_, err := s.db.ExecContext(ctx, `UPDATE skill_versions SET state='quarantined'
 			WHERE control_tenant_id=? AND skill_key=? AND version_hash=? AND state='active'
 			AND parent_version_hash<>'' AND created_by='skill_curator'`, observation.ControlTenantID,

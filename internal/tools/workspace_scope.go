@@ -45,6 +45,15 @@ type ExecutionScope struct {
 	// process default.
 	SandboxPolicy *ExecSandboxPolicy
 	Capabilities  []string
+	// StandingGrants bounds which remembered classes this run may consume.
+	//
+	// A run a person is having with SelfMind consumes all of them. Scheduled
+	// work does not inherit them by default: the person authorised the schedule
+	// when they created it, not every class they have accepted since, so a job
+	// carries the cutoff it was created with and an unset cutoff means it
+	// consumes none. A run may USE a standing class; only a person answering an
+	// ask can create one.
+	StandingGrants StandingGrantPolicy
 	// ExecutionProfile is an internal contract for system-originated work. It
 	// must never be populated from an external request.
 	ExecutionProfile string

@@ -42,6 +42,7 @@ var vcrPlanStepIDPattern = regexp.MustCompile(`\bstep_[0-9a-fA-F]{8}-[0-9a-fA-F]
 var vcrSkillCandidateRefPattern = regexp.MustCompile(`\bskref_[0-9a-fA-F]{16}\b`)
 var vcrTaskIDPattern = regexp.MustCompile(`\btask_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
 var vcrRunIDPattern = regexp.MustCompile(`\brun_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+var vcrArtifactIDPattern = regexp.MustCompile(`\bart_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
 
 // WithVCRSession tags a context so provider calls made under it are recorded or
 // replayed against the named session.
@@ -281,6 +282,9 @@ func (v *vcrProvider) load(ctx context.Context, path string, messages []Message)
 	for i, id := range vcrRunIDs(messages) {
 		c = rewriteCassette(c, vcrRunIDPlaceholder(i), id)
 	}
+	for i, id := range vcrOpaqueIDs(messages, vcrArtifactIDPattern) {
+		c = rewriteCassette(c, vcrArtifactPlaceholder(i), id)
+	}
 	return &c, nil
 }
 
@@ -331,6 +335,9 @@ func (v *vcrProvider) save(ctx context.Context, path string, c cassette, message
 	}
 	for i, id := range vcrRunIDs(messages) {
 		c = rewriteCassette(c, id, vcrRunIDPlaceholder(i))
+	}
+	for i, id := range vcrOpaqueIDs(messages, vcrArtifactIDPattern) {
+		c = rewriteCassette(c, id, vcrArtifactPlaceholder(i))
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -672,4 +679,8 @@ func (v *vcrProvider) SupportsNativeTools() bool { return ProviderSupportsNative
 // evidence for every recorded call.
 func (v *vcrProvider) FingerprintRequest(ctx context.Context, req ChatRequest, stream bool) (RequestFingerprint, bool) {
 	return FingerprintProviderRequest(ctx, v.inner, req, stream)
+}
+
+func vcrArtifactPlaceholder(index int) string {
+	return fmt.Sprintf("{{SELFMIND_VCR_ARTIFACT_%d}}", index+1)
 }

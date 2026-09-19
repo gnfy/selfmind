@@ -110,6 +110,34 @@ func (s *Store) WorkUnitActivatedSkillKeys(ctx context.Context, controlTenantID,
 	return keys, rows.Err()
 }
 
+// WorkUnitAttributedSkillKeys returns the Skills one work unit used without
+// activating them: it read the package's own content instead. It is the
+// evidence that a Skill for this work already existed, whatever the run did
+// with it.
+func (s *Store) WorkUnitAttributedSkillKeys(ctx context.Context, controlTenantID, runID, workUnitID string) (map[string]bool, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("control store is required")
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT skill_key FROM skill_attributions
+		WHERE control_tenant_id=? AND run_id=? AND work_unit_id=?`,
+		normalizeTenant(controlTenantID), strings.TrimSpace(runID), strings.TrimSpace(workUnitID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	keys := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		if key = strings.TrimSpace(key); key != "" {
+			keys[key] = true
+		}
+	}
+	return keys, rows.Err()
+}
+
 // SkillAttributionSummaries aggregates attribution per logical Skill for the
 // stats projection and for usage recency of a Skill on a read-only root, where a
 // sidecar usage file cannot be written.

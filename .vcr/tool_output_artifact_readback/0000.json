@@ -1,4 +1,5 @@
 {
+  "plan_binding_version": 1,
   "method": "completion",
-  "completion": "terminal command execution awk script run as-is no pipeline modification"
+  "completion": "QLX-7734-MID awk 原样运行 不要加管道过滤 只回复done"
 }

@@ -459,8 +459,18 @@ func (m *uiModel) resumeAfterApproval() {
 // decision names the RULE (that is what the person actually chose); a class
 // decision falls back to the scope wording.
 func approvalDecisionNote(opt components.ApprovalOption) string {
-	if strings.TrimSpace(opt.RuleLabel) != "" {
-		return " (allowed for this run: " + opt.RuleLabel + ")"
+	label := strings.TrimSpace(opt.RuleLabel)
+	// Scope decides the wording, not the presence of a label. A standing answer
+	// also carries a class label, and reporting it as "for this run" would tell
+	// the person their record says something narrower than what they granted.
+	if opt.Scope == "workspace" {
+		if label != "" {
+			return " (remembered for this workspace: " + label + ")"
+		}
+		return " (remembered for this workspace)"
+	}
+	if label != "" {
+		return " (allowed for this run: " + label + ")"
 	}
 	return approvalScopeNote(opt.Scope)
 }
@@ -473,6 +483,8 @@ func approvalScopeNote(scope string) string {
 		return " (allowed for this run)"
 	case "task":
 		return " (allowed for this task)"
+	case "workspace":
+		return " (remembered for this workspace)"
 	case "person":
 		return " (allowed across tasks for 8h)"
 	default:

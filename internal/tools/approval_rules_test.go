@@ -111,7 +111,7 @@ func TestGrantedRuleSkipsTheAsk(t *testing.T) {
 	grants := newFakeGrantStore()
 	cleanup := SetExecutionScope("person-rule", ExecutionScope{
 		TenantID: "tenant-rule", PersonID: "person-rule", TaskID: "task-rule",
-		WorkspaceRoot: "/workspace/app", ApprovalMode: ApprovalReadOnly, Grants: grants,
+		WorkspaceRoot: "/workspace/app", ApprovalMode: ApprovalReadOnly, Grants: grants, StandingGrants: InteractiveStandingGrants(),
 		Approval: func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
 			t.Fatal("a granted rule must not reach the human ask")
 			return ToolApprovalDecision{}, nil
@@ -176,7 +176,7 @@ func TestUnofferedRuleKeyIsRefused(t *testing.T) {
 	grants := newFakeGrantStore()
 	cleanup := SetExecutionScope("person-forge", ExecutionScope{
 		TenantID: "tenant-forge", PersonID: "person-forge", TaskID: "task-forge",
-		WorkspaceRoot: "/workspace/app", ApprovalMode: ApprovalReadOnly, Grants: grants,
+		WorkspaceRoot: "/workspace/app", ApprovalMode: ApprovalReadOnly, Grants: grants, StandingGrants: InteractiveStandingGrants(),
 		Approval: func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
 			return ToolApprovalDecision{
 				Approved: true, ApprovalID: "apr_forge", Scope: "person",

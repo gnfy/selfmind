@@ -1,0 +1,42 @@
+id: reliability_verification_recheck_closed_unit
+title: "An input change can be reverified after its original work unit closes"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [cat]
+turns:
+  - input: >-
+      Work in two separate plan work units. First create setting.txt containing
+      7 and a newline, and verify that it contains a positive integer. Bind this
+      verification to criterion "setting is positive", target "setting.txt",
+      and local_dependencies ["setting.txt"]. Complete the first work unit after
+      this check succeeds. Then change setting.txt to contain 8 and a newline in
+      the second work unit. Reverify the same condition with exactly the same
+      criterion, target, and local dependencies, using replaces to reference the
+      first verification evidence id and explaining that the input changed.
+      Finish both work units and report the result. Execute each verification
+      once: the first proves the original value and the second proves the changed
+      value. The first work unit must already be closed when the second check runs.
+expect:
+  status: completed
+  max_tool_errors: 0
+  max_duration_seconds: 180
+assert_state:
+  - on: file
+    path: setting.txt
+    contains: "8"
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 2
+    count_lte: 2
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"replaces":'
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_tool_xml_leak: true

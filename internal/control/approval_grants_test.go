@@ -28,7 +28,7 @@ func TestApprovalGrantExpiryAndRevocation(t *testing.T) {
 	if err := store.GrantApproval(ctx, "person", tenant, person, person, key, time.Now().Add(-time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	granted, err := store.IsApprovalGranted(ctx, tenant, person, key)
+	granted, err := store.IsApprovalGranted(ctx, tenant, person, "", key, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestApprovalGrantExpiryAndRevocation(t *testing.T) {
 	if err := store.GrantApproval(ctx, "person", tenant, person, person, key, time.Now().Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if granted, err = store.IsApprovalGranted(ctx, tenant, person, key); err != nil {
+	if granted, err = store.IsApprovalGranted(ctx, tenant, person, "", key, time.Time{}); err != nil {
 		t.Fatal(err)
 	} else if !granted {
 		t.Fatal("a refreshed grant must authorize its class")
@@ -74,7 +74,7 @@ func TestApprovalGrantExpiryAndRevocation(t *testing.T) {
 	if !withdrawn {
 		t.Fatal("revoke should report a change")
 	}
-	if granted, err = store.IsApprovalGranted(ctx, tenant, person, key); err != nil {
+	if granted, err = store.IsApprovalGranted(ctx, tenant, person, "", key, time.Time{}); err != nil {
 		t.Fatal(err)
 	} else if granted {
 		t.Fatal("a revoked grant must not authorize its class")
@@ -103,7 +103,7 @@ func TestApprovalGrantWithoutDeadlineStaysActive(t *testing.T) {
 	if err := store.GrantApproval(ctx, "person", DefaultTenantID, "p", "p", key, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	granted, err := store.IsApprovalGranted(ctx, DefaultTenantID, "p", key)
+	granted, err := store.IsApprovalGranted(ctx, DefaultTenantID, "p", "", key, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestHistoricalTaskScopedGrantAuthorizesNothing(t *testing.T) {
 		 VALUES ('agr_legacy', ?, 'p', 'task', 'task-1', ?, 1, 0, 0)`, DefaultTenantID, key); err != nil {
 		t.Fatal(err)
 	}
-	granted, err := store.IsApprovalGranted(ctx, DefaultTenantID, "p", key)
+	granted, err := store.IsApprovalGranted(ctx, DefaultTenantID, "p", "", key, time.Time{})
 	if err != nil {
 		t.Fatal(err)
 	}

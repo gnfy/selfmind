@@ -78,6 +78,17 @@ func buildApprovalDecisions(req tools.ToolApprovalRequest) []approvalDecisionOpt
 			ID: "run", Label: "Yes, and don't ask again for " + class + " in this run", Decision: "approved", Scope: "run", RuleLabel: class, Key: "r",
 		})
 	}
+	// The standing answer. A run-scoped reuse dies with the run, so the same
+	// release workflow asked the same questions again the next morning; over one
+	// week that was 478 approvals across 56 runs for 121 distinct classes. This
+	// option is offered only when the floor minted a class, so the label always
+	// names exactly what it widens.
+	if class := strings.TrimSpace(req.GrantClass); class != "" {
+		options = append(options, approvalDecisionOption{
+			ID: "workspace", Label: "Yes, and stop asking for " + class + " in this workspace",
+			Decision: "approved", Scope: "workspace", RuleLabel: class, Key: "a",
+		})
+	}
 	return append(options, deny)
 }
 

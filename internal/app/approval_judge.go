@@ -128,6 +128,7 @@ func (j *llmApprovalJudge) Judge(ctx context.Context, prompt string) (string, er
 }
 
 func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (tools.ApprovalResponse, error) {
+	started := time.Now()
 	resp, err := j.provider.Chat(ctx, llm.ChatRequest{
 		SystemPrompt: judgeSystemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
@@ -137,8 +138,13 @@ func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (to
 		// (unrecognized replies escalate).
 		Options: map[string]interface{}{"temperature": 0, "reasoning_effort": j.reasoningEffort(), "response_format": map[string]interface{}{"type": "json_object"}},
 	})
-	result := tools.ApprovalResponse{ApprovalResponseMetadata: tools.ApprovalResponseMetadata{Version: 1}}
+	result := tools.ApprovalResponse{ApprovalResponseMetadata: tools.ApprovalResponseMetadata{Version: 2, Model: llm.GetModelName(j.provider), Role: j.route, DurationMS: time.Since(started).Milliseconds()}}
 	if err != nil {
+		if info, ok := llm.ProviderErrorInfo(err); ok {
+			result.Usage = &info.Usage
+			result.OutputTokens = info.Usage.OutputTokens
+			result.ReasoningTokens = info.Usage.ReasoningOutputTokens
+		}
 		result.ProtocolStatus = "provider_error"
 		return result, err
 	}
@@ -149,6 +155,7 @@ func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (to
 			result.FinishReason = "unrecognized"
 		}
 		result.ResponseBytes = len(resp.Content)
+		result.Usage = &resp.Usage
 		result.OutputTokens = resp.Usage.OutputTokens
 		result.ReasoningTokens = resp.Usage.ReasoningOutputTokens
 	}

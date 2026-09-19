@@ -238,12 +238,46 @@ failure. Kernel rejection detection and middleware error strings are a shared
 contract: rejection tells the model not to repeat the operation. A hard safety
 block is a policy decision and remains distinguishable from user rejection.
 
-Approval memory uses bounded daemon-derived rules (for example a two-token
-command prefix, one network host, or one write root), not opaque client-defined
-classes or raw exact command strings. The proposed rule text travels alongside
-its opaque key and is shown verbatim in every approval surface. Hard-floor
-denials and content-level denials are never grantable. Numbered approval
-references resolve in the gateway with the same order used by every client.
+Approval memory uses bounded daemon-derived rules (for example a command
+prefix, one network host, or one write root), not opaque client-defined classes
+or raw exact command strings. The proposed rule text travels alongside its
+opaque key and is shown verbatim in every approval surface. Hard-floor denials
+and content-level denials are never grantable. Numbered approval references
+resolve in the gateway with the same order used by every client.
+
+A remembered exec class is a token prefix that reaches the subcommand verb, not
+the program alone and not the whole command. Stopping at the program conflated
+a read with a write in the same class; taking the trailing tokens minted one
+class per invocation, because those tokens are build ids and resource names.
+Pipeline plumbing contributes no class, and a payload whose subcommand is not
+identified is not grantable. A subcommand that performs any HTTP method carries
+the method and a bounded resource path, so a remembered read cannot release a
+delete. Programs that run whatever they are handed — shells, interpreters,
+`git`, `find`, `make`, arbitrary network clients — never mint a class at any
+scope.
+
+Host execution no longer forces a one-shot decision by itself; the floor
+decides. A class the floor minted may be remembered for one workspace, which is
+narrower than person scope and carries no deadline: what bounds it is that it is
+narrow, listed by `/approvals grants`, revocable, and re-checked against the
+floor. A payload the floor refuses keeps its one-shot decision, including
+`execute_code`, which has no class narrower than arbitrary code.
+
+A command the dangerous-op heuristic flags for its own effect also stays
+one-shot on the host. Those classes — chmod, chown, mv, kill — are left out of
+the floor's banned set so they can be remembered under an enforced sandbox,
+where the blast radius is the workspace; the host offers no such bound. The
+heuristic's REASON decides this, not its boolean: it reports every host request
+as dangerous, so reading the flag alone would return every host call to a
+one-shot decision.
+
+A run may USE a remembered class; only a person answering an ask creates one.
+Automatic triage records at most a run-scoped reuse of the exact action.
+Scheduled work is authorised when the person creates the schedule, so it carries
+the classes that existed at that instant and no later ones; a schedule with no
+recorded authorisation consumes none and asks. Daemon-started continuations of a
+person's own work — an answered approval, a finished watcher, a recovered run —
+carry that person's decisions, because the work is theirs and already underway.
 
 Containment is assessed on three independent axes: filesystem
 (`isolated|host|unknown`), network (`none|shared`), and credentials
@@ -255,6 +289,19 @@ observation catalog may be released. Unknown programs, arbitrary scripts,
 approval-gated. Extending the catalog is a reviewed data change with focused
 tests; it must not become a permissive shell heuristic.
 
+A filter joins the catalog only when every operand it takes is an INPUT. A
+program whose second operand is an output file writes with no flag to reject,
+and the catalog's rule shape cannot express "no positional output" — which is
+why `uniq`, `tee` and `xxd` are excluded while `od` is not. This matters beyond
+auto-approval: the same catalog decides what a durable watcher may re-run
+unattended.
+
+Where one subcommand can perform every HTTP method, the catalog and the class
+derivation must resolve that verb with the SAME parser. Two parsers accepting
+different spellings of one flag is how `-X=DELETE` and `-XDELETE` were read as
+ordinary GETs by the catalog while the class recorded them as reads. A verb that
+cannot be resolved statically is a mutation.
+
 An exec payload that is too opaque to mint a safe class authorization may offer
 an exact-run decision. Its key hashes the raw action plus run, workspace,
 environment, and containment metadata; raw code is never persisted. The grant
@@ -263,13 +310,16 @@ cannot be promoted to task or person scope. `/diag` reports containment,
 class/rule grant hits, exact-run hits, judge outcomes, and human asks as funnel
 events rather than pretending they are unique operation counts.
 
-Host execution, credential reads, explicit-deny overrides, and high-risk or
-unclassified requests are once-only decisions. They never create a reusable
-grant from the interactive prompt. Ordinary bounded operations may offer one
-run-local reuse choice; the exact server-issued choice is shared by CLI and IM.
-Historical task/person grants remain readable until they expire and can be
-inspected or revoked with the approval and workspace grant commands, but new
-interactive prompts do not mint grants at those scopes.
+Credential reads outside the observation catalog, explicit-deny overrides, and
+high-risk or unclassified requests are once-only decisions and never create a
+reusable grant from the interactive prompt. An exec call that is not provably
+isolated is judged by the same rule as the host above: it needs a class the
+floor minted, and an unresolved sandbox mode is not evidence of containment.
+Ordinary bounded operations offer a run-local reuse choice and, where a class
+exists, the workspace choice; the exact server-issued choice set is shared by
+CLI and IM. Historical task and person grants remain readable until they expire
+and can be inspected or revoked with the approval and workspace grant commands,
+but new interactive prompts do not mint grants at those scopes.
 
 The model-visible `sandbox: auto|isolated|host` arguments are a compatibility
 surface. Internally they may map to capability requests such as
@@ -329,9 +379,9 @@ asking to override it; uncertainty escalates with the missing evidence stated.
 The judge makes the smart-mode operation decision; a risk flag is a reason for
 review, not proof that a separate human grant is missing. Explicit execution
 restrictions and the control-plane safety floor remain independently enforced.
-The provider request enables structured JSON output and bounded low reasoning;
-forcing reasoning off misread complete, explicitly named authorization in live
-review. The existing output and timeout budgets still bound the call. Version-3 review requires
+The provider request enables structured JSON output with reasoning disabled by
+default; an explicit judge-role override wins. Output and timeout budgets still
+bound the call. Version-3 review requires
 all four decision fields; malformed or incomplete output is an auditable model
 failure and falls back to the human, never a verdict inferred from prose. New
 audit records identify the policy as `smart-v3`.
@@ -344,6 +394,18 @@ decisions, and provider failures stay distinct from a valid `escalate` decision.
 All unavailable paths still require human confirmation; transport success alone
 never authorizes execution. Existing injected legacy judges remain supported
 without fabricating response metadata.
+
+Version-2 response diagnostics also retain full provider usage (including cache
+reporting flags), model, role, latency, and a bounded restriction citation.
+Historical missing usage stays unknown. The daily report separates Main,
+approval, and maintenance usage rather than counting approval continuations as
+judge calls. An incomplete action is not sent for a prefix-only review.
+New provider-backed denials cite an attributed quotation and explain its
+applicability to the actual effect. The runtime validates quotation provenance;
+the model still decides meaning. Missing or fabricated restriction evidence is
+an unavailable decision requiring human review, never automatic approval.
+Necessary observation does not require verbatim command authorization, while
+applicable restrictions, hard floors, and unanswered-approval parking remain.
 
 An unanswered approval returns a typed Run pause: kernel records `waiting_user`
 and stops the remaining calls before another model turn. The model cannot treat

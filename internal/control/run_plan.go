@@ -86,10 +86,10 @@ type StalePlanStepReferenceError struct {
 	Current []string
 }
 
-type planVerificationPreconditionError struct{ step, criterion, state string }
+type planVerificationPreconditionError struct{ step, criterion, state, blockers string }
 
 func (e *planVerificationPreconditionError) Error() string {
-	return fmt.Sprintf("plan step %q requires successful verification before its work unit can complete; the previous plan is unchanged. Criterion: %q; current verification: %s", e.step, e.criterion, e.state)
+	return fmt.Sprintf("plan step %q requires successful verification before its work unit can complete; the previous plan is unchanged. Criterion: %q; current verification: %s. %s", e.step, e.criterion, e.state, e.blockers)
 }
 
 func (*planVerificationPreconditionError) PlanVerificationPrecondition() bool { return true }
@@ -162,8 +162,11 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 			continue
 		}
 		for _, unit := range units {
-			if unit.ID == stepWorkUnits[i] && unit.Status == WorkUnitCompleted && unit.VerificationState != "passed" {
-				return RunPlanProjection{}, &planVerificationPreconditionError{step: step.Step, criterion: step.SuccessCriteria, state: unit.VerificationState}
+			if unit.ID == stepWorkUnits[i] && unit.Status == WorkUnitCompleted {
+				state, _, blockers := workUnitEvidenceProjectionTx(ctx, tx, runID, unit.StartedCursor, unit.FinishedCursor, step.StepID)
+				if state != "passed" {
+					return RunPlanProjection{}, &planVerificationPreconditionError{step: step.Step, criterion: step.SuccessCriteria, state: state, blockers: blockers}
+				}
 			}
 		}
 	}

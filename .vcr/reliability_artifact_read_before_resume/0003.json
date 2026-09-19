@@ -1,0 +1,305 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "Art"
+    },
+    {
+      "content": "ifact"
+    },
+    {
+      "content": " reference"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "art"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "634"
+    },
+    {
+      "content": "820"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "614"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "13"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "887"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "06"
+    },
+    {
+      "content": "ac"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "cd"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " ran"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " given"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " filtering"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " changes"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Full"
+    },
+    {
+      "content": " output"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "172"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": "860"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "300"
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": " lines"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " stored"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " artifact"
+    },
+    {
+      "content": " above"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " have"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " extracted"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " marker"
+    },
+    {
+      "content": " yet"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Status"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": " when"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " want"
+    },
+    {
+      "content": " me"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " extract"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " marker"
+    },
+    {
+      "content": " from"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " artifact"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 14940,
+        "output_tokens": 96,
+        "cache_read_input_tokens": 3456,
+        "cache_miss_input_tokens": 11484,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

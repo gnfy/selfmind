@@ -27,8 +27,13 @@ type SkillEvidenceDigest struct {
 	ParentVersionHash    string                `json:"parent_version_hash,omitempty"`
 	SuccessObservations  []WorkflowObservation `json:"success_observations"`
 	NegativeObservations []WorkflowObservation `json:"negative_observations,omitempty"`
-	ExpectedSavings      map[string]int64      `json:"expected_savings,omitempty"`
-	PromptSnapshotHash   string                `json:"prompt_snapshot_hash,omitempty"`
+	// CoveringSkillKeys are the Skills that EVERY success observation used
+	// without activating: the agent read the package and then did the work its
+	// own way. A cohort with one is not virgin territory, so it must not mint a
+	// second Skill for work a Skill already claims.
+	CoveringSkillKeys  []string         `json:"covering_skill_keys,omitempty"`
+	ExpectedSavings    map[string]int64 `json:"expected_savings,omitempty"`
+	PromptSnapshotHash string           `json:"prompt_snapshot_hash,omitempty"`
 }
 
 func (s *Store) ReadySkillEvidenceDigestsForRun(ctx context.Context, tenantID, runID string) ([]SkillEvidenceDigest, error) {
@@ -204,6 +209,13 @@ func (s *Store) comparableWorkflowCohortFromSource(ctx context.Context, anchor W
 			digest.NegativeObservations = append(digest.NegativeObservations, observation)
 		}
 	}
+	if digest.TargetSkillKey == "" {
+		covering, coverErr := s.coveringSkillKeys(ctx, digest.ControlTenantID, digest.SuccessObservations)
+		if coverErr != nil {
+			return SkillEvidenceDigest{}, coverErr
+		}
+		digest.CoveringSkillKeys = covering
+	}
 	if digest.TargetSkillKey != "" {
 		active, activeErr := s.ActiveSkillVersion(ctx, digest.ControlTenantID, digest.TargetSkillKey)
 		if activeErr != nil {
@@ -223,6 +235,43 @@ func (s *Store) comparableWorkflowCohortFromSource(ctx context.Context, anchor W
 		}
 	}
 	return digest, nil
+}
+
+// coveringSkillKeys intersects the attributed Skills across a cohort. Only a
+// Skill every observation reached is evidence that this class of work is
+// already claimed; one run consulting something once is not.
+func (s *Store) coveringSkillKeys(ctx context.Context, tenantID string, observations []WorkflowObservation) ([]string, error) {
+	if len(observations) == 0 {
+		return nil, nil
+	}
+	var shared map[string]bool
+	for _, observation := range observations {
+		keys, err := s.WorkUnitAttributedSkillKeys(ctx, tenantID, observation.RunID, observation.WorkUnitID)
+		if err != nil {
+			return nil, err
+		}
+		if len(keys) == 0 {
+			return nil, nil
+		}
+		if shared == nil {
+			shared = keys
+			continue
+		}
+		for key := range shared {
+			if !keys[key] {
+				delete(shared, key)
+			}
+		}
+		if len(shared) == 0 {
+			return nil, nil
+		}
+	}
+	out := make([]string, 0, len(shared))
+	for key := range shared {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func skillRepairContentTopologyEligible(content string) bool {

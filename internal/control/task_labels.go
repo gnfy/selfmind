@@ -18,8 +18,11 @@ import (
 // Task status alone cannot distinguish a daemon restart from a provider error
 // or an intentional wait for an external system.
 type LatestRunOutcome struct {
-	CompletionReason string
-	Resumable        bool
+	CompletionReason    string
+	Resumable           bool
+	Summary             string
+	NextSteps           []string
+	VerificationSummary string
 }
 
 // LatestRunOutcomesByPerson returns the newest durable run outcome for every

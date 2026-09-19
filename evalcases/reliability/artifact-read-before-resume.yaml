@@ -1,0 +1,46 @@
+id: reliability_artifact_read_before_resume
+title: "Artifact readback remains observational before an exact continuation"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [awk]
+turns:
+  - input: >-
+      Prepare evidence for a pending marker-extraction task. Run exactly this
+      command once, without filtering or changing it:
+      awk 'BEGIN{for(i=1;i<=3000;i++){if(i==1500){print "MARKER-CODE: RBP-8412-MID"}else{print "line",i,"padding padding padding padding padding padding"}}}'
+      Its captured output will be an artifact. Report its artifact reference,
+      then use finish_run(waiting_user). Wait for my confirmation before
+      extracting the marker; the work is not complete yet.
+  - input: >-
+      Proceed with the pending extraction. Inspect the waiting Run if needed,
+      then read the middle of its saved output using tool_output_view BEFORE
+      calling work_select(resume) for that exact waiting Run. Do not run terminal
+      again. After the direct continuation is committed, report the marker and
+      finish the task. Reading the existing artifact must not create a new task.
+expect:
+  status: completed
+  resumable: false
+  contains: [RBP-8412-MID]
+  max_tool_errors: 0
+  max_duration_seconds: 180
+assert_state:
+  - on: run
+    field: resumes_run_id
+    empty: false
+  - on: events
+    type: work.selection_committed
+    payload_contains: '"commit_mode":"direct"'
+    count_gte: 1
+  - on: events
+    type: work.selection_rejected
+    count_lte: 0
+  - on: events
+    type: tool.started
+    payload_contains: '"tool":"tool_output_view"'
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

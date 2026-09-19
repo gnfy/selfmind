@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12622,
+        "output_tokens": 309,
+        "cache_read_input_tokens": 12160,
+        "cache_miss_input_tokens": 462,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_a5pZpwq7NQFnnOWrZ06K0442",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"done\", \"summary\": \"Created source.txt with exactly 7 plus a newline, ran the single bound verify check on it, then wrote and read back result.md.\", \"done\": [\"Created source.txt containing '7' followed by a single newline\", \"Ran the verify tool exactly once, bound to criterion 'source value equals 7', target 'source.txt', local_dependencies ['source.txt'] — it passed (evidence call_00_ovOvowK9MW2esBY2MGI08406)\", \"Wrote result.md explaining the verified value and read it back to confirm the written content\"], \"files\": [\"source.txt\", \"result.md\"], \"tests\": [\"verify: test \\\"$(cat source.txt)\\\" = \\\"7\\\" -\u003e exit 0 (criterion 'source value equals 7', target 'source.txt', local_dependencies ['source.txt']); run once, not repeated after the report\"], \"next_steps\": [], \"risks\": []}"
+        }
+      ]
+    }
+  ]
+}

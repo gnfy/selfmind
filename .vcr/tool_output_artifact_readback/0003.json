@@ -1,4 +1,5 @@
 {
+  "plan_binding_version": 1,
   "method": "completion",
-  "completion": "artifact tool_output_view truncated marker output"
+  "completion": "MARKER-CODE tool_output_view artifact 截断中段 标记值"
 }

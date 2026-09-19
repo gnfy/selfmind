@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12743,
+        "output_tokens": 253,
+        "cache_read_input_tokens": 12544,
+        "cache_miss_input_tokens": 199,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_QABBe46eQjTXAq06Wbnp6710",
+          "Function": "verify",
+          "Args": "{\"check\": {\"criterion\": \"setting is positive\", \"target\": \"setting.txt\", \"local_dependencies\": [\"setting.txt\"], \"replaces\": \"call_00_kcDOlAJ7gWD2nq3nGLWR2028\", \"reason\": \"The input changed: setting.txt now contains 8 + newline instead of 7 + newline, so the same positive-integer condition is re-checked against the new value.\"}, \"command\": \"awk 'NR==1{a=$0} END{ exit !(NR==1 \u0026\u0026 a ~ /^[0-9]+$/ \u0026\u0026 a+0 \u003e 0) }' setting.txt\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"kind\": \"smoke\"}"
+        }
+      ]
+    }
+  ]
+}

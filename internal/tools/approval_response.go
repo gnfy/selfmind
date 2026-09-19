@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"selfmind/internal/kernel/llm"
 )
 
 // ApprovalResponse retains protocol facts without persisting model text or
@@ -13,13 +14,18 @@ type ApprovalResponse struct {
 }
 
 type ApprovalResponseMetadata struct {
-	Version         int    `json:"version,omitempty"`
-	ToolCallID      string `json:"tool_call_id,omitempty"`
-	FinishReason    string `json:"finish_reason,omitempty"`
-	ResponseBytes   int    `json:"response_bytes"`
-	OutputTokens    int    `json:"output_tokens"`
-	ReasoningTokens int    `json:"reasoning_tokens"`
-	ProtocolStatus  string `json:"protocol_status,omitempty"`
+	Restriction     *RestrictionEvidence `json:"restriction,omitempty"`
+	Usage           *llm.UsageStats      `json:"usage,omitempty"`
+	Model           string               `json:"model,omitempty"`
+	Role            string               `json:"role,omitempty"`
+	DurationMS      int64                `json:"duration_ms,omitempty"`
+	Version         int                  `json:"version,omitempty"`
+	ToolCallID      string               `json:"tool_call_id,omitempty"`
+	FinishReason    string               `json:"finish_reason,omitempty"`
+	ResponseBytes   int                  `json:"response_bytes"`
+	OutputTokens    int                  `json:"output_tokens"`
+	ReasoningTokens int                  `json:"reasoning_tokens"`
+	ProtocolStatus  string               `json:"protocol_status,omitempty"`
 }
 
 // StructuredApprovalJudge is implemented at the provider adapter. Legacy

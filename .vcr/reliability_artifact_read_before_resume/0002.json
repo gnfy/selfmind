@@ -1,0 +1,740 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " ran"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " saved"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": " art"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "634"
+    },
+    {
+      "reasoning_content": "820"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "614"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "13"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "887"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "06"
+    },
+    {
+      "reasoning_content": "ac"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "cd"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "f"
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Report"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": " reference"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "(w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ").\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": ")"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " truncated"
+    },
+    {
+      "reasoning_content": " middle"
+    },
+    {
+      "reasoning_content": " portion"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Per"
+    },
+    {
+      "reasoning_content": " instructions"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " NOT"
+    },
+    {
+      "reasoning_content": " extract"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": " yet"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " report"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": " reference"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Also"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " complete"
+    },
+    {
+      "reasoning_content": " yet"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Should"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " No"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " explicit"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " report"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": " reference"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "(w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " extracting"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " middle"
+    },
+    {
+      "reasoning_content": " now"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Run"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " filtering"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "172"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": "860"
+    },
+    {
+      "content": "-by"
+    },
+    {
+      "content": "te"
+    },
+    {
+      "content": " output"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " captured"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " artifact"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "art"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "634"
+    },
+    {
+      "content": "820"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "614"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "13"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "887"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "06"
+    },
+    {
+      "content": "ac"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "cd"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "the"
+    },
+    {
+      "content": " tool"
+    },
+    {
+      "content": " view"
+    },
+    {
+      "content": " shows"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " beginning"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " end"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " marker"
+    },
+    {
+      "content": " line"
+    },
+    {
+      "content": " sits"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " omitted"
+    },
+    {
+      "content": " middle"
+    },
+    {
+      "content": " range"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " untouched"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " any"
+    },
+    {
+      "content": " filter"
+    },
+    {
+      "content": ").\n\n"
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'m"
+    },
+    {
+      "content": " holding"
+    },
+    {
+      "content": " off"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " extraction"
+    },
+    {
+      "content": " until"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 14420,
+        "output_tokens": 580,
+        "cache_read_input_tokens": 9856,
+        "cache_miss_input_tokens": 4564,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 150,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_NIPn9Bal6ps2nygJ7yVj9726",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"waiting_user\", \"summary\": \"Ran the exact awk command once (no filtering/alteration); its full output is stored as artifact {{SELFMIND_VCR_ARTIFACT_1}}. Marker extraction is intentionally deferred pending user confirmation.\", \"done\": [\"Executed the exact command once, unmodified\", \"Captured full 172860-byte output as artifact {{SELFMIND_VCR_ARTIFACT_1}}\", \"Reported the artifact reference\"], \"files\": [\"{{SELFMIND_VCR_ARTIFACT_1}}\"], \"next_steps\": [\"Await user confirmation, then read the omitted middle range of the artifact (using tool_output_view) to extract the marker code\"], \"risks\": [\"Marker extraction not yet performed; the marker is in the truncated middle portion of the artifact and has not been verified\"], \"tests\": [\"Command executed successfully; output size recorded (172860 bytes) and persisted as an artifact\"]}"
+        }
+      ]
+    }
+  ]
+}

@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"errors"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -13,7 +12,7 @@ import (
 // no more dangerous than the file writes smart mode already performs unprompted,
 // so asking about it was fatigue with no safety return.
 func TestSandboxContainedExecSkipsAskInSmartMode(t *testing.T) {
-	if runtime.GOOS != "linux" || !ExecSandboxAvailable() {
+	if !ExecSandboxAvailable() {
 		t.Skip("containment requires an enforceable sandbox on this host")
 	}
 	withExecSandboxPolicy(t, true, true, false)
@@ -123,7 +122,7 @@ func TestNetworkPolicyDefeatsContainment(t *testing.T) {
 }
 
 func TestThreeAxisContainmentReleasesOnlyDeclaredObservations(t *testing.T) {
-	if runtime.GOOS != "linux" || !ExecSandboxAvailable() {
+	if !ExecSandboxAvailable() {
 		t.Skip("containment requires an enforceable sandbox on this host")
 	}
 	withExecSandboxPolicy(t, true, true, true)

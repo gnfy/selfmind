@@ -135,12 +135,44 @@ ExecutionRequest
   → EnvironmentResolver     （按 lease 取 snapshot）
   → ToolEnvironmentProfile  （catalog 匹配 + 叠加）
   → SandboxPlanner          （→ SandboxPlan + ProcessMaterial）
-  → SandboxBackend          （bwrap | macOS host）
+  → SandboxBackend          （bwrap | seatbelt | host）
   → ProcessRunner
   → FailureClassifier
   → RecoveryPolicy          （至多一次）
   → ExecutionResult
 ```
+
+### 5.1.1 后端强度不等价（macOS seatbelt）
+
+平台由 `IsolationBackendForPlatform` 选择：Linux 用 bubblewrap，macOS 用
+`/usr/bin/sandbox-exec`，其余平台没有隔离后端、退回审批受控的 host 执行。三处
+判断（有效模式、`ContainmentAssessment.Enforced`、host-escape 归类）都问后端的
+`Available()`，不再各自写 `GOOS == "linux"`。
+
+两个后端**实施同一份 `sandbox.Policy`，但强度不同**。seatbelt 是权限过滤器，
+不是命名空间，因此有三条必须记录的差异：
+
+| 契约 | bubblewrap | seatbelt |
+| --- | --- | --- |
+| 工作区外只读 | `--ro-bind / /` | `(allow file-read*)` + 默认拒写 |
+| 写限定在声明根 | `--bind-try` 每根 | `(allow file-write* (subpath (param …)))` 每根 |
+| 关闭出网 | `--unshare-net` | `(deny default)` 下不发放 network 规则 |
+| PID / IPC / UTS 命名空间 | 有 | **无** |
+| `OverlayMounts` / `SynthesizedDirs` | 有 | **无，计划被拒绝** |
+| `$SELFMIND_RUN_TMP` 与 `/tmp` | 同一目录（双重绑定） | **不同**；`/tmp` 在可写根之外 |
+
+后两条有具体后果：
+
+- 需要挂载的计划（catalog 里只有 `aws` 的 SSO token cache 用 `MapRWAt`，其余八个
+  profile 靠环境变量重定向）在 macOS 上**被显式拒绝**，而不是悄悄忽略——忽略会让
+  工具状态指回宿主。`auto` 退回 host + 审批并说明原因；`isolated` 或
+  `required` 则失败，不降级。
+- `TMPDIR` 已指向 run scratch（`executionenv/scratch.go`），所以 `mktemp` 一类仍在
+  可写视图内；依赖字面 `/tmp` 的命令在 macOS 沙箱里会被拒写。
+
+路径以 `sandbox-exec -D` 参数传入，不插值进 policy 文本，因此路径无法终止字符串
+字面量并注入规则；非绝对或未规范化的路径一律拒绝渲染（fail closed），退回审批，
+而不是丢掉一个可写根后产生难以定位的权限失败。
 
 ### 5.2 类型边界
 

@@ -40,7 +40,19 @@ func ExecutionCapabilityMiddleware() Middleware {
 			}
 
 			fingerprint := executionCapabilityFingerprint(scope.WorkspaceID, executionenv.CapabilityNetworkShared)
-			networkShared := scope.TrustLevel == executionenv.TrustTrusted && ExecSandboxAllowsNetwork()
+			// An operator policy that ALLOWS egress is not a reason to hand it
+			// to a command that does not reach the network. Sharing it anyway
+			// is what made every trusted command network-shared, and a
+			// network-shared call is not contained — so the sandbox's own
+			// "isolated, no egress" release never fired and purely local work
+			// (git diff, rg, jq, ...) queued for approval behind commands that
+			// genuinely talk to a remote service.
+			//
+			// This is the same correction resolveCredentialCapability already
+			// carries for the credential axis, applied to the axis that still
+			// had the blanket form.
+			networkShared := scope.TrustLevel == executionenv.TrustTrusted &&
+				ExecSandboxAllowsNetwork() && commandPlausiblyNeedsEgress(toolName, args)
 			if !networkShared && scope.runGrants != nil {
 				networkShared = scope.runGrants.has(executionCapabilityRunGrantKey(executionenv.CapabilityNetworkShared, fingerprint))
 			}
@@ -158,6 +170,25 @@ func commandClearlyNeedsNetwork(toolName string, args map[string]interface{}) bo
 	segments, _ := expandCommandSegments(command, 0)
 	hit, _ := egressCommand(command, segments)
 	return hit
+}
+
+// commandPlausiblyNeedsEgress reports whether sharing the daemon's network with
+// this command is warranted at all.
+//
+// It is deliberately WIDER than commandClearlyNeedsNetwork. That detector
+// recognises explicit egress programs and matched 55 of 666 real commands,
+// while 388 of them invoke a credential-bearing tool profile — gcloud, aws,
+// kubectl and friends exist to talk to a remote service, so withholding the
+// network from them would turn an approval into a failed first attempt that
+// only the post-failure recovery path could rescue. Trading one approval for
+// one wasted execution is not an improvement.
+//
+// The union keeps that cost at zero while still denying egress to the commands
+// that plainly never leave the host, which is what lets those take the
+// sandbox's contained fast path.
+func commandPlausiblyNeedsEgress(toolName string, args map[string]interface{}) bool {
+	return commandClearlyNeedsNetwork(toolName, args) ||
+		commandNeedsOperatorCredentials(toolName, args)
 }
 
 func networkCapabilityFailure(toolName string, err error, output string, args map[string]interface{}) bool {

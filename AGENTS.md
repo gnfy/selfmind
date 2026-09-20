@@ -134,9 +134,9 @@ daemon must not expose that directory as a product runtime Skill.
 - Derive sandbox views and compatibility from typed scope, `ToolProfile`, and
   platform conventions. Do not add project- or vendor-specific branches to
   generic execution code.
-- Linux and macOS x64/arm64 are official targets. Linux has the strongest
-  isolation. macOS uses approval-controlled host execution until a reviewed
-  native sandbox exists. Native Windows is unsupported; use WSL.
+- Linux and macOS x64/arm64 are official targets. Both enforce isolation from
+  one policy, at different strength: ask the backend, not the platform. Native
+  Windows is unsupported; use WSL.
 
 ## Identity, Runs, and Delivery
 

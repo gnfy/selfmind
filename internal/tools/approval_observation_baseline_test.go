@@ -108,3 +108,85 @@ func TestObservationFiltersHaveNoPositionalOutput(t *testing.T) {
 		t.Error("od takes only input operands and must stay an observation")
 	}
 }
+
+func provenReadOnlyWithCredentials(t *testing.T, command string) bool {
+	t.Helper()
+	return deterministicObservationExec("terminal", map[string]interface{}{
+		"command": command, credentialReadArgKey: true,
+	})
+}
+
+// A credentialed payload requires EVERY program in it to be credential-safe,
+// so the shape that dominated the remaining ask volume was an ordinary
+// credentialed read wrapped in plumbing: 73 commands died on a leading `cd` and
+// 32 more on an `echo` banner. Those two cannot emit a credential — their
+// output comes only from arguments the parser already proved static.
+func TestObservationCredentialSafePlumbingDoesNotDisqualifyReads(t *testing.T) {
+	for _, command := range []string{
+		"cd /w/cicd && gcloud builds list --project p",
+		`echo "== caller identity ==" ; aws sts get-caller-identity --profile cw2`,
+		"cd /w && kubectl get pods -n platform -o json | jq -r '.items[].metadata.name'",
+		"which gcloud && gcloud config get-value account",
+		"test -d /w && cd /w && aws iam list-roles",
+	} {
+		if !provenReadOnlyWithCredentials(t, command) {
+			t.Errorf("credentialed read must survive its plumbing: %s", command)
+		}
+	}
+}
+
+// The constraint that must change the result: a program that CAN print what is
+// inside a file stays disqualified once credentials are in scope, because that
+// is exactly how a credential leaves. Uncredentialed, these same commands are
+// ordinary reads — which is why the flag is separate from the catalog itself.
+func TestObservationCredentialSafeExcludesEveryFileReader(t *testing.T) {
+	for _, command := range []string{
+		"cat ~/.config/gcloud/application_default_credentials.json",
+		"aws sts get-caller-identity | tee saved.txt",
+		// `set` and `export` carry no file access but print the whole variable
+		// environment when given no operands.
+		"set; gcloud builds list",
+		"export; aws iam list-roles",
+	} {
+		if provenReadOnlyWithCredentials(t, command) {
+			t.Errorf("a credential emitter must stay gated: %s", command)
+		}
+	}
+}
+
+// Read verbs added from measured usage. Each is paired with the sibling that
+// must NOT match, because these were added by pinning the verb rather than
+// stopping at the noun.
+func TestObservationCatalogCoversMeasuredReadVerbs(t *testing.T) {
+	reads := []string{
+		"gcloud artifacts repositories list --project=p",
+		"gcloud artifacts docker images list us-east4-docker.pkg.dev/p/r",
+		"gcloud artifacts docker tags list us-east4-docker.pkg.dev/p/r/i",
+		"gcloud artifacts docker versions list us-east4-docker.pkg.dev/p/r/i",
+		"gh release view v20260918151055 --repo owner/name",
+		"gh release list --repo owner/name",
+		"git ls-remote https://github.com/owner/name refs/heads/main",
+	}
+	for _, command := range reads {
+		if !provenReadOnly(t, command) {
+			t.Errorf("must be provable read-only: %s", command)
+		}
+	}
+	// These reach the same subcommand families and must stay gated. The first
+	// three are why the catalog cannot simply trust a credential-bearing CLI:
+	// each prints a secret or changes state through an otherwise read-shaped
+	// verb.
+	for _, command := range []string{
+		"gcloud auth print-access-token",              // emits a credential
+		"aws configure get aws_secret_access_key",     // emits a credential
+		"kubectl config use-context gke_p_us-east4_c", // rewrites kubeconfig
+		"gcloud artifacts docker images delete IMAGE", // sibling of a list
+		"gcloud artifacts repositories delete r",      // sibling of a list
+		"gh release delete v1 --repo owner/name",      // sibling of a view
+		"git push origin develop",                     // not a remote read
+	} {
+		if provenReadOnly(t, command) {
+			t.Errorf("must NOT be provable read-only: %s", command)
+		}
+	}
+}

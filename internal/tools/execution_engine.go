@@ -172,10 +172,7 @@ func planFromMaterial(material execMaterial, decision SandboxDecision) SandboxPl
 	if decision.NetworkShared {
 		network = "shared"
 	}
-	backend := hostBackendName
-	if decision.Mode == SandboxIsolated {
-		backend = bubblewrapBackendName
-	}
+	backend := SandboxBackendName(decision.Mode)
 	return SandboxPlan{
 		Version:       SandboxPlanVersion,
 		SnapshotID:    material.SnapshotID,
@@ -210,6 +207,7 @@ type SandboxSynthesizedDir struct {
 
 const (
 	bubblewrapBackendName = "bubblewrap"
+	seatbeltBackendName   = "seatbelt"
 	hostBackendName       = "host"
 )
 
@@ -253,7 +251,7 @@ func classifyHostEscape(decision SandboxDecision, programs []string, payload str
 	if strings.Contains(lower, "sudo ") || strings.Contains(lower, "/etc/") || strings.Contains(lower, "systemctl") {
 		return HostEscapeHostWrite
 	}
-	if runtime.GOOS != "linux" || !ExecSandboxAvailable() {
+	if !ExecSandboxAvailable() {
 		// The host cannot isolate at all: not an avoidable escape.
 		return HostEscapeHostWrite
 	}

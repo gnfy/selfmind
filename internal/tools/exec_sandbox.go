@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"selfmind/internal/executionenv"
-	"selfmind/internal/tools/sandbox"
 )
 
 // SandboxMode is the per-call execution contract exposed by exec tools.
@@ -84,16 +83,15 @@ func ExecSandboxAllowsNetwork() bool {
 func ExecSandboxDiagnostics() ExecSandboxDiagnostic {
 	enabled, required, network := execSandboxPolicy()
 	available := ExecSandboxAvailable()
-	backend := "host"
+	isolation := IsolationBackendForPlatform(runtime.GOOS)
+	backend := hostBackendName
 	switch {
-	case runtime.GOOS == "linux" && available && enabled:
-		backend = "bubblewrap"
-	case runtime.GOOS == "linux":
-		backend = "host (bubblewrap unavailable or disabled)"
-	case runtime.GOOS == "darwin":
-		backend = "approval-controlled host"
+	case isolation == nil:
+		backend = "host (no isolation backend on " + runtime.GOOS + ")"
+	case available && enabled:
+		backend = isolation.Name()
 	default:
-		backend = "unsupported host"
+		backend = "host (" + isolationUnavailableReason(runtime.GOOS) + " or disabled)"
 	}
 	networkMode := "isolated"
 	if network {
@@ -114,7 +112,21 @@ func ExecSandboxDiagnostics() ExecSandboxDiagnostic {
 // the dispatcher has installed its process-wide policy yet. CLI diagnostics
 // use this before a gateway is started.
 func ExecSandboxAvailable() bool {
-	return runtime.GOOS == "linux" && sandbox.Available()
+	backend := IsolationBackendForPlatform(runtime.GOOS)
+	return backend != nil && backend.Available()
+}
+
+// isolationUnavailableReason explains, per platform convention, why a host that
+// has an isolation backend still cannot use it. It stays a derivation from the
+// platform rather than a branch inside the exec path.
+func isolationUnavailableReason(goos string) string {
+	switch goos {
+	case "linux":
+		return "bubblewrap or unprivileged user namespaces unavailable"
+	case "darwin":
+		return "sandbox-exec unavailable"
+	}
+	return "no isolation backend on " + goos
 }
 
 // ExecSandboxPromptNote renders the model-facing one-liner about the effective
@@ -164,7 +176,7 @@ func effectiveSandboxModeForPolicy(requested SandboxMode, enabled, required bool
 	if requested == SandboxIsolated || required {
 		return SandboxIsolated
 	}
-	if enabled && runtime.GOOS == "linux" && ExecSandboxAvailable() {
+	if enabled && ExecSandboxAvailable() {
 		return SandboxIsolated
 	}
 	return SandboxHost
@@ -316,7 +328,7 @@ func sandboxedCommandWithMaterial(
 		}
 		return plain(SandboxDecision{Mode: SandboxHost, Reason: "exec sandbox disabled by configuration", NetworkShared: true})
 	}
-	if goos != "linux" {
+	if IsolationBackendForPlatform(goos) == nil {
 		if requested == SandboxIsolated || required {
 			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable on %s", goos)
 		}
@@ -328,9 +340,9 @@ func sandboxedCommandWithMaterial(
 	}
 	if !sandboxAvailable {
 		if requested == SandboxIsolated || required {
-			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable (install bubblewrap and enable unprivileged user namespaces)")
+			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable (%s)", isolationUnavailableReason(goos))
 		}
-		return plain(SandboxDecision{Mode: SandboxHost, Reason: "bubblewrap or unprivileged user namespaces unavailable", NetworkShared: true})
+		return plain(SandboxDecision{Mode: SandboxHost, Reason: isolationUnavailableReason(goos), NetworkShared: true})
 	}
 
 	decision := SandboxDecision{Mode: SandboxIsolated, NetworkShared: network}
@@ -338,10 +350,20 @@ func sandboxedCommandWithMaterial(
 	processMaterial := ProcessMaterial{env: env, scratchTmp: strings.TrimSpace(material.ScratchTmp)}
 	cmd, err := SandboxBackendForMode(SandboxIsolated).Command(ctx, inner, plan, processMaterial)
 	if err != nil {
+		// Reached when the backend exists and the host can run it, but THIS
+		// plan is not enforceable — on macOS, a plan whose tool state needs a
+		// mount. Isolation was still promised, so a required run fails rather
+		// than quietly widening; otherwise it degrades to an approval-gated
+		// host run with the reason visible.
 		if requested == SandboxIsolated || required {
-			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable (install bubblewrap and enable unprivileged user namespaces)")
+			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable (%s cannot enforce this plan)",
+				SandboxBackendName(SandboxIsolated))
 		}
-		return plain(SandboxDecision{Mode: SandboxHost, Reason: "bubblewrap or unprivileged user namespaces unavailable", NetworkShared: true})
+		return plain(SandboxDecision{
+			Mode:          SandboxHost,
+			Reason:        SandboxBackendName(SandboxIsolated) + " cannot enforce this plan (mount-backed tool state)",
+			NetworkShared: true,
+		})
 	}
 	return cmd, decision, nil
 }

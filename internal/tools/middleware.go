@@ -550,8 +550,25 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// this effect agrees with the person's current request. No language
 			// parser chooses this review: every effect in the new smart contract
 			// is judged, including an otherwise in-scope file write.
-			semanticReview := mode == ApprovalSmart && intentSnapshot.ModelAuthorization && (isWriteTool(toolName) || isExecTool(toolName) || dangerous)
+			//
+			// Containment is the one exception, and it has to be, or the C1
+			// release below is unreachable: the gateway marks every run
+			// ModelAuthorization, so an unconditional semantic review made
+			// `contained` dead for the whole deployment. The funnel proved it —
+			// `contained 0` against 33 judged decisions in a day, while the
+			// judge's own escalation rationales read "read-only ... but the
+			// specific target wasn't named". That is the fatigue C1 exists to
+			// remove, paid for with a model call each time.
+			//
+			// Nothing is widened here. Containment still means isolated,
+			// ENFORCED, no egress and no credentials — or a declaratively proven
+			// observation — and a dangerous op, an explicit deny, an unclassified
+			// external effect, a write tool, and every uncontained exec all keep
+			// their review. Only a call the runtime can already prove harmless
+			// stops paying for a judgement about whether it was asked for.
 			contained := containment.AutoApprove() && !denyForcesHuman
+			semanticReview := mode == ApprovalSmart && intentSnapshot.ModelAuthorization &&
+				!contained && (isWriteTool(toolName) || isExecTool(toolName) || dangerous)
 			if !semanticReview && !denyForcesHuman && !externalUnknown && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
 					recordScopeTriage(scope, toolName, "", TriageOutcomeContained, TriageAssessment{}, 0, nil)

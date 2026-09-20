@@ -120,7 +120,17 @@ Workspace trust is enforced as a durable owner-controlled boundary:
   Declining leaves the command runnable with an empty state overlay;
 - access is never granted to all of `~/.config`. A profile names the files and
   subdirectories it needs, bounded by `copy_in` limits, and the operator's own
-  files are never modified.
+  files are never modified;
+- once credentials are in scope, every program in the payload must be unable to
+  emit one, because that is how a credential leaves. The per-program flag is too
+  coarse for a filter, so the invocation is judged instead: a catalogued filter
+  invoked with no file operand can only have read the previous command's stdout,
+  which is why `… | grep tag` is released while `grep -r secret ~/.aws`,
+  `head ~/.aws/credentials` and `grep -f patterns.txt` are not. The argument
+  grammar is per program and fails closed on any flag, bundle or operand it does
+  not fully model, so it can only ever widen. `rg` is excluded because with no
+  path operand it walks the working directory, and `set`/`export` are excluded
+  because with no operands they print the whole variable environment.
 
 Private package installation in an untrusted workspace requires a shared-network
 capability, and credential-backed registries additionally require
@@ -370,9 +380,17 @@ and ordered later corrections. Workspace/source/work-key facts remain separate;
 task summaries and system wake-ups are not human authorization. New version-3
 snapshots do not infer permissions or prohibitions with word lists, sentence
 splitting, or operation-class matching. Main follows the person's constraints.
-Version-3 smart execution reviews writes
-and process operations even when containment or an older capability grant would
-otherwise bypass triage. The cheap judge resolves references, exceptions, timing,
+Version-3 smart execution reviews writes and process operations even when an
+older capability grant would otherwise bypass triage. Enforced containment is
+the one exception, because it is layer 2 of the ordered funnel above and a
+lower layer cannot override it: a call the runtime already proves harmless —
+isolated, enforced, no egress and no credentials, or a declaratively proven
+observation — runs without a judgement about whether it was asked for. Reviewing
+those anyway made containment unreachable in practice, since every gateway run
+carries model authorization; the funnel reported zero contained releases while
+the judge escalated calls its own rationale described as read-only. A dangerous
+operation, an explicit deny, an unclassified external effect, a write tool, and
+every uncontained execution keep their review. The cheap judge resolves references, exceptions, timing,
 and scope from that evidence; only an unchanged action/evidence decision is
 reused. A clear applicable refusal is respected without
 asking to override it; uncertainty escalates with the missing evidence stated.

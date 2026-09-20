@@ -1,7 +1,10 @@
-// Package sandbox builds bubblewrap (bwrap) command wrappers for exec tools.
-// Landlock alone cannot gate network egress, so the isolation is namespace-
-// based: read-only host root, writable workspace only, and no network by
-// default.
+// Package sandbox builds OS-level isolation wrappers for exec tools. One
+// Policy describes the contract — read-only host view, writes confined to
+// declared roots, no network by default — and each host enforces it with what
+// it has: bubblewrap namespaces on Linux (this file), seatbelt permission
+// filtering on macOS (seatbelt.go). The two are not equivalent: seatbelt has no
+// mount namespace, so the Policy fields that need one are refused there rather
+// than ignored.
 //
 // This package only constructs argv and detects capability; it never decides
 // policy or approval. The caller decides whether an unavailable sandbox may

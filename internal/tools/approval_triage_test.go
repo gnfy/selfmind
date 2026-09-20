@@ -534,3 +534,88 @@ func TestOfferIsWithheldWhenThereIsNoHumanReply(t *testing.T) {
 		t.Fatalf("a system-originated run must still be labelled as one:\n%s", prompt)
 	}
 }
+
+// Containment must outrank semantic review, or the C1 release is unreachable:
+// the gateway marks every run ModelAuthorization, so an unconditional review
+// left `contained` at zero for the whole deployment while the judge escalated
+// calls its own rationale called read-only.
+//
+// The release is still exactly as narrow as containment: everything the runtime
+// cannot already prove harmless keeps its judgement.
+func TestContainedExecSkipsSemanticReviewButNothingElseDoes(t *testing.T) {
+	if !ExecSandboxAvailable() {
+		t.Skip("containment requires an enforceable sandbox on this host")
+	}
+	run := func(t *testing.T, args map[string]interface{}, intent RunIntentSnapshot) (judged int, asked int, ran bool) {
+		t.Helper()
+		withExecSandboxPolicy(t, true, false, false)
+		judge := &fakeJudge{reply: `{"decision":"APPROVE"}`}
+		cleanup := SetExecutionScope("person-sr", ExecutionScope{
+			TenantID: "tenant-sr", PersonID: "person-sr", WorkspaceID: "ws-sr",
+			ApprovalMode: ApprovalSmart, Judge: judge,
+			IntentSnapshot: func() RunIntentSnapshot { return intent },
+			Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
+				asked++
+				return ToolApprovalDecision{Approved: true}, nil
+			},
+		})
+		defer cleanup()
+		exec := SmartApprovalMiddleware("")(func(map[string]interface{}) (string, error) {
+			ran = true
+			return "", nil
+		})
+		args["_tenant_id"] = "person-sr"
+		if _, err := exec(args); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return judge.calls, asked, ran
+	}
+
+	authorized := RunIntentSnapshot{RawUserText: "do the weekly summary", Source: "direct", ModelAuthorization: true}
+	contained := func(command string) map[string]interface{} {
+		return map[string]interface{}{
+			"_tool_name": "terminal", "_effective_sandbox_mode": string(SandboxIsolated),
+			"command": command,
+		}
+	}
+
+	// A contained, non-dangerous exec: no judge call, no human, it just runs.
+	// These are the ones the judge was escalating as "read-only, but ...".
+	for _, command := range []string{"git status --short", "rg TODO .", "cd /w && wc -l notes.md"} {
+		judged, asked, ran := run(t, contained(command), authorized)
+		if judged != 0 || asked != 0 || !ran {
+			t.Fatalf("%s: contained exec must run unreviewed, got judged=%d asked=%d ran=%v", command, judged, asked, ran)
+		}
+	}
+
+	// Each constraint below must change the result, one at a time.
+	t.Run("dangerous still reviewed", func(t *testing.T) {
+		args := contained("rm -rf build")
+		if judged, _, _ := run(t, args, authorized); judged == 0 {
+			t.Fatal("a dangerous op must still be judged")
+		}
+	})
+	t.Run("uncontained egress still reviewed", func(t *testing.T) {
+		args := contained("future-agent sync --remote")
+		args["_network_shared"] = true
+		if judged, _, _ := run(t, args, authorized); judged == 0 {
+			t.Fatal("a network-shared call that is not a proven observation must still be judged")
+		}
+	})
+	t.Run("host mode still reviewed", func(t *testing.T) {
+		args := contained("git status --short")
+		args["_effective_sandbox_mode"] = string(SandboxHost)
+		if judged, _, _ := run(t, args, authorized); judged == 0 {
+			t.Fatal("an uncontained host call must still be judged")
+		}
+	})
+	t.Run("explicit deny still reviewed", func(t *testing.T) {
+		denied := authorized
+		denied.RawUserText = "do not run any git commands"
+		denied.DenyScopes = []DenyScope{{Marker: "do not", Clause: "do not run any git commands", Classes: []OperationClass{OpClassObserve, OpClassExecInTurn}}}
+		args := contained("git status --short")
+		if judged, asked, _ := run(t, args, denied); judged == 0 && asked == 0 {
+			t.Fatal("an explicit deny must reach a review")
+		}
+	})
+}

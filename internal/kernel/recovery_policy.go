@@ -21,6 +21,7 @@ type RecoveryAttempt struct {
 	TargetHash            string
 	Strategy              string
 	EnvironmentGeneration int64
+	PreparationState      string
 }
 
 type RecoveryFailure struct {
@@ -34,9 +35,12 @@ type RecoveryFailure struct {
 }
 
 // RecoveryPolicy is injected so the Agent loop owns decisions while storage
-// and orchestration remain outside kernel. It prevents a known-failed attempt
-// before dispatch and learns only from typed tool results after dispatch.
+// and orchestration remain outside kernel. It suppresses exact repeated
+// preparation failures separately from failed execution strategies, and learns
+// execution recovery state from typed tool results after dispatch.
 type RecoveryPolicy interface {
+	BeforePreparation(RecoveryAttempt) error
+	RecordPreparationFailure(RecoveryFailure)
 	BeforeDispatch(RecoveryAttempt) error
 	RecordFailure(RecoveryFailure)
 	RecordSuccess(RecoveryAttempt)
@@ -60,12 +64,55 @@ func RecoveryPolicyFromContext(ctx context.Context) RecoveryPolicy {
 }
 
 type strategyRecoveryPolicy struct {
-	mu       sync.Mutex
-	failures map[string][]RecoveryFailure
+	mu                  sync.Mutex
+	failures            map[string][]RecoveryFailure
+	preparationFailures map[string]RecoveryFailure
 }
 
 func NewStrategyRecoveryPolicy() RecoveryPolicy {
-	return &strategyRecoveryPolicy{failures: map[string][]RecoveryFailure{}}
+	return &strategyRecoveryPolicy{
+		failures:            map[string][]RecoveryFailure{},
+		preparationFailures: map[string]RecoveryFailure{},
+	}
+}
+
+func (p *strategyRecoveryPolicy) BeforePreparation(attempt RecoveryAttempt) error {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	failure, repeated := p.preparationFailures[preparationAttemptKey(attempt)]
+	if !repeated {
+		return nil
+	}
+	if failure.FailureClass == "invalid_input" {
+		return newRecoveryPolicyError(
+			"tool_arguments_repeated",
+			"blocked_model_protocol",
+			"corrected_input",
+			"not_dispatched",
+			"This exact malformed tool call was already rejected before dispatch. Correct its arguments before trying again.",
+			appendRecoveryAlternatives(failure.Alternatives, "inspect_tool_schema", "correct_arguments", "report_actionable_blocker"),
+		)
+	}
+	return newRecoveryPolicyError(
+		"tool_preparation_repeated",
+		"blocked_tool_capability",
+		"different_strategy",
+		"not_dispatched",
+		"This exact tool call was already refused before dispatch under the same tool catalogue state.",
+		appendRecoveryAlternatives(failure.Alternatives, "refresh_tool_catalog", "choose_available_tool", "report_actionable_blocker"),
+	)
+}
+
+func (p *strategyRecoveryPolicy) RecordPreparationFailure(failure RecoveryFailure) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.preparationFailures[preparationAttemptKey(failure.Attempt)] = failure
+	p.mu.Unlock()
 }
 
 func (p *strategyRecoveryPolicy) BeforeDispatch(attempt RecoveryAttempt) error {
@@ -147,6 +194,13 @@ func (p *strategyRecoveryPolicy) RecordSuccess(attempt RecoveryAttempt) {
 		}
 	}
 	p.mu.Unlock()
+}
+
+func preparationAttemptKey(attempt RecoveryAttempt) string {
+	return fmt.Sprintf("%d\x00%s\x00%s\x00%s\x00%d\x00%s", attempt.PlanVersion,
+		strings.TrimSpace(attempt.PlanStepID), strings.TrimSpace(attempt.ToolName),
+		strings.TrimSpace(attempt.InputSignature), attempt.EnvironmentGeneration,
+		strings.TrimSpace(attempt.PreparationState))
 }
 
 func recoveryAttemptFromCall(ctx context.Context, toolName string, args map[string]interface{}, signature string, retryClass ToolRetryClass) RecoveryAttempt {
@@ -346,13 +400,18 @@ func appendRecoveryAlternatives(current []string, fallback ...string) []string {
 }
 
 type recoveryPolicyError struct {
-	code, category, retryability, effectState, message string
-	alternatives                                       []string
+	code, category, phase, retryability, effectState, message string
+	alternatives                                              []string
 }
 
 func newRecoveryPolicyError(code, category, retryability, effectState, message string, alternatives []string) error {
 	return &recoveryPolicyError{code: code, category: category, retryability: retryability,
-		effectState: effectState, message: message, alternatives: alternatives}
+		effectState: effectState, message: message, phase: "planning", alternatives: alternatives}
+}
+
+func newPreparationPolicyError(code, category, retryability, effectState, message string, alternatives []string) error {
+	return &recoveryPolicyError{code: code, category: category, retryability: retryability,
+		effectState: effectState, message: message, phase: "preparation", alternatives: alternatives}
 }
 
 func (e *recoveryPolicyError) Error() string             { return e.message }
@@ -362,7 +421,7 @@ func (e *recoveryPolicyError) ModelSafeMessage() string  { return e.message }
 func (e *recoveryPolicyError) ToolRecoveryHint() string {
 	return "Use the typed alternatives or finish with an actionable blocker; do not retry a cosmetic variant."
 }
-func (e *recoveryPolicyError) ToolFailurePhase() string { return "planning" }
+func (e *recoveryPolicyError) ToolFailurePhase() string { return e.phase }
 func (e *recoveryPolicyError) ToolRetryability() string { return e.retryability }
 func (e *recoveryPolicyError) ToolEffectState() string  { return e.effectState }
 func (e *recoveryPolicyError) ToolStateChanged() bool   { return false }

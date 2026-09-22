@@ -20,6 +20,7 @@ expect:
     - "Background readiness:"
     - "Running primary"
     - "Running background"
+    - "reasoning="
     - "fast_classifier: uses background model"
     - "memory_extract: uses background model"
     - "skill_curator: uses background model"

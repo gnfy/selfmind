@@ -80,6 +80,14 @@ func (d *Dispatcher) DispatchResult(name string, args map[string]interface{}) (k
 	return d.registry.DispatchResult(name, args)
 }
 
+func (d *Dispatcher) PrepareToolArguments(name string, args map[string]interface{}) (map[string]interface{}, error) {
+	return d.registry.PrepareToolArguments(name, args)
+}
+
+func (d *Dispatcher) ToolPreparationState(name string) string {
+	return d.registry.ToolPreparationState(name)
+}
+
 func processToolResult(result ExecutionResult) kernel.ToolDispatchResult {
 	process := &kernel.ToolProcessResult{Started: result.Started, SandboxMode: string(result.Plan.Mode), RecoveryOutcome: result.RecoveryOutcome}
 	if result.ExitCodeKnown {

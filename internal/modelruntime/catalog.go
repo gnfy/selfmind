@@ -119,23 +119,24 @@ func DiscoverModelDescriptor(providerID, model string) (ModelDescriptor, bool) {
 	if model == "" {
 		return ModelDescriptor{}, false
 	}
-	if providerID == "deepseek" && strings.HasPrefix(strings.ToLower(model), "deepseek-v4-") {
-		return ModelDescriptor{
-			ID:                 model,
-			ContextWindow:      KnownContextLength(providerID, model),
-			DefaultReasoning:   "high",
-			SupportedReasoning: []string{"high", "xhigh"},
-			CapabilitySource:   "built-in DeepSeek V4 metadata",
-		}, true
+	descriptor := ModelDescriptor{ID: model}
+	if profile, ok := NewRegistry().Resolve(providerID); ok {
+		descriptor.DefaultReasoning = strings.TrimSpace(profile.DefaultReasoning)
+		descriptor.SupportedReasoning = append([]string(nil), profile.SupportedReasoning...)
+		descriptor.DefaultServiceTier = strings.TrimSpace(profile.DefaultServiceTier)
+		descriptor.SupportedServiceTiers = append([]string(nil), profile.SupportedServiceTiers...)
+		if descriptor.DefaultReasoning != "" || len(descriptor.SupportedReasoning) > 0 ||
+			descriptor.DefaultServiceTier != "" || len(descriptor.SupportedServiceTiers) > 0 {
+			descriptor.CapabilitySource = "built-in provider profile"
+		}
 	}
 	if contextWindow := KnownContextLength(providerID, model); contextWindow > 0 {
-		return ModelDescriptor{
-			ID:               model,
-			ContextWindow:    contextWindow,
-			CapabilitySource: "built-in fallback",
-		}, true
+		descriptor.ContextWindow = contextWindow
+		if descriptor.CapabilitySource == "" {
+			descriptor.CapabilitySource = "built-in fallback"
+		}
 	}
-	return ModelDescriptor{}, false
+	return descriptor, descriptor.CapabilitySource != ""
 }
 
 func (c *Catalog) fetch(ctx context.Context, profile ProviderProfile, rt Runtime) ([]string, error) {

@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -418,6 +419,85 @@ func TestWorkTimelineAttentionForChannelPrefersSameChannel(t *testing.T) {
 	unpreferred, err := timeline.AttentionForChannel(ctx, identity.TenantID, identity.PersonID, "", 10)
 	if err != nil || len(unpreferred) != 2 || unpreferred[0].RunID != imRun.ID {
 		t.Fatalf("empty channel preference must equal plain attention: %+v err=%v", unpreferred, err)
+	}
+}
+
+func TestRejectedWorkSelectionDoesNotCreateResumableAttention(t *testing.T) {
+	ctx := context.Background()
+	store, identity, timeline := newTimelineFixture(t)
+	thread, err := timeline.CreateInteraction(ctx, ThreadCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "ambiguous historical selection",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, thread.legacyTask(), "cli", thread.Title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]interface{}{"outcome": map[string]interface{}{
+		"status": "waiting_user", "completion_reason": "work_selection_rejected", "resumable": true,
+	}})
+	if _, err := store.AppendEvent(ctx, Event{TaskID: thread.ID, RunID: run.ID, Type: "run.finished", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+
+	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attention) != 0 {
+		t.Fatalf("a rejected selector became resumable work: %+v", attention)
+	}
+	stored, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil || stored == nil || stored.Status != "waiting_user" {
+		t.Fatalf("attention projection rewrote run history: run=%+v err=%v", stored, err)
+	}
+}
+
+func TestRejectedWorkSelectionUsesDurableEventOrder(t *testing.T) {
+	ctx := context.Background()
+	store, identity, timeline := newTimelineFixture(t)
+	thread, err := timeline.CreateInteraction(ctx, ThreadCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "event order",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, thread.legacyTask(), "cli", thread.Title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	rejected, _ := json.Marshal(map[string]interface{}{"outcome": map[string]interface{}{
+		"status": "waiting_user", "completion_reason": "work_selection_rejected", "resumable": true,
+	}})
+	accepted, _ := json.Marshal(map[string]interface{}{"outcome": map[string]interface{}{
+		"status": "waiting_user", "completion_reason": "waiting_user", "resumable": true,
+	}})
+	rejectedEvent, err := store.AppendEvent(ctx, Event{TaskID: thread.ID, RunID: run.ID, Type: "run.finished", Payload: rejected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedEvent, err := store.AppendEvent(ctx, Event{TaskID: thread.ID, RunID: run.ID, Type: "run.finished", Payload: accepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a wall-clock jump: cursor order remains authoritative even when
+	// the older event has the later timestamp.
+	if _, err := store.db.ExecContext(ctx, `UPDATE task_events SET created_at = CASE id WHEN ? THEN ? WHEN ? THEN ? END WHERE id IN (?,?)`,
+		rejectedEvent.ID, time.Now().Add(time.Hour).Unix(), acceptedEvent.ID, time.Now().Unix(), rejectedEvent.ID, acceptedEvent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil || len(attention) != 1 || attention[0].RunID != run.ID {
+		t.Fatalf("latest durable outcome was not authoritative: attention=%+v err=%v", attention, err)
 	}
 }
 

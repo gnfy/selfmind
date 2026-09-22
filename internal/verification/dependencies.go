@@ -3,7 +3,6 @@ package verification
 import (
 	"fmt"
 	"path/filepath"
-	"slices"
 	"strings"
 )
 
@@ -11,16 +10,6 @@ import (
 type Mutation struct {
 	Path       string
 	FinishedAt int64
-}
-
-func sameDependencies(a, b *Binding) bool {
-	if a.Version != b.Version {
-		return false
-	}
-	if a.LocalDependencies == nil || b.LocalDependencies == nil {
-		return a.LocalDependencies == nil && b.LocalDependencies == nil
-	}
-	return slices.Equal(*a.LocalDependencies, *b.LocalDependencies)
 }
 
 func RelevantMutationAt(check Check, mutations []Mutation) int64 {

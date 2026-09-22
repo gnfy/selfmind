@@ -451,6 +451,25 @@ func TestModelControlStatusDistinguishesRunningConfiguredPending(t *testing.T) {
 	}
 }
 
+func TestFormatModelStatusShowsEffectiveDefaultReasoning(t *testing.T) {
+	selection := config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-flash"}
+	status := modelchange.Status{
+		Running:          modelchange.Snapshot{Primary: selection, Auxiliary: selection},
+		Configured:       modelchange.Snapshot{Primary: selection, Auxiliary: selection},
+		RunningTuning:    modelchange.TuningSnapshot{Primary: modelchange.RouteTuning{Reasoning: "high", ReasoningSource: "model_default"}, Auxiliary: modelchange.RouteTuning{Reasoning: "high", ReasoningSource: "model_default"}},
+		ConfiguredTuning: modelchange.TuningSnapshot{Primary: modelchange.RouteTuning{Reasoning: "high", ReasoningSource: "model_default"}, Auxiliary: modelchange.RouteTuning{Reasoning: "high", ReasoningSource: "model_default"}},
+	}
+	rendered := formatModelStatus(status)
+	for _, want := range []string{
+		"Running primary: deepseek/deepseek-flash reasoning=auto→high",
+		"Running background: deepseek/deepseek-flash reasoning=auto→high",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("status missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func testModelChangeService(t *testing.T) (*modelchange.Service, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")

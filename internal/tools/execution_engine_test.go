@@ -22,6 +22,7 @@ func TestSandboxPlanSerializationCarriesNoEnvironment(t *testing.T) {
 		Env:              []string{"PATH=/usr/bin", "GCLOUD_TOKEN=super-secret", "HOME=/home/u"},
 		Profiles:         []string{"gcloud"},
 		ProfileNotes:     []string{"credentials withheld"},
+		ProxyMode:        proxyModeOmittedUnreachableLoopback,
 		CopiedStateFiles: 6,
 		SnapshotID:       "envsnap_1_abcd",
 		Generation:       1,
@@ -51,6 +52,9 @@ func TestSandboxPlanSerializationCarriesNoEnvironment(t *testing.T) {
 	// backend that happens to be right on Linux.
 	if plan.Version != SandboxPlanVersion || plan.Backend != SandboxBackendName(SandboxIsolated) || plan.NetworkMode != "shared" {
 		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	if plan.ProxyMode != proxyModeOmittedUnreachableLoopback || strings.Contains(rendered, "127.0.0.1") {
+		t.Fatalf("plan must retain the proxy decision without an endpoint: %s", rendered)
 	}
 	// A plan with an empty binding cannot be audited or verified by whoever runs
 	// it, so the identity fields must actually be populated.

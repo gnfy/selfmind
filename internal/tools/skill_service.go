@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -375,9 +376,49 @@ var skillRootSearchSkipDirs = map[string]struct{}{
 }
 
 func skillRootAncestors(start string) []string {
+	return skillRootAncestorsBelow(start, skillRootAncestorCeiling(start))
+}
+
+func skillRootAncestorCeiling(start string) string {
 	start = filepath.Clean(start)
+	candidates := []string{skillUserHomeDir()}
+	if current, err := user.Current(); err == nil {
+		candidates = append(candidates, current.HomeDir)
+	}
+	best, bestDepth := "", int(^uint(0)>>1)
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(strings.TrimSpace(candidate))
+		if candidate == "." {
+			continue
+		}
+		rel, err := filepath.Rel(candidate, start)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		depth := 0
+		if rel != "." {
+			depth = len(strings.Split(rel, string(filepath.Separator)))
+		}
+		if depth < bestDepth {
+			best, bestDepth = candidate, depth
+		}
+	}
+	return best
+}
+
+func skillRootAncestorsBelow(start, ceiling string) []string {
+	start = filepath.Clean(start)
+	ceiling = filepath.Clean(ceiling)
 	var dirs []string
 	for len(dirs) < 8 {
+		// A user-level agent directory is not a repository convention. Stop
+		// before the nearest configured or operating-system account home so its
+		// agent directories cannot be relabelled as workspace-owned. Considering
+		// both matters when a service overrides HOME while its cwd remains under
+		// the account home, or when the service workspace lives under the override.
+		if ceiling != "." && start == ceiling {
+			break
+		}
 		dirs = append(dirs, start)
 		parent := filepath.Dir(start)
 		if parent == start {

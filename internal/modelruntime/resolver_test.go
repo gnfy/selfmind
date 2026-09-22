@@ -363,6 +363,29 @@ func TestResolverRejectsUnknownQuirkValues(t *testing.T) {
 	}
 }
 
+func TestResolverDeepSeekAutoKeepsProviderDefaultUnforced(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-flash"}},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"deepseek": {APIKey: "test-key"},
+		},
+	}
+	cfg.Normalize()
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.ReasoningEffort != "" {
+		t.Fatalf("auto reasoning forced wire value %q", rt.ReasoningEffort)
+	}
+	if rt.DefaultReasoning != "high" {
+		t.Fatalf("default reasoning = %q", rt.DefaultReasoning)
+	}
+	if len(rt.ReasoningLevels) != 2 || rt.ReasoningLevels[1] != "xhigh" {
+		t.Fatalf("reasoning levels = %v", rt.ReasoningLevels)
+	}
+}
+
 func TestResolverContextLengthOverrides(t *testing.T) {
 	cfg := &config.Config{
 		Model: config.ModelConfig{Provider: "kimi-coding", Default: "kimi-for-coding", ContextLength: 131072},

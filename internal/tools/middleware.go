@@ -588,6 +588,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// hard-floor op.
 			patternKey := approvalPatternKeyForScope(toolName, args, reason, scope, hasScope)
 			exactRunKey := approvalExactRunKey(toolName, args, scope, hasScope)
+			declaredEffectKey := approvalDeclaredEffectKey(toolName, args, scope, hasScope)
 			// Rule candidates (batch B2) are the narrow authorizations this call
 			// could create — a command prefix, a host, a writable root — and the
 			// keys a previously granted rule is looked up under.
@@ -605,6 +606,12 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			case externalUnknown:
 				// External unknown effects are deliberately once-only. Historical
 				// broad grants and live run grants cannot release them.
+			case isRunGranted(declaredEffectKey):
+				// A person approved this byte-identical command as part of a bounded
+				// phase. The hard floor and current deny already ran above; identity,
+				// workspace, environment and effective sandbox are part of the key.
+				recordScopeTriage(scope, toolName, declaredEffectKey, TriageOutcomeBundleHit, TriageAssessment{}, 0, nil)
+				return next(args)
 			case isRunGranted(decisionKey):
 				recordScopeTriage(scope, toolName, decisionKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
@@ -964,6 +971,31 @@ func approvalExactRunKey(toolName string, args map[string]interface{}, scope Exe
 	}, "\x00")
 	sum := sha256.Sum256([]byte(material))
 	return fmt.Sprintf("run:exact:%x", sum[:16])
+}
+
+// approvalDeclaredEffectKey binds a command approved through
+// request_permissions to this live run and execution identity. Public arguments
+// are canonicalized, while credentials and raw commands never leave the hash.
+// Network and credential capabilities remain independent runtime checks; the
+// effective filesystem boundary is included so a sandbox fallback asks again.
+func approvalDeclaredEffectKey(toolName string, args map[string]interface{}, scope ExecutionScope, hasScope bool) string {
+	if !hasScope || !isExecTool(toolName) || strings.TrimSpace(scope.RunID) == "" {
+		return ""
+	}
+	actualArgs, err := json.Marshal(approvalArgs(args))
+	if err != nil {
+		return ""
+	}
+	material := strings.Join([]string{
+		"v1", strings.ToLower(strings.TrimSpace(toolName)), string(actualArgs),
+		strings.TrimSpace(scope.TenantID), strings.TrimSpace(scope.PersonID), strings.TrimSpace(scope.TaskID),
+		strings.TrimSpace(scope.RunID), strings.TrimSpace(scope.WorkspaceID),
+		strings.TrimSpace(scope.EnvironmentSnapshotID), fmt.Sprint(scope.EnvironmentGeneration),
+		strings.TrimSpace(scope.EnvironmentFingerprint), strings.TrimSpace(scope.PrincipalFingerprint),
+		strings.TrimSpace(scope.CredentialSourceHash), string(effectiveSandboxModeArg(args)),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(material))
+	return fmt.Sprintf("run:declared-effect:v1:%x", sum[:16])
 }
 
 // approvalResumeFingerprint binds a parked decision to the actual action and

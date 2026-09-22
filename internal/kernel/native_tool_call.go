@@ -212,7 +212,10 @@ func unresolvedPlanStepsFromToolCall(call llm.ToolCall) ([]string, bool) {
 	if strings.TrimSpace(call.Function) != "update_plan" {
 		return nil, false
 	}
-	args := parseToolCallArgs(call.Args)
+	args, argsErr := parseToolCallArgsStrict(call.Args)
+	if argsErr != nil {
+		return nil, false
+	}
 	raw, ok := args["plan"].([]interface{})
 	if !ok {
 		return nil, false
@@ -493,7 +496,26 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		}
 	}
 
-	args := parseToolCallArgs(call.Args)
+	preparationAttempt := recoveryAttemptFromCall(ctx, name, nil, signature, ClassifyToolRetry(name))
+	if provider, ok := a.backend.(ToolPreparationStateProvider); ok {
+		preparationAttempt.PreparationState = provider.ToolPreparationState(name)
+	}
+	if policy := RecoveryPolicyFromContext(ctx); policy != nil {
+		if policyErr := policy.BeforePreparation(preparationAttempt); policyErr != nil {
+			return a.toolDispatchRefused(eventCh, idx, call, signature, policyErr)
+		}
+	}
+	args, argsErr := parseToolCallArgsStrict(call.Args)
+	if argsErr != nil {
+		argsErr = newPreparationPolicyError(
+			"tool_arguments_invalid", "invalid_input", "corrected_input", "not_dispatched",
+			argsErr.Error(), []string{"emit_valid_json_object", "correct_arguments"},
+		)
+		if policy := RecoveryPolicyFromContext(ctx); policy != nil {
+			policy.RecordPreparationFailure(preparationRecoveryFailure(preparationAttempt, name, argsErr))
+		}
+		return a.toolDispatchRefused(eventCh, idx, call, signature, argsErr)
+	}
 	stripModelRuntimeArgs(args)
 	args["_tenant_id"] = tenantID
 	args["_context"] = ctx
@@ -517,6 +539,16 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		// by WorkspaceScopeMiddleware. Memory uses this hidden value to keep
 		// project facts out of the person's global preference partition.
 		args["_workspace_id"] = strings.TrimSpace(workspace.ID)
+	}
+	if preparer, ok := a.backend.(ToolArgumentPreparer); ok {
+		prepared, prepareErr := preparer.PrepareToolArguments(name, args)
+		if prepareErr != nil {
+			if policy := RecoveryPolicyFromContext(ctx); policy != nil {
+				policy.RecordPreparationFailure(preparationRecoveryFailure(preparationAttempt, name, prepareErr))
+			}
+			return a.toolDispatchRefused(eventCh, idx, call, signature, prepareErr)
+		}
+		args = prepared
 	}
 
 	// Claim the dispatch BEFORE execution. For state-changing tools this is a
@@ -690,6 +722,15 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 }
 
+func preparationRecoveryFailure(attempt RecoveryAttempt, toolName string, err error) RecoveryFailure {
+	packaged := packageToolError(toolName, err)
+	return RecoveryFailure{
+		Attempt: attempt, ErrorCode: packaged.ErrorCode, FailureClass: packaged.ErrorCategory,
+		Retryability: packaged.Retryability, EffectState: packaged.EffectState,
+		StateChanged: packaged.StateChanged, Alternatives: packaged.Alternatives,
+	}
+}
+
 // modelVisibleSkillToolResult keeps control-plane identity in rawResult/events
 // while reducing the provider-visible tool message to the presentation
 // contract. This is the final common dispatch boundary, so direct tools cannot
@@ -779,6 +820,8 @@ func stripModelRuntimeArgs(args map[string]interface{}) {
 
 func (a *Agent) toolDispatchRefused(eventCh chan string, idx int, call llm.ToolCall, signature string, err error) toolExecutionResult {
 	packaged := packageToolError(call.Function, err)
+	invoked := false
+	packaged.Invoked = &invoked
 	if eventCh != nil {
 		emitToolEndEventWithDuration(eventCh, call.Function, call.ID, packaged, 0, err)
 	}
@@ -800,17 +843,25 @@ func toolHistoryStep(name string, result ToolResultEnvelope) string {
 }
 
 func parseToolCallArgs(raw string) map[string]interface{} {
-	args := make(map[string]interface{})
-	if raw == "" {
-		return args
-	}
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
-		return args
-	}
+	args, _ := parseToolCallArgsStrict(raw)
 	if args == nil {
 		return make(map[string]interface{})
 	}
 	return args
+}
+
+func parseToolCallArgsStrict(raw string) (map[string]interface{}, error) {
+	args := make(map[string]interface{})
+	if strings.TrimSpace(raw) == "" {
+		return args, nil
+	}
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return nil, fmt.Errorf("tool arguments must be one valid JSON object: %w", err)
+	}
+	if args == nil {
+		return nil, fmt.Errorf("tool arguments must be a JSON object, got null")
+	}
+	return args, nil
 }
 
 func shouldParallelizeToolCalls(calls []llm.ToolCall, backends ...AgentBackend) bool {

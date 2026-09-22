@@ -845,7 +845,7 @@ func (m *uiModel) applyModelStatus(status modelchange.Status) {
 	m.providerName = status.Running.Primary.Provider
 	m.modelName = status.Running.Primary.Model
 	m.backgroundModelName = status.Running.Auxiliary.Model
-	m.modelMeta = strings.TrimSpace(status.Running.Primary.Reasoning)
+	m.modelMeta = reasoningStatusLabel(status.Running.Primary, status.RunningTuning.Primary)
 }
 
 func modelManagerPatches(draft []components.ModelManagerSubmission) []api.ModelSelectionPatch {

@@ -1,4 +1,5 @@
 {
+  "plan_binding_version": 1,
   "method": "completion",
-  "completion": "receipt.txt VERIFIED watch_external receipt-prerequisites READY_A"
+  "completion": "receipt.txt VERIFIED receipt-prerequisites watch_external READY_A"
 }

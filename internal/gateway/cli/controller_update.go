@@ -213,10 +213,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modelManagerStatus.PrimaryProvider = change.Candidate.Primary.Provider
 		m.modelManagerStatus.PrimaryModel = change.Candidate.Primary.Model
 		m.modelManagerStatus.PrimaryReasoning = change.Candidate.Primary.Reasoning
+		m.modelManagerStatus.PrimaryReasoningLabel = reasoningStatusLabel(change.Candidate.Primary, modelchange.RouteTuning{})
 		m.modelManagerStatus.PrimaryServiceTier = change.Candidate.Primary.ServiceTier
 		m.modelManagerStatus.BackgroundProvider = change.Candidate.Auxiliary.Provider
 		m.modelManagerStatus.BackgroundModel = change.Candidate.Auxiliary.Model
 		m.modelManagerStatus.BackgroundReasoning = change.Candidate.Auxiliary.Reasoning
+		m.modelManagerStatus.BackgroundReasoningLabel = reasoningStatusLabel(change.Candidate.Auxiliary, modelchange.RouteTuning{})
 		m.modelManagerStatus.BackgroundServiceTier = change.Candidate.Auxiliary.ServiceTier
 		m.modelManagerStatus.RoleOverrides = make(map[string]components.ModelManagerSubmission)
 		for _, route := range modelchange.ManagedRoleRoutes() {

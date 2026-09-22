@@ -1,5 +1,5 @@
 {
   "plan_binding_version": 1,
   "method": "completion",
-  "completion": "prerequisite.txt second-prerequisite.txt receipt.txt finish_run waiting_user"
+  "completion": "交付方案 delivery-plan prerequisite.txt receipt.txt finish_run"
 }

@@ -38,3 +38,14 @@ func TestDeferredToolsActivateMonotonicallyAfterSearch(t *testing.T) {
 		t.Fatalf("repeat activation changed set: %v", added)
 	}
 }
+
+func TestPagedSkillActivationAlsoActivatesSkillView(t *testing.T) {
+	ctx := withToolActivationState(context.Background())
+	activated := activateToolsFromSearchResult(ctx, "skill_select", `{"delivery_mode":"paged"}`)
+	if len(activated) != 1 || activated[0] != "skill_view" || !deferredToolActive(ctx, "skill_view") {
+		t.Fatalf("activated=%v active=%t", activated, deferredToolActive(ctx, "skill_view"))
+	}
+	if got := activateToolsFromSearchResult(ctx, "skill_select", `{"delivery_mode":"full"}`); len(got) != 0 {
+		t.Fatalf("full delivery activated tools: %v", got)
+	}
+}

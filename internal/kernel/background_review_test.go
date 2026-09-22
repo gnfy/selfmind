@@ -8,6 +8,7 @@ package kernel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -174,6 +175,22 @@ func TestRestrictedReviewBackendForwardsTrustedMetadata(t *testing.T) {
 	if denied := backend.ToolExecutionMetadata("terminal", nil); denied.Origin != "" || denied.Category != "" ||
 		denied.RiskLevel != "" || denied.ReadOnly || len(denied.OperationClasses) != 0 {
 		t.Fatalf("disallowed tool metadata leaked through wrapper: %+v", denied)
+	}
+}
+
+func TestRestrictedReviewBackendForwardsArgumentPreparation(t *testing.T) {
+	inner := &rejectingArgumentPreparerBackend{}
+	backend := &restrictedReviewBackend{inner: inner, allowed: map[string]bool{"skill_view": true}}
+	if _, err := backend.PrepareToolArguments("skill_view", map[string]interface{}{"extra": true}); err == nil {
+		t.Fatal("inner argument rejection was lost")
+	}
+	if inner.prepareCalls != 1 || inner.dispatchCalls != 0 {
+		t.Fatalf("prepare=%d dispatch=%d", inner.prepareCalls, inner.dispatchCalls)
+	}
+	_, err := backend.PrepareToolArguments("terminal", nil)
+	var facts recoveryAwareToolFailure
+	if err == nil || !errors.As(err, &facts) || facts.ToolEffectState() != "not_dispatched" {
+		t.Fatalf("disallowed review tool was not a pre-dispatch refusal: %T %v", err, err)
 	}
 }
 

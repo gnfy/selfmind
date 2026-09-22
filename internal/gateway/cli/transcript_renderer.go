@@ -134,7 +134,11 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	if version == "" {
 		version = "dev"
 	}
-	mainValue := renderStartupModelValue(modelName, providerName, m.modelManagerStatus.PrimaryReasoning, styles)
+	mainReasoning := m.modelManagerStatus.PrimaryReasoningLabel
+	if mainReasoning == "" {
+		mainReasoning = m.modelManagerStatus.PrimaryReasoning
+	}
+	mainValue := renderStartupModelValue(modelName, providerName, mainReasoning, styles)
 
 	lines := []string{
 		styles.startupBrand.Render(">_ SelfMind") + styles.startupSubtle.Render("  "+version),
@@ -150,10 +154,14 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	if backgroundStatusKnown && !m.modelManagerStatus.BackgroundEnabled {
 		backgroundValue = styles.startupValue.Render("disabled")
 	} else if m.modelManagerStatus.BackgroundProvider != "" || m.modelManagerStatus.BackgroundModel != "" {
+		backgroundReasoning := m.modelManagerStatus.BackgroundReasoningLabel
+		if backgroundReasoning == "" {
+			backgroundReasoning = m.modelManagerStatus.BackgroundReasoning
+		}
 		backgroundValue = renderStartupModelValue(
 			m.modelManagerStatus.BackgroundModel,
 			m.modelManagerStatus.BackgroundProvider,
-			m.modelManagerStatus.BackgroundReasoning,
+			backgroundReasoning,
 			styles,
 		)
 	} else if background := strings.TrimSpace(m.backgroundModelName); background != "" {
@@ -251,7 +259,7 @@ func renderStartupModelValue(model, provider, reasoning string, styles transcrip
 	if provider != "" && !strings.EqualFold(provider, model) && !strings.EqualFold(provider, "active") {
 		parts = append(parts, styles.startupValue.Render(provider))
 	}
-	if reasoning != "" && !strings.EqualFold(reasoning, "auto") {
+	if reasoning != "" {
 		parts = append(parts, styles.startupValue.Render(reasoning))
 	}
 	return strings.Join(parts, styles.startupSubtle.Render(" · "))

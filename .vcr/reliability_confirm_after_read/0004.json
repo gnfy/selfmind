@@ -1,4 +1,5 @@
 {
+  "plan_binding_version": 1,
   "method": "completion",
-  "completion": "batch_read instructions.txt work_inspect work_select result.txt verify"
+  "completion": "batch_read instructions.txt work_inspect work_select result.txt verify Run resume"
 }

@@ -25,6 +25,13 @@ type ContextTool interface {
 	ExecuteContext(context.Context, map[string]interface{}) (string, error)
 }
 
+// ToolArgumentNormalizer is a compatibility boundary that translates a
+// previously published argument shape into the tool's current public schema.
+// It runs before coercion and validation; unknown fields still fail closed.
+type ToolArgumentNormalizer interface {
+	NormalizeArguments(map[string]interface{}) (map[string]interface{}, error)
+}
+
 // ContextFromArgs returns the authenticated run context installed by the
 // kernel. Direct management/test dispatches have no run context and therefore
 // use Background rather than manufacturing a cancellable lifetime.
@@ -121,19 +128,26 @@ func publicToolArgs(args map[string]interface{}) map[string]interface{} {
 
 // ToolSchema 定义工具的参数 schema（兼容 OpenAI tool schema）
 type ToolSchema struct {
-	Type       string                 `json:"type"`
-	Properties map[string]PropertyDef `json:"properties,omitempty"`
-	Required   []string               `json:"required,omitempty"`
+	Type                 string                 `json:"type"`
+	Properties           map[string]PropertyDef `json:"properties,omitempty"`
+	Required             []string               `json:"required,omitempty"`
+	AdditionalProperties *bool                  `json:"additionalProperties,omitempty"`
 }
 
 type PropertyDef struct {
-	Type        string                 `json:"type"`
-	Description string                 `json:"description,omitempty"`
-	Default     interface{}            `json:"default,omitempty"`
-	Enum        []string               `json:"enum,omitempty"`
-	Items       *PropertyDef           `json:"items,omitempty"`
-	Properties  map[string]PropertyDef `json:"properties,omitempty"`
-	Required    []string               `json:"required,omitempty"`
+	Type                 string                 `json:"type"`
+	Description          string                 `json:"description,omitempty"`
+	Default              interface{}            `json:"default,omitempty"`
+	Enum                 []string               `json:"enum,omitempty"`
+	Items                *PropertyDef           `json:"items,omitempty"`
+	Properties           map[string]PropertyDef `json:"properties,omitempty"`
+	Required             []string               `json:"required,omitempty"`
+	AdditionalProperties *bool                  `json:"additionalProperties,omitempty"`
+}
+
+func rejectAdditionalProperties() *bool {
+	value := false
+	return &value
 }
 
 // BaseTool 提供工具的默认实现基类
@@ -222,6 +236,9 @@ func propertyDefinition(def PropertyDef) map[string]interface{} {
 	if len(def.Required) > 0 {
 		out["required"] = def.Required
 	}
+	if def.AdditionalProperties != nil {
+		out["additionalProperties"] = *def.AdditionalProperties
+	}
 	return out
 }
 
@@ -293,46 +310,76 @@ func isDefaultParallelSafe(name string) bool {
 // ValidateArgs checks that all required fields are present and types match.
 // Returns an error describing the first validation failure.
 func ValidateArgs(schema ToolSchema, args map[string]interface{}) error {
-	if schema.Properties == nil {
-		return nil
-	}
+	return validateObject("", args, schema.Properties, schema.Required, schema.AdditionalProperties, true)
+}
 
-	// Check required fields
-	for _, required := range schema.Required {
-		if _, ok := args[required]; !ok {
-			return fmt.Errorf("missing required parameter: %s", required)
+func validateObject(path string, value map[string]interface{}, properties map[string]PropertyDef, required []string, additional *bool, root bool) error {
+	for _, name := range required {
+		if _, ok := value[name]; !ok {
+			return fmt.Errorf("missing required parameter: %s", joinParameterPath(path, name))
 		}
 	}
-
-	// Type-check present arguments
-	for param, val := range args {
-		def, ok := schema.Properties[param]
-		if !ok {
-			// Unknown parameter — skip, don't error (forward-compat)
+	for name, item := range value {
+		if root && strings.HasPrefix(name, "_") {
 			continue
 		}
-		if err := validateType(param, val, def.Type); err != nil {
+		def, ok := properties[name]
+		if !ok {
+			if additional != nil && !*additional {
+				return fmt.Errorf("unknown parameter: %s", joinParameterPath(path, name))
+			}
+			continue
+		}
+		if err := validateProperty(joinParameterPath(path, name), item, def); err != nil {
 			return err
 		}
-		if len(def.Enum) > 0 {
-			value, ok := val.(string)
-			if !ok {
-				return fmt.Errorf("parameter %s must be one of %s", param, strings.Join(def.Enum, ", "))
-			}
-			allowed := false
-			for _, candidate := range def.Enum {
-				if value == candidate {
-					allowed = true
-					break
+	}
+	return nil
+}
+
+func validateProperty(path string, value interface{}, def PropertyDef) error {
+	if err := validateType(path, value, def.Type); err != nil {
+		return err
+	}
+	if len(def.Enum) > 0 {
+		text, ok := value.(string)
+		if !ok || !stringInList(text, def.Enum) {
+			return fmt.Errorf("parameter %s must be one of %s, got %q", path, strings.Join(def.Enum, ", "), text)
+		}
+	}
+	switch def.Type {
+	case "object":
+		object, ok := value.(map[string]interface{})
+		if ok {
+			return validateObject(path, object, def.Properties, def.Required, def.AdditionalProperties, false)
+		}
+	case "array":
+		items, ok := value.([]interface{})
+		if ok && def.Items != nil {
+			for index, item := range items {
+				if err := validateProperty(fmt.Sprintf("%s[%d]", path, index), item, *def.Items); err != nil {
+					return err
 				}
-			}
-			if !allowed {
-				return fmt.Errorf("parameter %s must be one of %s, got %q", param, strings.Join(def.Enum, ", "), value)
 			}
 		}
 	}
-
 	return nil
+}
+
+func stringInList(value string, values []string) bool {
+	for _, candidate := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func joinParameterPath(parent, name string) string {
+	if parent == "" {
+		return name
+	}
+	return parent + "." + name
 }
 
 func validateType(param string, val interface{}, expectedType string) error {
@@ -373,22 +420,55 @@ func validateType(param string, val interface{}, expectedType string) error {
 
 // CoerceArgs 将 string/bool/int 等动态类型强制转换为 schema 声明的类型
 func CoerceArgs(schema ToolSchema, args map[string]interface{}) (map[string]interface{}, error) {
-	coerced := make(map[string]interface{})
-	for param, val := range args {
-		if strings.HasPrefix(param, "_") {
-			coerced[param] = val
-		}
-	}
-	for param, def := range schema.Properties {
-		val, exists := args[param]
-		if !exists {
+	return coerceObject("", args, schema.Properties, schema.AdditionalProperties, true)
+}
+
+func coerceObject(path string, args map[string]interface{}, properties map[string]PropertyDef, additional *bool, root bool) (map[string]interface{}, error) {
+	coerced := make(map[string]interface{}, len(args))
+	for name, value := range args {
+		if root && strings.HasPrefix(name, "_") {
+			coerced[name] = value
 			continue
 		}
-		coercedValue, err := coerceValue(param, val, def.Type)
+		def, ok := properties[name]
+		if !ok {
+			if additional != nil && !*additional {
+				return nil, fmt.Errorf("unknown parameter: %s", joinParameterPath(path, name))
+			}
+			// Open schemas preserve fields instead of silently discarding them.
+			coerced[name] = value
+			continue
+		}
+		item, err := coerceProperty(joinParameterPath(path, name), value, def)
 		if err != nil {
 			return nil, err
 		}
-		coerced[param] = coercedValue
+		coerced[name] = item
+	}
+	return coerced, nil
+}
+
+func coerceProperty(path string, value interface{}, def PropertyDef) (interface{}, error) {
+	coerced, err := coerceValue(path, value, def.Type)
+	if err != nil {
+		return nil, err
+	}
+	switch def.Type {
+	case "object":
+		if object, ok := coerced.(map[string]interface{}); ok {
+			return coerceObject(path, object, def.Properties, def.AdditionalProperties, false)
+		}
+	case "array":
+		if items, ok := coerced.([]interface{}); ok && def.Items != nil {
+			out := make([]interface{}, len(items))
+			for index, item := range items {
+				out[index], err = coerceProperty(fmt.Sprintf("%s[%d]", path, index), item, *def.Items)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return out, nil
+		}
 	}
 	return coerced, nil
 }

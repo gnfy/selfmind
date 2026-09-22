@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -1124,6 +1125,33 @@ func TestStartupCardExplainsRoutesAndShowsOnlyExplicitRoleOverrides(t *testing.T
 	}
 	if strings.Contains(rendered, "fast_classifier") {
 		t.Fatalf("inherited role should not be repeated in startup card:\n%s", rendered)
+	}
+}
+
+func TestModelStatusRefreshKeepsAutoReasoningVisibleWithEffectiveDefault(t *testing.T) {
+	controller := NewController("deepseek", "deepseek-flash", nil, "")
+	model := controller.model
+	selection := config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-flash"}
+	status := modelchange.Status{
+		Running:          modelchange.Snapshot{Primary: selection, Auxiliary: selection},
+		Configured:       modelchange.Snapshot{Primary: selection, Auxiliary: selection},
+		RunningTuning:    modelchange.TuningSnapshot{Primary: modelchange.RouteTuning{Reasoning: "high", ReasoningSource: "model_default"}},
+		ConfiguredTuning: modelchange.TuningSnapshot{Primary: modelchange.RouteTuning{Reasoning: "high", ReasoningSource: "model_default"}},
+	}
+	model.applyModelStatus(status)
+	if model.modelMeta != "auto→high" {
+		t.Fatalf("model meta = %q", model.modelMeta)
+	}
+	rendered := stripANSI(strings.Join(model.renderStartupCard(100), "\n"))
+	if !strings.Contains(rendered, "deepseek-flash · deepseek · auto→high") {
+		t.Fatalf("startup card omitted effective reasoning:\n%s", rendered)
+	}
+}
+
+func TestModelManagerUsesProviderReasoningCapabilitiesForDynamicAlias(t *testing.T) {
+	models := modelManagerModels("deepseek", []string{"deepseek-flash"})
+	if len(models) != 1 || !reflect.DeepEqual(models[0].Reasoning, []string{"high", "xhigh"}) {
+		t.Fatalf("models = %+v", models)
 	}
 }
 

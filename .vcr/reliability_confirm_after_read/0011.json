@@ -1,4 +1,5 @@
 {
+  "plan_binding_version": 1,
   "method": "stream",
   "events": [
     {
@@ -6,10 +7,10 @@
     },
     {
       "usage": {
-        "input_tokens": 14508,
-        "output_tokens": 303,
+        "input_tokens": 14498,
+        "output_tokens": 341,
         "cache_read_input_tokens": 14080,
-        "cache_miss_input_tokens": 428,
+        "cache_miss_input_tokens": 418,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true
@@ -18,9 +19,9 @@
     {
       "tool_calls": [
         {
-          "ID": "call_00_ET_kAhxkrqO2wvnRT2qeZxL0320",
+          "ID": "call_00_ET_eILWzFBU3PGxxMlkceSb7794",
           "Function": "finish_run",
-          "Args": "{\"done\": [\"Re-read instructions.txt: accepted result is result.txt containing exactly \\\"READY\\\" followed by a newline\", \"Resumed the waiting run run_5825e9bf via work_inspect + work_select (committed, direct)\", \"Wrote result.txt with exactly READY + newline (6 bytes)\", \"Verified bytes are 52 45 41 44 59 0a and size is 6\"], \"files\": [\"result.txt\"], \"next_steps\": [], \"risks\": [], \"status\": \"done\", \"summary\": \"Produced result.txt containing exactly \\\"READY\\\\n\\\" in the workspace, byte-verified as 52 45 41 44 59 0a (6 bytes). The previously waiting run was resumed rather than restarted.\", \"tests\": [\"verify (smoke): od hex of result.txt == 52454144590a and wc -c == 6 — exit 0\"]}"
+          "Args": "{\"status\": \"done\", \"summary\": \"Re-read instructions.txt, resumed the waiting run, wrote result.txt with exactly `READY\\\\n`, and verified the bytes.\", \"done\": [\"Re-read instructions.txt: result.txt must contain exactly READY followed by a newline\", \"Resumed {{SELFMIND_VCR_RUN_2}} via work_select (direct commit)\", \"Wrote result.txt in the workspace root with content READY + newline\", \"Verified byte-exact content: 6 bytes, hex 52 45 41 44 59 0a\"], \"files\": [\"result.txt\"], \"tests\": [\"verify: test \\\"$(od -An -tx1 result.txt | tr -d ' \\\\n')\\\" = \\\"52454144590a\\\" \u0026\u0026 test \\\"$(wc -c \u003c result.txt | tr -d ' ')\\\" = \\\"6\\\" — passed (evidence call_00_yp3G2JLYnpIsBhQwAy6b1483)\"], \"next_steps\": [], \"risks\": []}"
         }
       ]
     }

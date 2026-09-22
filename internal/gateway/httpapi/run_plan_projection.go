@@ -65,6 +65,16 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 			}),
 		})
 	}
+	for _, step := range projection.VerificationDeferred {
+		if len(review) >= 8 {
+			break
+		}
+		if step.Status == "completed" && step.VerificationRequired {
+			review = append(review, fmt.Sprintf("Step %s remains in_progress because its first durable snapshot marked it completed before required verification could be associated. Run verify now; the runtime will bind that check to this server-issued step id, then resubmit the complete snapshot.", step.StepID))
+			continue
+		}
+		review = append(review, fmt.Sprintf("Step %s returned to pending while required verification for an earlier step remains open. Keep it pending until that check passes, then resubmit the complete snapshot.", step.StepID))
+	}
 	plan := tools.PlanState{Explanation: projection.Plan.Explanation, Plan: make([]tools.PlanStep, 0, len(projection.Plan.Steps))}
 	for _, step := range projection.Plan.Steps {
 		plan.Plan = append(plan.Plan, tools.PlanStep{

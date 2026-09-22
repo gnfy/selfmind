@@ -128,6 +128,9 @@ func parametersFromToolSchema(schema ToolSchema) map[string]interface{} {
 	if len(schema.Required) > 0 {
 		out["required"] = append([]string(nil), schema.Required...)
 	}
+	if schema.AdditionalProperties != nil {
+		out["additionalProperties"] = *schema.AdditionalProperties
+	}
 	return out
 }
 

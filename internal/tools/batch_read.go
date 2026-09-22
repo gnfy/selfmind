@@ -245,7 +245,7 @@ func batchReadParentCallID(args map[string]interface{}) string {
 func batchReadChildArgs(operation batchReadOperation, parent map[string]interface{}, index int) map[string]interface{} {
 	args := map[string]interface{}{}
 	for key, value := range parent {
-		if strings.HasPrefix(key, "_") {
+		if strings.HasPrefix(key, "_") && key != preparedToolInvocationArg {
 			args[key] = value
 		}
 	}

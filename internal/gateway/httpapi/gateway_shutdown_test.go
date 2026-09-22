@@ -202,6 +202,41 @@ func TestModelChangeShutdownUsesUnboundedSafeBoundaryWait(t *testing.T) {
 	}
 }
 
+func TestExplicitSafeBoundaryShutdownNeverInterruptsActiveRun(t *testing.T) {
+	var cancelled atomic.Bool
+	shutdown := make(chan struct{}, 1)
+	server := &Server{DrainTimeout: time.Millisecond, ShutdownFunc: func() { shutdown <- struct{}{} }}
+	if !server.coordinator().beginActive("person_active", &activeRun{
+		PersonID: "person_active", RunID: "run_active", StartedAt: time.Now(),
+		Cancel: func() { cancelled.Store(true) },
+	}) {
+		t.Fatal("active run registration failed")
+	}
+	body := bytes.NewBufferString(`{"reason":"service_reconcile","wait_for_safe_boundary":true}`)
+	request := httptest.NewRequest(http.MethodPost, "/v1/gateway/shutdown", body)
+	response := httptest.NewRecorder()
+	server.handleGatewayShutdown(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	time.Sleep(25 * time.Millisecond)
+	if cancelled.Load() {
+		t.Fatal("safe-boundary shutdown interrupted the active run")
+	}
+	select {
+	case <-shutdown:
+		t.Fatal("gateway stopped before the active run reached a safe boundary")
+	default:
+	}
+
+	server.coordinator().endActive("person_active")
+	select {
+	case <-shutdown:
+	case <-time.After(2 * time.Second):
+		t.Fatal("gateway did not stop after the active run completed")
+	}
+}
+
 func TestRecoveryRetryCanCrossTheShutdownSafeBoundary(t *testing.T) {
 	service, _ := testModelChangeService(t)
 	status, err := service.Inspect()

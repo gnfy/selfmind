@@ -321,6 +321,26 @@ type workUnitEvidence struct {
 }
 
 func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64, stepIDs ...string) (string, string, string) {
+	knownPlanSteps := map[string]bool{}
+	stepRows, stepErr := tx.QueryContext(ctx, `SELECT DISTINCT step_id FROM run_plan_steps WHERE run_id=?`, runID)
+	if stepErr != nil {
+		return "blocked", "[]", "Verification obligation identities are unavailable."
+	}
+	for stepRows.Next() {
+		var stepID string
+		if stepRows.Scan(&stepID) != nil {
+			_ = stepRows.Close()
+			return "blocked", "[]", "Verification obligation identities are unreadable."
+		}
+		knownPlanSteps[stepID] = true
+	}
+	if err := stepRows.Err(); err != nil {
+		_ = stepRows.Close()
+		return "blocked", "[]", "Verification obligation identities are unavailable."
+	}
+	if err := stepRows.Close(); err != nil {
+		return "blocked", "[]", "Verification obligation identities are unavailable."
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(payload_json,'{}') FROM task_events
 		WHERE run_id=? AND COALESCE(cursor,0)>? AND COALESCE(cursor,0)<=? AND type='evidence.recorded'
 		ORDER BY COALESCE(cursor,0), rowid`, runID, startedCursor, finishedCursor)
@@ -355,10 +375,22 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 		if evidence.Kind != "verification" || evidence.Command == nil {
 			continue
 		}
-		if len(stepIDs) > 0 && evidence.Command.Binding != nil && evidence.Command.Binding.Version == 3 && evidence.Command.Binding.StepID != stepIDs[0] {
-			continue
+		binding := evidence.Command.Binding
+		// Versions 1 and 2 predate persisted plan-step identity. Their runtime
+		// default target was the server-issued step id, which is enough to
+		// restore the durable obligation without interpreting prose.
+		if verification.ValidBinding(binding) && binding.StepID == "" && knownPlanSteps[binding.Target] {
+			copy := *binding
+			copy.Version = 3
+			copy.StepID = binding.Target
+			binding = &copy
 		}
-		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: evidence.Command.Binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
+		if len(stepIDs) > 0 {
+			if !verification.ValidBinding(binding) || binding.Version != 3 || binding.StepID != stepIDs[0] {
+				continue
+			}
+		}
+		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
 	}
 	if err := rows.Err(); err != nil {
 		return "blocked", "[]", "Verification evidence is unavailable."

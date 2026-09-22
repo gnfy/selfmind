@@ -213,7 +213,7 @@ func NewWorkInspectTool(store *control.Store) *WorkInspectTool {
 func (t *WorkInspectTool) Name() string { return "work_inspect" }
 
 func (t *WorkInspectTool) Description() string {
-	return "Inspect one exact prior run for the current person. Returns bounded status, plan, handoff, event summaries, and artifact references without raw transcripts."
+	return "Inspect one exact prior run for the current person. Returns bounded status, plan, handoff, event summaries, and artifact references without raw transcripts. Inspection does not attach the current turn; call work_select next when the request continues or asks about this run."
 }
 
 func (t *WorkInspectTool) Schema() ToolSchema {
@@ -278,6 +278,7 @@ func (t *WorkInspectTool) Execute(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("task not found for the current person")
 	}
 	result := map[string]interface{}{
+		"selection_notice": "Inspection is read-only and did not attach this turn. If the current request continues this run, call work_select with action resume before changing its plan, doing its remaining work, or finishing. For a status/result question, call work_select with action observe. If the request is unrelated, do not select it.",
 		"run": map[string]interface{}{
 			"run_id": run.ID, "task_id": run.TaskID, "resumes_run_id": run.ResumesRunID,
 			"status": run.Status, "workspace_id": run.WorkspaceID, "channel": run.Channel,

@@ -59,6 +59,11 @@ type StopOptions struct {
 	// use it so an approval wait is never silently converted into a forced
 	// interruption after an arbitrary infrastructure timeout.
 	WaitForSafeBoundary bool
+	// RequireSafeBoundary tells the daemon that active work must finish before
+	// shutdown. This is separate from WaitForSafeBoundary: managed service
+	// reconciliation waits for the daemon's bounded drain decision, while an
+	// operator restart owns an unbounded drain and must never interrupt a Run.
+	RequireSafeBoundary bool
 	// Abort is checked while waiting for the old owner to stop. A model-change
 	// helper uses it to leave cleanly when its still-cancellable transaction is
 	// cancelled or superseded instead of lingering and starting the wrong route.
@@ -343,7 +348,21 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 			initialPID = rec.PID
 		}
 	}
-	payload, _ := json.Marshal(map[string]interface{}{"force": opts.Force, "reason": strings.TrimSpace(opts.Reason)})
+	reason := strings.TrimSpace(opts.Reason)
+	if opts.RequireSafeBoundary {
+		modelChange := strings.HasPrefix(strings.ToLower(reason), "model_change:") && strings.TrimSpace(reason[len("model_change:"):]) != ""
+		if !modelChange {
+			// Older daemons do not understand wait_for_safe_boundary. The
+			// service-reconcile reason makes their bounded drain defer instead of
+			// interrupting active work; the restart caller can safely retry.
+			reason = api.ShutdownReasonServiceReconcile
+		}
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"force":                  opts.Force,
+		"reason":                 reason,
+		"wait_for_safe_boundary": opts.RequireSafeBoundary,
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ResolveURL(opts.URL)+"/v1/gateway/shutdown", bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -395,7 +414,7 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 	}
 
 	deadline := time.Now().Add(timeout)
-	serviceReconcile := strings.EqualFold(strings.TrimSpace(opts.Reason), api.ShutdownReasonServiceReconcile)
+	serviceReconcile := strings.EqualFold(reason, api.ShutdownReasonServiceReconcile)
 	for opts.WaitForSafeBoundary || time.Now().Before(deadline) {
 		if opts.Abort != nil && opts.Abort() {
 			return ErrShutdownAborted

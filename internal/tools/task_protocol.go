@@ -122,7 +122,8 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 			name:        "update_plan",
 			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work; do not use for one-shot answers, small code examples, simple commands, or direct explanations. Include every step on every update, keep exactly one step in_progress while work is active, and resolve all steps before finishing successfully.",
 			schema: ToolSchema{
-				Type: "object",
+				Type:                 "object",
+				AdditionalProperties: rejectAdditionalProperties(),
 				Properties: map[string]PropertyDef{
 					"explanation": {
 						Type:        "string",
@@ -132,7 +133,8 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 						Type:        "array",
 						Description: "The complete ordered plan snapshot, including unchanged and completed steps. This replaces the previous snapshot; it is not a partial patch.",
 						Items: &PropertyDef{
-							Type: "object",
+							Type:                 "object",
+							AdditionalProperties: rejectAdditionalProperties(),
 							Properties: map[string]PropertyDef{
 								"step_id": {
 									Type:        "string",
@@ -140,7 +142,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"step": {
 									Type:        "string",
-									Description: "A concise task step.",
+									Description: "A concise task step. Required for a new step; omission with an exact server-issued step_id preserves the existing text.",
 								},
 								"status": {
 									Type:        "string",
@@ -167,7 +169,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								// the step.
 								"verification_required": {
 									Type:        "boolean",
-									Description: "True when success_criteria names something that has to be observed or run to know it holds — a command, an API read, a test, a file check. Use verify before completing the work unit: completion freezes its evidence window and is rejected without required successful verification. Leaving this false on a step whose criterion you have not checked reports work as done that is not.",
+									Description: "True only on the single plan step that owns a distinct acceptance condition requiring successful verify evidence. Keep that same step in_progress across failed attempts and replacements. Leave false on diagnostic attempts and on separate retry or recheck steps for the same condition; different conditions may each set true.",
 									Default:     false,
 								},
 								"work_unit_id": {
@@ -180,7 +182,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 									Default:     false,
 								},
 							},
-							Required: []string{"step", "status"},
+							Required: []string{"status"},
 						},
 					},
 				},
@@ -200,11 +202,12 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	projection := runPlanProjectionFromArgs(args)
 	inProgress := 0
 	for i := range steps {
 		steps[i].Step = strings.TrimSpace(steps[i].Step)
 		steps[i].Status = strings.TrimSpace(steps[i].Status)
-		if steps[i].Step == "" {
+		if steps[i].Step == "" && (steps[i].StepID == "" || projection == nil) {
 			return "", fmt.Errorf("plan[%d].step is required", i)
 		}
 		switch steps[i].Status {
@@ -228,7 +231,6 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	planVersion := 0
 	var workUnits []PlanWorkUnitIdentity
 	var acceptanceReview []string
-	projection := runPlanProjectionFromArgs(args)
 	if projection != nil {
 		projected, projectionErr := projection.Project(ContextFromArgs(args), state)
 		err = projectionErr
@@ -236,7 +238,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			var verification interface{ PlanVerificationPrecondition() bool }
 			if errors.As(err, &verification) && verification.PlanVerificationPrecondition() {
 				return "", newStableToolError(err, "plan_verification_required", "stale_precondition", err.Error(),
-					"Keep the current work unit open and inspect the failed check. Use verify for required checks; when correcting a bound check, preserve check.criterion and check.target, cite its evidence id in check.replaces and explain the method correction in check.reason. Then submit the completed plan snapshot.")
+					"Keep the current work unit open and inspect the failed check. Use verify for required checks; when correcting a bound check, preserve criterion and target, cite its evidence id in replaces and explain the method correction in reason. Then submit the completed plan snapshot.")
 			}
 			var staleStep interface{ CurrentPlanStepIDs() []string }
 			if errors.As(err, &staleStep) {
@@ -384,8 +386,8 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 			}
 			steps = append(steps, PlanStep{
 				StepID:               taskStringArg(obj, "step_id"),
-				Step:                 fmt.Sprintf("%v", obj["step"]),
-				Status:               fmt.Sprintf("%v", obj["status"]),
+				Step:                 taskStringArg(obj, "step"),
+				Status:               taskStringArg(obj, "status"),
 				SuccessCriteria:      taskStringArg(obj, "success_criteria"),
 				VerificationRequired: taskBoolArg(obj, "verification_required"),
 				WorkUnitID:           taskStringArg(obj, "work_unit_id"),
@@ -443,7 +445,8 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 			name:        "finish_run",
 			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, waiting on a registered external watch, prepared and waiting for the user's go-ahead (waiting_user), or needs approval.",
 			schema: ToolSchema{
-				Type: "object",
+				Type:                 "object",
+				AdditionalProperties: rejectAdditionalProperties(),
 				Properties: map[string]PropertyDef{
 					"status": {
 						Type: "string",
@@ -637,6 +640,7 @@ func (t *ToolSearchTool) Execute(args map[string]interface{}) (string, error) {
 		ReadOnly    bool          `json:"read_only,omitempty"`
 		Exposure    ToolExposure  `json:"exposure"`
 		Activated   bool          `json:"activated"`
+		Score       int           `json:"-"`
 	}
 	var results []result
 	for _, name := range reg.List() {
@@ -655,7 +659,8 @@ func (t *ToolSearchTool) Execute(args map[string]interface{}) (string, error) {
 			meta.SearchText,
 			string(meta.RiskLevel),
 		}, " "))
-		if !containsAllTerms(haystack, query) {
+		score := toolSearchScore(name, haystack, query)
+		if score == 0 {
 			continue
 		}
 		exposure := reg.EffectiveToolExposure(name)
@@ -667,9 +672,13 @@ func (t *ToolSearchTool) Execute(args map[string]interface{}) (string, error) {
 			ReadOnly:    meta.ReadOnly,
 			Exposure:    exposure,
 			Activated:   exposure == ToolExposureDeferred,
+			Score:       score,
 		})
 	}
 	sort.Slice(results, func(i, j int) bool {
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
 		return results[i].Name < results[j].Name
 	})
 	if len(results) > limit {
@@ -677,6 +686,29 @@ func (t *ToolSearchTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	data, _ := json.MarshalIndent(results, "", "  ")
 	return string(data), nil
+}
+
+func toolSearchScore(name, haystack, query string) int {
+	name = strings.ToLower(strings.TrimSpace(name))
+	query = strings.ToLower(strings.TrimSpace(query))
+	if name == "" || query == "" {
+		return 0
+	}
+	score := 0
+	if query == name {
+		score += 1000
+	}
+	for _, term := range strings.Fields(query) {
+		if term == name {
+			score += 500
+		}
+		if strings.Contains(name, term) {
+			score += 50
+		} else if strings.Contains(haystack, term) {
+			score += 10
+		}
+	}
+	return score
 }
 
 func taskStringArg(args map[string]interface{}, key string) string {

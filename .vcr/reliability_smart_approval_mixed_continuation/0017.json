@@ -1,20 +1,440 @@
 {
   "plan_binding_version": 1,
-  "method": "chat",
-  "chat": {
-    "Content": "{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"The person explicitly authorized writing workspace receipt.txt with VERIFIED after the receipt-handoff watch completed, so this bounded local write is within accepted scope.\"}",
-    "ReasoningContent": "We need answer JSON only. Need evaluate actual op write_file receipt.txt content VERIFIED to workspace path. Context: Person first said prepare plan, wait confirmation, don't create files. Then second said \"执行，上面的3个问题，都不要处理。接续刚才等待确认的同一项任务...\" They authorized local read-only checks, receipt.txt write and verify commands. Conditions: wait prerequisite.txt READY, second-prerequisite.txt READY_B, then create receipt.txt content VERIFIED, verify. System request says wait group completed succeeded READY_B, but missing first? Actually summary wait group receipt-handoff all completed. READY_B. Both prerequisites? It says wait group all completed. So external observation satisfied. Now write_file at workspace receipt.txt content VERIFIED. This is authorized. Execution containment filesystem unknown, network none, credentials none. Target local workspace receipt.txt. Risk low? It's a write of a small file in workspace. user authorization high, explicit: \"我授权在本机执行...receipt.txt 写入和校验命令\" and \"恢复后写 receipt.txt\". Outcome approve. rationale cite their authorization. Need exact JSON. Ensure no extra.",
-    "Phase": "",
-    "ToolCalls": [],
-    "Usage": {
-      "input_tokens": 2117,
-      "output_tokens": 291,
-      "cache_read_input_tokens": 768,
-      "cache_miss_input_tokens": 1349,
-      "cache_creation_input_tokens": 0,
-      "reasoning_output_tokens": 238,
-      "cache_usage_reported": true
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Ver"
     },
-    "FinishReason": "stop"
-  }
+    {
+      "reasoning_content": "ification"
+    },
+    {
+      "reasoning_content": " passed"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "evidence"
+    },
+    {
+      "reasoning_content": " recorded"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Note"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " acceptance"
+    },
+    {
+      "reasoning_content": "_re"
+    },
+    {
+      "reasoning_content": "view"
+    },
+    {
+      "reasoning_content": " flagged"
+    },
+    {
+      "reasoning_content": " my"
+    },
+    {
+      "reasoning_content": " changed"
+    },
+    {
+      "reasoning_content": " criterion"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "ae"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "da"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " judge"
+    },
+    {
+      "reasoning_content": " against"
+    },
+    {
+      "reasoning_content": " original"
+    },
+    {
+      "reasoning_content": " scope"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " original"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " did"
+    },
+    {
+      "reasoning_content": " include"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "本轮"
+    },
+    {
+      "reasoning_content": "完成"
+    },
+    {
+      "reasoning_content": "接"
+    },
+    {
+      "reasoning_content": "续"
+    },
+    {
+      "reasoning_content": "和"
+    },
+    {
+      "reasoning_content": " wat"
+    },
+    {
+      "reasoning_content": "cher"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "登记"
+    },
+    {
+      "reasoning_content": "后"
+    },
+    {
+      "reasoning_content": "，"
+    },
+    {
+      "reasoning_content": "以"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "结束"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " hand"
+    },
+    {
+      "reasoning_content": "off"
+    },
+    {
+      "reasoning_content": " itself"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " acceptance"
+    },
+    {
+      "reasoning_content": " condition"
+    },
+    {
+      "reasoning_content": " (\""
+    },
+    {
+      "reasoning_content": "交接"
+    },
+    {
+      "reasoning_content": "本身"
+    },
+    {
+      "reasoning_content": "也是"
+    },
+    {
+      "reasoning_content": "验收"
+    },
+    {
+      "reasoning_content": "条件"
+    },
+    {
+      "reasoning_content": "\")."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " addition"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "且"
+    },
+    {
+      "reasoning_content": "后台"
+    },
+    {
+      "reasoning_content": "恢复"
+    },
+    {
+      "reasoning_content": "已"
+    },
+    {
+      "reasoning_content": "发生"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " reflects"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " explicit"
+    },
+    {
+      "reasoning_content": " requirement"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " background"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " occurs"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Actually"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": " registered"
+    },
+    {
+      "reasoning_content": " successfully"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " resume"
+    },
+    {
+      "reasoning_content": " happened"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " consistent"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " scope"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " note"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 14566,
+        "output_tokens": 564,
+        "cache_read_input_tokens": 14336,
+        "cache_miss_input_tokens": 230,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 137,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_CXQlW9iPksZ9GQ4IjGJP5812",
+          "Function": "update_plan",
+          "Args": "{\"explanation\": \"All delivery steps finished: prerequisites confirmed, watcher group handed off as waiting_external and resumed, receipt.txt written and verified.\", \"plan\": [{\"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"status\": \"completed\", \"step\": \"确认前置条件：prerequisite.txt=READY 且 second-prerequisite.txt=READY_B\", \"success_criteria\": \"两个文件内容分别为 READY 和 READY_B\", \"verification_required\": false}, {\"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\", \"status\": \"completed\", \"step\": \"登记 receipt-handoff watcher 组（wait_group_size=2, mode=all）并将本次运行交接为 waiting_external\", \"success_criteria\": \"两个 watch_external 均登记成功，运行以 waiting_external 交接，且后台恢复已发生\", \"verification_required\": false}, {\"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\", \"status\": \"completed\", \"step\": \"创建 receipt.txt，内容为 VERIFIED\", \"success_criteria\": \"receipt.txt 存在且内容为 VERIFIED\"}, {\"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_4}}\", \"status\": \"completed\", \"step\": \"校验 receipt.txt 内容为 VERIFIED\", \"success_criteria\": \"test \\\"$(cat receipt.txt)\\\" = VERIFIED 退出码为 0\", \"verification_required\": true}]}"
+        }
+      ]
+    }
+  ]
 }

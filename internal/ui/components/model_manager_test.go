@@ -113,6 +113,40 @@ func TestModelManagerAcceptsManualModelID(t *testing.T) {
 	}
 }
 
+func TestModelManagerAcceptsManualReasoningWhenCapabilitiesAreUnknown(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{}, []ModelManagerProvider{{
+		ID: "custom:test", Models: []ModelManagerModel{{ID: "future-model"}},
+	}}, 80, 24)
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // main
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // provider
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // model
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})  // manual reasoning
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !manager.editingCustomReasoning {
+		t.Fatal("manual reasoning editor did not open")
+	}
+	manager.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ultra")})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // reasoning -> service tier
+	action := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(action.Draft) != 1 || action.Draft[0].Reasoning != "ultra" {
+		t.Fatalf("action = %+v", action)
+	}
+}
+
+func TestModelManagerPreservesExplicitReasoningWhenCapabilitiesAreUnknown(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{
+		PrimaryProvider: "custom:test", PrimaryModel: "future-model", PrimaryReasoning: "ultra",
+	}, []ModelManagerProvider{{
+		ID: "custom:test", Models: []ModelManagerModel{{ID: "future-model"}},
+	}}, 80, 24)
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // main
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // provider
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // model
+	if got := manager.option(manager.reasoningOptions(), manager.index); got != "ultra" {
+		t.Fatalf("reasoning selection = %q", got)
+	}
+}
+
 func TestModelManagerCollectsMissingProviderCredentialBeforeValidation(t *testing.T) {
 	manager := NewModelManager(ModelManagerStatus{}, []ModelManagerProvider{{
 		ID: "deepseek", CredentialRequired: true, Models: []ModelManagerModel{{ID: "deepseek-chat"}},

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +33,35 @@ func TestRequestShutdownCanAbortCancellableSafeBoundaryWait(t *testing.T) {
 	})
 	if !errors.Is(err, ErrShutdownAborted) {
 		t.Fatalf("RequestShutdown error = %v; want ErrShutdownAborted", err)
+	}
+}
+
+func TestRequestShutdownRequiresServerSafeBoundaryWithLegacyFallback(t *testing.T) {
+	type shutdownRequest struct {
+		Reason              string `json:"reason"`
+		WaitForSafeBoundary bool   `json:"wait_for_safe_boundary"`
+	}
+	received := make(chan shutdownRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request shutdownRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode shutdown request: %v", err)
+		}
+		received <- request
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	err := RequestShutdown(context.Background(), StopOptions{
+		URL: server.URL, Timeout: time.Second, WaitForSafeBoundary: true, RequireSafeBoundary: true,
+		Abort: func() bool { return true },
+	})
+	if !errors.Is(err, ErrShutdownAborted) {
+		t.Fatalf("RequestShutdown error = %v; want ErrShutdownAborted", err)
+	}
+	request := <-received
+	if request.Reason != "service_reconcile" || !request.WaitForSafeBoundary {
+		t.Fatalf("shutdown request = %+v; want safe-boundary protocol plus legacy-safe reason", request)
 	}
 }
 

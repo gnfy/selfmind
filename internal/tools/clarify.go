@@ -43,11 +43,17 @@ func NewClarifyTool() *ClarifyTool {
 			name:        "clarify",
 			description: "Ask the user a question when you need clarification, feedback, or a decision before proceeding. Supports two modes:\n\n1. **Multiple choice** — provide up to 4 choices. The user picks one or types their own answer via a 5th 'Other' option.\n2. **Open-ended** — omit choices entirely. The user types a free-form response.\n\nUse this tool when:\n- The task is ambiguous and you need the user to choose an approach\n- You want post-task feedback ('How did that work out?')\n- A decision has meaningful trade-offs the user should weigh in on\n\nDo NOT use this tool for simple yes/no confirmation of dangerous commands (the terminal tool handles that). Prefer making a reasonable default choice yourself when the decision is low-stakes.",
 			schema: ToolSchema{
-				Type: "object",
+				Type:                 "object",
+				AdditionalProperties: rejectAdditionalProperties(),
 				Properties: map[string]PropertyDef{
 					"question": {
 						Type:        "string",
 						Description: "The question to present to the user.",
+					},
+					"choices": {
+						Type:        "array",
+						Description: "Optional predefined answers; at most four are shown before Other.",
+						Items:       &PropertyDef{Type: "string"},
 					},
 				},
 				Required: []string{"question"},

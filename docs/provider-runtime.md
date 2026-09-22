@@ -184,8 +184,13 @@ The primary selection lives only under `models.primary`. `reasoning` and
 `service_tier` are optional. Omission or `auto` means provider/model default;
 the resolver deliberately does not send a forced value. Supported values are
 model capabilities, not a global hardcoded enum. The Model Manager validates
-them when metadata is discoverable and otherwise preserves the explicit value
-for compatible private endpoints.
+them when metadata is discoverable. When capability metadata is unknown, it
+offers `auto` plus a manually entered value and relies on the same contract
+probe used by every model change; unknown is never treated as unsupported.
+Model status keeps the configured value separate from the effective default
+and names its source (`explicit`, `model_default`, `provider_override`, or
+`provider_default`). This lets clients show `auto` honestly without turning a
+display default into a forced wire parameter.
 
 For local onboarding, an enabled auxiliary selection with no provider/model
 defaults to the primary provider/model. It can instead be explicitly disabled

@@ -48,9 +48,10 @@ type RunPlan struct {
 }
 
 type RunPlanProjection struct {
-	Plan      RunPlan       `json:"plan"`
-	Changed   bool          `json:"changed"`
-	WorkUnits []RunWorkUnit `json:"work_units,omitempty"`
+	Plan                 RunPlan       `json:"plan"`
+	Changed              bool          `json:"changed"`
+	WorkUnits            []RunWorkUnit `json:"work_units,omitempty"`
+	VerificationDeferred []RunPlanStep `json:"verification_deferred,omitempty"`
 	// CriteriaRestated names steps this snapshot marks completed whose
 	// success_criteria differs from the bar FIRST declared for them. Restating a
 	// criterion can be honest replanning, so this is a fact and not a verdict:
@@ -135,6 +136,7 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 	if err != nil {
 		return RunPlanProjection{}, err
 	}
+	verificationDeferred := normalizeFirstPlanVerification(steps, previous)
 	workInput, boundaries := projectRunPlanWorkUnits(steps)
 	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, workInput)
 	if err != nil {
@@ -184,7 +186,7 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		if err := tx.Commit(); err != nil {
 			return RunPlanProjection{}, err
 		}
-		return RunPlanProjection{Plan: *previous, Changed: false, WorkUnits: units}, nil
+		return RunPlanProjection{Plan: *previous, Changed: false, WorkUnits: units, VerificationDeferred: verificationDeferred}, nil
 	}
 	version := 1
 	if previous != nil {
@@ -220,7 +222,37 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		return RunPlanProjection{}, err
 	}
 	plan := RunPlan{RunID: runID, Version: version, Explanation: strings.TrimSpace(explanation), ContentHash: hash, Steps: steps, CreatedAt: now}
-	return RunPlanProjection{Plan: plan, Changed: true, WorkUnits: units, CriteriaRestated: restated}, nil
+	return RunPlanProjection{Plan: plan, Changed: true, WorkUnits: units, VerificationDeferred: verificationDeferred, CriteriaRestated: restated}, nil
+}
+
+// normalizeFirstPlanVerification turns an impossible first snapshot into an
+// executable one. A completed verification_required step has no server-issued
+// identity yet, so earlier evidence cannot have been associated with it. Keep
+// the earliest such obligation active and park later work. This never grants
+// completion; it gives Main the durable id needed to verify once and resubmit.
+func normalizeFirstPlanVerification(steps []RunPlanStep, previous *RunPlan) []RunPlanStep {
+	if previous != nil {
+		return nil
+	}
+	selected := -1
+	for i := range steps {
+		if steps[i].Status == "completed" && steps[i].VerificationRequired {
+			selected = i
+			break
+		}
+	}
+	if selected < 0 {
+		return nil
+	}
+	deferred := []RunPlanStep{}
+	for i := range steps {
+		if steps[i].Status == "in_progress" || (steps[i].Status == "completed" && steps[i].VerificationRequired) {
+			deferred = append(deferred, steps[i])
+			steps[i].Status = "pending"
+		}
+	}
+	steps[selected].Status = "in_progress"
+	return deferred
 }
 
 // originalPlanCriteriaTx returns each step's acceptance bar as first declared
@@ -316,15 +348,20 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 			item.StepID = ""
 			item.WorkUnitID = ""
 		}
-		if item.Step == "" {
-			return nil, fmt.Errorf("plan[%d].step is required", i)
-		}
 		if !validRunPlanStatus(item.Status) {
 			return nil, fmt.Errorf("plan[%d].status is invalid", i)
 		}
 		if item.StepID != "" {
 			if _, ok := byID[item.StepID]; !ok {
-				return nil, &StalePlanStepReferenceError{StepID: item.StepID, RunID: runID, Current: currentIDs}
+				// A provider may echo a descriptive or stale alias even though the
+				// complete snapshot still names the exact durable step. Recover only
+				// from a unique semantic identity; ambiguity or changed text remains
+				// a stale-precondition error and cannot retarget another step.
+				staleID := item.StepID
+				item.StepID = uniqueRunPlanStepMatch(previous.Steps, item, used, i == 0)
+				if item.StepID == "" {
+					return nil, &StalePlanStepReferenceError{StepID: staleID, RunID: runID, Current: currentIDs}
+				}
 			}
 		} else if previous != nil {
 			for _, candidate := range previous.Steps {
@@ -337,6 +374,12 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 		}
 		if item.StepID == "" {
 			item.StepID = "step_" + uuid.NewString()
+		}
+		if old, ok := byID[item.StepID]; ok && item.Step == "" {
+			item.Step = old.Step
+		}
+		if item.Step == "" {
+			return nil, fmt.Errorf("plan[%d].step is required for a new or unmatched step", i)
 		}
 		// Progress snapshots preserve the established acceptance obligation.
 		// Omission is not a user decision to remove verification or erase criteria.
@@ -351,6 +394,9 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 		if old, ok := byID[item.StepID]; ok && item.WorkUnitID == "" {
 			item.WorkUnitID = old.WorkUnitID
 			item.WorkUnit = item.WorkUnit || old.WorkUnit
+		}
+		if item.VerificationRequired && item.SuccessCriteria == "" {
+			return nil, fmt.Errorf("plan[%d].success_criteria is required when verification_required is true", i)
 		}
 		if used[item.StepID] {
 			return nil, fmt.Errorf("plan step %s appears more than once in the snapshot", item.StepID)
@@ -370,6 +416,20 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 		}
 	}
 	return out, nil
+}
+
+func uniqueRunPlanStepMatch(previous []RunPlanStep, next RunPlanStepInput, used map[string]bool, first bool) string {
+	match := ""
+	for _, candidate := range previous {
+		if used[candidate.StepID] || !sameRunPlanIdentity(candidate, next, first) {
+			continue
+		}
+		if match != "" {
+			return ""
+		}
+		match = candidate.StepID
+	}
+	return match
 }
 
 func sameRunPlanIdentity(previous RunPlanStep, next RunPlanStepInput, first bool) bool {

@@ -1,110 +1,39 @@
 {
+  "plan_binding_version": 1,
   "method": "stream",
   "events": [
     {
-      "content": "Preparation"
+      "content": "Record"
     },
     {
-      "content": " is"
-    },
-    {
-      "content": " complete"
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " run"
-    },
-    {
-      "content": " is"
-    },
-    {
-      "content": " parked"
+      "content": "ed"
     },
     {
       "content": " as"
     },
     {
-      "content": " `"
+      "content": " waiting"
     },
     {
-      "content": "wait"
+      "content": " for"
     },
     {
-      "content": "ing"
+      "content": " your"
     },
     {
-      "content": "_user"
+      "content": " confirmation"
     },
     {
-      "content": "`.\n\n"
+      "content": ".\n\n"
     },
     {
-      "content": "What"
-    },
-    {
-      "content": " I"
+      "content": "Instruction"
     },
     {
       "content": " found"
     },
     {
       "content": ":"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "instructions"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " ("
-    },
-    {
-      "content": "the"
-    },
-    {
-      "content": " only"
-    },
-    {
-      "content": " file"
-    },
-    {
-      "content": " in"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " workspace"
-    },
-    {
-      "content": ")"
-    },
-    {
-      "content": " specifies"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " accepted"
-    },
-    {
-      "content": " result"
-    },
-    {
-      "content": " as"
     },
     {
       "content": " `"
@@ -119,7 +48,10 @@
       "content": "`"
     },
     {
-      "content": " containing"
+      "content": " must"
+    },
+    {
+      "content": " contain"
     },
     {
       "content": " exactly"
@@ -152,79 +84,43 @@
       "content": "line"
     },
     {
-      "content": ".\n\n"
+      "content": " ("
     },
     {
-      "content": "What"
+      "content": "6"
     },
     {
-      "content": " I"
+      "content": " bytes"
     },
     {
-      "content": " did"
+      "content": " total"
     },
     {
-      "content": " not"
+      "content": ").\n\n"
     },
     {
-      "content": " do"
+      "content": "Pending"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " your"
+    },
+    {
+      "content": " go"
+    },
+    {
+      "content": "-a"
+    },
+    {
+      "content": "head"
     },
     {
       "content": ":"
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": " left"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "result"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " un"
-    },
-    {
-      "content": "created"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " as"
-    },
-    {
-      "content": " requested"
-    },
-    {
-      "content": ".\n\n"
-    },
-    {
-      "content": "When"
-    },
-    {
-      "content": " you"
-    },
-    {
-      "content": " confirm"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": "'ll"
     },
     {
       "content": " write"
@@ -245,28 +141,13 @@
       "content": " with"
     },
     {
-      "content": " the"
+      "content": " that"
     },
     {
       "content": " exact"
     },
     {
-      "content": " bytes"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "READ"
-    },
-    {
-      "content": "Y"
-    },
-    {
-      "content": "\\n"
-    },
-    {
-      "content": "`"
+      "content": " content"
     },
     {
       "content": " and"
@@ -293,14 +174,32 @@
       "content": "."
     },
     {
+      "content": " Nothing"
+    },
+    {
+      "content": " has"
+    },
+    {
+      "content": " been"
+    },
+    {
+      "content": " written"
+    },
+    {
+      "content": " yet"
+    },
+    {
+      "content": "."
+    },
+    {
       "finish_reason": "stop"
     },
     {
       "usage": {
-        "input_tokens": 9702,
-        "output_tokens": 98,
-        "cache_read_input_tokens": 3328,
-        "cache_miss_input_tokens": 6374,
+        "input_tokens": 10551,
+        "output_tokens": 64,
+        "cache_read_input_tokens": 3584,
+        "cache_miss_input_tokens": 6967,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true

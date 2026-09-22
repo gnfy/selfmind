@@ -25,3 +25,19 @@ type ToolExecutionMetadata struct {
 type ToolExecutionMetadataProvider interface {
 	ToolExecutionMetadata(name string, args map[string]interface{}) ToolExecutionMetadata
 }
+
+// ToolArgumentPreparer is the optional pre-dispatch boundary implemented by
+// production registries. The Agent calls it before recovery policy, durable
+// ledger claims, and tool.started so malformed input cannot become execution
+// evidence. Implementations must be deterministic and safe to call again from
+// compatibility dispatch paths.
+type ToolArgumentPreparer interface {
+	PrepareToolArguments(name string, args map[string]interface{}) (map[string]interface{}, error)
+}
+
+// ToolPreparationStateProvider identifies the current schema/catalogue state
+// for exact malformed-call suppression. A changed value lets an unchanged call
+// be validated again after live tool discovery changes its contract.
+type ToolPreparationStateProvider interface {
+	ToolPreparationState(name string) string
+}

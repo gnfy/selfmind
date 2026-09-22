@@ -48,12 +48,42 @@ func ValidBinding(b *Binding) bool {
 // CanReplace checks reference integrity, not semantic equivalence. Main must
 // explain why its corrected method still proves the unchanged obligation.
 func CanReplace(old, next Check) bool {
-	return ValidBinding(old.Binding) && ValidBinding(next.Binding) &&
-		old.ToolCallID != "" && next.Binding.Replaces == old.ToolCallID && strings.TrimSpace(next.Binding.Reason) != "" &&
-		old.Binding.Criterion == next.Binding.Criterion && old.Binding.Target == next.Binding.Target && old.CWD == next.CWD &&
-		old.Binding.StepID == next.Binding.StepID &&
-		sameDependencies(old.Binding, next.Binding) &&
-		old.FinishedAt <= next.StartedAt && old.ToolCallID != next.ToolCallID
+	return ReplacementMismatch(old, next) == ""
+}
+
+// ReplacementMismatch explains the runtime-owned part of replacement
+// identity. A plan step is an execution association and local dependencies
+// describe the chosen observation method. Both may change while Main preserves
+// the criterion and target and explains the replacement.
+func ReplacementMismatch(old, next Check) string {
+	if !ValidBinding(old.Binding) {
+		return "referenced evidence has no valid proof obligation"
+	}
+	if !ValidBinding(next.Binding) {
+		return "new evidence has no valid proof obligation"
+	}
+	if old.ToolCallID == "" || next.Binding.Replaces != old.ToolCallID {
+		return "replacement reference does not identify the prior evidence"
+	}
+	if strings.TrimSpace(next.Binding.Reason) == "" {
+		return "replacement reason is empty"
+	}
+	if old.Binding.Criterion != next.Binding.Criterion {
+		return fmt.Sprintf("criterion changed from %q to %q", old.Binding.Criterion, next.Binding.Criterion)
+	}
+	if old.Binding.Target != next.Binding.Target {
+		return fmt.Sprintf("target changed from %q to %q", old.Binding.Target, next.Binding.Target)
+	}
+	if old.CWD != next.CWD {
+		return fmt.Sprintf("working directory changed from %q to %q", old.CWD, next.CWD)
+	}
+	if old.FinishedAt > next.StartedAt {
+		return "replacement started before the prior attempt finished"
+	}
+	if old.ToolCallID == next.ToolCallID {
+		return "replacement reused the prior evidence id"
+	}
+	return ""
 }
 
 func Latest(checks []Check) []Check {
@@ -78,7 +108,17 @@ func Latest(checks []Check) []Check {
 			continue
 		}
 		key := strings.TrimSpace(c.Kind) + "\x00" + strings.TrimSpace(c.Command) + "\x00" + strings.TrimSpace(c.CWD)
-		if c.Binding != nil {
+		if ValidBinding(c.Binding) && c.Binding.Version == 3 {
+			// A plan step owns one durable acceptance obligation. Commands are
+			// observation methods, so a later attempt against the exact same
+			// runtime-owned step, criterion, target, cwd, and declared inputs is
+			// the effective state. Every attempt remains in the event history.
+			dependencies := "<all-local-inputs>"
+			if c.Binding.LocalDependencies != nil {
+				dependencies = strings.Join(*c.Binding.LocalDependencies, "\x1f")
+			}
+			key = fmt.Sprintf("plan-step\x00%s\x00%s\x00%s\x00%s\x00%s", c.Binding.StepID, c.Binding.Criterion, c.Binding.Target, strings.TrimSpace(c.CWD), dependencies)
+		} else if c.Binding != nil {
 			// Bound attempts only supersede by explicit reference. This also keeps an
 			// invalid/future binding from inheriting legacy command-based replacement.
 			key += fmt.Sprintf("\x00%d\x00%s\x00%s\x00%s\x00%d", c.Binding.Version, c.Binding.Criterion, c.Binding.Target, c.ToolCallID, c.StartedAt)

@@ -7,10 +7,10 @@
     },
     {
       "usage": {
-        "input_tokens": 11811,
-        "output_tokens": 39,
-        "cache_read_input_tokens": 11648,
-        "cache_miss_input_tokens": 163,
+        "input_tokens": 12774,
+        "output_tokens": 75,
+        "cache_read_input_tokens": 12544,
+        "cache_miss_input_tokens": 230,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true
@@ -19,9 +19,9 @@
     {
       "tool_calls": [
         {
-          "ID": "call_00_ET_6Vu36FWtQfsNovDGPnlX4362",
+          "ID": "call_00_ET_9deuMwoFxlOYk0kaUi5Q9572",
           "Function": "read_file",
-          "Args": "{\"path\": \"result.md\"}"
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/result.md\"}"
         }
       ]
     }

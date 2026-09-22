@@ -46,6 +46,22 @@ func TestDiscoverCodexModelDescriptorFromLocalCache(t *testing.T) {
 	}
 }
 
+func TestDiscoverModelDescriptorUsesProviderCapabilitiesForDynamicModelAlias(t *testing.T) {
+	got, ok := DiscoverModelDescriptor("deepseek", "deepseek-flash")
+	if !ok {
+		t.Fatal("descriptor was not discovered")
+	}
+	if got.DefaultReasoning != "high" {
+		t.Fatalf("default reasoning = %q", got.DefaultReasoning)
+	}
+	if len(got.SupportedReasoning) != 2 || got.SupportedReasoning[0] != "high" || got.SupportedReasoning[1] != "xhigh" {
+		t.Fatalf("reasoning levels = %v", got.SupportedReasoning)
+	}
+	if got.CapabilitySource != "built-in provider profile" {
+		t.Fatalf("capability source = %q", got.CapabilitySource)
+	}
+}
+
 func TestCatalogReportsStaleCacheInsteadOfPresentingItAsLive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "model_cache.json")
 	profile := ProviderProfile{ID: "openai", ModelList: ModelListOpenAICompatible, FallbackModels: []string{"fallback"}}

@@ -32,7 +32,8 @@ func (t *WorkSelectTool) Description() string {
 
 func (t *WorkSelectTool) Schema() ToolSchema {
 	return ToolSchema{
-		Type: "object",
+		Type:                 "object",
+		AdditionalProperties: rejectAdditionalProperties(),
 		Properties: map[string]PropertyDef{
 			"action": {Type: "string", Enum: []string{"observe", "resume"}, Description: "observe reads/reports prior state; resume continues that work, directly in this turn when the execution domain matches."},
 			"run_id": {Type: "string", Description: "Exact run_id already supported by work_search/work_inspect evidence."},

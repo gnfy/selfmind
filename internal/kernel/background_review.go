@@ -312,6 +312,35 @@ func (b *restrictedReviewBackend) DispatchResult(name string, args map[string]in
 	return DispatchToolResult(b.inner, name, args)
 }
 
+func (b *restrictedReviewBackend) PrepareToolArguments(name string, args map[string]interface{}) (map[string]interface{}, error) {
+	if b == nil || !b.allowed[name] {
+		return nil, newRecoveryPolicyError(
+			"background_tool_not_allowed",
+			"authorization",
+			"different_strategy",
+			"not_dispatched",
+			fmt.Sprintf("background review cannot use tool %s", name),
+			[]string{"use_allowed_review_tool", "finish_without_tool"},
+		)
+	}
+	preparer, ok := b.inner.(ToolArgumentPreparer)
+	if !ok {
+		return args, nil
+	}
+	return preparer.PrepareToolArguments(name, args)
+}
+
+func (b *restrictedReviewBackend) ToolPreparationState(name string) string {
+	if b == nil || !b.allowed[name] {
+		return "restricted"
+	}
+	provider, ok := b.inner.(ToolPreparationStateProvider)
+	if !ok {
+		return ""
+	}
+	return provider.ToolPreparationState(name)
+}
+
 func (b *restrictedReviewBackend) ToolExecutionMetadata(name string, args map[string]interface{}) ToolExecutionMetadata {
 	if b == nil || !b.allowed[name] {
 		return ToolExecutionMetadata{}

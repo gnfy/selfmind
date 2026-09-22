@@ -10,6 +10,19 @@ import (
 	"selfmind/internal/kernel/llm"
 )
 
+func TestParseToolCallArgsStrictRejectsMalformedObject(t *testing.T) {
+	if _, err := parseToolCallArgsStrict(`{"plan":[}`); err == nil || !strings.Contains(err.Error(), "valid JSON object") {
+		t.Fatalf("malformed arguments were not diagnosed: %v", err)
+	}
+	if _, err := parseToolCallArgsStrict(`null`); err == nil {
+		t.Fatal("null arguments were accepted as an empty invocation")
+	}
+	args, err := parseToolCallArgsStrict(`{"plan":[]}`)
+	if err != nil || args["plan"] == nil {
+		t.Fatalf("valid arguments changed: args=%v err=%v", args, err)
+	}
+}
+
 func TestExternalWatchHandoffIsolatesLaterNonWatcherCalls(t *testing.T) {
 	calls := []llm.ToolCall{
 		{ID: "read", Function: "read_file"},
@@ -81,6 +94,146 @@ func (l *capturingToolLedger) ClaimDispatch(_ context.Context, entry ToolLedgerE
 }
 
 func (*capturingToolLedger) RecordOutcome(context.Context, string, string, bool) error { return nil }
+
+type argumentPreparationFailure struct{}
+
+func (argumentPreparationFailure) Error() string             { return "unknown parameter: content.options.extra" }
+func (argumentPreparationFailure) ToolErrorCode() string     { return "tool_arguments_invalid" }
+func (argumentPreparationFailure) ToolErrorCategory() string { return "invalid_input" }
+func (argumentPreparationFailure) ModelSafeMessage() string {
+	return "unknown parameter: content.options.extra"
+}
+func (argumentPreparationFailure) ToolRecoveryHint() string {
+	return "Correct the arguments to match the published tool schema."
+}
+func (argumentPreparationFailure) ToolFailurePhase() string { return "preparation" }
+func (argumentPreparationFailure) ToolRetryability() string { return "corrected_input" }
+func (argumentPreparationFailure) ToolEffectState() string  { return "not_dispatched" }
+func (argumentPreparationFailure) ToolStateChanged() bool   { return false }
+func (argumentPreparationFailure) ToolAlternatives() []string {
+	return []string{"inspect_tool_schema", "correct_arguments"}
+}
+
+type rejectingArgumentPreparerBackend struct {
+	prepareCalls  int
+	dispatchCalls int
+	state         string
+	acceptAll     bool
+}
+
+func (b *rejectingArgumentPreparerBackend) PrepareToolArguments(_ string, args map[string]interface{}) (map[string]interface{}, error) {
+	b.prepareCalls++
+	if valid, _ := args["valid"].(bool); valid || b.acceptAll {
+		return args, nil
+	}
+	return nil, argumentPreparationFailure{}
+}
+func (b *rejectingArgumentPreparerBackend) Dispatch(string, map[string]interface{}) (string, error) {
+	b.dispatchCalls++
+	return "ok", nil
+}
+func (b *rejectingArgumentPreparerBackend) GetToolDefinitions() []map[string]interface{} { return nil }
+func (b *rejectingArgumentPreparerBackend) ToolExecutionMetadata(string, map[string]interface{}) ToolExecutionMetadata {
+	return ToolExecutionMetadata{Origin: "builtin", Category: "filesystem", RiskLevel: "high", ReadOnly: false}
+}
+func (b *rejectingArgumentPreparerBackend) ToolPreparationState(string) string { return b.state }
+
+func TestArgumentPreparationRefusalPrecedesLedgerAndStartedEvent(t *testing.T) {
+	ctx := WithTaskRuntimeContext(context.Background(), TaskRuntimeContext{RunID: "run-invalid-args"})
+	ledger := &capturingToolLedger{}
+	ctx = WithToolLedger(ctx, ledger)
+	backend := &rejectingArgumentPreparerBackend{}
+	events := make(chan string, 8)
+
+	result := (&Agent{backend: backend}).executeSingleToolCall(ctx, "default", events, 0, llm.ToolCall{
+		ID: "call-invalid-args", Function: "write_file", Args: `{"path":"result.txt","content":{"options":{"extra":true}}}`,
+	})
+
+	if result.success || backend.prepareCalls != 1 || backend.dispatchCalls != 0 {
+		t.Fatalf("invalid arguments reached dispatch: result=%+v prepare=%d dispatch=%d", result, backend.prepareCalls, backend.dispatchCalls)
+	}
+	if ledger.entry.ToolCallID != "" {
+		t.Fatalf("invalid arguments claimed durable dispatch: %+v", ledger.entry)
+	}
+	if !strings.Contains(result.msg.Content, "failure_phase: preparation") ||
+		!strings.Contains(result.msg.Content, "effect_state: not_dispatched") {
+		t.Fatalf("refusal lost preparation facts: %s", result.msg.Content)
+	}
+	for _, event := range drainAgentEvents(events) {
+		if event.Type == "tool.started" {
+			t.Fatalf("invalid arguments emitted tool.started: %+v", event)
+		}
+		if event.Type == "tool.completed" && event.Payload["invoked"] != false {
+			t.Fatalf("refusal did not record invoked=false: %+v", event)
+		}
+	}
+}
+
+func TestArgumentPreparationBlocksOnlyIdenticalMalformedRepeat(t *testing.T) {
+	ctx := WithRecoveryPolicy(context.Background(), NewStrategyRecoveryPolicy())
+	backend := &rejectingArgumentPreparerBackend{}
+	agent := &Agent{backend: backend}
+	invalid := llm.ToolCall{ID: "invalid-1", Function: "write_file", Args: `{"extra":true}`}
+
+	first := agent.executeSingleToolCall(ctx, "default", nil, 0, invalid)
+	invalid.ID = "invalid-2"
+	second := agent.executeSingleToolCall(ctx, "default", nil, 0, invalid)
+	corrected := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{
+		ID: "valid-1", Function: "write_file", Args: `{"valid":true}`,
+	})
+
+	if first.success || second.success || !corrected.success {
+		t.Fatalf("unexpected results: first=%+v second=%+v corrected=%+v", first, second, corrected)
+	}
+	if backend.prepareCalls != 2 || backend.dispatchCalls != 1 {
+		t.Fatalf("identical refusal was re-prepared or correction was blocked: prepare=%d dispatch=%d", backend.prepareCalls, backend.dispatchCalls)
+	}
+	if !strings.Contains(second.msg.Content, "error_code: tool_arguments_repeated") {
+		t.Fatalf("identical malformed repeat lost typed refusal: %s", second.msg.Content)
+	}
+}
+
+func TestArgumentPreparationBlocksIdenticalMalformedJSON(t *testing.T) {
+	ctx := WithRecoveryPolicy(context.Background(), NewStrategyRecoveryPolicy())
+	backend := &rejectingArgumentPreparerBackend{}
+	agent := &Agent{backend: backend}
+	invalid := llm.ToolCall{ID: "json-1", Function: "write_file", Args: `{"path":`}
+
+	first := agent.executeSingleToolCall(ctx, "default", nil, 0, invalid)
+	invalid.ID = "json-2"
+	second := agent.executeSingleToolCall(ctx, "default", nil, 0, invalid)
+	corrected := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{
+		ID: "json-valid", Function: "write_file", Args: `{"valid":true}`,
+	})
+
+	if first.success || second.success || !corrected.success {
+		t.Fatalf("unexpected results: first=%+v second=%+v corrected=%+v", first, second, corrected)
+	}
+	if backend.prepareCalls != 1 || backend.dispatchCalls != 1 {
+		t.Fatalf("malformed JSON was reprocessed or correction was blocked: prepare=%d dispatch=%d", backend.prepareCalls, backend.dispatchCalls)
+	}
+	if !strings.Contains(second.msg.Content, "error_code: tool_arguments_repeated") {
+		t.Fatalf("identical malformed JSON repeat lost typed refusal: %s", second.msg.Content)
+	}
+}
+
+func TestArgumentPreparationRetriesSameCallAfterCatalogueChange(t *testing.T) {
+	ctx := WithRecoveryPolicy(context.Background(), NewStrategyRecoveryPolicy())
+	backend := &rejectingArgumentPreparerBackend{state: "catalogue-1"}
+	agent := &Agent{backend: backend}
+	call := llm.ToolCall{ID: "catalogue-1", Function: "dynamic_tool", Args: `{"new_field":true}`}
+	first := agent.executeSingleToolCall(ctx, "default", nil, 0, call)
+
+	backend.state = "catalogue-2"
+	backend.acceptAll = true
+	call.ID = "catalogue-2"
+	second := agent.executeSingleToolCall(ctx, "default", nil, 0, call)
+
+	if first.success || !second.success || backend.prepareCalls != 2 || backend.dispatchCalls != 1 {
+		t.Fatalf("catalogue change did not release exact call: first=%+v second=%+v prepare=%d dispatch=%d",
+			first, second, backend.prepareCalls, backend.dispatchCalls)
+	}
+}
 
 type successfulToolBackend struct{}
 

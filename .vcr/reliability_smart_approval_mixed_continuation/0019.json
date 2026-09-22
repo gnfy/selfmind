@@ -1,20 +1,788 @@
 {
   "plan_binding_version": 1,
-  "method": "chat",
-  "chat": {
-    "Content": "{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"Exact command the user pre-authorized (\\\"使用 verify 的 test \\\\\\\"$(cat receipt.txt)\\\\\\\" = VERIFIED 检查交付内容\\\") — a bounded read-only check of receipt.txt in the owned workspace, no network or credentials.\"}",
-    "ReasoningContent": "The command: test \"$(cat receipt.txt)\" = VERIFIED — a read-only verification of receipt.txt content. The person explicitly authorized: \"我授权在本机执行交付所需的只读检查、目录浏览、receipt.txt 写入和校验命令\" and specifically \"使用 verify 的 test \"$(cat receipt.txt)\" = VERIFIED 检查交付内容。\" This is the exact authorized command. Risk: low (read-only local file read). Authorization: high. Approve.",
-    "Phase": "",
-    "ToolCalls": [],
-    "Usage": {
-      "input_tokens": 2078,
-      "output_tokens": 174,
-      "cache_read_input_tokens": 768,
-      "cache_miss_input_tokens": 1310,
-      "cache_creation_input_tokens": 0,
-      "reasoning_output_tokens": 98,
-      "cache_usage_reported": true
+  "method": "stream",
+  "events": [
+    {
+      "content": "交付"
     },
-    "FinishReason": "stop"
-  }
+    {
+      "content": "完成"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "以"
+    },
+    {
+      "content": " done"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "结束"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "接"
+    },
+    {
+      "content": "续"
+    },
+    {
+      "content": "的是"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "task"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "34"
+    },
+    {
+      "content": "bed"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "另"
+    },
+    {
+      "content": "开"
+    },
+    {
+      "content": "新"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "），"
+    },
+    {
+      "content": "后台"
+    },
+    {
+      "content": "恢复"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "了"
+    },
+    {
+      "content": "交付"
+    },
+    {
+      "content": "写入"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": "-hand"
+    },
+    {
+      "content": "off"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " wat"
+    },
+    {
+      "content": "cher"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "组"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "_group"
+    },
+    {
+      "content": "_size"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "mode"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "all"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "）"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "登记"
+    },
+    {
+      "content": "并以"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": "_ex"
+    },
+    {
+      "content": "ternal"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "交接"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "本次"
+    },
+    {
+      "content": "后台"
+    },
+    {
+      "content": "观察"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "正常"
+    },
+    {
+      "content": "恢复"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "恢复"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "复核"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "pr"
+    },
+    {
+      "content": "erequisite"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "=`"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "second"
+    },
+    {
+      "content": "-pr"
+    },
+    {
+      "content": "erequisite"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "=`"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "_B"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "改动"
+    },
+    {
+      "content": "这两个"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "）。\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "新建"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "内容"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "VER"
+    },
+    {
+      "content": "IFIED"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "验证"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "verify"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "test"
+    },
+    {
+      "content": " \"$"
+    },
+    {
+      "content": "("
+    },
+    {
+      "content": "cat"
+    },
+    {
+      "content": " receipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": ")\""
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " VER"
+    },
+    {
+      "content": "IFIED"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "退出"
+    },
+    {
+      "content": "码"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "evidence"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "call"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "00"
+    },
+    {
+      "content": "_Y"
+    },
+    {
+      "content": "p"
+    },
+    {
+      "content": "KV"
+    },
+    {
+      "content": "q"
+    },
+    {
+      "content": "W"
+    },
+    {
+      "content": "de"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "gf"
+    },
+    {
+      "content": "BL"
+    },
+    {
+      "content": "F"
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "rr"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "D"
+    },
+    {
+      "content": "641"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "）。\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "计划"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "全部"
+    },
+    {
+      "content": "步骤"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "更新"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "随后"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "fin"
+    },
+    {
+      "content": "ish"
+    },
+    {
+      "content": "_run"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "done"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "项"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "修改"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "config"
+    },
+    {
+      "content": ".yaml"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "重建"
+    },
+    {
+      "content": "旧"
+    },
+    {
+      "content": " worker"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "提交"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "这三"
+    },
+    {
+      "content": "项"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "你的"
+    },
+    {
+      "content": "要求"
+    },
+    {
+      "content": "一律"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "config"
+    },
+    {
+      "content": ".yaml"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "仍"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "样"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "只有"
+    },
+    {
+      "content": "新增"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 16056,
+        "output_tokens": 257,
+        "cache_read_input_tokens": 4096,
+        "cache_miss_input_tokens": 11960,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
 }

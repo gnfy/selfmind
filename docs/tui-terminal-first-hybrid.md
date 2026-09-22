@@ -147,7 +147,10 @@ launchd/systemd details. Each displayed route includes one normal-contrast
 sentence describing its responsibility; inherited roles are represented by the
 Background description instead of six duplicate rows. It uses full-width open
 horizontal rules with no side rails or background fill. `MAIN` combines model,
-provider, and explicit reasoning, `/model` stays right-aligned when it fits,
+provider, and reasoning. An explicit level is shown directly; `auto` remains
+visible and includes a known effective default (for example `auto→high`)
+instead of disappearing after a model-status refresh. `/model` stays
+right-aligned when it fits,
 and all values and descriptions wrap losslessly instead of being truncated on
 narrow terminals. Until
 the first successful non-command local task, it also shows one read-only starter

@@ -140,24 +140,31 @@ func oneOf(value string, values ...string) bool {
 // client construction. The resolver combines this metadata with config and
 // credential sources into a Runtime.
 type ProviderProfile struct {
-	ID              string
-	DisplayName     string
-	Aliases         []string
-	Protocol        string
-	AuthType        string
-	BaseURL         string
-	APIKeyEnvVars   []string
-	BaseURLEnvVar   string
-	ExternalSource  string
-	ModelList       ModelListKind
-	FallbackModels  []string
-	ContextLength   int
-	Headers         map[string]string
-	MaxTokens       int
-	ReasoningEffort string
-	Thinking        map[string]interface{}
-	ServiceTier     string
-	Quirks          ProviderQuirks
+	ID             string
+	DisplayName    string
+	Aliases        []string
+	Protocol       string
+	AuthType       string
+	BaseURL        string
+	APIKeyEnvVars  []string
+	BaseURLEnvVar  string
+	ExternalSource string
+	ModelList      ModelListKind
+	FallbackModels []string
+	ContextLength  int
+	Headers        map[string]string
+	MaxTokens      int
+	// DefaultReasoning and SupportedReasoning describe provider-contract
+	// capabilities. They are metadata only: an omitted user setting must not be
+	// turned into a forced wire value.
+	DefaultReasoning      string
+	SupportedReasoning    []string
+	ReasoningEffort       string
+	Thinking              map[string]interface{}
+	DefaultServiceTier    string
+	SupportedServiceTiers []string
+	ServiceTier           string
+	Quirks                ProviderQuirks
 }
 
 type ModelListKind string
@@ -389,10 +396,11 @@ func BuiltinProfiles() []ProviderProfile {
 			Protocol: ProtocolOpenAICompatible, AuthType: AuthAPIKey,
 			BaseURL: "https://api.deepseek.com/v1", APIKeyEnvVars: []string{"DEEPSEEK_API_KEY"},
 			BaseURLEnvVar: "DEEPSEEK_BASE_URL", ModelList: ModelListOpenAICompatible,
-			FallbackModels:  []string{"deepseek-v4-flash", "deepseek-v4-pro"},
-			ReasoningEffort: "high",
-			Thinking:        map[string]interface{}{"type": "enabled"},
-			Quirks:          deepSeekQuirks(),
+			FallbackModels:     []string{"deepseek-v4-flash", "deepseek-v4-pro"},
+			DefaultReasoning:   "high",
+			SupportedReasoning: []string{"high", "xhigh"},
+			Thinking:           map[string]interface{}{"type": "enabled"},
+			Quirks:             deepSeekQuirks(),
 		},
 		{
 			ID: "zai", DisplayName: "Z.AI / GLM", Aliases: []string{"glm", "z-ai", "zhipu"},

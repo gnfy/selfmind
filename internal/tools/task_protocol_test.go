@@ -75,6 +75,18 @@ func TestPlanToolsUseDurableProjectionAsCompletionAuthority(t *testing.T) {
 	}
 }
 
+func TestPlanStepParserPreservesOmittedTextForExactIDInheritance(t *testing.T) {
+	steps, err := planStepsFromArgs([]interface{}{map[string]interface{}{
+		"step_id": "step-issued", "status": "completed",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 1 || steps[0].StepID != "step-issued" || steps[0].Step != "" || steps[0].Status != "completed" {
+		t.Fatalf("parsed step=%+v", steps)
+	}
+}
+
 func TestUpdatePlanToolReturnsSynchronousWorkUnitIdentities(t *testing.T) {
 	tool := NewUpdatePlanTool()
 	ctx := WithPlanProjectionSink(context.Background(), func(_ context.Context, steps []PlanStep) ([]PlanWorkUnitIdentity, error) {

@@ -33,7 +33,7 @@ func EvidenceMiddleware() ResultMiddleware {
 				var err error
 				binding, err = prepareVerificationBinding(args)
 				if err != nil {
-					return kernel.ToolDispatchResult{Invoked: new(bool)}, newStableToolError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use check.replaces and check.reason to inherit an eligible recorded obligation. Preserve its working directory. The runtime supplies omitted criterion, target and dependencies; historical unbound checks cannot acquire replacement authority.")
+					return kernel.ToolDispatchResult{Invoked: new(bool)}, newStableToolError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use replaces and reason to inherit an eligible recorded obligation. Preserve its working directory. The runtime supplies omitted criterion, target and dependencies; historical unbound checks cannot acquire replacement authority.")
 				}
 			}
 
@@ -86,6 +86,12 @@ func EvidenceMiddleware() ResultMiddleware {
 			emitEvidence(args, evidence)
 			if evidence.Command != nil && evidence.Command.Binding != nil {
 				result.Output += "\nVerification evidence: " + evidence.ToolCallID
+				if err != nil && strings.TrimSpace(binding.StepID) != "" {
+					result.Output += "\nThis verification_required obligation remains open. Keep exactly its existing plan step in_progress, keep diagnostic and report steps pending, and correct this same check with replaces. Cancel any separate retry step for this same check."
+				}
+				if err == nil && strings.TrimSpace(binding.Replaces) != "" && strings.TrimSpace(binding.StepID) != "" {
+					result.Output += "\nThis replacement remains bound to the original verification obligation. Before completing the plan, keep the original obligation and cancel any separate step created only for this retry; verify another verification_required step only when it represents a distinct condition."
+				}
 				if len(binding.UnresolvedLocalDependencies) > 0 {
 					result.Output += "\nDependency identity unresolved: " + strings.Join(binding.UnresolvedLocalDependencies, ", ") + ". Relative paths use tool cwd, not shell-internal cd. This check conservatively depends on all local changes; inspect and correct the declared inputs before relying on independence."
 				}

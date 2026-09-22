@@ -83,7 +83,7 @@ func TestWorkInspectReturnsBoundedRunStateWithoutRawEventContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"release prepared", "verify deployment", "artifact://release-record", "read_file"} {
+	for _, want := range []string{"release prepared", "verify deployment", "artifact://release-record", "read_file", "work_select", "did not attach"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("work inspection missing %q: %s", want, result)
 		}

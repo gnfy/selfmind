@@ -1,20 +1,871 @@
 {
   "plan_binding_version": 1,
-  "method": "chat",
-  "chat": {
-    "Content": "{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"Read-only `cat prerequisite.txt` is explicitly authorized by the person's words (\\\"用 terminal 的 cat prerequisite.txt 做只读检查\\\") and is a bounded local observation within the accepted handoff task.\"}",
-    "ReasoningContent": "The command is `cat prerequisite.txt` — read-only observation. Person explicitly authorized: \"用 terminal 的 cat prerequisite.txt 做只读检查\". Execution containment: filesystem=host, network=shared, credentials=none, operation=observation-only. This is a read-only local file read, explicitly authorized by the user's words.\n\nFlag says host outside isolated sandbox. But actual effect is a read-only cat of a workspace file, explicitly authorized. Risk low. Approve.\n\nThe person explicitly authorized read-only checks including this exact command. So approve.",
-    "Phase": "",
-    "ToolCalls": [],
-    "Usage": {
-      "input_tokens": 1776,
-      "output_tokens": 182,
-      "cache_read_input_tokens": 768,
-      "cache_miss_input_tokens": 1008,
-      "cache_creation_input_tokens": 0,
-      "reasoning_output_tokens": 114,
-      "cache_usage_reported": true
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
     },
-    "FinishReason": "stop"
-  }
+    {
+      "reasoning_content": " register"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " two"
+    },
+    {
+      "reasoning_content": " wat"
+    },
+    {
+      "reasoning_content": "chers"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " batch"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Wat"
+    },
+    {
+      "reasoning_content": "cher"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " prerequisite"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "`,"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "`,"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": "_group"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": "-hand"
+    },
+    {
+      "reasoning_content": "off"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " size"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " mode"
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " interval"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " timeout"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "60"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Wat"
+    },
+    {
+      "reasoning_content": "cher"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " second"
+    },
+    {
+      "reasoning_content": "-pr"
+    },
+    {
+      "reasoning_content": "erequisite"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "`,"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "_B"
+    },
+    {
+      "reasoning_content": "`,"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": " params"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Both"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " assistant"
+    },
+    {
+      "reasoning_content": " block"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "two"
+    },
+    {
+      "reasoning_content": " calls"
+    },
+    {
+      "reasoning_content": ").\n\n"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "wd"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " root"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "default"
+    },
+    {
+      "reasoning_content": " \".\""
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " pass"
+    },
+    {
+      "reasoning_content": " c"
+    },
+    {
+      "reasoning_content": "wd"
+    },
+    {
+      "reasoning_content": " explicitly"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " \".\""
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " root"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Working"
+    },
+    {
+      "reasoning_content": " directory"
+    },
+    {
+      "reasoning_content": " within"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " active"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " default"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": ".\"."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " set"
+    },
+    {
+      "reasoning_content": " c"
+    },
+    {
+      "reasoning_content": "wd"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " \".\""
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " them"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Note"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " patterns"
+    },
+    {
+      "reasoning_content": " are"
+    },
+    {
+      "reasoning_content": " whole"
+    },
+    {
+      "reasoning_content": "-value"
+    },
+    {
+      "reasoning_content": " regex"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "_B"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Since"
+    },
+    {
+      "reasoning_content": " whole"
+    },
+    {
+      "reasoning_content": "-value"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " maybe"
+    },
+    {
+      "reasoning_content": " better"
+    },
+    {
+      "reasoning_content": " \"^"
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "$"
+    },
+    {
+      "reasoning_content": "\"?"
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "匹配"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Whole"
+    },
+    {
+      "reasoning_content": "-value"
+    },
+    {
+      "reasoning_content": " regex"
+    },
+    {
+      "reasoning_content": " likely"
+    },
+    {
+      "reasoning_content": " anchors"
+    },
+    {
+      "reasoning_content": " implicitly"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " instructed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " if"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " includes"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " observation"
+    },
+    {
+      "reasoning_content": " adapter"
+    },
+    {
+      "reasoning_content": " selects"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " bounded"
+    },
+    {
+      "reasoning_content": " scalar"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " safe"
+    },
+    {
+      "reasoning_content": " against"
+    },
+    {
+      "reasoning_content": " substring"
+    },
+    {
+      "reasoning_content": "/"
+    },
+    {
+      "reasoning_content": "whole"
+    },
+    {
+      "reasoning_content": "-value"
+    },
+    {
+      "reasoning_content": " ambiguity"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " explicitly"
+    },
+    {
+      "reasoning_content": " specified"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " pattern"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " follow"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " include"
+    },
+    {
+      "reasoning_content": " description"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Both"
+    },
+    {
+      "reasoning_content": " calls"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " block"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "现在"
+    },
+    {
+      "content": "在同一"
+    },
+    {
+      "content": "批"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "登记"
+    },
+    {
+      "content": "两个"
+    },
+    {
+      "content": " wat"
+    },
+    {
+      "content": "cher"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "组成"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": "-hand"
+    },
+    {
+      "content": "off"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "交接"
+    },
+    {
+      "content": "组"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 20140,
+        "output_tokens": 656,
+        "cache_read_input_tokens": 19968,
+        "cache_miss_input_tokens": 172,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 258,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_IPK8QCchTf35fGF7dAaN6234",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"cat prerequisite.txt\", \"cwd\": \".\", \"description\": \"Watch prerequisite.txt until it reads READY\", \"success_pattern\": \"READY\", \"wait_group\": \"receipt-handoff\", \"wait_group_size\": 2, \"wait_group_mode\": \"all\", \"interval_seconds\": 5, \"timeout_seconds\": 60}"
+        },
+        {
+          "ID": "call_01_wgPyeYziemjxQ05VY0un6362",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"cat second-prerequisite.txt\", \"cwd\": \".\", \"description\": \"Watch second-prerequisite.txt until it reads READY_B\", \"success_pattern\": \"READY_B\", \"wait_group\": \"receipt-handoff\", \"wait_group_size\": 2, \"wait_group_mode\": \"all\", \"interval_seconds\": 5, \"timeout_seconds\": 60}"
+        }
+      ]
+    }
+  ]
 }

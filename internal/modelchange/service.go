@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 )
 
@@ -196,13 +197,33 @@ type State struct {
 }
 
 type Status struct {
-	Generation        int64     `json:"generation"`
-	Running           Snapshot  `json:"running"`
-	RunningVerifiedAt time.Time `json:"running_verified_at,omitempty"`
-	Configured        Snapshot  `json:"configured"`
-	Pending           *Change   `json:"pending,omitempty"`
-	History           []Change  `json:"history,omitempty"`
-	Readiness         Readiness `json:"readiness"`
+	Generation        int64          `json:"generation"`
+	Running           Snapshot       `json:"running"`
+	RunningTuning     TuningSnapshot `json:"running_tuning"`
+	RunningVerifiedAt time.Time      `json:"running_verified_at,omitempty"`
+	Configured        Snapshot       `json:"configured"`
+	ConfiguredTuning  TuningSnapshot `json:"configured_tuning"`
+	Pending           *Change        `json:"pending,omitempty"`
+	History           []Change       `json:"history,omitempty"`
+	Readiness         Readiness      `json:"readiness"`
+}
+
+// RouteTuning separates the persisted user choice from the effective provider
+// behavior. Empty Reasoning with source provider_default means the provider
+// owns the value and SelfMind does not force a wire parameter.
+type RouteTuning struct {
+	Reasoning            string   `json:"reasoning,omitempty"`
+	ReasoningSource      string   `json:"reasoning_source"`
+	SupportedReasoning   []string `json:"supported_reasoning,omitempty"`
+	ServiceTier          string   `json:"service_tier,omitempty"`
+	ServiceTierSource    string   `json:"service_tier_source"`
+	SupportedServiceTier []string `json:"supported_service_tiers,omitempty"`
+	CapabilitySource     string   `json:"capability_source,omitempty"`
+}
+
+type TuningSnapshot struct {
+	Primary   RouteTuning `json:"primary"`
+	Auxiliary RouteTuning `json:"auxiliary"`
 }
 
 type Readiness struct {
@@ -445,11 +466,12 @@ func (s *Service) inspectLocked() (Status, error) {
 			return Status{}, err
 		}
 	}
+	configured := logicalConfigured(cfg, state.Pending)
 	return Status{
 		Generation: state.Generation, Running: state.Running, RunningVerifiedAt: state.RunningVerifiedAt,
-		Configured: logicalConfigured(cfg, state.Pending), Pending: cloneChange(state.Pending),
-		History:   append([]Change(nil), state.History...),
-		Readiness: readinessFor(cfg, state),
+		RunningTuning: tuningSnapshot(cfg, state.Running),
+		Configured:    configured, ConfiguredTuning: tuningSnapshot(cfg, configured), Pending: cloneChange(state.Pending),
+		History: append([]Change(nil), state.History...), Readiness: readinessFor(cfg, state),
 	}, nil
 }
 
@@ -1439,12 +1461,64 @@ func (s *Service) rollbackStartup(cfg *config.Config, state State, change Change
 }
 
 func (s *Service) InspectWithState(cfg *config.Config, state State) Status {
+	configured := logicalConfigured(cfg, state.Pending)
 	return Status{
 		Generation: state.Generation, Running: state.Running, RunningVerifiedAt: state.RunningVerifiedAt,
-		Configured: logicalConfigured(cfg, state.Pending), Pending: cloneChange(state.Pending),
-		History:   append([]Change(nil), state.History...),
-		Readiness: readinessFor(cfg, state),
+		RunningTuning: tuningSnapshot(cfg, state.Running),
+		Configured:    configured, ConfiguredTuning: tuningSnapshot(cfg, configured), Pending: cloneChange(state.Pending),
+		History: append([]Change(nil), state.History...), Readiness: readinessFor(cfg, state),
 	}
+}
+
+func tuningSnapshot(cfg *config.Config, snapshot Snapshot) TuningSnapshot {
+	snapshot = normalizeSnapshot(snapshot)
+	return TuningSnapshot{
+		Primary:   resolveRouteTuning(cfg, snapshot.Primary),
+		Auxiliary: resolveRouteTuning(cfg, snapshot.Auxiliary),
+	}
+}
+
+func resolveRouteTuning(cfg *config.Config, selection config.ModelSelectionConfig) RouteTuning {
+	descriptor, _ := modelruntime.DiscoverModelDescriptor(selection.Provider, selection.Model)
+	result := RouteTuning{
+		SupportedReasoning:   append([]string(nil), descriptor.SupportedReasoning...),
+		SupportedServiceTier: append([]string(nil), descriptor.SupportedServiceTiers...),
+		CapabilitySource:     descriptor.CapabilitySource,
+	}
+	if explicit := strings.TrimSpace(selection.Reasoning); explicit != "" {
+		result.Reasoning, result.ReasoningSource = explicit, "explicit"
+	} else if descriptor.DefaultReasoning != "" {
+		result.Reasoning, result.ReasoningSource = descriptor.DefaultReasoning, "model_default"
+	} else {
+		result.ReasoningSource = "provider_default"
+	}
+	if explicit := strings.TrimSpace(selection.ServiceTier); explicit != "" {
+		result.ServiceTier, result.ServiceTierSource = explicit, "explicit"
+	} else if descriptor.DefaultServiceTier != "" {
+		result.ServiceTier, result.ServiceTierSource = descriptor.DefaultServiceTier, "model_default"
+	} else {
+		result.ServiceTierSource = "provider_default"
+	}
+	if cfg == nil {
+		return result
+	}
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{
+		Provider: selection.Provider, Model: selection.Model,
+		ContextLength: selection.ContextLength, ReasoningEffort: selection.Reasoning, ServiceTier: selection.ServiceTier,
+	})
+	if err != nil {
+		return result
+	}
+	result.SupportedReasoning = append([]string(nil), rt.ReasoningLevels...)
+	result.SupportedServiceTier = append([]string(nil), rt.ServiceTiers...)
+	result.CapabilitySource = rt.CapabilitySource
+	if selection.Reasoning == "" && rt.ReasoningEffort != "" {
+		result.Reasoning, result.ReasoningSource = rt.ReasoningEffort, "provider_override"
+	}
+	if selection.ServiceTier == "" && rt.ServiceTier != "" {
+		result.ServiceTier, result.ServiceTierSource = rt.ServiceTier, "provider_override"
+	}
+	return result
 }
 
 func (s *Service) validate(ctx context.Context, cfg *config.Config, routes []Route) []ProbeResult {

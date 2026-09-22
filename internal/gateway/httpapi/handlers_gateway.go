@@ -251,7 +251,8 @@ func (d *Server) handleGatewayShutdown(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload struct {
-		Reason string `json:"reason"`
+		Reason              string `json:"reason"`
+		WaitForSafeBoundary bool   `json:"wait_for_safe_boundary"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&payload)
 	reason := strings.TrimSpace(payload.Reason)
@@ -267,7 +268,7 @@ func (d *Server) handleGatewayShutdown(w http.ResponseWriter, r *http.Request) {
 	}
 	drainTimeout := shutdownTimeoutForReason(d.drainTimeout(), reason)
 	responseReady := make(chan struct{})
-	started := d.requestGatewayShutdown(drainTimeout, reason, responseReady)
+	started := d.requestGatewayShutdown(drainTimeout, reason, payload.WaitForSafeBoundary, responseReady)
 	if started {
 		defer close(responseReady)
 	}
@@ -403,7 +404,8 @@ func (d *Server) ActiveRunCount() int {
 }
 
 func (d *Server) RequestGatewayShutdown(timeout time.Duration, reason string) bool {
-	return d.requestGatewayShutdown(timeout, reason, nil)
+	_, modelChange := modelChangeShutdownID(reason)
+	return d.requestGatewayShutdown(timeout, reason, modelChange, nil)
 }
 
 // requestGatewayShutdown optionally waits for the HTTP acceptance response to
@@ -412,7 +414,7 @@ func (d *Server) RequestGatewayShutdown(timeout time.Duration, reason string) bo
 // the same scheduler turn; without it, runner's immediate Server.Close can cut
 // off the 202 response and leave the restart client with EOF after a successful
 // shutdown. Signal- and context-originated shutdowns pass nil and start at once.
-func (d *Server) requestGatewayShutdown(timeout time.Duration, reason string, responseReady <-chan struct{}) bool {
+func (d *Server) requestGatewayShutdown(timeout time.Duration, reason string, waitForSafeBoundary bool, responseReady <-chan struct{}) bool {
 	d.mu.Lock()
 	if d.shutdownPending {
 		// Replacing a candidate before the safe boundary keeps the existing
@@ -432,12 +434,12 @@ func (d *Server) requestGatewayShutdown(timeout time.Duration, reason string, re
 		if responseReady != nil {
 			<-responseReady
 		}
-		d.shutdownAfterDrain(timeout, reason)
+		d.shutdownAfterDrain(timeout, reason, waitForSafeBoundary)
 	}()
 	return true
 }
 
-func (d *Server) shutdownAfterDrain(timeout time.Duration, reason string) {
+func (d *Server) shutdownAfterDrain(timeout time.Duration, reason string, waitForSafeBoundary bool) {
 	if _, modelChange := modelChangeShutdownID(reason); modelChange {
 		if !d.waitForModelSafeBoundary() {
 			d.cancelPendingShutdown()
@@ -455,6 +457,13 @@ func (d *Server) shutdownAfterDrain(timeout time.Duration, reason string) {
 			d.cancelPendingShutdown()
 			return
 		}
+		if d.ShutdownFunc != nil {
+			d.ShutdownFunc()
+		}
+		return
+	}
+	if waitForSafeBoundary {
+		_ = d.waitForIdle(context.Background())
 		if d.ShutdownFunc != nil {
 			d.ShutdownFunc()
 		}

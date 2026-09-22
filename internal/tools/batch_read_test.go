@@ -164,4 +164,11 @@ func TestBatchReadChildArgsNeverFabricatesNilCallID(t *testing.T) {
 	if got := child["_tool_call_id"]; got != "parent:batch:2" {
 		t.Fatalf("derived child call id = %#v, want parent:batch:2", got)
 	}
+
+	child = batchReadChildArgs(batchReadOperation{Tool: "read_file", Path: "main.go"}, map[string]interface{}{
+		preparedToolInvocationArg: &preparedToolInvocation{},
+	}, 0)
+	if _, leaked := child[preparedToolInvocationArg]; leaked {
+		t.Fatal("parent prepared-invocation capability leaked into nested tool")
+	}
 }

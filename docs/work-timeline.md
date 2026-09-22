@@ -198,7 +198,10 @@ queue. Prose such as “resume after approval” has no routing authority.
    its Thread; a later Run in the same Thread causally supersedes an older
    parked one. An `interrupted` Run counts only when it left work evidence (a
    plan, a non-lifecycle side-effect tool row, an approval, clarification, or
-   watcher, a resume edge, or next steps).
+   watcher, a resume edge, or next steps). A Run whose typed completion reason
+   is `work_selection_rejected` records a refused relationship decision rather
+   than unfinished historical work, so it remains in history but does not
+   enter Attention or `/resume`.
 
 Items are person-partitioned; same-channel items rank first, then stronger
 live signals outrank recency. `/status`, the attach

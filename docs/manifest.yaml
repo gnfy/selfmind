@@ -274,7 +274,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: 9e488a520b6b22a9
+    source_hash: 9dfe334552aa4cff
   - path: docs/skill-learning-and-repair.md
     title: Skill Learning, Automatic Promotion, and Repair
     class: decision

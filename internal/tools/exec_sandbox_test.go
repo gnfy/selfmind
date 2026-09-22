@@ -2,8 +2,10 @@ package tools
 
 import (
 	"context"
+	"net"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -170,7 +172,7 @@ func TestMountBackedPlanIsRefusedRatherThanSilentlyWidened(t *testing.T) {
 		}},
 	}
 
-	_, decision, err := sandboxedCommandWithMaterial(context.Background(),
+	_, decision, _, err := sandboxedCommandWithMaterial(context.Background(),
 		[]string{"/bin/sh", "-c", "echo hi"}, material, SandboxAuto, runtime.GOOS, true)
 	if err != nil {
 		t.Fatalf("auto must degrade rather than fail: %v", err)
@@ -184,7 +186,7 @@ func TestMountBackedPlanIsRefusedRatherThanSilentlyWidened(t *testing.T) {
 
 	// The constraint that must change the result: isolation was demanded, so
 	// there is nothing to degrade to.
-	if _, _, err := sandboxedCommandWithMaterial(context.Background(),
+	if _, _, _, err := sandboxedCommandWithMaterial(context.Background(),
 		[]string{"/bin/sh", "-c", "echo hi"}, material, SandboxIsolated, runtime.GOOS, true); err == nil {
 		t.Fatal("an explicit isolated request must fail when the plan is unenforceable")
 	}
@@ -192,7 +194,7 @@ func TestMountBackedPlanIsRefusedRatherThanSilentlyWidened(t *testing.T) {
 	// Generality: the same plan WITHOUT the mount is enforceable, so the
 	// refusal is about the mount and not about this material in general.
 	material.OverlayMounts = nil
-	_, decision, err = sandboxedCommandWithMaterial(context.Background(),
+	_, decision, _, err = sandboxedCommandWithMaterial(context.Background(),
 		[]string{"/bin/sh", "-c", "echo hi"}, material, SandboxAuto, runtime.GOOS, true)
 	if err != nil || decision.Mode != SandboxIsolated {
 		t.Fatalf("the same plan without a mount must isolate: %+v (%v)", decision, err)
@@ -226,4 +228,81 @@ func TestMacOSIsolationIsReportedEverywhere(t *testing.T) {
 	}).Enforced {
 		t.Fatal("a disabled sandbox must not report enforcement")
 	}
+}
+
+// The proxy projection must follow the decision that actually runs, not the
+// request. `auto` degrades to host execution carrying the daemon's own network,
+// and projecting from the request stripped a proxy that command could reach —
+// recording a plan that read network_mode "shared" beside proxy_mode
+// "omitted_for_isolated_network".
+//
+// The listener is real rather than injected: "reachable loopback proxy" is the
+// condition under test, and a stub would assert the plumbing instead of it.
+func TestProxyProjectionFollowsTheResolvedDecision(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skip("cannot bind a loopback listener")
+	}
+	defer listener.Close()
+	proxy := "HTTPS_PROXY=http://" + listener.Addr().String()
+
+	material := func() execMaterial {
+		return execMaterial{
+			WritableRoots: []string{t.TempDir()},
+			Env:           []string{"PATH=/usr/bin", proxy},
+		}
+	}
+
+	t.Run("auto degrading to host keeps a proxy that host execution can reach", func(t *testing.T) {
+		withExecSandboxPolicy(t, false, false, false) // disabled -> host fallback
+		cmd, decision, plan, err := sandboxedCommandWithMaterial(context.Background(),
+			[]string{"/bin/sh", "-c", "true"}, material(), SandboxAuto, runtime.GOOS, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Mode != SandboxHost || !decision.NetworkShared {
+			t.Fatalf("expected a host fallback with the daemon's network: %+v", decision)
+		}
+		if plan.NetworkMode != "shared" || plan.ProxyMode != proxyModeInherited {
+			t.Fatalf("a shared-network plan must not report an isolated-network proxy omission: %+v", plan)
+		}
+		if !slices.Contains(cmd.Env, proxy) {
+			t.Fatal("host execution lost a proxy it can reach")
+		}
+	})
+
+	t.Run("explicit host execution is a shared network", func(t *testing.T) {
+		withExecSandboxPolicy(t, true, false, false)
+		cmd, decision, plan, err := sandboxedCommandWithMaterial(context.Background(),
+			[]string{"/bin/sh", "-c", "true"}, material(), SandboxHost, runtime.GOOS, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Mode != SandboxHost || plan.ProxyMode != proxyModeInherited || !slices.Contains(cmd.Env, proxy) {
+			t.Fatalf("explicit host execution must keep its proxy: %+v %+v", decision, plan)
+		}
+	})
+
+	// The constraint that must change the result: an isolated call cannot reach
+	// any proxy, so the same material must lose it — and say so consistently.
+	t.Run("isolated execution omits it and the plan agrees", func(t *testing.T) {
+		if !ExecSandboxAvailable() {
+			t.Skip("no isolation backend on this host")
+		}
+		withExecSandboxPolicy(t, true, false, false)
+		cmd, decision, plan, err := sandboxedCommandWithMaterial(context.Background(),
+			[]string{"/bin/sh", "-c", "true"}, material(), SandboxAuto, runtime.GOOS, true, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Mode != SandboxIsolated {
+			t.Fatalf("expected isolation: %+v", decision)
+		}
+		if plan.NetworkMode != "isolated" || plan.ProxyMode != proxyModeOmittedForIsolatedNetwork {
+			t.Fatalf("an isolated plan must record why the proxy went: %+v", plan)
+		}
+		if slices.Contains(cmd.Env, proxy) {
+			t.Fatal("an isolated command kept a proxy it cannot reach")
+		}
+	})
 }

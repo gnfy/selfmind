@@ -174,8 +174,11 @@ SelfMind 区分两个容易混淆的字段：
 主模型只在 `models.primary` 选择。`reasoning` 和 `service_tier` 都是可选项；
 省略或写 `auto` 表示使用 provider/模型默认值，resolver 不会强制发送该字段。
 支持哪些取值由具体模型的能力元数据决定，不维护一份全局硬编码枚举。
-模型管理器在能发现元数据时动态校验；私有 endpoint 没有元数据时，仍会保留用户
-显式配置的兼容值。
+模型管理器在能发现元数据时动态校验。能力元数据未知时，它会提供 `auto` 与手动
+输入值，并继续使用每次模型变更都必须经过的契约探测；未知不能被当作不支持。
+模型状态把配置值与有效默认值分开，并标注其来源（`explicit`、
+`model_default`、`provider_override` 或 `provider_default`）。客户端因此可以如实
+显示 `auto`，而不会为了显示默认值就在请求中强制发送该档位。
 
 本地初始化时，已启用但未填写 provider/model 的 auxiliary 默认使用 primary 的
 provider/model；也可用 `models.auxiliary.enabled: false` 显式关闭后台模型工作。

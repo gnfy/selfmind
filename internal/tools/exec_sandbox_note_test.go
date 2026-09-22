@@ -32,7 +32,7 @@ func TestExecSandboxPromptNote(t *testing.T) {
 
 	withExecSandboxPolicy(t, true, false, true)
 	note := ExecSandboxPromptNote()
-	if !strings.Contains(note, "daemon host namespace") || !strings.Contains(note, "proxy and DNS") {
+	if !strings.Contains(note, "daemon host namespace") || !strings.Contains(note, "proxy settings are projected") {
 		t.Fatalf("networked sandbox note must state shared network, got %q", note)
 	}
 

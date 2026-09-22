@@ -3,13 +3,1477 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "check"
+      "reasoning_content": "state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " check"
     },
     {
       "reasoning_content": ".sh"
     },
     {
+      "reasoning_content": " checks"
+    },
+    {
+      "reasoning_content": " equals"
+    },
+    {
+      "reasoning_content": " RUN"
+    },
+    {
+      "reasoning_content": "NING"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " defect"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "wrong"
+    },
+    {
+      "reasoning_content": " expected"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": ").\n\n"
+    },
+    {
+      "reasoning_content": "Task"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " binding"
+    },
+    {
+      "reasoning_content": " criterion"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " target"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Keep"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " unit"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " investigation"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Plan"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Run"
+    },
+    {
+      "reasoning_content": " supplied"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
+    },
+    {
+      "reasoning_content": " via"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "expect"
+    },
+    {
+      "reasoning_content": " failure"
+    },
+    {
+      "reasoning_content": ")"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " owns"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " acceptance"
+    },
+    {
+      "reasoning_content": " condition"
+    },
+    {
       "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " corrected"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " unit"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " investigation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " structure"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ":\n\n"
+    },
+    {
+      "reasoning_content": "Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Run"
+    },
+    {
+      "reasoning_content": " supplied"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "riterion"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": " target"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "\")"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " expect"
+    },
+    {
+      "reasoning_content": " fail"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " diagnostic"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": "Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Diagn"
+    },
+    {
+      "reasoning_content": "ose"
+    },
+    {
+      "reasoning_content": " defect"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " inspecting"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": "Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Correct"
+    },
+    {
+      "reasoning_content": " observation"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " replace"
+    },
+    {
+      "reasoning_content": " original"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "re"
+    },
+    {
+      "reasoning_content": "places"
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": " id"
+    },
+    {
+      "reasoning_content": " from"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " criterion"
+    },
+    {
+      "reasoning_content": "/t"
+    },
+    {
+      "reasoning_content": "arget"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": " true"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": "Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Report"
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": " including"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " failure"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " owns"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": "?"
+    },
+    {
+      "reasoning_content": " Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " corrected"
+    },
+    {
+      "reasoning_content": " attempt"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " condition"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Correct"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " observation"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " without"
+    },
+    {
+      "reasoning_content": " changing"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " acceptance"
+    },
+    {
+      "reasoning_content": " condition"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " original"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": " reference"
+    },
+    {
+      "reasoning_content": " when"
+    },
+    {
+      "reasoning_content": " replacing"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " attempt"
+    },
+    {
+      "reasoning_content": ".\""
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " owns"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " distinct"
+    },
+    {
+      "reasoning_content": " acceptance"
+    },
+    {
+      "reasoning_content": " condition"
+    },
+    {
+      "reasoning_content": " requiring"
+    },
+    {
+      "reasoning_content": " successful"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " corrected"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": " also"
+    },
+    {
+      "reasoning_content": " runs"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " guidance"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": " across"
+    },
+    {
+      "reasoning_content": " failed"
+    },
+    {
+      "reasoning_content": " attempts"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " replacements"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " ideally"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " covers"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": " condition"
+    },
+    {
+      "reasoning_content": " across"
+    },
+    {
+      "reasoning_content": " attempts"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " also"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " diagnosis"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " make"
+    },
+    {
+      "reasoning_content": ":\n\n"
+    },
+    {
+      "reasoning_content": "Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Run"
+    },
+    {
+      "reasoning_content": " supplied"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
+    },
+    {
+      "reasoning_content": " via"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " attempt"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": "=true"
+    },
+    {
+      "reasoning_content": ")"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": " criteria"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " confirmed"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " evidence"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Keep"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": "_pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": " across"
+    },
+    {
+      "reasoning_content": " failure"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": "Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Diagn"
+    },
+    {
+      "reasoning_content": "ose"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
+    },
+    {
+      "reasoning_content": " defect"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "pending"
+    },
+    {
+      "reasoning_content": ").\n"
+    },
+    {
+      "reasoning_content": "Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Replace"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " corrected"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": "-only"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " criterion"
+    },
+    {
+      "reasoning_content": "/t"
+    },
+    {
+      "reasoning_content": "arget"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "pending"
+    },
+    {
+      "reasoning_content": ").\n"
+    },
+    {
+      "reasoning_content": "Step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Report"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "one"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " unit"
+    },
+    {
+      "reasoning_content": " open"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " investigation"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": " steps"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": " unit"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Only"
+    },
+    {
+      "reasoning_content": " mark"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_unit"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " maybe"
+    },
+    {
+      "reasoning_content": " simpler"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " failures"
+    },
+    {
+      "reasoning_content": " aren"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " necessarily"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "un"
+    },
+    {
+      "reasoning_content": "hand"
+    },
+    {
+      "reasoning_content": "led"
+    },
+    {
+      "reasoning_content": " errors"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " stop"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " records"
+    },
+    {
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": ".sh"
     },
     {
       "reasoning_content": ":"
@@ -48,106 +1512,10 @@
       "reasoning_content": "NING"
     },
     {
-      "reasoning_content": "`."
-    },
-    {
-      "reasoning_content": " But"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " acceptance"
-    },
-    {
-      "reasoning_content": " condition"
-    },
-    {
-      "reasoning_content": " is"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "state"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " contains"
-    },
-    {
-      "reasoning_content": " exactly"
-    },
-    {
-      "reasoning_content": " READ"
-    },
-    {
-      "reasoning_content": "Y"
-    },
-    {
-      "reasoning_content": "\"."
-    },
-    {
-      "reasoning_content": " So"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": ".sh"
-    },
-    {
-      "reasoning_content": " has"
-    },
-    {
-      "reasoning_content": " a"
-    },
-    {
-      "reasoning_content": " defect"
+      "reasoning_content": "`"
     },
     {
       "reasoning_content": " —"
-    },
-    {
-      "reasoning_content": " it"
-    },
-    {
-      "reasoning_content": " checks"
-    },
-    {
-      "reasoning_content": " for"
-    },
-    {
-      "reasoning_content": " RUN"
-    },
-    {
-      "reasoning_content": "NING"
-    },
-    {
-      "reasoning_content": " instead"
-    },
-    {
-      "reasoning_content": " of"
-    },
-    {
-      "reasoning_content": " READ"
-    },
-    {
-      "reasoning_content": "Y"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " read"
     },
     {
       "reasoning_content": " state"
@@ -156,148 +1524,49 @@
       "reasoning_content": ".txt"
     },
     {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Actually"
-    },
-    {
-      "reasoning_content": " wait"
-    },
-    {
-      "reasoning_content": " —"
-    },
-    {
-      "reasoning_content": " I"
-    },
-    {
-      "reasoning_content": " should"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": " run"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": ".sh"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " verify"
-    },
-    {
-      "reasoning_content": " as"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " task"
-    },
-    {
-      "reasoning_content": " requests"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " But"
-    },
-    {
-      "reasoning_content": " let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": " state"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": "?"
-    },
-    {
-      "reasoning_content": " The"
-    },
-    {
-      "reasoning_content": " task"
-    },
-    {
-      "reasoning_content": " says"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": " run"
-    },
-    {
-      "reasoning_content": " it"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " verify"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " a"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": " binding"
-    },
-    {
-      "reasoning_content": " whose"
-    },
-    {
-      "reasoning_content": " criterion"
-    },
-    {
       "reasoning_content": " is"
     },
     {
       "reasoning_content": " \""
     },
     {
-      "reasoning_content": "state"
+      "reasoning_content": "READ"
     },
     {
-      "reasoning_content": ".txt"
+      "reasoning_content": "Y"
     },
     {
-      "reasoning_content": " contains"
+      "reasoning_content": "\\n"
     },
     {
-      "reasoning_content": " exactly"
+      "reasoning_content": "\","
     },
     {
-      "reasoning_content": " READ"
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " substitution"
+    },
+    {
+      "reasoning_content": " strips"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": " →"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
     },
     {
       "reasoning_content": "Y"
@@ -306,64 +1575,112 @@
       "reasoning_content": "\""
     },
     {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " target"
-    },
-    {
-      "reasoning_content": " is"
+      "reasoning_content": " ≠"
     },
     {
       "reasoning_content": " \""
     },
     {
-      "reasoning_content": "state"
+      "reasoning_content": "RUN"
     },
     {
-      "reasoning_content": ".txt"
+      "reasoning_content": "NING"
     },
     {
-      "reasoning_content": "\"."
+      "reasoning_content": "\""
     },
     {
-      "reasoning_content": " Then"
+      "reasoning_content": " →"
     },
     {
-      "reasoning_content": " if"
+      "reasoning_content": " exit"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Note"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "test"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " un"
+    },
+    {
+      "reasoning_content": "qu"
+    },
+    {
+      "reasoning_content": "oted"
+    },
+    {
+      "reasoning_content": "..."
     },
     {
       "reasoning_content": " it"
     },
     {
-      "reasoning_content": " fails"
+      "reasoning_content": " is"
     },
     {
-      "reasoning_content": ","
+      "reasoning_content": " quoted"
     },
     {
-      "reasoning_content": " inspect"
+      "reasoning_content": " \"$"
     },
     {
-      "reasoning_content": " the"
+      "reasoning_content": "(..."
     },
     {
-      "reasoning_content": " check"
+      "reasoning_content": ")\"."
     },
     {
-      "reasoning_content": " and"
+      "reasoning_content": " Also"
     },
     {
-      "reasoning_content": " the"
+      "reasoning_content": " note"
     },
     {
-      "reasoning_content": " input"
+      "reasoning_content": " if"
     },
     {
-      "reasoning_content": " to"
+      "reasoning_content": " state"
     },
     {
-      "reasoning_content": " diagnose"
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " had"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": "..."
+    },
+    {
+      "reasoning_content": " Fine"
     },
     {
       "reasoning_content": ".\n\n"
@@ -372,34 +1689,13 @@
       "reasoning_content": "So"
     },
     {
-      "reasoning_content": " I"
-    },
-    {
-      "reasoning_content": " should"
-    },
-    {
-      "reasoning_content": " run"
-    },
-    {
       "reasoning_content": " verify"
     },
     {
-      "reasoning_content": " first"
+      "reasoning_content": " will"
     },
     {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": ".sh"
-    },
-    {
-      "reasoning_content": " command"
+      "reasoning_content": " fail"
     },
     {
       "reasoning_content": "."
@@ -411,19 +1707,10 @@
       "reasoning_content": " me"
     },
     {
-      "reasoning_content": " set"
+      "reasoning_content": " run"
     },
     {
-      "reasoning_content": " up"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " plan"
-    },
-    {
-      "reasoning_content": " first"
+      "reasoning_content": " it"
     },
     {
       "reasoning_content": ".\n\n"
@@ -435,40 +1722,55 @@
       "reasoning_content": " me"
     },
     {
-      "reasoning_content": " create"
+      "reasoning_content": " write"
     },
     {
-      "reasoning_content": " a"
-    },
-    {
-      "reasoning_content": " durable"
+      "reasoning_content": " the"
     },
     {
       "reasoning_content": " plan"
     },
     {
-      "reasoning_content": " with"
+      "reasoning_content": " first"
     },
     {
-      "reasoning_content": " success"
+      "reasoning_content": ","
     },
     {
-      "reasoning_content": " criteria"
+      "reasoning_content": " then"
     },
     {
-      "reasoning_content": " and"
+      "reasoning_content": " call"
     },
     {
-      "reasoning_content": " required"
+      "reasoning_content": " verify"
     },
     {
-      "reasoning_content": " verification"
+      "reasoning_content": " alone"
     },
     {
-      "reasoning_content": "."
+      "reasoning_content": ".\n\n"
     },
     {
-      "reasoning_content": " One"
+      "reasoning_content": "Note"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " note"
+    },
+    {
+      "reasoning_content": " about"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Keep"
+    },
+    {
+      "reasoning_content": " one"
     },
     {
       "reasoning_content": " work"
@@ -480,6 +1782,36 @@
       "reasoning_content": " open"
     },
     {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " investigation"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_unit"
+    },
+    {
       "reasoning_content": ".\n\n"
     },
     {
@@ -489,184 +1821,22 @@
       "reasoning_content": " me"
     },
     {
-      "reasoning_content": " not"
+      "reasoning_content": " do"
     },
     {
-      "reasoning_content": " read"
+      "reasoning_content": " update"
     },
     {
-      "reasoning_content": " state"
+      "reasoning_content": "_"
     },
     {
-      "reasoning_content": ".txt"
+      "reasoning_content": "plan"
     },
     {
-      "reasoning_content": " yet"
-    },
-    {
-      "reasoning_content": "?"
-    },
-    {
-      "reasoning_content": " Actually"
-    },
-    {
-      "reasoning_content": " reading"
-    },
-    {
-      "reasoning_content": " it"
-    },
-    {
-      "reasoning_content": " is"
-    },
-    {
-      "reasoning_content": " fine"
-    },
-    {
-      "reasoning_content": "—"
-    },
-    {
-      "reasoning_content": "but"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " honor"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " sequence"
-    },
-    {
-      "reasoning_content": " ("
-    },
-    {
-      "reasoning_content": "report"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": " failure"
-    },
-    {
-      "reasoning_content": "),"
-    },
-    {
-      "reasoning_content": " it"
-    },
-    {
-      "reasoning_content": "'s"
-    },
-    {
-      "reasoning_content": " fine"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": " it"
-    },
-    {
-      "reasoning_content": " after"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Actually"
-    },
-    {
-      "reasoning_content": " I"
-    },
-    {
-      "reasoning_content": " already"
-    },
-    {
-      "reasoning_content": " have"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": ".sh"
-    },
-    {
-      "reasoning_content": " content"
-    },
-    {
-      "reasoning_content": " which"
-    },
-    {
-      "reasoning_content": " reveals"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " defect"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " But"
-    },
-    {
-      "reasoning_content": " let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " follow"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " requested"
-    },
-    {
-      "reasoning_content": " order"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " run"
+      "reasoning_content": " then"
     },
     {
       "reasoning_content": " verify"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " set"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " plan"
     },
     {
       "reasoning_content": "."
@@ -676,21 +1846,21 @@
     },
     {
       "usage": {
-        "input_tokens": 9894,
-        "output_tokens": 571,
-        "cache_read_input_tokens": 9600,
-        "cache_miss_input_tokens": 294,
+        "input_tokens": 10470,
+        "output_tokens": 916,
+        "cache_read_input_tokens": 9984,
+        "cache_miss_input_tokens": 486,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 223,
+        "reasoning_output_tokens": 613,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_n5SqYpyFyF0Dsd4j4mKY6945",
+          "ID": "call_00_j4jJOwrR1zsNpVl0llKh3271",
           "Function": "update_plan",
-          "Args": "{\"plan\": [{\"step\": \"Run supplied check.sh through verify bound to criterion \\\"state.txt contains exactly READY\\\" on target state.txt, and capture the first result\", \"status\": \"in_progress\", \"success_criteria\": \"A verify invocation of ./check.sh is recorded with criterion \\\"state.txt contains exactly READY\\\" on target state.txt and its exit status is known\", \"verification_required\": true, \"work_unit\": true}, {\"step\": \"If it failed, inspect check.sh and state.txt to diagnose whether the failure is a defect in the check or a genuine mismatch of the input\", \"status\": \"pending\", \"success_criteria\": \"The cause of the failure is identified from the observed command file and the input bytes, distinguishing check defect from real content mismatch\", \"verification_required\": false}, {\"step\": \"Correct only the observation command (not the acceptance condition) and re-run verify, citing the original evidence as replaced\", \"status\": \"pending\", \"success_criteria\": \"A corrected observation of state.txt is recorded with the same criterion \\\"state.txt contains exactly READY\\\", referencing the prior verification evidence id\", \"verification_required\": true}, {\"step\": \"Report what the evidence establishes, including the first failure and any residual uncertainty\", \"status\": \"pending\", \"success_criteria\": \"Report states the first failure cause, the corrected result, and the exact evidence establishing state.txt exactly equals READY, with no files modified\", \"verification_required\": false}]}"
+          "Args": "{\"explanation\": \"One work unit for the whole investigation: run the supplied check, diagnose, then replace the attempt with a corrected read-only observation under the unchanged criterion.\", \"plan\": [{\"step\": \"Run the supplied check.sh through verify as the first attempt at criterion \\\"state.txt contains exactly READY\\\" on target state.txt\", \"status\": \"in_progress\", \"verification_required\": true, \"work_unit\": true, \"success_criteria\": \"verify records whether check.sh confirms state.txt contains exactly READY\"}, {\"step\": \"Diagnose any failure by inspecting check.sh and state.txt (no runtime storage, no file modifications)\", \"status\": \"pending\", \"success_criteria\": \"The observed mismatch is explained by concrete evidence from the two workspace files\"}, {\"step\": \"Replace the verification attempt with a corrected read-only observation command, referencing the original evidence id, keeping the same criterion and target\", \"status\": \"pending\", \"success_criteria\": \"Corrected observation returns success evidence for state.txt containing exactly READY\"}, {\"step\": \"Report what the evidence establishes, including the first failure\", \"status\": \"pending\", \"success_criteria\": \"Report states the verified fact, the defect found, and the corrected method\"}]}"
         }
       ]
     }

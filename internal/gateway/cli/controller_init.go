@@ -208,27 +208,29 @@ func modelManagerCredentialReady(resolver *modelruntime.Resolver, provider strin
 
 func modelManagerStatusFrom(status modelchange.Status) components.ModelManagerStatus {
 	view := components.ModelManagerStatus{
-		RunningPrimary:        selectionDisplay(status.Running.Primary),
-		RunningBackground:     selectionDisplay(status.Running.Auxiliary),
-		ConfiguredPrimary:     selectionDisplay(status.Configured.Primary),
-		ConfiguredBackground:  selectionDisplay(status.Configured.Auxiliary),
-		PrimaryProvider:       status.Configured.Primary.Provider,
-		PrimaryModel:          status.Configured.Primary.Model,
-		PrimaryReasoning:      status.Configured.Primary.Reasoning,
-		PrimaryServiceTier:    status.Configured.Primary.ServiceTier,
-		BackgroundProvider:    status.Configured.Auxiliary.Provider,
-		BackgroundModel:       status.Configured.Auxiliary.Model,
-		BackgroundReasoning:   status.Configured.Auxiliary.Reasoning,
-		BackgroundServiceTier: status.Configured.Auxiliary.ServiceTier,
-		BackgroundEnabled:     status.Configured.Auxiliary.Enabled == nil || *status.Configured.Auxiliary.Enabled,
-		BackgroundFollowsMain: status.Configured.Auxiliary.FollowPrimary,
-		ForegroundReady:       status.ForegroundReady(),
-		BackgroundReady:       status.BackgroundReady(),
-		ReadinessDegraded:     status.Readiness.Degraded,
-		ForegroundReason:      status.Readiness.ForegroundReason,
-		BackgroundReason:      status.Readiness.BackgroundReason,
-		Generation:            status.Generation,
-		RoleOverrides:         make(map[string]components.ModelManagerSubmission),
+		RunningPrimary:           selectionDisplayWithTuning(status.Running.Primary, status.RunningTuning.Primary),
+		RunningBackground:        selectionDisplayWithTuning(status.Running.Auxiliary, status.RunningTuning.Auxiliary),
+		ConfiguredPrimary:        selectionDisplayWithTuning(status.Configured.Primary, status.ConfiguredTuning.Primary),
+		ConfiguredBackground:     selectionDisplayWithTuning(status.Configured.Auxiliary, status.ConfiguredTuning.Auxiliary),
+		PrimaryProvider:          status.Configured.Primary.Provider,
+		PrimaryModel:             status.Configured.Primary.Model,
+		PrimaryReasoning:         status.Configured.Primary.Reasoning,
+		PrimaryReasoningLabel:    reasoningStatusLabel(status.Configured.Primary, status.ConfiguredTuning.Primary),
+		PrimaryServiceTier:       status.Configured.Primary.ServiceTier,
+		BackgroundProvider:       status.Configured.Auxiliary.Provider,
+		BackgroundModel:          status.Configured.Auxiliary.Model,
+		BackgroundReasoning:      status.Configured.Auxiliary.Reasoning,
+		BackgroundReasoningLabel: reasoningStatusLabel(status.Configured.Auxiliary, status.ConfiguredTuning.Auxiliary),
+		BackgroundServiceTier:    status.Configured.Auxiliary.ServiceTier,
+		BackgroundEnabled:        status.Configured.Auxiliary.Enabled == nil || *status.Configured.Auxiliary.Enabled,
+		BackgroundFollowsMain:    status.Configured.Auxiliary.FollowPrimary,
+		ForegroundReady:          status.ForegroundReady(),
+		BackgroundReady:          status.BackgroundReady(),
+		ReadinessDegraded:        status.Readiness.Degraded,
+		ForegroundReason:         status.Readiness.ForegroundReason,
+		BackgroundReason:         status.Readiness.BackgroundReason,
+		Generation:               status.Generation,
+		RoleOverrides:            make(map[string]components.ModelManagerSubmission),
 	}
 	for _, route := range modelchange.ManagedRoleRoutes() {
 		selection := modelchange.SelectionForRoute(status.Configured, route)
@@ -310,6 +312,32 @@ func selectionDisplay(selection config.ModelSelectionConfig) string {
 		reasoning = "auto"
 	}
 	return fmt.Sprintf("%s/%s · reasoning=%s", provider, model, reasoning)
+}
+
+func selectionDisplayWithTuning(selection config.ModelSelectionConfig, tuning modelchange.RouteTuning) string {
+	if selection.Enabled != nil && !*selection.Enabled {
+		return "disabled"
+	}
+	provider := strings.TrimSpace(selection.Provider)
+	model := strings.TrimSpace(selection.Model)
+	if provider == "" {
+		provider = "-"
+	}
+	if model == "" {
+		model = "-"
+	}
+	return fmt.Sprintf("%s/%s · reasoning=%s", provider, model, reasoningStatusLabel(selection, tuning))
+}
+
+func reasoningStatusLabel(selection config.ModelSelectionConfig, tuning modelchange.RouteTuning) string {
+	if explicit := strings.TrimSpace(selection.Reasoning); explicit != "" {
+		return explicit
+	}
+	effective := strings.TrimSpace(tuning.Reasoning)
+	if effective != "" {
+		return "auto→" + effective
+	}
+	return "auto"
 }
 
 func (c *Controller) Start() {

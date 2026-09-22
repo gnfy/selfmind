@@ -166,6 +166,9 @@ func TestObservationCatalogCoversMeasuredReadVerbs(t *testing.T) {
 		"gh release view v20260918151055 --repo owner/name",
 		"gh release list --repo owner/name",
 		"git ls-remote https://github.com/owner/name refs/heads/main",
+		// Added from a live release: reading a build's CloudWatch log is a read,
+		// and the `logs` family's write verbs sit right beside it.
+		"aws logs get-log-events --profile cw3 --log-group-name /aws/codebuild/x --log-stream-name y --limit 50",
 	}
 	for _, command := range reads {
 		if !provenReadOnly(t, command) {
@@ -177,13 +180,18 @@ func TestObservationCatalogCoversMeasuredReadVerbs(t *testing.T) {
 	// each prints a secret or changes state through an otherwise read-shaped
 	// verb.
 	for _, command := range []string{
-		"gcloud auth print-access-token",              // emits a credential
-		"aws configure get aws_secret_access_key",     // emits a credential
-		"kubectl config use-context gke_p_us-east4_c", // rewrites kubeconfig
-		"gcloud artifacts docker images delete IMAGE", // sibling of a list
-		"gcloud artifacts repositories delete r",      // sibling of a list
-		"gh release delete v1 --repo owner/name",      // sibling of a view
-		"git push origin develop",                     // not a remote read
+		"gcloud auth print-access-token",                                                // emits a credential
+		"aws configure get aws_secret_access_key",                                       // emits a credential
+		"kubectl config use-context gke_p_us-east4_c",                                   // rewrites kubeconfig
+		"gcloud artifacts docker images delete IMAGE",                                   // sibling of a list
+		"gcloud artifacts repositories delete r",                                        // sibling of a list
+		"gh release delete v1 --repo owner/name",                                        // sibling of a view
+		"git push origin develop",                                                       // not a remote read
+		"aws logs put-log-events --log-group-name x --log-stream-name y --log-events f", // writes
+		"aws logs create-log-group --log-group-name x",                                  // creates
+		"aws logs delete-log-group --log-group-name x",                                  // deletes
+		"aws logs put-retention-policy --log-group-name x --retention-in-days 7",        // changes retention
+		"aws logs tail /aws/codebuild/x --follow",                                       // not the pinned verb
 	} {
 		if provenReadOnly(t, command) {
 			t.Errorf("must NOT be provable read-only: %s", command)

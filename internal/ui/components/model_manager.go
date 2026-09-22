@@ -19,31 +19,35 @@ var modelManagerRoles = []string{
 	"summarizer",
 }
 
+const manualReasoningOption = "Enter a reasoning value manually…"
+
 type ModelManagerStatus struct {
-	RunningPrimary        string
-	RunningBackground     string
-	ConfiguredPrimary     string
-	ConfiguredBackground  string
-	PrimaryProvider       string
-	PrimaryModel          string
-	PrimaryReasoning      string
-	PrimaryServiceTier    string
-	BackgroundProvider    string
-	BackgroundModel       string
-	BackgroundReasoning   string
-	BackgroundServiceTier string
-	BackgroundEnabled     bool
-	BackgroundFollowsMain bool
-	ForegroundReady       bool
-	BackgroundReady       bool
-	ReadinessDegraded     bool
-	ForegroundReason      string
-	BackgroundReason      string
-	RoleOverrides         map[string]ModelManagerSubmission
-	Pending               string
-	RecoveryRequired      bool
-	RecoveryFailure       string
-	Generation            int64
+	RunningPrimary           string
+	RunningBackground        string
+	ConfiguredPrimary        string
+	ConfiguredBackground     string
+	PrimaryProvider          string
+	PrimaryModel             string
+	PrimaryReasoning         string
+	PrimaryReasoningLabel    string
+	PrimaryServiceTier       string
+	BackgroundProvider       string
+	BackgroundModel          string
+	BackgroundReasoning      string
+	BackgroundReasoningLabel string
+	BackgroundServiceTier    string
+	BackgroundEnabled        bool
+	BackgroundFollowsMain    bool
+	ForegroundReady          bool
+	BackgroundReady          bool
+	ReadinessDegraded        bool
+	ForegroundReason         string
+	BackgroundReason         string
+	RoleOverrides            map[string]ModelManagerSubmission
+	Pending                  string
+	RecoveryRequired         bool
+	RecoveryFailure          string
+	Generation               int64
 }
 
 type ModelManagerModel struct {
@@ -120,36 +124,39 @@ const (
 // ModelManager owns one transient, multi-route draft. The daemon remains the
 // authority for probes, persistence, generation checks, and safe restarts.
 type ModelManager struct {
-	theme              uitheme.Theme
-	status             ModelManagerStatus
-	providers          []ModelManagerProvider
-	screen             modelManagerScreen
-	index              int
-	route              string
-	roleIndex          int
-	provider           int
-	model              int
-	reasoning          int
-	serviceTier        int
-	draft              map[string]ModelManagerSubmission
-	providerDraft      map[string]ModelManagerProviderSubmission
-	validation         map[string]string
-	credentials        map[string]string
-	credentialInput    []rune
-	credentialStage    string
-	editingCustomModel bool
-	customModelInput   []rune
-	connection         int
-	connectionNew      bool
-	connectionInput    []rune
-	connectionEditing  ModelManagerProviderSubmission
-	width              int
-	height             int
-	setup              bool
-	setupValidating    bool
-	setupValidated     bool
-	setupValidation    []ModelSetupProbe
-	setupError         string
+	theme                  uitheme.Theme
+	status                 ModelManagerStatus
+	providers              []ModelManagerProvider
+	screen                 modelManagerScreen
+	index                  int
+	route                  string
+	roleIndex              int
+	provider               int
+	model                  int
+	reasoning              int
+	serviceTier            int
+	draft                  map[string]ModelManagerSubmission
+	providerDraft          map[string]ModelManagerProviderSubmission
+	validation             map[string]string
+	credentials            map[string]string
+	credentialInput        []rune
+	credentialStage        string
+	editingCustomModel     bool
+	customModelInput       []rune
+	editingCustomReasoning bool
+	customReasoningInput   []rune
+	customReasoning        string
+	connection             int
+	connectionNew          bool
+	connectionInput        []rune
+	connectionEditing      ModelManagerProviderSubmission
+	width                  int
+	height                 int
+	setup                  bool
+	setupValidating        bool
+	setupValidated         bool
+	setupValidation        []ModelSetupProbe
+	setupError             string
 }
 
 func NewModelManager(status ModelManagerStatus, providers []ModelManagerProvider, width, height int) *ModelManager {
@@ -245,6 +252,9 @@ func (m *ModelManager) Update(msg tea.KeyMsg) ModelManagerAction {
 	if m.editingCustomModel {
 		return m.updateCustomModel(msg)
 	}
+	if m.editingCustomReasoning {
+		return m.updateCustomReasoning(msg)
+	}
 	if m.screen == modelScreenConnectionName || m.screen == modelScreenConnectionURL {
 		return m.updateConnectionInput(msg)
 	}
@@ -329,6 +339,33 @@ func (m *ModelManager) updateCustomModel(msg tea.KeyMsg) ModelManagerAction {
 	return ModelManagerAction{}
 }
 
+func (m *ModelManager) updateCustomReasoning(msg tea.KeyMsg) ModelManagerAction {
+	switch msg.String() {
+	case "esc", "ctrl+c":
+		m.editingCustomReasoning = false
+		m.customReasoningInput = nil
+	case "enter":
+		value := strings.TrimSpace(string(m.customReasoningInput))
+		if value == "" || strings.EqualFold(value, "auto") {
+			return ModelManagerAction{}
+		}
+		m.customReasoning = value
+		m.editingCustomReasoning = false
+		m.customReasoningInput = nil
+		m.reasoning = optionIndex(m.reasoningOptions(), value)
+		m.screen, m.index = modelScreenServiceTier, m.serviceTier
+	case "backspace":
+		if len(m.customReasoningInput) > 0 {
+			m.customReasoningInput = m.customReasoningInput[:len(m.customReasoningInput)-1]
+		}
+	default:
+		if len(msg.Runes) > 0 {
+			m.customReasoningInput = append(m.customReasoningInput, msg.Runes...)
+		}
+	}
+	return ModelManagerAction{}
+}
+
 func (m *ModelManager) choose() ModelManagerAction {
 	if m.setup {
 		if action, handled := m.chooseSetup(); handled {
@@ -387,6 +424,7 @@ func (m *ModelManager) choose() ModelManagerAction {
 			return ModelManagerAction{}
 		}
 		m.provider, m.model, m.reasoning, m.serviceTier = m.index, 0, 0, 0
+		m.customReasoning = ""
 		m.alignModelOptions()
 		provider := m.currentProvider()
 		if provider.CredentialRequired && !provider.CredentialReady && strings.TrimSpace(m.credentials[provider.ID]) == "" {
@@ -406,6 +444,11 @@ func (m *ModelManager) choose() ModelManagerAction {
 		m.alignTuningOptions()
 		m.screen, m.index = modelScreenReasoning, m.reasoning
 	case modelScreenReasoning:
+		if m.option(m.reasoningOptions(), m.index) == manualReasoningOption {
+			m.editingCustomReasoning = true
+			m.customReasoningInput = nil
+			return ModelManagerAction{}
+		}
 		m.reasoning = m.index
 		m.screen, m.index = modelScreenServiceTier, m.serviceTier
 	case modelScreenServiceTier:
@@ -685,6 +728,7 @@ func (m *ModelManager) configuredSelection(route string) ModelManagerSubmission 
 
 func (m *ModelManager) alignToSelection(selection ModelManagerSubmission) {
 	m.provider, m.model, m.reasoning, m.serviceTier = 0, 0, 0, 0
+	m.customReasoning = ""
 	for i := range m.providers {
 		if strings.EqualFold(m.providers[i].ID, selection.Provider) {
 			m.provider = i
@@ -698,6 +742,7 @@ func (m *ModelManager) alignToSelection(selection ModelManagerSubmission) {
 			break
 		}
 	}
+	m.setCustomReasoning(selection.Reasoning)
 	m.reasoning = optionIndex(m.reasoningOptions(), selection.Reasoning)
 	m.serviceTier = optionIndex(m.serviceTierOptions(), selection.ServiceTier)
 }
@@ -719,11 +764,28 @@ func (m *ModelManager) alignModelOptions() {
 func (m *ModelManager) alignTuningOptions() {
 	selection := m.effectiveSelection(m.route)
 	if strings.EqualFold(m.currentProvider().ID, selection.Provider) && strings.EqualFold(m.currentModel().ID, selection.Model) {
+		m.setCustomReasoning(selection.Reasoning)
 		m.reasoning = optionIndex(m.reasoningOptions(), selection.Reasoning)
 		m.serviceTier = optionIndex(m.serviceTierOptions(), selection.ServiceTier)
 		return
 	}
 	m.reasoning, m.serviceTier = 0, 0
+	m.customReasoning = ""
+}
+
+func (m *ModelManager) setCustomReasoning(value string) {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.EqualFold(value, "auto") {
+		m.customReasoning = ""
+		return
+	}
+	for _, supported := range m.currentModel().Reasoning {
+		if strings.EqualFold(strings.TrimSpace(supported), value) {
+			m.customReasoning = ""
+			return
+		}
+	}
+	m.customReasoning = value
 }
 
 func (m *ModelManager) back() {
@@ -944,6 +1006,9 @@ func (m *ModelManager) View() string {
 	if m.editingCustomModel {
 		return strings.Join(append(lines, "", "  "+string(m.customModelInput)+"█", "", muted.Render("Enter save  Esc cancel")), "\n")
 	}
+	if m.editingCustomReasoning {
+		return strings.Join(append(lines, "", "  Reasoning: "+string(m.customReasoningInput)+"█", "", muted.Render("Provider capability is unknown; validation runs before apply."), muted.Render("Enter continue  Esc cancel")), "\n")
+	}
 	if m.screen == modelScreenCredential {
 		masked := strings.Repeat("•", len(m.credentialInput))
 		return strings.Join(append(lines, "", "  API key: "+masked+"█", "", muted.Render("Enter continue  Esc back")), "\n")
@@ -1081,6 +1146,12 @@ func (m *ModelManager) reasoningOptions() []string {
 		if value = strings.TrimSpace(value); value != "" && !strings.EqualFold(value, "auto") {
 			options = append(options, value)
 		}
+	}
+	if value := strings.TrimSpace(m.customReasoning); value != "" {
+		options = append(options, value)
+	}
+	if len(m.currentModel().Reasoning) == 0 {
+		options = append(options, manualReasoningOption)
 	}
 	return uniqueManagerOptions(options)
 }

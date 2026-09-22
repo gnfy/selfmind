@@ -1,0 +1,158 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "notes"
+    },
+    {
+      "reasoning_content": ".md"
+    },
+    {
+      "reasoning_content": " has"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " lines"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Answer"
+    },
+    {
+      "reasoning_content": " directly"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "notes"
+    },
+    {
+      "content": ".md"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "行"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "命令"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区内"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "不"
+    },
+    {
+      "content": "联网"
+    },
+    {
+      "content": "）"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "```\n"
+    },
+    {
+      "content": "wc"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "l"
+    },
+    {
+      "content": " notes"
+    },
+    {
+      "content": ".md"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "```\n\n"
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": " notes"
+    },
+    {
+      "content": ".md"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 10232,
+        "output_tokens": 47,
+        "cache_read_input_tokens": 9984,
+        "cache_miss_input_tokens": 248,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 10,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

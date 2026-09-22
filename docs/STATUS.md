@@ -18,7 +18,7 @@ citations for new provider-backed denials. Response usage includes input/cache
 accounting, with historical gaps kept visible separately from Main/maintenance.
 Two new real-provider cases cover readback-before-resume and method correction;
 four live approval probes cover changed wording/targets and opposing constraints.
-Full selfcheck passed all 80 cases, with focused race coverage and an isolated
+Full selfcheck passed all 81 cases, with focused race coverage and an isolated
 packed-npm daemon lifecycle smoke. Local installation is
 `v0.1.0-beta.26-local.run-evidence.1`; real multi-day and cross-model behavior
 remain observation gates. Historical unfinished Runs are not rewritten.
@@ -27,8 +27,8 @@ remain observation gates. Historical unfinished Runs are not rewritten.
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 80 reviewed YAML cases. Model-backed cases carry committed cassettes; deterministic cases
-  declare `model_required: false`.
+- Release corpus: 81 reviewed YAML cases; model-backed ones carry committed cassettes, deterministic ones
+  declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
 - Pull requests run the fast offline corpus and core Linux/macOS checks. Main

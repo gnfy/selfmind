@@ -553,6 +553,7 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 		buf := make([]byte, 4096)
 		var leftover []byte
 		toolDeltas := make(map[int]*OpenAIToolCall)
+		var priorUsage UsageStats
 
 		for {
 			n, err := reader.Read(buf)
@@ -607,7 +608,10 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 						ch <- StreamEvent{FinishReason: chunk.Choices[0].FinishReason}
 					}
 					if chunk.Usage != nil {
-						stats := chunk.Usage.usageStats()
+						// OpenAI-compatible usage values are cumulative snapshots for
+						// this response. Some providers repeat them on several SSE
+						// chunks; the agent loop sums events, so send only new counts.
+						stats := openAIUsageDelta(chunk.Usage.usageStats(), &priorUsage)
 						if stats != (UsageStats{}) {
 							ch <- StreamEvent{Usage: &stats}
 						}
@@ -670,6 +674,31 @@ func (u openAIStreamUsage) usageStats() UsageStats {
 		stats.ReasoningOutputTokens = maxUsageInt(u.CompletionTokensDetails.ReasoningTokens, 0)
 	}
 	return stats
+}
+
+func openAIUsageDelta(current UsageStats, prior *UsageStats) UsageStats {
+	if prior == nil {
+		return current
+	}
+	delta := UsageStats{
+		InputTokens:              max(0, current.InputTokens-prior.InputTokens),
+		OutputTokens:             max(0, current.OutputTokens-prior.OutputTokens),
+		CacheReadInputTokens:     max(0, current.CacheReadInputTokens-prior.CacheReadInputTokens),
+		CacheMissInputTokens:     max(0, current.CacheMissInputTokens-prior.CacheMissInputTokens),
+		CacheCreationInputTokens: max(0, current.CacheCreationInputTokens-prior.CacheCreationInputTokens),
+		ReasoningOutputTokens:    max(0, current.ReasoningOutputTokens-prior.ReasoningOutputTokens),
+		CacheUsageReported:       current.CacheUsageReported && !prior.CacheUsageReported,
+		CacheCreationReported:    current.CacheCreationReported && !prior.CacheCreationReported,
+	}
+	prior.InputTokens = max(prior.InputTokens, current.InputTokens)
+	prior.OutputTokens = max(prior.OutputTokens, current.OutputTokens)
+	prior.CacheReadInputTokens = max(prior.CacheReadInputTokens, current.CacheReadInputTokens)
+	prior.CacheMissInputTokens = max(prior.CacheMissInputTokens, current.CacheMissInputTokens)
+	prior.CacheCreationInputTokens = max(prior.CacheCreationInputTokens, current.CacheCreationInputTokens)
+	prior.ReasoningOutputTokens = max(prior.ReasoningOutputTokens, current.ReasoningOutputTokens)
+	prior.CacheUsageReported = prior.CacheUsageReported || current.CacheUsageReported
+	prior.CacheCreationReported = prior.CacheCreationReported || current.CacheCreationReported
+	return delta
 }
 
 func maxUsageInt(value, minimum int) int {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -145,6 +146,29 @@ func TestFinalAnswerWithoutNewToolsKeepsPairedToolHistory(t *testing.T) {
 	result, _ := json.Marshal(anthropic.Messages[2].Content)
 	if !strings.Contains(string(assistant), `"type":"tool_use"`) || !strings.Contains(string(result), `"type":"tool_result"`) {
 		t.Fatalf("Anthropic final-answer request broke the native pair: assistant=%s result=%s", assistant, result)
+	}
+}
+
+func TestOpenAIStreamRepeatedUsageSnapshotsCountOnlyOnce(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"a"}}],"usage":{"prompt_tokens":100,"completion_tokens":1,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20}}`,
+		`data: {"choices":[{"delta":{"content":"b"}}],"usage":{"prompt_tokens":100,"completion_tokens":2,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20}}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":2,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20}}`,
+		`data: [DONE]`,
+	}, "\n\n") + "\n\n"
+	response := &http.Response{Body: io.NopCloser(strings.NewReader(stream))}
+	var total UsageStats
+	for event := range openAIStreamEvents(response) {
+		if event.Usage == nil {
+			continue
+		}
+		total.InputTokens += event.Usage.InputTokens
+		total.OutputTokens += event.Usage.OutputTokens
+		total.CacheReadInputTokens += event.Usage.CacheReadInputTokens
+		total.CacheMissInputTokens += event.Usage.CacheMissInputTokens
+	}
+	if total.InputTokens != 100 || total.OutputTokens != 2 || total.CacheReadInputTokens != 80 || total.CacheMissInputTokens != 20 {
+		t.Fatalf("repeated usage snapshots were double counted: %+v", total)
 	}
 }
 

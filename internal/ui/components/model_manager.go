@@ -51,9 +51,18 @@ type ModelManagerStatus struct {
 }
 
 type ModelManagerModel struct {
-	ID           string
-	Reasoning    []string
-	ServiceTiers []string
+	ID                   string
+	Reasoning            []string
+	ServiceTiers         []string
+	Remembered           bool
+	Available            bool
+	Configured           bool
+	AllowManualReasoning bool
+}
+
+type ModelManagerRememberedModel struct {
+	Provider string
+	Model    string
 }
 
 type ModelManagerProvider struct {
@@ -96,6 +105,7 @@ type ModelManagerAction struct {
 	ValidationRoute string
 	RecoveryAction  string
 	ProviderDraft   []ModelManagerProviderSubmission
+	ForgetModel     *ModelManagerRememberedModel
 }
 
 type modelManagerScreen int
@@ -117,7 +127,7 @@ const (
 	modelScreenConnectionURL
 	modelScreenConnectionProtocol
 	modelScreenConnectionAuth
-	modelScreenSetupBackground
+	modelScreenBackground
 	modelScreenSetupValidation
 )
 
@@ -261,6 +271,13 @@ func (m *ModelManager) Update(msg tea.KeyMsg) ModelManagerAction {
 	if m.screen == modelScreenCredential {
 		return m.updateCredential(msg)
 	}
+	if msg.String() == "d" && m.screen == modelScreenModel {
+		model := m.currentModel()
+		if model.Remembered {
+			return ModelManagerAction{ForgetModel: &ModelManagerRememberedModel{Provider: m.currentProvider().ID, Model: model.ID}}
+		}
+		return ModelManagerAction{}
+	}
 	switch msg.String() {
 	case "esc":
 		if m.setup && m.screen != modelScreenMenu {
@@ -316,7 +333,7 @@ func (m *ModelManager) updateCustomModel(msg tea.KeyMsg) ModelManagerAction {
 		id := strings.TrimSpace(string(m.customModelInput))
 		if id != "" && len(m.providers) > 0 {
 			provider := &m.providers[m.provider]
-			provider.Models = append(provider.Models, ModelManagerModel{ID: id})
+			provider.Models = append(provider.Models, ModelManagerModel{ID: id, AllowManualReasoning: true})
 			m.model = len(provider.Models) - 1
 			m.editingCustomModel = false
 			m.customModelInput = nil
@@ -324,8 +341,8 @@ func (m *ModelManager) updateCustomModel(msg tea.KeyMsg) ModelManagerAction {
 				m.alignTuningOptions()
 				return m.finishSetupSelection()
 			}
-			m.screen = modelScreenReasoning
-			m.index = 0
+			m.reasoning = 0
+			m.enterReasoning()
 		}
 	case "backspace":
 		if len(m.customModelInput) > 0 {
@@ -367,6 +384,9 @@ func (m *ModelManager) updateCustomReasoning(msg tea.KeyMsg) ModelManagerAction 
 }
 
 func (m *ModelManager) choose() ModelManagerAction {
+	if m.screen == modelScreenBackground {
+		return m.chooseBackground()
+	}
 	if m.setup {
 		if action, handled := m.chooseSetup(); handled {
 			return action
@@ -378,7 +398,8 @@ func (m *ModelManager) choose() ModelManagerAction {
 		case 0:
 			m.beginRoute("primary")
 		case 1:
-			m.beginRoute("background")
+			m.route = "background"
+			m.screen, m.index = modelScreenBackground, 0
 		case 2:
 			m.screen, m.index = modelScreenRoles, 0
 		case 3:
@@ -412,14 +433,6 @@ func (m *ModelManager) choose() ModelManagerAction {
 			m.screen, m.index = modelScreenRoles, m.roleIndex
 		}
 	case modelScreenProvider:
-		if m.route == "background" && m.index >= len(m.providers) {
-			disabled := false
-			selection := m.configuredSelection("background")
-			selection.Enabled = &disabled
-			m.setDraft(selection)
-			m.screen, m.index = modelScreenMenu, 1
-			return m.draftAction(m.route)
-		}
 		if len(m.providers) == 0 {
 			return ModelManagerAction{}
 		}
@@ -442,7 +455,7 @@ func (m *ModelManager) choose() ModelManagerAction {
 		}
 		m.model = m.index
 		m.alignTuningOptions()
-		m.screen, m.index = modelScreenReasoning, m.reasoning
+		m.enterReasoning()
 	case modelScreenReasoning:
 		if m.option(m.reasoningOptions(), m.index) == manualReasoningOption {
 			m.editingCustomReasoning = true
@@ -481,10 +494,83 @@ func (m *ModelManager) choose() ModelManagerAction {
 	return ModelManagerAction{}
 }
 
+func (m *ModelManager) chooseBackground() ModelManagerAction {
+	primary := m.effectiveSelection("primary")
+	models := m.backgroundModels()
+	switch {
+	case m.index == 0:
+		m.setDraft(ModelManagerSubmission{Route: "background", Reset: true})
+		return m.finishBackgroundChoice()
+	case m.index <= len(models):
+		m.route = "background"
+		m.alignToSelection(ModelManagerSubmission{Provider: primary.Provider, Model: models[m.index-1].ID})
+		m.alignTuningOptions()
+		if m.setup {
+			return m.finishSetupSelection()
+		}
+		m.screen, m.index = modelScreenReasoning, m.reasoning
+	case m.index == len(models)+1:
+		m.beginRoute("background")
+	case m.index == len(models)+2:
+		disabled := false
+		selection := m.configuredSelection("background")
+		selection.Reset = false
+		selection.Enabled = &disabled
+		m.setDraft(selection)
+		return m.finishBackgroundChoice()
+	default:
+		m.screen, m.index = modelScreenMenu, 1
+	}
+	return ModelManagerAction{}
+}
+
+func (m *ModelManager) finishBackgroundChoice() ModelManagerAction {
+	m.screen, m.index = modelScreenMenu, 1
+	if m.setup {
+		m.index = 3
+	}
+	if _, changed := m.draft["background"]; !changed {
+		return ModelManagerAction{}
+	}
+	return m.draftAction("background")
+}
+
+func (m *ModelManager) backgroundModels() []ModelManagerModel {
+	primary := m.effectiveSelection("primary")
+	for _, provider := range m.providers {
+		if strings.EqualFold(provider.ID, primary.Provider) {
+			return provider.Models
+		}
+	}
+	return nil
+}
+
+func (m *ModelManager) backgroundOptions() []string {
+	options := []string{"Same as Main"}
+	for _, model := range m.backgroundModels() {
+		options = append(options, model.ID)
+	}
+	return append(options, "Another Provider…", "Disable background model work", "Back")
+}
+
 func (m *ModelManager) beginRoute(route string) {
 	m.route = normalizeManagerRoute(route)
 	m.alignToSelection(m.effectiveSelection(m.route))
 	m.screen, m.index = modelScreenProvider, m.provider
+}
+
+// approvalManagerRoute is the approval-triage role. The daemon always runs it
+// at the chosen model's lowest-latency reasoning tier, so the manager offers
+// no reasoning choice there and submits auto.
+const approvalManagerRoute = "fast_classifier"
+
+func (m *ModelManager) enterReasoning() {
+	if m.route == approvalManagerRoute {
+		m.reasoning = 0
+		m.screen, m.index = modelScreenServiceTier, m.serviceTier
+		return
+	}
+	m.screen, m.index = modelScreenReasoning, m.reasoning
 }
 
 func (m *ModelManager) setDraft(submission ModelManagerSubmission) {
@@ -799,21 +885,26 @@ func (m *ModelManager) back() {
 		m.screen, m.index = modelScreenMenu, 2
 	case modelScreenRoleChoice:
 		m.screen, m.index = modelScreenRoles, m.roleIndex
+	case modelScreenBackground:
+		m.screen, m.index = modelScreenMenu, 1
 	case modelScreenProvider:
 		if isManagerRole(m.route) {
 			m.screen, m.index = modelScreenRoleChoice, 1
+		} else if m.route == "background" {
+			m.screen, m.index = modelScreenBackground, 0
 		} else {
 			m.screen = modelScreenMenu
-			if m.route == "background" {
-				m.index = 1
-			}
 		}
 	case modelScreenModel:
 		m.screen, m.index = modelScreenProvider, m.provider
 	case modelScreenReasoning:
 		m.screen, m.index = modelScreenModel, m.model
 	case modelScreenServiceTier:
-		m.screen, m.index = modelScreenReasoning, m.reasoning
+		if m.route == approvalManagerRoute {
+			m.screen, m.index = modelScreenModel, m.model
+		} else {
+			m.screen, m.index = modelScreenReasoning, m.reasoning
+		}
 	case modelScreenReview:
 		m.screen, m.index = modelScreenMenu, 5
 	case modelScreenStatus:
@@ -840,6 +931,9 @@ func (m *ModelManager) move(delta int) {
 }
 
 func (m *ModelManager) options() []string {
+	if m.screen == modelScreenBackground {
+		return m.backgroundOptions()
+	}
 	if m.setup {
 		if options, ok := m.setupOptions(); ok {
 			return options
@@ -865,7 +959,7 @@ func (m *ModelManager) options() []string {
 	case modelScreenRoleChoice:
 		return []string{"Use background model", "Choose an explicit model", "Back"}
 	case modelScreenProvider:
-		out := make([]string, 0, len(m.providers)+1)
+		out := make([]string, 0, len(m.providers))
 		for _, provider := range m.providers {
 			label := provider.Label
 			if label == "" {
@@ -877,15 +971,16 @@ func (m *ModelManager) options() []string {
 				out = append(out, fmt.Sprintf("%s (%s)", label, provider.ID))
 			}
 		}
-		if m.route == "background" {
-			out = append(out, "Disable background model work")
-		}
 		return out
 	case modelScreenModel:
 		provider := m.currentProvider()
 		out := make([]string, 0, len(provider.Models)+1)
 		for _, model := range provider.Models {
-			out = append(out, model.ID)
+			label := model.ID
+			if model.Remembered {
+				label += " · remembered"
+			}
+			out = append(out, label)
 		}
 		return append(out, "Enter a model ID manually…")
 	case modelScreenReasoning:
@@ -1000,7 +1095,9 @@ func (m *ModelManager) View() string {
 		return strings.Join(append(lines, "", "  r  retry the committed candidate", "  b  restore the last healthy model", "", muted.Render("r/b choose  Esc close")), "\n")
 	}
 	lines = append(lines, "", accent.Render(m.screenTitle()))
-	if m.setup {
+	if m.screen == modelScreenBackground {
+		lines = append(lines, "Main: "+m.setupRouteLabel("primary"), "Same as Main follows future Main changes; a named model stays independent.")
+	} else if m.setup {
 		lines = append(lines, m.setupDetailLines()...)
 	}
 	if m.editingCustomModel {
@@ -1032,6 +1129,9 @@ func (m *ModelManager) View() string {
 			value := selection.Provider + "/" + selection.Model
 			if selection.Reset {
 				value = "Uses background model"
+				if selection.Route == "background" {
+					value = "Same as Main"
+				}
 			} else if selection.Route == "background" && !submissionEnabled(selection) {
 				value = "Disabled"
 			}
@@ -1072,6 +1172,9 @@ func (m *ModelManager) View() string {
 	if m.setup {
 		footer = "↑/↓ move  Enter select  Esc back (close from summary)"
 	}
+	if m.screen == modelScreenModel && m.currentModel().Remembered {
+		footer = "d forget remembered  " + footer
+	}
 	view := strings.Join(append(lines, "", muted.Render(footer)), "\n")
 	if m.setup && m.width > 4 {
 		return lipgloss.NewStyle().Width(m.width - 2).Render(view)
@@ -1109,6 +1212,8 @@ func (m *ModelManager) screenTitle() string {
 		return "Role overrides (optional)"
 	case modelScreenRoleChoice:
 		return m.route
+	case modelScreenBackground:
+		return "What should Background use?"
 	case modelScreenProvider:
 		return "Choose provider for " + m.route
 	case modelScreenCredential:
@@ -1150,10 +1255,37 @@ func (m *ModelManager) reasoningOptions() []string {
 	if value := strings.TrimSpace(m.customReasoning); value != "" {
 		options = append(options, value)
 	}
-	if len(m.currentModel().Reasoning) == 0 {
+	if m.currentModel().AllowManualReasoning || len(m.currentModel().Reasoning) == 0 {
 		options = append(options, manualReasoningOption)
 	}
 	return uniqueManagerOptions(options)
+}
+
+// ForgetRememberedModel updates the manager's presentation after the daemon
+// has durably removed the history entry. Catalog and configured models remain
+// visible because forgetting history never changes availability or routing.
+func (m *ModelManager) ForgetRememberedModel(provider, model string) {
+	for providerIndex := range m.providers {
+		if !strings.EqualFold(m.providers[providerIndex].ID, provider) {
+			continue
+		}
+		models := m.providers[providerIndex].Models
+		for modelIndex := range models {
+			if !strings.EqualFold(models[modelIndex].ID, model) {
+				continue
+			}
+			models[modelIndex].Remembered = false
+			if !models[modelIndex].Available && !models[modelIndex].Configured {
+				models = append(models[:modelIndex], models[modelIndex+1:]...)
+			}
+			m.providers[providerIndex].Models = models
+			if m.provider == providerIndex {
+				m.model = min(m.model, max(0, len(models)-1))
+				m.index = min(m.index, len(models))
+			}
+			return
+		}
+	}
 }
 
 func (m *ModelManager) serviceTierOptions() []string {

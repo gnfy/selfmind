@@ -133,6 +133,7 @@ func (m *uiModel) finishSkillInvocationResolution(msg MsgSkillInvocationResolved
 	m.setStatusNotice(noticeInfo, fmt.Sprintf("Loaded skill context: %s", msg.DisplayName))
 	m.runStatus = "working"
 	m.runTokens = 0
+	m.lastRequestTokens = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
 	return tea.Batch(m.runAgent(ctx, msg.Prompt), m.startModelWait("Waiting for the model to choose the first step"), workingTick())
@@ -157,9 +158,17 @@ func (m *uiModel) handleStatus() tea.Cmd {
 	return func() tea.Msg {
 		elapsed := time.Since(m.startTime)
 		usage := fmt.Sprintf("%s total · %s", compactCount(m.totalTokens), formatUsage(m.runTokens, m.tokenLimit))
+		contextWindow := "unknown"
+		if m.tokenLimit > 0 {
+			contextWindow = fmt.Sprintf("%s tokens (%s)", formatContextLimit(m.tokenLimit), contextSourceDescription(m.tokenLimitSource))
+		}
+		lastRequest := "not reported yet"
+		if m.lastRequestTokens > 0 {
+			lastRequest = compactCount(m.lastRequestTokens) + " tokens (actual latest provider call)"
+		}
 
-		status := fmt.Sprintf("## System Status\n\n- **Provider**: %s\n- **Model**: %s\n- **Uptime**: %s\n- **Token Usage**: %s\n",
-			m.providerName, m.modelName, formatDuration(elapsed), usage)
+		status := fmt.Sprintf("## System Status\n\n- **Provider**: %s\n- **Model**: %s\n- **Context Window**: %s\n- **Latest Request**: %s\n- **Uptime**: %s\n- **Token Usage**: %s\n",
+			m.providerName, m.modelName, contextWindow, lastRequest, formatDuration(elapsed), usage)
 
 		if m.messageProcessor != nil {
 			resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest("/status"))
@@ -185,6 +194,17 @@ func (m *uiModel) handleStatus() tea.Cmd {
 
 		return MsgAgentDone{Response: status}
 	}
+}
+
+func contextSourceDescription(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" || source == "unknown" {
+		return "source unknown"
+	}
+	if contextSourceEstimated(source) {
+		return source + ", estimated"
+	}
+	return source
 }
 
 // handleControlPassthrough forwards a gateway control command (e.g. /queue,

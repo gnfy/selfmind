@@ -51,6 +51,7 @@ func NewController(providerName, modelName string, cfg *config.Config, tenantID 
 	}
 	editor.SeedHistory(persistedHistory, historyMaxBytes)
 	modelManagerStatus, modelManagerRoutes := buildModelManagerData(cfg)
+	tokenLimit, tokenLimitSource := resolveUIContext(cfg, providerName, modelName)
 
 	return &Controller{
 		model: &uiModel{
@@ -70,7 +71,8 @@ func NewController(providerName, modelName string, cfg *config.Config, tenantID 
 			approvalMode:       "", // unset: requests omit the mode so the persisted /mode preference governs
 			startTime:          time.Now(),
 			runStatus:          "ready",
-			tokenLimit:         resolveUITokenLimit(cfg, providerName, modelName),
+			tokenLimit:         tokenLimit,
+			tokenLimitSource:   tokenLimitSource,
 			modelMeta:          resolveUIModelMeta(cfg),
 			modelManagerStatus: modelManagerStatus,
 			modelManagerRoutes: modelManagerRoutes,
@@ -157,11 +159,7 @@ func buildModelManagerData(cfg *config.Config) (components.ModelManagerStatus, [
 				}
 			}
 		}
-		for _, selection := range configuredSelections {
-			if strings.EqualFold(selection.Provider, profile.ID) {
-				models = prependUniqueModel(models, selection.Model)
-			}
-		}
+		managerModels := modelManagerModels(profile.ID, models, cfg.Models.Remembered, configuredSelections)
 		endpoint, hasEndpoint := cfg.Providers.BuiltinEndpoint(profile.ID)
 		if !hasEndpoint {
 			endpoint = cfg.ProviderProfiles[profile.ID]
@@ -169,8 +167,8 @@ func buildModelManagerData(cfg *config.Config) (components.ModelManagerStatus, [
 		providers = append(providers, components.ModelManagerProvider{
 			ID: profile.ID, Label: profile.DisplayName, Source: source,
 			CredentialRequired: profile.AuthType == modelruntime.AuthAPIKey,
-			CredentialReady:    modelManagerCredentialReady(resolver, profile.ID, models),
-			Models:             modelManagerModels(profile.ID, models),
+			CredentialReady:    modelManagerCredentialReady(resolver, profile.ID, modelManagerModelIDs(managerModels)),
+			Models:             managerModels,
 			BaseURL:            endpoint.BaseURL,
 			Protocol:           firstNonEmptyText(endpoint.Protocol, profile.Protocol),
 		})
@@ -181,12 +179,16 @@ func buildModelManagerData(cfg *config.Config) (components.ModelManagerStatus, [
 			continue
 		}
 		models := []string{strings.TrimSpace(custom.Model)}
+		for model := range custom.Models {
+			models = append(models, model)
+		}
+		managerModels := modelManagerModels(name, models, cfg.Models.Remembered, configuredSelections)
 		providers = append(providers, components.ModelManagerProvider{
 			ID: name, Label: name,
 			Custom: true, BaseURL: custom.BaseURL, Protocol: custom.Protocol, Auth: custom.Auth,
 			CredentialRequired: !strings.EqualFold(strings.TrimSpace(custom.Auth), "none"),
-			CredentialReady:    strings.EqualFold(strings.TrimSpace(custom.Auth), "none") || modelManagerCredentialReady(resolver, name, models),
-			Models:             modelManagerModels(name, models),
+			CredentialReady:    strings.EqualFold(strings.TrimSpace(custom.Auth), "none") || modelManagerCredentialReady(resolver, name, modelManagerModelIDs(managerModels)),
+			Models:             managerModels,
 		})
 	}
 	return view, providers
@@ -263,36 +265,84 @@ func catalogSourceLabel(result modelruntime.CatalogResult) string {
 	return source
 }
 
-func modelManagerModels(provider string, ids []string) []components.ModelManagerModel {
+func modelManagerModels(provider string, availableIDs []string, remembered []config.RememberedModelConfig, configured []config.ModelSelectionConfig) []components.ModelManagerModel {
+	available := make(map[string]bool, len(availableIDs))
+	configuredModels := make(map[string]bool)
+	rememberedModels := make(map[string]config.RememberedModelConfig)
+	ids := make([]string, 0, len(availableIDs)+len(remembered)+len(configured))
+	for _, selection := range configured {
+		if strings.EqualFold(selection.Provider, provider) && strings.TrimSpace(selection.Model) != "" {
+			ids = append(ids, selection.Model)
+			configuredModels[strings.ToLower(strings.TrimSpace(selection.Model))] = true
+		}
+	}
+	for _, id := range availableIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			ids = append(ids, id)
+			available[strings.ToLower(id)] = true
+		}
+	}
+	for _, entry := range remembered {
+		if strings.EqualFold(entry.Provider, provider) && strings.TrimSpace(entry.Model) != "" {
+			ids = append(ids, entry.Model)
+			rememberedModels[strings.ToLower(strings.TrimSpace(entry.Model))] = entry
+		}
+	}
 	seen := map[string]bool{}
 	models := make([]components.ModelManagerModel, 0, len(ids))
 	for _, id := range ids {
 		id = strings.TrimSpace(id)
-		if id == "" || seen[strings.ToLower(id)] {
+		key := strings.ToLower(id)
+		if id == "" || seen[key] {
 			continue
 		}
-		seen[strings.ToLower(id)] = true
-		entry := components.ModelManagerModel{ID: id}
+		seen[key] = true
+		entry := components.ModelManagerModel{
+			ID: id, Available: available[key], Configured: configuredModels[key],
+		}
 		if descriptor, ok := modelruntime.DiscoverModelDescriptor(provider, id); ok {
 			entry.Reasoning = append([]string(nil), descriptor.SupportedReasoning...)
 			entry.ServiceTiers = append([]string(nil), descriptor.SupportedServiceTiers...)
+			entry.AllowManualReasoning = len(descriptor.SupportedReasoning) == 0
+		} else {
+			entry.AllowManualReasoning = true
+		}
+		if recent, ok := rememberedModels[key]; ok {
+			entry.Remembered = true
+			entry.Reasoning = appendUniqueFold(entry.Reasoning, recent.Reasoning...)
 		}
 		models = append(models, entry)
 	}
 	return models
 }
 
-func prependUniqueModel(models []string, model string) []string {
-	model = strings.TrimSpace(model)
-	if model == "" {
-		return models
+func modelManagerModelIDs(models []components.ModelManagerModel) []string {
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ID)
 	}
-	for _, existing := range models {
-		if strings.EqualFold(strings.TrimSpace(existing), model) {
-			return models
+	return ids
+}
+
+func appendUniqueFold(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		addition = strings.TrimSpace(addition)
+		if addition == "" {
+			continue
+		}
+		found := false
+		for _, value := range values {
+			if strings.EqualFold(strings.TrimSpace(value), addition) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			values = append(values, addition)
 		}
 	}
-	return append([]string{model}, models...)
+	return values
 }
 
 func selectionDisplay(selection config.ModelSelectionConfig) string {
@@ -348,7 +398,7 @@ func (c *Controller) Start() {
 	// capture so the terminal owns selection/scroll.
 	// Focus reporting drives the terminal attention signal: an approval that
 	// parks the run stays silent while the person is demonstrably watching it.
-	p := tea.NewProgram(c.model, tea.WithReportFocus())
+	p := tea.NewProgram(c.model, tea.WithReportFocus(), tea.WithOutput(newTerminalCursorOutput(os.Stdout)))
 	c.model.program = p
 	stopHangupWatch := watchHangup(p)
 	defer stopHangupWatch()

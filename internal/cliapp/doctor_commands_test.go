@@ -21,6 +21,7 @@ import (
 func TestFormatModelRoleProbesGroupsResultsAndReportsFailure(t *testing.T) {
 	section, failed := formatModelRoleProbes([]appcore.ModelRoleProbe{
 		{Roles: []string{"background_review", "memory_extract"}, Provider: "kimi-coding", Model: "kimi-for-coding", Latency: 1250 * time.Millisecond},
+		{Roles: []string{"fast_classifier"}, Provider: "google", Model: "gemini-3.8-flash", Latency: 300 * time.Millisecond, ApprovalContractTested: true, ApprovalContractPassed: true},
 		{Roles: []string{"summarizer"}, Provider: "minimax", Model: "MiniMax-M3", Latency: time.Second, Err: errors.New("provider 403: secret-token")},
 	})
 	if !failed {
@@ -28,6 +29,8 @@ func TestFormatModelRoleProbesGroupsResultsAndReportsFailure(t *testing.T) {
 	}
 	for _, want := range []string{
 		"OK roles=background_review,memory_extract provider=kimi-coding model=kimi-for-coding",
+		"OK roles=fast_classifier provider=google model=gemini-3.8-flash",
+		"approval_contract=passed",
 		"FAIL roles=summarizer provider=minimax model=MiniMax-M3",
 	} {
 		if !strings.Contains(section, want) {

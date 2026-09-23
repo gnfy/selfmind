@@ -37,6 +37,10 @@ type MemoryConsolidator struct {
 	gov       config.MemoryGovernanceConfig
 	reportDir string
 	prompts   *promptassets.Snapshot
+	// callTimeout bounds one judge call. The judge runs at the route's
+	// configured reasoning level, so it gets the maintenance call bound rather
+	// than a budget sized for an answer without thinking.
+	callTimeout time.Duration
 }
 
 // Consolidation is a periodic in-process pass, not a durable queued job. One
@@ -75,7 +79,8 @@ func NewConfiguredMemoryConsolidator(mem *memory.MemoryManager, cfg *config.Conf
 	if home, err := os.UserHomeDir(); err == nil {
 		reportDir = filepath.Join(home, ".selfmind", "reports", "memory-consolidation")
 	}
-	return &MemoryConsolidator{provider: provider, mem: mem, tenantID: tenantID, gov: gov, reportDir: reportDir, prompts: prompts}
+	return &MemoryConsolidator{provider: provider, mem: mem, tenantID: tenantID, gov: gov, reportDir: reportDir, prompts: prompts,
+		callTimeout: cfg.Tasks.MaintenanceLLMCallTimeout()}
 }
 
 // Interval returns the configured consolidation cadence (default 24h).
@@ -593,16 +598,18 @@ func (c *MemoryConsolidator) judgeCluster(ctx context.Context, personID string, 
 		PersonID: strings.TrimSpace(personID),
 		Role:     llm.RoleMemoryExtract,
 	})
-	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	timeout := c.callTimeout
+	if timeout <= 0 {
+		timeout = config.DefaultTaskMaintenanceLLMTimeout
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	resp, err := c.provider.Chat(callCtx, llm.ChatRequest{
 		SystemPrompt: promptassets.AppendOperatorGuidance(memoryJudgeSystemPrompt,
 			c.prompts.Custom(promptassets.FileMemoryExtract, promptassets.SectionConsolidation)),
 		Messages:  []llm.Message{{Role: "user", Content: sb.String()}},
 		MaxTokens: 400,
-		Options: map[string]interface{}{
-			"temperature": 0, "reasoning_effort": maintenanceReasoningEffort,
-		},
+		Options:   map[string]interface{}{"temperature": 0},
 	})
 	if err != nil {
 		return memory.ConsolidationDecision{}, err

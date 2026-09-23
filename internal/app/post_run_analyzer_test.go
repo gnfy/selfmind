@@ -130,8 +130,8 @@ func TestPostRunAnalyzerRetriesTruncatedContractOnce(t *testing.T) {
 	if provider.requests[0].MaxTokens != 1024 || provider.requests[1].MaxTokens != 2048 {
 		t.Fatalf("max tokens = %d then %d", provider.requests[0].MaxTokens, provider.requests[1].MaxTokens)
 	}
-	if got := provider.requests[0].Options["reasoning_effort"]; got != maintenanceReasoningEffort {
-		t.Fatalf("reasoning effort = %#v, want %q", got, maintenanceReasoningEffort)
+	if got, named := provider.requests[0].Options["reasoning_effort"]; named {
+		t.Fatalf("the analyzer runs at its route's configured reasoning, but named %#v", got)
 	}
 }
 
@@ -194,32 +194,53 @@ func (p *postRunProviderStub) StreamChat(_ context.Context, req llm.ChatRequest)
 	return ch, nil
 }
 
-func TestMaintenanceProviderChainOverridesAuxiliaryReasoning(t *testing.T) {
-	provider := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
-	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{{
-		role: llm.RoleBackgroundReview, provider: provider,
-	}}}
+// Maintenance runs at each route's configured reasoning level, so the chain
+// must neither override it nor hand a thinking route a cap sized for the JSON
+// answer alone: DeepSeek V4 counts reasoning against max_tokens and returned
+// nothing when a probe cap was hit exactly.
+func TestMaintenanceProviderChainFollowsTheRouteReasoning(t *testing.T) {
+	send := func(t *testing.T, route namedMaintenanceProvider, req llm.ChatRequest) (llm.ChatRequest, llm.ChatRequest) {
+		t.Helper()
+		provider := &postRunProviderStub{content: `{"task_decision":"KEEP"}`, streamEvents: []llm.StreamEvent{{Content: "ok"}}}
+		route.role, route.provider = llm.RoleBackgroundReview, provider
+		chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{route}}
+		if _, err := chain.Chat(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		stream, err := chain.StreamChat(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range stream {
+		}
+		return provider.requests[0], provider.streamRequests[0]
+	}
+	bounded := llm.ChatRequest{MaxTokens: 400, Options: map[string]interface{}{"temperature": 0}}
 
-	if _, err := chain.Chat(context.Background(), llm.ChatRequest{Options: map[string]interface{}{
-		"reasoning_effort": "high",
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := provider.requests[0].Options["reasoning_effort"]; got != maintenanceReasoningEffort {
-		t.Fatalf("maintenance reasoning = %#v, want %q", got, maintenanceReasoningEffort)
-	}
-
-	provider.streamEvents = []llm.StreamEvent{{Content: "ok"}}
-	stream, err := chain.StreamChat(context.Background(), llm.ChatRequest{Options: map[string]interface{}{
-		"reasoning_effort": "xhigh",
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for range stream {
-	}
-	if got := provider.streamRequests[0].Options["reasoning_effort"]; got != maintenanceReasoningEffort {
-		t.Fatalf("stream maintenance reasoning = %#v, want %q", got, maintenanceReasoningEffort)
+	for _, tc := range []struct {
+		name  string
+		route namedMaintenanceProvider
+		req   llm.ChatRequest
+		want  int
+	}{
+		{"thinking route", namedMaintenanceProvider{reasoning: "high"}, bounded, 400 + 16384},
+		{"provider default may reason", namedMaintenanceProvider{}, bounded, 400 + 8192},
+		{"route with reasoning off", namedMaintenanceProvider{reasoning: "none"}, bounded, 400},
+		{"request names its own level", namedMaintenanceProvider{reasoning: "high"},
+			llm.ChatRequest{MaxTokens: 400, Options: map[string]interface{}{"reasoning_effort": "none"}}, 400},
+		{"route output ceiling still wins", namedMaintenanceProvider{reasoning: "high", maxOutputTokens: 4096}, bounded, 4096},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chat, stream := send(t, tc.route, tc.req)
+			for label, got := range map[string]llm.ChatRequest{"chat": chat, "stream": stream} {
+				if got.MaxTokens != tc.want {
+					t.Fatalf("%s max tokens = %d, want %d", label, got.MaxTokens, tc.want)
+				}
+				if got.Options["reasoning_effort"] != tc.req.Options["reasoning_effort"] {
+					t.Fatalf("%s reasoning = %#v; the chain must pass the request's own setting through", label, got.Options["reasoning_effort"])
+				}
+			}
+		})
 	}
 }
 
@@ -748,8 +769,8 @@ func TestMaintenanceCandidateSlotsCollapseOntoOneRoute(t *testing.T) {
 	if len(slots) != 2 {
 		t.Fatalf("slots = %d, want the role plus the auxiliary floor", len(slots))
 	}
-	first, _ := maintenanceRouteIdentityFor(cfg, slots[0].role, slots[0].roleCfg)
-	second, _ := maintenanceRouteIdentityFor(cfg, slots[1].role, slots[1].roleCfg)
+	first, _, _ := maintenanceRouteIdentityFor(cfg, slots[0].role, slots[0].roleCfg)
+	second, _, _ := maintenanceRouteIdentityFor(cfg, slots[1].role, slots[1].roleCfg)
 	if first.ID == "" || first.ID != second.ID {
 		t.Fatalf("routes = %q/%q, want one shared physical route", first.ID, second.ID)
 	}
@@ -799,13 +820,14 @@ func TestDescribeMaintenanceFallbackReportsFloorAndCollapse(t *testing.T) {
 
 // The analyzer sizes its output contract from the role's own route. A fallback
 // route with a smaller ceiling must be handed its own limit, otherwise it
-// returns a truncated empty body that reads as a provider fault.
+// returns a truncated empty body that reads as a provider fault. Both routes
+// run with reasoning off so only the ceiling is under test.
 func TestMaintenanceProviderChainClampsOutputToRouteCeiling(t *testing.T) {
 	primary := &postRunProviderStub{err: errors.New("403 quota exhausted")}
 	fallback := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
 	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
-		{slot: "memory_extract", role: llm.RoleMemoryExtract, provider: primary, maxOutputTokens: 32768},
-		{slot: auxiliaryFloorSlot, role: llm.RoleMemoryExtract, provider: fallback, maxOutputTokens: 4096},
+		{slot: "memory_extract", role: llm.RoleMemoryExtract, provider: primary, maxOutputTokens: 32768, reasoning: "none"},
+		{slot: auxiliaryFloorSlot, role: llm.RoleMemoryExtract, provider: fallback, maxOutputTokens: 4096, reasoning: "none"},
 	}}
 
 	if _, err := chain.Chat(context.Background(), llm.ChatRequest{MaxTokens: 16000}); err != nil {
@@ -819,10 +841,12 @@ func TestMaintenanceProviderChainClampsOutputToRouteCeiling(t *testing.T) {
 	}
 }
 
-func TestMaintenanceProviderChainNeverRaisesOutputBudget(t *testing.T) {
+// Only reasoning earns a larger budget: a route that does not think keeps a
+// deliberately small request small.
+func TestMaintenanceProviderChainKeepsSmallBudgetWithoutReasoning(t *testing.T) {
 	provider := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
 	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
-		{slot: "memory_extract", role: llm.RoleMemoryExtract, provider: provider, maxOutputTokens: 8192},
+		{slot: "memory_extract", role: llm.RoleMemoryExtract, provider: provider, maxOutputTokens: 8192, reasoning: "off"},
 	}}
 	if _, err := chain.Chat(context.Background(), llm.ChatRequest{MaxTokens: 512}); err != nil {
 		t.Fatal(err)

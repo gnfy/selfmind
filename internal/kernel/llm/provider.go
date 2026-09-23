@@ -31,6 +31,20 @@ func reasoningDisabled(value string) bool {
 	}
 }
 
+// ReasoningHeadroom is the output budget a bounded request must add when it
+// runs at the given reasoning effort: zero when reasoning is disabled,
+// otherwise the budget the Anthropic adapter reserves for thinking. Some
+// OpenAI-compatible providers count reasoning tokens against max_tokens
+// (DeepSeek V4 does), so a cap sized for the answer alone is spent thinking
+// before the answer starts. An empty effort is the provider default, which may
+// reason.
+func ReasoningHeadroom(effort string) int {
+	if reasoningDisabled(effort) {
+		return 0
+	}
+	return thinkingBudget(effort)
+}
+
 // Message is one conversation entry.
 type Message struct {
 	Role             string
@@ -113,6 +127,12 @@ type ToolCall struct {
 	ID       string
 	Function string
 	Args     string
+	// ReplayMetadata is opaque provider data that accompanied this tool call
+	// and must be sent back unchanged with the assistant message. Some
+	// OpenAI-compatible providers use it to bind a later tool result to the
+	// model's preceding reasoning. The kernel never interprets or authorizes
+	// anything from this field.
+	ReplayMetadata json.RawMessage `json:"replay_metadata,omitempty"`
 }
 
 type UsageStats struct {

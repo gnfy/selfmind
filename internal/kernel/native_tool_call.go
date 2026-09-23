@@ -13,16 +13,19 @@ import (
 )
 
 type toolExecutionResult struct {
-	pause      *toolLifecycleHandoff
-	index      int
-	step       string
-	msg        llm.Message
-	toolName   string
-	signature  string
-	rawResult  string
-	success    bool
-	errorCode  string
-	retryClass ToolRetryClass
+	pause        *toolLifecycleHandoff
+	index        int
+	step         string
+	msg          llm.Message
+	toolName     string
+	signature    string
+	rawResult    string
+	success      bool
+	errorCode    string
+	failurePhase string
+	retryability string
+	effectState  string
+	retryClass   ToolRetryClass
 }
 
 type toolLifecycleHandoff struct {
@@ -674,12 +677,15 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			pause = &toolLifecycleHandoff{Status: "waiting_user", CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
 		}
 		return toolExecutionResult{
-			pause:     pause,
-			index:     idx,
-			step:      packaged.ModelContent,
-			toolName:  name,
-			errorCode: packaged.ErrorCode,
-			signature: signature,
+			pause:        pause,
+			index:        idx,
+			step:         packaged.ModelContent,
+			toolName:     name,
+			errorCode:    packaged.ErrorCode,
+			failurePhase: packaged.FailurePhase,
+			retryability: packaged.Retryability,
+			effectState:  packaged.EffectState,
+			signature:    signature,
 			msg: llm.Message{
 				Role:       "tool",
 				Content:    packaged.ModelContent,
@@ -827,6 +833,8 @@ func (a *Agent) toolDispatchRefused(eventCh chan string, idx int, call llm.ToolC
 	}
 	return toolExecutionResult{
 		index: idx, step: packaged.ModelContent, toolName: call.Function, signature: signature,
+		errorCode: packaged.ErrorCode, failurePhase: packaged.FailurePhase,
+		retryability: packaged.Retryability, effectState: packaged.EffectState,
 		msg: llm.Message{Role: "tool", Content: packaged.ModelContent, Name: call.Function, ToolCallID: call.ID},
 	}
 }

@@ -38,6 +38,7 @@ type ModelDescriptor struct {
 	ID                      string
 	DisplayName             string
 	ContextWindow           int
+	ContextSource           string
 	EffectiveContextPercent int
 	DefaultReasoning        string
 	SupportedReasoning      []string
@@ -98,6 +99,7 @@ func (c *Catalog) Descriptors(ctx context.Context, profile ProviderProfile, rt R
 		out = append(out, ModelDescriptor{
 			ID:               model,
 			ContextWindow:    KnownContextLength(profile.ID, model),
+			ContextSource:    "built-in fallback",
 			CapabilitySource: "built-in fallback",
 		})
 	}
@@ -130,13 +132,33 @@ func DiscoverModelDescriptor(providerID, model string) (ModelDescriptor, bool) {
 			descriptor.CapabilitySource = "built-in provider profile"
 		}
 	}
+	applyBuiltInReasoningCapabilities(providerID, model, &descriptor)
 	if contextWindow := KnownContextLength(providerID, model); contextWindow > 0 {
 		descriptor.ContextWindow = contextWindow
+		descriptor.ContextSource = "built-in fallback"
 		if descriptor.CapabilitySource == "" {
 			descriptor.CapabilitySource = "built-in fallback"
 		}
 	}
 	return descriptor, descriptor.CapabilitySource != ""
+}
+
+// applyBuiltInReasoningCapabilities records protocol facts that a provider's
+// model-list endpoint does not publish. Keeping family compatibility here lets
+// callers select a supported latency tier without branching on model names in
+// approval, maintenance, or UI code.
+func applyBuiltInReasoningCapabilities(providerID, model string, descriptor *ModelDescriptor) {
+	if descriptor == nil {
+		return
+	}
+	providerID = NormalizeProviderID(providerID)
+	model = strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case (providerID == "google" || providerID == "gemini-cli") && strings.HasPrefix(model, "gemini-3"):
+		descriptor.DefaultReasoning = "medium"
+		descriptor.SupportedReasoning = []string{"low", "medium", "high"}
+		descriptor.CapabilitySource = "built-in model-family compatibility"
+	}
 }
 
 func (c *Catalog) fetch(ctx context.Context, profile ProviderProfile, rt Runtime) ([]string, error) {
@@ -286,6 +308,9 @@ func collectModelDescriptors(value interface{}, source string) []ModelDescriptor
 					SupportedServiceTiers:   collectNamedValues(item["service_tiers"], "id"),
 					SupportsVision:          containsStringValue(item["input_modalities"], "image"),
 					CapabilitySource:        source,
+				}
+				if descriptor.ContextWindow > 0 {
+					descriptor.ContextSource = "provider model metadata"
 				}
 				if descriptor.ID != "" {
 					byID[strings.ToLower(descriptor.ID)] = descriptor

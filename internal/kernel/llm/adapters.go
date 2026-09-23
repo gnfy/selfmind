@@ -40,9 +40,10 @@ type OpenAIMessage struct {
 }
 
 type OpenAIToolCall struct {
-	ID       string             `json:"id,omitempty"`
-	Type     string             `json:"type"`
-	Function OpenAIToolFunction `json:"function"`
+	ID           string             `json:"id,omitempty"`
+	Type         string             `json:"type"`
+	Function     OpenAIToolFunction `json:"function"`
+	ExtraContent json.RawMessage    `json:"extra_content,omitempty"`
 }
 
 type OpenAIToolFunction struct {
@@ -51,10 +52,11 @@ type OpenAIToolFunction struct {
 }
 
 type openAIToolCallDelta struct {
-	Index    int     `json:"index"`
-	ID       *string `json:"id"`
-	Type     *string `json:"type"`
-	Function struct {
+	Index        int             `json:"index"`
+	ID           *string         `json:"id"`
+	Type         *string         `json:"type"`
+	ExtraContent json.RawMessage `json:"extra_content"`
+	Function     struct {
 		Name      *string `json:"name"`
 		Arguments *string `json:"arguments"`
 	} `json:"function"`
@@ -261,8 +263,9 @@ func openAIToolCallsFromLLM(calls []ToolCall) []OpenAIToolCall {
 	out := make([]OpenAIToolCall, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, OpenAIToolCall{
-			ID:   c.ID,
-			Type: "function",
+			ID:           c.ID,
+			Type:         "function",
+			ExtraContent: boundedToolCallReplayMetadata(c.ReplayMetadata),
 			Function: OpenAIToolFunction{
 				Name:      c.Function,
 				Arguments: c.Args,
@@ -276,9 +279,10 @@ func llmToolCallsFromOpenAI(calls []OpenAIToolCall) []ToolCall {
 	out := make([]ToolCall, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, ToolCall{
-			ID:       c.ID,
-			Function: c.Function.Name,
-			Args:     c.Function.Arguments,
+			ID:             c.ID,
+			Function:       c.Function.Name,
+			Args:           c.Function.Arguments,
+			ReplayMetadata: boundedToolCallReplayMetadata(c.ExtraContent),
 		})
 	}
 	return out
@@ -311,6 +315,9 @@ func accumulateOpenAIToolDeltas(acc map[int]*OpenAIToolCall, deltas []openAITool
 		if delta.Type != nil {
 			call.Type = *delta.Type
 		}
+		if metadata := boundedToolCallReplayMetadata(delta.ExtraContent); len(metadata) > 0 {
+			call.ExtraContent = metadata
+		}
 		if call.Type == "" {
 			call.Type = "function"
 		}
@@ -321,6 +328,15 @@ func accumulateOpenAIToolDeltas(acc map[int]*OpenAIToolCall, deltas []openAITool
 			call.Function.Arguments += *delta.Function.Arguments
 		}
 	}
+}
+
+const maxToolCallReplayMetadataBytes = 64 << 10
+
+func boundedToolCallReplayMetadata(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || len(raw) > maxToolCallReplayMetadataBytes || !json.Valid(raw) {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
 }
 
 func orderedOpenAIToolCalls(acc map[int]*OpenAIToolCall) []ToolCall {
@@ -677,19 +693,32 @@ func (a *OpenAIAdapter) applyOptions(ctx context.Context, openaiReq *OpenAIReque
 		openaiReq.Thinking = a.Thinking
 	}
 	openaiReq.ServiceTier = a.ServiceTier
-	if req.Options != nil {
-		if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {
-			if reasoningDisabled(value) {
-				openaiReq.ReasoningEffort = ""
-				if strings.EqualFold(strings.TrimSpace(a.Quirks.ThinkingMode), "deepseek") {
-					openaiReq.Thinking = map[string]interface{}{"type": "disabled"}
-				} else {
-					openaiReq.Thinking = nil
-				}
-			} else {
-				openaiReq.ReasoningEffort = value
-			}
+	effort := a.ReasoningEffort
+	if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {
+		effort = value
+	}
+	// Disabling is encoded per provider, whether the request or the route's
+	// configured level asks for it: omitting the field means no reasoning only
+	// on a model that does not reason by default; one that does applies its own
+	// default and reasons anyway.
+	if reasoningDisabled(effort) {
+		switch strings.ToLower(strings.TrimSpace(a.Quirks.ThinkingMode)) {
+		case "deepseek":
+			openaiReq.ReasoningEffort = ""
+			openaiReq.Thinking = map[string]interface{}{"type": "disabled"}
+		case "effort_none":
+			openaiReq.ReasoningEffort = "none"
+			openaiReq.Thinking = nil
+		default:
+			// Omitted, not "none": some OpenAI-compatible endpoints reject a
+			// value they do not list.
+			openaiReq.ReasoningEffort = ""
+			openaiReq.Thinking = nil
 		}
+	} else {
+		openaiReq.ReasoningEffort = effort
+	}
+	if req.Options != nil {
 		if value, ok := req.Options["thinking"]; ok {
 			openaiReq.Thinking = value
 		}

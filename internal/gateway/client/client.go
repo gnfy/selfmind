@@ -439,6 +439,14 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 				OutputTokens: int(num(p["output_tokens"])),
 			},
 		}, true
+	case ev.Type == "provider.call.usage":
+		return llm.StreamEvent{
+			EventType: "provider.call.usage",
+			Usage: &llm.UsageStats{
+				InputTokens:  int(num(p["input_tokens"])),
+				OutputTokens: int(num(p["output_tokens"])),
+			},
+		}, true
 	case ev.Type == "plan.updated":
 		// The daemon records the full structured plan (plan steps + explanation)
 		// in the event payload. Forward it so the client TUI can render the live

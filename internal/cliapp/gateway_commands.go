@@ -263,7 +263,16 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
 	var modelChanges *modelchange.Service
 	if modelRestart {
-		modelChanges = &modelchange.Service{ConfigPath: a.configPath}
+		cfg, err := config.LoadConfig(config.Options{Path: a.configPath})
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		modelChanges = modelchange.NewService(cfg, nil)
+		if err := modelChanges.PreflightRestart(modelChangeID); err != nil {
+			fmt.Fprintf(a.stderr, "Model restart preflight failed; the running gateway was not stopped: %v\n", err)
+			return 1
+		}
 	}
 	requireSafeBoundary := !*force
 	ctx, cancel := contextWithTimeout(a.ctx, timeout)

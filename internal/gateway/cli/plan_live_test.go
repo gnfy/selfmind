@@ -42,6 +42,43 @@ func TestLivePlanReplacesSnapshotAboveComposer(t *testing.T) {
 	}
 }
 
+func TestLivePlanRejectsStaleVersionAndForeignRun(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.runStatus = "working"
+	current := `{"plan_version":2,"plan":[{"step":"apply","status":"in_progress"}]}`
+	model.Update(MsgPlanUpdated{Content: current, Event: uiEventRef{RunID: "run-current", Cursor: 20}})
+
+	stale := `{"plan_version":1,"plan":[{"step":"inspect","status":"in_progress"}]}`
+	model.Update(MsgPlanUpdated{Content: stale, Event: uiEventRef{RunID: "run-current", Cursor: 21}})
+	if model.activePlanJSON != current || model.activePlanVersion != 2 {
+		t.Fatalf("stale version replaced canonical plan: %q v%d", model.activePlanJSON, model.activePlanVersion)
+	}
+
+	foreign := `{"plan_version":3,"plan":[{"step":"old run","status":"in_progress"}]}`
+	model.Update(MsgPlanUpdated{Content: foreign, Event: uiEventRef{RunID: "run-old", Cursor: 30}})
+	if model.activePlanJSON != current || model.activePlanRunID != "run-current" {
+		t.Fatalf("foreign run replaced canonical plan: %q run=%q", model.activePlanJSON, model.activePlanRunID)
+	}
+
+	next := `{"plan_version":3,"plan":[{"step":"verify","status":"in_progress"}]}`
+	model.Update(MsgPlanUpdated{Content: next, Event: uiEventRef{RunID: "run-current", Cursor: 22}})
+	if model.activePlanJSON != next || model.activePlanVersion != 3 {
+		t.Fatalf("newer plan was not projected: %q v%d", model.activePlanJSON, model.activePlanVersion)
+	}
+}
+
+func TestClearActivePlanResetsProjectionOwnership(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.applyPlanSnapshot(`{"plan_version":4,"plan":[{"step":"done","status":"completed"}]}`, uiEventRef{RunID: "run-one", Cursor: 9})
+	model.clearActivePlan()
+	if model.activePlanJSON != "" || model.activePlanRunID != "" || model.activePlanVersion != 0 || model.activePlanCursor != 0 {
+		t.Fatalf("plan projection was not fully cleared: %+v", model)
+	}
+	if !model.applyPlanSnapshot(`{"plan_version":1,"plan":[{"step":"new","status":"in_progress"}]}`, uiEventRef{RunID: "run-two", Cursor: 1}) {
+		t.Fatal("new run could not claim cleared plan projection")
+	}
+}
+
 func TestLivePlanClearsWhenRunFinishes(t *testing.T) {
 	model := NewController("", "", nil, "").model
 	model.width = 100

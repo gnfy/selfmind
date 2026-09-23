@@ -111,6 +111,22 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 			return
 		}
 		result.Status = &status
+	case "forget_recent":
+		if strings.TrimSpace(req.Provider) == "" || strings.TrimSpace(req.Model) == "" {
+			http.Error(w, "provider and model are required", http.StatusBadRequest)
+			return
+		}
+		if err := d.ModelChanges.ForgetRememberedModel(req.Provider, req.Model); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		status, err := d.ModelChanges.Inspect()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		result.Status = &status
+		result.Notices = []string{"Forgot the remembered model entry. Provider catalog models remain available."}
 	case "validate":
 		candidate, _, notices, err := buildModelDraft(d.ModelChanges, req)
 		if err != nil {
@@ -185,7 +201,7 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 			return
 		}
 		result.Change = &prepared.Change
-		result.Notices = notices
+		result.Notices = append(notices, modelchange.ProbeNotices(prepared.Change.Probes)...)
 		result.NeedsConfirm = prepared.NeedsConfirm
 		result.NeedsRestart = prepared.NeedsRestart
 		if prepared.NeedsRestart {
@@ -202,6 +218,7 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 			return
 		}
 		result.Change = &prepared.Change
+		result.Notices = modelchange.ProbeNotices(prepared.Change.Probes)
 		result.NeedsRestart = prepared.NeedsRestart
 		if _, restartErr := d.scheduleModelRestart(prepared.Change.ID); restartErr != nil {
 			result.Notices = append(result.Notices, "automatic restart was not scheduled: "+restartErr.Error()+"; run `selfmind gateway restart --drain`")

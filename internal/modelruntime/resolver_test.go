@@ -381,8 +381,28 @@ func TestResolverDeepSeekAutoKeepsProviderDefaultUnforced(t *testing.T) {
 	if rt.DefaultReasoning != "high" {
 		t.Fatalf("default reasoning = %q", rt.DefaultReasoning)
 	}
-	if len(rt.ReasoningLevels) != 2 || rt.ReasoningLevels[1] != "xhigh" {
+	if len(rt.ReasoningLevels) != 3 || rt.ReasoningLevels[0] != "none" || rt.ReasoningLevels[2] != "xhigh" {
 		t.Fatalf("reasoning levels = %v", rt.ReasoningLevels)
+	}
+}
+
+func TestLowestLatencyReasoningUsesDeclaredCapabilityFloor(t *testing.T) {
+	tests := []struct {
+		name   string
+		levels []string
+		want   string
+	}{
+		{name: "unknown stays compatible", want: "none"},
+		{name: "disable when supported", levels: []string{"none", "high"}, want: "none"},
+		{name: "minimal before low", levels: []string{"low", "minimal", "medium"}, want: "minimal"},
+		{name: "lowest declared tier", levels: []string{"low", "medium", "high"}, want: "low"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LowestLatencyReasoning(Runtime{ReasoningLevels: tt.levels}); got != tt.want {
+				t.Fatalf("LowestLatencyReasoning() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

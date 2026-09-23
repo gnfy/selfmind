@@ -139,9 +139,12 @@ providers:
 Omit a boolean quirk to inherit the built-in profile. Set it explicitly to
 `true` or `false` only when the endpoint contract differs. Valid identity
 values are `auto`, `user_id`, `metadata.user_id`, and `off`; valid HTTP values
-are `auto`, `http1`, and `http2`. `system_message_mode` is deprecated and
-ignored. Model Manager validates the resolved contract automatically and keeps
-warnings with the draft.
+are `auto`, `http1`, and `http2`. `thinking_mode: effort_none` sends a literal
+`reasoning_effort: "none"` when SelfMind disables reasoning. Model Manager
+records it when validation proves an OpenAI-compatible endpoint keeps reasoning
+otherwise and honors that value (see [Provider Runtime](provider-runtime.md)).
+`system_message_mode` is deprecated and ignored. Model Manager validates the
+resolved contract automatically and keeps warnings with the draft.
 
 ## 2. Model routing
 
@@ -181,11 +184,20 @@ default and sends no forced value. When capability metadata is available,
 Model Manager validates each completed selection and shows the discovered
 defaults.
 
-Model switching has no additional YAML keys. SelfMind stores the non-secret
-transaction generation, pending change, last running snapshot, probe summaries,
-verified-running timestamp, and bounded history in `model-state.json` beside
-this file. That file is the sole authority for Model Readiness; onboarding does
-not duplicate its routes. Do not edit it. A direct edit to `models.primary` or
+Validated model switches maintain a bounded, non-authoritative
+`models.remembered` list in YAML. It remembers the previous and new
+provider/model plus explicit reasoning values so Model Manager can offer them
+again without retyping. The list is capped at 24 models and eight reasoning
+values per model. Press `d` on a remembered model in Model Manager to remove
+the local history entry; a model still present in the provider catalogue or an
+active route remains available. This history never chooses a route and should
+normally be managed through Model Manager rather than edited.
+
+SelfMind separately stores the non-secret transaction generation, pending
+change, last running snapshot, probe summaries, verified-running timestamp,
+and bounded transaction history in `model-state.json` beside this file. That
+file is the sole authority for Model Readiness; onboarding does not duplicate
+its routes. Do not edit it. A direct edit to `models.primary` or
 `models.auxiliary` is treated as configured but unverified until daemon startup
 probes it; use `selfmind model` for the normal validated path.
 
@@ -523,6 +535,7 @@ agent:
   llm_retry_cap: "30s"          # backoff cap
   llm_stream_idle_timeout: "180s"  # abort a stalled SSE stream after this
   approval_triage_timeout: "30s"   # smart-mode cheap judge foreground budget
+  compaction_timeout: "30s"        # one context compaction inside the turn
   approval_wait: "30m"             # resource wait while a live/healthy endpoint can answer
   approval_wait_unattended: "30s"  # resource wait when no endpoint can currently answer
 editor:
@@ -563,6 +576,14 @@ timeout. If the auxiliary/explicit `fast_classifier` does not return within
 this budget, smart mode fails safe to a human approval prompt. The default is
 30 seconds; lower values can turn a healthy reasoning-capable cheap model into
 an apparent outage.
+
+`compaction_timeout` bounds one context compaction. Compaction runs inside the
+person's turn at the summarizer route's configured reasoning level (an explicit
+`models.roles.summarizer` setting, else the Background route's). When the
+bound expires, the turn continues on deterministic trimming instead of a
+summary. A long summary on a slow route can need well over the 30-second
+default: one 50k-token span took 100-135 seconds on a flash model whether or
+not it reasoned.
 
 Approval wait values are resource budgets, not answer-expiry timers. A live
 process uses `approval_wait`. Without one, no routable IM account or a latest

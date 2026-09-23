@@ -56,6 +56,30 @@ func TestGatewayModelChangeEndpointReturnsStructuredPreview(t *testing.T) {
 	}
 }
 
+func TestGatewayModelChangeForgetsOnlyRememberedEntry(t *testing.T) {
+	service, path := testModelChangeService(t)
+	cfg := mustLoadGatewayConfig(t, path)
+	cfg.Models.RememberModel("google", "retired-model", "high")
+	before := modelchange.SnapshotFromConfig(cfg)
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{ModelChanges: service, LocalControlToken: "local-secret"}
+	body, _ := json.Marshal(api.ModelChangeRequest{Action: "forget_recent", Provider: "google", Model: "retired-model"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:43210"
+	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	recorder := httptest.NewRecorder()
+	server.handleGatewayModelChange(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	after := mustLoadGatewayConfig(t, path)
+	if len(after.Models.Remembered) != 0 || modelchange.SnapshotFromConfig(after) != before {
+		t.Fatalf("forget changed route or retained history: remembered=%+v route=%+v", after.Models.Remembered, modelchange.SnapshotFromConfig(after))
+	}
+}
+
 func TestGatewayModelCancelResumesWorkParkedByReadiness(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)
 	service, _ := testModelChangeService(t)
@@ -148,8 +172,20 @@ func TestGatewayModelChangeValidatesWholeDraftWithoutWriting(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Probes) != 1 || response.Probes[0].Route != modelchange.RouteMemoryExtract || !response.Probes[0].OK {
-		t.Fatalf("response = %+v", response)
+	// The draft changes Main, Background, and memory_extract. Validating one
+	// selection proves every route the draft changes, so applying the same
+	// draft can reuse the evidence instead of probing again.
+	probed := make(map[modelchange.Route]bool, len(response.Probes))
+	for _, probe := range response.Probes {
+		if !probe.OK {
+			t.Fatalf("response = %+v", response)
+		}
+		probed[probe.Route] = true
+	}
+	for _, route := range []modelchange.Route{modelchange.RouteMemoryExtract, modelchange.RoutePrimary, modelchange.RouteAuxiliary} {
+		if !probed[route] {
+			t.Fatalf("route %s changed by the draft was not validated: %+v", route, response.Probes)
+		}
 	}
 	status, err := service.Inspect()
 	if err != nil {

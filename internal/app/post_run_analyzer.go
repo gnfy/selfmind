@@ -75,7 +75,6 @@ const (
 	postRunAnalyzerMaxTokens         = 4096
 	postRunAnalyzerTokensPerBatchRun = 1280
 	postRunAnalyzerBatchMaxTokens    = 16384
-	maintenanceReasoningEffort       = "none"
 	// maintenanceResponseFormat asks the provider for JSON mode. The contract
 	// used to rely on the system prompt alone, and a small model answered
 	// "task_decision: KEEP\nmemory_decisions: []" — the request echoed as
@@ -183,7 +182,7 @@ func configuredMaintenanceRouteIDs(cfg *config.Config) []string {
 	// is down. It is an active route even when no role names it, so route
 	// migration must not treat its blocked jobs as orphaned.
 	if floor, ok := cfg.AuxiliaryRoleFloor(); ok {
-		route, _ := maintenanceRouteIdentityFor(cfg, primary, floor)
+		route, _, _ := maintenanceRouteIdentityFor(cfg, primary, floor)
 		collect(route)
 	}
 	return ids
@@ -205,23 +204,24 @@ func maintenanceRoleRouteIdentity(cfg *config.Config, role llm.ModelRole) mainte
 	if !ok || roleConfigEmpty(roleCfg) {
 		return maintenanceRouteIdentity{}
 	}
-	route, _ := maintenanceRouteIdentityFor(cfg, role, roleCfg)
+	route, _, _ := maintenanceRouteIdentityFor(cfg, role, roleCfg)
 	return route
 }
 
 // maintenanceRouteIdentityFor computes a route from an already-resolved role
 // configuration, so the models.auxiliary floor can be identified without being
-// mistaken for a role override. It also returns the resolved output ceiling,
-// which the provider chain uses to bound a request to the route serving it.
+// mistaken for a role override. It also returns the resolved output ceiling and
+// reasoning level, which the provider chain uses to size a request for the
+// route serving it.
 func maintenanceRouteIdentityFor(cfg *config.Config, role llm.ModelRole,
-	roleCfg config.ModelRoleConfig) (maintenanceRouteIdentity, int) {
+	roleCfg config.ModelRoleConfig) (maintenanceRouteIdentity, int, string) {
 	if cfg == nil || roleConfigEmpty(roleCfg) {
-		return maintenanceRouteIdentity{}, 0
+		return maintenanceRouteIdentity{}, 0, ""
 	}
 	providerName := firstNonEmpty(roleCfg.Provider, defaultProviderName(cfg))
 	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), roleProviderSelection(role, providerName, roleCfg))
 	if err != nil {
-		return maintenanceRouteIdentity{}, 0
+		return maintenanceRouteIdentity{}, 0, ""
 	}
 	credential := maintenanceCredentialIdentity(&rt)
 	credentialSum := sha256.Sum256([]byte(credential))
@@ -234,13 +234,13 @@ func maintenanceRouteIdentityFor(cfg *config.Config, role llm.ModelRole,
 	quotaID := fmt.Sprintf("%x", sum[:])
 	contractPayload := strings.Join([]string{
 		quotaID, strings.TrimSpace(rt.Model), strings.TrimSpace(rt.Protocol),
-		maintenanceReasoningEffort, fmt.Sprintf("%d", rt.MaxTokens), "post-run-v3",
+		strings.TrimSpace(rt.ReasoningEffort), fmt.Sprintf("%d", rt.MaxTokens), "post-run-v4",
 	}, "\x00")
 	contractSum := sha256.Sum256([]byte(contractPayload))
 	return maintenanceRouteIdentity{
 		ID: quotaID, ContractID: "contract:" + fmt.Sprintf("%x", contractSum[:]),
 		Provider: rt.Provider, Model: rt.Model,
-	}, rt.MaxTokens
+	}, rt.MaxTokens, strings.TrimSpace(rt.ReasoningEffort)
 }
 
 func maintenanceOutputContract(cfg *config.Config, role llm.ModelRole) (int, int, string) {
@@ -352,7 +352,6 @@ func (a *llmPostRunAnalyzer) Analyze(ctx context.Context, req httpapi.PostRunAna
 			Options: map[string]interface{}{
 				"temperature": 0, "maintenance_batch_size": 1,
 				"maintenance_contract_attempt": attempt + 1,
-				"reasoning_effort":             maintenanceReasoningEffort,
 				"response_format":              map[string]interface{}{"type": maintenanceResponseFormat},
 			},
 		})
@@ -436,7 +435,6 @@ func (a *llmPostRunAnalyzer) AnalyzeBatch(ctx context.Context, reqs []httpapi.Po
 			Options: map[string]interface{}{
 				"temperature": 0, "maintenance_batch_size": len(reqs),
 				"maintenance_contract_attempt": attempt + 1,
-				"reasoning_effort":             maintenanceReasoningEffort,
 				"response_format":              map[string]interface{}{"type": maintenanceResponseFormat},
 			},
 		})

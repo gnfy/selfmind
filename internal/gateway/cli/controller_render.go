@@ -24,11 +24,27 @@ func formatUsage(usage, limit int) string {
 // formatUsageSession adds the session-cumulative token count for cost
 // awareness: "12.0K run · 340.0K session · 1.05M ctx".
 func formatUsageSession(run, session, limit int) string {
+	return formatUsageSessionWithSource(run, session, limit, "")
+}
+
+func formatUsageSessionWithSource(run, session, limit int, source string) string {
+	return formatUsageSessionRequest(run, session, 0, limit, source)
+}
+
+func formatUsageSessionRequest(run, session, request, limit int, source string) string {
 	ctx := "ctx ?"
 	if limit > 0 {
 		ctx = formatContextLimit(limit) + " ctx"
+		if contextSourceEstimated(source) {
+			ctx += " est"
+		}
 	}
-	return fmt.Sprintf("%s run · %s session · %s", compactCount(run), compactCount(session), ctx)
+	parts := make([]string, 0, 4)
+	if request > 0 {
+		parts = append(parts, compactCount(request)+" req")
+	}
+	parts = append(parts, compactCount(run)+" run", compactCount(session)+" session", ctx)
+	return strings.Join(parts, " · ")
 }
 
 // formatContextLimit shows the context window with more precision than
@@ -65,13 +81,43 @@ func resolveUIModelMeta(cfg *config.Config) string {
 }
 
 func resolveUITokenLimit(cfg *config.Config, providerName, modelName string) int {
+	limit, _ := resolveUIContext(cfg, providerName, modelName)
+	return limit
+}
+
+func resolveUIContext(cfg *config.Config, providerName, modelName string) (int, string) {
 	if cfg != nil {
 		rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{})
 		if err == nil && rt.ContextLength > 0 {
-			return rt.ContextLength
+			return rt.ContextLength, rt.ContextSource
 		}
 	}
-	return modelruntime.KnownContextLength(providerName, modelName)
+	if limit := modelruntime.KnownContextLength(providerName, modelName); limit > 0 {
+		return limit, "built-in fallback"
+	}
+	return 0, "unknown"
+}
+
+func contextForSelection(selection config.ModelSelectionConfig) (int, string) {
+	if selection.ContextLength > 0 {
+		return selection.ContextLength, "explicit config"
+	}
+	if descriptor, ok := modelruntime.DiscoverModelDescriptor(selection.Provider, selection.Model); ok && descriptor.ContextWindow > 0 {
+		return descriptor.ContextWindow, descriptor.ContextSource
+	}
+	if limit := modelruntime.KnownContextLength(selection.Provider, selection.Model); limit > 0 {
+		return limit, "built-in fallback"
+	}
+	return 0, "unknown"
+}
+
+func contextSourceEstimated(source string) bool {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "built-in fallback", "built-in profile", "provider profile":
+		return true
+	default:
+		return false
+	}
 }
 
 func compactCount(n int) string {

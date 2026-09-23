@@ -59,6 +59,31 @@ type Selection struct {
 	Quirks          ProviderQuirks
 }
 
+// LowestLatencyReasoning returns the least expensive reasoning control the
+// resolved model declares. Unknown providers retain the historical "none"
+// request, which adapters translate to their safest disable/omit behavior.
+func LowestLatencyReasoning(rt Runtime) string {
+	levels := make(map[string]string, len(rt.ReasoningLevels))
+	for _, value := range rt.ReasoningLevels {
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized != "" {
+			levels[normalized] = strings.TrimSpace(value)
+		}
+	}
+	for _, preferred := range []string{"none", "off", "disabled", "minimal", "low"} {
+		if value := levels[preferred]; value != "" {
+			if preferred == "off" || preferred == "disabled" {
+				return "none"
+			}
+			return value
+		}
+	}
+	if len(rt.ReasoningLevels) > 0 {
+		return strings.TrimSpace(rt.ReasoningLevels[0])
+	}
+	return "none"
+}
+
 // Resolver owns provider lookup, profile overrides, and credential precedence.
 // LLM adapters should stay protocol-focused and not repeat this discovery logic.
 type Resolver struct {
@@ -198,11 +223,8 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 	}
 	descriptor, _ := DiscoverModelDescriptor(profile.ID, model)
 	contextLength, contextSource := resolvedContextLength(
-		selection.ContextLength,
-		endpoint.ContextLength,
-		profile.ContextLength,
-		descriptor.ContextWindow,
-		KnownContextLength(profile.ID, model),
+		selection.ContextLength, endpoint.ContextLength, profile.ContextLength,
+		descriptor, KnownContextLength(profile.ID, model),
 	)
 	resolvedQuirks := mergeProviderQuirks(profile.Quirks, quirksFromConfig(endpoint.Quirks), selection.Quirks)
 	if err := ValidateProviderQuirks(resolvedQuirks); err != nil {
@@ -300,19 +322,25 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 	return Runtime{}, fmt.Errorf("unknown provider: %s", providerName)
 }
 
-func resolvedContextLength(values ...int) (int, string) {
-	sources := []string{"explicit config", "provider profile", "built-in profile", "provider model metadata", "built-in fallback"}
-	for i, value := range values {
-		if value <= 0 {
-			continue
+func resolvedContextLength(explicit, endpoint, profile int, descriptor ModelDescriptor, fallback int) (int, string) {
+	switch {
+	case explicit > 0:
+		return explicit, "explicit config"
+	case endpoint > 0:
+		return endpoint, "provider profile"
+	case profile > 0:
+		return profile, "built-in profile"
+	case descriptor.ContextWindow > 0:
+		source := strings.TrimSpace(descriptor.ContextSource)
+		if source == "" {
+			source = "provider model metadata"
 		}
-		source := "resolved"
-		if i < len(sources) {
-			source = sources[i]
-		}
-		return value, source
+		return descriptor.ContextWindow, source
+	case fallback > 0:
+		return fallback, "built-in fallback"
+	default:
+		return 0, "unknown"
 	}
-	return 0, "unknown"
 }
 
 func resolvedCustomContextLength(explicit, modelMetadata, fallback int) (int, string) {

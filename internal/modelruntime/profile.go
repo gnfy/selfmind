@@ -56,6 +56,14 @@ const (
 	ThinkingModeOpenAI    = "openai"
 	ThinkingModeDeepSeek  = "deepseek"
 	ThinkingModeOmit      = "omit"
+	// ThinkingModeEffortNone encodes a request to DISABLE reasoning as a literal
+	// `reasoning_effort: "none"` on an OpenAI-compatible chat endpoint. The
+	// default OpenAI-compatible encoding omits the parameter instead, which
+	// only means "no reasoning" on a model that does not reason by default; a
+	// model that does reason by default then applies its own default and
+	// thinks anyway. It says nothing about any other reasoning level, which is
+	// sent unchanged.
+	ThinkingModeEffortNone = "effort_none"
 )
 
 // ProviderQuirks describes provider-specific wire behavior in declarative form.
@@ -91,7 +99,7 @@ func ValidateProviderQuirks(q ProviderQuirks) error {
 	if !oneOf(q.ToolSchema, "", ToolSchemaOpenAI, ToolSchemaAnthropic, ToolSchemaMoonshot) {
 		return fmt.Errorf("unsupported tool_schema quirk %q", q.ToolSchema)
 	}
-	if !oneOf(q.ThinkingMode, "", ThinkingModeAnthropic, ThinkingModeKimi, ThinkingModeMiniMax, ThinkingModeOpenAI, ThinkingModeDeepSeek, ThinkingModeOmit) {
+	if !oneOf(q.ThinkingMode, "", ThinkingModeAnthropic, ThinkingModeKimi, ThinkingModeMiniMax, ThinkingModeOpenAI, ThinkingModeDeepSeek, ThinkingModeOmit, ThinkingModeEffortNone) {
 		return fmt.Errorf("unsupported thinking_mode quirk %q", q.ThinkingMode)
 	}
 	if !oneOf(q.UserIdentityField, "", UserIdentityAuto, UserIdentityOpenAI, UserIdentityAnthropic, UserIdentityOff) {
@@ -398,7 +406,7 @@ func BuiltinProfiles() []ProviderProfile {
 			BaseURLEnvVar: "DEEPSEEK_BASE_URL", ModelList: ModelListOpenAICompatible,
 			FallbackModels:     []string{"deepseek-v4-flash", "deepseek-v4-pro"},
 			DefaultReasoning:   "high",
-			SupportedReasoning: []string{"high", "xhigh"},
+			SupportedReasoning: []string{"none", "high", "xhigh"},
 			Thinking:           map[string]interface{}{"type": "enabled"},
 			Quirks:             deepSeekQuirks(),
 		},

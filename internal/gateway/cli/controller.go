@@ -14,6 +14,7 @@ import (
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelchange"
+	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/components"
@@ -71,7 +72,6 @@ type ChatMessage struct {
 	IsSkipped      bool    // tool was refused before dispatch; warning, not execution failure
 	IsRunning      bool
 	RunningDetail  string
-	ProcessGroupID uint64     // action narration group; grouped tools render one level below it
 	NoticeKind     noticeKind // structured semantics for notice-role cells; never inferred from prose
 	// Committed is set in terminal-first hybrid mode once this message has been
 	// printed into native scrollback. Committed messages are immutable and are
@@ -106,6 +106,7 @@ type uiModel struct {
 	// handlers that are void by design: arming a prompt is called from several
 	// places, some of which have no command of their own to return.
 	pendingCmds           []tea.Cmd
+	terminalCursorFrame   uint64
 	modelManagerStatus    components.ModelManagerStatus
 	modelManagerRoutes    []components.ModelManagerProvider
 	messages              []ChatMessage
@@ -113,8 +114,10 @@ type uiModel struct {
 	thinking              bool
 	toolExecuting         string
 	runTokens             int
+	lastRequestTokens     int
 	totalTokens           int
 	tokenLimit            int
+	tokenLimitSource      string
 	modelMeta             string
 	startTime             time.Time
 	providerName          string
@@ -166,6 +169,9 @@ type uiModel struct {
 	waitingForModel       bool      // exactly one spinner tick chain owns this structured model_wait phase
 	spinnerRunning        bool      // a spinner tick chain is alive; guards against parallel chains
 	activePlanJSON        string    // Latest complete plan snapshot, rendered above the composer
+	activePlanRunID       string    // Run that owns the current canonical plan projection
+	activePlanVersion     int       // Durable RunPlan version; rejects out-of-order snapshots
+	activePlanCursor      int64     // Event cursor tie-breaker for equal/legacy versions
 	runStatus             string    // ready | queued | working | done | error | cancelled
 	queuedCount           int       // requests submitted by this TUI and accepted into the daemon queue
 	queuedInputs          []string  // local queue acknowledgements awaiting run.started
@@ -790,12 +796,13 @@ func (m *uiModel) openModelManager() tea.Cmd {
 		}
 		return nil
 	}
-	m.thinking = true
-	m.activityText = "Loading model routes"
-	return func() tea.Msg {
+	m.thinkingStart = time.Time{}
+	progress := m.startModelOperation("Loading model routes")
+	load := func() tea.Msg {
 		response, err := processor(context.Background(), api.ModelChangeRequest{Action: "status"})
 		return MsgModelManagerOpen{Response: response, Err: err}
 	}
+	return tea.Batch(progress, load)
 }
 
 func (m *uiModel) observeModelChange(openManager bool, delay time.Duration) tea.Cmd {
@@ -846,6 +853,7 @@ func (m *uiModel) applyModelStatus(status modelchange.Status) {
 	m.modelName = status.Running.Primary.Model
 	m.backgroundModelName = status.Running.Auxiliary.Model
 	m.modelMeta = reasoningStatusLabel(status.Running.Primary, status.RunningTuning.Primary)
+	m.tokenLimit, m.tokenLimitSource = contextForSelection(status.Running.Primary)
 }
 
 func modelManagerPatches(draft []components.ModelManagerSubmission) []api.ModelSelectionPatch {
@@ -908,6 +916,81 @@ func (m *uiModel) submitModelManager(draft []components.ModelManagerSubmission, 
 			ProviderPatches: modelManagerProviderPatches(providers),
 		})
 		return MsgModelChangeDone{Response: response, Err: err}
+	}
+}
+
+func (m *uiModel) forgetRememberedModel(provider, model string) tea.Cmd {
+	processor := m.modelChangeProcessor
+	return func() tea.Msg {
+		if processor == nil {
+			return MsgModelRememberedForgotten{Provider: provider, Model: model, Err: fmt.Errorf("model management is unavailable in this client")}
+		}
+		_, err := processor(context.Background(), api.ModelChangeRequest{
+			Action: "forget_recent", Provider: provider, Model: model,
+		})
+		return MsgModelRememberedForgotten{Provider: provider, Model: model, Err: err}
+	}
+}
+
+func applyModelManagerChange(providers []components.ModelManagerProvider, change modelchange.Change) {
+	for providerIndex := range providers {
+		for modelIndex := range providers[providerIndex].Models {
+			providers[providerIndex].Models[modelIndex].Configured = false
+		}
+	}
+	for _, route := range append([]modelchange.Route{modelchange.RoutePrimary, modelchange.RouteAuxiliary}, modelchange.ManagedRoleRoutes()...) {
+		markModelManagerSelection(providers, modelchange.SelectionForRoute(change.Candidate, route), false, true)
+	}
+	for _, route := range change.ChangedRoutes {
+		markModelManagerSelection(providers, modelchange.SelectionForRoute(change.Previous, route), true, false)
+		markModelManagerSelection(providers, modelchange.SelectionForRoute(change.Candidate, route), true, true)
+	}
+}
+
+func markModelManagerSelection(providers []components.ModelManagerProvider, selection config.ModelSelectionConfig, remembered, configured bool) {
+	provider := strings.TrimSpace(selection.Provider)
+	model := strings.TrimSpace(selection.Model)
+	if provider == "" || model == "" {
+		return
+	}
+	for providerIndex := range providers {
+		if !strings.EqualFold(providers[providerIndex].ID, provider) {
+			continue
+		}
+		for modelIndex := range providers[providerIndex].Models {
+			if !strings.EqualFold(providers[providerIndex].Models[modelIndex].ID, model) {
+				continue
+			}
+			entry := &providers[providerIndex].Models[modelIndex]
+			entry.Remembered = entry.Remembered || remembered
+			entry.Configured = entry.Configured || configured
+			entry.Reasoning = appendUniqueFold(entry.Reasoning, selection.Reasoning)
+			return
+		}
+		providers[providerIndex].Models = append(providers[providerIndex].Models, components.ModelManagerModel{
+			ID: model, Reasoning: appendUniqueFold(nil, selection.Reasoning), Remembered: remembered, Configured: configured, AllowManualReasoning: true,
+		})
+		return
+	}
+}
+
+func forgetModelManagerRoute(providers []components.ModelManagerProvider, provider, model string) {
+	for providerIndex := range providers {
+		if !strings.EqualFold(providers[providerIndex].ID, provider) {
+			continue
+		}
+		models := providers[providerIndex].Models
+		for modelIndex := range models {
+			if !strings.EqualFold(models[modelIndex].ID, model) {
+				continue
+			}
+			models[modelIndex].Remembered = false
+			if !models[modelIndex].Available && !models[modelIndex].Configured {
+				models = append(models[:modelIndex], models[modelIndex+1:]...)
+			}
+			providers[providerIndex].Models = models
+			return
+		}
 	}
 }
 func patchArgOf(toolArgs string) string {
@@ -1099,6 +1182,12 @@ type MsgModelRecoveryDone struct {
 	Err    error
 }
 
+type MsgModelRememberedForgotten struct {
+	Provider string
+	Model    string
+	Err      error
+}
+
 type MsgSkillInvocationResolved struct {
 	SlashName   string
 	Found       bool
@@ -1191,8 +1280,9 @@ type MsgWatcherCompleted struct {
 // so far; it updates the status bar mid-run while the final response usage
 // stays authoritative for session totals.
 type MsgTokens struct {
-	Run   int
-	Event uiEventRef
+	Run         int
+	LastRequest int
+	Event       uiEventRef
 }
 
 // MsgWorkspaceSwitched reports a successful gateway /workspace switch, carrying
@@ -1276,7 +1366,7 @@ func (m *uiModel) cancelActiveRunLocally() tea.Cmd {
 	m.thinking = false
 	m.activityText = ""
 	m.toolExecuting = ""
-	m.activePlanJSON = ""
+	m.clearActivePlan()
 	m.steerCh = nil
 	m.runStatus = "cancelled"
 	noticeID := m.setStatusNotice(noticeError, "Task cancelled by user.")

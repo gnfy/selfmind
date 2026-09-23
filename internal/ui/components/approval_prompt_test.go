@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 	"github.com/muesli/termenv"
 )
@@ -175,22 +176,8 @@ func TestTruncateMiddle(t *testing.T) {
 	}
 }
 
-// stripANSIForTest removes SGR sequences so width assertions measure the
-// visible content.
+// stripANSIForTest removes terminal control sequences so width assertions
+// measure only visible content.
 func stripANSIForTest(s string) string {
-	var sb strings.Builder
-	inEsc := false
-	for _, r := range s {
-		switch {
-		case inEsc:
-			if r == 'm' {
-				inEsc = false
-			}
-		case r == '\x1b':
-			inEsc = true
-		default:
-			sb.WriteRune(r)
-		}
-	}
-	return sb.String()
+	return ansi.Strip(s)
 }

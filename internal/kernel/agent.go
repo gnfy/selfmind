@@ -35,6 +35,8 @@ type Agent struct {
 	llm              llm.Provider
 	summaryProvider  llm.Provider                 // optional cheap model for over-budget context compaction, kept OFF the main run provider
 	summaryMaxTokens int                          // resolved output ceiling for the summarizer route
+	summaryReasoning string                       // configured reasoning level of the summarizer route
+	summaryTimeout   time.Duration                // bound for one context compaction
 	judgeProvider    llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
 	runLLM           llm.Provider                 // per-run active provider; every access goes through runLLMMu
 	skillInventory   func(tenantID string) string // optional: compact learned-skill list for the prompt
@@ -158,6 +160,20 @@ func (a *Agent) SetSummaryOutputLimit(maxTokens int) {
 	}
 }
 
+// SetSummaryPolicy records the summarizer route's configured reasoning level
+// and the bound for one compaction, re-applied whenever the context engine is
+// rebuilt.
+func (a *Agent) SetSummaryPolicy(reasoning string, timeout time.Duration) {
+	if a == nil {
+		return
+	}
+	a.summaryReasoning, a.summaryTimeout = reasoning, timeout
+	if a.contextEngine != nil {
+		a.contextEngine.SetSummaryReasoning(reasoning)
+		a.contextEngine.SetSummaryTimeout(timeout)
+	}
+}
+
 // SetApprovalJudgeProvider installs the cheap role-routed provider used for
 // smart-mode approval triage (H2). The kernel only carries the provider so the
 // app/gateway layer (which owns model routing) can pick a cheap role and keep it
@@ -260,6 +276,8 @@ func (a *Agent) SetContextWindow(maxTokens int) {
 	// over-budget compaction survives a context-window reconfiguration.
 	a.contextEngine.SetSummaryProvider(a.summaryProvider)
 	a.contextEngine.SetSummaryOutputLimit(a.summaryMaxTokens)
+	a.contextEngine.SetSummaryReasoning(a.summaryReasoning)
+	a.contextEngine.SetSummaryTimeout(a.summaryTimeout)
 	// Prompt assets are frozen for the process lifetime. Rebuilding the context
 	// engine must preserve the same snapshot or compaction silently falls back
 	// to built-in summarizer guidance.
@@ -1602,14 +1620,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		nativeCalls = normalizeToolCallIDs(nativeCalls, i)
 		outputLimited := responseStoppedForOutputLimit(finishReason)
 		calls := nativeCalls
-		var droppedForBudget, deferredAcrossWorkUnitBoundary, deferredAcrossWatchHandoff int
+		var droppedForBudget, droppedForLifecycle, deferredAcrossWorkUnitBoundary, deferredAcrossWatchHandoff int
 		if outputLimited {
 			if len(calls) == 0 {
 				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i)
 			}
 		} else {
 			calls, droppedForBudget = filterToolCallsByStrategyAndBudget(nativeCalls, iterationStrategy, actionToolsUsed)
-			var droppedForLifecycle int
 			calls, droppedForLifecycle = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
 			droppedForBudget += droppedForLifecycle
 			if len(calls) == 0 {
@@ -1619,6 +1636,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				calls, legacyLifecycleDropped = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
 				droppedForBudget += legacyDropped
 				droppedForBudget += legacyLifecycleDropped
+				droppedForLifecycle += legacyLifecycleDropped
 			}
 			if len(calls) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
 				droppedForBudget = 1
@@ -1763,26 +1781,28 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind held later non-watcher calls at the watcher lifecycle boundary. Because registration did not complete the handoff, re-issue only the calls still needed after correcting the watcher."})
 			}
 
-			if droppedForBudget > 0 && tryExtendToolBudget(i) {
+			if droppedForBudget > droppedForLifecycle && tryExtendToolBudget(i) {
 				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because the completed calls produced new evidence. Continue with the next necessary action, and avoid repeating an identical call unless its inputs or relevant state changed."})
 			}
 			continue
 		}
 		if droppedForBudget > 0 && !toolBudgetRepairIssued {
-			if tryExtendToolBudget(i) {
+			if droppedForBudget > droppedForLifecycle && tryExtendToolBudget(i) {
 				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because prior calls produced new evidence. Retry only the next necessary tool action; do not repeat unchanged calls."})
 				recordStep(i, StepContinueModel, "budget_extended")
 				continue
 			}
 			toolBudgetRepairIssued = true
 			reserveAvailable := strategy.CompletionReserve > 0 && actionToolsUsed >= actionToolBudgetLimit-strategy.CompletionReserve && actionToolsUsed < actionToolBudgetLimit
-			toolBudgetExhausted = !reserveAvailable
+			toolBudgetExhausted = droppedForLifecycle > 0 || !reserveAvailable
 			if i+1 >= maxIterations {
 				maxIterations = i + 2
 			}
 			emitAgentActivity(eventCh, "Tool budget reached; finishing from collected evidence", "tool_budget", i)
 			finalizeHint := "SelfMind tool budget for this turn has been reached. Use the remaining lifecycle tools to record the plan and outcome, then write the final answer from collected evidence. If incomplete, state the blocker and exact next action."
-			if reserveAvailable {
+			if droppedForLifecycle > 0 {
+				finalizeHint = "A lifecycle action reached its bounded attempt limit. Do not call it again in this turn. Write an honest final answer from the recorded evidence; if completion was not recorded, state the unresolved blocker and exact next action."
+			} else if reserveAvailable {
 				finalizeHint = "SelfMind reserved the remaining action calls for verify. Use verify for the outstanding checks, then resolve the plan and finish_run according to the evidence. Further implementation calls are unavailable."
 			}
 			messages = append(messages, llm.Message{

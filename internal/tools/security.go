@@ -13,7 +13,8 @@ var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`sk-[A-Za-z0-9_-]{16,}`),
 }
 
-var sensitiveAssignmentPattern = regexp.MustCompile(`(?i)((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|token|secret|password|credential|authorization))(\s*[:=]\s*)(["']?)([^\s"',}]+)`)
+var sensitiveJSONAssignmentPattern = regexp.MustCompile(`(?i)("(?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|token|secret|password|credential|authorization)"\s*:\s*")((?:\\.|[^"\\])*)(")`)
+var sensitiveAssignmentPattern = regexp.MustCompile(`(?i)((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|token|secret|password|credential|authorization))(["']?)(\s*[:=]\s*)(["']?)([^\s"',}]+)`)
 
 // SecretRegistry holds exact runtime secret values that cannot be recognized
 // reliably by shape alone (for example an opaque gateway token). It is shared
@@ -140,20 +141,32 @@ func RedactSensitive(value string) string {
 	}
 	out := defaultSecretRegistry.Redact(value)
 	out = sensitivePatterns[0].ReplaceAllString(out, `${1}[REDACTED]`)
+	out = redactSensitiveJSONAssignments(out)
 	out = redactSensitiveAssignments(out)
 	out = sensitivePatterns[1].ReplaceAllString(out, `${1}[REDACTED]`)
 	out = sensitivePatterns[2].ReplaceAllString(out, `sk-[REDACTED]`)
 	return out
 }
 
+func redactSensitiveJSONAssignments(value string) string {
+	return sensitiveJSONAssignmentPattern.ReplaceAllStringFunc(value, func(match string) string {
+		parts := sensitiveJSONAssignmentPattern.FindStringSubmatch(match)
+		if len(parts) != 4 || isCredentialReference(parts[2]) ||
+			(strings.Contains(strings.ToLower(parts[1]), `"authorization"`) && strings.EqualFold(parts[2], "bearer")) {
+			return match
+		}
+		return parts[1] + "[REDACTED]" + parts[3]
+	})
+}
+
 func redactSensitiveAssignments(value string) string {
 	return sensitiveAssignmentPattern.ReplaceAllStringFunc(value, func(match string) string {
 		parts := sensitiveAssignmentPattern.FindStringSubmatch(match)
-		if len(parts) != 5 || isCredentialReference(parts[4]) ||
-			(strings.EqualFold(parts[1], "authorization") && strings.EqualFold(parts[4], "bearer")) {
+		if len(parts) != 6 || isCredentialReference(parts[5]) ||
+			(strings.EqualFold(parts[1], "authorization") && strings.EqualFold(parts[5], "bearer")) {
 			return match
 		}
-		return parts[1] + parts[2] + parts[3] + "[REDACTED]"
+		return parts[1] + parts[2] + parts[3] + parts[4] + "[REDACTED]"
 	})
 }
 

@@ -29,7 +29,6 @@ import (
 	"selfmind/internal/gateway/weixin"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelchange"
-	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/promptassets"
@@ -102,11 +101,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Model transitions are reconciled only after this process owns
 	// gateway.lock. launchd/systemd may briefly start competing processes; they
 	// must not each increment attempts or mutate the same candidate transaction.
-	modelChanges := &modelchange.Service{
-		ConfigPath:  cfg.Path,
-		Validate:    app.ValidateModelChange,
-		Credentials: modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile),
-	}
+	modelChanges := modelchange.NewService(cfg, app.NewModelChangeValidator().Validate)
 	modelStatus, modelRolledBack, err := modelChanges.ReconcileStartup(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile model configuration: %w", err)

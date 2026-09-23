@@ -236,6 +236,9 @@ kept verbatim. 这取代了旧的"默认直接丢弃最旧消息"行为——长
 - 摘要用便宜的 `memory_extract` 角色 provider(`Agent.SetSummaryProvider` →
   `ContextEngine.SetSummaryProvider`),不占用主 coding provider;只在越过阈值那一
   刻做一次有界调用,绝不每轮调用,所以流式首 token 不受影响。
+- 摘要调用使用 summarizer 路由配置的推理等级(显式的 `models.roles.summarizer`,
+  否则 Background 路由),开启思考时输出上限加上对应等级的推理余量;单次压缩受
+  `agent.compaction_timeout`(默认 30 秒)约束,超时即退回确定性裁剪。
 - 摘要 prompt 强制保留 `## Relevant Files`(任务目标、决策、下一步,以及所有
   创建/修改/读取的文件路径)。另有一个确定性兜底:从工具调用参数
   (`path`/`file_path`/`output_path`/`workdir` 和 V4A `patch`/`apply_patch` 头)

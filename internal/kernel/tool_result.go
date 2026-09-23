@@ -565,11 +565,84 @@ func toolResultPreview(name, raw string) string {
 		if summary := patchPreview(raw); summary != "" {
 			return summary
 		}
+	case "skill_select":
+		if summary := skillSelectPreview(raw); summary != "" {
+			return summary
+		}
+	case "skill_view":
+		if summary := skillViewPreview(raw); summary != "" {
+			return summary
+		}
+	case "batch_read":
+		if summary := batchReadPreview(raw); summary != "" {
+			return summary
+		}
 	}
 	if summary := genericJSONPreview(raw); summary != "" {
 		return summary
 	}
 	return firstNonEmptyLine(raw, toolResultPreviewBytes)
+}
+
+func skillSelectPreview(raw string) string {
+	var payload struct {
+		Success bool   `json:"success"`
+		Name    string `json:"name"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil || !payload.Success || strings.TrimSpace(payload.Name) == "" {
+		return ""
+	}
+	return textutil.Truncate(strings.TrimSpace(payload.Name)+toolResultSeparator+"activated", toolResultPreviewBytes)
+}
+
+func skillViewPreview(raw string) string {
+	var payload struct {
+		Success    bool   `json:"success"`
+		Name       string `json:"name"`
+		File       string `json:"file"`
+		Section    string `json:"section"`
+		Content    string `json:"content"`
+		Complete   bool   `json:"complete"`
+		TotalBytes int    `json:"total_bytes"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil || !payload.Success || strings.TrimSpace(payload.Name) == "" {
+		return ""
+	}
+	parts := []string{strings.TrimSpace(payload.Name)}
+	if section := strings.TrimSpace(payload.Section); section != "" {
+		parts = append(parts, "section "+section)
+	} else if file := strings.TrimSpace(payload.File); file != "" {
+		parts = append(parts, "file "+file)
+	}
+	parts = append(parts, fmt.Sprintf("%d/%d bytes", len(payload.Content), payload.TotalBytes))
+	if payload.Complete {
+		parts = append(parts, "complete")
+	} else {
+		parts = append(parts, "more available")
+	}
+	return textutil.Truncate(strings.Join(parts, toolResultSeparator), toolResultPreviewBytes)
+}
+
+func batchReadPreview(raw string) string {
+	var payload struct {
+		Success          bool `json:"success"`
+		Operations       int  `json:"operations"`
+		Failures         int  `json:"failures"`
+		FallbackRequired bool `json:"fallback_required"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil || payload.Operations <= 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("%d operation(s)", payload.Operations)}
+	if payload.Success && payload.Failures == 0 {
+		parts = append(parts, "all succeeded")
+	} else {
+		parts = append(parts, fmt.Sprintf("%d failed", payload.Failures))
+	}
+	if payload.FallbackRequired {
+		parts = append(parts, "fallback required")
+	}
+	return textutil.Truncate(strings.Join(parts, toolResultSeparator), toolResultPreviewBytes)
 }
 
 func listFilesPreview(raw string) string {

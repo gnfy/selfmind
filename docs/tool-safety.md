@@ -431,9 +431,15 @@ asking to override it; uncertainty escalates with the missing evidence stated.
 The judge makes the smart-mode operation decision; a risk flag is a reason for
 review, not proof that a separate human grant is missing. Explicit execution
 restrictions and the control-plane safety floor remain independently enforced.
-The provider request enables structured JSON output with reasoning disabled by
-default; an explicit judge-role override wins. Output and timeout budgets still
-bound the call. Version-3 review requires
+The provider request enables structured JSON output and always selects the
+lowest latency tier declared by the resolved model, whatever reasoning the
+configuration names: disabled when supported, then `minimal` or `low`, with the
+compatibility-safe disabled request for unknown capabilities. Output and
+timeout budgets still bound the call. Model-change validation sends this same
+approval contract before activating the route and, when the model keeps
+reasoning anyway, records the provider's proven disabled encoding (see
+[Provider Runtime](provider-runtime.md)).
+Version-3 review requires
 all four decision fields; malformed or incomplete output is an auditable model
 failure and falls back to the human, never a verdict inferred from prose. New
 audit records identify the policy as `smart-v3`.
@@ -540,8 +546,8 @@ rationale, and a short redacted provider error. It never stores the command,
 arguments, prompt, or credentials. Records are retained for 14 days. A failure
 to write diagnostics must not block approval, so the foreground write has a
 short deadline and is best-effort. The judge has a five-second foreground
-deadline; its 1024-token output budget accommodates hidden reasoning while the
-request still asks for low reasoning and a compact structured verdict.
+deadline; its 4096-token output budget accommodates providers that still spend
+hidden reasoning tokens before returning the compact structured verdict.
 
 The declarative read-only catalog may bypass a human only when both the command
 shape and the credential-bearing tool profile are recognized. Trusted workspace

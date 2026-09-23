@@ -207,3 +207,86 @@ func TestFinishCorrectionNeverUnlocksUnchangedOrRepeatedFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestFinishCorrectionAllowsOneCorrectedNotDispatchedArgumentFailure(t *testing.T) {
+	counts := map[string]int{"finish_run": 1}
+	var correction finishCorrection
+	invalid := toolExecutionResult{
+		toolName: "finish_run", errorCode: "tool_arguments_invalid",
+		failurePhase: "preparation", retryability: "corrected_input", effectState: "not_dispatched",
+	}
+	correction.observe([]toolExecutionResult{invalid}, counts)
+	if counts["finish_run"] != 0 {
+		t.Fatalf("not-dispatched argument correction stayed capped: %v", counts)
+	}
+	counts["finish_run"] = 1
+	correction.observe([]toolExecutionResult{invalid}, counts)
+	if counts["finish_run"] != 1 {
+		t.Fatalf("argument correction was unlocked more than once: %v", counts)
+	}
+}
+
+type argumentCorrectionProvider struct {
+	mockLLMProvider
+	requests     int
+	retryVisible bool
+	requestTools [][]string
+}
+
+func (p *argumentCorrectionProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests++
+	tools := make([]string, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		tools = append(tools, tool.Name)
+	}
+	p.requestTools = append(p.requestTools, tools)
+	ch := make(chan llm.StreamEvent, 1)
+	switch p.requests {
+	case 1:
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: "completed-plan", Function: "update_plan",
+			Args: `{"plan":[{"step":"complete work","status":"completed"}]}`,
+		}}}
+	case 2:
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: "malformed-finish", Function: "finish_run", Args: `{"status":`,
+		}}}
+	case 3:
+		p.retryVisible = requestHasTool(req, "finish_run")
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: "corrected-finish", Function: "finish_run", Args: `{"status":"done","summary":"done"}`,
+		}}}
+	default:
+		ch <- llm.StreamEvent{Content: "done"}
+	}
+	close(ch)
+	return ch, nil
+}
+
+type finishCountingBackend struct {
+	budgetClosureBackend
+	attempts int
+}
+
+func (b *finishCountingBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
+	if name == "finish_run" {
+		b.attempts++
+	}
+	return b.budgetClosureBackend.Dispatch(name, args)
+}
+
+func TestMalformedFinishArgumentsCanBeCorrectedBeforeDispatch(t *testing.T) {
+	provider := &argumentCorrectionProvider{}
+	backend := &finishCountingBackend{}
+	agent := NewAgent(memory.NewMemoryManager(&mockStorage{}), backend, provider, "helpful", 4, 1, nil)
+	answer, _, err := agent.RunConversation(context.Background(), "test", "cli", "finish the completed work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !provider.retryVisible || backend.attempts != 1 {
+		t.Fatalf("corrected retry visible=%v dispatched attempts=%d tools=%v", provider.retryVisible, backend.attempts, provider.requestTools)
+	}
+	if !strings.Contains(answer, "done") {
+		t.Fatalf("finish result = %q", answer)
+	}
+}

@@ -7,6 +7,7 @@ import (
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
@@ -15,9 +16,9 @@ import (
 // llmApprovalJudge implements tools.ApprovalJudge over a cheap role-routed
 // provider. It is the concrete judge the smart-mode triage step (H2) calls: the
 // provider is a role model (kept OFF the run's main coding provider), the reply
-// is bounded structured JSON, and the temperature is pinned to 0 for a
-// deterministic verdict. This lives in the app layer (not internal/tools) so the
-// triage logic stays model-agnostic and the concrete model choice is injected.
+// is bounded structured JSON, and malformed or unavailable output fails closed.
+// This lives in the app layer (not internal/tools) so the triage logic stays
+// model-agnostic and the concrete model choice is injected.
 type llmApprovalJudge struct {
 	provider  llm.Provider
 	route     string
@@ -42,12 +43,9 @@ When uncertain, choose escalate.`
 // internal reasoning behavior.
 const judgeMaxTokens = 4096
 
-// judgeDefaultReasoning asks the provider not to reason. The verdict is a
-// bounded classification, the same shape as post-run maintenance, which also
-// runs at "none". Requesting "low" is not bounded on every provider: DeepSeek
-// has no low tier, so the adapter maps it to the high tier with thinking
-// enabled, and that reasoning consumed the whole output budget above. An
-// explicit models.roles.<judge role>.reasoning still wins.
+// judgeDefaultReasoning is the protocol-neutral disabled/omitted fallback. The
+// configured judge replaces it with the runtime's lowest declared latency tier
+// when the provider does not expose a disabled tier.
 const judgeDefaultReasoning = "none"
 
 // NewApprovalJudge builds a tools.ApprovalJudge backed by the given cheap role
@@ -78,16 +76,14 @@ func NewConfiguredApprovalJudge(mem *memory.MemoryManager, cfg *config.Config, t
 	}
 }
 
-// approvalJudgeReasoning honors an explicit reasoning setting on the judge's
-// own role entry. The inherited models.auxiliary reasoning is not applied: it
-// is tuned for the other background roles, and a thinking tier there would
-// recreate the exhausted-budget failure the default exists to prevent.
+// approvalJudgeReasoning is the resolved model's lowest-latency tier, whatever
+// reasoning the configuration names. Every smart-mode tool call waits on this
+// verdict inside the person's turn, so a thinking tier only adds wait: neither
+// the inherited background level nor an explicit role setting applies here.
 func approvalJudgeReasoning(cfg *config.Config, role llm.ModelRole) string {
 	if cfg != nil {
-		if explicit, ok := cfg.Models.Roles[string(role)]; ok {
-			if value := explicit.EffectiveReasoning(); value != "" {
-				return value
-			}
+		if runtime, err := ResolveModelRuntime(context.Background(), cfg, string(role)); err == nil {
+			return modelruntime.LowestLatencyReasoning(runtime)
 		}
 	}
 	return judgeDefaultReasoning
@@ -133,10 +129,7 @@ func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (to
 		SystemPrompt: judgeSystemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: prompt}},
 		MaxTokens:    judgeMaxTokens,
-		// temperature 0 for a deterministic verdict; adapters that ignore the
-		// option simply fall back to their default, which triage tolerates
-		// (unrecognized replies escalate).
-		Options: map[string]interface{}{"temperature": 0, "reasoning_effort": j.reasoningEffort(), "response_format": map[string]interface{}{"type": "json_object"}},
+		Options:      map[string]interface{}{"reasoning_effort": j.reasoningEffort(), "response_format": map[string]interface{}{"type": "json_object"}},
 	})
 	result := tools.ApprovalResponse{ApprovalResponseMetadata: tools.ApprovalResponseMetadata{Version: 2, Model: llm.GetModelName(j.provider), Role: j.route, DurationMS: time.Since(started).Milliseconds()}}
 	if err != nil {

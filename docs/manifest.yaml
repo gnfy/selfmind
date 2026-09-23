@@ -109,7 +109,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: 884aae355de14c66
+    source_hash: 5e0f520084ec2095
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -274,7 +274,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: 9dfe334552aa4cff
+    source_hash: 135f1ddd92a85ada
   - path: docs/skill-learning-and-repair.md
     title: Skill Learning, Automatic Promotion, and Repair
     class: decision

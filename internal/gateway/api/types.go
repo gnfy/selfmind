@@ -13,7 +13,7 @@ import (
 const (
 	LocalControlTokenHeader        = "X-SelfMind-Local-Control-Token"
 	ShutdownReasonServiceReconcile = "service_reconcile"
-	ModelControlProtocolVersion    = 3
+	ModelControlProtocolVersion    = 4
 )
 
 type ActiveRunStatus struct {

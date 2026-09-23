@@ -155,6 +155,26 @@ type ProbeResult struct {
 	LatencyMS    int64        `json:"latency_ms,omitempty"`
 	Error        string       `json:"error,omitempty"`
 	FailureClass FailureClass `json:"failure_class,omitempty"`
+	// ThinkingMode is a disabled-reasoning encoding the probe proved for the
+	// route's provider; a confirmed change records it in that provider's
+	// quirks. Notice states what the probe observed, for the person.
+	ThinkingMode string `json:"thinking_mode,omitempty"`
+	Notice       string `json:"notice,omitempty"`
+	// Reused marks a passing result carried over from a validation of the
+	// identical request moments earlier rather than probed again.
+	Reused bool `json:"reused,omitempty"`
+}
+
+// ProbeNotices returns the observations a person should see from one
+// validation, in route order.
+func ProbeNotices(probes []ProbeResult) []string {
+	var notices []string
+	for _, probe := range probes {
+		if notice := strings.TrimSpace(probe.Notice); notice != "" {
+			notices = append(notices, notice)
+		}
+	}
+	return notices
 }
 
 type Change struct {
@@ -180,6 +200,10 @@ type Change struct {
 	ProviderChanges    []ProviderChange `json:"provider_changes,omitempty"`
 	Probes             []ProbeResult    `json:"probes,omitempty"`
 	Transitions        []Transition     `json:"transitions,omitempty"`
+	// ValidatedAt records when every changed route passed validation before
+	// commit. Startup then re-checks only what a restart can break, the new
+	// process's reach, instead of proving the same contracts again.
+	ValidatedAt time.Time `json:"validated_at,omitempty"`
 }
 
 type State struct {
@@ -319,6 +343,21 @@ type Service struct {
 	mu          sync.Mutex
 }
 
+// NewService builds a model transaction service with every dependency needed
+// by production mutation paths. Read-only callers may still use a minimal
+// Service, but apply, restart, and recovery paths must use this constructor so
+// a staged provider credential cannot be stranded between config commit and
+// process restart.
+func NewService(cfg *config.Config, validate Validator) *Service {
+	service := &Service{Validate: validate}
+	if cfg == nil {
+		return service
+	}
+	service.ConfigPath = cfg.Path
+	service.Credentials = modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile)
+	return service
+}
+
 var ErrGenerationConflict = errors.New("model configuration generation changed")
 var ErrRecoveryRequired = errors.New("model change requires recovery")
 
@@ -427,13 +466,14 @@ func (s *Service) ValidateCandidateWithConfig(ctx context.Context, candidate Sna
 	}
 	defer unlock()
 	candidate = normalizeSnapshot(candidate)
-	if len(routes) == 0 {
-		cfg, loadErr := config.LoadConfig(config.Options{Path: s.ConfigPath})
-		if loadErr != nil {
-			return nil, loadErr
-		}
-		routes = ChangedRoutes(SnapshotFromConfig(cfg), candidate)
+	cfg, loadErr := config.LoadConfig(config.Options{Path: s.ConfigPath})
+	if loadErr != nil {
+		return nil, loadErr
 	}
+	// Prove every route the draft changes, not only the one just edited: a
+	// Background that follows Main changes with it. Applying the same draft
+	// then reuses this evidence instead of probing the routes again.
+	routes = mergeRoutes(routes, ChangedRoutes(SnapshotFromConfig(cfg), candidate))
 	if len(routes) == 0 {
 		return nil, fmt.Errorf("model selection is unchanged")
 	}
@@ -634,7 +674,9 @@ func (s *Service) confirmLocked(ctx context.Context, id string) (PrepareResult, 
 		}
 		return PrepareResult{}, probeErr
 	}
+	pending.ProviderChanges = recordProbedThinkingModes(cfg, candidateCfg, pending.ProviderChanges, probes)
 	pending.Probes = probes
+	pending.ValidatedAt = s.now()
 	s.transition(pending, StatusAwaitingSafeBoundary, s.now())
 	state.Generation++
 	if err := s.save(state); err != nil {
@@ -724,6 +766,9 @@ func (s *Service) BeginDraining(id string) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
+	if err := s.requireCredentialTransaction(change); err != nil {
+		return s.InspectWithState(cfg, state), err
+	}
 	switch change.Status {
 	case StatusDraining, StatusRestarting, StatusStarting:
 		return s.InspectWithState(cfg, state), nil
@@ -750,6 +795,8 @@ func (s *Service) BeginDraining(id string) (Status, error) {
 		if err := s.save(state); err != nil {
 			return Status{}, err
 		}
+		rememberSnapshotSelections(cfg, change.Previous, change.ChangedRoutes)
+		rememberSnapshotSelections(cfg, change.Candidate, change.ChangedRoutes)
 		ApplySnapshot(cfg, change.Candidate)
 		ApplyProviderChanges(cfg, change.ProviderChanges, true)
 		if err := config.SaveConfig(s.ConfigPath, cfg); err != nil {
@@ -767,6 +814,46 @@ func (s *Service) BeginDraining(id string) (Status, error) {
 		return Status{}, err
 	}
 	return s.InspectWithState(cfg, state), nil
+}
+
+// PreflightRestart verifies that the detached restart process can finish the
+// pending transaction before it stops the healthy daemon. This is deliberately
+// read-only: a dependency or configuration error must leave both config.yaml
+// and the current process untouched.
+func (s *Service) PreflightRestart(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockState()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	cfg, err := config.LoadConfig(config.Options{Path: s.ConfigPath})
+	if err != nil {
+		return err
+	}
+	state, err := s.loadOrInitialize(cfg)
+	if err != nil {
+		return err
+	}
+	change, err := pendingChange(&state, id)
+	if err != nil {
+		return err
+	}
+	if err := s.requireCredentialTransaction(change); err != nil {
+		return err
+	}
+	// OverlayStage is a read-only proof that this process can find and decode
+	// the exact staged secret it will later commit. A non-nil but misconfigured
+	// credential store must fail before the healthy daemon is stopped too.
+	return s.overlayCredentialStage(change.CredentialStage, cfg)
+}
+
+func (s *Service) requireCredentialTransaction(change *Change) error {
+	if change == nil || strings.TrimSpace(change.CredentialStage) == "" || s.Credentials != nil {
+		return nil
+	}
+	return fmt.Errorf("model change %s has staged provider credentials, but provider credential transaction support is unavailable", change.ID)
 }
 
 // MarkRestarting records that the old owner has released gateway.lock and the
@@ -1091,6 +1178,8 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 			// Crash recovery for the narrow window between recording committing
 			// and replacing config.yaml. This process owns the gateway lock before
 			// ReconcileStartup is called, so completing the transaction is safe.
+			rememberSnapshotSelections(cfg, change.Previous, change.ChangedRoutes)
+			rememberSnapshotSelections(cfg, change.Candidate, change.ChangedRoutes)
 			ApplySnapshot(cfg, change.Candidate)
 			ApplyProviderChanges(cfg, change.ProviderChanges, true)
 			if err := config.SaveConfig(s.ConfigPath, cfg); err != nil {
@@ -1180,7 +1269,11 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 	if err := s.overlayCredentialStage(change.CredentialStage, candidateCfg); err != nil {
 		return Status{}, false, err
 	}
-	probes := s.validate(ctx, candidateCfg, change.ChangedRoutes)
+	routes := change.ChangedRoutes
+	if !change.ValidatedAt.IsZero() {
+		routes = []Route{startupRecheckRoute(change.Candidate)}
+	}
+	probes := s.validate(ctx, candidateCfg, routes)
 	if failureClass, probeErr := failedProbes(probes); probeErr != nil {
 		if (state.RunningVerifiedAt.IsZero() && change.Source == "initial-startup") || change.Source == "manual-provider-config" {
 			// With no known-good baseline there is nothing safe to roll back to.
@@ -1213,12 +1306,39 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 		}
 		return s.rollbackStartup(cfg, state, *change, probes, probeErr)
 	}
-	change.Probes = probes
+	change.Probes = mergeProbeResults(change.Probes, probes)
 	state.Generation++
 	if err := s.save(state); err != nil {
 		return Status{}, false, err
 	}
 	return s.InspectWithState(candidateCfg, state), false, nil
+}
+
+// startupRecheckRoute is the one route re-verified after a restart that
+// commits already-validated contracts. The approval route is the one every
+// smart-mode tool call waits on; with background work disabled there is none,
+// and Main stands in.
+func startupRecheckRoute(candidate Snapshot) Route {
+	if auxiliaryEnabled(candidate) {
+		return RouteFastClassifier
+	}
+	return RoutePrimary
+}
+
+// mergeProbeResults replaces earlier results with fresh ones for the same
+// route and keeps the rest, so the record shows every route's latest evidence.
+func mergeProbeResults(earlier, fresh []ProbeResult) []ProbeResult {
+	merged := make([]ProbeResult, 0, len(earlier)+len(fresh))
+	replaced := make(map[Route]bool, len(fresh))
+	for _, probe := range fresh {
+		replaced[probe.Route] = true
+	}
+	for _, probe := range earlier {
+		if !replaced[probe.Route] {
+			merged = append(merged, probe)
+		}
+	}
+	return append(merged, fresh...)
 }
 
 // MarkStartupHealthy commits a startup-validated candidate only after the
@@ -1781,6 +1901,48 @@ func (s *Service) historyMax() int {
 		return s.HistoryMax
 	}
 	return defaultHistorySize
+}
+
+// ForgetRememberedModel removes presentation history under the same
+// cross-process config lock used by model transactions. Runtime routes and
+// transaction generation are unchanged.
+func (s *Service) ForgetRememberedModel(provider, model string) error {
+	if s == nil || strings.TrimSpace(s.ConfigPath) == "" {
+		return fmt.Errorf("model configuration is unavailable")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockState()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	cfg, err := config.LoadConfig(config.Options{Path: s.ConfigPath})
+	if err != nil {
+		return err
+	}
+	if !cfg.Models.ForgetModel(provider, model) {
+		return nil
+	}
+	return config.SaveConfig(s.ConfigPath, cfg)
+}
+
+func rememberSnapshotSelections(cfg *config.Config, snapshot Snapshot, routes []Route) {
+	if cfg == nil {
+		return
+	}
+	if len(routes) == 0 {
+		routes = append([]Route{RoutePrimary, RouteAuxiliary}, ManagedRoleRoutes()...)
+	}
+	for _, route := range routes {
+		selection := selectionForRoute(snapshot, route)
+		provider := strings.TrimSpace(selection.Provider)
+		model := strings.TrimSpace(selection.Model)
+		if provider == "" || model == "" {
+			continue
+		}
+		cfg.Models.RememberModel(provider, model, selection.Reasoning)
+	}
 }
 
 func configWithSnapshot(path string, snapshot Snapshot) (*config.Config, error) {

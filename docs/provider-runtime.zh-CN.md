@@ -186,10 +186,12 @@ provider/model；也可用 `models.auxiliary.enabled: false` 显式关闭后台�
 精简设置界面；交互式 `selfmind setup` 也会打开此摘要。Main、Background、可选的
 Advanced roles 与 Validate & continue 同时可见。Provider 选择页保留连接管理入口，
 reasoning 与 service tier 使用兼容默认值，不再强制经过额外页面。
-设置中的 Same as Main 会写入 `models.auxiliary.follow_primary: true`，使 Background
-随之后 Main 的 provider/model 修改而变化，同时保留自身的后台调优策略。选择具体的
-Background 模型会清除此标记，即使它暂时与 Main 相同。旧的显式选择不会自动变成
-继承，历史快照的指纹保持稳定。
+首次设置和之后的 Model Manager 共用同一个 Background 选择器，统一提供三种状态：
+Same as Main、指定一个独立模型或停用。Same as Main 会写入
+`models.auxiliary.follow_primary: true`，使 Background 随之后 Main 的
+provider/model 修改而变化，同时保留自身的后台调优策略。选择具体的 Background
+模型会清除此标记，即使它暂时与 Main 相同。旧的显式选择不会自动变成继承，历史
+快照的指纹保持稳定。
 `model-state.json` 中已应用的事务是前台/后台就绪状态的唯一权威；onboarding 不再复制
 路由或验证事实，因此之后成功应用的路由变更不会重新打开无关的工作区或后台服务
 步骤。有效的旧设置回执只会作为一次性迁移证据，并在移除其中的模型字段前备份。
@@ -219,6 +221,11 @@ TUI 中不带参数的 `/model` 打开同一个模型管理器；IM 只展示只
 过期。历史最多保留十条不含密钥的终态快照；回滚会从上一条成功快照创建一笔新的、
 经过校验的事务。
 
+所有会修改事务的生产入口都从已加载配置创建同一个完整事务服务，其中包括凭据存储。
+detached 重启会在停止健康 daemon 或写入候选配置之前，以只读方式确认此次事务对应的
+暂存凭据可读。因此，事务依赖缺失或不可读时，daemon、配置和 pending 状态都保持不变，
+不会再在配置提交与凭据激活之间失败。
+
 状态文件是所选 `config.yaml` 同目录下的 `model-state.json`。其中只有路由选择、
 非敏感 provider connection 快照、独立的前台/后台及逐角色验证证据、阶段转换、探测摘要、
 generation、重启次数和历史，不包含凭据或原始认证数据。新输入的 key 首先只形成
@@ -227,7 +234,10 @@ generation、重启次数和历史，不包含凭据或原始认证数据。新�
 精确凭据镜像，直到新 daemon 通过启动探测和真实 `/health`。取消会丢弃未提交 stage；
 自动回滚会把 provider、路由和凭据作为一个整体恢复。经过校验的候选项只有在当前 run 空闲、到达安全
 边界后才写入 YAML。
-启动时还会再次探测，并且只有运行时构建和真实 `/health` 端点成功后才记录为 running。
+所有改动的路由在提交前都已验证通过，所以启动时只复查重启可能改变的东西，即新进程能否
+连通：执行一次审批契约探测；后台工作停用时改为执行一次 Main 的探测。没有这份前置验证的
+启动（例如手动修改配置或首次启动）会验证实际改动的路由。只有运行时构建和真实 `/health`
+端点成功后才记录为 running。
 只有确定且可归因于模型的启动探测失败才会自动恢复上一条运行快照。网络、额度、
 监听端口、服务管理器和未知失败会保留证据并进入 `recovery_required`；模型管理器的
 “变更状态”页面可以重试候选项，或显式恢复上一条健康路由。schema v1 至 v4 状态
@@ -253,15 +263,37 @@ Gateway 状态公开有效路由快照的不含秘密哈希和分离的 readines
 契约探测。只有已知兼容时才会保留原 reasoning 和 service tier；兼容性未知时只把
 受影响选项恢复为 provider `auto` 并提示。显式输入始终优先。
 
+模型事务到达安全提交边界后，Model Manager 会把变更前与候选的 provider/model，
+以及它们使用过的显式 reasoning 值都加入仅用于界面选择的 MRU 列表。该列表以有界
+`models.remembered` 数据保存（最多 24 组 provider/model，每组最多 8 个 reasoning
+值）；校验失败或尚未提交的草稿不会进入列表。界面先展示已配置和当前可发现模型，
+再合并记住的条目，因此之前手工输入的模型无需再次输入即可切回。在模型选择页按
+`d` 可忘记当前条目。此操作不会修改任何生效路由；若该模型仍由 provider 目录提供
+或仍被路由使用，它依然可见。provider 目录模型是否移除仍由目录缓存过期与刷新决定。
+
+校验和重启等待与普通 agent 工作共用同一个 TUI 动画所有者。进度页按持久事务阶段的
+时间戳显示阶段和耗时，并保持唯一一条 spinner tick 链，直到操作完成或进入可处理的
+恢复状态。
+
 校验分为两个边界。精简设置界面保留可编辑草稿，直到 Validate & continue 按实际生效
-选择探测 Main、Background 和全部六个细分角色。界面显示每条路由的结果，拒绝缺失或
-失败的证据，并允许重试或返回修改。完整模型管理器在每一项选择完成后自动发送相应的有界契约探测：主模型
-使用前台探测，后台模型及六个受管理角色使用后台或维护 JSON 探测。最终 daemon 事务
-会在修改服务状态前，在 daemon 自己的环境中再次解析并探测整份草稿。这样可以避免
-只在 shell 中存在的凭据被误判为后台运行也可用。新输入的 API key 在校验期间只保存在
+选择探测 Main、Background 和全部六个细分角色。不同物理端点的只读通道会并行探测，
+共享一个端点的契约串行执行，相同 provider 线上请求指纹只探测一次。界面显示每条路由的
+结果，拒绝缺失或失败的证据，并允许重试或返回修改。完整模型管理器在每一项选择完成后
+自动验证这份草稿改动的所有路由，包括跟随 Main 的 Background。每条路由执行相应的有界
+契约探测：主模型必须调用指定的无副作用工具、接受 assistant/tool 的
+精确回放并返回最终文本。协议与推理契约允许时，探测会精确指定该工具；否则允许有限次数
+的自动工具选择，但仍要求真实工具调用。维护角色使用维护 JSON
+探测，`fast_classifier` 使用真实的结构化审批
+判定契约。审批探测采用与线上相同的五秒时限，并使用已解析模型声明的最低推理等级。探测遇到
+provider 临时故障（5xx、限流或连接中断）时，会短暂等待后重试一次，之后才算失败。最终
+daemon 事务会在修改服务状态前，在 daemon 自己的环境中解析整份草稿，并复用十分钟内同一
+请求、端点和凭据已通过的探测结果；没有这类证据的路由会在此时探测。选择时的验证同样在
+daemon 内执行，因此只在 shell 中存在的凭据不会被误判为后台运行也可用。新输入的 API key 在校验期间只保存在
 不透明的暂存 auth 记录中，绝不会写入 YAML；服务定义只包含路径和非凭据环境。探测失败
 会保留可编辑草稿，绝不会伪装成已验证。引导会等待此次事务已应用且 daemon 健康可达，
-重新读取已应用配置，在同一次启动中继续运行环境设置并进入对话。取消模型摘要不会
+重新读取已应用配置，在同一次启动中继续运行环境设置并进入对话。之后运行的
+`selfmind model` 与对话内 `/model` 也采用相同完成条件，不会把重启回执当成完成；发生恢复状态时会
+重新打开可操作的管理器，直到重试或恢复上一版本到达已验证的健康状态。取消模型摘要不会
 安装服务或信任工作区。
 
 Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级映射为 thinking
@@ -270,10 +302,28 @@ Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级
 `reasoning_effort` 或 provider 专属 thinking 契约。优先使用这些有类型字段；
 `extra_body` 只作为最终 wire 边界的应急覆盖。
 
-后台维护不会继承主模型或辅助模型用于交互任务的高推理等级。Post-run 分析、记忆
-合并、模型契约探针和审批判定都会显式请求关闭推理并限制输出；维护 provider 链在
-实际派发时再次执行同一约束。因此，即使用户把辅助模型设为 `high` 或 `xhigh`，
-日常治理也不会按该档位放大成本，前台任务的推理设置则保持不变。
+关闭推理（`none`、`off` 或 `disabled`）在 OpenAI-compatible 协议里没有通用编码，
+因此由 provider 的 `thinking_mode` 声明：`deepseek` 发送 `thinking.type=disabled`，
+`effort_none` 发送字面量 `reasoning_effort: "none"`，其他模式都省略该字段，因为有些
+endpoint 会拒绝 `"none"`。无论关闭推理来自请求本身还是路由配置的等级，都按同一方式
+编码。省略字段等于使用 provider 默认值，默认开启思考的模型会继续思考：审批判定明明请求
+关闭推理，却要付出完整的推理开销，还可能超过 `approval_triage_timeout`。
+模型变更验证会在审批路由上检查这一点：默认 OpenAI 编码下探测回答仍带推理时，用
+`reasoning_effort: "none"` 重发一次同样的请求；只有这次回答通过契约且没有推理，已确认
+的变更才会给未声明 thinking_mode 的 provider 记录 `thinking_mode: effort_none`。已声明
+的模式绝不会被替换，变更提示会说明观察到了什么、保存了什么。
+
+审批判定无论配置写了什么推理等级，都使用已解析模型声明的最低延迟等级：支持关闭就关闭，
+不支持关闭则用 `minimal` 或 `low`，能力未知时使用兼容性安全的关闭请求。每次 smart 模式
+的工具调用都要在用户的回合里等这个结论，所以 Model Manager 不再为 `fast_classifier`
+提供推理选项。其余后台角色（上下文压缩、post-run 分析、记忆合并和 skill 整理）使用所在
+路由配置的推理等级：先看显式的角色设置，否则用 Background 路由的设置。该等级可能推理时，
+输出上限会加上对应等级的思考预算（`low=4096`、默认 `8192`、`high=16384`、
+`xhigh/max=32768`），因为有些 provider 会把推理 token 计入 `max_tokens`。上下文压缩要在
+用户的回合里等待，所以有单独的上限 `agent.compaction_timeout`（默认 30 秒）；超时后本轮
+改用确定性裁剪继续。异步调用及其验证探测使用维护调用超时。因此开启思考的 Background
+路由会让这些工作更慢、成本更高；把它或对应角色的推理设为 `none` 即可保持关闭。模型变更
+在路由生效前会验证审批 JSON 请求的形状。
 
 自然语言工作连续性使用正常配置的 Main 回合，不使用 `fast_classifier`、辅助模型
 路由或第二次 run 外模型调用。活动期间的用户输入会在安全检查点交给同一个 Main；
@@ -334,7 +384,7 @@ ProviderProfile{
 | `AuthHeader` | 请求认证头策略 | `bearer`、`x_api_key`、`auto` |
 | `ToolSchema` | tool JSON schema 修复策略 | `openai`、`anthropic`、`moonshot` |
 | `SystemMessageMode` | 已废弃的兼容字段；system 形态由协议 adapter 决定 | 不建议配置 |
-| `ThinkingMode` | thinking 参数策略 | `openai`、`anthropic`、`kimi`、`minimax`、`deepseek`、`omit` |
+| `ThinkingMode` | thinking 参数策略 | `openai`、`anthropic`、`kimi`、`minimax`、`deepseek`、`omit`、`effort_none` |
 | `UserIdentityField` | 可选的 provider 侧稳定匿名用户字段 | `auto`、`user_id`、`metadata.user_id`、`off` |
 | `UserAgent` | provider 需要的客户端标识 | 例如 `claude-code/0.1.0` |
 | `HTTPVersion` | transport 的 HTTP 版本约束 | `auto`、`http1`、`http2` |
@@ -443,13 +493,17 @@ OpenRouter adapter 自己的请求构造，adapter 里设置的归因头因此�
 当思考响应调用工具时，adapter 会把 `reasoning_content` 与 assistant tool call
 一起保存，并在 tool result 之前原样回放；缺少这段内容会使下一次 provider 请求无效。
 
+OpenAI-compatible 工具调用还可能携带 provider 自有的 `extra_content`（例如推理签名）。
+adapter 会把这个对象作为有界、不透明的回放元数据保存，并随 assistant tool call 原样发回。
+kernel 不会把它解释成指令、证据或权限。
+
 DeepSeek 请求还可携带 `user_id`。SelfMind 不会发送原始 person、tenant、channel、
 邮箱或平台 ID；`StableProviderUserID` 根据已认证的 tenant/person 派生带版本的
 匿名 `sm_...` 值。它跨渠道和 run 稳定、不同用户不同，并且只在 provider profile
 声明 `user_identity_field: user_id` 时发送。
 
-模型管理器的自动路由校验与 `doctor --probe-models` 除了验证普通原生工具 schema，
-还会验证完整思考工具循环：思考与工具调用、工具结果回放、最终 assistant 答复。
+模型管理器的前台路由校验会验证完整原生工具循环：工具调用、随工具结果回放不透明元数据、
+最终 assistant 答复。角色诊断继续使用该角色真实的有界文本或 JSON 契约。
 
 ## Kimi Coding Plan
 

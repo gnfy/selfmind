@@ -255,8 +255,11 @@ func (m *uiModel) viewActiveRegion() string {
 	// question over the manager left the person pressing answers that a hidden
 	// wizard was consuming. The armed question waits and shows when the
 	// overlay closes.
-	if m.modelSetup && (m.modelApplying || m.modelManager == nil) && m.approvalPrompt == nil {
-		return m.modelSetupProgressView()
+	if m.modelApplying && m.approvalPrompt == nil {
+		return m.modelChangeProgressView()
+	}
+	if (m.modelSetup || m.modelManagerOnly) && m.modelManager == nil && m.approvalPrompt == nil {
+		return m.modelChangeProgressView()
 	}
 	if m.modelManager != nil && !m.modelApplying && m.approvalPrompt == nil {
 		return m.modelManager.View()
@@ -316,5 +319,5 @@ func (m *uiModel) viewActiveRegion() string {
 		parts = append(parts, hint)
 	}
 	parts = append(parts, inputArea, statusBar)
-	return lipgloss.JoinVertical(lipgloss.Left, parts...)
+	return m.targetComposerCursor(lipgloss.JoinVertical(lipgloss.Left, parts...))
 }

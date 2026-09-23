@@ -262,7 +262,7 @@ func (m *uiModel) statusLine() string {
 	parts := []string{
 		st.Status.Value.Render(header),
 		st.Status.Value.Render(dir),
-		st.Status.Label.Render(formatUsageSession(m.runTokens, m.totalTokens, m.tokenLimit)),
+		st.Status.Label.Render(formatUsageSessionRequest(m.runTokens, m.totalTokens, m.lastRequestTokens, m.tokenLimit, m.tokenLimitSource)),
 	}
 	if m.modelChangePhase != "" {
 		phase := strings.ReplaceAll(string(m.modelChangePhase), "_", " ")

@@ -54,6 +54,31 @@ func TestClaimInteractionContinuationMovesRunAndClaimsParentAtomically(t *testin
 	}
 }
 
+func TestClaimInteractionContinuationRollsBackWhenPlanImportFails(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	parentTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "parent", Channel: "cli"})
+	parent, _ := store.StartRun(ctx, parentTask, "cli", "work")
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, parent.ID, "work", []RunPlanStepInput{{Step: "prepare", Status: "completed"}, {Step: "finish", Status: "in_progress"}}); err != nil {
+		t.Fatal(err)
+	}
+	_ = store.FinishRun(ctx, identity.TenantID, parent.ID, "waiting_user")
+	childTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "continue", Channel: "cli"})
+	child, _ := store.StartRun(ctx, childTask, "cli", "continue")
+	if _, err := store.db.ExecContext(ctx, `CREATE TRIGGER fail_plan_import BEFORE INSERT ON run_plan_versions
+		WHEN NEW.run_id = '`+child.ID+`' BEGIN SELECT RAISE(ABORT, 'injected plan import failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimInteractionContinuation(ctx, identity.TenantID, identity.PersonID, child.ID, parent.ID); err == nil {
+		t.Fatal("claim must fail when its durable plan cannot be imported")
+	}
+	unchanged, err := store.GetRun(ctx, identity.TenantID, child.ID)
+	if err != nil || unchanged.TaskID != childTask.ID || unchanged.ResumesRunID != "" {
+		t.Fatalf("failed import exposed a partial claim: run=%+v err=%v", unchanged, err)
+	}
+}
+
 func TestClaimInteractionContinuationRefusesDomainAndCheckpointMismatch(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

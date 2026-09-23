@@ -2,6 +2,18 @@ package llm
 
 import "strings"
 
+// A final-answer request may expose no new tools while still carrying native
+// tool calls and results from earlier in the same turn. Keep that history in
+// its paired protocol shape independently of the current tool catalogue.
+func hasNativeToolHistory(messages []Message) bool {
+	for _, msg := range messages {
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // sanitizeToolMessageLedger removes broken historical native-tool pairs before
 // an adapter serializes the request. Context compaction/trimming can otherwise
 // leave a tool result without its assistant tool_call, or a tool_call without

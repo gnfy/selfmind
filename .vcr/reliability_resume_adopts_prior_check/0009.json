@@ -1,0 +1,70 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will resume the waiting run to continue and"
+    },
+    {
+      "usage": {
+        "input_tokens": 12078,
+        "output_tokens": 9,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " complete the task."
+    },
+    {
+      "usage": {
+        "input_tokens": 12078,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 12078,
+        "output_tokens": 69,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 12683,
+        "output_tokens": 69,
+        "cache_read_input_tokens": 4045,
+        "cache_miss_input_tokens": 8638,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_18069",
+          "Function": "work_select",
+          "Args": "{\"action\":\"resume\",\"run_id\":\"{{SELFMIND_VCR_RUN_2}}\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EoMHCoAHAWkUfRMevDstL42lY75K2jauIZsrYxRT68qgKXTZJsGPFZXqk4cRgZ/8XM/FxikPq1FbchaVssSggnF7qiR4awjdKCfZfgJL1ebu1xT89wd9T3S35lv3XxolvOhVBK/VgrL2xf7ELEIcuFy5R58tHUAh/MjOppGkV9xlrRnywIghVhnMmoTQupbRzHU6Ecuj08NswxzMX3iDW5J4vD0IsYyWPsZB/hcxzd9eayfS9BtAvfaQUAOKxB+2J87qz1nK5Um3HgOzQTLb47c6PSR97ISnADQ7xblvd+0/d9LTlSDo+hhnCdHg4cDa7hyY/Zu3FI9LWp56lctMeJrr22dxcgKuPVbv5oa7bgfEPMNajKlylhYZqzTB0kxwm/mIUQ3AQhXzU5kQEV/xrMyloxAgCQHVfUyzse4Eq2v5uEWxTA/bM1lEul0beLuhlIAYFhmbritqmg0YmztaWyD1zRn4FHiDOugzHOogijMRumgNsjPGSR3Yontgw9y1J+0JGShr5n6T/+Wq6dvFriOS8dsVQVTWFbfBx6he8kXkOt9adV+LB9QCOlcIEx5MtnGRD+zl+7klQtGFPoEaJebRfakTfjQovPsE0m5SR8V5KBc8lxMKJMpWBZx/S+r0aaCSSpQtm1pIf6axvB8DxscGeCeN8dSOFAONdmHMzBM171Pu4FTvQbSP3w7FVfBAvqtyhXmR0Adawi6BJ1o/u57yw6Yb1lvRbbsp8crw5z/xD5cCJ8fKOGrBuhBeLRvhpFRJpDn/9Czx2g+p920W9VPjvJ14ESN596bRsf4p6Trl9ocSpfFveXla55IFu8p2a8MKvzX8R8g4RyT2K64MU/XlMjUY28mRFohFDSy7IL+8C321dbzCCxZbJLrJ8d1BLC8qrf+3+NQmdHFaQaQMBOrvLzt0qMyMDfSb16nsBcyBmVwOXAanOWvWMIt5AkPsm7Eq+QXCANDVsSuqWax8Gupi5eOmWjCDt0+4laVqAbe/d3mvlzutmHZG0uU6+3YkgdLBAOq7G32lhNE/JzefGhAHqpkJhbdt27KxbIRq4Fbd7aENf7aLulEPSwegOUBLUCCvLB6BXpEmcLH+qzmHB7aSsDxJCv05E0EM6JQWrqKp2f24qQf5cO9FhEmBqypqWK7rUT/4Bp6lZ/u03bO+dz6eNGpapjAad+EB3tCDGrKCOoPZ92Y="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

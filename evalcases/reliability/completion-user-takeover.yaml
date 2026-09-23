@@ -38,6 +38,10 @@ assert_state:
     type: work.selection_committed
     payload_contains: '"commit_mode":"direct"'
     count_gte: 1
+  - on: events
+    type: plan.updated
+    payload_contains: '"source":"resumed_run"'
+    count_gte: 1
   - on: file
     path: draft.txt
     contains: Draft ready

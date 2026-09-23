@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "value.txt finish_run acceptance_condition verification finish_task"
+}

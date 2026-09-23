@@ -125,6 +125,29 @@ func TestOpenAIAdapterReplaysOpaqueToolCallMetadata(t *testing.T) {
 	}
 }
 
+func TestFinalAnswerWithoutNewToolsKeepsPairedToolHistory(t *testing.T) {
+	messages := []Message{
+		{Role: "user", Content: "inspect"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Function: "read_file", Args: `{}`}}},
+		{Role: "tool", ToolCallID: "call-1", Content: "verified"},
+	}
+	req := ChatRequest{Messages: messages}
+	openai := openAIRequestFromChat("test-model", req, false)
+	if len(openai.Tools) != 0 || len(openai.Messages) != 3 || len(openai.Messages[1].ToolCalls) != 1 ||
+		openai.Messages[2].Role != "tool" || openai.Messages[2].ToolCallID != "call-1" {
+		t.Fatalf("OpenAI final-answer request broke the native pair: %+v", openai)
+	}
+	anthropic := (&AnthropicAdapter{}).requestFromChat(req, false)
+	if len(anthropic.Tools) != 0 || len(anthropic.Messages) != 3 {
+		t.Fatalf("Anthropic final-answer request lost history: %+v", anthropic)
+	}
+	assistant, _ := json.Marshal(anthropic.Messages[1].Content)
+	result, _ := json.Marshal(anthropic.Messages[2].Content)
+	if !strings.Contains(string(assistant), `"type":"tool_use"`) || !strings.Contains(string(result), `"type":"tool_result"`) {
+		t.Fatalf("Anthropic final-answer request broke the native pair: assistant=%s result=%s", assistant, result)
+	}
+}
+
 func TestDeepSeekUsageAndReasoningAreNormalized(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")

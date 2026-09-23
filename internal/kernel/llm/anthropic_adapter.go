@@ -510,8 +510,10 @@ func (a *AnthropicAdapter) requestFromChatContext(ctx context.Context, req ChatR
 	if strings.TrimSpace(systemPrompt) != "" {
 		systemParts = append(systemParts, strings.TrimSpace(systemPrompt))
 	}
-	for _, m := range sanitizeToolMessageLedger(req.Messages) {
-		content := anthropicContentFromMessage(m, len(req.Tools) > 0)
+	messages := sanitizeToolMessageLedger(req.Messages)
+	nativeHistory := len(req.Tools) > 0 || hasNativeToolHistory(messages)
+	for _, m := range messages {
+		content := anthropicContentFromMessage(m, nativeHistory)
 		role := m.Role
 		if role == "system" {
 			if text := strings.TrimSpace(contentString(content)); text != "" {
@@ -521,7 +523,7 @@ func (a *AnthropicAdapter) requestFromChatContext(ctx context.Context, req ChatR
 		}
 		if role == "tool" {
 			role = "user"
-			if len(req.Tools) == 0 || m.ToolCallID == "" {
+			if !nativeHistory || m.ToolCallID == "" {
 				content = "TOOL_RESULT: " + contentString(content)
 			}
 		}

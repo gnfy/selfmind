@@ -99,8 +99,8 @@ type OpenAIResponse struct {
 }
 
 func openAIRequestFromChat(model string, req ChatRequest, stream bool) OpenAIRequest {
-	nativeTools := len(req.Tools) > 0
 	messages := sanitizeToolMessageLedger(req.Messages)
+	nativeTools := len(req.Tools) > 0 || hasNativeToolHistory(messages)
 	openaiReq := OpenAIRequest{
 		Model:    model,
 		Messages: make([]OpenAIMessage, 0, len(messages)+1),
@@ -120,7 +120,7 @@ func openAIRequestFromChat(model string, req ChatRequest, stream bool) OpenAIReq
 	for _, m := range messages {
 		openaiReq.Messages = append(openaiReq.Messages, openAIMessageFromLLM(m, nativeTools))
 	}
-	if nativeTools {
+	if len(req.Tools) > 0 {
 		openaiReq.Tools = openAIToolDefinitions(req.Tools)
 	}
 	if stream {

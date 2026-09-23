@@ -23,19 +23,23 @@ func (e *completionPreconditionError) Error() string              { return e.mes
 func (*completionPreconditionError) CompletionPrecondition() bool { return true }
 
 type RunPlanStepInput struct {
-	StepID               string `json:"step_id,omitempty"`
-	Step                 string `json:"step"`
-	Status               string `json:"status"`
-	SuccessCriteria      string `json:"success_criteria,omitempty"`
-	VerificationRequired bool   `json:"verification_required,omitempty"`
-	RelatedTaskID        string `json:"related_task_id,omitempty"`
-	WorkUnitID           string `json:"work_unit_id,omitempty"`
-	WorkUnit             bool   `json:"work_unit,omitempty"`
+	StepID                 string `json:"step_id,omitempty"`
+	Step                   string `json:"step"`
+	Status                 string `json:"status"`
+	SuccessCriteria        string `json:"success_criteria,omitempty"`
+	VerificationRequired   bool   `json:"verification_required,omitempty"`
+	ReusePriorVerification bool   `json:"reuse_prior_verification,omitempty"`
+	ReuseReason            string `json:"reuse_reason,omitempty"`
+	RelatedTaskID          string `json:"related_task_id,omitempty"`
+	WorkUnitID             string `json:"work_unit_id,omitempty"`
+	WorkUnit               bool   `json:"work_unit,omitempty"`
 }
 
 type RunPlanStep struct {
 	RunPlanStepInput
-	Sequence int `json:"sequence"`
+	Sequence          int    `json:"sequence"`
+	SourceStepID      string `json:"source_step_id,omitempty"`
+	SourcePlanVersion int    `json:"source_plan_version,omitempty"`
 }
 
 type RunPlan struct {
@@ -119,7 +123,20 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		return RunPlanProjection{}, err
 	}
 	defer tx.Rollback()
+	projection, err := s.syncRunPlanTx(ctx, tx, tenant, runID, explanation, input, nil, false)
+	if err != nil {
+		return RunPlanProjection{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return RunPlanProjection{}, err
+	}
+	return projection, nil
+}
 
+// syncRunPlanTx is shared by ordinary complete snapshots and exact-parent
+// imports. Importing inside the continuation claim keeps the parent edge,
+// child plan, and source step identities in one transaction.
+func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, explanation string, input []RunPlanStepInput, inherited *RunPlan, replace bool) (RunPlanProjection, error) {
 	var contractVersion int
 	if err := tx.QueryRowContext(ctx, `SELECT recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).Scan(&contractVersion); err != nil {
 		return RunPlanProjection{}, err
@@ -132,13 +149,68 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 	if err != nil {
 		return RunPlanProjection{}, err
 	}
-	steps, err := resolveRunPlanSteps(runID, input, previous)
+	identityPrevious := previous
+	if replace {
+		identityPrevious = nil
+	}
+	if identityPrevious != nil {
+		input, err = translateInheritedWorkUnitIDsTx(ctx, tx, tenant, runID, input, identityPrevious)
+		if err != nil {
+			return RunPlanProjection{}, err
+		}
+	}
+	steps, err := resolveRunPlanSteps(runID, input, identityPrevious)
 	if err != nil {
 		return RunPlanProjection{}, err
 	}
-	verificationDeferred := normalizeFirstPlanVerification(steps, previous)
+	if inherited != nil {
+		if len(inherited.Steps) != len(steps) {
+			return RunPlanProjection{}, fmt.Errorf("inherited plan step count changed before import")
+		}
+		for i := range steps {
+			// A step remains the same logical obligation across an exact Run
+			// continuation. Its id is scoped by run_id in durable storage, so
+			// retaining it lets Main update the resumed Plan without translating
+			// ids from a just-completed turn.
+			steps[i].StepID = inherited.Steps[i].StepID
+			steps[i].SourceStepID = inherited.Steps[i].StepID
+			steps[i].SourcePlanVersion = inherited.Version
+			steps[i].ReusePriorVerification = false
+			steps[i].ReuseReason = ""
+		}
+	}
+	for i := range steps {
+		if !steps[i].ReusePriorVerification {
+			continue
+		}
+		if steps[i].Status != "completed" || !steps[i].VerificationRequired || strings.TrimSpace(steps[i].ReuseReason) == "" {
+			return RunPlanProjection{}, fmt.Errorf("plan[%d] can reuse prior verification only for a completed required check with a reason", i)
+		}
+		if identityPrevious != nil {
+			alreadyAccepted := false
+			for _, old := range identityPrevious.Steps {
+				if old.StepID == steps[i].StepID && old.ReusePriorVerification && old.Status == "completed" &&
+					old.ReuseReason == steps[i].ReuseReason && normalizeRunPlanText(old.SuccessCriteria) == normalizeRunPlanText(steps[i].SuccessCriteria) &&
+					old.SourceStepID == steps[i].SourceStepID && old.SourcePlanVersion == steps[i].SourcePlanVersion {
+					alreadyAccepted = true
+					break
+				}
+			}
+			if alreadyAccepted {
+				continue
+			}
+		}
+		if err := validatePriorVerificationReuseTx(ctx, tx, tenant, runID, steps[i]); err != nil {
+			return RunPlanProjection{}, fmt.Errorf("plan[%d] cannot reuse prior verification: %w", i, err)
+		}
+	}
+	verificationPrevious := identityPrevious
+	if verificationPrevious != nil && len(verificationPrevious.Steps) == 0 {
+		verificationPrevious = nil
+	}
+	verificationDeferred := normalizeFirstPlanVerification(steps, verificationPrevious)
 	workInput, boundaries := projectRunPlanWorkUnits(steps)
-	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, workInput)
+	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, workInput, replace)
 	if err != nil {
 		return RunPlanProjection{}, err
 	}
@@ -166,11 +238,45 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		for _, unit := range units {
 			if unit.ID == stepWorkUnits[i] && unit.Status == WorkUnitCompleted {
 				state, _, blockers := workUnitEvidenceProjectionTx(ctx, tx, runID, unit.StartedCursor, unit.FinishedCursor, step.StepID)
-				if state != "passed" {
+				if state != "passed" && !(step.ReusePriorVerification && state == "not_applicable") {
 					return RunPlanProjection{}, &planVerificationPreconditionError{step: step.Step, criterion: step.SuccessCriteria, state: state, blockers: blockers}
 				}
 			}
 		}
+	}
+	// A prior check is accepted only after Main explicitly states why it still
+	// satisfies the unchanged criterion and the runtime verifies its lineage.
+	// Keep the work-unit projection truthful: its passed state points to the
+	// inherited Run/step rather than pretending a command ran in this Run.
+	for i := range units {
+		unit := &units[i]
+		if unit.Status != WorkUnitCompleted || unit.VerificationState == "passed" {
+			continue
+		}
+		var refs []string
+		for sequence, step := range steps {
+			if stepWorkUnits[sequence] != unit.ID || !step.VerificationRequired || step.Status != "completed" {
+				continue
+			}
+			if !step.ReusePriorVerification {
+				refs = nil
+				break
+			}
+			refs = append(refs, fmt.Sprintf("inherited:%s:%d", step.SourceStepID, step.SourcePlanVersion))
+		}
+		if len(refs) == 0 || unit.VerificationState != "not_applicable" {
+			continue
+		}
+		encoded, err := json.Marshal(refs)
+		if err != nil {
+			return RunPlanProjection{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE run_work_units SET verification_state='passed', verification_refs_json=?
+			WHERE identity_tenant_id=? AND run_id=? AND id=?`, string(encoded), tenant, runID, unit.ID); err != nil {
+			return RunPlanProjection{}, err
+		}
+		unit.VerificationState = "passed"
+		unit.VerificationRefs = encoded
 	}
 
 	original, err := originalPlanCriteriaTx(ctx, tx, tenant, runID)
@@ -181,9 +287,6 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 	hash := hashRunPlanSteps(steps, stepWorkUnits)
 	if previous != nil && previous.ContentHash == hash {
 		if err := promoteThreadForRunTx(ctx, tx, tenant, runID); err != nil {
-			return RunPlanProjection{}, err
-		}
-		if err := tx.Commit(); err != nil {
 			return RunPlanProjection{}, err
 		}
 		return RunPlanProjection{Plan: *previous, Changed: false, WorkUnits: units, VerificationDeferred: verificationDeferred}, nil
@@ -201,10 +304,12 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 	for i, step := range steps {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO run_plan_steps
 			(run_id, tenant_id, plan_version, step_id, sequence, step_text, status, success_criteria,
-			 verification_required, related_task_id, work_unit_id, work_unit_boundary, created_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
+			 verification_required, related_task_id, work_unit_id, work_unit_boundary, source_step_id, source_plan_version,
+			 prior_verification_reused, reuse_reason, created_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
 			step.Step, step.Status, step.SuccessCriteria, boolInt(step.VerificationRequired), step.RelatedTaskID, stepWorkUnits[i],
-			boolInt(isRunPlanBoundary(steps, i)), now.Unix()); err != nil {
+			boolInt(isRunPlanBoundary(steps, i)), step.SourceStepID, step.SourcePlanVersion,
+			boolInt(step.ReusePriorVerification), step.ReuseReason, now.Unix()); err != nil {
 			return RunPlanProjection{}, err
 		}
 	}
@@ -217,9 +322,6 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		if err := promoteThreadForRunTx(ctx, tx, tenant, runID); err != nil {
 			return RunPlanProjection{}, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return RunPlanProjection{}, err
 	}
 	plan := RunPlan{RunID: runID, Version: version, Explanation: strings.TrimSpace(explanation), ContentHash: hash, Steps: steps, CreatedAt: now}
 	return RunPlanProjection{Plan: plan, Changed: true, WorkUnits: units, VerificationDeferred: verificationDeferred, CriteriaRestated: restated}, nil
@@ -395,6 +497,11 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 			item.WorkUnitID = old.WorkUnitID
 			item.WorkUnit = item.WorkUnit || old.WorkUnit
 		}
+		if old, ok := byID[item.StepID]; ok && old.ReusePriorVerification && !item.ReusePriorVerification &&
+			item.Status == "completed" && normalizeRunPlanText(item.SuccessCriteria) == normalizeRunPlanText(old.SuccessCriteria) {
+			item.ReusePriorVerification = true
+			item.ReuseReason = old.ReuseReason
+		}
 		if item.VerificationRequired && item.SuccessCriteria == "" {
 			return nil, fmt.Errorf("plan[%d].success_criteria is required when verification_required is true", i)
 		}
@@ -402,7 +509,12 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 			return nil, fmt.Errorf("plan step %s appears more than once in the snapshot", item.StepID)
 		}
 		used[item.StepID] = true
-		out = append(out, RunPlanStep{RunPlanStepInput: item, Sequence: i + 1})
+		step := RunPlanStep{RunPlanStepInput: item, Sequence: i + 1}
+		if old, ok := byID[item.StepID]; ok {
+			step.SourceStepID = old.SourceStepID
+			step.SourcePlanVersion = old.SourcePlanVersion
+		}
+		out = append(out, step)
 	}
 	// Repeating the current unit's id describes membership, not another
 	// independent objective. Keep one boundary and let ordinary steps omit it.
@@ -453,6 +565,9 @@ func validRunPlanStatus(status string) bool {
 }
 
 func projectRunPlanWorkUnits(steps []RunPlanStep) ([]WorkUnitPlanInput, []int) {
+	if len(steps) == 0 {
+		return nil, nil
+	}
 	boundaries := []int{0}
 	for i := 1; i < len(steps); i++ {
 		if isRunPlanBoundary(steps, i) {
@@ -504,8 +619,8 @@ func aggregateRunPlanStatus(steps []RunPlanStep) string {
 
 func hashRunPlanSteps(steps []RunPlanStep, workUnitIDs []string) string {
 	type hashStep struct {
-		StepID, Step, Status, SuccessCriteria, RelatedTaskID, WorkUnitID string
-		VerificationRequired, WorkUnit                                   bool
+		StepID, Step, Status, SuccessCriteria, RelatedTaskID, WorkUnitID, ReuseReason string
+		VerificationRequired, WorkUnit, ReusePriorVerification                        bool
 	}
 	canonical := make([]hashStep, 0, len(steps))
 	for i, step := range steps {
@@ -513,7 +628,8 @@ func hashRunPlanSteps(steps []RunPlanStep, workUnitIDs []string) string {
 		if i < len(workUnitIDs) {
 			workUnitID = workUnitIDs[i]
 		}
-		canonical = append(canonical, hashStep{step.StepID, step.Step, step.Status, step.SuccessCriteria, step.RelatedTaskID, workUnitID, step.VerificationRequired, step.WorkUnit})
+		canonical = append(canonical, hashStep{step.StepID, step.Step, step.Status, step.SuccessCriteria, step.RelatedTaskID, workUnitID,
+			step.ReuseReason, step.VerificationRequired, step.WorkUnit, step.ReusePriorVerification})
 	}
 	data, _ := json.Marshal(canonical)
 	sum := sha256.Sum256(data)
@@ -534,7 +650,8 @@ func latestRunPlanTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (*
 	plan.RunID = runID
 	plan.CreatedAt = time.Unix(created, 0)
 	rows, err := tx.QueryContext(ctx, `SELECT step_id, sequence, step_text, status, success_criteria, verification_required,
-		related_task_id, work_unit_id, work_unit_boundary FROM run_plan_steps
+		related_task_id, work_unit_id, work_unit_boundary, source_step_id, source_plan_version,
+		prior_verification_reused, reuse_reason FROM run_plan_steps
 		WHERE tenant_id=? AND run_id=? AND plan_version=? ORDER BY sequence`, tenantID, runID, plan.Version)
 	if err != nil {
 		return nil, err
@@ -543,12 +660,14 @@ func latestRunPlanTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (*
 	for rows.Next() {
 		var step RunPlanStep
 		var workUnitID string
-		var verificationRequired, boundary int
+		var verificationRequired, boundary, reused int
 		if err := rows.Scan(&step.StepID, &step.Sequence, &step.Step, &step.Status, &step.SuccessCriteria, &verificationRequired,
-			&step.RelatedTaskID, &workUnitID, &boundary); err != nil {
+			&step.RelatedTaskID, &workUnitID, &boundary, &step.SourceStepID, &step.SourcePlanVersion,
+			&reused, &step.ReuseReason); err != nil {
 			return nil, err
 		}
 		step.VerificationRequired = verificationRequired != 0
+		step.ReusePriorVerification = reused != 0
 		step.WorkUnit = boundary != 0
 		if step.WorkUnit {
 			step.WorkUnitID = workUnitID

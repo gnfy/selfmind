@@ -152,9 +152,16 @@ explicit /new, /resume, /choose
   identical execution roots), has no unfinished loop checkpoint, and the
   interaction has produced no effect yet, `work_select(resume)` claims the
   parent atomically at tool time (`ClaimInteractionContinuation`): the
-  interaction Run moves onto the parent's Thread, the parent's plan is restored
-  as a durable `plan.updated` event, and the parent's bounded resume context is
-  the tool result, so Main continues in the same turn with one Run and no
+  interaction Run moves onto the parent's Thread, its own versioned Plan is
+  imported in that claim transaction with stable logical step ids and exact
+  source-step references, and `plan.updated` announces the committed snapshot.
+  Work Units remain Run-local; an echoed parent Work Unit id is translated only
+  when it belongs to that exact source step, while unrelated stale ids fail.
+  The bounded resume context follows exact lineage for prior-step evidence as
+  historical context. Main may explicitly adopt an unchanged successful check
+  with a reason in `update_plan`; the runtime verifies its source step, criterion,
+  scope, and absence of an intervening child effect before accepting it. Other
+  checks stay open. Main continues in the same turn with one Run and no
   queue; one pre-effect correction re-points that claim
   (`RetargetInteractionContinuation`). A workspace, execution-root, or
   checkpoint mismatch creates a correctly scoped transfer child at
@@ -265,8 +272,9 @@ assembled from separately budgeted slices:
 
 1. latest user message;
 2. bounded work-spine tail and compaction summary;
-3. exact parent-Run handoff, events, artifacts, plan, and checkpoint when one
-   was validated;
+3. exact parent-Run handoff, events, artifacts, inherited Plan, source-step
+   evidence summary, and bounded selected results from a completed checkpoint;
+   only an incomplete checkpoint restores the full loop ledger;
 4. workspace conventions and current state;
 5. person preferences;
 6. bounded recall hits.

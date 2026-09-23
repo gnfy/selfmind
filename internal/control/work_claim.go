@@ -163,6 +163,18 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 	if err := resolveOriginRunBlockersTx(ctx, tx, tenantID, parent.threadID, resumesRunID, sourceRunID); err != nil {
 		return err
 	}
+	// A direct claim must establish the same durable child Plan as a queued
+	// continuation before this transaction can expose the new parent edge.
+	// Retargeting discards only the transient execution identity: the previous
+	// plan versions remain audit history while fresh step/work-unit ids prevent
+	// evidence from the abandoned parent being attributed to the new one.
+	childPlan, err := latestRunPlanTx(ctx, tx, tenantID, sourceRunID)
+	if err != nil {
+		return err
+	}
+	if _, err := s.inheritRunPlanTx(ctx, tx, tenantID, sourceRunID, resumesRunID, retarget || childPlan != nil); err != nil {
+		return err
+	}
 	now := time.Now().Unix()
 	// The person deliberately continued this work: the parent thread is
 	// listed work again even if it had been archived, mirroring explicit

@@ -437,11 +437,11 @@ func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh c
 	var paused bool
 	for idx, call := range calls {
 		if paused {
-			results[idx] = a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, fmt.Errorf("run paused at a control-plane boundary; this call was not executed"))
+			results[idx] = a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, fmt.Errorf("run stopped at a control-plane boundary; this call was not executed"))
 			continue
 		}
 		results[idx] = a.executeSingleToolCall(ctx, tenantID, eventCh, idx, call)
-		paused = results[idx].pause != nil
+		paused = results[idx].pause != nil || (results[idx].success && call.Function == "finish_run")
 	}
 	return results
 }

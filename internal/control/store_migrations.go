@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 16
+const CurrentControlSchemaVersion = 17
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -491,6 +491,25 @@ DROP TABLE IF EXISTS task_references;`)
 			// the column removes the concept rather than leaving it inert for
 			// the next reader to reintroduce.
 			return dropMigrationColumn(ctx, db, "threads", "pinned")
+		},
+	},
+	{
+		Version: 17,
+		Name:    "run-plan-step-source",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Historical steps have no asserted origin. Only a new exact-parent
+			// import may set this reference; an upgrade must not infer one from
+			// position or similar prose.
+			if err := ensureMigrationColumn(ctx, db, "run_plan_steps", "source_step_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			if err := ensureMigrationColumn(ctx, db, "run_plan_steps", "source_plan_version", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+			if err := ensureMigrationColumn(ctx, db, "run_plan_steps", "prior_verification_reused", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+				return err
+			}
+			return ensureMigrationColumn(ctx, db, "run_plan_steps", "reuse_reason", "TEXT NOT NULL DEFAULT ''")
 		},
 	},
 }

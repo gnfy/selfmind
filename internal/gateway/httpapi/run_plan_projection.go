@@ -35,9 +35,11 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	for _, step := range state.Plan {
 		input = append(input, control.RunPlanStepInput{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
-			SuccessCriteria:      step.SuccessCriteria,
-			VerificationRequired: step.VerificationRequired,
-			WorkUnitID:           step.WorkUnitID, WorkUnit: step.WorkUnit,
+			SuccessCriteria:        step.SuccessCriteria,
+			VerificationRequired:   step.VerificationRequired,
+			ReusePriorVerification: step.ReusePriorVerification,
+			ReuseReason:            step.ReuseReason,
+			WorkUnitID:             step.WorkUnitID, WorkUnit: step.WorkUnit,
 		})
 	}
 	projection, err := p.coordinator.srv.Control.SyncRunPlan(ctx, p.identity.TenantID, p.run.ID, state.Explanation, input)
@@ -79,9 +81,11 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	for _, step := range projection.Plan.Steps {
 		plan.Plan = append(plan.Plan, tools.PlanStep{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
-			SuccessCriteria:      step.SuccessCriteria,
-			VerificationRequired: step.VerificationRequired,
-			WorkUnitID:           step.WorkUnitID, WorkUnit: step.WorkUnit,
+			SuccessCriteria:        step.SuccessCriteria,
+			VerificationRequired:   step.VerificationRequired,
+			ReusePriorVerification: step.ReusePriorVerification,
+			ReuseReason:            step.ReuseReason,
+			WorkUnitID:             step.WorkUnitID, WorkUnit: step.WorkUnit,
 		})
 	}
 	workUnits := make([]tools.PlanWorkUnitIdentity, 0, len(projection.WorkUnits))

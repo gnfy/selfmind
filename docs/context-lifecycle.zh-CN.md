@@ -75,6 +75,9 @@ LLM system prompt: # DURABLE TASK CONTEXT
   remaining、files、tests、risks。
 - 精确 parent Run 的 artifacts：kind、name、uri、mime、metadata summary。
 - 精确 parent Run 的 events：type、channel、payload 摘要。
+- 精确 parent Run 已完成轮次的 checkpoint 只抽取有限数量的去重工具结果片段
+  （按人和 Run 精确读取、再次脱敏、总量受限）；它们是历史观察，不是当前验证
+  或执行权限。完整工具记录仍留在 checkpoint 和 artifact，不跨 Run 原样重放。
 - 没有精确 parent（无或多个未认领可续 Run）时，full 模式降级为 bounded task
   card：不含 handoff、artifacts、events；`context.scope` 事件记录降级。
   resume 用户消息块与 loop checkpoint 恢复受同一 parent 门控。

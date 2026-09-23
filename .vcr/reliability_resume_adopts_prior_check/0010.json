@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am recording the task completion with finish_run."
+    },
+    {
+      "usage": {
+        "input_tokens": 13807,
+        "output_tokens": 11,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 100,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2949,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_309518",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"done\",\"done\":[\"Verified value.txt contains exactly READY followed by a newline\",\"Reported verified outcome after user confirmation\"],\"tests\":[\"python3 assert open('value.txt', 'rb').read() == b'READY\\\\n'\"],\"files\":[],\"summary\":\"Verified that value.txt contains exactly READY followed by a newline. Prior verification remains valid and was adopted without modifying files.\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EuAJCt0JAWkUfRNk1JNQ1iaILoNlc/vw1qoATF1rfOEkoCzKzBEusaPlAY+J68obSXq7nwKGTeviZ4/hW5sxTvDZt1nqLjBOPJnR9+a1hchUMtHEjj6SfiCxcn84pVVTkxu5I+wgZfthg9MBUxBCs5kAL8zF+dj83OKCVvjeqhi4/ZD6eqTQ201jYDin8m9x7Bi/Cw15BnKUnzpDew6Oac4tFmWpm10bbqLDU57u/Q+Y2gDBDcqMVgYAr6ZFYM57wJ1ffY0So0nxSCrW6DkSLK8wNWfPJzDYFo4kmOXX63P8qQv4X87kLIZziN+JUzGwwwhG1RN8MYTF3xPaVRm9m0qrLgtkS7eRi2Z5LgpqABtEwV/0oPGlSGDF9JVjcEcgZEs3nShJ2bRz5knUFx1LdaArKIcKouIozLBZ7pZx6oyETKMgVx5LBkI3bjcMVJAoDFm4UN/tBYddgClZFOTbsUC91P6/A2WNHmXHw1QA/bCXQzsuVpd4u+hvTS+ALZApohs35Tvzh/nWu9CHzL6K/cMnuRmunLjF1TWFhkdgcebBc/i7Kq0ksdnEMN0AYrvL6DsXTBxPBj4OaiZco6bXbZwwhvtGRjjBQGWJNsy7Qhhtih8JpLKrbW7zffv6c5ngIWPs8QbIUD4JU6NsYJJjpwN+KxAjRoLPpU9YvaHbFI3Fnur/NKXLr4IrpQi6G9TSPnZL86NzF2S+eqjZRxgpgrAohI2txBrzpvKtSM1BMwBwMCSbVBLZnDbozLnpgE9/8pd2jWF3ii9e4AhsUBfoItOCVjY0WZLbvZba0uwFapQ05EZEgWTNg+fLiqd/4rgJlc8X7LIaNvOpa6bBJMGlKhTkPkmgoZmT2erjPaGu2FIluHNIDLsbdlmntB1ikaXRS6qLo+1lGnIR8RTncbs1If1mpQnnOvx+Sci8QIDszNxhvxVeEp+f7YtNzUU1Vnd7P97cxrRd+l0SdLCuUBy0W2nCd1jDx9xo5mcN100ih2lJ6E+t4uhFczfpyQb2T1BMbNdr6EN/4PRjcOTEk+8Z2qBJqBf5c9ikLaaf/89um6P1AeEsj8iFsRmq6eMaLz6xQHh/NcABQTnZOQYgMtqPEyfjEVJJ0Dugw+il3y9HlF0ua/hizFcyqN5Pqnb/gzC6YdBLBU67MVsUkDc4g21hWKKRWlTdK/WhhVDvWcrcdEKBexz8bWyGJqzPWX0k/Exe+2enHqxLIPgmDq/xsr60b9KChguUEehK0KW5bLyl9+UFEfKz+Xp0rxL5l0/Gl3tGlFR1qX1geE5GBvFwfxyt20PfO5cgk+epnS1qMNaYxJ/xANDudNJWbPofsQVhu19PxIGMOZuhxT6/N4uDIB4oDwLE5rDZuRcD8IQrPc/4/3r+0s9Km3giNXRAWLe3IWP/D1w2v1mk+XnF6ZHB1uqcD02HirQexR/4vl/LO3vlJV9VBiGBtNaktc4ED878VYOsI6MbTsbayZLwT+BeeTvxppGTcJRqjxMUp5vynHPH4DbdYrX2hZGHmsfZH07b1SztZCJiZxhyGong79PVpNHUK7onj2Jx2+0G7OBr842ZO+qMYP2dLIHaXi8nbm/CQ6Hpv6FbExSLqPD9kXGc7P2OED4f/02k47Sm07p7dVkD31bAK+BY1FTu8fGQ0TvFy89dIqUV"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -67,6 +67,31 @@ func (s *Store) IncompleteLoopCheckpointForRun(ctx context.Context, tenantID, ru
 	return &record, nil
 }
 
+// CompletedLoopCheckpointForRun returns an exact completed turn's durable
+// ledger for bounded continuation selection. It is never treated as a live
+// loop checkpoint: callers select excerpts instead of replaying the full
+// message array into another Run.
+func (s *Store) CompletedLoopCheckpointForRun(ctx context.Context, tenantID, personID, runID string) (*LoopCheckpointRecord, error) {
+	if s == nil || s.db == nil || runID == "" || personID == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT tenant_id, person_id, thread_id, run_id,
+		contract_version, recovery_json, iteration, outcome, detail, snapshot_json, updated_at
+		FROM loop_checkpoints WHERE tenant_id=? AND person_id=? AND run_id=? AND outcome='complete_turn'
+		LIMIT 1`, normalizeTenant(tenantID), personID, runID)
+	var record LoopCheckpointRecord
+	var updated int64
+	if err := row.Scan(&record.TenantID, &record.PersonID, &record.TaskID, &record.RunID,
+		&record.ContractVersion, &record.Recovery, &record.Iteration, &record.Outcome, &record.Detail, &record.Snapshot, &updated); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	record.UpdatedAt = time.Unix(updated, 0)
+	return &record, nil
+}
+
 func recoveryJSON(value []byte) []byte {
 	if len(value) == 0 {
 		return []byte("{}")

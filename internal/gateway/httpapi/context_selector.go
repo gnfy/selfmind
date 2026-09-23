@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/textutil"
+	"selfmind/internal/tools"
 )
 
 // selectedTaskRuntimeContext assembles the bounded durable-context slice for
@@ -111,7 +112,18 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 					})
 				}
 			}
+			if prior, err := c.srv.Control.ListInheritedPlanEvidence(ctx, task.TenantID, run.ID); err == nil {
+				for _, item := range prior {
+					selected.InheritedEvidence = append(selected.InheritedEvidence, kernel.InheritedEvidenceItem{
+						StepID: item.StepID, SourceRunID: item.SourceRunID, SourceStatus: item.SourceStatus,
+						SourceCriterion: item.SourceCriterion, CriterionChanged: item.CriterionChanged,
+						PriorVerification: item.PriorVerification, LatestCheck: item.LatestCheck,
+						Target: item.Target, CheckedAt: item.CheckedAt,
+					})
+				}
+			}
 		}
+		selected.PriorToolReceipts = tools.CompletedRunToolReceipts(ctx, c.srv.Control, task.TenantID, task.PersonID, parent.ID)
 		if watches, err := c.srv.Control.ListRunExternalWatches(ctx, task.TenantID, task.PersonID, parent.ID); err == nil {
 			for _, watch := range watches {
 				selected.ExternalWatches = append(selected.ExternalWatches, kernel.ExternalWatchContext{

@@ -161,6 +161,37 @@ func TestFailedFinishCanRetryOnlyAfterPlanCorrection(t *testing.T) {
 	}
 }
 
+type postFinishProvider struct {
+	mockLLMProvider
+	requests         int
+	toolsAfterFinish int
+}
+
+func (p *postFinishProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests++
+	ch := make(chan llm.StreamEvent, 1)
+	if p.requests == 1 {
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{ID: "finish", Function: "finish_run", Args: `{"status":"done","summary":"verified"}`}}}
+	} else {
+		p.toolsAfterFinish = len(req.Tools)
+		ch <- llm.StreamEvent{Content: "Verified result."}
+	}
+	close(ch)
+	return ch, nil
+}
+
+func TestSuccessfulFinishLeavesOnlyFinalAnswer(t *testing.T) {
+	provider := &postFinishProvider{}
+	agent := NewAgent(memory.NewMemoryManager(&mockStorage{}), &budgetClosureBackend{}, provider, "helpful", 4, 1, nil)
+	answer, _, err := agent.RunConversation(context.Background(), "test", "cli", "report verified result")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.requests != 2 || provider.toolsAfterFinish != 0 || answer != "Verified result." {
+		t.Fatalf("post-finish requests=%d tools=%d answer=%q", provider.requests, provider.toolsAfterFinish, answer)
+	}
+}
+
 func TestActionBatchPreservesCompletionReserve(t *testing.T) {
 	strategy := DefaultTaskStrategy()
 	strategy.MaxActionTools, strategy.ActionToolBudgetLimit, strategy.CompletionReserve = 12, 12, 2

@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am checking the exact content of value.txt using the verify tool."
+    },
+    {
+      "usage": {
+        "input_tokens": 10458,
+        "output_tokens": 15,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 90,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 575,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_452637",
+          "Function": "verify",
+          "Args": "{\"local_dependencies\":[\"value.txt\"],\"target\":\"value.txt\",\"command\":\"python3 -c \\\"data = open('value.txt', 'rb').read(); assert data == b'READY\\\\n', f'Unexpected content: {data!r}'\\\"\",\"kind\":\"custom\",\"criterion\":\"value.txt contains exactly READY followed by a newline\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "Eo0HCooHAWkUfRNJrYTe5Tep0DbrMdddzVGsIWW3676iL4iYFeIu2uhgxyq6w4t0gZx1ChccscaRQuINhD+bd2DzYwnV57UQJj5JKN/x0tnb0h/t0+61l7H7iTFfAYIpJroyenI3q/7ta3rzJnh+LjhVfyLuv/VTEpZn7EvFh6A9m7Liz0scrK2uTDQwZgqxg4TPFinOCseV9UFfw+KH5bOi3mqbyzIfHnKKRM31fW8gr4mjyDGygTPUX+7rp6XI0yQD369FkVP5sbWDXVjWWPP42hKsfPZQOsjFBoK68lTXKQlgNVVE3sYhtEBS217LPNjQE3FF2ZioG7XMEl72M7hiSyXZUxFjNWP4yA8aCJA9ujOW2mXKctdRND0OxpF4lTuoRUQsP10Zz6CFWwP0EASJKfdoQFihZMRJIN3qqxUwAvbHp8jhGN5740ECsFAD/qmN17m+hTh3PYryo+nzsHyWe1FEKFAo0gzKf9DqaAL7vS+EB+JhQd0x4uH19n+OSUb7IFTfaJTvYz+B0Ryy9AjyAlnds3li4Clk7LDZH7+8Anf75XrVBMti9+GxWX5dqF1GojBUmHRP7ek1PXL5eyo6vZ3dBMkSOE/Fm2h15QGlrvYn2H2zDSxzpOpICMix2Z8De2h2ZxKF1Is1dp3QEUCAA9BAKKRzzaS8UD5RkG8+BhbgKstQx7eJrx5r3atiX1eq/BHRYkUATiCRSmJzDeV8omyzeuVRyXugp6T6giqHWgTURKZWgwB7FWhEZI3i8vI4pvWX/4rBHJbi1NH7jxQJujcTFbOfSiRS5qPxaMhu+vbyS40/jLXQYidjqfmYNIAunDefl8d8MG3jHGkzcxPrfyf5jIWZ8f17eyO5YD29ZUFbFd3PHs9l/qQUlMFSCRHYfxo5VlyEFbchyzRMFCZtyhjkwuZEt2AzDN45zQ8lzua9y/uliGh+eITPgKZGp4skUxcENKiqnxOr8KCNBevGOzqWrOwbvZoM1owBGHFUul17vNVT2slFgcQLKOidAksFqF1le8z+iXomkTZhRJgZHxLYaWx4ti+5MzD5E1s4X8lggjz/uOfmsjnyxLV+vf1obf/AJMrucluHYgmn+v8vn1kdeTNeLZLjr1Pu8mH/BMh0rmKpwSsAN2FX8Lp0PV+LY+2SHRAkfHhhU6prMcK3/0Gcv98QFJN+imQVxfaRNkHym8FLyZi2wYT68aE5"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -73,7 +73,7 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 		return nil, err
 	}
 	defer tx.Rollback()
-	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, plan)
+	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, plan, false)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 // compatibility API and the durable Run-plan projection. Keeping plan steps
 // and their coarser work-unit attribution in one transaction prevents a crash
 // from publishing only half of the execution structure.
-func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runID string, plan []WorkUnitPlanInput) ([]RunWorkUnit, error) {
+func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runID string, plan []WorkUnitPlanInput, replace bool) ([]RunWorkUnit, error) {
 	var personID, workspaceID, primaryTaskID string
 	if err := tx.QueryRowContext(ctx, `SELECT person_id, COALESCE(workspace_id,''), thread_id FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).
 		Scan(&personID, &workspaceID, &primaryTaskID); err != nil {
@@ -130,7 +130,11 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 				return nil, fmt.Errorf("related task %s is not owned by run person", item.RelatedTaskID)
 			}
 		}
-		unit, err := resolvePlanWorkUnit(runID, item, existing, byID, used)
+		var unit *RunWorkUnit
+		var err error
+		if !replace {
+			unit, err = resolvePlanWorkUnit(runID, item, existing, byID, used)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +188,7 @@ func resolvePlanWorkUnit(runID string, item WorkUnitPlanInput, existing []RunWor
 	}
 	if item.RelatedTaskID != "" {
 		for i := range existing {
-			if !used[existing[i].ID] && existing[i].RelatedTaskID == item.RelatedTaskID {
+			if !used[existing[i].ID] && existing[i].PlanStatus != "cancelled" && existing[i].RelatedTaskID == item.RelatedTaskID {
 				return &existing[i], nil
 			}
 		}
@@ -192,7 +196,7 @@ func resolvePlanWorkUnit(runID string, item WorkUnitPlanInput, existing []RunWor
 	goal := normalizeWorkUnitGoal(item.GoalDigest)
 	if goal != "" {
 		for i := range existing {
-			if !used[existing[i].ID] && normalizeWorkUnitGoal(existing[i].GoalDigest) == goal {
+			if !used[existing[i].ID] && existing[i].PlanStatus != "cancelled" && normalizeWorkUnitGoal(existing[i].GoalDigest) == goal {
 				return &existing[i], nil
 			}
 		}

@@ -78,11 +78,13 @@ func TestPlanToolsUseDurableProjectionAsCompletionAuthority(t *testing.T) {
 func TestPlanStepParserPreservesOmittedTextForExactIDInheritance(t *testing.T) {
 	steps, err := planStepsFromArgs([]interface{}{map[string]interface{}{
 		"step_id": "step-issued", "status": "completed",
+		"reuse_prior_verification": true, "reuse_reason": "the same target is unchanged",
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(steps) != 1 || steps[0].StepID != "step-issued" || steps[0].Step != "" || steps[0].Status != "completed" {
+	if len(steps) != 1 || steps[0].StepID != "step-issued" || steps[0].Step != "" || steps[0].Status != "completed" ||
+		!steps[0].ReusePriorVerification || steps[0].ReuseReason != "the same target is unchanged" {
 		t.Fatalf("parsed step=%+v", steps)
 	}
 }

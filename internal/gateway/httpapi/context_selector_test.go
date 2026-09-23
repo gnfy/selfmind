@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"selfmind/internal/control/controltest"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 )
 
 func TestWorkContinuityHintsSurfaceWaitingRunForShortReply(t *testing.T) {
@@ -116,6 +118,16 @@ func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	snapshot, _ := json.Marshal([]llm.Message{
+		{Role: "assistant", ToolCalls: []llm.ToolCall{{ID: "read", Function: "read_file", Args: `{"path":"selector.json"}`}}},
+		{Role: "tool", ToolCallID: "read", Content: "selector state=ready"},
+	})
+	if err := store.SaveLoopCheckpoint(ctx, control.LoopCheckpointRecord{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: parent.ID,
+		Outcome: "complete_turn", Snapshot: snapshot,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.FinishRun(ctx, identity.TenantID, parent.ID, "waiting_user"); err != nil {
 		t.Fatal(err)
 	}
@@ -137,6 +149,7 @@ func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 		"internal/kernel/agent.go",
 		"tool.completed",
 		"read agent.go",
+		"selector state=ready",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("selected prompt missing %q:\n%s", want, prompt)

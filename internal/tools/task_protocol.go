@@ -93,13 +93,15 @@ type PlanState struct {
 }
 
 type PlanStep struct {
-	StepID               string `json:"step_id,omitempty"`
-	Step                 string `json:"step"`
-	Status               string `json:"status"`
-	SuccessCriteria      string `json:"success_criteria,omitempty"`
-	VerificationRequired bool   `json:"verification_required,omitempty"`
-	WorkUnitID           string `json:"work_unit_id,omitempty"`
-	WorkUnit             bool   `json:"work_unit,omitempty"`
+	StepID                 string `json:"step_id,omitempty"`
+	Step                   string `json:"step"`
+	Status                 string `json:"status"`
+	SuccessCriteria        string `json:"success_criteria,omitempty"`
+	VerificationRequired   bool   `json:"verification_required,omitempty"`
+	ReusePriorVerification bool   `json:"reuse_prior_verification,omitempty"`
+	ReuseReason            string `json:"reuse_reason,omitempty"`
+	WorkUnitID             string `json:"work_unit_id,omitempty"`
+	WorkUnit               bool   `json:"work_unit,omitempty"`
 }
 
 func NewPlanStore() *PlanStore {
@@ -171,6 +173,15 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 									Type:        "boolean",
 									Description: "True only on the single plan step that owns a distinct acceptance condition requiring successful verify evidence. Keep that same step in_progress across failed attempts and replacements. Leave false on diagnostic attempts and on separate retry or recheck steps for the same condition; different conditions may each set true.",
 									Default:     false,
+								},
+								"reuse_prior_verification": {
+									Type:        "boolean",
+									Description: "On an exact Run continuation only: mark a completed required check as satisfied by its unchanged, successful prior verification after judging that it still covers this step. The runtime checks the exact source and rejects changed criteria, scope, or later effects. Otherwise run verify again.",
+									Default:     false,
+								},
+								"reuse_reason": {
+									Type:        "string",
+									Description: "When reusing prior verification, briefly explain why the prior observation is still sufficient for this criterion and target.",
 								},
 								"work_unit_id": {
 									Type:        "string",
@@ -367,7 +378,7 @@ func samePlanSteps(a, b []PlanStep) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].StepID != b[i].StepID || a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].SuccessCriteria != b[i].SuccessCriteria || a[i].VerificationRequired != b[i].VerificationRequired ||
+		if a[i].StepID != b[i].StepID || a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].SuccessCriteria != b[i].SuccessCriteria || a[i].VerificationRequired != b[i].VerificationRequired || a[i].ReusePriorVerification != b[i].ReusePriorVerification || a[i].ReuseReason != b[i].ReuseReason ||
 			a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
 			return false
 		}
@@ -385,13 +396,15 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 				return nil, fmt.Errorf("plan items must be objects")
 			}
 			steps = append(steps, PlanStep{
-				StepID:               taskStringArg(obj, "step_id"),
-				Step:                 taskStringArg(obj, "step"),
-				Status:               taskStringArg(obj, "status"),
-				SuccessCriteria:      taskStringArg(obj, "success_criteria"),
-				VerificationRequired: taskBoolArg(obj, "verification_required"),
-				WorkUnitID:           taskStringArg(obj, "work_unit_id"),
-				WorkUnit:             taskBoolArg(obj, "work_unit"),
+				StepID:                 taskStringArg(obj, "step_id"),
+				Step:                   taskStringArg(obj, "step"),
+				Status:                 taskStringArg(obj, "status"),
+				SuccessCriteria:        taskStringArg(obj, "success_criteria"),
+				VerificationRequired:   taskBoolArg(obj, "verification_required"),
+				ReusePriorVerification: taskBoolArg(obj, "reuse_prior_verification"),
+				ReuseReason:            taskStringArg(obj, "reuse_reason"),
+				WorkUnitID:             taskStringArg(obj, "work_unit_id"),
+				WorkUnit:               taskBoolArg(obj, "work_unit"),
 			})
 		}
 		return steps, nil

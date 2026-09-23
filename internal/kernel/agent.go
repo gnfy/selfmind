@@ -1332,6 +1332,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		if len(cappedLifecycleTools) > 0 {
 			iterationStrategy = iterationStrategy.WithHiddenTools(cappedLifecycleTools...)
 		}
+		// A successful finish_run has committed this Run's structured outcome.
+		// The remaining provider call is for the final answer only; exposing
+		// tools here invites unrelated effects after completion.
+		if successfulFinishStatus != "" {
+			iterationStrategy.AllowedTools = map[string]bool{}
+		}
 		// Plan guidance escalation. The system prompt — including
 		// planToolGuidance — is composed once per Run, before any work has
 		// happened, so a model that simply never volunteers update_plan keeps
@@ -1347,7 +1353,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// and it stops once the turn is winding down — asking for a plan while
 		// the budget-exhausted path is telling the model to stop calling tools
 		// would be a contradiction, not guidance.
-		if !planGuidanceEscalated && !toolBudgetExhausted && shouldEscalatePlanGuidance(iterationStrategy, planEvidenceTools, planSeen) {
+		if successfulFinishStatus == "" && !planGuidanceEscalated && !toolBudgetExhausted && shouldEscalatePlanGuidance(iterationStrategy, planEvidenceTools, planSeen) {
 			planGuidanceEscalated = true
 			previousPlanPolicy := iterationStrategy.normalized().PlanPolicy
 			iterationStrategy = iterationStrategy.WithPlanRequired()

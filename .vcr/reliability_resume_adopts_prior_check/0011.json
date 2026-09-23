@@ -3,12 +3,12 @@
   "method": "stream",
   "events": [
     {
-      "content": "I will"
+      "content": "`value.txt` contains"
     },
     {
       "usage": {
-        "input_tokens": 13675,
-        "output_tokens": 2,
+        "input_tokens": 7633,
+        "output_tokens": 6,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -16,22 +16,38 @@
       }
     },
     {
-      "content": " record the completed task outcome with finish_run."
+      "content": " exactly `READY` followed by a newline (`READY\\n`).\n\n### Summary\n- The prior verified check (`b"
     },
     {
       "usage": {
-        "input_tokens": 13675,
+        "input_tokens": 0,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "\"READY\\n\"`) remains valid and was adopted without re-running redundant checks or modifying any files.\n- The plan steps have"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 28,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " been completed and the run has finished with status `done`."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
         "output_tokens": 12,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "usage": {
-        "input_tokens": 13675,
-        "output_tokens": 118,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -43,27 +59,13 @@
     },
     {
       "usage": {
-        "input_tokens": 15865,
-        "output_tokens": 118,
+        "input_tokens": 3180,
+        "output_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0
       }
-    },
-    {
-      "tool_calls": [
-        {
-          "ID": "call_124931",
-          "Function": "finish_run",
-          "Args": "{\"status\":\"done\",\"summary\":\"value.txt contains exactly READY followed by a newline; prior verification verified and reported.\",\"tests\":[\"python3 -c \\\"assert open('value.txt', 'rb').read() == b'READY\\\\\\\\n'\\\" (prior verification adopted)\"],\"files\":[\"value.txt\"],\"done\":[\"Verified value.txt contains exactly READY followed by a newline\",\"Reported verification result following user confirmation\"]}",
-          "replay_metadata": {
-            "google": {
-              "thought_signature": "EpcJCpQJAWkUfRNycT4QjnMiMiJxxAsLOxLMb15zdnHWWLkMjmIMm2JR9URKemehCk1WWt7t9FemWH+abBYnYO9j3X0IK5ZHUa5MBL71nKPhJbeePze2Bl8M0T9EzOJY2NIzQTlgsqa3dproIJTyCpbvvqwe56fEH7PIpWkKlZ8MuQ/I+KpiiCdN+7ssB/sZs41ylA/VQob8p4Ev/NUsD20eNxxqGqd3QCsRxiNxl/DKKdxILYt+kYeAVqI9RdMm0wziCFjKMcAzHUG5zR/VJM0IZKd553Zc9u/4ZbE7S+z27FAY5b9kh5l5jCTc418EnUKupc/kFHz3o1cOpWlyJ6MKXZxtIXTWFCkU/zDahDuNbfbjiEF5g3Mi9D4skin2d3FQZFZzPP0WZHV5BWnGgBRjaJTUMEt/K1+qtKm6sEIIsr4Qu5S3AQsRmemYlf1IAw4js0NqfIUD3QiPLR0kcr+5eySWVcaS6fwDyetx4RknTFX1cKcqPNokkgR5E+Osl5sABvav335Us2FVejqbwW0DPbEHzW7l+7wx0US7HUmGcMF/CWeSfr796jAR1k/IXuvDIbT2rk90J+0c1v9gxZ5vFoUxOruaPmcON8jQjSADDqtHrGMwYJm5kixPrbBojetrzr/pxIxQK0pQPUYweXUQS7YDH+sIpqMUejtDB7cBtMGjb1zPv4Pq6f04MO1h2+DgcSbJyFrJ5BqZ4dBFxKgH5pxt+AaLBFTYjaEGWTvFucPP4T8NV9SFb0p370s0r3jDwnMgoMZGzpCBDWwRgpOvpLZFmw2MDyWdN9f0u+aYnniO245IKBwbMIIh+mo8Ep/4P7IF76GgdFiqhxcTyMUl9wowePECwLFfBoowK7fG9wjuwLSjnul0bc3qEuu90qRDZSxYm+grGNeIHuXC3tzi4DfA4DHTsTWXgLGntSm/pi12CwxV0kMNMtAiEMOt5yyg44cKLMj3EY4KmMHNdJDMZh88Iu4EoZSCM3vaeaBhq9KFh6vJmdGY+Lhndz+tuxnKQ7OX9MdB8XOa9fep9aSRXBRR4hsLv852MxOQOagVqFQQVc91jSs6qrxFLUH5eF4POWCIo2xU4v1u2a03/gTr7ua1WM4gZLiDFldAAAMQWyk7HNn2FJ6aQBqEp1bM4YU67yuzSKnvkT429Qx2EuMiJQzM+R/Z7ownLvoaCy63bf0GK6YSLxESbi7RE5IG9wlhDDlfu538XgZ44zxlFFZxdAMGpSJFoDzEDzz9vin+sriSRuwjA7trOWc/8bT+KZ+54MXj3lyOEUo1aptP8DreI4Zim8nt7wZ1q9WCIGtYnQSwtlAr7EX3buZ3Bv8pkvWpT/VAdjYUJ+eSZRlUdrVQLWIgELqEY40O3P//Tqhtf7JFyStHpbuaBt8HViQ5J69ZzJ6Wf1nN0ElHjvYyTv06+IzJT5S8Zw2zd4I8VgZru6ghqozoz8Sk9eNtxlEmrWKS0Kc2OZ6MEU+E2CGciAR7knoHw3rj9+msWCXprGpPeahnNd3ZfQ/ifP0z2TmrUK0zPll/Ufc28gdl6OOKPv4ClehcCMYTEUA="
-            }
-          }
-        }
-      ]
     }
   ]
 }

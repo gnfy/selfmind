@@ -156,7 +156,11 @@ jobs:
   eval:
     name: Provider-offline eval
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The corpus steps stop first, so an overrun is a failed step with minutes
+    # left to upload diagnostics. A job-level timeout cancels the job and skips
+    # failure() steps: the 2026-09-24 main run lost its logs that way after the
+    # corpus had already passed.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -190,14 +194,18 @@ jobs:
 
       - name: Fast provider-offline PR corpus
         if: github.event_name == 'pull_request'
+        timeout-minutes: 15
         run: go run ./cmd/selfmind selfcheck --profile local-fast --skip-go
 
       - name: Complete provider-offline main corpus
         if: github.event_name != 'pull_request'
+        timeout-minutes: 15
         run: go run ./cmd/selfmind selfcheck --profile local-full --skip-go
 
+      # A manual dispatch is an investigation, so it keeps the logs even when
+      # every case passes.
       - name: Upload eval diagnostics
-        if: failure()
+        if: failure() || cancelled() || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v6
         with:
           name: selfmind-eval-linux
@@ -271,7 +279,7 @@ jobs:
         run: bash scripts/smoke-npm-packages.sh 0.0.0-ci darwin-arm64
 
       - name: Upload eval diagnostics
-        if: failure()
+        if: failure() || cancelled()
         uses: actions/upload-artifact@v6
         with:
           name: selfmind-eval-macos

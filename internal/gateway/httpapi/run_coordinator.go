@@ -621,19 +621,12 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		outcome.Summary = selection.Notice
 		outcome.NextSteps = []string{"Confirm whether to continue the historical work separately. No continuation was queued."}
 	}
-	if !hasFinalContent && structuredOutcome && strings.TrimSpace(outcome.Summary) != "" {
-		// finish_run is a durable structured result. When a provider ends the
-		// stream without separate prose, expose that result instead of storing
-		// the router's generic missing-response fallback as a successful answer.
-		content = strings.TrimSpace(outcome.Summary)
-	}
 	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.TenantID, run.ID)
 	outcome.Verification, outcome.Files = verification, evidenceFiles
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
 	outcome = applyVerificationOutcome(outcome)
 	if !hasFinalContent && !structuredOutcome && (selection == nil || !selection.Rejected) {
-		content = missingFinalEvidenceSummary(run.ID, outcome)
-		outcome.Summary = truncate(toOneLine(content), 1000)
+		content, outcome.Summary = missingFinalEvidenceSummary(run.ID, outcome, c.acceptedPlanSteps(finCtx, identity.TenantID, run.ID))
 	}
 	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {
 		if watch, watchErr := d.Control.GetExternalWatch(finCtx, identity.TenantID, watchID); watchErr == nil {
@@ -644,6 +637,12 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	for _, mismatch := range outcome.ClaimMismatches {
 		outcome.Risks = appendUnique(outcome.Risks, mismatch, 8)
+	}
+	if structuredOutcome && !hasFinalContent {
+		content = structuredResultFallback(outcome)
+	}
+	if !structuredOutcome && eventSummary.Completion().CompletionReason == "plan_unresolved" {
+		content, outcome.Summary = unresolvedPlanFallback(outcome, c.acceptedPlanSteps(finCtx, identity.TenantID, run.ID))
 	}
 	content = withVerificationNotice(content, outcome.Verification, outcome.ClaimMismatches)
 	content = withCompletionNotice(content, outcome)

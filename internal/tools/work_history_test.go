@@ -91,6 +91,13 @@ func TestWorkInspectReturnsBoundedRunStateWithoutRawEventContent(t *testing.T) {
 	if strings.Contains(result, "RAW PRIVATE TRANSCRIPT") {
 		t.Fatalf("raw event payload leaked: %s", result)
 	}
+	current, err := tool.Execute(map[string]interface{}{
+		"run_id":            run.ID,
+		"_invocation_scope": kernel.ToolInvocationScope{ControlTenantID: person.TenantID, PersonID: person.PersonID, RunID: run.ID},
+	})
+	if err != nil || !strings.Contains(current, "already selected") || strings.Contains(current, "did not attach") {
+		t.Fatalf("current Run inspection gave historical-selection guidance: result=%s err=%v", current, err)
+	}
 }
 
 func TestWorkInspectRejectsAnotherPersonRun(t *testing.T) {

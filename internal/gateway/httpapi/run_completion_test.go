@@ -129,14 +129,115 @@ func TestMissingFinalResponsePreservesKnownBlocker(t *testing.T) {
 
 func TestMissingFinalSummaryRetainsEvidenceWithoutClaimingCompletion(t *testing.T) {
 	outcome := api.RunOutcome{Files: []string{"report.csv"}, Verification: &api.VerificationOutcome{State: "not_run", Summary: "No structured verification evidence."}}
-	got := missingFinalEvidenceSummary("run_test", outcome)
-	for _, want := range []string{"without a final response", "report.csv", "not_run", "/resume run_test"} {
+	got, summary := missingFinalEvidenceSummary("run_test", outcome, nil)
+	for _, want := range []string{"**Work remains**\n\n", "without a final response", "report.csv", "not_run", "/resume run_test"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %s", want, got)
 		}
 	}
-	if strings.Contains(got, "completed") {
-		t.Fatalf("missing response was called complete: %s", got)
+	if strings.Contains(got, "completed") || summary != "The run stopped without a final response." {
+		t.Fatalf("missing response was called complete: result=%q summary=%q", got, summary)
+	}
+}
+
+// A rejected finish_run leaves no structured outcome. The accepted plan still
+// says how far the work got; the evidence after it says what was observed.
+func TestMissingFinalSummaryLeadsWithAcceptedPlanProgress(t *testing.T) {
+	outcome := api.RunOutcome{
+		Files:        []string{"releases/2026-09-24-record.md"},
+		Verification: &api.VerificationOutcome{State: "stale", Summary: "1 verification check(s) need review after changes to their inputs."},
+	}
+	steps := []taskPlanStep{
+		{Step: "触发 Cloud Build 并回读终态", Status: "completed"},
+		{Step: "Retire the duplicate probe", Status: "cancelled"},
+		{Step: "写入发布记录并推送", Status: "in_progress"},
+		{Step: "Report the result", Status: "pending"},
+	}
+	got, summary := missingFinalEvidenceSummary("run_test", outcome, steps)
+	for _, want := range []string{
+		"**Work remains**\n\nThe run stopped without a final response: 2 of 4 steps resolved. Open plan step: 写入发布记录并推送",
+		"**Completed plan steps**\n- 触发 Cloud Build 并回读终态",
+		"**Open plan steps**\n- 写入发布记录并推送\n- Report the result",
+		"releases/2026-09-24-record.md", "Recorded verification: stale", "/resume run_test",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if strings.Contains(got, "Retire the duplicate probe") {
+		t.Fatalf("a cancelled step was presented as work: %s", got)
+	}
+	if summary != "The run stopped without a final response: 2 of 4 steps resolved. Open plan step: 写入发布记录并推送" {
+		t.Fatalf("summary = %q", summary)
+	}
+}
+
+// A release plan whose seven steps all completed while its last check went
+// stale must still show its final step: that is where the work remains.
+func TestMissingFinalSummaryListsTheWholeTypicalPlan(t *testing.T) {
+	var steps []taskPlanStep
+	for i := 1; i <= 7; i++ {
+		steps = append(steps, taskPlanStep{Step: fmt.Sprintf("release step %d", i), Status: "completed"})
+	}
+	got, _ := missingFinalEvidenceSummary("run_test", api.RunOutcome{Verification: &api.VerificationOutcome{State: "stale"}}, steps)
+	if !strings.Contains(got, "7 of 7 steps resolved") || !strings.Contains(got, "- release step 7") || strings.Contains(got, "more recorded") {
+		t.Fatalf("typical plan was not listed whole: %s", got)
+	}
+}
+
+// The coordinator reads progress from the durable plan, not from the turn's
+// narration.
+func TestMissingFinalSummaryReadsAcceptedRunPlan(t *testing.T) {
+	ctx := context.Background()
+	store := controltest.NewStore(t)
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "publish", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "publish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	if steps := daemon.coordinator().acceptedPlanSteps(ctx, identity.TenantID, run.ID); len(steps) != 0 {
+		t.Fatalf("a run without a plan projected steps: %#v", steps)
+	}
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "publish", []control.RunPlanStepInput{
+		{Step: "dispatch the build", Status: "completed"}, {Step: "write the release record", Status: "in_progress"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := missingFinalEvidenceSummary(run.ID, api.RunOutcome{}, daemon.coordinator().acceptedPlanSteps(ctx, identity.TenantID, run.ID))
+	for _, want := range []string{"1 of 2 steps resolved. Open plan step: write the release record", "**Completed plan steps**\n- dispatch the build", "/resume " + run.ID} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+}
+
+// The structured summary is the answer when no separate prose exists. A CJK
+// decision request that fits the character bound must survive intact even when
+// lists follow; only a runaway field is cut.
+func TestStructuredResultFallbackBoundsSummaryByCharacters(t *testing.T) {
+	decision := strings.Repeat("预检已完成，源版本与主干一致。", 26) + "请你确认两件事：是否派发构建，以及是否接受降级的发布记录。"
+	got := structuredResultFallback(api.RunOutcome{
+		Status: "waiting_user", Summary: decision,
+		Done: []string{"预检结果已记录"}, NextSteps: []string{strings.Repeat("确认后派发构建并回读终态", 30)},
+	})
+	if !strings.Contains(got, decision) {
+		t.Fatalf("decision request was cut: %s", got)
+	}
+	if want := "- " + strings.Repeat("确认后派发构建并回读终态", 26) + "确认后派发构建并..."; !strings.Contains(got, want) {
+		t.Fatalf("list item was not bounded by characters: %s", got)
+	}
+	runaway := strings.Repeat("长", resultSummaryRunes+50)
+	got = structuredResultFallback(api.RunOutcome{Status: "waiting_user", Summary: runaway})
+	if strings.Contains(got, runaway) || !strings.Contains(got, strings.Repeat("长", resultSummaryRunes)+"...") {
+		t.Fatalf("runaway summary was not bounded: %d runes", len([]rune(got)))
 	}
 }
 
@@ -149,6 +250,33 @@ func TestStructuredOutcomeIsFinalWithoutSeparateProse(t *testing.T) {
 
 	if outcome.Status != "done" || outcome.CompletionReason != "completed" || outcome.Resumable {
 		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
+func TestStructuredResultFallbackKeepsDecisionAndEvidenceReadable(t *testing.T) {
+	got := structuredResultFallback(api.RunOutcome{
+		Status: "waiting_user", Summary: "预检完成。\n\n等待确认。", Done: []string{"项目和源版本已核对", "预检结果已记录"},
+		NextSteps: []string{"确认后派发构建"}, Risks: []string{"发布脚本不支持无 tag 输入"},
+	})
+	for _, want := range []string{"**Awaiting your decision**", "预检完成。\n\n等待确认。", "**Completed**\n- 项目和源版本已核对", "**Next steps**\n- 确认后派发构建", "**Risks**\n- 发布脚本不支持无 tag 输入"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatted result missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestUnresolvedPlanFallbackDoesNotPresentProgressNarrationAsResult(t *testing.T) {
+	got, summary := unresolvedPlanFallback(api.RunOutcome{
+		Status: "interrupted", Summary: "Retrying the plan close-out because...",
+		External: &api.ExternalOutcome{Status: "succeeded"},
+	}, []taskPlanStep{{Step: "Publish", Status: "completed"}, {Step: "Record outcome", Status: "in_progress"}})
+	for _, want := range []string{"1 of 2 steps resolved", "External observation: succeeded", "**Completed plan steps**\n- Publish", "**Open plan steps**\n- Record outcome"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatted plan result missing %q: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "Retrying") || !strings.Contains(summary, "1 of 2") {
+		t.Fatalf("progress narration leaked into result: result=%q summary=%q", got, summary)
 	}
 }
 

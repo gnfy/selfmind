@@ -152,7 +152,9 @@ func uiStatusForDaemonOutcome(status string) string {
 		return "done"
 	case "cancelled", "canceled":
 		return "cancelled"
-	case "running", "waiting_user", "waiting_external", "verification_partial", "interrupted":
+	case "interrupted", "verification_partial":
+		return "interrupted"
+	case "running", "waiting_user", "waiting_external":
 		return "done"
 	default:
 		return "error"
@@ -243,6 +245,15 @@ func (m *uiModel) markBackgroundRun(runID, watchID, origin string) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return
+	}
+	if m.backgroundRunID != runID {
+		m.backgroundToolCount = 0
+		m.backgroundLastAction = ""
+		m.backgroundPlanResolved = 0
+		m.backgroundPlanTotal = 0
+		m.backgroundPlanVersion = 0
+		m.backgroundPlanCursor = 0
+		m.backgroundTickRunning = false
 	}
 	m.backgroundRunID = runID
 	m.backgroundWatchID = strings.TrimSpace(watchID)

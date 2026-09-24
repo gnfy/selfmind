@@ -290,6 +290,9 @@ func (t *WorkInspectTool) Execute(args map[string]interface{}) (string, error) {
 			"next_steps": boundedWorkStrings(task.NextSteps, 6, 240),
 		},
 	}
+	if run.ID == scope.RunID {
+		result["selection_notice"] = "This is the current Run and it is already selected. Continue directly with its plan and evidence; work_select only accepts a different historical Run."
+	}
 	if run.FinishedAt != nil {
 		result["finished_at"] = run.FinishedAt.UTC().Format(time.RFC3339)
 	}

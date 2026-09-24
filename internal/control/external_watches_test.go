@@ -503,6 +503,23 @@ func TestExternalWatchGroupsResolveAllAndAnyOnce(t *testing.T) {
 			if err != nil || !again.Terminal || again.Won {
 				t.Fatalf("second aggregate claimant=%+v err=%v", again, err)
 			}
+			// A historical/crash-gap non-winner must not remain in the
+			// compensation backlog or emit a second aggregate result.
+			nonWinnerID := first.ID
+			if resolved.Group.WinnerWatchID == first.ID {
+				nonWinnerID = second.ID
+			}
+			if _, err := store.db.ExecContext(context.Background(), `UPDATE external_watches SET finalized=0,notified=0 WHERE id=?`, nonWinnerID); err != nil {
+				t.Fatal(err)
+			}
+			settled, err := store.ResolveExternalWatchGroup(context.Background(), identity.TenantID, group.ID, nonWinnerID)
+			if err != nil || !settled.Terminal || settled.Won {
+				t.Fatalf("non-winner compensation=%+v err=%v", settled, err)
+			}
+			stored, err := store.GetExternalWatch(context.Background(), identity.TenantID, nonWinnerID)
+			if err != nil || stored == nil || !stored.Finalized || !stored.Notified {
+				t.Fatalf("non-winner remained unfinalized: %+v err=%v", stored, err)
+			}
 		})
 	}
 }

@@ -192,6 +192,15 @@ type RoleProvider struct {
 	role    ModelRole
 }
 
+func (p *RoleProvider) DescribeProviderRoute() ProviderRouteInfo {
+	profile := p.gateway.resolve(p.role)
+	model := profile.Model
+	if model == "" {
+		model = GetModelName(profile.Provider)
+	}
+	return ProviderRouteInfo{Provider: profile.ProviderName, Model: model}
+}
+
 func (p *RoleProvider) ChatCompletion(ctx context.Context, messages []Message) (string, error) {
 	req := ChatRequest{Messages: messages}
 	resp, err := p.Chat(ctx, req)

@@ -194,6 +194,13 @@ type uiModel struct {
 	backgroundWatchID       string
 	backgroundOrigin        string
 	backgroundResultPending bool
+	backgroundTickRunning   bool
+	backgroundToolCount     int
+	backgroundLastAction    string
+	backgroundPlanResolved  int
+	backgroundPlanTotal     int
+	backgroundPlanVersion   int
+	backgroundPlanCursor    int64
 	migrationHint           string // Hint for migrating Hermes skills
 	cursorVisible           bool
 	clientMode              bool // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
@@ -287,6 +294,8 @@ type uiModel struct {
 
 type MsgClearStatus struct{ NoticeID uint64 }
 type MsgWorkingTick time.Time
+
+type MsgBackgroundTick struct{ RunID string }
 type MsgCursorBlinkTick time.Time
 type MsgAgentActivity struct {
 	Content string
@@ -368,6 +377,10 @@ func workingTick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return MsgWorkingTick(t)
 	})
+}
+
+func backgroundTick(runID string) tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return MsgBackgroundTick{RunID: runID} })
 }
 
 // cursorBlinkIdleAfter is how long without a keystroke before the caret stops

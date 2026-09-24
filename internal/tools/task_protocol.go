@@ -249,7 +249,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			var verification interface{ PlanVerificationPrecondition() bool }
 			if errors.As(err, &verification) && verification.PlanVerificationPrecondition() {
 				return "", newStableToolError(err, "plan_verification_required", "stale_precondition", err.Error(),
-					"Keep the current work unit open and inspect the failed check. Use verify for required checks; when correcting a bound check, preserve criterion and target, cite its evidence id in replaces and explain the method correction in reason. Then submit the completed plan snapshot.")
+					"Keep the current work unit open and follow each step's next action. verify binds to the in_progress verification_required step, so make an unbound step in_progress before verifying it; when correcting a bound check, preserve criterion and target, cite its evidence id in replaces and explain the method correction in reason. Then submit the completed plan snapshot.")
 			}
 			var staleStep interface{ CurrentPlanStepIDs() []string }
 			if errors.As(err, &staleStep) {

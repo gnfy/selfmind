@@ -82,6 +82,35 @@ type RunRecoverySnapshot struct {
 	UncertainEffectIDs []string `json:"uncertain_effect_ids,omitempty"`
 }
 
+// RunPlanEvidenceRevision changes only for a successful check bound to a step
+// this exact update asks to complete. An unrelated sibling check must not
+// release the repeated-failure guard for a still-invalid plan update.
+// SyncRunPlan remains the authority that validates every transition.
+func (s *Store) RunPlanEvidenceRevision(ctx context.Context, tenantID, runID string, completedStepIDs []string) (string, error) {
+	var planVersion int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM run_plan_versions
+		WHERE tenant_id=? AND run_id=?`, normalizeTenant(tenantID), runID).Scan(&planVersion); err != nil {
+		return "", err
+	}
+	var evidenceCursor int64
+	stepIDsJSON, err := json.Marshal(completedStepIDs)
+	if err != nil {
+		return "", err
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(e.cursor),0) FROM task_events e
+		WHERE e.run_id=? AND e.type='evidence.recorded'
+		  AND json_extract(e.payload_json,'$.evidence.kind')='verification'
+		  AND json_extract(e.payload_json,'$.evidence.status')='succeeded'
+		  AND EXISTS (SELECT 1 FROM run_plan_steps p
+		    WHERE p.tenant_id=? AND p.run_id=? AND p.plan_version=?
+		      AND p.step_id=json_extract(e.payload_json,'$.evidence.command.binding.step_id')
+		      AND p.step_id IN (SELECT value FROM json_each(?)))`,
+		runID, normalizeTenant(tenantID), runID, planVersion, string(stepIDsJSON)).Scan(&evidenceCursor); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d:%d", planVersion, evidenceCursor), nil
+}
+
 // StalePlanStepReferenceError is returned when a model echoes an id not issued
 // for the current Run. The tool layer renders the legal ids without parsing
 // error prose.
@@ -91,10 +120,55 @@ type StalePlanStepReferenceError struct {
 	Current []string
 }
 
-type planVerificationPreconditionError struct{ step, criterion, state, blockers string }
+type planVerificationBlock struct {
+	step, criterion, state, blockers string
+	// checks counts the plan-bound checks for this step in its work unit, or
+	// is -1 when the evidence could not be read.
+	checks int
+}
 
+type planVerificationPreconditionError struct{ blocked []planVerificationBlock }
+
+// Error names the next action for each blocked step from the evidence
+// projection. A check binds to the step that was in_progress when it ran, so a
+// step with no bound check needs to become in_progress first, while a bound
+// check that is stale or failed keeps its step through replaces.
 func (e *planVerificationPreconditionError) Error() string {
-	return fmt.Sprintf("plan step %q requires successful verification before its work unit can complete; the previous plan is unchanged. Criterion: %q; current verification: %s. %s", e.step, e.criterion, e.state, e.blockers)
+	var lines []string
+	for i, block := range e.blocked {
+		if i >= 8 {
+			lines = append(lines, fmt.Sprintf("… and %d more", len(e.blocked)-i))
+			break
+		}
+		line := fmt.Sprintf("step %q: criterion %q; ", block.step, boundedPlanErrorText(block.criterion, 240))
+		switch {
+		case block.checks == 0:
+			line += "no check is bound to this step; next: make it the in_progress step with update_plan, then run verify"
+		case block.checks > 0:
+			state := block.state
+			if state == "not_run" {
+				// The work-unit projection reports stale evidence as not_run.
+				state = "stale"
+			}
+			line += fmt.Sprintf("verification %s; %s; next: recheck with verify replaces=<evidence id> and a reason, which stays bound to this step",
+				state, boundedPlanErrorText(block.blockers, 240))
+			if state == "stale" {
+				line += "; declare local_dependencies: [] only when the check reads no local files"
+			}
+		default:
+			line += fmt.Sprintf("verification %s; %s", block.state, boundedPlanErrorText(block.blockers, 240))
+		}
+		lines = append(lines, line)
+	}
+	return fmt.Sprintf("%d plan step(s) require successful verification before their work units can complete; the previous plan is unchanged. %s", len(e.blocked), strings.Join(lines, " | "))
+}
+
+func boundedPlanErrorText(value string, maxRunes int) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "…"
 }
 
 func (*planVerificationPreconditionError) PlanVerificationPrecondition() bool { return true }
@@ -231,18 +305,22 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 	}
 	// Completing a work unit freezes its evidence window. Reject a premature
 	// close transactionally so a subsequent check can still belong to that unit.
+	var blockedChecks []planVerificationBlock
 	for i, step := range steps {
 		if step.Status != "completed" || !step.VerificationRequired {
 			continue
 		}
 		for _, unit := range units {
 			if unit.ID == stepWorkUnits[i] && unit.Status == WorkUnitCompleted {
-				state, _, blockers := workUnitEvidenceProjectionTx(ctx, tx, runID, unit.StartedCursor, unit.FinishedCursor, step.StepID)
+				state, _, blockers, checks := workUnitEvidenceProjectionTx(ctx, tx, runID, unit.StartedCursor, unit.FinishedCursor, step.StepID)
 				if state != "passed" && !(step.ReusePriorVerification && state == "not_applicable") {
-					return RunPlanProjection{}, &planVerificationPreconditionError{step: step.Step, criterion: step.SuccessCriteria, state: state, blockers: blockers}
+					blockedChecks = append(blockedChecks, planVerificationBlock{step: step.Step, criterion: step.SuccessCriteria, state: state, blockers: blockers, checks: checks})
 				}
 			}
 		}
+	}
+	if len(blockedChecks) > 0 {
+		return RunPlanProjection{}, &planVerificationPreconditionError{blocked: blockedChecks}
 	}
 	// A prior check is accepted only after Main explicitly states why it still
 	// satisfies the unchanged criterion and the runtime verifies its lineage.

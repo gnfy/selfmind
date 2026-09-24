@@ -901,9 +901,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		})
 	}
 	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats) {
+		route := llm.DescribeProviderRoute(a.activeLLM())
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type: "provider.call.usage",
 			Payload: map[string]interface{}{
+				"provider":                    route.Provider,
+				"model":                       route.Model,
+				"role":                        string(llm.RoleCodingAgent),
 				"iteration":                   iteration,
 				"transport":                   transport,
 				"status":                      status,

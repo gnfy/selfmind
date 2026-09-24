@@ -114,12 +114,29 @@ func TestExternalWatchGroupEmitsOneAggregateFinalization(t *testing.T) {
 	if err != nil || len(queued) != 0 {
 		t.Fatalf("group finalized early: %+v err=%v", queued, err)
 	}
-	daemon.completeExternalWatch(ctx, second, control.ExternalWatchSucceeded, "DONE", "")
-	daemon.recoverExternalWatchVerdicts(ctx)
+	// Model a durable verdict followed by interruption before any finalization
+	// side effects. The ordinary compensation pass, not a daemon restart, must
+	// materialize the one aggregate child.
+	if finished, err := store.FinishExternalWatch(ctx, identity.TenantID, second.ID, control.ExternalWatchSucceeded, "DONE", ""); err != nil || !finished {
+		t.Fatalf("terminal verdict: finished=%v err=%v", finished, err)
+	}
+	if resolved, err := store.ResolveExternalWatchGroup(ctx, identity.TenantID, group.ID, second.ID); err != nil || !resolved.Terminal || !resolved.Won {
+		t.Fatalf("aggregate verdict: %+v err=%v", resolved, err)
+	}
+	daemon.compensateUnfinalizedExternalWatches(ctx, time.Now().Add(-time.Hour), 1)
 	daemon.reconcileExternalWatchFinalizations(ctx)
 	queued, err = store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	if err != nil || len(queued) != 1 || !strings.Contains(queued[0].Content, "wait group release-checks (all)") {
 		t.Fatalf("aggregate finalization=%+v err=%v", queued, err)
+	}
+	daemon.compensateUnfinalizedExternalWatches(ctx, time.Now().Add(-time.Hour), 1)
+	stored, err := store.GetExternalWatch(ctx, identity.TenantID, second.ID)
+	if err != nil || stored == nil || !stored.Finalized {
+		t.Fatalf("winner remained unfinalized: %+v err=%v", stored, err)
+	}
+	queued, err = store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(queued) != 1 {
+		t.Fatalf("compensation duplicated the child: %+v err=%v", queued, err)
 	}
 }
 

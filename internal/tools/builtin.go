@@ -502,7 +502,7 @@ func NewVerifyTool() *VerifyTool {
 	}
 	return &VerifyTool{BaseTool: BaseTool{
 		name:        "verify",
-		description: "Run a test, build, lint, typecheck, syntax, smoke, or custom verification command and record its exit status as durable run evidence. Declare criterion and target directly; the runtime binds the check to the active verification_required plan step.",
+		description: "Run a test, build, lint, typecheck, syntax, smoke, or custom verification command and record its exit status as durable run evidence. Declare criterion and target directly; the runtime binds the check to the in_progress verification_required plan step, so make the step you are verifying in_progress first.",
 		schema:      schema,
 	}}
 }

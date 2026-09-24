@@ -13,26 +13,11 @@ import (
 // run already owns.
 func (m *uiModel) applyPlanSnapshot(content string, ref uiEventRef) bool {
 	content = strings.TrimSpace(textutil.CleanUTF8(content))
-	if content == "" {
+	if !planSnapshotFresh(m.activePlanJSON != "", m.activePlanRunID, m.activePlanVersion, m.activePlanCursor, content, ref) {
 		return false
 	}
 	runID := strings.TrimSpace(ref.RunID)
-	if m.activePlanJSON != "" && runID != "" && m.activePlanRunID != "" && runID != m.activePlanRunID {
-		return false
-	}
 	version := planSnapshotVersion(content)
-	if m.activePlanJSON != "" {
-		switch {
-		case m.activePlanVersion > 0 && version == 0:
-			return false
-		case version > 0 && m.activePlanVersion > 0 && version < m.activePlanVersion:
-			return false
-		case version == m.activePlanVersion && version > 0 && ref.Cursor > 0 && m.activePlanCursor > 0 && ref.Cursor <= m.activePlanCursor:
-			return false
-		case version == 0 && m.activePlanVersion == 0 && ref.Cursor > 0 && m.activePlanCursor > 0 && ref.Cursor <= m.activePlanCursor:
-			return false
-		}
-	}
 	m.activePlanJSON = content
 	if runID != "" {
 		m.activePlanRunID = runID
@@ -42,6 +27,58 @@ func (m *uiModel) applyPlanSnapshot(content string, ref uiEventRef) bool {
 	}
 	if ref.Cursor > m.activePlanCursor {
 		m.activePlanCursor = ref.Cursor
+	}
+	return true
+}
+
+// Foreground and background plan displays use the same durable ordering rule.
+// A delayed daemon event cannot move either display back to an older snapshot.
+func planSnapshotFresh(hasCurrent bool, currentRunID string, currentVersion int, currentCursor int64, content string, ref uiEventRef) bool {
+	if content == "" {
+		return false
+	}
+	if !hasCurrent {
+		return true
+	}
+	runID := strings.TrimSpace(ref.RunID)
+	if runID != "" && currentRunID != "" && runID != currentRunID {
+		return false
+	}
+	version := planSnapshotVersion(content)
+	switch {
+	case currentVersion > 0 && version == 0:
+		return false
+	case version > 0 && currentVersion > 0 && version < currentVersion:
+		return false
+	case version == currentVersion && ref.Cursor > 0 && currentCursor > 0 && ref.Cursor <= currentCursor:
+		return false
+	}
+	return true
+}
+
+func (m *uiModel) applyBackgroundPlanSnapshot(content string, ref uiEventRef) bool {
+	content = strings.TrimSpace(textutil.CleanUTF8(content))
+	if ref.RunID != m.backgroundRunID || !planSnapshotFresh(m.backgroundPlanTotal > 0, m.backgroundRunID, m.backgroundPlanVersion, m.backgroundPlanCursor, content, ref) {
+		return false
+	}
+	var snapshot struct {
+		Plan []struct {
+			Status string `json:"status"`
+		} `json:"plan"`
+	}
+	if json.Unmarshal([]byte(content), &snapshot) != nil || len(snapshot.Plan) == 0 {
+		return false
+	}
+	m.backgroundPlanTotal = len(snapshot.Plan)
+	m.backgroundPlanResolved = 0
+	for _, step := range snapshot.Plan {
+		if step.Status == "completed" || step.Status == "cancelled" {
+			m.backgroundPlanResolved++
+		}
+	}
+	m.backgroundPlanVersion = planSnapshotVersion(content)
+	if ref.Cursor > m.backgroundPlanCursor {
+		m.backgroundPlanCursor = ref.Cursor
 	}
 	return true
 }

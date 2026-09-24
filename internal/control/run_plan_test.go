@@ -158,6 +158,69 @@ func TestRunPlanIssuesStableStepIDsAndVersionsCompleteSnapshots(t *testing.T) {
 	}
 }
 
+func TestRunPlanEvidenceRevisionUsesCurrentBoundSuccessfulChecks(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{Step: "Check the result", Status: "in_progress", SuccessCriteria: "result is correct", VerificationRequired: true},
+		{Step: "Check the independent report", Status: "pending", SuccessCriteria: "report is correct", VerificationRequired: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested := []string{first.Plan.Steps[0].StepID}
+	initial, err := store.RunPlanEvidenceRevision(ctx, identity.TenantID, run.ID, requested)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendCheck := func(stepID, status string) {
+		t.Helper()
+		payload, _ := json.Marshal(map[string]interface{}{"evidence": map[string]interface{}{
+			"kind": "verification", "status": status, "command": map[string]interface{}{
+				"binding": map[string]interface{}{"step_id": stepID},
+			},
+		}})
+		if _, err := store.AppendEvent(ctx, Event{RunID: run.ID, Type: "evidence.recorded", Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendCheck(first.Plan.Steps[0].StepID, "failed")
+	appendCheck("step_from_other_plan", "succeeded")
+	appendCheck(first.Plan.Steps[1].StepID, "succeeded")
+	unchanged, err := store.RunPlanEvidenceRevision(ctx, identity.TenantID, run.ID, requested)
+	if err != nil || unchanged != initial {
+		t.Fatalf("unrelated evidence changed revision: before=%q after=%q err=%v", initial, unchanged, err)
+	}
+	appendCheck(first.Plan.Steps[0].StepID, "succeeded")
+	changed, err := store.RunPlanEvidenceRevision(ctx, identity.TenantID, run.ID, requested)
+	if err != nil || changed == initial {
+		t.Fatalf("bound successful check did not change revision: before=%q after=%q err=%v", initial, changed, err)
+	}
+}
+
+func TestRunPlanReportsEveryMissingRequiredCheckInRejectedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{Step: "Check build", Status: "in_progress", SuccessCriteria: "build succeeded", VerificationRequired: true, WorkUnit: true},
+		{Step: "Check deployment", Status: "pending", SuccessCriteria: "deployment healthy", VerificationRequired: true, WorkUnit: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Step: "Check build", Status: "completed", WorkUnit: true},
+		{StepID: first.Plan.Steps[1].StepID, Step: "Check deployment", Status: "completed", WorkUnit: true},
+	})
+	if err == nil || !strings.Contains(err.Error(), "2 plan step(s)") || !strings.Contains(err.Error(), "Check build") || !strings.Contains(err.Error(), "Check deployment") {
+		t.Fatalf("missing checks were not reported together: %v", err)
+	}
+	latest, err := store.LatestRunPlan(ctx, identity.TenantID, run.ID)
+	if err != nil || latest.Version != first.Plan.Version {
+		t.Fatalf("rejected snapshot changed the plan: %+v err=%v", latest, err)
+	}
+}
+
 func TestFirstRunPlanIgnoresUntrustedClientStepIDs(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)

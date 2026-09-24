@@ -589,9 +589,16 @@ Completion precondition failures are typed separately from storage failures.
 One failed `finish_run` may be retried after a genuinely changed plan or a
 successful `verify` call; unchanged retries, rejection, and unknown failures do
 not unlock it. Successful completion remains final and the retry is bounded.
+An identical rejected `update_plan` is retried only after its requested
+completed steps receive new successful bound verification or the durable Plan
+version changes. A check for a sibling step that the update did not complete
+does not unlock it; the Plan store still revalidates every transition.
 Closing a work unit with declared required verification is rejected before
 commit if its checks have not passed. The plan and evidence window stay open
-so Main can verify and resubmit the same completed snapshot.
+so Main can verify and resubmit the same completed snapshot. The rejection
+derives each blocked step's next action from its bound evidence: a step with no
+bound check must become the in_progress step before `verify`, while a stale or
+failed bound check is rechecked with `replaces` and keeps its step.
 Every plan-bound check records the server-issued step id even though the public
 call does not carry that runtime-owned id. The active required step wins;
 otherwise the earliest pending required step in the active work unit is selected
@@ -788,6 +795,16 @@ and mixed observe/mutate pipelines are refused before registration. This limit
 does not prevent final state recording: writeback is a separate, one-shot
 watch-finalization run after the external observation reaches a terminal state.
 
+The active-turn guard recognizes repeated observation of external state from
+the same read-only command catalog, plus a guard-only table: provider-native
+waits such as `kubectl rollout status`, `kubectl wait`, `argocd app wait`, and
+`gh run watch`, and the AWS and Azure CLI read-operation conventions. The table
+only restricts; its forms still require approval. A loop over one unchanged
+target, including a finite retry loop, must move to a durable watcher, a single
+provider-native wait, or an actionable handoff. A bounded read of distinct
+targets remains an ordinary batch. The guard does not classify a mutation as a
+status check.
+
 Successful registration is itself a trusted lifecycle handoff. The kernel
 records a structured `waiting_external` outcome and ends the foreground turn
 without asking the model to call `finish_run` or produce another response.
@@ -797,7 +814,16 @@ therefore has no active person run and no model-token cost; a new user task can
 start immediately. Terminal finalization is still real daemon work under the
 one-active-run policy, so clients label that short interval as background
 finalization and queue concurrent input honestly instead of displaying a
-foreground elapsed-time clock.
+foreground elapsed-time clock. During finalization the CLI shows elapsed time,
+accepted plan progress, and a bounded action count in its status line; it does
+not replay background tool output into the transcript. An interrupted
+finalization remains visibly unfinished.
+Terminal watch products are idempotent and compensated on ordinary worker
+ticks as well as startup. A terminal group has one winning member that owns
+the child Run and notification; non-winning members settle their own bookkeeping
+without emitting a second result. A crash after enqueue but before the winning
+member's finalized mark therefore does not leave a permanent backlog or create
+a duplicate child.
 
 ### Failure classification
 
@@ -812,6 +838,10 @@ only correct remedy.
 Event `error_category` comes from the structured class the tools layer already
 appended, not from re-reading the prose hint. Do not add a second classifier
 that parses enriched error text.
+An active-turn polling block or repeated no-progress refusal is a
+`policy_redirect` with `effect_state: not_dispatched`, not a malformed model
+protocol call. Daily reports count these separately by `error_code` so model
+quality comparisons do not absorb runtime policy decisions.
 
 Human waits and human decisions use the same structured class. A parked
 approval reaches the model and the event stream as `human_wait` (code

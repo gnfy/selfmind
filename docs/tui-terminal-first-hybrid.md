@@ -321,7 +321,7 @@ substrate). Document results in this file.
   than a red execution failure, while a command that actually ran and failed
   remains visibly failed.
 - Active command output is a bounded three-line tail. A terminal run state
-  (`done`, `error`, or `cancelled`) finalizes every unfinished tool cell as an
+  (`done`, `error`, `cancelled`, or `interrupted`) finalizes every unfinished tool cell as an
   interrupted error before committing it. Only an intentional spectator detach
   discards its transient projection because the daemon run remains active. Thus
   no terminal run leaves a `Running` row in the redraw region.
@@ -471,8 +471,10 @@ mistaken for one request exceeding the displayed context capacity.
   observation is transient status-bar state
   (`Watcher <id> | status: succeeded | task: waiting_finalization`, or
   `blocked_environment` when the check never observed the external state), and
-  the finalization run itself renders as `background watcher finalizing`
-  instead of exposing its internal prompt. The
+  the finalization run itself renders as `background watcher finalizing` with
+  elapsed time, accepted plan progress, and a bounded action count in the
+  status line instead of exposing its internal prompt. A finalization whose
+  plan is unresolved shows `needs attention` when it stops. The
   current user run is never interrupted; finalization still obeys the
   per-person durable queue.
 - The transient observation is owned by its exact watcher ID. Its matching

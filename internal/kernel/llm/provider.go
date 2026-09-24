@@ -183,6 +183,31 @@ type Provider interface {
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
 }
 
+// ProviderRouteInfo is presentation-safe routing identity for usage evidence.
+// It contains no endpoint, credential, or request content. A dynamic role
+// router resolves it for the call; transparent wrappers forward the probe.
+type ProviderRouteInfo struct {
+	Provider string
+	Model    string
+}
+
+type ProviderRouteDescriber interface {
+	DescribeProviderRoute() ProviderRouteInfo
+}
+
+func DescribeProviderRoute(p Provider) ProviderRouteInfo {
+	if p == nil {
+		return ProviderRouteInfo{}
+	}
+	if describer, ok := p.(ProviderRouteDescriber); ok {
+		return describer.DescribeProviderRoute()
+	}
+	if inner, ok := unwrapProvider(p); ok {
+		return DescribeProviderRoute(inner)
+	}
+	return ProviderRouteInfo{Model: GetModelName(p)}
+}
+
 // RequestFingerprint describes the provider-adapter request shape without
 // retaining prompt text, tool schemas, headers, or credentials. PrefixHash is
 // built from the cache-relevant stable blocks; RequestHash covers the complete

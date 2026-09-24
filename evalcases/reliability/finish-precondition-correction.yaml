@@ -22,6 +22,12 @@ expect:
   verification_state: passed
   max_tool_errors: 2
   max_duration_seconds: 180
+  contains:
+    - "closure.txt"
+    - "READY"
+  must_not_contain:
+    - "SelfMind stopped without a final response"
+    - "Retrying the plan close-out"
 assert_state:
   - on: file
     path: closure.txt

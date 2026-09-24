@@ -77,6 +77,11 @@ func (d *Server) startExternalWatchWorker(ctx context.Context, interval time.Dur
 
 func (d *Server) runExternalWatchPass(ctx context.Context) {
 	defer func() {
+		// A crash or a failed write after the idempotent finalization enqueue
+		// can leave a terminal watch unmarked while its child Run succeeds.
+		// Compensate on ordinary ticks as well as startup; otherwise that row
+		// remains in the backlog until the daemon next restarts.
+		d.compensateUnfinalizedExternalWatches(ctx, time.Now().Add(-externalWatchRecoveryLookback), 1)
 		d.reconcileExternalWatchFinalizations(ctx)
 		d.runExternalWatchNotificationPass(ctx)
 	}()
@@ -621,10 +626,12 @@ func (d *Server) recoverExternalWatchVerdicts(ctx context.Context) {
 		log.Info("external watch verdict revised", "watch_id", watch.ID, "status", status)
 	}
 	// Revision reset finalized=0, so revised watches are compensated below
-	// together with genuinely interrupted finalizations. Loop until the scan
-	// drains (each finalize marks its watch, so progress is guaranteed), with
-	// a hard pass cap so a pathological backlog cannot block startup.
-	for pass := 0; pass < 20; pass++ {
+	// together with genuinely interrupted finalizations.
+	d.compensateUnfinalizedExternalWatches(ctx, since, 20)
+}
+
+func (d *Server) compensateUnfinalizedExternalWatches(ctx context.Context, since time.Time, maxPasses int) {
+	for pass := 0; pass < maxPasses; pass++ {
 		unfinalized, err := d.Control.ListUnfinalizedExternalWatches(ctx, since, 100)
 		if err != nil {
 			log.Warn("external watch finalization compensation scan failed", "error", err)

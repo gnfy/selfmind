@@ -79,6 +79,34 @@ func TestClearActivePlanResetsProjectionOwnership(t *testing.T) {
 	}
 }
 
+func TestBackgroundPlanUsesSameVersionAndCursorOrdering(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.markBackgroundRun("run-watch", "watch-1", "external_watch")
+	current := `{"plan_version":3,"plan":[{"status":"completed"},{"status":"in_progress"}]}`
+	if !model.applyBackgroundPlanSnapshot(current, uiEventRef{RunID: "run-watch", Cursor: 30}) {
+		t.Fatal("current background plan was refused")
+	}
+	for _, stale := range []struct {
+		content string
+		ref     uiEventRef
+	}{
+		{`{"plan_version":2,"plan":[{"status":"pending"}]}`, uiEventRef{RunID: "run-watch", Cursor: 31}},
+		{`{"plan_version":3,"plan":[{"status":"pending"}]}`, uiEventRef{RunID: "run-watch", Cursor: 29}},
+		{`{"plan_version":4,"plan":[{"status":"pending"}]}`, uiEventRef{RunID: "run-other", Cursor: 40}},
+	} {
+		if model.applyBackgroundPlanSnapshot(stale.content, stale.ref) {
+			t.Fatalf("stale or foreign plan was accepted: %+v", stale)
+		}
+	}
+	if model.backgroundPlanResolved != 1 || model.backgroundPlanTotal != 2 || model.backgroundPlanVersion != 3 || model.backgroundPlanCursor != 30 {
+		t.Fatalf("background plan regressed: %+v", model)
+	}
+	model.markBackgroundRun("run-next", "watch-2", "external_watch")
+	if model.backgroundPlanVersion != 0 || model.backgroundPlanCursor != 0 || model.backgroundPlanTotal != 0 {
+		t.Fatal("new background run inherited the old projection")
+	}
+}
+
 func TestLivePlanClearsWhenRunFinishes(t *testing.T) {
 	model := NewController("", "", nil, "").model
 	model.width = 100

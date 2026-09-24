@@ -135,6 +135,13 @@ func (p *controlRunPlanProjection) ValidateCompletion(ctx context.Context) error
 	return nil
 }
 
+func (p *controlRunPlanProjection) GuardrailRevision(ctx context.Context, completedStepIDs []string) (string, error) {
+	if p == nil || p.coordinator == nil || p.coordinator.srv == nil || p.coordinator.srv.Control == nil || p.identity == nil || p.run == nil {
+		return "", fmt.Errorf("run plan projection is unavailable")
+	}
+	return p.coordinator.srv.Control.RunPlanEvidenceRevision(ctx, p.identity.TenantID, p.run.ID, completedStepIDs)
+}
+
 func (p *controlRunPlanProjection) ValidateVerification(ctx context.Context, binding verification.Binding, cwd string) error {
 	return p.coordinator.srv.Control.ValidateVerificationReplacement(ctx, p.identity.TenantID, p.run.ID, binding, cwd)
 }

@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,13 @@ type toolGuardrailRecord struct {
 	LastErrorHash  string
 	LastResultHash string
 	UpdatedAt      time.Time
+}
+
+// planGuardrailRevision is optional because unit and legacy plan projections
+// have no durable evidence ledger. The production projection supplies a
+// revision that changes when a plan or successful verification changes.
+type planGuardrailRevision interface {
+	GuardrailRevision(context.Context, []string) (string, error)
 }
 
 func NewToolGuardrails() *ToolGuardrails {
@@ -50,6 +58,23 @@ func (g *ToolGuardrails) Middleware(next ToolExecutor) ToolExecutor {
 		}
 		runID := guardrailRunID(args)
 		key := guardrailKey(runID, toolName, args)
+		if toolName == "update_plan" {
+			if projection, ok := runPlanProjectionFromArgs(args).(planGuardrailRevision); ok {
+				var completedStepIDs []string
+				if steps, parseErr := planStepsFromArgs(args["plan"]); parseErr == nil {
+					for _, step := range steps {
+						if step.Status == "completed" && step.StepID != "" {
+							completedStepIDs = append(completedStepIDs, step.StepID)
+						}
+					}
+				}
+				revision, err := projection.GuardrailRevision(ContextFromArgs(args), completedStepIDs)
+				if err != nil {
+					return "", err
+				}
+				key += "|" + revision
+			}
+		}
 
 		g.mu.Lock()
 		rec := g.records[key]
@@ -77,7 +102,10 @@ func (g *ToolGuardrails) Middleware(next ToolExecutor) ToolExecutor {
 // the kernel recovery policy must not count it as a failed strategy attempt,
 // and the model receives the same structured alternatives as a policy refusal.
 func guardrailRefusal(code, message string, alternatives ...string) error {
-	return newStableToolRecoveryError(errors.New(message), code, "blocked_model_protocol", message,
+	// These calls are deliberately redirected by runtime policy before dispatch.
+	// They are not malformed provider tool calls; counting them as protocol
+	// failures makes model comparisons and the daily failure rate misleading.
+	return newStableToolRecoveryError(errors.New(message), code, "policy_redirect", message,
 		"Use the typed alternatives or finish with an actionable blocker; do not retry a cosmetic variant.",
 		"planning", "different_strategy", "not_dispatched", false, alternatives...)
 }
@@ -122,7 +150,7 @@ func noProgressToolCall(toolName string, args map[string]interface{}) bool {
 		return true
 	}
 	command, _ := args["command"].(string)
-	return isRemoteStatusCommand(command)
+	return isRemoteObservationCommand(command)
 }
 
 func activeTurnPollingReason(toolName string, args map[string]interface{}) string {
@@ -130,7 +158,7 @@ func activeTurnPollingReason(toolName string, args map[string]interface{}) strin
 		return ""
 	}
 	command, _ := args["command"].(string)
-	if !isRemoteStatusCommand(command) || !containsPollingLoop(command) {
+	if !isRemoteObservationCommand(command) || !containsPollingLoop(command) {
 		return ""
 	}
 	return "tool guardrail blocked active-turn polling of external state"
@@ -234,9 +262,58 @@ func forClauseWaits(clause *syntax.ForClause) bool {
 		return true
 	}
 	if finiteLiteralForLoop(clause) {
-		return false
+		// A finite list can still repeat the SAME observation until its state
+		// changes. A read of each distinct item is a batch, even with pacing.
+		return loopHasRemoteObservation(clause.Do) && !loopObservesIterator(clause)
 	}
 	return stmtsWait(clause.Do)
+}
+
+func loopHasRemoteObservation(stmts []*syntax.Stmt) bool {
+	found := false
+	for _, stmt := range stmts {
+		syntax.Walk(stmt, func(node syntax.Node) bool {
+			if call, ok := node.(*syntax.CallExpr); ok && remoteObservationCall(call) {
+				found = true
+				return false
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func loopObservesIterator(clause *syntax.ForClause) bool {
+	iter, ok := clause.Loop.(*syntax.WordIter)
+	if !ok || iter.Name == nil || iter.Name.Value == "" {
+		return false
+	}
+	found := false
+	allDistinct := true
+	for _, stmt := range clause.Do {
+		syntax.Walk(stmt, func(node syntax.Node) bool {
+			call, ok := node.(*syntax.CallExpr)
+			if !ok || !remoteObservationCall(call) {
+				return true
+			}
+			found = true
+			usesIterator := false
+			syntax.Walk(call, func(part syntax.Node) bool {
+				if param, ok := part.(*syntax.ParamExp); ok && param.Param != nil && param.Param.Value == iter.Name.Value {
+					usesIterator = true
+				}
+				return true
+			})
+			if !usesIterator {
+				allDistinct = false
+			}
+			return false
+		})
+	}
+	return found && allDistinct
 }
 
 func stmtsWait(stmts []*syntax.Stmt) bool {
@@ -293,21 +370,157 @@ func finiteLiteralForLoop(clause *syntax.ForClause) bool {
 	return true
 }
 
-func isRemoteStatusCommand(command string) bool {
-	normalized := strings.ToLower(strings.Join(strings.Fields(command), " "))
-	for _, pattern := range []string{
-		"gcloud builds describe", "gcloud builds list",
-		"argocd app get", "argocd app wait",
-		"kubectl get", "kubectl wait", "kubectl rollout status",
-		"gh run view", "gh run watch", "gh run list",
-		"aws codebuild batch-get-builds", "aws cloudformation describe-stacks",
-		"az deployment show",
-	} {
-		if strings.Contains(normalized, pattern) {
-			return true
+func isRemoteObservationCommand(command string) bool {
+	return remoteObservationCommandDepth(command, 0)
+}
+
+func remoteObservationCommandDepth(command string, depth int) bool {
+	if depth > 4 {
+		return false
+	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
+	if err != nil || file == nil {
+		return false
+	}
+	found := false
+	syntax.Walk(file, func(node syntax.Node) bool {
+		call, ok := node.(*syntax.CallExpr)
+		if !ok || found {
+			return !found
+		}
+		if nested, ok := nestedShellCommand(call); ok && remoteObservationCommandDepth(nested, depth+1) {
+			found = true
+			return false
+		}
+		if remoteObservationCall(call) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func remoteObservationCall(call *syntax.CallExpr) bool {
+	if call == nil || len(call.Args) == 0 {
+		return false
+	}
+	words := make([]string, 0, len(call.Args))
+	for _, arg := range call.Args {
+		value, static := staticObservationWord(arg)
+		if !static {
+			value = "__dynamic__"
+		}
+		words = append(words, value)
+	}
+	// These wrappers alter invocation mechanics, not the observation's target.
+	// Only known forms are unwrapped; unknown options remain unclassified.
+unwrap:
+	for depth := 0; depth < 3 && len(words) > 0; depth++ {
+		wrapper := strings.ToLower(filepath.Base(words[0]))
+		switch wrapper {
+		case "command", "timeout":
+			inner, ok := observationWrappedCommand(wrapper, words[1:])
+			if !ok {
+				return false
+			}
+			words = inner
+		case "env":
+			inner, ok := externalObservationEnvCommand(words[1:])
+			if !ok {
+				return false
+			}
+			words = inner
+		default:
+			break unwrap
 		}
 	}
+	if len(words) == 0 {
+		return false
+	}
+	program := strings.ToLower(filepath.Base(words[0]))
+	args, ok := observationCommandArgs(program, words[1:])
+	if !ok {
+		return false
+	}
+	if rule, ok := observationRuleByProgram[program]; ok && rule.external && rule.matches(args) && (rule.verify == nil || rule.verify(args)) {
+		return true
+	}
+	rule, ok := pollingObservationRules[program]
+	return ok && rule.matches(args) && (rule.verify == nil || rule.verify(args))
+}
+
+// pollingObservationRules recognizes external reads for this guard only. The
+// guard restricts, so a form listed here never widens what runs without
+// approval. Provider-native waits block until a condition holds and stay out of
+// the approval catalog: one wait is the recommended alternative, a loop around
+// it is polling. AWS and Azure reads follow their CLIs' naming conventions,
+// while the catalog approves their operations one reviewed form at a time.
+var pollingObservationRules = map[string]observationRule{
+	"kubectl": {prefixes: [][]string{{"rollout", "status"}, {"wait"}}},
+	"argocd":  {prefixes: [][]string{{"app", "wait"}}},
+	"gh":      {prefixes: [][]string{{"run", "watch"}, {"pr", "checks"}}},
+	"aws":     {anyArgs: true, verify: awsReadOperation},
+	"az":      {anyArgs: true, verify: azReadOperation},
+}
+
+// awsReadOperation accepts an operation named after a Describe, Get, List or
+// BatchGet API action, or a built-in waiter.
+func awsReadOperation(args []string) bool {
+	words := leadingCommandWords(args)
+	if len(words) < 2 {
+		return false
+	}
+	operation := strings.ToLower(words[1])
+	return operation == "wait" || strings.HasPrefix(operation, "describe-") || strings.HasPrefix(operation, "get-") ||
+		strings.HasPrefix(operation, "list-") || strings.HasPrefix(operation, "batch-get-")
+}
+
+// azReadOperation accepts a command whose final word before its arguments is a
+// read verb, as in `az deployment group show`.
+func azReadOperation(args []string) bool {
+	words := leadingCommandWords(args)
+	if len(words) < 2 {
+		return false
+	}
+	switch strings.ToLower(words[len(words)-1]) {
+	case "show", "list", "wait":
+		return true
+	}
 	return false
+}
+
+func leadingCommandWords(args []string) []string {
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			return args[:i]
+		}
+	}
+	return args
+}
+
+func externalObservationEnvCommand(args []string) ([]string, bool) {
+	for len(args) > 0 {
+		switch args[0] {
+		case "-u", "--unset":
+			if len(args) < 3 || args[1] == "" {
+				return nil, false
+			}
+			args = args[2:]
+		case "-i", "--ignore-environment", "--":
+			args = args[1:]
+		default:
+			if strings.HasPrefix(args[0], "--unset=") || (strings.Contains(args[0], "=") && !strings.HasPrefix(args[0], "-")) {
+				args = args[1:]
+				continue
+			}
+			if strings.HasPrefix(args[0], "-") {
+				return nil, false
+			}
+			return args, true
+		}
+	}
+	return nil, false
 }
 
 func (g *ToolGuardrails) sweepLocked() {

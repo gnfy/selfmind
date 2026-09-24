@@ -79,6 +79,9 @@ func TestPolicyGatewayRoutesRoleProfile(t *testing.T) {
 	})
 
 	provider := gw.ProviderForRole(RoleMemoryExtract)
+	if route := DescribeProviderRoute(provider); route.Provider != "gemini" || route.Model != "memory-model" {
+		t.Fatalf("role route attribution = %+v", route)
+	}
 	resp, err := provider.Chat(context.Background(), ChatRequest{})
 	if err != nil {
 		t.Fatalf("Chat returned error: %v", err)

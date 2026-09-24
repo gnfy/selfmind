@@ -102,6 +102,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, workingTick()
 
+	case MsgBackgroundTick:
+		if msg.RunID != m.backgroundRunID || !m.backgroundDaemonRunActive() {
+			return m, nil
+		}
+		return m, backgroundTick(msg.RunID)
+
 	case MsgTerminalGone:
 		// The controlling terminal is gone. Quit rather than run on against it:
 		// the read loop already ended silently, so only timers are left and the
@@ -639,6 +645,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addMessage("notice", "Queued task started: "+title)
 		}
 		if m.backgroundDaemonRunActive() {
+			if !m.backgroundTickRunning {
+				m.backgroundTickRunning = true
+				return m, backgroundTick(msg.RunID)
+			}
 			return m, spinnerCmd
 		}
 		return m, workingTick()
@@ -664,6 +674,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		awaitingSynchronousDone := m.daemonRunAwaitingDone
 		m.daemonRunOwned = false
 		m.daemonRunActive = false
+		m.backgroundTickRunning = false
 		m.daemonRunID = ""
 		m.daemonRunQueueID = ""
 		m.daemonRunStarted = time.Time{}
@@ -805,7 +816,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case MsgToolStart:
-		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
+		if m.backgroundRunEvent(msg.Event) {
+			m.backgroundToolCount++
+			m.backgroundLastAction = toolAction(msg.ToolName, nil, "", false)
 			return m, spinnerCmd
 		}
 		// Anonymous mutable rows cannot be completed deterministically and would
@@ -849,7 +865,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgPlanUpdated:
-		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
+		if m.backgroundRunEvent(msg.Event) {
+			m.applyBackgroundPlanSnapshot(msg.Content, msg.Event)
 			return m, spinnerCmd
 		}
 		if isTerminalRunStatus(m.runStatus) {

@@ -171,6 +171,18 @@ explicit /new, /resume, /choose
   (`RetargetInteractionContinuation`). A workspace, execution-root, or
   checkpoint mismatch creates a correctly scoped transfer child at
   finalization, because a Run's execution domain never changes in place.
+- Repeating an identical `update_plan` after a verification precondition fails
+  remains blocked until the accepted Plan version or a successful check bound
+  to one of its current steps changes. The retry guard uses that durable
+  evidence revision; it does not treat a cosmetic argument rewrite, an
+  unrelated check, or a failed check as progress. A rejected multi-step close
+  reports every open verification obligation, each with its next action,
+  without committing part of the proposed snapshot.
+- A Run that ends without final prose renders its result from runtime state,
+  never from progress narration: a structured `finish_run` outcome when one was
+  recorded, otherwise the accepted Plan's completed and open steps followed by
+  recorded file and verification evidence. Display bounds count characters, so
+  CJK text keeps the same visible length as ASCII.
 - Read-only discovery uses the same trusted registration facts for dispatch,
   recovery, and plan-progress accounting. A proven read-only command (ledger
   effect class `observation`) is discovery too and leaves the selection window

@@ -129,7 +129,7 @@ func (p *strategyRecoveryPolicy) BeforeDispatch(attempt RecoveryAttempt) error {
 	for _, failure := range failures {
 		if failure.Attempt.InputSignature == attempt.InputSignature {
 			return newRecoveryPolicyError(
-				"recovery_attempt_repeated", "blocked_model_protocol", "different_strategy", "not_dispatched",
+				"recovery_attempt_repeated", "policy_redirect", "different_strategy", "not_dispatched",
 				"This exact failed tool attempt was already tried without new evidence or state.",
 				appendRecoveryAlternatives(last.Alternatives, "inspect_current_state", "change_strategy", "report_actionable_blocker"),
 			)
@@ -151,7 +151,7 @@ func (p *strategyRecoveryPolicy) BeforeDispatch(attempt RecoveryAttempt) error {
 	}
 	if last.Retryability == "different_strategy" || len(failures) >= 2 {
 		return newRecoveryPolicyError(
-			"recovery_strategy_exhausted", "blocked_model_capability", "different_strategy", "not_dispatched",
+			"recovery_strategy_exhausted", "policy_redirect", "different_strategy", "not_dispatched",
 			"This strategy already failed for the current plan step and target. A cosmetic argument change is not new progress.",
 			appendRecoveryAlternatives(last.Alternatives, "inspect_current_state", "change_strategy", "report_actionable_blocker"),
 		)

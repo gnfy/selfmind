@@ -236,7 +236,7 @@ func upsertProjectedWorkUnitTx(ctx context.Context, tx *sql.Tx, unit *RunWorkUni
 		if !workUnitTerminal(status) {
 			if unit.PlanStatus == "completed" {
 				status = WorkUnitCompleted
-				verification, refs, _ = workUnitEvidenceProjectionTx(ctx, tx, unit.RunID, startedCursor, finishCursor)
+				verification, refs, _, _ = workUnitEvidenceProjectionTx(ctx, tx, unit.RunID, startedCursor, finishCursor)
 			} else {
 				status = WorkUnitCancelled
 				verification, refs = "", "[]"
@@ -324,32 +324,35 @@ type workUnitEvidence struct {
 	} `json:"command"`
 }
 
-func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64, stepIDs ...string) (string, string, string) {
+// workUnitEvidenceProjectionTx also reports how many plan-bound checks it
+// considered, or -1 when the evidence could not be read. With a step filter,
+// zero means no check in the window is bound to that step.
+func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64, stepIDs ...string) (string, string, string, int) {
 	knownPlanSteps := map[string]bool{}
 	stepRows, stepErr := tx.QueryContext(ctx, `SELECT DISTINCT step_id FROM run_plan_steps WHERE run_id=?`, runID)
 	if stepErr != nil {
-		return "blocked", "[]", "Verification obligation identities are unavailable."
+		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
 	}
 	for stepRows.Next() {
 		var stepID string
 		if stepRows.Scan(&stepID) != nil {
 			_ = stepRows.Close()
-			return "blocked", "[]", "Verification obligation identities are unreadable."
+			return "blocked", "[]", "Verification obligation identities are unreadable.", -1
 		}
 		knownPlanSteps[stepID] = true
 	}
 	if err := stepRows.Err(); err != nil {
 		_ = stepRows.Close()
-		return "blocked", "[]", "Verification obligation identities are unavailable."
+		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
 	}
 	if err := stepRows.Close(); err != nil {
-		return "blocked", "[]", "Verification obligation identities are unavailable."
+		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(payload_json,'{}') FROM task_events
 		WHERE run_id=? AND COALESCE(cursor,0)>? AND COALESCE(cursor,0)<=? AND type='evidence.recorded'
 		ORDER BY COALESCE(cursor,0), rowid`, runID, startedCursor, finishedCursor)
 	if err != nil {
-		return "blocked", "[]", "Verification evidence is unavailable."
+		return "blocked", "[]", "Verification evidence is unavailable.", -1
 	}
 	defer rows.Close()
 	var mutations []verification.Mutation
@@ -357,13 +360,13 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 	for rows.Next() {
 		var raw string
 		if rows.Scan(&raw) != nil {
-			return "blocked", "[]", "Verification evidence is unreadable."
+			return "blocked", "[]", "Verification evidence is unreadable.", -1
 		}
 		var payload struct {
 			Evidence workUnitEvidence `json:"evidence"`
 		}
 		if json.Unmarshal([]byte(raw), &payload) != nil || payload.Evidence.Kind == "" || (payload.Evidence.Kind == "verification" && payload.Evidence.Command == nil) {
-			return "blocked", "[]", "Verification evidence is malformed."
+			return "blocked", "[]", "Verification evidence is malformed.", -1
 		}
 		evidence := payload.Evidence
 		if evidence.Kind == "mutation" {
@@ -397,7 +400,7 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
 	}
 	if err := rows.Err(); err != nil {
-		return "blocked", "[]", "Verification evidence is unavailable."
+		return "blocked", "[]", "Verification evidence is unavailable.", -1
 	}
 	state, summary := verification.StateWithMutations(mutations, checks)
 	refs := []string{}
@@ -411,7 +414,7 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 	if state == "stale" {
 		state = "not_run"
 	}
-	return state, string(refsJSON), summary
+	return state, string(refsJSON), summary, len(checks)
 }
 
 func (s *Store) ListRunWorkUnits(ctx context.Context, tenantID, runID string) ([]RunWorkUnit, error) {

@@ -42,6 +42,7 @@ type dailyQualityStats struct {
 	ApprovalCacheMissTokens int64
 	ApprovalUsageByRole     map[string]int
 	ProviderCalls           int
+	ProviderRoutes          map[string]dailyRouteUsage
 	InputTokens             int64
 	OutputTokens            int64
 	CacheReadTokens         int64
@@ -52,6 +53,7 @@ type dailyQualityStats struct {
 	ToolRejectedPreDispatch int
 	ToolFailures            int
 	ToolPolicyRedirects     int
+	ToolRedirectReasons     map[string]int
 	ToolFailureClasses      map[string]int
 	ToolFailurePhases       map[string]int
 	ToolEffectStates        map[string]int
@@ -77,6 +79,15 @@ type dailyQualityStats struct {
 	ContextToolSchemaTokens int64
 	FingerprintStates       map[string]int
 	ProviderPrefixHashes    map[string]bool
+}
+
+type dailyRouteUsage struct {
+	Calls           int
+	DurationMS      int64
+	InputTokens     int64
+	CacheReadTokens int64
+	OutputTokens    int64
+	ReasoningTokens int64
 }
 
 func parseDailyReportWindow(input string) (time.Duration, error) {
@@ -117,6 +128,8 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		ApprovalCounts:         make(map[string]int),
 		MemoryDisposition:      make(map[string]int),
 		ToolFailureClasses:     make(map[string]int),
+		ProviderRoutes:         make(map[string]dailyRouteUsage),
+		ToolRedirectReasons:    make(map[string]int),
 		ToolFailurePhases:      make(map[string]int),
 		ToolEffectStates:       make(map[string]int),
 		ToolCallsByName:        make(map[string]int),
@@ -208,13 +221,32 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			}
 		case "provider.call.usage":
 			var p struct {
-				InputTokens     int64 `json:"input_tokens"`
-				OutputTokens    int64 `json:"output_tokens"`
-				CacheReadTokens int64 `json:"cache_read_input_tokens"`
-				CacheMissTokens int64 `json:"cache_miss_input_tokens"`
-				DurationMS      int64 `json:"duration_ms"`
+				Provider        string `json:"provider"`
+				Model           string `json:"model"`
+				Role            string `json:"role"`
+				InputTokens     int64  `json:"input_tokens"`
+				OutputTokens    int64  `json:"output_tokens"`
+				ReasoningTokens int64  `json:"reasoning_output_tokens"`
+				CacheReadTokens int64  `json:"cache_read_input_tokens"`
+				CacheMissTokens int64  `json:"cache_miss_input_tokens"`
+				DurationMS      int64  `json:"duration_ms"`
 			}
 			if json.Unmarshal(event.Payload, &p) == nil {
+				route := "unattributed"
+				if p.Provider != "" && p.Model != "" {
+					route = truncate(toOneLine(p.Provider+"/"+p.Model), 120)
+					if p.Role != "" && p.Role != "coding_agent" {
+						route = truncate(toOneLine(p.Role+":"+route), 120)
+					}
+				}
+				usage := stats.ProviderRoutes[route]
+				usage.Calls++
+				usage.DurationMS += p.DurationMS
+				usage.InputTokens += p.InputTokens
+				usage.CacheReadTokens += p.CacheReadTokens
+				usage.OutputTokens += p.OutputTokens
+				usage.ReasoningTokens += p.ReasoningTokens
+				stats.ProviderRoutes[route] = usage
 				stats.ProviderCalls++
 				stats.InputTokens += p.InputTokens
 				stats.OutputTokens += p.OutputTokens
@@ -268,6 +300,11 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 				}
 				if category == "policy_redirect" {
 					stats.ToolPolicyRedirects++
+					code := strings.TrimSpace(p.ErrorCode)
+					if code == "" {
+						code = "unspecified"
+					}
+					stats.ToolRedirectReasons[code]++
 				} else {
 					stats.ToolFailures++
 					stats.ToolFailureClasses[category]++
@@ -505,6 +542,7 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
+	fmt.Fprintf(&sb, "Model routes: %s\n", formatDailyRouteUsage(stats.ProviderRoutes))
 	fmt.Fprintf(&sb, "Approval model (separate from Main and maintenance): %d responses, input %d, cache read %d, uncached %d, output %d; usage unavailable for %d responses; roles %s\n", stats.ApprovalModelCalls, stats.ApprovalInputTokens, stats.ApprovalCacheReadTokens, stats.ApprovalCacheMissTokens, stats.ApprovalOutputTokens, stats.ApprovalUsageMissing, formatCountMap(stats.ApprovalUsageByRole))
 	if stats.ContextSamples > 0 {
 		avgRequest := stats.ContextEstimatedTokens / int64(stats.ContextSamples)
@@ -517,9 +555,9 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 			stats.ContextSamples, avgRequest, avgSchemas, schemaShare,
 			formatCountMap(stats.FingerprintStates), len(stats.ProviderPrefixHashes))
 	}
-	fmt.Fprintf(&sb, "Tools: %d outcome(s), %d dispatched, %d rejected before dispatch; %d failed (%d%%), %d policy redirects; failures by class: %s; phase: %s; effect certainty: %s\n",
+	fmt.Fprintf(&sb, "Tools: %d outcome(s), %d dispatched, %d rejected before dispatch; %d failed (%d%%), %d policy redirects (%s); failures by class: %s; phase: %s; effect certainty: %s\n",
 		stats.ToolCalls, stats.ToolDispatched, stats.ToolRejectedPreDispatch,
-		stats.ToolFailures, toolFailureRate, stats.ToolPolicyRedirects, formatCountMap(stats.ToolFailureClasses),
+		stats.ToolFailures, toolFailureRate, stats.ToolPolicyRedirects, formatCountMap(stats.ToolRedirectReasons), formatCountMap(stats.ToolFailureClasses),
 		formatCountMap(stats.ToolFailurePhases), formatCountMap(stats.ToolEffectStates))
 	if searches := stats.ToolCallsByName["tool_search"]; searches > 0 {
 		fmt.Fprintf(&sb, "Deferred tool discovery: %d tool_search call(s), %d%% of tool calls\n", searches, searches*100/max(stats.ToolCalls, 1))
@@ -674,4 +712,38 @@ func formatCountMap(counts map[string]int) string {
 		parts = append(parts, key+" "+strconv.Itoa(counts[key]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func formatDailyRouteUsage(routes map[string]dailyRouteUsage) string {
+	if len(routes) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(routes))
+	for key, usage := range routes {
+		if usage.Calls > 0 {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return "none"
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		usage := routes[key]
+		if len(parts) == 8 {
+			parts = append(parts, fmt.Sprintf("%d more route(s)", len(keys)-8))
+			break
+		}
+		cachePercent, reasoningPercent := int64(0), int64(0)
+		if usage.InputTokens > 0 {
+			cachePercent = usage.CacheReadTokens * 100 / usage.InputTokens
+		}
+		if usage.OutputTokens > 0 {
+			reasoningPercent = usage.ReasoningTokens * 100 / usage.OutputTokens
+		}
+		parts = append(parts, fmt.Sprintf("%s %d calls, avg %dms, cache %d%%, reasoning %d%%",
+			key, usage.Calls, usage.DurationMS/int64(usage.Calls), cachePercent, reasoningPercent))
+	}
+	return strings.Join(parts, "; ")
 }

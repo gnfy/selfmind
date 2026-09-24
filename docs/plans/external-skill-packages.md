@@ -14,9 +14,22 @@ dependency order; the order is not interchangeable.
 - Owner: SelfMind project owner
 - Approver: project owner
 - Review date: 2026-09-25
-- Status: paused while
-  [`agent-execution-recovery.md`](agent-execution-recovery.md) holds the active
-  slot. The review date stands; no scope item is withdrawn.
+- Status: implemented and closed on 2026-09-24. All four batches landed while
+  the plan was paused, and each verification below is pinned by a test that
+  passes on develop: Batch 1 by
+  `internal/tools/skill_package_contract_test.go`; Batch 2 by the mechanism
+  sections of `docs/skills-architecture.md`, the Skills row of
+  `docs/STATUS.md`, and ADR 0003; Batch 3 by
+  `internal/tools/skill_attribution_observer_test.go` and
+  `internal/control/skill_attribution_test.go`, including the upgrade fixture
+  and the curator-isolation check; Batch 4 by the completion tests in
+  `internal/tools/skill_discovery_test.go` and
+  `internal/gateway/cli/skill_hints_test.go` plus
+  `internal/gateway/router/dollar_mention_test.go`. One verification is weaker
+  than its wording: the whole-inventory completion test uses two Skills, so it
+  shows that candidates come from the full inventory rather than asserting a
+  count above the bounded catalog. Daily operation continues through
+  `docs/STATUS.md`; the out-of-scope items below stay out of scope.
 
 ## Batch 1: Close the package contract
 

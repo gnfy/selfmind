@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will read the contents of value.txt to inspect its current content."
+    },
+    {
+      "usage": {
+        "input_tokens": 11970,
+        "output_tokens": 15,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 18,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1323,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_650140",
+          "Function": "read_file",
+          "Args": "{\"path\":\"value.txt\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EtYDCtMDAWkUfRN7JyZO+q+fJdDL4mBFOs01e7TBgZv/S4GW5awQhDY8VRtJRqA9LIaJxb/s2lHHTq0nbNi8J4Ss87UHXBv5dN0GNosiU6GdlVeXSJ/QcUDGWjTi9//XVQ+8UqfQpusaqfpCkwvnMyciNKmTID/NzzON7Vraxl5Oru1Q0hmcViqcvRaLUU5VSUmS+UyEagUSJDwMdTUjN1bY5OZBtDfyLdo+OOPjetA4VZQEZcSJNYeMc/zjHv1T4BlvMZUSSuMlbkw8uxqY46Q5enEB/+5xTNnB1TY4E1A1vyx683WUgLvlcrAqy3qtN7OZdwTEGQyVOiFjMS6M8Yg1vG4acmhvQp7Qu2CnzFuNg+Y7BQUrroFn5y6B1T1NIMbRmA5VeUGUESCOT5EMqRCvE00W7kcuCRxq55woO/BTnmbEJZoVIfl3Hdici6UNpZRCLpWww/dPvPVS2cRUccvx5dLa9axeP/kX3G4ys5EePOAXDPz5QqpzdCZ8OqT8WieukwNwP99iIqVfrc+Sr08CD+3Q95wqxUg4Z3vhfqQnS2bNHzDPvfn0PD94097rKN/pI/PRofR2mugTtZICt/Jqxdn0wj8WLVrUIRpuW/QLBPWZO6uJncQ="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

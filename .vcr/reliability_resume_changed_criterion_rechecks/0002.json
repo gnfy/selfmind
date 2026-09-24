@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am verifying that value.txt contains exactly READY followed by a"
+    },
+    {
+      "usage": {
+        "input_tokens": 10448,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " newline."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 2,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 88,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 517,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_35951",
+          "Function": "verify",
+          "Args": "{\"command\":\"python3 -c \\\"import sys; sys.exit(0 if open('value.txt', 'rb').read() == b'READY\\\\n' else 1)\\\"\",\"target\":\"value.txt\",\"local_dependencies\":[\"value.txt\"],\"criterion\":\"value.txt contains exactly READY followed by a newline\",\"kind\":\"test\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EtYJCtMJAWkUfRMOHSQLFLvJBKswzb8AB2bPGpWxRXL4vpgnZR4FntWRYmj3k9vcbCURC21ywqQ82tFqxhnGfN1OkbaHvmsXyM10u68m/kTQpJgQAUrCoSuzd0UupUsNP+ZfVwthCkvkOdktzwFl8LAh4qT47pHLbhcPiVW9fhcWqYB5dipxQ2VYD8wyUSP5PHArLce2Isr0j9q0f6HV66MuggOzt8PYA9PI9DMDCNwfSsiZEpboMSOWy//OXSWMScyn1EyM0o3ITtbrMacC/DgrxT7+ZqGlyumuU8po/Gk6oK0fIqDInTZ/JLMxjD9Bl5aBOMnGa4boBxtBsOcL2bjYMefVN8hgL0gK6i88IuqOxM8IljJIojRgGktVjL0F8GDI0/ttuYcBVAE2cv5CqGRoUwl9pFEjvczU6RQmDd4ATYsBHYeH4cfrbg1kYyxnBD2liw+iwF2/b2N9xdJczdKGqRBrJP1+8cWpkvo/1wPEtBMlJrRxHKVN3tgUdj36V3MCF8iSG3XBhedFr5FTcgVIajOJikDrRa9ptTLoeKOM2hN96aTbJLGybo1y2p3eH67t4ALGMlbxupZJK3f7QKtI6EjAJEi8C7InrhoXyntBsA9XZX0TkcYq22woY3uubnJvHIOM2LyBMeVarT2Zwq+hx0EQ+lCb5RZkOn0XK4zXS/eVuPZVYuQ9FqezaA67zJeU6i/1VsJCiG5M64U+RbuZB1x5QpijxHuTXZFcDhXXBRAPd2BI2HPDmt5uPV8tdbG7RwI9jyqSb0YVCJeIV8+e+ihoGuxdI0UuGPNDJXrKf7ZWGFFzyVP0ErnEBifo1Bqaa18P4T0yrNTXX8ri3c3Nkr2l6lQxQMdPNIjj/rPG8yk6OGDd0YM/g9zpLW7LbP7znkB8/4dhDednxKg3h5OpJf9RhNA7Bfk5FCgTFpX6GqMjnO2unCGRHkpYP1C0U7ZkP3x/E3XTFIqhcjvshmaVxrwhJmV7YxGAhLe7MZC7wh9H5ALEeHg1xZbKVlPy1kBi4ssW+H9+wrs/xLUOYTqqe3GgdduZPgdfZls8wbvZ7BiqDihUPexrxHy4+IU2i2Cjwr1eojIIRGxZwtmPbf2n6xwGXjRtS5nCuiGN2kzmDGNtHzcnMFuK3OtMy6/nXZais6oKHPzkk34E5QsCiUyI8u1Yx1yETI4I+iQwPgLOXmqTvBVPzjg+VcSgVx8Oe/8hvteUMjulGouP7n/VlETyz7MBw+cltAymBpAV2tmK9VdmEZRJOhCA/1/JMK9/YjLFqv0yzD4yFXm9ch2HU225+/tG1cZGAKAhCnC1ls3xzdGfmbuoQN6JCy+4/ab3MuUxMbEixu5+U5RByH7wGrSpL8YcY5lCMmZwbTrvki3Oh22L3OuvEUs8ClIMIaXgqwFoHGngzLnxNFPlIP95zR3CCgljaQnwpQMDPnukDQcmhJdWVsGDlghrQRnbQHxspSsls3quitB5AhLN0pQNeHkx5uDJk4kZI8n6nzNve+srMFWCAsz/WhzJrG8VbX2HIg01fzDIAaWLJ7EIv09ULUKYYqKkYIb8MVldhXVSGaappBuDriWKl9THm4cNymxptwvqeOWWyuhswJjb/8ZzlKK2uNkIgbbvZ7akJkEGlN+d0Ci1e8j/Ayg="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -113,13 +113,18 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 				}
 			}
 			if prior, err := c.srv.Control.ListInheritedPlanEvidence(ctx, task.TenantID, run.ID); err == nil {
+				selectedAt := time.Now()
 				for _, item := range prior {
-					selected.InheritedEvidence = append(selected.InheritedEvidence, kernel.InheritedEvidenceItem{
+					evidence := kernel.InheritedEvidenceItem{
 						StepID: item.StepID, SourceRunID: item.SourceRunID, SourceStatus: item.SourceStatus,
 						SourceCriterion: item.SourceCriterion, CriterionChanged: item.CriterionChanged,
 						PriorVerification: item.PriorVerification, LatestCheck: item.LatestCheck,
 						Target: item.Target, CheckedAt: item.CheckedAt,
-					})
+					}
+					if !item.CheckedAt.IsZero() && selectedAt.After(item.CheckedAt) {
+						evidence.Age = selectedAt.Sub(item.CheckedAt)
+					}
+					selected.InheritedEvidence = append(selected.InheritedEvidence, evidence)
 				}
 			}
 		}

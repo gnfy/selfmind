@@ -1,0 +1,45 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I have verified that `value.txt` meets the acceptance condition, marked the verification"
+    },
+    {
+      "usage": {
+        "input_tokens": 4842,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " step as completed, and kept the reporting step pending.\n\nAwaiting your confirmation before reporting the result."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 21,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2566,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

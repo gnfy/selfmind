@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "work_select terminal od -c value.txt 继续 resume"
+}

@@ -326,6 +326,16 @@ why `uniq`, `tee` and `xxd` are excluded while `od` is not. This matters beyond
 auto-approval: the same catalog decides what a durable watcher may re-run
 unattended.
 
+The catalog vouches for the program a bare name resolves to, never for the file
+at a path. A path-qualified program (`./cat`, `bin/git`, `/tmp/x/od`), including
+a path-qualified `sh -c`, `timeout`, or `command` wrapper, is not a proven
+observation: it may be a workspace script that borrows a catalogued basename.
+A relative or workspace-internal entry on the daemon's PATH could still shadow a
+bare name, so keep such entries out of the daemon environment. The same proof
+records the call's ledger effect class as `observation`, which keeps a read
+from closing a continuation's selection window or counting as work; replay,
+recovery, and approval keep their own classes.
+
 Where one subcommand can perform every HTTP method, the catalog and the class
 derivation must resolve that verb with the SAME parser. Two parsers accepting
 different spellings of one flag is how `-X=DELETE` and `-XDELETE` were read as

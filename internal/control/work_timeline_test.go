@@ -938,6 +938,58 @@ func TestWorkEvidenceIgnoresNeverDispatchedLedgerRow(t *testing.T) {
 	}
 }
 
+// A question answered by one proven read — `git status`, `pwd && ls` — did no
+// work, so an interruption must not turn it into resumable Attention. The same
+// row without the observation proof still counts.
+func TestWorkEvidenceIgnoresProvenObservation(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeline := NewWorkTimeline(store)
+	thread, err := timeline.CreateInteraction(ctx, ThreadCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "look only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, thread.legacyTask(), "cli", "look only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO tool_ledger
+		(tenant_id, run_id, tool_call_id, tool_name, args_hash, retry_class, effect_id, plan_version,
+		 plan_step_id, strategy, effect_class, environment_generation, status, created_at, updated_at)
+		VALUES (?, ?, 'call-look', 'terminal', 'hash', 'side_effect', '', 0, '', 'mutate', 'observation', 0, 'completed', 1, 1)`,
+		identity.TenantID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: run.ID, TaskID: thread.ID, RunStatus: "interrupted", Summary: "cut off",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("a look-only interruption must not be attention: %+v", items)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE tool_ledger SET effect_class = 'side_effect' WHERE run_id = ?`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	items, err = timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].RunID != run.ID {
+		t.Fatalf("an unproven command stays work evidence: %+v", items)
+	}
+}
+
 // Explicit /resume is the person saying this work is live again, so pinning it
 // also lifts that Run's Attention dismissal (docs/work-timeline.md).
 func TestPinResumeSelectionClearsAttentionDismissal(t *testing.T) {

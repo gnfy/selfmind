@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am recording the task outcome as waiting for user confirmation"
+    },
+    {
+      "usage": {
+        "input_tokens": 11098,
+        "output_tokens": 11,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " before reporting."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 101,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1105,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_118488",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"waiting_user\",\"need_approve\":false,\"tests\":[\"call_35951\"],\"files\":[\"value.txt\"],\"done\":[\"Verified value.txt contains exactly READY followed by a newline\"],\"next_steps\":[\"Wait for user confirmation before reporting the result\"],\"summary\":\"Verified value.txt contains exactly READY followed by a newline; waiting for user confirmation before reporting the result.\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EswFCskFAWkUfRMGemLJjJ/FDPdDU3Zd+Tn9wLHQ2i/kwjjnnQx5l7LSdUmh0LzVKU3mgWnB4unUfut7c+2pZB43mWEyIhvAZbzZIK9KgdW4ruiEc+yd/Zfo/Jhx7EpRufUZXD6TZFvI1JJ0b18V3qyd8TaM+DN6a9+AO7ka+20H4hf8Vi+QnSX4E5sJw1sVkILX691FGBGCi+56JUktYu4pM1+mUXPH4SP06j/wMPUuSlD0pUlVQE4ZiFhvxc/rhhtPoKvVDiwLx2uD9u8lYG68V0y5Hm+xMzeJOk8wb/SW6wQ70SNpGDSaAM0NbPw903rTbp3vQyp7MQe40BzsYFGgppwDUOW+FBxEyHwZD+5XGcD87p6Smwnsxc+dKmg9GwVaG029L+dVZNjr56B217mXklKJGkswMGQA7tsEiYXmfeGjUaK1XEWkGdUDgt7WASpmcisR3D26EzGiesPe41I9n+46GrxBHxhC39nAsJ8jbjoYQ3v0kSzsWEidSGb7O72Qg8/7elq2xtHOgHCGwhNgQ//G9ENdWSNfAfXzS9PBYQ/ueEH14FkkGhXy1squMYE6ovsKEEhwmeFNJzYF+HrA1Wd18W75/3HGNbC7sLolTbD7/NBm9qKF6sO1Zdi2s+J4MIuSP0s1tlIg2BeUeGVl/DreDJqOzTHQR+y2ChvLP5xxUuxB8YuvMGG/TIbc7C1Ok1xrRcADU84G+Nnv4Yf9vFCrEhe/p+S5G9YtkDs1kqAVxybZObRN6G29B34gAKQY/o9rAqCx3JJf3VSh9ORVeRitWj8NhVlXj0sf9O1XbzCoo1Fzr8l68M+BKXZ8docP0mAgLLPRbF8uV2oRiae9L/PSzWBHc8RjEkjFn/BlU9Hze52h6rWHHk+3e/NMywmnr0Y+fr9baz/MUnO6Fe1Wz4q0nqOriRLzk+FwG/ko6f2tTOmzK1F7qaHIJ6g="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

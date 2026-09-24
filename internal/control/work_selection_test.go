@@ -60,6 +60,33 @@ func TestRunSelectionEffectBoundaryIgnoresReadOnlyAndLifecycle(t *testing.T) {
 	}
 }
 
+// Looking before selecting is discovery, not an effect: a terminal read the
+// dispatcher proved read-only keeps the window open, while an unproven command
+// with the same replay class still closes it.
+func TestRunSelectionEffectBoundaryIgnoresProvenObservation(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	claim := func(id, effectClass string) {
+		t.Helper()
+		got, err := store.ClaimToolDispatch(ctx, identity.TenantID, ToolLedgerEntry{
+			RunID: run.ID, ToolCallID: id, ToolName: "terminal", ArgsHash: id, RetryClass: "side_effect",
+			Strategy: "mutate", EffectClass: effectClass,
+		})
+		if err != nil || !got.Execute {
+			t.Fatalf("claim %s: %+v %v", id, got, err)
+		}
+		_ = store.RecordToolOutcome(ctx, identity.TenantID, run.ID, id, true)
+	}
+	claim("look", "observation")
+	if blocked, reason, err := store.RunSelectionEffectBoundary(ctx, identity.TenantID, identity.PersonID, run.ID); err != nil || blocked {
+		t.Fatalf("a proven observation closed the selection window: %v %q %v", blocked, reason, err)
+	}
+	claim("unproven", "side_effect")
+	if blocked, reason, err := store.RunSelectionEffectBoundary(ctx, identity.TenantID, identity.PersonID, run.ID); err != nil || !blocked || reason != "tool_effect" {
+		t.Fatalf("an unproven command must still close the window: %v %q %v", blocked, reason, err)
+	}
+}
+
 func TestProjectInteractionTaskHidesOnlySingleRunLabel(t *testing.T) {
 	ctx := context.Background()
 	store, identity, task, run := newRecoveryFixture(t)

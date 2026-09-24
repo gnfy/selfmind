@@ -173,6 +173,21 @@ jobs:
           node-version: "22"
           package-manager-cache: false
 
+      # Linux enforces exec isolation with bubblewrap, which the runner image
+      # lacks. Without it every command runs on the host, so cases recorded
+      # where containment releases a read (macOS, or Linux with bwrap) park on
+      # a human approval here. Ubuntu's AppArmor userns restriction would also
+      # break bwrap at runtime, so the step lifts it and proves a sandbox runs.
+      - name: Enable the Linux exec sandbox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --die-with-parent --unshare-pid --unshare-ipc --unshare-uts --unshare-net \
+            --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp true
+
       - name: Fast provider-offline PR corpus
         if: github.event_name == 'pull_request'
         run: go run ./cmd/selfmind selfcheck --profile local-fast --skip-go

@@ -1,0 +1,347 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Report"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " we"
+    },
+    {
+      "reasoning_content": " are"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " without"
+    },
+    {
+      "reasoning_content": " reporting"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "stop"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " my"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " reporting"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " reveal"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " pass"
+    },
+    {
+      "reasoning_content": "/f"
+    },
+    {
+      "reasoning_content": "ail"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": " yet"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Just"
+    },
+    {
+      "reasoning_content": " say"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ve"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " am"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " acceptance"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " has"
+    },
+    {
+      "content": " been"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " recorded"
+    },
+    {
+      "content": " through"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "verify"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " parked"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": " Per"
+    },
+    {
+      "content": " your"
+    },
+    {
+      "content": " instruction"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'m"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " reporting"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " outcome"
+    },
+    {
+      "content": " yet"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "value"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " modified"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "only"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": ").\n\n"
+    },
+    {
+      "content": "Waiting"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " your"
+    },
+    {
+      "content": " confirmation"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " report"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 5872,
+        "output_tokens": 110,
+        "cache_read_input_tokens": 2944,
+        "cache_miss_input_tokens": 2928,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 51,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

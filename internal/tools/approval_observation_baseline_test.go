@@ -53,6 +53,40 @@ func TestObservationBaselineStillRefusesEffects(t *testing.T) {
 	}
 }
 
+// The catalog names tools that a bare program name resolves to. A path runs
+// whatever file is there, so `./cat` or `bin/git` may be a workspace script
+// that only borrows a catalogued basename; wrappers are no different.
+func TestObservationRejectsPathQualifiedPrograms(t *testing.T) {
+	for _, command := range []string{
+		"./cat value.txt",
+		"bin/git status",
+		"/tmp/x/od -c value.txt",
+		"cd /w && ./ls",
+		"./sh -c 'cat value.txt'",
+		"/bin/sh -c 'cat value.txt'",
+		"/usr/bin/timeout 5 cat value.txt",
+		"timeout 5 ./cat value.txt",
+		"sh -c './cat value.txt'",
+	} {
+		if provenReadOnly(t, command) {
+			t.Errorf("a path-qualified program must NOT be provable read-only: %s", command)
+		}
+	}
+	// The constraint that must change the result: the same tools named bare
+	// stay provable, including through the wrappers the parser understands.
+	for _, command := range []string{
+		"cat value.txt",
+		"sh -c 'cat value.txt'",
+		"timeout 5 cat value.txt",
+		"git status --short",
+		"wc -c value.txt && od -An -c value.txt",
+	} {
+		if !provenReadOnly(t, command) {
+			t.Errorf("a bare catalogued program must stay provable read-only: %s", command)
+		}
+	}
+}
+
 // TestObservationBaselineIsNarrowerThanTheGrantFloorNeutralSet pins the reason
 // the two word lists differ. grant_floor.go asks "may this word name a
 // remembered class"; this catalog asks "does this run and change nothing". A

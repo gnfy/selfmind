@@ -6,28 +6,16 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-09-03
+**Snapshot:** 2026-09-24
 
-Daily-driver closure update (2026-09-18): artifact readback carries trusted
-read-only registration facts into continuation. Verification corrections can
-inherit the recorded obligation; explicit plan-step bindings attribute failures
-to the correct criterion. Unresolved dependency paths retain conservative
-invalidation. Completion failures expose exact blocking evidence. Approval
-review rejects incomplete action input and requires attributed restriction
-citations for new provider-backed denials. Response usage includes input/cache
-accounting, with historical gaps kept visible separately from Main/maintenance.
-Two new real-provider cases cover readback-before-resume and method correction;
-four live approval probes cover changed wording/targets and opposing constraints.
-Full selfcheck passed all 81 cases, with focused race coverage and an isolated
-packed-npm daemon lifecycle smoke. Local installation and the managed daemon run
-`v0.1.0-beta.26-local.model-recovery.7`; real multi-day and cross-model behavior
-remain observation gates. Historical unfinished Runs are not rewritten.
+Dated delivery and validation records live in
+[`status-history.md`](status-history.md); this file keeps current state only.
 
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 82 reviewed YAML cases; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 86 reviewed YAML cases; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -56,127 +44,12 @@ remain observation gates. Historical unfinished Runs are not rewritten.
 | npm beta distribution | Partial | Clean tagged release through GitHub Actions plus install/update/daemon-restart verification on Linux and macOS. |
 | SaaS / enterprise | Deferred | No implementation until maintainers approve a dedicated strategy decision and its evidence gates. |
 
-External observation closure update (2026-09-14): new versioned receipts require
-whole-value scalar matching, retain already-observed group members, and restore
-Main with normal scoped tools and approvals after a condition match. Incomplete
-groups cannot silently hand off, and abandoned incomplete contracts surface as
-check failures. Historical receipts retain their original authority. Terminal
-syntax is checked before approval; daily reports include current wait-group
-backlog and missing-member counts. Real-provider/replay coverage now resumes Main
-through the production worker to create and verify the deliverable. Versioned
-approval intent preserves user prohibitions without parsing system instructions
-as user bans. `/diag learning` exposes bounded workspace evidence and gate reasons;
-learning and daily diagnostics explain memory shadow mode and scheduler state.
-Approved host observations retain only the capability proven by their preflight,
-bound to the frozen command and watcher deadline. Validation (2026-09-15): full
-Go tests and all 72 local-full cases passed. An isolated real-provider daemon
-preserved one ready and one pending prerequisite across process restart, resumed
-Main exactly once, and produced a deliverable with two passing verification
-checks. Installed locally as `v0.1.0-beta.26-local.closure.2`; managed restart,
-schema v14 health, and learning/memory diagnostics passed. Live IM delivery and
-sustained daily-driver observation remain required.
-
-Approval and liveness correction (2026-09-15): version-2 approval snapshots
-preserve attributed human requests, preceding proposals, and ordered corrections
-across same-scope resumes. The judge evaluates accepted scope without inventing
-new grants; model reasons are visible in approval summaries. Model decisions
-are reused only for identical actions, human evidence, and environment within a
-Run, instead of granting a command class. Active `/status`
-uses the exact Run's plan and progress, not an earlier watcher handoff. Foreground
-Unix cancellation kills the managed process group and bounds output draining,
-fixing pipe descendants delaying a 90-second timeout for several minutes.
-Full Go checks, all 72 local-full evals, focused race checks, and an isolated
-real-provider process-restart scenario passed, including retained authorization
-evidence, active progress, and a verified deliverable. Installed locally as
-`v0.1.0-beta.26-local.closure.4`; managed restart and schema v14 health passed.
-Real approval-frequency improvement remains a daily-driver observation gate.
-
-Semantic approval correction (2026-09-15): new version-3 snapshots retain
-complete bounded human quotations and stop deriving keyword prohibitions.
-Smart mode reviews effect authorization even for scoped writes; unrelated
-exclusions do not block accepted work, and applicable refusals remain refusals.
-Enforced containment is the documented exception again (2026-09-20): reviewing
-contained calls too made layer 2 unreachable, because every gateway run carries
-model authorization — the live funnel reported zero contained releases against
-33 judged decisions in a day while the judge escalated calls its own rationale
-called read-only. A call the runtime already proves harmless now runs without a
-judge call; dangerous operations, explicit denies, unclassified external
-effects, write tools, and every uncontained execution keep their review.
-Historical policy evidence is not widened. Direct claims and watcher resumes
-preserve exact-parent authorization, including claims made after Run start.
-A refused continuation pauses the turn before further dispatch; selection
-lookup no longer depends on the progress-event tail. The new real-model smart
-case checks preparation without writes, partial acceptance, exact continuation,
-watcher recovery, verified delivery, zero human asks, and positive judge audit.
-Unanswered approvals pause before further dispatch. Cheap-role review uses
-structured JSON and bounded low reasoning; invalid output still asks the human.
-Full Go/doc checks, all 73 local-full evals, focused race checks, and the real
-configured smart flow passed (18 tools, zero errors and human asks), including
-watcher recovery. Installed as `v0.1.0-beta.26-local.closure.5`; managed restart,
-healthy heartbeat, zero active Runs, and schema v14 were verified.
-
-Current P0/P1 implementation retains versioned approval response diagnostics
-and refuses incomplete provider output without inventing authorization. Bound
-verification corrections preserve criterion, target, scope, and failure history;
-Run/work-unit verification shares one projection. Run-lifecycle, steering, and human-wait schemas now
-reject unknown fields recursively before dispatch instead of silently dropping
-them; plan-bound checks always retain the server-issued step identity, and the
-latest exact-obligation attempt determines current state without erasing prior
-failures. The public verify call no longer asks Main to copy that runtime id;
-flat arguments are canonical while the published nested shape is normalized at
-one compatibility boundary. Corrected methods may declare their actual inputs,
-and later work units receive their own step association without changing the criterion or target. Unique exact plan text can recover a stale provider alias while
-ambiguous or changed steps still fail closed. Invocation middleware retains
-actual exit codes and evidence references through one typed result pipeline;
-unknown process exit status cannot become zero, and failed outcome persistence
-retains observed output and requires observation before retry. Fault-injection
-coverage spans dispatch claims, partial effects, result storage, and notification
-after commit. New dispatch interfaces use Run scope; storage migration remains
-with the active Run + Work Journal plan. Plan progress preserves existing
-acceptance requirements, changed criteria return to Main for review, and missing
-final answers retain known blockers. Main owns explicit user-takeover semantics;
-necessary unfinished work without handoff evidence stays unfinished. Three new
-real-provider cases cover corrected checks and both handoff outcomes, including
-an exact continuation of the prior waiting plan. Approval-frequency improvement
-and the cause of the previously unclassified production parse failures still
-need live observation; 24 protocol probes did not reproduce those failures.
-Validation: full Go/doc checks, all 81 local-full evals, and focused race checks
-passed. A real smart-mode flow passed with 22 tools, zero tool errors, and zero
-human asks. The current local package matches the tested binary; managed restart,
-healthy heartbeat, zero active Runs, and schema v16 passed.
-
-Natural-language continuation uses the ordinary Main turn for every phrasing;
-explicit commands and structured replies retain deterministic execution binding.
-External-watch completion, compensation, and reconciliation share the aggregate
-wait-group verdict, respect live queue claims, and pass bounded exact-parent
-observation targets and results through durable runtime context. Resumed turns
-also receive current Run plan IDs, acceptance criteria, verification flags, and
-bounded user corrections from the exact resume lineage. Watch finalization
-claims that lineage before plan inheritance. Stable step IDs preserve work-unit
-attribution without repeated internal IDs; plans update at meaningful progress.
-Execution evidence is paged independently of transcript volume, and answer-only
-file mentions no longer create changed-file metadata or file artifacts.
-Default tool guidance identifies `verify` as the executable verification evidence
-entrypoint.
-Completion evidence update (2026-09-17): `finish_run(done)` and finalization use
-the same Run evidence verdict. New version-2 checks may declare local input
-dependencies; unrelated outputs preserve them, related partial writes invalidate
-them, replacements inherit omitted declarations, and corrected methods may
-declare their actual inputs. Unavailable or malformed evidence blocks completion.
-`/resume` shows each exact Run's own outcome and next step, with distinct labels for
-user decisions and incomplete verification. Historical Runs are not rewritten.
-Default gateway restart carries a server-enforced safe-boundary contract; older
-daemons defer without interrupting Runs and remain available for human input.
-Two real-provider recordings cover independent report output and rechecking changed
-inputs after a work unit closes. Cross-model and sustained live coverage remain open.
-Validation: full selfcheck passed all 81 local-full cases, including refreshed live recordings
-for continuation, watcher, smart approval, and verification. The local npm CLI and
-active daemon run `v0.1.0-beta.26-local.model-recovery.7` after a safe restart.
-Its isolated packaged lifecycle passed on schema v16 with no active production Run. Live status reports Main and
-Background reasoning from resolved model metadata; cross-model live evidence is not claimed.
-Natural in-place Skill selection still needs live quality observation: a release
-lookup completed with unnecessary calls and invalid Skill references. Explicit
-resume separately covers restoration of an already bound Skill.
+Open observation gates carried from the dated records: live IM delivery and
+sustained daily-driver use; whether approval frequency really dropped, and the
+cause of earlier unclassified production parse failures (24 protocol probes did
+not reproduce them); cross-model and sustained live coverage of continuation,
+restart, and Background reasoning; and natural in-place Skill selection quality,
+where a release lookup made unnecessary calls and invalid Skill references.
 
 ## Capability Map
 
@@ -191,7 +64,7 @@ resume separately covers restoration of an already bound Skill.
 | Provider cost visibility | Done | OpenAI-compatible and Responses cache usage is normalized; role/VCR wrappers preserve adapter request prefix/block fingerprints and report explicit unsupported states without storing prompt content; `/diag context` distinguishes total provider requests from prompt-only assembly, while `selfmind usage` and `selfmind report daily` provide paged local execution/token trends, schema share, logical-work-chain/resume projections, dispatch phase/effect certainty, and approval attribution without the old non-causal run-level post-failure count. Provider pricing remains external. |
 | Context lifecycle | Partial | Person work spine, bounded composer slices, project instructions, deterministic workspace-knowledge indexing, artifacts, recall, and compaction are integrated. Tool-catalogue deferral is live for a reviewed category cohort — Skill authoring/catalog, media, rare execution shapes, and web search leave the direct surface and return through `tool_search`, measured at about a quarter of the provider-facing schema bytes — while asking the person, tool discovery, artifact read-back, retrieval, continuity, and steering are never deferred. Tool results now also carry a cumulative per-turn cap, so several artifact-backed results inside the age window age oldest-first instead of together dominating the request; unspooled bytes are never dropped. Provider preflight now includes native tool arguments and tool schemas; compaction and trimming retain Run instructions, summaries inherit Run cancellation/ownership, and task slices prioritize verification while deduplicating handoff text. Exact completed-run continuations select a small, redacted, deduplicated set of prior tool-result excerpts from the checkpoint; they do not replay its full ledger or treat excerpts as current proof. Remaining: the catalogue share is about a quarter down, not below the 20% target, and a usage-driven cohort still needs seven days of real evidence. Default context still replays only the most recent 16 work-spine entries; older history stays searchable but is not auto-replayed. |
 | Memory | Partial | Person memory is preference-only: cross-endpoint `/remember`/`/forget` are the deterministic primary intake, short natural-language preferences remain eligible for asynchronous analysis without language-specific keyword routing, the post-run analyzer (v4) judges explicitly stated preferences only, and the deterministic apply layer skips environment/project targets and audits (never applies) legacy flat fact arrays — replay-proof for frozen legacy proposals. The per-turn fact extractors and their `auto_extract_*` config keys are removed. Historical environment rows stay readable and archive reversibly via `selfmind maintenance memory-archive-environment`. Canonical governance, pin/correct/forget, transient filtering, FTS-safe lexical/CJK retrieval, JSON-fenced and narrowly bounded multilingual query expansion, access tracking, audits, output-overlap recall telemetry, and per-run intake disposition counts exist. Governance due state is durable per person, catches up overdue work after startup, retries foreground deferral promptly, distinguishes bounded partial progress from a complete scan, and exposes remaining backlog plus report age/scheduler reasons. These signals are diagnostic rather than proof of causal use; preference usefulness, reuse, and duplicate rates still need sustained measurement. |
-| Work history | Partial | Schema v17 has one durable Thread aggregate and one Run execution authority: ordinary roots are retained as `interaction + unlisted`, work evidence (plans, side-effect tool rows, approvals/clarifications/watchers, resume edges, next steps) promotes in place while lifecycle and read-only tools never do, and Thread has no lifecycle status or `current_task` pointer. Attention is derived per exact Run from live execution, pending approval/clarification, watchers, and unclaimed resumable outcomes: only the latest Run of a Thread is resumable, `interrupted` counts only with work evidence, same-channel items rank first, and `/status`, the attach digest, task cards, and the compatibility `Task.status` vocabulary (`active|needs_attention|monitoring|resumable`, `done`, `archived`) read that one derivation. A bare `/resume` is the attention listing and owns the ordinal snapshot; the tasks, task, and diag tasks commands are removed, `/search` is a gateway command on every endpoint, and an idle `/stop` dismisses only the exact Run and refuses while a pending approval, clarification, or live watcher exists; explicit resume reverses dismissal or archive. Numbered commands bind endpoint-local snapshots while stable Run ids remain restart-safe; a Thread id resumes only one unambiguous unresolved Run. Search covers complete retained titles, Run inputs, handoffs, and paths, including unlisted and archived history; FTS sessions are keyed by Run (`run:<id>`, replacing `task:<id>`) and recall groups a continued line of work by walking the resume edge at read time, and event ownership is derived from the Run rather than a Thread join. `startRun` takes a RunOwner, so a Run with no Thread executes, parks, stays Attention, and resumes; ordinary root messages still create one, which is the remaining Batch 3 step. Otherwise-new user turns receive at most three same-channel-first, transcript-free Attention hints in the normal Main context, so short confirmations remain discoverable even when semantic recall skips them; Main still commits any relationship through `work_select`. Structured reply edges and `runs.resumes_run_id` (v12 renamed it from `parent_run_id`) remain person/scope validated and unique-index protected; Task holds no authority: approval grants are person-plus-class only (the retired task scope authorizes nothing and smart triage now grants run-local reuse instead of a durable row), a parked approval is claimed on person plus fingerprint plus the exact resume lineage rather than a shared thread, re-enqueued work takes its workspace from the Run, and Attention reads no Thread column — pinning is removed and dismissal on the exact Run is the only hide, with v13 converting every hidden/archived Thread into that bulk dismissal; a validated natural-language RESUME in the same execution domain is claimed atomically at `work_select` time with the parent's plan restored and its resume context returned to Main in the same turn, while a domain or checkpoint mismatch creates a correctly scoped transfer child with inherited durable plan before Main starts. Active natural language is steered, daemon text cannot steer, `semantic_recall` is optional/fail-open, and `fast_classifier` has no continuity authority. `reset-work-history` provides dry-run, live-work refusal, verified backup, and tenant-scoped cleanup that removes in-flight Skill learning evidence and Thread-keyed memory sessions while preserving identity, settings, memory preferences, provider state, grants, and published Skill packages; the v10-to-v11 upgrade keeps legacy kinds and maps hidden labels to unlisted under orphan and resume-edge invariants, and a released-v11 schema fixture proves the v12/v13 steps reach every install: shape adoption may only claim the version its detector recognizes, never the current one. v14 gives the queue and the steering mailbox durable attachment references, so work that parks — or guidance added mid-run — keeps the files it was accepted with instead of persisting only its text; rows written before it decode as no attachments, which is what they had. v17 adds inert-by-default parent Plan step/version references for exact child imports; inherited checks remain historical context until a current verification passes or Main explicitly adopts an unchanged successful source check with runtime-validated provenance, scope, and no intervening child effect. v16 drops `threads.pinned`: a pin kept a Thread listed and exempt from automatic archival, which let a display flag decide what counts as work — the same mistake v13 corrected when it stopped ranking Attention by Thread columns. Its writer had no production caller, so what remained were three guards that could only pass and a `/diag` counter that could only read zero; `/status`, `/watchers`, and `/diag` now say Work rather than Task. v15 drops the task-reference tables: a reference existed to address a Task by a human-facing name, nothing has written either table since Task stopped being a domain object, and what remained was schema plus two always-true `NOT EXISTS` guards that read as conditions on two DELETE statements which had none. Go/eval gates are implemented; sustained real CLI/IM and restart evidence remains. |
+| Work history | Partial | Schema v17 has one durable Thread aggregate and one Run execution authority: ordinary roots are retained as `interaction + unlisted`, work evidence (plans, side-effect tool rows, approvals/clarifications/watchers, resume edges, next steps) promotes in place while lifecycle tools, read-only tools, and commands the dispatcher proved read-only (ledger effect class `observation`) never do, and Thread has no lifecycle status or `current_task` pointer. Attention is derived per exact Run from live execution, pending approval/clarification, watchers, and unclaimed resumable outcomes: only the latest Run of a Thread is resumable, `interrupted` counts only with work evidence, same-channel items rank first, and `/status`, the attach digest, task cards, and the compatibility `Task.status` vocabulary (`active|needs_attention|monitoring|resumable`, `done`, `archived`) read that one derivation. A bare `/resume` is the attention listing and owns the ordinal snapshot; the tasks, task, and diag tasks commands are removed, `/search` is a gateway command on every endpoint, and an idle `/stop` dismisses only the exact Run and refuses while a pending approval, clarification, or live watcher exists; explicit resume reverses dismissal or archive. Numbered commands bind endpoint-local snapshots while stable Run ids remain restart-safe; a Thread id resumes only one unambiguous unresolved Run. Search covers complete retained titles, Run inputs, handoffs, and paths, including unlisted and archived history; FTS sessions are keyed by Run (`run:<id>`, replacing `task:<id>`) and recall groups a continued line of work by walking the resume edge at read time, and event ownership is derived from the Run rather than a Thread join. `startRun` takes a RunOwner, so a Run with no Thread executes, parks, stays Attention, and resumes; ordinary root messages still create one, which is the remaining Batch 3 step. Otherwise-new user turns receive at most three same-channel-first, transcript-free Attention hints in the normal Main context, so short confirmations remain discoverable even when semantic recall skips them; Main still commits any relationship through `work_select`. Structured reply edges and `runs.resumes_run_id` (v12 renamed it from `parent_run_id`) remain person/scope validated and unique-index protected; Task holds no authority: approval grants are person-plus-class only (the retired task scope authorizes nothing and smart triage now grants run-local reuse instead of a durable row), a parked approval is claimed on person plus fingerprint plus the exact resume lineage rather than a shared thread, re-enqueued work takes its workspace from the Run, and Attention reads no Thread column — pinning is removed and dismissal on the exact Run is the only hide, with v13 converting every hidden/archived Thread into that bulk dismissal; a validated natural-language RESUME in the same execution domain is claimed atomically at `work_select` time with the parent's plan restored and its resume context returned to Main in the same turn, while a domain or checkpoint mismatch creates a correctly scoped transfer child with inherited durable plan before Main starts. Active natural language is steered, daemon text cannot steer, `semantic_recall` is optional/fail-open, and `fast_classifier` has no continuity authority. `reset-work-history` provides dry-run, live-work refusal, verified backup, and tenant-scoped cleanup that removes in-flight Skill learning evidence and Thread-keyed memory sessions while preserving identity, settings, memory preferences, provider state, grants, and published Skill packages; the v10-to-v11 upgrade keeps legacy kinds and maps hidden labels to unlisted under orphan and resume-edge invariants, and a released-v11 schema fixture proves the v12/v13 steps reach every install: shape adoption may only claim the version its detector recognizes, never the current one. v14 gives the queue and the steering mailbox durable attachment references, so work that parks — or guidance added mid-run — keeps the files it was accepted with instead of persisting only its text; rows written before it decode as no attachments, which is what they had. v17 adds inert-by-default parent Plan step/version references for exact child imports; inherited checks remain historical context until a current verification passes or Main explicitly adopts an unchanged successful source check with runtime-validated provenance, scope, and no file change recorded in the child; a read-only look first does not forfeit adoption, a proven read-only command does not close the selection window, and inherited checks show their age. v16 drops `threads.pinned`: a pin kept a Thread listed and exempt from automatic archival, which let a display flag decide what counts as work — the same mistake v13 corrected when it stopped ranking Attention by Thread columns. Its writer had no production caller, so what remained were three guards that could only pass and a `/diag` counter that could only read zero; `/status`, `/watchers`, and `/diag` now say Work rather than Task. v15 drops the task-reference tables: a reference existed to address a Task by a human-facing name, nothing has written either table since Task stopped being a domain object, and what remained was schema plus two always-true `NOT EXISTS` guards that read as conditions on two DELETE statements which had none. Go/eval gates are implemented; sustained real CLI/IM and restart evidence remains. |
 | Background maintenance | Done | Debounced bounded batches, immutable replay jobs, restart-safe retry exhaustion, shared retry policy, stable semantic roles with a shared auxiliary floor, provider/contract circuit identity, diagnostics, migration tools, and dispatch-time output bounds with headroom for each route's configured reasoning exist. Retryable connection failures also retain a credential-free network-route fingerprint, so direct/proxy and local-listener changes release delayed or exhausted learning jobs without replaying unrelated provider, prompt, or policy blocks. Memory governance keeps its due clock durable and caps model-free schedule rescans at five minutes, so host sleep cannot strand overdue work behind a long monotonic timer. |
 | Skills | Partial | Runtime discovery uses a budgeted metadata catalog and server-issued candidate refs; provider catalogs contain no per-Skill tools. Exact tool-name terms now deterministically win while added natural-language words rank candidates instead of excluding an exact match, and paged Skill activation exposes `skill_view` automatically. Model, slash, and binding paths converge on one immutable package activation with context-proportional main delivery, explicit section/resource paging, compaction protection, active/candidate/previous/quarantined versions, and Doctor receipt checks. Automatically learned Skills default to a control-managed logical-workspace root outside the repository and are not discoverable from another workspace. Externally authored packages are usable: read-only roots are enumerated by package manifest when one is declared and otherwise scanned recursively within a fixed depth and exclusion set, `~/.agents/skills` is a cross-vendor root below the writable user root, names qualify as `source:name` with the discovery path as last-resort disambiguator, a typed ambiguous name is refused rather than resolved by precedence, and an author's model-invocation opt-out keeps a Skill user-invocable only. Curator authorization uses the exact production delivery builder, paged legacy repairs are non-growing, bundles share one executing-agent budget, and `/skills stats` derives from durable activations/work-unit outcomes. The cassette-backed local-full release gate is green; sustained production and installed-binary/daemon evidence remain open. |
 | Safe self-evolution | Partial | Terminal work-unit observations, neutral parked waits, comparable cohorts, frozen curator package proposals, environment-bound failure guards, evidence snapshots, quarantine, and compatible-previous rollback checks exist. Ordinary workflow success is observation only and cannot increment shadow matches, revive degraded candidates, or enable `batch_read`; runtime advice requires a separately verified comparison contract that the current profiler does not create. Three independent, comparable, verified work units may publish a workspace-scoped Skill when their procedures use eligible built-in tools, without granting execution authority. Repairs combine declared and daemon-observed categories: deterministic interface drift may publish after one verified recovery, workspace-scoped stable preconditions after one, semantic drift after three independent recoveries, and not-applicable/transient evidence cannot auto-publish. Schema v5 persists dependency/environment fingerprints and last verification time for bounded review nominations. User-global widening and sustained real-workflow validation remain open. |
@@ -240,8 +113,10 @@ limitation. It does not mean the area should be redesigned from scratch.
 - The personal edition deliberately uses SQLite and one daemon. PostgreSQL,
   remote control plane, Runner protocol, billing, organization seats, and
   enterprise handoff are future decisions, not active backlog.
-- macOS does not yet provide Linux-equivalent process isolation. Policy falls
-  back to explicit approval-controlled host execution.
+- macOS isolation (seatbelt) confines writes and network egress but has no
+  PID/IPC/UTS namespaces or mounts, so it is weaker than Linux bubblewrap; a
+  plan that needs overlay mounts or synthesized directories falls back to
+  approval-gated host execution.
 - IM delivery depends on external session and platform behavior. A durable
   `sent` record is not always proof that a handset displayed the message;
   diagnostics and bounded catch-up make this visible.
@@ -274,13 +149,12 @@ limitation. It does not mean the area should be redesigned from scratch.
   the project owner for review on 2026-09-18. It moves work-history authority
   from Task/Thread to Runs and the person-level Work Journal, keeps exact
   execution recovery, and includes context economics in the same delivery.
-- Paused plans: `docs/plans/main-turn-work-continuity.md`, approved for review
-  on 2026-09-09; `docs/plans/daily-driver-closure.md`, approved for review on
-  2026-09-11; and `docs/plans/external-skill-packages.md`, approved for review
-  on 2026-09-25. The 2026-09-10 continuity verdict carries its remaining real
-  CLI/IM evidence gates into the active run-centric plan. The 2026-09-13
-  daily-driver verdict retains all outstanding evidence and acceptance gates
-  while paused; resumption is reassessed when the active slot frees.
+- Paused plan: `docs/plans/daily-driver-closure.md`, approved for review on
+  2026-09-11. The 2026-09-13 verdict retains all outstanding evidence and
+  acceptance gates while paused; resumption is reassessed when the active slot
+  frees. Closed on 2026-09-24: `docs/plans/external-skill-packages.md` as
+  implemented, and `docs/plans/main-turn-work-continuity.md` as superseded,
+  its real CLI/IM evidence carried by the Phase-1 continuity gate above.
 - Historical plans, including the implemented schema-v11 Thread intermediate
   and the superseded Task Capsule proposal, remain discoverable through
   `docs/README.md` as archived records or decisions. They do not contribute

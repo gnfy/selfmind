@@ -12,6 +12,12 @@ documents:
     owner: maintainers
     state: current
     language: en
+  - path: docs/status-history.md
+    title: Status History
+    class: archive
+    owner: maintainers
+    state: archived
+    language: en
   - path: docs/adr/0001-separate-model-and-runtime-readiness.md
     title: Separate Model and Runtime Readiness
     class: decision
@@ -225,21 +231,16 @@ documents:
     language: en
   - path: docs/plans/external-skill-packages.md
     title: External Skill Package Adoption
-    class: plan
+    class: archive
     owner: maintainers
-    state: paused
+    state: archived
     language: en
-    approved_by: project-owner
-    review_by: 2026-09-25
   - path: docs/plans/main-turn-work-continuity.md
     title: Main-Turn Work Continuity
-    class: plan
+    class: archive
     owner: maintainers
-    state: paused
+    state: archived
     language: en
-    approved_by: project-owner
-    review_by: 2026-09-09
-    verdict: "2026-09-10: remain paused; continuity evidence carries forward to the active run-centric plan, while daily-driver defects are repaired within existing contracts."
   - path: docs/plans/threaded-work-history-redesign.zh-CN.md
     title: Thread 化工作历史重构方案
     class: archive

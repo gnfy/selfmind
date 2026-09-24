@@ -368,6 +368,33 @@ func TestDispatcherExposesTrustedToolExecutionMetadata(t *testing.T) {
 	}
 }
 
+// ObservationOnly follows the deterministic proof and nothing else. Where the
+// command runs is a risk question: a host-executed read is still a read, and
+// this test has no isolated sandbox, so every call below counts as host.
+func TestDispatcherMarksProvenObservationOnly(t *testing.T) {
+	reg := NewRegistry()
+	disp := &Dispatcher{registry: reg}
+	reg.Register(NewExecuteCommandTool())
+	reg.Register(NewWriteFileTool())
+	for command, want := range map[string]bool{
+		"wc -c value.txt && od -An -c value.txt":                                      true,
+		"ls -la; echo '---'; od -c value.txt 2>/dev/null || echo 'value.txt missing'": true,
+		"git status --short":    true,
+		"echo DONE > value.txt": false,
+		"rm stale.txt":          false,
+		"python3 -c 'print(1)'": false,
+		"sed -i 's/a/b/' x.txt": false,
+		"./cat value.txt":       false,
+	} {
+		if got := disp.ToolExecutionMetadata("terminal", map[string]interface{}{"command": command}).ObservationOnly; got != want {
+			t.Errorf("%q observation_only=%v, want %v", command, got, want)
+		}
+	}
+	if disp.ToolExecutionMetadata("write_file", map[string]interface{}{"file_path": "a.txt", "content": "x"}).ObservationOnly {
+		t.Error("a file write is never an observation")
+	}
+}
+
 func TestDispatcherMetadataUsesExecutionScopeAndEffectiveSandbox(t *testing.T) {
 	reg := NewRegistry()
 	disp := &Dispatcher{registry: reg}

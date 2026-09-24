@@ -28,15 +28,11 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 	if sourceRunID == "" {
 		return fmt.Errorf("run has no exact continuation parent")
 	}
-	var laterEffects int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_ledger
-		WHERE tenant_id=? AND run_id=? AND strategy='mutate' AND status<>'prepared'`, tenant, childRunID).
-		Scan(&laterEffects); err != nil {
-		return err
-	}
-	if laterEffects > 0 {
-		return fmt.Errorf("this run has already dispatched an effect; observe the current state instead")
-	}
+	// A check goes stale on the same evidence inside one Run and across a
+	// continuation: a recorded file change. A replay class is the wrong test —
+	// it made a read-only `od -c` before adoption look like an effect, so
+	// looking first, the careful order, lost the prior check. Uncertain effects
+	// still block completion through ValidateRunCompletion.
 	var mutations int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_events WHERE run_id=? AND type='evidence.recorded'
 		AND json_extract(payload_json,'$.evidence.kind')='mutation'`, childRunID).Scan(&mutations); err != nil {

@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am verifying that `value.txt` contains exactly "
+    },
+    {
+      "usage": {
+        "input_tokens": 10520,
+        "output_tokens": 11,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "`READY` followed by a newline."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 66,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 636,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_626728",
+          "Function": "verify",
+          "Args": "{\"command\":\"printf 'READY\\\\n' | cmp -s - value.txt\",\"local_dependencies\":[\"value.txt\"],\"criterion\":\"value.txt contains exactly READY followed by a newline\",\"target\":\"value.txt\",\"kind\":\"test\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EqQLCqELAWkUfROGBYuLzPfWwzeZuky6YCP5jRI2fTe5CzD1sf3C29uYD/MXPLTYSqULQiAyMtRNQkaiH7opgZMO2j6257VilXOu7y5lKazMCGiivRQx68pDQc3DajuDf5cBZ+l+GfdueDZZPL8Vvj7H9OY41seuQxAnXDf7D2FxvdaQJcCp4BTM5F1CURLTgxX1ALs5FIamgeNKS+AUreRwf8GcLBUUJ0L62LAudUm+RFgPKWvqIQzIq1amaWOMwyOzLINxFGaE9IAVJCfeP1YbvdtjeSXPNC/9C8wFeUR+yku/wgHbT6kogMmKjQ4UNC219Qzq8ZcNRnrbjUWEXzSMXgDaPPEokq/2BhuQrAsG9ZM4Z43SRpC793zbvdqqqJxZCIxogv1TgIBQ8YwuhXxwTdHWffjxWtDP13D8YXUocwIPyjbJCpm0vN3QcxyBPOB4rq/GOkU/Pmz22RB8PWgVsmzpgNiwRRVI6Pv9v041KgcHEDs5uq7W+/ty6Kqew9uvk8NSTG8zE+UebVEZr5vLFXVjXS5JCzH6XQ/oMfhIOinAf9/D58ea5ttCK69UyJfEPIPWQ2soWqjmdiEB7Ck3iLQmKNBPmr+FQyrEl/+j+DlmdVe63FDo8VIBHHRXL7WmlV6jEujuWrIAewA+fS7fDC/bioIpHOZc1YlE7Aq+OQAqBNlH+JorynehWlLEBa+7oAIh4sTDqIVwi+cAh1J2kPthWWlDkKhc4C6YtHSSWaQm/8att90eRzRPxJ3eNaIdYjwQLsOV7tlbBudpiN+OItGbacOpgRCMTxLcL/pZdNvMlnYGpDB0nPLetjXXq/OpbxTLB7azwQvIOk/rL4zhjMvgV7H0w7379Setek0yt49SUiNQ5lENZ5AT4iW1AC+zl+us5sHf6q2vtEFgcsiB4j4ydyDyHbBgmRFNwvo5qqdR14bsEZzA/uuPJe4UWF6Fg7InjiTU936t7AyOaPpEkHYilxJy8gWwxLf9ZrqlUXDoycVpNqNx7CySVrJybOb75ACc6WFNsTG52Aj2VP+hw9LkCnNgDM8TInHMR4VhTxYQideey0UwHCxkNKJGmVyJs74pszdktfwTEQFfcd4HYnH8kqxG5Aw6G5AEL9qQs6w/KWTqwPy1KJBryDQ6/BIhe1fJngiBE3WzE48Px9Yyjn+LrwSW/JADmiyVBlOtuJxu9AV/0gx1BODA8WH5iv/+PVFLOEah1StK66lA8EOVgi3PwEgaXdXAdHK+4BY81D2FJo7TFk2ZPmbbc1KKUPDzEeXV1m5pSenMsMWSDXOmxu+Y9XoM+Sgj5aE6JOwG8pw1ta4hDiIwEKvMDm1T5IBQnLZkIXgJtrcGLz2BFyJq+lghvQDpN6YhbbVzVlqAEAWjXEnlUMFJ2Cy8X85YBjYsvMEXp1fG1U5fTOFunohSRiwp2PBdFZD3F4WztTYAcmL+2a4l0D+i0sVGTvKh7k2g38UoIYpAoFJCf/Sls5fuG90rQFymajOmWdCogN8GcUDnvYIwGp6gfQpwYrV+5V+KCIxOM0FtMEbCILiXJgTMHpMMLGSYKglfgrbEcE7u0xBRkWlBIhPWGOJdW2/MPZHx2wbtERtm6och4RbGa0N8MszFQskyljjlbJfrvc/qW4HJVY9vGlTydBFiyUxXOeWyh5KY9Qe1EqKkr/o+MZu6VQXz9Vn1pWQqgX4Bcv2Lxj80hPWljAhhh1BghyxrKSxui1z71owB0vclcG0DEqvokL5Rf0NAxi8D4dV3xNOoAmCW+gIxYfQ4SCr27Y/V9UdTltx+GFG/uvWYYmfwQtB/57ocoNj6RyudOXRdYEoNC+8fPQPeeJQl2I3hH8aAjcDFBruckgQHlktr7fTA1HzsdynZLWWOHo0IjAST8XLShOlDAdmlT6CxwT+EbXiAXYAP/ics/w=="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

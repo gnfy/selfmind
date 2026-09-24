@@ -82,9 +82,12 @@ func (s *Store) RunSelectionEffectBoundary(ctx context.Context, tenantID, person
 	if run == nil || run.PersonID != personID {
 		return false, "", fmt.Errorf("run is unavailable for the current person")
 	}
+	// A proven observation (effect_class 'observation', written by the kernel)
+	// is read-only discovery even when its replay class is side_effect.
 	var count int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_ledger
 		WHERE tenant_id = ? AND run_id = ? AND retry_class <> 'read_only'
+		  AND COALESCE(effect_class, '') <> 'observation'
 		  AND tool_name NOT IN ('work_select', 'update_plan', 'finish_run')`, tenantID, runID).Scan(&count); err != nil {
 		return false, "", err
 	}

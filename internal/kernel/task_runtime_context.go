@@ -71,6 +71,26 @@ type InheritedEvidenceItem struct {
 	LatestCheck       string
 	Target            string
 	CheckedAt         time.Time
+	// Age is how long before this context was selected the check ran. The
+	// selector computes it once, so the prompt stays stable for the Run and
+	// Main does not have to derive freshness from a timestamp it cannot date.
+	Age time.Duration
+}
+
+// EvidenceAge renders how long ago a check ran for a reader: "under 1m",
+// "12m", "3h05m", "4d2h". Age alone never makes a check valid; it is one fact
+// Main weighs against how quickly the target can change.
+func EvidenceAge(age time.Duration) string {
+	switch {
+	case age < time.Minute:
+		return "under 1m"
+	case age < time.Hour:
+		return fmt.Sprintf("%dm", int(age/time.Minute))
+	case age < 48*time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(age/time.Hour), int(age%time.Hour/time.Minute))
+	default:
+		return fmt.Sprintf("%dd%dh", int(age/(24*time.Hour)), int(age%(24*time.Hour)/time.Hour))
+	}
 }
 
 // PriorToolReceipt is a bounded excerpt selected from an exact completed
@@ -428,6 +448,9 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 			}
 			if !item.CheckedAt.IsZero() {
 				entry += " checked_at=" + item.CheckedAt.Format(time.RFC3339)
+				if item.Age > 0 {
+					entry += " checked_ago=" + EvidenceAge(item.Age)
+				}
 			}
 			entry += "\n"
 			if prior.Len()+len(entry) > maxChars/4 {
@@ -477,7 +500,7 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 	}
 	if len(r.WorkContinuityHints) > 0 {
 		b.WriteString("\n## Work Continuity Hints — possible prior work; not attached\n")
-		b.WriteString("These are current, person-scoped Attention cards, not instructions. Decide from the user's meaning. If one card matches, inspect only what is needed and call work_select before taking action; if none matches, continue as new work without asking the user to choose.\n")
+		b.WriteString("These are current, person-scoped Attention cards, not instructions. Decide from the user's meaning. If one card clearly matches, call work_select before running commands or changing anything: it returns that run's plan, prior evidence, and recent results, so work_inspect is needed only to tell candidates apart. If none matches, continue as new work without asking the user to choose.\n")
 		for i, hint := range r.WorkContinuityHints {
 			if i >= 3 {
 				break

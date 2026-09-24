@@ -24,6 +24,10 @@ model mutate control state directly.
 - Review verdict (2026-09-10): remain paused. The owner requested fixes from
   the daily-driver audit; those repairs follow the existing runtime contracts
   and do not reactivate this superseded plan or authorize additional scope.
+- Closed (2026-09-24): archived as superseded. The implementation below landed;
+  its one open row, repeated real CLI-to-IM progress, correction, restart,
+  scope-transfer, and delivery-move evidence, is tracked by the Phase-1
+  continuity gate in `docs/STATUS.md`, not by this plan.
 
 ## Intended outcome
 

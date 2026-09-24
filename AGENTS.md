@@ -282,16 +282,10 @@ daemon must not expose that directory as a product runtime Skill.
 - Skills are instruction assets, not auto-executed scripts. Their scripts still
   pass through normal tools and safety. Catalog replacement preserves
   provenance; automatic curation governs writable, unpinned agent-created
-  assets only. Three independent, comparable, verified work units using
-  eligible built-in tools may publish to the control-managed logical-workspace
-  root without granting execution authority;
-  network/delete/external/delegated effects and user-global widening still
-  require management. Ordinary success is observation, never shadow evidence.
-  A repair includes the failed section, changes at most three declared sections,
-  and uses daemon-derived class thresholds: deterministic interface drift may
-  publish after one attributable verified recovery, semantic drift requires
-  three independent recoveries, and transient/not-applicable evidence cannot
-  auto-publish.
+  assets only and never grants execution authority. Network, delete, external,
+  and delegated effects and user-global widening still require management.
+  Ordinary success is observation, never shadow evidence. Publication and
+  repair thresholds live in `docs/skills-architecture.md`.
 
 ## UI and Commands
 

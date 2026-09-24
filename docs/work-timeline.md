@@ -101,8 +101,11 @@ language-independent evidence exists:
 - the final handoff contains next steps or changed files.
 
 Lifecycle tools (`finish_run`, `update_plan`, `work_select`,
-`queue_user_input`) and read-only tools are not evidence. An OBSERVE
-projection never demotes an evidence-bearing Thread.
+`queue_user_input`) and read-only tools are not evidence. Neither is a command
+the dispatcher proved read-only: the ledger records it with effect class
+`observation`, so `git status` alone does not make a question resumable work.
+The replay class stays `side_effect` for recovery. An OBSERVE projection never
+demotes an evidence-bearing Thread.
 
 A tool-free direct answer remains unlisted by default. Promotion is monotonic
 for automation: it never hides a listed Thread and never reopens an archived
@@ -158,16 +161,21 @@ explicit /new, /resume, /choose
   Work Units remain Run-local; an echoed parent Work Unit id is translated only
   when it belongs to that exact source step, while unrelated stale ids fail.
   The bounded resume context follows exact lineage for prior-step evidence as
-  historical context. Main may explicitly adopt an unchanged successful check
-  with a reason in `update_plan`; the runtime verifies its source step, criterion,
-  scope, and absence of an intervening child effect before accepting it. Other
-  checks stay open. Main continues in the same turn with one Run and no
+  historical context, each check with its age at selection. Main may
+  explicitly adopt an unchanged successful check with a reason in
+  `update_plan`; the runtime verifies its source step, criterion, scope, and
+  that the child recorded no file change — the rule that makes a check stale
+  inside one Run — before accepting it. A read-only look first never forfeits
+  adoption. Other checks stay open. Main continues in the same turn with one Run and no
   queue; one pre-effect correction re-points that claim
   (`RetargetInteractionContinuation`). A workspace, execution-root, or
   checkpoint mismatch creates a correctly scoped transfer child at
   finalization, because a Run's execution domain never changes in place.
 - Read-only discovery uses the same trusted registration facts for dispatch,
-  recovery, and plan-progress accounting. Captured `tool_output` artifacts are
+  recovery, and plan-progress accounting. A proven read-only command (ledger
+  effect class `observation`) is discovery too and leaves the selection window
+  open; an unproven command still closes it, so Attention guidance asks Main to
+  select before running commands. Captured `tool_output` artifacts are
   observation storage and follow the continuing Run; originating mutations
   still block implicit selection through their execution ledger. Deliverable
   artifacts and pending human/external control objects retain their guards.
@@ -204,8 +212,9 @@ queue. Prose such as “resume after approval” has no routing authority.
 4. an unclaimed resumable Run with no child that is still the latest Run of
    its Thread; a later Run in the same Thread causally supersedes an older
    parked one. An `interrupted` Run counts only when it left work evidence (a
-   plan, a non-lifecycle side-effect tool row, an approval, clarification, or
-   watcher, a resume edge, or next steps). A Run whose typed completion reason
+   plan, a non-lifecycle side-effect tool row that is not a proven
+   observation, an approval, clarification, or watcher, a resume edge, or next
+   steps). A Run whose typed completion reason
    is `work_selection_rejected` records a refused relationship decision rather
    than unfinished historical work, so it remains in history but does not
    enter Attention or `/resume`.

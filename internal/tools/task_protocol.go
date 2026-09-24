@@ -176,7 +176,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"reuse_prior_verification": {
 									Type:        "boolean",
-									Description: "On an exact Run continuation only: mark a completed required check as satisfied by its unchanged, successful prior verification after judging that it still covers this step. The runtime checks the exact source and rejects changed criteria, scope, or later effects. Otherwise run verify again.",
+									Description: "On an exact Run continuation only: mark a completed required check as satisfied by its unchanged, successful prior verification after judging that it still covers this step. The runtime checks the exact source and rejects a changed criterion or target, a different scope, or a file change recorded in this run; a read-only look first does not. Omit success_criteria or repeat it exactly. Otherwise run verify again.",
 									Default:     false,
 								},
 								"reuse_reason": {

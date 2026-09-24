@@ -278,7 +278,7 @@ func (t *WorkInspectTool) Execute(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("task not found for the current person")
 	}
 	result := map[string]interface{}{
-		"selection_notice": "Inspection is read-only and did not attach this turn. If the current request continues this run, call work_select with action resume before changing its plan, doing its remaining work, or finishing. For a status/result question, call work_select with action observe. If the request is unrelated, do not select it.",
+		"selection_notice": "Inspection is read-only and did not attach this turn. If the current request continues this run, call work_select with action resume before running commands, changing its plan, doing its remaining work, or finishing. For a status/result question, call work_select with action observe. If the request is unrelated, do not select it.",
 		"run": map[string]interface{}{
 			"run_id": run.ID, "task_id": run.TaskID, "resumes_run_id": run.ResumesRunID,
 			"status": run.Status, "workspace_id": run.WorkspaceID, "channel": run.Channel,

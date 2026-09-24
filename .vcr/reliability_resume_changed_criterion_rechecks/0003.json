@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will update the task plan to mark the verification step completed."
+    },
+    {
+      "usage": {
+        "input_tokens": 10573,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 206,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 814,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_701949",
+          "Function": "update_plan",
+          "Args": "{\"plan\":[{\"step\":\"Verify that value.txt contains exactly READY followed by a newline\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\",\"reuse_prior_verification\":false,\"success_criteria\":\"value.txt contains exactly READY followed by a newline\",\"verification_required\":true,\"status\":\"completed\"},{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_2}}\",\"success_criteria\":\"Verification result is reported after receiving user confirmation\",\"verification_required\":false,\"step\":\"Report the verification result after user confirmation\",\"status\":\"pending\"}],\"explanation\":\"Mark verification completed after verify succeeded.\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EuAJCt0JAWkUfRMhNMHCp3xVctEC40sl1nw2fo/qxTw4tZJ8+pxC2xsvgut4e7/xdvJOsNdlGQZH+X/Hg3PQp+rMhNJvaZ8QPlsQbbqX9P7V3gl4IDausLw04ewO7T5YokfYtAOWiloT2MMwKBG6E35c/Qw/HgenxgCkzMtl+w4cez7P1ThN2atQIwAWip5f3elKTp4z7VRBRzO5fjNn/x7sOs85LxzSV7vamzGgS4cbGFEpl2OFQvPUgNni67yzMPxhqKJcJAuENQQt60AZdJxeTiB+RoAXTBIBxpUVg5Z3RSmyr3Pu8DPLb4Ov88LGxZDPQ7tko8CTw/FLeOKZ36j/bFwAb3Jl0Oy51jsX/Lz3HnKdEnuBf4+l6N3tXvUALMEotB/osdYFfJ0DWiZyheHaadDqpzNmoCCSQcQ63+gXSSqgYDc6QtA2kFebq7zLKsi4atILS4ybLYr8qUgrHLik20Buv+spX5Bo9Hj6gUDo2ultTxHOpWiIXC5vUjZtQMIalTc+FxCbJSqclI72btzcs9Zzx6CEdy2BaVspHeV2qczhD9li5SjO7P98PlL/vh6JVUbqay18qbxe/8m42tD9sjx59EzgLPHhswys8ix+g1shCOXdkokg38gR6lE5zPvKpFs5dTk2SSOA6H0czWLUfivoGIjEhIModYvsy0QtfOkTyqtRvTkz04H287rqimpAfN17MeQ273RmIHI5fiy8lybK0hzeuFpRSLwOa6T3Xao9F3uF/CxGG7U1VBmyRJcYDwEu1bJp3MnsNOCbx3TWB0n/QajOx1RIuSkPsm6GE1kNNn0nXoUF2CwZA/Hx0DAKgpOhzopzR9Opa0eqrf4yyb9OEuoMvzTx9EJbeAWbpTukoBxUPDnRLATYdpfAXJtmobE5o3QfsOMk3fOUP2X9C771RfDaNe4ChOGQHFPDr1RJGlE6lYMEP4C8cPpY19PuS0qHW6O5ia2T2TLXGPUJJ8+a9zEj4N7fAWvopYEILUEziFYw/HHVti1aZSi70v9t6az/1y6zDgL58Yy7ke1hdw+/cf6nahgZpSy3v8UhIMkURNFuCLsdlq4URXER4NUyqGigw7Mg85s6ua2h9JBw6tg21esYGBiUa6xqyRcC11/PyzHR7EiHB06BO4mk8QOP1KgkgCTJZP8P6SkAc0eLgLRDwZCLm/RTWE3p0VbrLJ+ZLMaDQCQX+1vMK/7h/23rBDptUVM3Mdnb1ZquViYMwUTNWHIDYjHpIahwdzI2rimG2bWFymjnBj1maZ6wWaw9CRnWP3dejoE3K9xUm0kEyjogRHRLlE+GofGLSjcfiRGt1eaAHkAXDTYxt4aXgfnW2hf7z+BxsVmtxr2zTpwQLbb99YxD9lvM+hj3NLp6mHNS62Nb168jbBUQKd7eID4A0FHF0ywboXJ2Rp3S7r6HYzRSLtPOWfJoNbzrUZU6sd63tQZyA8MTsAg8qWv3X0VdAp6Ac6XLxBHmd2Pqq51WuxOHaFboNZCwaym2t/T343kbsMqt2kX3ActNa8OSyyoJaJTZ4eL9W4zVg+xShGAdXx5GUO2/XdCkkyAdaXMCD6iLqVuXq5bAO8p7pSOXPNCdZljRhfGXpDQB5M7d9d0YCML2URzWMxcYaVD6RhelCMCK6GFE/R8lTZwP/nz9jPlz"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

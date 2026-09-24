@@ -1,0 +1,45 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "The verification check has established that `value.txt` contains"
+    },
+    {
+      "usage": {
+        "input_tokens": 4888,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " exactly `READY` followed by a newline, and the step has been marked completed.\n\nWaiting for your confirmation before reporting the result."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 27,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1246,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

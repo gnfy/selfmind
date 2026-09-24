@@ -1,0 +1,602 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": " followed"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " mark"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Then"
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " distinct"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": " reporting"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " set"
+    },
+    {
+      "reasoning_content": " up"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " policy"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " itself"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " action"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Plan"
+    },
+    {
+      "reasoning_content": " steps"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Insp"
+    },
+    {
+      "reasoning_content": "ect"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " determine"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Verify"
+    },
+    {
+      "reasoning_content": " acceptance"
+    },
+    {
+      "reasoning_content": " condition"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "required"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Reporting"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " careful"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " verification"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " must"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " marked"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " reporting"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " remains"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "plan"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " set"
+    },
+    {
+      "content": " up"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " inspect"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " verifying"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10094,
+        "output_tokens": 369,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 10094,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 176,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_7kyptcZWAbMqwz7ESajs2035",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"step\": \"Read value.txt bytes to determine exact content\", \"status\": \"in_progress\", \"success_criteria\": \"Exact byte content of value.txt is known without modifying it\"}, {\"step\": \"Verify acceptance condition: value.txt contains exactly READY followed by a newline\", \"status\": \"pending\", \"success_criteria\": \"A recorded verify check exits 0 only if value.txt is exactly b'READY\\\\n'\", \"verification_required\": true}, {\"step\": \"Report result to user (blocked until user confirms)\", \"status\": \"pending\", \"success_criteria\": \"User has confirmed, then the verification result is reported\"}]}"
+        }
+      ]
+    }
+  ]
+}

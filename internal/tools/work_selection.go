@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/kernel"
 )
 
 // WorkSelectTool records Main's typed interpretation of one exact historical
@@ -363,6 +364,7 @@ func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, 
 	}
 	if len(prior) > 0 {
 		sb.WriteString("Prior step evidence (historical, not a current verification grant):\n")
+		now := time.Now()
 		for i, item := range prior {
 			if i == 8 {
 				break
@@ -370,7 +372,11 @@ func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, 
 			fmt.Fprintf(&sb, "- step_id=%s source_run_id=%s source_status=%s prior_verification=%s latest_check=%s target=%q\n",
 				item.StepID, item.SourceRunID, item.SourceStatus, item.PriorVerification, item.LatestCheck, workBound(item.Target, 120))
 			if !item.CheckedAt.IsZero() {
-				fmt.Fprintf(&sb, "  checked_at=%s\n", item.CheckedAt.Format(time.RFC3339))
+				age := ""
+				if now.After(item.CheckedAt) {
+					age = " checked_ago=" + kernel.EvidenceAge(now.Sub(item.CheckedAt))
+				}
+				fmt.Fprintf(&sb, "  checked_at=%s%s\n", item.CheckedAt.Format(time.RFC3339), age)
 			}
 			if item.CriterionChanged {
 				fmt.Fprintf(&sb, "  criterion changed from %q; prior verification cannot cover the new criterion without review.\n", workBound(item.SourceCriterion, 160))

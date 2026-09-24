@@ -205,18 +205,29 @@ func TestExactContinuationCanAdoptUnchangedVerifiedStep(t *testing.T) {
 			t.Fatalf("accepted invalid reuse: %+v", changed)
 		}
 	}
+	// Looking first is the careful order: a completed terminal read is ledgered
+	// as mutate for replay purposes but changes no file, so it cannot make the
+	// prior check stale — the same rule a check follows inside one Run.
 	if _, err := store.db.ExecContext(ctx, `INSERT INTO tool_ledger
 		(tenant_id, run_id, tool_call_id, tool_name, strategy, retry_class, status, created_at, updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`, identity.TenantID, child.ID, "write", "write_file", "mutate", "idempotent", "completed", 2, 2); err != nil {
+		VALUES(?,?,?,?,?,?,?,?,?)`, identity.TenantID, child.ID, "look", "terminal", "mutate", "side_effect", "completed", 2, 2); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.SyncRunPlan(ctx, identity.TenantID, child.ID, "effect occurred", []RunPlanStepInput{{
+	changed, _ := json.Marshal(map[string]interface{}{"evidence": map[string]interface{}{
+		"kind": "mutation", "tool_call_id": "write", "tool_name": "write_file", "status": "succeeded",
+		"started_at_unix_nano": int64(20), "finished_at_unix_nano": int64(21),
+		"files": []map[string]interface{}{{"path": "/workspace/target", "before_sha256": "a", "after_sha256": "b"}},
+	}})
+	if _, err := store.AppendEvent(ctx, Event{TaskID: childTask.ID, RunID: child.ID, Type: "evidence.recorded", Payload: changed}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, child.ID, "file changed", []RunPlanStepInput{{
 		StepID: step.StepID, Step: step.Step, Status: "completed",
 		ReusePriorVerification: true, ReuseReason: "same target",
 	}}); err == nil {
-		t.Fatal("a prior check cannot be adopted after a current effect without observation")
+		t.Fatal("a prior check cannot be adopted after this run recorded a file change")
 	}
-	if _, err := store.db.ExecContext(ctx, `DELETE FROM tool_ledger WHERE tenant_id=? AND run_id=? AND tool_call_id='write'`, identity.TenantID, child.ID); err != nil {
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM task_events WHERE run_id=? AND type='evidence.recorded'`, child.ID); err != nil {
 		t.Fatal(err)
 	}
 	var originalRoots string

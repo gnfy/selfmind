@@ -124,6 +124,12 @@ func deterministicObservationExec(toolName string, args map[string]interface{}) 
 	}
 	credentialed, _ := args[credentialReadArgKey].(bool)
 	for _, fields := range commands {
+		// The catalog vouches for the tool a bare name resolves to, not for
+		// whatever file sits at a path: `./cat` or `bin/git` may be a workspace
+		// script that only borrows a catalogued basename.
+		if strings.Contains(fields[0], "/") {
+			return false
+		}
 		program := strings.ToLower(filepath.Base(fields[0]))
 		rule, ok := observationRuleByProgram[program]
 		// credentialSafe is per program; filterReadsOnlyStdin judges the

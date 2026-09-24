@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am recording the task completion now"
+    },
+    {
+      "usage": {
+        "input_tokens": 11849,
+        "output_tokens": 7,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " that all steps are verified and reported."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 86,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2528,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_828125",
+          "Function": "finish_run",
+          "Args": "{\"done\":[\"Verified value.txt contains exactly READY followed by a newline\",\"Reported verification result after user confirmation\"],\"summary\":\"Verified that value.txt contains exactly READY followed by a newline.\",\"status\":\"done\",\"tests\":[\"Prior verification confirmed value.txt contains exactly READY followed by a newline\"],\"files\":[\"value.txt\"]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EpMGCpAGAWkUfRO3Cx/eLWvkA0RwLX4mzI1tBw8wLHihdUFmv6eRg0VijcmqZYfS7TahsfVgSR/7Wc0JGpm8UJJjvol0QxdnwGgi3llOVDi1VQuQeCrsK1eK6SBFnLb8fPEyZNt6YxSIxorc6bPZ2kW/UUdNd6GldRRpOF7JplegBShniM5zAGsRPM+8jGJH9pjAoXdXEG+pBmDUMKEHxKl2cm7rG0GOEtRCSoD9udGqnQ0+drduizAPVxT/BNUPUH9VISbZs1shcidZ0b/HevdMlPzi3fq34BwWSAZlXHahmECfUNzWyTDcflBByxLr17g1iSTa+MamRpD0Tuz4s1zrxNCBKt4sIVZuB1NX8YZi86Ty89MdJHoX2umViBb8Ur4vvz2xCMXgFtSYA/xdHDg0BWgDWvYBO7VV40vUBEE5qSt8gV7QqruWQkZwuF+LjVTUx6vRp6B1gw8M6DRwlnNE7P1yAORI66qXA8Uw+SsY2H3mbasAlD+a9l4yKCfIeaSKaLrkwsV4c704BHpTiSa7VmgpANssZp1LWHrNubGQBSRaNpY8EnV/j+BxOL4ek2PB4ZqI/rqVQLkZQDf+8NBd+0JmJ7UiQI4FUHkF9jP6Z8YmKbuQgisTMLaBrbHGbjgR+I+B0enA4QdREgonrG1pHYwp/3T72p8kAq7shtAdZVFlQoy2QQOvWBTqcC5vZSGkNi+y0aBtqAZv4bjieDw4b6GDC7aVVHZ5zXkMCNdfle7L5YDRU+d8PG9rmThpeFE90Yd6R5fJ29U/Mn/cFgjzAXDSzC8G/aNviJesKfKAmcXiLm9pyjM/g4MqxSzJ5A7wDcKxZ6GPfjUh2FrA/TtzQVa4g6+54XQepf2GDJi/5aOgkmguMu2okhjXnhW+AcoB6Z+Dbjk7QHtttu2TuwBjprDPJkmUnZqzra7+833ayQuTGwR7rce2zcKXor1/iVisOtnMtWMNZZhVxoFrn67OwqRXbAWP4wWBdgvWzM1QUGL8toecldBuRTww7fHzbUb3joG3oQEhwVQB+D1H0RgzQHjC9Q=="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

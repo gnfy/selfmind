@@ -1,0 +1,54 @@
+id: reliability_resume_bare_confirmation_en
+title: "A bare English confirmation continues parked work without repeating its passed check"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+# Second wording of the same invariant as resume-bare-confirmation-zh: a short
+# acceptance in another language attaches the parked Run and keeps its check.
+requires:
+  commands: [cmp]
+setup:
+  files:
+    value.txt: "READY\n"
+turns:
+  - input: >-
+      Check whether value.txt contains exactly READY followed by a newline.
+      Use a plan with a verification_required step for that acceptance condition,
+      run verify to establish it, and mark the step completed. Then stop and
+      wait for my confirmation before reporting the result: keep a distinct
+      pending reporting step and record waiting_user with finish_run. Do not
+      modify value.txt.
+    assert_state:
+      - on: run
+        field: status
+        eq: waiting_user
+      - on: events
+        type: evidence.recorded
+        payload_contains: '"tool_name":"verify"}'
+        count_gte: 1
+  - input: "ok, go ahead."
+expect:
+  status: completed
+  max_tool_errors: 0
+  max_duration_seconds: 300
+assert_state:
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: work.selection_committed
+    payload_contains: '"commit_mode":"direct"'
+    count_gte: 1
+  - on: events
+    type: plan.updated
+    payload_contains: '"source":"resumed_run"'
+    count_gte: 1
+  - on: file
+    path: value.txt
+    contains: READY
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

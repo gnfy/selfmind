@@ -591,7 +591,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 				ArgsHash: ToolArgsHash(call.Args), RetryClass: retryClass,
 				EffectID: ToolEffectID(ledgerRunID, call.ID), PlanVersion: planVersion,
 				PlanStepID: planStepID, Strategy: ToolExecutionStrategy(name, retryClass),
-				EffectClass: string(retryClass), EnvironmentGeneration: environmentGeneration,
+				EffectClass: ToolEffectClass(retryClass, dispatchMetadata...), EnvironmentGeneration: environmentGeneration,
 			})
 			if claimErr != nil && retryClass != ToolRetryReadOnly {
 				return a.toolDispatchRefused(eventCh, idx, call, signature,
@@ -614,6 +614,9 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			payload["tool_read_only"] = metadata.ReadOnly
 			if len(metadata.OperationClasses) > 0 {
 				payload["operation_classes"] = metadata.OperationClasses
+			}
+			if metadata.ObservationOnly {
+				payload["observation_only"] = true
 			}
 		}
 		EmitAgentEvent(eventCh, AgentEvent{

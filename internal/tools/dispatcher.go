@@ -656,13 +656,17 @@ func (d *Dispatcher) ToolExecutionMetadata(name string, args map[string]interfac
 	classes := operationClassesFor(name, classifiedArgs, dangerous)
 	classes = uniqueOperationClasses(classes)
 	classNames := make([]string, 0, len(classes))
+	observation := false
 	for _, class := range classes {
 		classNames = append(classNames, string(class))
+		// operationClassesFor marks an exec call observe only when the
+		// deterministic proof holds, wherever the command will run.
+		observation = observation || (class == OpClassObserve && isExecTool(name))
 	}
 	return kernel.ToolExecutionMetadata{
 		Origin: string(policy.Origin), Category: policy.Category,
 		RiskLevel: string(policy.Risk), ReadOnly: policy.ReadOnly,
-		OperationClasses: classNames,
+		OperationClasses: classNames, ObservationOnly: observation,
 	}
 }
 

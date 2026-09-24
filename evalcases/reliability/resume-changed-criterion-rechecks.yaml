@@ -1,0 +1,51 @@
+id: reliability_resume_changed_criterion_rechecks
+title: "A continuation whose acceptance criterion changed rechecks instead of adopting the old pass"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+# The constraint that must change the result for the bare-confirmation cases:
+# the user replaces the criterion, so the passed READY check cannot be adopted.
+# A correct run observes the new criterion fail and reports it without editing
+# the file. Tool-error counts are not asserted: the failing verify is the
+# expected answer, and the harness does not yet separate "check said no" from
+# execution failure, so the case pins the evidence instead.
+requires:
+  commands: [python3]
+setup:
+  files:
+    value.txt: "READY\n"
+turns:
+  - input: >-
+      Check whether value.txt contains exactly READY followed by a newline.
+      Use a plan with a verification_required step for that acceptance condition,
+      run verify to establish it, and mark the step completed. Then stop and
+      wait for my confirmation before reporting the result: keep a distinct
+      pending reporting step and record waiting_user with finish_run. Do not
+      modify value.txt.
+    assert_state:
+      - on: run
+        field: status
+        eq: waiting_user
+      - on: events
+        type: evidence.recorded
+        payload_contains: '"tool_name":"verify"}'
+        count_gte: 1
+  - input: "确认，但验收条件改了：value.txt 必须恰好是 DONE 加换行。按新条件检查后再报告，不要修改文件。"
+expect:
+  verification_state: failed
+  max_duration_seconds: 300
+assert_state:
+  - on: events
+    type: work.selection_committed
+    count_gte: 1
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 2
+  - on: file
+    path: value.txt
+    contains: READY
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

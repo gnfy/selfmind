@@ -31,7 +31,10 @@ directory is intentionally ignored by git.
 
 Cases may opt into `approval_mode: smart`. The harness then installs the same
 cheap-role approval judge as the daemon and preserves smart mode for external
-watch continuations. Existing cases default to full-auto. An
+watch continuations. Existing cases default to full-auto. No person answers
+an eval approval, so in every mode an unanswered ask, such as a full-auto
+`network:shared` escalation, fails after a short settle instead of parking
+until the turn deadline. An
 `assert_state` predicate with `on: approval_triage`, `status: approved`, and
 `count_gte: 1` proves that the model funnel ran; `on: approval` with
 `count_lte: 0` detects unexpected human asks. Triage counts cover the isolated

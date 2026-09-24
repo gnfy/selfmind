@@ -1,11 +1,12 @@
 {
+  "plan_binding_version": 1,
   "method": "stream",
   "events": [
     {
       "content": "Done"
     },
     {
-      "content": "."
+      "content": " —"
     },
     {
       "content": " `"
@@ -20,19 +21,16 @@
       "content": "`"
     },
     {
-      "content": " now"
+      "content": " is"
     },
     {
-      "content": " exists"
+      "content": " written"
     },
     {
-      "content": " in"
+      "content": " and"
     },
     {
-      "content": " the"
-    },
-    {
-      "content": " workspace"
+      "content": " verified"
     },
     {
       "content": ".\n\n"
@@ -41,19 +39,10 @@
       "content": "-"
     },
     {
-      "content": " Requirements"
+      "content": " Re"
     },
     {
-      "content": " re"
-    },
-    {
-      "content": "-check"
-    },
-    {
-      "content": "ed"
-    },
-    {
-      "content": " from"
+      "content": "-read"
     },
     {
       "content": " `"
@@ -68,28 +57,13 @@
       "content": "`:"
     },
     {
-      "content": " accepted"
+      "content": " required"
     },
     {
-      "content": " result"
+      "content": " content"
     },
     {
       "content": " is"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "result"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " containing"
     },
     {
       "content": " exactly"
@@ -128,10 +102,13 @@
       "content": "-"
     },
     {
-      "content": " The"
+      "content": " Res"
     },
     {
-      "content": " prior"
+      "content": "umed"
+    },
+    {
+      "content": " the"
     },
     {
       "content": " waiting"
@@ -140,7 +117,7 @@
       "content": " run"
     },
     {
-      "content": " (`"
+      "content": " `"
     },
     {
       "content": "run"
@@ -149,127 +126,109 @@
       "content": "_"
     },
     {
-      "content": "582"
+      "content": "6"
+    },
+    {
+      "content": "ec"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "430"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "-a"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "dc"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "c"
     },
     {
       "content": "5"
     },
     {
-      "content": "e"
+      "content": "f"
+    },
+    {
+      "content": "-"
     },
     {
       "content": "9"
     },
     {
-      "content": "bf"
+      "content": "c"
     },
     {
-      "content": "`)"
+      "content": "15"
     },
     {
-      "content": " was"
+      "content": "-"
     },
     {
-      "content": " inspected"
+      "content": "39"
     },
     {
-      "content": " and"
+      "content": "ee"
     },
     {
-      "content": " resumed"
+      "content": "a"
     },
     {
-      "content": " via"
+      "content": "5"
     },
     {
-      "content": " `"
+      "content": "b"
     },
     {
-      "content": "work"
+      "content": "aff"
     },
     {
-      "content": "_select"
+      "content": "61"
     },
     {
       "content": "`"
     },
     {
-      "content": " —"
+      "content": " ("
     },
     {
-      "content": " it"
+      "content": "direct"
     },
     {
-      "content": " returned"
+      "content": " commit"
     },
     {
-      "content": " `"
+      "content": ")"
     },
     {
-      "content": "commit"
+      "content": " rather"
     },
     {
-      "content": "_mode"
+      "content": " than"
     },
     {
-      "content": ":"
+      "content": " starting"
     },
     {
-      "content": " direct"
+      "content": " new"
     },
     {
-      "content": "`,"
-    },
-    {
-      "content": " so"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " write"
-    },
-    {
-      "content": " happened"
-    },
-    {
-      "content": " in"
-    },
-    {
-      "content": " that"
-    },
-    {
-      "content": " run"
-    },
-    {
-      "content": "'s"
-    },
-    {
-      "content": " scope"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " keeping"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " completed"
-    },
-    {
-      "content": " read"
-    },
-    {
-      "content": "/"
-    },
-    {
-      "content": "plan"
-    },
-    {
-      "content": " steps"
+      "content": " work"
     },
     {
       "content": ".\n"
@@ -278,37 +237,16 @@
       "content": "-"
     },
     {
-      "content": " Write"
+      "content": " W"
     },
     {
-      "content": ":"
+      "content": "rote"
     },
     {
       "content": " `"
     },
     {
-      "content": "printf"
-    },
-    {
-      "content": " '"
-    },
-    {
-      "content": "READ"
-    },
-    {
-      "content": "Y"
-    },
-    {
-      "content": "\\n"
-    },
-    {
-      "content": "'"
-    },
-    {
-      "content": " \u003e"
-    },
-    {
-      "content": " result"
+      "content": "result"
     },
     {
       "content": ".txt"
@@ -317,16 +255,16 @@
       "content": "`"
     },
     {
-      "content": " →"
+      "content": " in"
     },
     {
-      "content": " "
+      "content": " the"
     },
     {
-      "content": "6"
+      "content": " workspace"
     },
     {
-      "content": " bytes"
+      "content": " root"
     },
     {
       "content": ".\n"
@@ -338,40 +276,25 @@
       "content": " Verification"
     },
     {
-      "content": " (`"
+      "content": " passed"
     },
     {
-      "content": "verify"
-    },
-    {
-      "content": "`,"
-    },
-    {
-      "content": " smoke"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " exit"
+      "content": ":"
     },
     {
       "content": " "
     },
     {
-      "content": "0"
+      "content": "6"
     },
     {
-      "content": "):"
+      "content": " bytes"
+    },
+    {
+      "content": ","
     },
     {
       "content": " hex"
-    },
-    {
-      "content": " dump"
-    },
-    {
-      "content": " is"
     },
     {
       "content": " `"
@@ -413,127 +336,28 @@
       "content": "a"
     },
     {
-      "content": "`,"
+      "content": "`"
     },
     {
-      "content": " byte"
+      "content": " (`"
     },
     {
-      "content": " count"
+      "content": "READ"
     },
     {
-      "content": " is"
+      "content": "Y"
     },
     {
-      "content": " `"
+      "content": "\\n"
     },
     {
-      "content": "6"
+      "content": "`"
     },
     {
-      "content": "`.\n\n"
+      "content": "),"
     },
     {
-      "content": "Plan"
-    },
-    {
-      "content": " is"
-    },
-    {
-      "content": " fully"
-    },
-    {
-      "content": " resolved"
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " run"
-    },
-    {
-      "content": " finished"
-    },
-    {
-      "content": " as"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "done"
-    },
-    {
-      "content": "`."
-    },
-    {
-      "content": " One"
-    },
-    {
-      "content": " note"
-    },
-    {
-      "content": " for"
-    },
-    {
-      "content": " accuracy"
-    },
-    {
-      "content": ":"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " byte"
-    },
-    {
-      "content": " comparison"
-    },
-    {
-      "content": " passed"
-    },
-    {
-      "content": " with"
-    },
-    {
-      "content": " no"
-    },
-    {
-      "content": " output"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " so"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " evidence"
-    },
-    {
-      "content": " is"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " exit"
-    },
-    {
-      "content": " status"
-    },
-    {
-      "content": " plus"
-    },
-    {
-      "content": " the"
+      "content": " via"
     },
     {
       "content": " `"
@@ -545,34 +369,25 @@
       "content": "`"
     },
     {
-      "content": "/"
+      "content": " +"
     },
     {
-      "content": "`"
+      "content": " `"
     },
     {
       "content": "wc"
     },
     {
+      "content": " -"
+    },
+    {
+      "content": "c"
+    },
+    {
       "content": "`"
     },
     {
-      "content": " checks"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " not"
-    },
-    {
-      "content": " a"
-    },
-    {
-      "content": " printed"
-    },
-    {
-      "content": " diff"
+      "content": " comparison"
     },
     {
       "content": "."
@@ -582,10 +397,10 @@
     },
     {
       "usage": {
-        "input_tokens": 14710,
-        "output_tokens": 193,
-        "cache_read_input_tokens": 3712,
-        "cache_miss_input_tokens": 10998,
+        "input_tokens": 14778,
+        "output_tokens": 131,
+        "cache_read_input_tokens": 4096,
+        "cache_miss_input_tokens": 10682,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true

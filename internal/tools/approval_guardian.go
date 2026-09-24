@@ -79,6 +79,16 @@ func validateStructuredTriageReply(raw string) *ApprovalResponseError {
 	return nil
 }
 
+// ValidateStructuredApprovalReply exposes the same fail-closed contract used
+// by live triage so model setup can prove that a selected fast-classifier route
+// produces an actionable verdict before committing it.
+func ValidateStructuredApprovalReply(raw string) error {
+	if err := validateStructuredTriageReply(raw); err != nil {
+		return err
+	}
+	return nil
+}
+
 // parseTriageAssessment reads the judge's reply. It accepts the JSON contract
 // first, then falls back to the historical bare verdict word so an older or
 // simpler judge keeps working. Anything else escalates.

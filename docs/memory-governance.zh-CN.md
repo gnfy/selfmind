@@ -307,6 +307,9 @@ ARCHIVE + canonical 文本 + member_ids + confidence。
 
 整理的 due clock 按 tenant/person 持久化到 control store，而不是依赖进程内 24 小时
 ticker。daemon 启动后先给前台 30 秒宽限；若上次成功已经逾期，则补跑一次。tick
+只把 durable `next_due_at` 当作事实，不把长间隔直接变成同样长的进程内 timer；
+调度器至多每 5 分钟做一次不调用模型的到期扫描。这样笔记本休眠暂停 monotonic timer
+后，唤醒也能在有界时间内按 wall clock 补跑，而不会把休眠前剩余时长重新等一遍。
 碰到活跃 run 或一次可重试失败时，记录 defer/failure 原因并在 10 分钟级短间隔重排，
 不会丢弃本次机会后再等完整的 24 小时。成功的空 pass 也会推进 last-success 与
 next-due。一次 pass 只处理有界批次；若当前 judge 版本仍有 backlog，则记录

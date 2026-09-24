@@ -35,7 +35,8 @@ func TestModelManagerBuildsOneDraftAcrossMainBackgroundAndRole(t *testing.T) {
 	// Background model.
 	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
 	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	for i := 0; i < 4; i++ {
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown}) // explicit gpt-next
+	for i := 0; i < 3; i++ {
 		action = manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	}
 	if action.ValidationRoute != "background" || len(action.Draft) != 2 {
@@ -64,6 +65,51 @@ func TestModelManagerBuildsOneDraftAcrossMainBackgroundAndRole(t *testing.T) {
 	apply := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !apply.Closed || len(apply.Draft) != 3 {
 		t.Fatalf("apply action = %+v", apply)
+	}
+}
+
+// The daemon runs approval triage at the chosen model's lowest-latency tier
+// whatever reasoning is configured, so the manager must not offer a reasoning
+// choice there that would be ignored. Other roles keep theirs.
+func TestModelManagerApprovalRoleOffersNoReasoningChoice(t *testing.T) {
+	pickExplicitModel := func(roleDowns int) *ModelManager {
+		manager := NewModelManager(ModelManagerStatus{}, []ModelManagerProvider{{
+			ID: "codex-cli", Label: "Codex", Models: []ModelManagerModel{{ID: "gpt-next", Reasoning: []string{"low", "high"}}},
+		}}, 80, 24)
+		// Role overrides -> role -> choose explicit -> provider -> model.
+		manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+		manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+		manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		for i := 0; i < roleDowns; i++ {
+			manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+		}
+		manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+		manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		return manager
+	}
+
+	approval := pickExplicitModel(0)
+	if approval.route != "fast_classifier" || approval.screen != modelScreenServiceTier {
+		t.Fatalf("approval route %q is on screen %v after choosing the model, want the service tier", approval.route, approval.screen)
+	}
+	approval.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	if approval.screen != modelScreenModel {
+		t.Fatalf("back from the approval service tier landed on screen %v, want the model list", approval.screen)
+	}
+	approval.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	action := approval.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if action.ValidationRoute != "fast_classifier" || len(action.Draft) != 1 || action.Draft[0].Model != "gpt-next" {
+		t.Fatalf("approval draft action = %+v", action)
+	}
+	if got := action.Draft[0].Reasoning; got != "auto" {
+		t.Fatalf("approval draft reasoning = %q, want auto", got)
+	}
+
+	if review := pickExplicitModel(1); review.route != "memory_extract" || review.screen != modelScreenReasoning {
+		t.Fatalf("memory_extract route %q is on screen %v after choosing the model, want its reasoning choice", review.route, review.screen)
 	}
 }
 
@@ -113,6 +159,75 @@ func TestModelManagerAcceptsManualModelID(t *testing.T) {
 	}
 }
 
+func TestModelManagerAcceptsManualReasoningWhenCapabilitiesAreUnknown(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{}, []ModelManagerProvider{{
+		ID: "custom:test", Models: []ModelManagerModel{{ID: "future-model"}},
+	}}, 80, 24)
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // main
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // provider
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // model
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})  // manual reasoning
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !manager.editingCustomReasoning {
+		t.Fatal("manual reasoning editor did not open")
+	}
+	manager.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("ultra")})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // reasoning -> service tier
+	action := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if len(action.Draft) != 1 || action.Draft[0].Reasoning != "ultra" {
+		t.Fatalf("action = %+v", action)
+	}
+}
+
+func TestModelManagerShowsAndForgetsRememberedModel(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{}, []ModelManagerProvider{{
+		ID: "google", Models: []ModelManagerModel{{ID: "gemini-retired", Remembered: true}},
+	}}, 80, 24)
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // main -> provider
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // provider -> model
+	view := manager.View()
+	if !strings.Contains(view, "gemini-retired · remembered") || !strings.Contains(view, "d forget remembered") {
+		t.Fatalf("remembered model affordance is missing: %s", view)
+	}
+	action := manager.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if action.ForgetModel == nil || action.ForgetModel.Provider != "google" || action.ForgetModel.Model != "gemini-retired" {
+		t.Fatalf("forget action = %+v", action)
+	}
+	manager.ForgetRememberedModel("google", "gemini-retired")
+	if got := manager.currentProvider().Models; len(got) != 0 {
+		t.Fatalf("history-only model remained after forgetting: %+v", got)
+	}
+}
+
+func TestModelManagerForgetKeepsCatalogOrConfiguredModel(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{}, []ModelManagerProvider{{
+		ID: "google", Models: []ModelManagerModel{
+			{ID: "catalog-model", Remembered: true, Available: true},
+			{ID: "configured-model", Remembered: true, Configured: true},
+		},
+	}}, 80, 24)
+	manager.ForgetRememberedModel("google", "catalog-model")
+	manager.ForgetRememberedModel("google", "configured-model")
+	models := manager.providers[0].Models
+	if len(models) != 2 || models[0].Remembered || models[1].Remembered {
+		t.Fatalf("forget removed provider/configured availability: %+v", models)
+	}
+}
+
+func TestModelManagerPreservesExplicitReasoningWhenCapabilitiesAreUnknown(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{
+		PrimaryProvider: "custom:test", PrimaryModel: "future-model", PrimaryReasoning: "ultra",
+	}, []ModelManagerProvider{{
+		ID: "custom:test", Models: []ModelManagerModel{{ID: "future-model"}},
+	}}, 80, 24)
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // main
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // provider
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // model
+	if got := manager.option(manager.reasoningOptions(), manager.index); got != "ultra" {
+		t.Fatalf("reasoning selection = %q", got)
+	}
+}
+
 func TestModelManagerCollectsMissingProviderCredentialBeforeValidation(t *testing.T) {
 	manager := NewModelManager(ModelManagerStatus{}, []ModelManagerProvider{{
 		ID: "deepseek", CredentialRequired: true, Models: []ModelManagerModel{{ID: "deepseek-chat"}},
@@ -159,18 +274,129 @@ func TestModelManagerEscapeClosesWithoutSubmission(t *testing.T) {
 
 func TestModelManagerCanDisableBackgroundWork(t *testing.T) {
 	manager := NewModelManager(ModelManagerStatus{
+		PrimaryProvider: "openai", PrimaryModel: "gpt-test",
 		BackgroundEnabled: true, BackgroundProvider: "openai", BackgroundModel: "gpt-test",
 	}, []ModelManagerProvider{{ID: "openai", Models: []ModelManagerModel{{ID: "gpt-test"}}}}, 80, 24)
 	manager.Update(tea.KeyMsg{Type: tea.KeyDown})  // background menu
-	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // provider screen
-	manager.Update(tea.KeyMsg{Type: tea.KeyDown})  // disable option
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // background choices
+	for range 3 {
+		manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
 	action := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if action.ValidationRoute != "background" || len(action.Draft) != 1 || action.Draft[0].Enabled == nil || *action.Draft[0].Enabled {
+	if action.ValidationRoute != "background" || len(action.Draft) != 1 || action.Draft[0].Reset || action.Draft[0].Enabled == nil || *action.Draft[0].Enabled {
 		t.Fatalf("disable action = %+v", action)
 	}
 	if summary := manager.routeSummary("background"); !strings.Contains(summary, "disabled") {
 		t.Fatalf("background summary = %q", summary)
 	}
+}
+
+func TestModelManagerBackgroundChoicesMatchSetupAndLaterSettings(t *testing.T) {
+	status := ModelManagerStatus{
+		PrimaryProvider: "one", PrimaryModel: "main",
+		BackgroundEnabled: true, BackgroundProvider: "one", BackgroundModel: "small",
+	}
+	providers := []ModelManagerProvider{
+		{ID: "one", Models: []ModelManagerModel{{ID: "main"}, {ID: "small"}}},
+		{ID: "two", Models: []ModelManagerModel{{ID: "other"}}},
+	}
+	normal := NewModelManager(status, providers, 80, 24)
+	normal.Update(tea.KeyMsg{Type: tea.KeyDown})
+	normal.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	setup := NewModelManager(status, providers, 80, 24)
+	setup.SetSetupMode()
+	setup.Update(tea.KeyMsg{Type: tea.KeyDown})
+	setup.Update(tea.KeyMsg{Type: tea.KeyEnter})
+
+	want := []string{"Same as Main", "main", "small", "Another Provider…", "Disable background model work", "Back"}
+	if got := normal.options(); !equalStrings(got, want) {
+		t.Fatalf("normal background choices = %v, want %v", got, want)
+	}
+	if got := setup.options(); !equalStrings(got, want) {
+		t.Fatalf("setup background choices = %v, want %v", got, want)
+	}
+	for _, manager := range []*ModelManager{normal, setup} {
+		view := manager.View()
+		for _, text := range []string{"What should Background use?", "Main: one/main", "Same as Main follows future Main changes; a named model stays independent."} {
+			if !strings.Contains(view, text) {
+				t.Fatalf("shared Background view missing %q: %s", text, view)
+			}
+		}
+	}
+}
+
+func TestModelManagerCanRestoreBackgroundInheritance(t *testing.T) {
+	for _, status := range []ModelManagerStatus{
+		{
+			PrimaryProvider: "one", PrimaryModel: "main",
+			BackgroundEnabled: true, BackgroundProvider: "one", BackgroundModel: "small",
+		},
+		{
+			PrimaryProvider: "one", PrimaryModel: "main",
+			BackgroundEnabled: false, BackgroundProvider: "one", BackgroundModel: "small",
+		},
+	} {
+		manager := NewModelManager(status, []ModelManagerProvider{{ID: "one", Models: []ModelManagerModel{{ID: "main"}, {ID: "small"}}}}, 80, 24)
+		manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+		manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		action := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		if action.ValidationRoute != "background" || len(action.Draft) != 1 || !action.Draft[0].Reset || action.Draft[0].Enabled != nil {
+			t.Fatalf("inheritance action = %+v", action)
+		}
+		if summary := manager.routeSummary("background"); summary != "Same as Main → one/main" {
+			t.Fatalf("background summary = %q", summary)
+		}
+		manager.screen = modelScreenReview
+		if view := manager.View(); !strings.Contains(view, "Same as Main") {
+			t.Fatalf("review hides inheritance: %s", view)
+		}
+	}
+}
+
+func TestModelManagerCurrentBackgroundChoiceIsANoOp(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{
+		PrimaryProvider: "one", PrimaryModel: "main",
+		BackgroundEnabled: true, BackgroundFollowsMain: true,
+	}, []ModelManagerProvider{{ID: "one", Models: []ModelManagerModel{{ID: "main"}}}}, 80, 24)
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	action := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if action.ValidationRoute != "" || len(action.Draft) != 0 || manager.screen != modelScreenMenu {
+		t.Fatalf("current inheritance should not start an empty validation: %+v", action)
+	}
+}
+
+func TestModelManagerExplicitMainModelKeepsBackgroundIndependent(t *testing.T) {
+	manager := NewModelManager(ModelManagerStatus{
+		PrimaryProvider: "one", PrimaryModel: "main",
+		BackgroundEnabled: true, BackgroundFollowsMain: true,
+	}, []ModelManagerProvider{{ID: "one", Models: []ModelManagerModel{{ID: "main"}}}}, 80, 24)
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	manager.Update(tea.KeyMsg{Type: tea.KeyDown})
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // explicit main model
+	manager.Update(tea.KeyMsg{Type: tea.KeyEnter}) // reasoning
+	action := manager.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if action.ValidationRoute != "background" || len(action.Draft) != 1 {
+		t.Fatalf("explicit Background action = %+v", action)
+	}
+	selection := action.Draft[0]
+	if selection.Reset || selection.Provider != "one" || selection.Model != "main" || selection.Enabled == nil || !*selection.Enabled {
+		t.Fatalf("explicit Background selection = %+v", selection)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestModelManagerAddsCustomProviderConnectionDraft(t *testing.T) {

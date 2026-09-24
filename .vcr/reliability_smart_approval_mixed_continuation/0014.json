@@ -1,20 +1,140 @@
 {
   "plan_binding_version": 1,
-  "method": "chat",
-  "chat": {
-    "Content": "{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"Read-only cat of prerequisite.txt/second-prerequisite.txt plus ls -la in the workspace matches the user's explicit authorization for 只读检查 and 目录浏览 of this workspace's files.\"}",
-    "ReasoningContent": "The actual operation: `cat prerequisite.txt; echo \"---\"; cat second-prerequisite.txt; echo \"---\"; ls -la`. This is read-only inspection of workspace files, explicitly authorized: \"用 terminal 的 cat prerequisite.txt 做只读检查\" and \"可按需对本工作区的文件和目录进行只读检查\". So approve, low risk, high authorization.\n\nIt's host filesystem but observation-only, read-only. Authorized explicitly. Approve.",
-    "Phase": "",
-    "ToolCalls": [],
-    "Usage": {
-      "input_tokens": 2094,
-      "output_tokens": 157,
-      "cache_read_input_tokens": 896,
-      "cache_miss_input_tokens": 1198,
-      "cache_creation_input_tokens": 0,
-      "reasoning_output_tokens": 95,
-      "cache_usage_reported": true
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Both"
     },
-    "FinishReason": "stop"
-  }
+    {
+      "reasoning_content": " prerequisites"
+    },
+    {
+      "reasoning_content": " satisfied"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " present"
+    },
+    {
+      "reasoning_content": " yet"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Write"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "两个"
+    },
+    {
+      "content": "前置"
+    },
+    {
+      "content": "条件"
+    },
+    {
+      "content": "仍"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " /"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "_B"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "现在"
+    },
+    {
+      "content": "写入"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "rece"
+    },
+    {
+      "content": "ipt"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 14059,
+        "output_tokens": 134,
+        "cache_read_input_tokens": 13824,
+        "cache_miss_input_tokens": 235,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 13,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_sifDiq6LdXb36AQzYchy4636",
+          "Function": "write_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/receipt.txt\", \"content\": \"VERIFIED\\n\"}"
+        }
+      ]
+    }
+  ]
 }

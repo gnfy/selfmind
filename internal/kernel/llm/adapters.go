@@ -40,9 +40,10 @@ type OpenAIMessage struct {
 }
 
 type OpenAIToolCall struct {
-	ID       string             `json:"id,omitempty"`
-	Type     string             `json:"type"`
-	Function OpenAIToolFunction `json:"function"`
+	ID           string             `json:"id,omitempty"`
+	Type         string             `json:"type"`
+	Function     OpenAIToolFunction `json:"function"`
+	ExtraContent json.RawMessage    `json:"extra_content,omitempty"`
 }
 
 type OpenAIToolFunction struct {
@@ -51,10 +52,11 @@ type OpenAIToolFunction struct {
 }
 
 type openAIToolCallDelta struct {
-	Index    int     `json:"index"`
-	ID       *string `json:"id"`
-	Type     *string `json:"type"`
-	Function struct {
+	Index        int             `json:"index"`
+	ID           *string         `json:"id"`
+	Type         *string         `json:"type"`
+	ExtraContent json.RawMessage `json:"extra_content"`
+	Function     struct {
 		Name      *string `json:"name"`
 		Arguments *string `json:"arguments"`
 	} `json:"function"`
@@ -97,8 +99,8 @@ type OpenAIResponse struct {
 }
 
 func openAIRequestFromChat(model string, req ChatRequest, stream bool) OpenAIRequest {
-	nativeTools := len(req.Tools) > 0
 	messages := sanitizeToolMessageLedger(req.Messages)
+	nativeTools := len(req.Tools) > 0 || hasNativeToolHistory(messages)
 	openaiReq := OpenAIRequest{
 		Model:    model,
 		Messages: make([]OpenAIMessage, 0, len(messages)+1),
@@ -118,7 +120,7 @@ func openAIRequestFromChat(model string, req ChatRequest, stream bool) OpenAIReq
 	for _, m := range messages {
 		openaiReq.Messages = append(openaiReq.Messages, openAIMessageFromLLM(m, nativeTools))
 	}
-	if nativeTools {
+	if len(req.Tools) > 0 {
 		openaiReq.Tools = openAIToolDefinitions(req.Tools)
 	}
 	if stream {
@@ -261,8 +263,9 @@ func openAIToolCallsFromLLM(calls []ToolCall) []OpenAIToolCall {
 	out := make([]OpenAIToolCall, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, OpenAIToolCall{
-			ID:   c.ID,
-			Type: "function",
+			ID:           c.ID,
+			Type:         "function",
+			ExtraContent: boundedToolCallReplayMetadata(c.ReplayMetadata),
 			Function: OpenAIToolFunction{
 				Name:      c.Function,
 				Arguments: c.Args,
@@ -276,9 +279,10 @@ func llmToolCallsFromOpenAI(calls []OpenAIToolCall) []ToolCall {
 	out := make([]ToolCall, 0, len(calls))
 	for _, c := range calls {
 		out = append(out, ToolCall{
-			ID:       c.ID,
-			Function: c.Function.Name,
-			Args:     c.Function.Arguments,
+			ID:             c.ID,
+			Function:       c.Function.Name,
+			Args:           c.Function.Arguments,
+			ReplayMetadata: boundedToolCallReplayMetadata(c.ExtraContent),
 		})
 	}
 	return out
@@ -311,6 +315,9 @@ func accumulateOpenAIToolDeltas(acc map[int]*OpenAIToolCall, deltas []openAITool
 		if delta.Type != nil {
 			call.Type = *delta.Type
 		}
+		if metadata := boundedToolCallReplayMetadata(delta.ExtraContent); len(metadata) > 0 {
+			call.ExtraContent = metadata
+		}
 		if call.Type == "" {
 			call.Type = "function"
 		}
@@ -321,6 +328,15 @@ func accumulateOpenAIToolDeltas(acc map[int]*OpenAIToolCall, deltas []openAITool
 			call.Function.Arguments += *delta.Function.Arguments
 		}
 	}
+}
+
+const maxToolCallReplayMetadataBytes = 64 << 10
+
+func boundedToolCallReplayMetadata(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || len(raw) > maxToolCallReplayMetadataBytes || !json.Valid(raw) {
+		return nil
+	}
+	return append(json.RawMessage(nil), raw...)
 }
 
 func orderedOpenAIToolCalls(acc map[int]*OpenAIToolCall) []ToolCall {
@@ -537,6 +553,7 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 		buf := make([]byte, 4096)
 		var leftover []byte
 		toolDeltas := make(map[int]*OpenAIToolCall)
+		var priorUsage UsageStats
 
 		for {
 			n, err := reader.Read(buf)
@@ -591,7 +608,10 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 						ch <- StreamEvent{FinishReason: chunk.Choices[0].FinishReason}
 					}
 					if chunk.Usage != nil {
-						stats := chunk.Usage.usageStats()
+						// OpenAI-compatible usage values are cumulative snapshots for
+						// this response. Some providers repeat them on several SSE
+						// chunks; the agent loop sums events, so send only new counts.
+						stats := openAIUsageDelta(chunk.Usage.usageStats(), &priorUsage)
 						if stats != (UsageStats{}) {
 							ch <- StreamEvent{Usage: &stats}
 						}
@@ -656,6 +676,31 @@ func (u openAIStreamUsage) usageStats() UsageStats {
 	return stats
 }
 
+func openAIUsageDelta(current UsageStats, prior *UsageStats) UsageStats {
+	if prior == nil {
+		return current
+	}
+	delta := UsageStats{
+		InputTokens:              max(0, current.InputTokens-prior.InputTokens),
+		OutputTokens:             max(0, current.OutputTokens-prior.OutputTokens),
+		CacheReadInputTokens:     max(0, current.CacheReadInputTokens-prior.CacheReadInputTokens),
+		CacheMissInputTokens:     max(0, current.CacheMissInputTokens-prior.CacheMissInputTokens),
+		CacheCreationInputTokens: max(0, current.CacheCreationInputTokens-prior.CacheCreationInputTokens),
+		ReasoningOutputTokens:    max(0, current.ReasoningOutputTokens-prior.ReasoningOutputTokens),
+		CacheUsageReported:       current.CacheUsageReported && !prior.CacheUsageReported,
+		CacheCreationReported:    current.CacheCreationReported && !prior.CacheCreationReported,
+	}
+	prior.InputTokens = max(prior.InputTokens, current.InputTokens)
+	prior.OutputTokens = max(prior.OutputTokens, current.OutputTokens)
+	prior.CacheReadInputTokens = max(prior.CacheReadInputTokens, current.CacheReadInputTokens)
+	prior.CacheMissInputTokens = max(prior.CacheMissInputTokens, current.CacheMissInputTokens)
+	prior.CacheCreationInputTokens = max(prior.CacheCreationInputTokens, current.CacheCreationInputTokens)
+	prior.ReasoningOutputTokens = max(prior.ReasoningOutputTokens, current.ReasoningOutputTokens)
+	prior.CacheUsageReported = prior.CacheUsageReported || current.CacheUsageReported
+	prior.CacheCreationReported = prior.CacheCreationReported || current.CacheCreationReported
+	return delta
+}
+
 func maxUsageInt(value, minimum int) int {
 	if value < minimum {
 		return minimum
@@ -677,19 +722,32 @@ func (a *OpenAIAdapter) applyOptions(ctx context.Context, openaiReq *OpenAIReque
 		openaiReq.Thinking = a.Thinking
 	}
 	openaiReq.ServiceTier = a.ServiceTier
-	if req.Options != nil {
-		if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {
-			if reasoningDisabled(value) {
-				openaiReq.ReasoningEffort = ""
-				if strings.EqualFold(strings.TrimSpace(a.Quirks.ThinkingMode), "deepseek") {
-					openaiReq.Thinking = map[string]interface{}{"type": "disabled"}
-				} else {
-					openaiReq.Thinking = nil
-				}
-			} else {
-				openaiReq.ReasoningEffort = value
-			}
+	effort := a.ReasoningEffort
+	if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {
+		effort = value
+	}
+	// Disabling is encoded per provider, whether the request or the route's
+	// configured level asks for it: omitting the field means no reasoning only
+	// on a model that does not reason by default; one that does applies its own
+	// default and reasons anyway.
+	if reasoningDisabled(effort) {
+		switch strings.ToLower(strings.TrimSpace(a.Quirks.ThinkingMode)) {
+		case "deepseek":
+			openaiReq.ReasoningEffort = ""
+			openaiReq.Thinking = map[string]interface{}{"type": "disabled"}
+		case "effort_none":
+			openaiReq.ReasoningEffort = "none"
+			openaiReq.Thinking = nil
+		default:
+			// Omitted, not "none": some OpenAI-compatible endpoints reject a
+			// value they do not list.
+			openaiReq.ReasoningEffort = ""
+			openaiReq.Thinking = nil
 		}
+	} else {
+		openaiReq.ReasoningEffort = effort
+	}
+	if req.Options != nil {
 		if value, ok := req.Options["thinking"]; ok {
 			openaiReq.Thinking = value
 		}

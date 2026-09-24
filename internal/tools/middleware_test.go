@@ -355,15 +355,15 @@ func TestDangerousToolCallDetection(t *testing.T) {
 }
 
 func TestRedactSensitive(t *testing.T) {
-	input := `Authorization: Bearer abcdefghijklmnop token=secret-value api_key: sk-testsecret123456789`
+	input := `Authorization: Bearer abcdefghijklmnop token=secret-value api_key: sk-testsecret123456789 {"token":"json secret value"}`
 	out := RedactSensitive(input)
-	if strings.Contains(out, "secret-value") || strings.Contains(out, "abcdefghijklmnop") || strings.Contains(out, "sk-testsecret") {
+	if strings.Contains(out, "secret-value") || strings.Contains(out, "json secret value") || strings.Contains(out, "abcdefghijklmnop") || strings.Contains(out, "sk-testsecret") {
 		t.Fatalf("sensitive data was not redacted: %s", out)
 	}
 }
 
 func TestRedactSensitivePreservesCredentialReferences(t *testing.T) {
-	input := `TOKEN="$(gcloud auth print-access-token)" curl -H "Authorization: Bearer ${TOKEN}"`
+	input := `TOKEN="$(gcloud auth print-access-token)" curl -H "Authorization: Bearer ${TOKEN}" {"token":"${TOKEN}"}`
 	if got := RedactSensitive(input); got != input {
 		t.Fatalf("credential reference structure changed:\n got: %s\nwant: %s", got, input)
 	}

@@ -68,6 +68,15 @@ lets existing CLIs keep using their normal login mechanisms without exposing
 the daemon's own authority. Later credential snapshots may narrow this set,
 but must do so through data-driven profiles rather than per-vendor branches.
 
+The immutable snapshot is projected into each invocation's actual network
+view. An isolated invocation receives no standard proxy variables. A shared
+invocation preserves remote proxies and reachable loopback proxies; when a
+loopback listener is no longer reachable, the runtime omits it from that child
+environment and records `proxy_mode` in the sandbox plan and execution event.
+This decision is runtime-owned and generic: models do not need to remember
+shell prefixes such as `unset HTTPS_PROXY`, and the execution engine has no
+provider, project, or command-specific proxy branch.
+
 Bubblewrap receives the constructed environment through `cmd.Env`. Never put a
 credential into bwrap arguments with `--setenv`: process arguments are visible
 through process listings and `/proc/*/cmdline`.
@@ -120,7 +129,17 @@ Workspace trust is enforced as a durable owner-controlled boundary:
   Declining leaves the command runnable with an empty state overlay;
 - access is never granted to all of `~/.config`. A profile names the files and
   subdirectories it needs, bounded by `copy_in` limits, and the operator's own
-  files are never modified.
+  files are never modified;
+- once credentials are in scope, every program in the payload must be unable to
+  emit one, because that is how a credential leaves. The per-program flag is too
+  coarse for a filter, so the invocation is judged instead: a catalogued filter
+  invoked with no file operand can only have read the previous command's stdout,
+  which is why `… | grep tag` is released while `grep -r secret ~/.aws`,
+  `head ~/.aws/credentials` and `grep -f patterns.txt` are not. The argument
+  grammar is per program and fails closed on any flag, bundle or operand it does
+  not fully model, so it can only ever widen. `rg` is excluded because with no
+  path operand it walks the working directory, and `set`/`export` are excluded
+  because with no operands they print the whole variable environment.
 
 Private package installation in an untrusted workspace requires a shared-network
 capability, and credential-backed registries additionally require
@@ -142,6 +161,17 @@ the unchanged script cannot turn arbitrary arguments into mutation.
 
 - Native tool calls preserve their provider call id through the result. The
   text tool protocol is a compatibility fallback only.
+- Compatibility normalization, scalar coercion, and recursive schema validation
+  finish before recovery policy, durable dispatch claim, or `tool.started`.
+  Repeating the same malformed call is blocked until its arguments or the
+  tool's catalogue generation changes. A prepared call retains the exact Tool
+  and middleware snapshot it validated, so a concurrent catalogue refresh
+  affects the next call rather than invalidating an already claimed one.
+- Run-lifecycle, steering, and human-wait controls use closed recursive schemas. Unknown fields fail
+  before dispatch with their exact argument path; they are never silently
+  dropped and therefore cannot turn a malformed control request into a
+  different valid action. Open compatibility and external schemas preserve
+  undeclared fields unless their own schema closes the object.
 - Clearly read-only calls may run in parallel. Terminal execution, writes,
   patches, process control, memory or skill mutation, delegation, and unknown
   tools run sequentially by default.
@@ -296,6 +326,16 @@ why `uniq`, `tee` and `xxd` are excluded while `od` is not. This matters beyond
 auto-approval: the same catalog decides what a durable watcher may re-run
 unattended.
 
+The catalog vouches for the program a bare name resolves to, never for the file
+at a path. A path-qualified program (`./cat`, `bin/git`, `/tmp/x/od`), including
+a path-qualified `sh -c`, `timeout`, or `command` wrapper, is not a proven
+observation: it may be a workspace script that borrows a catalogued basename.
+A relative or workspace-internal entry on the daemon's PATH could still shadow a
+bare name, so keep such entries out of the daemon environment. The same proof
+records the call's ledger effect class as `observation`, which keeps a read
+from closing a continuation's selection window or counting as work; replay,
+recovery, and approval keep their own classes.
+
 Where one subcommand can perform every HTTP method, the catalog and the class
 derivation must resolve that verb with the SAME parser. Two parsers accepting
 different spellings of one flag is how `-X=DELETE` and `-XDELETE` were read as
@@ -309,6 +349,20 @@ exists only in memory for that run, releases only a byte-identical repeat, and
 cannot be promoted to task or person scope. `/diag` reports containment,
 class/rule grant hits, exact-run hits, judge outcomes, and human asks as funnel
 events rather than pretending they are unique operation counts.
+
+When Main can name a bounded phase before it starts, `request_permissions` may
+combine its path and host rules with up to eight exact, statically known command
+effects in one human decision. Each command is normalized through its registered
+schema from a closed `tool` plus `arguments_json` declaration before the ask and
+is bound to the live Run, workspace, identity,
+environment generation, and effective filesystem boundary. The actual call is
+normalized again and still passes the hard floor, current explicit restrictions,
+execution capabilities, and workspace scope. Changed arguments or boundaries
+ask again. Arbitrary code, opaque shell scripts, arbitrary network clients,
+destructive host operations, external tools, and commands that depend on an
+earlier result stay on the ordinary single-call path. `/diag` reports successful
+declared-command reuse separately as `bundle-hit` so daily-driver evidence can
+measure the interaction reduction rather than infer it from approval counts.
 
 Credential reads outside the observation catalog, explicit-deny overrides, and
 high-risk or unclassified requests are once-only decisions and never create a
@@ -370,18 +424,32 @@ and ordered later corrections. Workspace/source/work-key facts remain separate;
 task summaries and system wake-ups are not human authorization. New version-3
 snapshots do not infer permissions or prohibitions with word lists, sentence
 splitting, or operation-class matching. Main follows the person's constraints.
-Version-3 smart execution reviews writes
-and process operations even when containment or an older capability grant would
-otherwise bypass triage. The cheap judge resolves references, exceptions, timing,
+Version-3 smart execution reviews writes and process operations even when an
+older capability grant would otherwise bypass triage. Enforced containment is
+the one exception, because it is layer 2 of the ordered funnel above and a
+lower layer cannot override it: a call the runtime already proves harmless —
+isolated, enforced, no egress and no credentials, or a declaratively proven
+observation — runs without a judgement about whether it was asked for. Reviewing
+those anyway made containment unreachable in practice, since every gateway run
+carries model authorization; the funnel reported zero contained releases while
+the judge escalated calls its own rationale described as read-only. A dangerous
+operation, an explicit deny, an unclassified external effect, a write tool, and
+every uncontained execution keep their review. The cheap judge resolves references, exceptions, timing,
 and scope from that evidence; only an unchanged action/evidence decision is
 reused. A clear applicable refusal is respected without
 asking to override it; uncertainty escalates with the missing evidence stated.
 The judge makes the smart-mode operation decision; a risk flag is a reason for
 review, not proof that a separate human grant is missing. Explicit execution
 restrictions and the control-plane safety floor remain independently enforced.
-The provider request enables structured JSON output with reasoning disabled by
-default; an explicit judge-role override wins. Output and timeout budgets still
-bound the call. Version-3 review requires
+The provider request enables structured JSON output and always selects the
+lowest latency tier declared by the resolved model, whatever reasoning the
+configuration names: disabled when supported, then `minimal` or `low`, with the
+compatibility-safe disabled request for unknown capabilities. Output and
+timeout budgets still bound the call. Model-change validation sends this same
+approval contract before activating the route and, when the model keeps
+reasoning anyway, records the provider's proven disabled encoding (see
+[Provider Runtime](provider-runtime.md)).
+Version-3 review requires
 all four decision fields; malformed or incomplete output is an auditable model
 failure and falls back to the human, never a verdict inferred from prose. New
 audit records identify the policy as `smart-v3`.
@@ -488,8 +556,8 @@ rationale, and a short redacted provider error. It never stores the command,
 arguments, prompt, or credentials. Records are retained for 14 days. A failure
 to write diagnostics must not block approval, so the foreground write has a
 short deadline and is best-effort. The judge has a five-second foreground
-deadline; its 1024-token output budget accommodates hidden reasoning while the
-request still asks for low reasoning and a compact structured verdict.
+deadline; its 4096-token output budget accommodates providers that still spend
+hidden reasoning tokens before returning the compact structured verdict.
 
 The declarative read-only catalog may bypass a human only when both the command
 shape and the credential-bearing tool profile are recognized. Trusted workspace
@@ -521,9 +589,37 @@ Completion precondition failures are typed separately from storage failures.
 One failed `finish_run` may be retried after a genuinely changed plan or a
 successful `verify` call; unchanged retries, rejection, and unknown failures do
 not unlock it. Successful completion remains final and the retry is bounded.
+An identical rejected `update_plan` is retried only after its requested
+completed steps receive new successful bound verification or the durable Plan
+version changes. A check for a sibling step that the update did not complete
+does not unlock it; the Plan store still revalidates every transition.
 Closing a work unit with declared required verification is rejected before
 commit if its checks have not passed. The plan and evidence window stay open
-so Main can verify and resubmit the same completed snapshot.
+so Main can verify and resubmit the same completed snapshot. The rejection
+derives each blocked step's next action from its bound evidence: a step with no
+bound check must become the in_progress step before `verify`, while a stale or
+failed bound check is rechecked with `replaces` and keeps its step.
+Every plan-bound check records the server-issued step id even though the public
+call does not carry that runtime-owned id. The active required step wins;
+otherwise the earliest pending required step in the active work unit is selected
+from durable plan order. Selection never matches model prose and never crosses
+the next work-unit boundary. One required step represents one distinct acceptance
+gate; the command is evidence for that step rather than another gate.
+For that one durable step, criterion, target, cwd, and declared dependency set,
+the latest attempt is the effective verdict; earlier failures remain immutable
+evidence. Historical bindings whose runtime target is an issued step id are
+projected through the same rule. Evidence for another step or standalone target
+cannot satisfy the obligation.
+`verify` exposes criterion, target, replacement metadata, and method dependencies
+as flat arguments. A compatibility adapter lifts the previously published
+`check` object before strict validation. A replacement keeps criterion, target,
+and cwd; omitted dependencies inherit, while an explicit dependency list records
+the corrected observation method. It retains the original step identity while
+that step remains in an active work unit, even if Main changes its step status.
+If the step was replanned away, or its owning work unit is already frozen, the
+declared recheck binds to the current active required step without rewriting the
+historical projection. Failure feedback keeps the same open obligation in place;
+successful replacement feedback identifies a separate retry step as redundant.
 When a role has `verify` and a sufficiently large action envelope, two calls
 inside the existing hard ceiling are reserved for verification. A bounded
 notice asks Main to finish the current scope and reconcile its plan first.
@@ -699,6 +795,16 @@ and mixed observe/mutate pipelines are refused before registration. This limit
 does not prevent final state recording: writeback is a separate, one-shot
 watch-finalization run after the external observation reaches a terminal state.
 
+The active-turn guard recognizes repeated observation of external state from
+the same read-only command catalog, plus a guard-only table: provider-native
+waits such as `kubectl rollout status`, `kubectl wait`, `argocd app wait`, and
+`gh run watch`, and the AWS and Azure CLI read-operation conventions. The table
+only restricts; its forms still require approval. A loop over one unchanged
+target, including a finite retry loop, must move to a durable watcher, a single
+provider-native wait, or an actionable handoff. A bounded read of distinct
+targets remains an ordinary batch. The guard does not classify a mutation as a
+status check.
+
 Successful registration is itself a trusted lifecycle handoff. The kernel
 records a structured `waiting_external` outcome and ends the foreground turn
 without asking the model to call `finish_run` or produce another response.
@@ -708,7 +814,16 @@ therefore has no active person run and no model-token cost; a new user task can
 start immediately. Terminal finalization is still real daemon work under the
 one-active-run policy, so clients label that short interval as background
 finalization and queue concurrent input honestly instead of displaying a
-foreground elapsed-time clock.
+foreground elapsed-time clock. During finalization the CLI shows elapsed time,
+accepted plan progress, and a bounded action count in its status line; it does
+not replay background tool output into the transcript. An interrupted
+finalization remains visibly unfinished.
+Terminal watch products are idempotent and compensated on ordinary worker
+ticks as well as startup. A terminal group has one winning member that owns
+the child Run and notification; non-winning members settle their own bookkeeping
+without emitting a second result. A crash after enqueue but before the winning
+member's finalized mark therefore does not leave a permanent backlog or create
+a duplicate child.
 
 ### Failure classification
 
@@ -723,6 +838,10 @@ only correct remedy.
 Event `error_category` comes from the structured class the tools layer already
 appended, not from re-reading the prose hint. Do not add a second classifier
 that parses enriched error text.
+An active-turn polling block or repeated no-progress refusal is a
+`policy_redirect` with `effect_state: not_dispatched`, not a malformed model
+protocol call. Daily reports count these separately by `error_code` so model
+quality comparisons do not absorb runtime policy decisions.
 
 Human waits and human decisions use the same structured class. A parked
 approval reaches the model and the event stream as `human_wait` (code

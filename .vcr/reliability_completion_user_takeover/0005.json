@@ -1,29 +1,5 @@
 {
   "plan_binding_version": 1,
-  "method": "stream",
-  "events": [
-    {
-      "finish_reason": "tool_calls"
-    },
-    {
-      "usage": {
-        "input_tokens": 13751,
-        "output_tokens": 322,
-        "cache_read_input_tokens": 13312,
-        "cache_miss_input_tokens": 439,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0,
-        "cache_usage_reported": true
-      }
-    },
-    {
-      "tool_calls": [
-        {
-          "ID": "call_00_ET_KpyrZBDyGvmbPclMRocX4976",
-          "Function": "finish_run",
-          "Args": "{\"done\": [\"Read the workspace: it contains only draft.txt\", \"Read the full contents of draft.txt (\\\"Draft ready\\\", 1 line / 12 bytes) via read_file and confirmed by `cat`/`wc -lc`\", \"Reviewed the file as requested and recorded review notes\"], \"files\": [\"draft.txt\"], \"next_steps\": [\"User supplies the delivery recipient\", \"Deliver the reviewed draft.txt to that recipient, then confirm the send with real evidence\"], \"risks\": [\"Delivery is still outstanding: no recipient has been named, so nothing was sent\", \"No delivery channel or address is known yet; the recipient spec may also need a channel (email, chat, file copy)\"], \"status\": \"waiting_user\", \"summary\": \"draft.txt reviewed; delivery is parked waiting for the recipient. No message was sent and no recipient was guessed.\", \"tests\": [\"cat draft.txt \u0026\u0026 wc -lc draft.txt in the workspace root (exit 0): single line \\\"Draft ready\\\", 12 bytes\"]}"
-        }
-      ]
-    }
-  ]
+  "method": "completion",
+  "completion": "draft.txt finish_run handoff scope distribution"
 }

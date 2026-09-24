@@ -1,0 +1,70 @@
+; SelfMind macOS exec sandbox — base policy.
+;
+; Mirrors the bubblewrap baseline semantically, not mechanically: a read-only
+; view of the host, writes confined to declared roots, and no egress unless the
+; policy shares the network. Seatbelt is a permission filter, so the namespace
+; isolation bwrap provides (PID/IPC/UTS, mount) has no equivalent here; see
+; docs/execution-engine.zh-CN.md for the recorded differences.
+;
+; Written against the documented SBPL primitives. The set of operations a shell
+; and ordinary developer toolchains actually need was cross-checked against
+; codex's seatbelt profile (codex-rs/sandboxing/src/seatbelt_base_policy.sbpl),
+; which credits Chromium's macOS sandbox policy for the same ground.
+;
+; The generated suffix appends the writable-root and network clauses; this file
+; must stay valid on its own so a profile with no writable roots is still a
+; closed sandbox rather than a parse error.
+
+(version 1)
+
+; Closed by default: every operation below is an explicit, reviewed opening.
+(deny default)
+
+; Children inherit this policy, so a shell may fork and exec normally.
+(allow process-exec)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
+
+; Read-only view of the host. This is the direct analogue of bwrap's
+; `--ro-bind / /`: reads are unrestricted, writes are not. Credential exposure
+; is governed separately by the approval layer's credential axis, exactly as it
+; is under bubblewrap.
+(allow file-read*)
+
+; Unrestricted sysctl reads. Restricting them buys only fingerprinting
+; resistance, which is not this sandbox's threat model, and a partial list is a
+; long tail of mysterious toolchain failures. bwrap likewise leaves host
+; sysctls readable.
+(allow sysctl-read)
+
+; Some CPU feature probes are classified as writes because userspace hands the
+; kernel a buffer; conceptually they are reads.
+(allow sysctl-write (sysctl-name "kern.grade_cputype"))
+
+; Discarding output must work even with no writable root.
+(allow file-write-data
+  (require-all
+    (path "/dev/null")
+    (vnode-type CHARACTER-DEVICE)))
+
+; Interactive tools check for a tty. Without this an ordinary shell reports no
+; terminal and changes its behaviour.
+(allow pseudo-tty)
+(allow file-read* file-write* file-ioctl (literal "/dev/ptmx"))
+(allow file-read* file-write*
+  (require-all
+    (regex #"^/dev/ttys[0-9]+")
+    (extension "com.apple.sandbox.pty")))
+; A pty created before the sandbox was entered carries no extension, so allow
+; ioctl on the slave directly.
+(allow file-ioctl (regex #"^/dev/ttys[0-9]+"))
+
+; mach-lookup stays an explicit allowlist. A blanket allow would let a confined
+; process reach arbitrary system services, which is a real escape surface on
+; macOS. Only user/group resolution is needed with the network disabled.
+(allow mach-lookup
+  (global-name "com.apple.system.opendirectoryd.libinfo"))
+
+; POSIX semaphores: Python's multiprocessing needs them to start at all.
+(allow ipc-posix-sem)

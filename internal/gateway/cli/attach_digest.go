@@ -138,7 +138,7 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 		// independent of whether a live watcher can be attached: the plan is
 		// state the digest already carries, not something the stream provides.
 		if plan := strings.TrimSpace(active.PlanJSON); plan != "" {
-			m.activePlanJSON = plan
+			m.applyPlanSnapshot(plan, uiEventRef{RunID: strings.TrimSpace(active.RunID)})
 		}
 		if m.clientMode && m.runWatcher != nil {
 			m.watchedRunID = strings.TrimSpace(active.RunID)
@@ -215,7 +215,7 @@ func (m *uiModel) detachWatchedRunForNewTurn() {
 	}
 	m.watchCancel = nil
 	m.toolExecuting = ""
-	m.activePlanJSON = ""
+	m.clearActivePlan()
 	m.discardOpenToolMessages()
 	if strings.HasPrefix(m.statusMsg, "Watching ") {
 		m.clearStatusNotice()

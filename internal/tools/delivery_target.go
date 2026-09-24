@@ -27,7 +27,8 @@ func (t *SetDeliveryTargetTool) Description() string {
 
 func (t *SetDeliveryTargetTool) Schema() ToolSchema {
 	return ToolSchema{
-		Type: "object",
+		Type:                 "object",
+		AdditionalProperties: rejectAdditionalProperties(),
 		Properties: map[string]PropertyDef{
 			"input_id": {Type: "string", Description: "Server-issued id from the exact [SelfMind live user input] that explicitly requested final delivery here."},
 		},

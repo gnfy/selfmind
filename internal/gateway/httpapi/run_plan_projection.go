@@ -35,9 +35,11 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	for _, step := range state.Plan {
 		input = append(input, control.RunPlanStepInput{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
-			SuccessCriteria:      step.SuccessCriteria,
-			VerificationRequired: step.VerificationRequired,
-			WorkUnitID:           step.WorkUnitID, WorkUnit: step.WorkUnit,
+			SuccessCriteria:        step.SuccessCriteria,
+			VerificationRequired:   step.VerificationRequired,
+			ReusePriorVerification: step.ReusePriorVerification,
+			ReuseReason:            step.ReuseReason,
+			WorkUnitID:             step.WorkUnitID, WorkUnit: step.WorkUnit,
 		})
 	}
 	projection, err := p.coordinator.srv.Control.SyncRunPlan(ctx, p.identity.TenantID, p.run.ID, state.Explanation, input)
@@ -65,13 +67,25 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 			}),
 		})
 	}
+	for _, step := range projection.VerificationDeferred {
+		if len(review) >= 8 {
+			break
+		}
+		if step.Status == "completed" && step.VerificationRequired {
+			review = append(review, fmt.Sprintf("Step %s remains in_progress because its first durable snapshot marked it completed before required verification could be associated. Run verify now; the runtime will bind that check to this server-issued step id, then resubmit the complete snapshot.", step.StepID))
+			continue
+		}
+		review = append(review, fmt.Sprintf("Step %s returned to pending while required verification for an earlier step remains open. Keep it pending until that check passes, then resubmit the complete snapshot.", step.StepID))
+	}
 	plan := tools.PlanState{Explanation: projection.Plan.Explanation, Plan: make([]tools.PlanStep, 0, len(projection.Plan.Steps))}
 	for _, step := range projection.Plan.Steps {
 		plan.Plan = append(plan.Plan, tools.PlanStep{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
-			SuccessCriteria:      step.SuccessCriteria,
-			VerificationRequired: step.VerificationRequired,
-			WorkUnitID:           step.WorkUnitID, WorkUnit: step.WorkUnit,
+			SuccessCriteria:        step.SuccessCriteria,
+			VerificationRequired:   step.VerificationRequired,
+			ReusePriorVerification: step.ReusePriorVerification,
+			ReuseReason:            step.ReuseReason,
+			WorkUnitID:             step.WorkUnitID, WorkUnit: step.WorkUnit,
 		})
 	}
 	workUnits := make([]tools.PlanWorkUnitIdentity, 0, len(projection.WorkUnits))
@@ -119,6 +133,13 @@ func (p *controlRunPlanProjection) ValidateCompletion(ctx context.Context) error
 		return fmt.Errorf("completion requires verification: %s %s", verdict.Summary, verificationNextStep(verdict))
 	}
 	return nil
+}
+
+func (p *controlRunPlanProjection) GuardrailRevision(ctx context.Context, completedStepIDs []string) (string, error) {
+	if p == nil || p.coordinator == nil || p.coordinator.srv == nil || p.coordinator.srv.Control == nil || p.identity == nil || p.run == nil {
+		return "", fmt.Errorf("run plan projection is unavailable")
+	}
+	return p.coordinator.srv.Control.RunPlanEvidenceRevision(ctx, p.identity.TenantID, p.run.ID, completedStepIDs)
 }
 
 func (p *controlRunPlanProjection) ValidateVerification(ctx context.Context, binding verification.Binding, cwd string) error {

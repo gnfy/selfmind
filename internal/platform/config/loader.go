@@ -540,6 +540,11 @@ type AgentConfig struct {
 	// mode. It is intentionally separate from provider transport timeouts: an
 	// unavailable judge must fail safe to a human ask without stalling the run.
 	ApprovalTriageTimeout string `mapstructure:"approval_triage_timeout" yaml:"approval_triage_timeout,omitempty"`
+	// CompactionTimeout bounds one context compaction, which runs inside the
+	// person's turn at the summarizer route's configured reasoning level. A
+	// thinking route may need more than the default; when the bound expires
+	// the turn continues on deterministic trimming.
+	CompactionTimeout string `mapstructure:"compaction_timeout" yaml:"compaction_timeout,omitempty"`
 	// ApprovalWait bounds how long a run parks on an unanswered approval while
 	// an endpoint could still answer it. A timeout is never a rejection: it
 	// parks the work (see docs/tool-safety.md).
@@ -566,6 +571,19 @@ func (a AgentConfig) ApprovalTriageTimeoutDuration() time.Duration {
 	d, err := time.ParseDuration(raw)
 	if err != nil || d <= 0 {
 		return DefaultApprovalTriageTimeout
+	}
+	return d
+}
+
+// DefaultCompactionTimeout is the historical compaction bound.
+const DefaultCompactionTimeout = 30 * time.Second
+
+// CompactionTimeoutDuration parses compaction_timeout. Empty, invalid, and
+// non-positive values use the default.
+func (a AgentConfig) CompactionTimeoutDuration() time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(a.CompactionTimeout))
+	if err != nil || d <= 0 {
+		return DefaultCompactionTimeout
 	}
 	return d
 }
@@ -846,6 +864,16 @@ type ModelsConfig struct {
 	Primary   ModelSelectionConfig       `mapstructure:"primary" yaml:"primary,omitempty"`
 	Auxiliary ModelSelectionConfig       `mapstructure:"auxiliary" yaml:"auxiliary,omitempty"`
 	Roles     map[string]ModelRoleConfig `mapstructure:"roles" yaml:"roles,omitempty"`
+	// Remembered keeps a bounded MRU list of model IDs and manually entered
+	// reasoning values that passed model-change validation. It is presentation
+	// history only: entries never select a route or grant runtime authority.
+	Remembered []RememberedModelConfig `mapstructure:"remembered" yaml:"remembered,omitempty"`
+}
+
+type RememberedModelConfig struct {
+	Provider  string   `mapstructure:"provider" yaml:"provider"`
+	Model     string   `mapstructure:"model" yaml:"model"`
+	Reasoning []string `mapstructure:"reasoning" yaml:"reasoning,omitempty"`
 }
 
 // ModelSelectionConfig is a user-facing model selection. Primary owns the
@@ -1083,6 +1111,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.llm_retry_cap", "30s")
 	v.SetDefault("agent.llm_stream_idle_timeout", "180s")
 	v.SetDefault("agent.approval_triage_timeout", "30s")
+	v.SetDefault("agent.compaction_timeout", "30s")
 	v.SetDefault("agent.action_tool_budget", 12)
 	v.SetDefault("agent.action_tool_budget_step", 6)
 	v.SetDefault("agent.action_tool_budget_limit", 64)
@@ -1211,6 +1240,7 @@ func (c *Config) Normalize() {
 	c.Models.Auxiliary.Model = expandEnvRef(c.Models.Auxiliary.Model)
 	c.Models.Auxiliary.Reasoning = normalizeReasoning(c.Models.Auxiliary.Reasoning)
 	c.Models.Auxiliary.ServiceTier = normalizeAutoValue(c.Models.Auxiliary.ServiceTier)
+	c.Models.Remembered = normalizeRememberedModels(c.Models.Remembered)
 	c.Model.Provider = expandEnvRef(c.Model.Provider)
 	c.Model.Default = expandEnvRef(c.Model.Default)
 	c.Model.Headers = normalizeHeaders(c.Model.Headers)
@@ -1225,6 +1255,7 @@ func (c *Config) Normalize() {
 	c.Gateway.DrainTimeout = expandEnvRef(c.Gateway.DrainTimeout)
 	c.Gateway.PresenceIdleTimeout = expandEnvRef(c.Gateway.PresenceIdleTimeout)
 	c.Agent.ApprovalTriageTimeout = expandEnvRef(c.Agent.ApprovalTriageTimeout)
+	c.Agent.CompactionTimeout = expandEnvRef(c.Agent.CompactionTimeout)
 	c.Gateway.PendingNotifyAfter = expandEnvRef(c.Gateway.PendingNotifyAfter)
 	c.Gateway.OutboundRetention = expandEnvRef(c.Gateway.OutboundRetention)
 	c.Gateway.OutboundWebhookURL = expandEnvRef(c.Gateway.OutboundWebhookURL)

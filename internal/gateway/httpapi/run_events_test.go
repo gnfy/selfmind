@@ -59,6 +59,30 @@ func TestAggregateGatewayResponseKeepsProseAfterLastTool(t *testing.T) {
 	}
 }
 
+func TestAggregateGatewayResponseMaterializesKernelFallbackAtTurnCompletion(t *testing.T) {
+	stream := make(chan llm.StreamEvent, 4)
+	stream <- llm.StreamEvent{EventType: "tool.started", ToolName: "finish_run"}
+	stream <- llm.StreamEvent{EventType: "tool.completed", ToolName: "finish_run", ToolResult: "invalid arguments"}
+	stream <- llm.StreamEvent{
+		EventType: "turn.completed",
+		Content:   "I could not record completion because the final lifecycle call was invalid.",
+		Payload:   map[string]interface{}{"status": "incomplete", "completion_reason": "tool_budget_exhausted"},
+	}
+	close(stream)
+
+	server := &Server{}
+	content, _, _, hasFinal, err := server.coordinator().aggregateGatewayResponse(
+		context.Background(), "cli", nil, nil,
+		&router.HandleResponse{Stream: stream, IsStreaming: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinal || !strings.HasPrefix(content, "I could not record completion because the final lifecycle call was invalid.") {
+		t.Fatalf("content=%q hasFinal=%v", content, hasFinal)
+	}
+}
+
 func TestAggregateGatewayResponseUsesTypedAssistantPhase(t *testing.T) {
 	stream := make(chan llm.StreamEvent, 3)
 	stream <- llm.StreamEvent{EventType: "stream", Phase: llm.AssistantPhaseCommentary, Content: "I am still checking."}

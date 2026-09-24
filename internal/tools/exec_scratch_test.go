@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -151,21 +152,39 @@ func TestWritableViewComesFromScopeNotCWD(t *testing.T) {
 }
 
 // The isolated path is the one that regressed: a private tmpfs per invocation.
-// This exercises the real bubblewrap double bind — scratch at its own absolute
-// path AND at /tmp — so $SELFMIND_RUN_TMP is literally the same directory in
-// both modes and survives between commands.
+// $SELFMIND_RUN_TMP must survive between the commands of a run under isolation,
+// on every platform that can isolate.
+//
+// How /tmp relates to it is NOT portable, and asserting one platform's answer
+// everywhere would either fail on the other or quietly stop testing anything.
+// bubblewrap binds scratch at its own path AND at /tmp, so the two are one
+// directory. Seatbelt cannot mount, so on macOS /tmp stays what it is on the
+// host and is simply outside the writable roots. Each half is asserted where it
+// is the real guarantee.
 func TestRunScratchSurvivesAcrossCommandsIsolated(t *testing.T) {
 	if !ExecSandboxAvailable() {
-		t.Skip("bubblewrap or unprivileged user namespaces unavailable")
+		t.Skip("no isolation backend available on this host")
 	}
 	enabled, required, network := execSandboxPolicy()
 	SetExecSandbox(true, false, true)
 	t.Cleanup(func() { SetExecSandbox(enabled, required, network) })
 
+	tmpIsScratch := runtime.GOOS == "linux"
+	write := `printf isolated-handoff > "$SELFMIND_RUN_TMP/iso.txt"`
+	read := `cat "$SELFMIND_RUN_TMP/iso.txt"`
+	want := []string{"isolated-handoff"}
+	if tmpIsScratch {
+		write += `; printf also-via-tmp > /tmp/iso-tmp.txt`
+		// Written through literal /tmp, read back through $SELFMIND_RUN_TMP:
+		// one directory, two mount points.
+		read += `; cat "$SELFMIND_RUN_TMP/iso-tmp.txt"; cat /tmp/iso.txt`
+		want = append(want, "also-via-tmp")
+	}
+
 	tenant, workspace := scratchExecScope(t)
 	if out, err := NewExecuteCommandTool().Execute(map[string]interface{}{
 		"_tenant_id": tenant,
-		"command":    `printf isolated-handoff > "$SELFMIND_RUN_TMP/iso.txt"; printf also-via-tmp > /tmp/iso-tmp.txt`,
+		"command":    write,
 		"cwd":        workspace,
 		"sandbox":    string(SandboxIsolated),
 		"timeout":    30,
@@ -175,7 +194,7 @@ func TestRunScratchSurvivesAcrossCommandsIsolated(t *testing.T) {
 
 	out, err := NewExecuteCommandTool().Execute(map[string]interface{}{
 		"_tenant_id": tenant,
-		"command":    `cat "$SELFMIND_RUN_TMP/iso.txt"; cat "$SELFMIND_RUN_TMP/iso-tmp.txt"; cat /tmp/iso.txt`,
+		"command":    read,
 		"cwd":        workspace,
 		"sandbox":    string(SandboxIsolated),
 		"timeout":    30,
@@ -183,12 +202,25 @@ func TestRunScratchSurvivesAcrossCommandsIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("isolated second command lost the handoff: %v (%s)", err, out)
 	}
-	// Written via $SELFMIND_RUN_TMP, read back through both paths, and the file
-	// written via literal /tmp is visible through $SELFMIND_RUN_TMP: one
-	// directory, two mount points.
-	for _, want := range []string{"isolated-handoff", "also-via-tmp"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("missing %q in isolated handoff output: %q", want, out)
+	for _, fragment := range want {
+		if !strings.Contains(out, fragment) {
+			t.Fatalf("missing %q in isolated handoff output: %q", fragment, out)
+		}
+	}
+
+	// The constraint that must change the result: where /tmp is NOT the run's
+	// scratch, it is outside every writable root, so writing there must fail.
+	// Without this the macOS branch above would only be asserting less.
+	if !tmpIsScratch {
+		if out, err := NewExecuteCommandTool().Execute(map[string]interface{}{
+			"_tenant_id": tenant,
+			"command":    `printf escaped > /tmp/selfmind-scratch-escape.txt`,
+			"cwd":        workspace,
+			"sandbox":    string(SandboxIsolated),
+			"timeout":    30,
+		}); err == nil {
+			os.Remove("/tmp/selfmind-scratch-escape.txt")
+			t.Fatalf("an isolated write to /tmp must be denied when /tmp is not the run scratch: %s", out)
 		}
 	}
 }

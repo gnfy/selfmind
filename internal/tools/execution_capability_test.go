@@ -184,3 +184,76 @@ func TestTrustedWorkspaceSelectsCredentialsOnlyForMatchingTools(t *testing.T) {
 		t.Fatalf("credential-bearing CLI did not receive operator credentials: %s", cloud)
 	}
 }
+
+// The network twin of TestTrustedWorkspaceSelectsCredentialsOnlyForMatchingTools.
+//
+// An operator policy that allows egress used to hand it to EVERY trusted
+// command. A network-shared call is not contained, so the sandbox's own
+// "isolated, no egress, no credentials" release could never fire and purely
+// local work queued for approval behind commands that genuinely reach a remote
+// service. Measured over 666 real approvals, 267 needed neither egress nor
+// credentials.
+func TestTrustedWorkspaceSharesNetworkOnlyWithCommandsThatReachIt(t *testing.T) {
+	// enabled, required=false, allow_network=TRUE — the permissive operator
+	// policy that made this blanket.
+	withExecSandboxPolicy(t, true, false, true)
+	cleanup := SetExecutionScope("person-trusted-network", ExecutionScope{
+		TenantID:    "tenant-trusted",
+		PersonID:    "person-trusted-network",
+		WorkspaceID: "workspace-trusted",
+		TrustLevel:  executionenv.TrustTrusted,
+	})
+	defer cleanup()
+
+	var captured map[string]interface{}
+	executor := ExecutionCapabilityMiddleware()(func(args map[string]interface{}) (string, error) {
+		captured = args
+		shared, _ := args["_network_shared"].(bool)
+		return fmt.Sprintf("network=%t", shared), nil
+	})
+	run := func(t *testing.T, command string) string {
+		t.Helper()
+		out, err := executor(map[string]interface{}{
+			"_tenant_id":              "person-trusted-network",
+			"_tool_name":              "terminal",
+			"_effective_sandbox_mode": string(SandboxIsolated),
+			"command":                 command,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", command, err)
+		}
+		return out
+	}
+
+	for _, command := range []string{"git diff --stat", "rg pattern .", "cat notes.md | wc -l"} {
+		if got := run(t, command); got != "network=false" {
+			t.Fatalf("a command that never leaves the host must not be given egress: %s -> %s", command, got)
+		}
+	}
+	// The payoff: with no egress and no credentials, an enforced sandbox
+	// contains this call, so it never reaches the approval queue at all.
+	if ExecSandboxAvailable() {
+		assessment := assessExecContainment("terminal", captured)
+		if assessment.Network != containmentNetworkNone || !assessment.AutoApprove() {
+			t.Fatalf("a contained local command must auto-approve: %+v", assessment)
+		}
+	}
+
+	// The constraint that must change the result, in both of its forms: a
+	// credential-bearing CLI exists to talk to a remote service, and an
+	// explicit egress program says so outright.
+	for _, command := range []string{
+		"gcloud projects get-iam-policy demo-project",
+		"aws sts get-caller-identity --profile prod",
+		"curl https://example.com/health",
+	} {
+		if got := run(t, command); got != "network=true" {
+			t.Fatalf("a command that reaches a remote service must keep egress: %s -> %s", command, got)
+		}
+	}
+	// ...and such a call is NOT contained, so it stays gated on proving itself
+	// an observation rather than riding the sandbox release.
+	if got := assessExecContainment("terminal", captured); got.Network != containmentNetworkShared {
+		t.Fatalf("an egress command must report shared network: %+v", got)
+	}
+}

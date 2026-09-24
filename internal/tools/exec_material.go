@@ -452,7 +452,10 @@ func emitProfilePreparation(ctx context.Context, toolName, toolCallID string, ma
 	if len(material.ProfileNotes) > 0 {
 		payload["notes"] = material.ProfileNotes
 	}
-	message := "env profiles: " + strings.Join(material.Profiles, ", ")
+	message := "execution environment"
+	if len(material.Profiles) > 0 {
+		message = "env profiles: " + strings.Join(material.Profiles, ", ")
+	}
 	if len(material.ProfileNotes) > 0 {
 		message += " — " + strings.Join(material.ProfileNotes, "; ")
 	}
@@ -573,6 +576,34 @@ func execMaterialForRequest(req ExecutionRequest, args map[string]interface{}) e
 		if strings.TrimSpace(root) != "" {
 			material.WritableRoots = append(material.WritableRoots, root)
 		}
+	}
+	return material
+}
+
+// adaptExecMaterialForNetwork projects the snapshot's proxy values into ONE
+// execution's network view. It is called from the sandbox construction site
+// with the RESOLVED decision, never with the request: `auto` degrades to host
+// execution with the daemon's network, so a projection made from the request
+// would strip a proxy the command can actually reach and record a plan reading
+// "shared network" beside "omitted for isolated network".
+//
+// It is not idempotent — a second call over an already-projected environment
+// finds nothing left to drop and would report `inherited` — so exactly one
+// caller may apply it.
+func adaptExecMaterialForNetwork(material execMaterial, networkShared bool) execMaterial {
+	adapted, decision := adaptProcessEnvForNetwork(material.Env, networkShared, nil)
+	material.Env = adapted
+	material.ProxyMode = decision.Mode
+	if decision.Suppressed == 0 {
+		return material
+	}
+	switch decision.Mode {
+	case proxyModeOmittedForIsolatedNetwork:
+		material.ProfileNotes = append(material.ProfileNotes,
+			"proxy variables omitted because this execution has an isolated network")
+	case proxyModeOmittedUnreachableLoopback:
+		material.ProfileNotes = append(material.ProfileNotes,
+			"unreachable loopback proxy omitted from this child environment")
 	}
 	return material
 }

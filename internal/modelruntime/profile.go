@@ -56,6 +56,14 @@ const (
 	ThinkingModeOpenAI    = "openai"
 	ThinkingModeDeepSeek  = "deepseek"
 	ThinkingModeOmit      = "omit"
+	// ThinkingModeEffortNone encodes a request to DISABLE reasoning as a literal
+	// `reasoning_effort: "none"` on an OpenAI-compatible chat endpoint. The
+	// default OpenAI-compatible encoding omits the parameter instead, which
+	// only means "no reasoning" on a model that does not reason by default; a
+	// model that does reason by default then applies its own default and
+	// thinks anyway. It says nothing about any other reasoning level, which is
+	// sent unchanged.
+	ThinkingModeEffortNone = "effort_none"
 )
 
 // ProviderQuirks describes provider-specific wire behavior in declarative form.
@@ -91,7 +99,7 @@ func ValidateProviderQuirks(q ProviderQuirks) error {
 	if !oneOf(q.ToolSchema, "", ToolSchemaOpenAI, ToolSchemaAnthropic, ToolSchemaMoonshot) {
 		return fmt.Errorf("unsupported tool_schema quirk %q", q.ToolSchema)
 	}
-	if !oneOf(q.ThinkingMode, "", ThinkingModeAnthropic, ThinkingModeKimi, ThinkingModeMiniMax, ThinkingModeOpenAI, ThinkingModeDeepSeek, ThinkingModeOmit) {
+	if !oneOf(q.ThinkingMode, "", ThinkingModeAnthropic, ThinkingModeKimi, ThinkingModeMiniMax, ThinkingModeOpenAI, ThinkingModeDeepSeek, ThinkingModeOmit, ThinkingModeEffortNone) {
 		return fmt.Errorf("unsupported thinking_mode quirk %q", q.ThinkingMode)
 	}
 	if !oneOf(q.UserIdentityField, "", UserIdentityAuto, UserIdentityOpenAI, UserIdentityAnthropic, UserIdentityOff) {
@@ -140,24 +148,31 @@ func oneOf(value string, values ...string) bool {
 // client construction. The resolver combines this metadata with config and
 // credential sources into a Runtime.
 type ProviderProfile struct {
-	ID              string
-	DisplayName     string
-	Aliases         []string
-	Protocol        string
-	AuthType        string
-	BaseURL         string
-	APIKeyEnvVars   []string
-	BaseURLEnvVar   string
-	ExternalSource  string
-	ModelList       ModelListKind
-	FallbackModels  []string
-	ContextLength   int
-	Headers         map[string]string
-	MaxTokens       int
-	ReasoningEffort string
-	Thinking        map[string]interface{}
-	ServiceTier     string
-	Quirks          ProviderQuirks
+	ID             string
+	DisplayName    string
+	Aliases        []string
+	Protocol       string
+	AuthType       string
+	BaseURL        string
+	APIKeyEnvVars  []string
+	BaseURLEnvVar  string
+	ExternalSource string
+	ModelList      ModelListKind
+	FallbackModels []string
+	ContextLength  int
+	Headers        map[string]string
+	MaxTokens      int
+	// DefaultReasoning and SupportedReasoning describe provider-contract
+	// capabilities. They are metadata only: an omitted user setting must not be
+	// turned into a forced wire value.
+	DefaultReasoning      string
+	SupportedReasoning    []string
+	ReasoningEffort       string
+	Thinking              map[string]interface{}
+	DefaultServiceTier    string
+	SupportedServiceTiers []string
+	ServiceTier           string
+	Quirks                ProviderQuirks
 }
 
 type ModelListKind string
@@ -389,10 +404,11 @@ func BuiltinProfiles() []ProviderProfile {
 			Protocol: ProtocolOpenAICompatible, AuthType: AuthAPIKey,
 			BaseURL: "https://api.deepseek.com/v1", APIKeyEnvVars: []string{"DEEPSEEK_API_KEY"},
 			BaseURLEnvVar: "DEEPSEEK_BASE_URL", ModelList: ModelListOpenAICompatible,
-			FallbackModels:  []string{"deepseek-v4-flash", "deepseek-v4-pro"},
-			ReasoningEffort: "high",
-			Thinking:        map[string]interface{}{"type": "enabled"},
-			Quirks:          deepSeekQuirks(),
+			FallbackModels:     []string{"deepseek-v4-flash", "deepseek-v4-pro"},
+			DefaultReasoning:   "high",
+			SupportedReasoning: []string{"none", "high", "xhigh"},
+			Thinking:           map[string]interface{}{"type": "enabled"},
+			Quirks:             deepSeekQuirks(),
 		},
 		{
 			ID: "zai", DisplayName: "Z.AI / GLM", Aliases: []string{"glm", "z-ai", "zhipu"},

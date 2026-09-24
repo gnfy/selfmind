@@ -1,0 +1,45 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "The verification check has run and the acceptance condition step is marked completed in the plan. As requested, I"
+    },
+    {
+      "usage": {
+        "input_tokens": 4954,
+        "output_tokens": 21,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " am holding here. Please provide your confirmation whenever you are ready for me to proceed with the reporting step."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 21,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1548,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

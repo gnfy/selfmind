@@ -113,7 +113,11 @@ providers:
 
 布尔 quirk 省略时继承内置 profile；只有 endpoint 契约不同时才显式写 `true` 或
 `false`。匿名身份可用 `auto`、`user_id`、`metadata.user_id`、`off`；HTTP 版本可用
-`auto`、`http1`、`http2`。`system_message_mode` 已废弃并被忽略。
+`auto`、`http1`、`http2`。`thinking_mode: effort_none` 会在 SelfMind 关闭推理时发送
+字面量 `reasoning_effort: "none"`。验证证明某个 OpenAI-compatible endpoint 不这样发就
+会继续推理、且认可该值时，Model Manager 会自动记录它（见
+[Provider Runtime](provider-runtime.zh-CN.md)）。
+`system_message_mode` 已废弃并被忽略。
 Model Manager 会自动校验最终契约，并把警告保留在草稿中。
 
 ## 2. 模型路由
@@ -151,13 +155,18 @@ auxiliary 已经落盘或被用户自定义，之后修改 primary 不会覆盖�
 都可省略；省略或写 `auto` 时使用 provider/模型默认值，不强制向接口发送。
 存在能力元数据时，Model Manager 会自动校验完成的选择并显示探测到的默认值。
 
-模型切换不需要额外 YAML 字段。SelfMind 会在本文件同目录的
-`model-state.json` 中保存不含密钥的事务 generation、pending 变更、上一次运行
-快照、探测摘要、运行快照验证时间和有界历史。该文件是“模型就绪”的唯一权威，
-onboarding 不会复制其中的路由；不要直接编辑该状态文件。直接修改 `models.primary`
-或 `models.auxiliary` 后，只会被视为 configured、尚未验证，直到 daemon 启动并
-完成探测。正常情况下请使用经过校验的
-`selfmind model` 路径。
+经过校验的模型切换会在 YAML 中维护一份有界、无路由权威的
+`models.remembered` 列表。它记住变更前后的 provider/model 和使用过的显式
+reasoning 值，让 Model Manager 下次可以直接选择，无需重新输入。列表最多保存
+24 个模型，每个模型最多 8 个 reasoning 值。在 Model Manager 的已记住模型上按
+`d` 可删除本地历史；仍在 provider 目录中或仍被生效路由使用的模型会继续可选。
+这份历史不会决定路由，通常应通过 Model Manager 管理而不是手工编辑。
+
+SelfMind 另在本文件同目录的 `model-state.json` 中保存不含密钥的事务 generation、
+pending 变更、上一次运行快照、探测摘要、运行快照验证时间和有界事务历史。该文件是
+“模型就绪”的唯一权威，onboarding 不会复制其中的路由；不要直接编辑该状态文件。
+直接修改 `models.primary` 或 `models.auxiliary` 后，只会被视为 configured、尚未验证，
+直到 daemon 启动并完成探测。正常情况下请使用经过校验的 `selfmind model` 路径。
 
 `kimi-coding` 的全部角色都使用供应商默认的 Anthropic Messages 传输
 （`https://api.kimi.com/coding/v1/messages`），与 Hermes 和 Kimi Coding
@@ -456,6 +465,7 @@ agent:
   llm_retry_cap: "30s"          # 退避上限
   llm_stream_idle_timeout: "180s"  # SSE 流卡住多久后中断
   approval_triage_timeout: "30s"   # smart 模式廉价裁决模型的前台预算
+  compaction_timeout: "30s"        # 回合内单次上下文压缩的上限
   approval_wait: "30m"             # 有实时/健康端点可回答时占用 run 的等待预算
   approval_wait_unattended: "30s"  # 当前没有端点可回答时占用 run 的等待预算
 editor:
@@ -491,6 +501,11 @@ TUI 不会绘制全屏背景。`auto` 跟随终端能力，`dark` / `light` 选�
 `approval_triage_timeout` 与主模型的传输超时相互独立。辅助或显式配置的
 `fast_classifier` 如果未在该预算内返回，smart 模式会安全降级为人工审批。
 默认值是 30 秒；设置过短会把可用的推理型廉价模型误判成不可用。
+
+`compaction_timeout` 限制单次上下文压缩的时长。压缩在用户的回合内执行，使用 summarizer
+路由配置的推理等级（显式的 `models.roles.summarizer` 设置，否则用 Background 路由的
+设置）。超时后本轮改用确定性裁剪，不再等待摘要。慢路由上的长摘要可能远超默认的 30 秒：
+一次 5 万 token 的片段在 flash 模型上无论是否推理都用了 100-135 秒。
 
 审批等待值是资源预算，不是回答失效时间。存在实时进程时使用
 `approval_wait`；没有实时进程，且没有可路由的 IM 账号，或首选 IM 最近状态为

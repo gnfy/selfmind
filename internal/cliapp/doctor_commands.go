@@ -901,11 +901,11 @@ func formatModelRoleProbes(probes []appcore.ModelRoleProbe) (string, bool) {
 		if probe.NativeToolsTested {
 			toolsStatus = "passed"
 		}
-		thinkingStatus := ""
-		if probe.ThinkingToolLoopTested {
-			thinkingStatus = " thinking=failed"
-			if probe.ThinkingToolLoopPassed {
-				thinkingStatus = " thinking=passed"
+		toolLoopStatus := ""
+		if probe.ToolLoopTested {
+			toolLoopStatus = " tool_loop=failed"
+			if probe.ToolLoopPassed {
+				toolLoopStatus = " tool_loop=passed"
 			}
 		}
 		contractStatus := "n/a"
@@ -915,8 +915,15 @@ func formatModelRoleProbes(probes []appcore.ModelRoleProbe) (string, bool) {
 				contractStatus = "passed"
 			}
 		}
-		fmt.Fprintf(&sb, "- OK roles=%s provider=%s model=%s latency=%s native_tools=%s maintenance_contract=%s%s\n",
-			roles, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), probe.Latency.Round(time.Millisecond), toolsStatus, contractStatus, thinkingStatus)
+		approvalStatus := "n/a"
+		if probe.ApprovalContractTested {
+			approvalStatus = "failed"
+			if probe.ApprovalContractPassed {
+				approvalStatus = "passed"
+			}
+		}
+		fmt.Fprintf(&sb, "- OK roles=%s provider=%s model=%s latency=%s native_tools=%s maintenance_contract=%s approval_contract=%s%s\n",
+			roles, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), probe.Latency.Round(time.Millisecond), toolsStatus, contractStatus, approvalStatus, toolLoopStatus)
 	}
 	return strings.TrimSpace(sb.String()), failed
 }

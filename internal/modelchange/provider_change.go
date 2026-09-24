@@ -115,6 +115,56 @@ func ApplyProviderChanges(cfg *config.Config, changes []ProviderChange, candidat
 	}
 }
 
+// recordProbedThinkingModes turns each disabled-reasoning encoding a probe
+// proved into a provider change, so the confirmed model change writes it to
+// the provider's quirks in config.yaml and every later request turns
+// reasoning off the same way. A thinking_mode the provider already declares
+// always wins; each recorded encoding is stated on its probe's notice.
+func recordProbedThinkingModes(current, candidate *config.Config, changes []ProviderChange, probes []ProbeResult) []ProviderChange {
+	recorded := make(map[string]struct{})
+	for index := range probes {
+		mode := strings.TrimSpace(probes[index].ThinkingMode)
+		id := normalizeProviderConnectionID(probes[index].Provider)
+		if mode == "" || id == "" || candidate == nil {
+			continue
+		}
+		if _, done := recorded[id]; done {
+			continue
+		}
+		_, custom := candidate.Providers.CustomProvider(id)
+		connection, exists := providerConnectionFromConfig(candidate, id, custom)
+		if !exists {
+			connection = ProviderConnection{ID: id, Custom: custom}
+		}
+		if declared := strings.TrimSpace(connection.Quirks.ThinkingMode); declared != "" {
+			probes[index].Notice = strings.TrimSpace(probes[index].Notice + " Provider " + id +
+				" declares thinking_mode: " + declared + ", so it was left unchanged.")
+			recorded[id] = struct{}{}
+			continue
+		}
+		connection.Quirks.ThinkingMode = mode
+		connection = normalizeProviderConnection(connection)
+		merged := false
+		for i := range changes {
+			if changes[i].ID == id && changes[i].Custom == custom && changes[i].CandidateExists {
+				changes[i].Candidate = connection
+				merged = true
+				break
+			}
+		}
+		if !merged {
+			previous, previousExists := providerConnectionFromConfig(current, id, custom)
+			changes = append(changes, ProviderChange{
+				ID: id, Custom: custom, PreviousExists: previousExists, Previous: previous,
+				CandidateExists: true, Candidate: connection,
+			})
+		}
+		recorded[id] = struct{}{}
+		probes[index].Notice = strings.TrimSpace(probes[index].Notice + " Saved quirks.thinking_mode: " + mode + " for provider " + id + ".")
+	}
+	return changes
+}
+
 func ProviderChangesMatch(cfg *config.Config, changes []ProviderChange, candidate bool) bool {
 	for _, change := range changes {
 		want, wantExists := change.Previous, change.PreviousExists

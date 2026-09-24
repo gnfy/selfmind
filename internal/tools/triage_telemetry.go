@@ -51,6 +51,9 @@ const (
 	// TriageOutcomeExactRunHit is a byte-identical action explicitly approved
 	// for this run. It is separated from broader grants for auditability.
 	TriageOutcomeExactRunHit TriageOutcome = "exact_run_hit"
+	// TriageOutcomeBundleHit is an exact command the person approved as part of
+	// a bounded request_permissions phase.
+	TriageOutcomeBundleHit TriageOutcome = "bundle_hit"
 	// TriageOutcomeHumanAsk counts calls that reached a person.
 	TriageOutcomeHumanAsk TriageOutcome = "human_ask"
 )
@@ -200,6 +203,7 @@ type TriageStats struct {
 	Contained    int
 	GrantHits    int
 	ExactRunHits int
+	BundleHits   int
 	HumanAsks    int
 	// LastError is the most recent judge failure in the window, already
 	// redacted and one-lined. Empty when triage never failed.
@@ -210,7 +214,7 @@ type TriageStats struct {
 // Total returns how many gated ops the funnel resolved in the window, including
 // the ones containment settled before triage.
 func (s TriageStats) Total() int {
-	return s.Approved + s.Denied + s.Escalated + s.Unavailable + s.Contained + s.GrantHits + s.ExactRunHits + s.HumanAsks
+	return s.Approved + s.Denied + s.Escalated + s.Unavailable + s.Contained + s.GrantHits + s.ExactRunHits + s.BundleHits + s.HumanAsks
 }
 
 // Judged returns how many ops actually reached the judge, which is the
@@ -249,6 +253,8 @@ func TriageDiagnostics(tenantID, personID string) TriageStats {
 			stats.GrantHits++
 		case TriageOutcomeExactRunHit:
 			stats.ExactRunHits++
+		case TriageOutcomeBundleHit:
+			stats.BundleHits++
 		case TriageOutcomeHumanAsk:
 			stats.HumanAsks++
 		}

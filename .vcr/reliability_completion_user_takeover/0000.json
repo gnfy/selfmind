@@ -1,5 +1,5 @@
 {
   "plan_binding_version": 1,
   "method": "completion",
-  "completion": "draft.txt review deliver recipient plan"
+  "completion": "draft.txt delivery recipient pending unsent"
 }

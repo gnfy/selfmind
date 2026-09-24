@@ -36,6 +36,7 @@ const (
 
 	defaultSummaryOutputTokens = 4096
 	maxSummaryOutputTokens     = 8192
+	defaultSummaryTimeout      = 30 * time.Second
 )
 
 // compactionBoundaryNote is the verbatim boundary note prefixed wherever a
@@ -62,6 +63,14 @@ type ContextEngine struct {
 	provider           llm.Provider // main run provider (legacy flag path only)
 	summaryProvider    llm.Provider // auxiliary/dedicated compaction summarizer
 	summaryOutputLimit int          // resolved role/provider output ceiling
+	// summaryRouteCap is the summarizer route's own configured output ceiling
+	// (0 when unknown); it bounds the request even after reasoning headroom.
+	summaryRouteCap int
+	// summaryReasoning is the summarizer route's configured reasoning level.
+	// Compaction runs at it, like other background roles.
+	summaryReasoning string
+	// summaryTimeout bounds one compaction, retry included.
+	summaryTimeout     time.Duration
 	tokenizer          *TokenEstimator
 	lastSummaryFailure time.Time
 	summaryCooldown    time.Duration
@@ -105,10 +114,35 @@ func (c *ContextEngine) SetSummaryOutputLimit(maxTokens int) {
 	if c == nil {
 		return
 	}
+	c.summaryRouteCap = 0
+	if maxTokens > 0 {
+		c.summaryRouteCap = maxTokens
+	}
 	if maxTokens <= 0 || maxTokens > maxSummaryOutputTokens {
 		maxTokens = maxSummaryOutputTokens
 	}
 	c.summaryOutputLimit = maxTokens
+}
+
+// SetSummaryReasoning records the summarizer route's configured reasoning
+// level. Compaction does not name its own level; the route's applies, and the
+// request cap gains room for it because some providers count reasoning tokens
+// against max_tokens. An empty level is the provider default, which may reason.
+func (c *ContextEngine) SetSummaryReasoning(effort string) {
+	if c == nil {
+		return
+	}
+	c.summaryReasoning = strings.TrimSpace(effort)
+}
+
+// SetSummaryTimeout bounds one compaction. It runs inside the person's turn,
+// so the bound is configured on its own rather than inherited from background
+// work; a non-positive value keeps the built-in bound.
+func (c *ContextEngine) SetSummaryTimeout(timeout time.Duration) {
+	if c == nil {
+		return
+	}
+	c.summaryTimeout = timeout
 }
 
 // SetPromptSnapshot installs the immutable process snapshot used by the
@@ -619,7 +653,11 @@ func (c *ContextEngine) summarizeSpan(ctx context.Context, sp llm.Provider, span
 		c.promptSnapshot.Custom(promptassets.FileSummarizer, promptassets.SectionLanguageDetail),
 	)
 	input := buildSummaryInput(existingSummary, transcript.String())
-	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	timeout := c.summaryTimeout
+	if timeout <= 0 {
+		timeout = defaultSummaryTimeout
+	}
+	callCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	owner := llm.ModelContextFrom(ctx)
 	owner.Role = llm.RoleSummarizer
@@ -632,6 +670,16 @@ func (c *ContextEngine) summarizeSpan(ctx context.Context, sp llm.Provider, span
 	if maxTokens > limit {
 		maxTokens = limit
 	}
+	// maxTokens budgets the summary itself; the request adds room for the
+	// route's reasoning and never exceeds the route's own ceiling.
+	headroom := llm.ReasoningHeadroom(c.summaryReasoning)
+	requestTokens := func(summaryTokens int) int {
+		total := summaryTokens + headroom
+		if c.summaryRouteCap > 0 && total > c.summaryRouteCap {
+			total = c.summaryRouteCap
+		}
+		return total
+	}
 	var summary string
 	for attempt := 0; attempt < 2; attempt++ {
 		if callCtx.Err() != nil {
@@ -640,10 +688,9 @@ func (c *ContextEngine) summarizeSpan(ctx context.Context, sp llm.Provider, span
 		response, err := sp.Chat(callCtx, llm.ChatRequest{
 			SystemPrompt: systemPrompt,
 			Messages:     []llm.Message{{Role: "user", Content: input}},
-			MaxTokens:    maxTokens,
+			MaxTokens:    requestTokens(maxTokens),
 			Options: map[string]interface{}{
-				"temperature": 0, "reasoning_effort": "none",
-				"summary_contract_attempt": attempt + 1,
+				"temperature": 0, "summary_contract_attempt": attempt + 1,
 			},
 		})
 		if err != nil || response == nil {

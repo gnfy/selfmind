@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "value.txt READY verification_required waiting_user finish_run"
+}

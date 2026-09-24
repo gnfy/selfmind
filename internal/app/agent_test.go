@@ -68,6 +68,26 @@ func TestBuildResponsesProviderPreservesTokenGetter(t *testing.T) {
 	}
 }
 
+// Compaction runs at the summarizer role's reasoning when the role names one,
+// and at the Background route's otherwise.
+func TestSummarizerReasoningFollowsTheRoleThenBackground(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "openai", Model: "primary-model", Reasoning: "xhigh"}
+	cfg.Models.Auxiliary = config.ModelSelectionConfig{Provider: "openai", Model: "aux-model", Reasoning: "high"}
+	cfg.Providers.OpenAI.APIKey = "test-key"
+	cfg.Normalize()
+	if got := summarizerReasoning(cfg); got != "high" {
+		t.Fatalf("summarizer reasoning = %q, want the Background route's high", got)
+	}
+	cfg.Models.Roles = map[string]config.ModelRoleConfig{
+		string(llm.RoleSummarizer): {Provider: "openai", Model: "summary-model", APIKey: "test-key", Reasoning: "low"},
+	}
+	cfg.Normalize()
+	if got := summarizerReasoning(cfg); got != "low" {
+		t.Fatalf("summarizer reasoning = %q, want the explicit role's low", got)
+	}
+}
+
 func TestSummarizerOutputLimitUsesResolvedRoleCapacity(t *testing.T) {
 	cfg := &config.Config{Models: config.ModelsConfig{Roles: map[string]config.ModelRoleConfig{
 		string(llm.RoleSummarizer): {MaxTokens: 3072},

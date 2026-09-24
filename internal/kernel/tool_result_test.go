@@ -75,6 +75,51 @@ func TestPackageToolResultSummarizesPatchPreview(t *testing.T) {
 	}
 }
 
+func TestPackageToolResultSummarizesSkillAndBatchPreviews(t *testing.T) {
+	tests := []struct {
+		name string
+		tool string
+		raw  string
+		want []string
+	}{
+		{
+			name: "skill selection",
+			tool: "skill_select",
+			raw:  `{"success":true,"name":"aws-codebuild-release","instructions":"large private instructions"}`,
+			want: []string{"aws-codebuild-release", "activated"},
+		},
+		{
+			name: "skill section",
+			tool: "skill_view",
+			raw:  `{"success":true,"name":"aws-codebuild-release","section":"安全边界","content":"abcdef","total_bytes":20,"complete":false}`,
+			want: []string{"aws-codebuild-release", "section 安全边界", "6/20 bytes", "more available"},
+		},
+		{
+			name: "batch fallback",
+			tool: "batch_read",
+			raw:  `{"success":false,"operations":3,"failures":1,"fallback_required":true,"items":[{"output":"large result"}]}`,
+			want: []string{"3 operation(s)", "1 failed", "fallback required"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := packageToolResult(test.tool, test.raw)
+			for _, want := range test.want {
+				if !strings.Contains(env.Preview, want) {
+					t.Fatalf("preview %q missing %q", env.Preview, want)
+				}
+			}
+			if strings.Contains(env.Preview, "large") || strings.Contains(env.Preview, `"content"`) {
+				t.Fatalf("preview leaked payload content: %q", env.Preview)
+			}
+			if env.ModelContent != test.raw {
+				t.Fatalf("preview formatting changed model content: %q", env.ModelContent)
+			}
+		})
+	}
+}
+
 func TestPackageToolErrorGuidesModelToDiagnose(t *testing.T) {
 	env := packageToolError("terminal", errTest("exit status 1"))
 

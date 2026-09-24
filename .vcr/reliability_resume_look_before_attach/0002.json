@@ -1,0 +1,47 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10794,
+        "output_tokens": 68,
+        "cache_read_input_tokens": 10368,
+        "cache_miss_input_tokens": 426,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 6,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_So6uNQVYUFmNFJwvbhX85594",
+          "Function": "terminal",
+          "Args": "{\"command\": \"ls -la \u0026\u0026 (test -f value.txt \u0026\u0026 hexdump -C value.txt || echo \\\"value.txt NOT FOUND\\\")\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am updating the plan to"
+    },
+    {
+      "usage": {
+        "input_tokens": 10628,
+        "output_tokens": 6,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " mark the verification step as completed while keeping reporting pending."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 11,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 141,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 975,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 4036,
+        "cache_miss_input_tokens": 7567,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_461084",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"Mark verification step completed and keep reporting step pending awaiting user confirmation.\",\"plan\":[{\"reuse_prior_verification\":false,\"status\":\"completed\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\"},{\"status\":\"pending\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_2}}\",\"reuse_prior_verification\":false}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

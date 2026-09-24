@@ -83,13 +83,20 @@ func TestWorkInspectReturnsBoundedRunStateWithoutRawEventContent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"release prepared", "verify deployment", "artifact://release-record", "read_file"} {
+	for _, want := range []string{"release prepared", "verify deployment", "artifact://release-record", "read_file", "work_select", "did not attach"} {
 		if !strings.Contains(result, want) {
 			t.Fatalf("work inspection missing %q: %s", want, result)
 		}
 	}
 	if strings.Contains(result, "RAW PRIVATE TRANSCRIPT") {
 		t.Fatalf("raw event payload leaked: %s", result)
+	}
+	current, err := tool.Execute(map[string]interface{}{
+		"run_id":            run.ID,
+		"_invocation_scope": kernel.ToolInvocationScope{ControlTenantID: person.TenantID, PersonID: person.PersonID, RunID: run.ID},
+	})
+	if err != nil || !strings.Contains(current, "already selected") || strings.Contains(current, "did not attach") {
+		t.Fatalf("current Run inspection gave historical-selection guidance: result=%s err=%v", current, err)
 	}
 }
 

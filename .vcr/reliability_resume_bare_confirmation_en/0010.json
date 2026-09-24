@@ -1,0 +1,57 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will record the completed task outcome."
+    },
+    {
+      "usage": {
+        "input_tokens": 12014,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 85,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1128,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 4044,
+        "cache_miss_input_tokens": 9098,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_34551",
+          "Function": "finish_run",
+          "Args": "{\"done\":[\"Verified that value.txt contains exactly READY followed by a newline\",\"Reported verification result to user\"],\"status\":\"done\",\"summary\":\"value.txt contains exactly READY followed by a newline.\",\"files\":[\"value.txt\"],\"tests\":[\"verify tool confirmed value.txt contents match 'READY\\\\n' exactly\"]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "Eo4CCosCAWkUfROwIOJS+Y0dVKm5Dmlu/H0DX3PuFjll+JiIK+nSvqFMEskM/nysrGaSvRGV89p+/V1Xrq0IoBqlLI/YZoUPEvYZ/1yyrlinXu0XkebnYBG2oiPuiifCLzlkJH9jPD5W9VilS427rZl6CuUQlSkJjIIFBp3PTfMmVZ8JqCvRc807WbpPQGAc/n1m16EvxoM/rUDmhlmc8BtXlEJtbu0KQNwCPLyre13WVlDOYHfKOMs2HmJE1EcpTv4xR9d0eBxU+XF3Xj/M7p1RoptRwbljJk6ceGJUuyynEDxl134Ro8KxHVVoMEzcgI3UsT0fKgy3/Nwp8mjLhzwRleON/ZKWXjPRiqg2ITQ5"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

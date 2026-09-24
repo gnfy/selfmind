@@ -74,7 +74,13 @@ func observationArgvCommands(argv []string, depth int) ([][]string, bool) {
 		return nil, false
 	}
 	program := strings.ToLower(filepath.Base(argv[0]))
-	if _, shell := shellDashCWrappers[program]; shell {
+	_, shell := shellDashCWrappers[program]
+	if (shell || program == "timeout" || program == "command") && strings.Contains(argv[0], "/") {
+		// A path-qualified wrapper runs whatever file is at that path; only its
+		// bare name is known to interpret the inner command.
+		return nil, false
+	}
+	if shell {
 		script, ok := exactDashCScript(argv[1:])
 		if !ok {
 			return nil, false

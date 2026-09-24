@@ -621,19 +621,12 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		outcome.Summary = selection.Notice
 		outcome.NextSteps = []string{"Confirm whether to continue the historical work separately. No continuation was queued."}
 	}
-	if !hasFinalContent && structuredOutcome && strings.TrimSpace(outcome.Summary) != "" {
-		// finish_run is a durable structured result. When a provider ends the
-		// stream without separate prose, expose that result instead of storing
-		// the router's generic missing-response fallback as a successful answer.
-		content = strings.TrimSpace(outcome.Summary)
-	}
 	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.TenantID, run.ID)
 	outcome.Verification, outcome.Files = verification, evidenceFiles
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
 	outcome = applyVerificationOutcome(outcome)
 	if !hasFinalContent && !structuredOutcome && (selection == nil || !selection.Rejected) {
-		content = missingFinalEvidenceSummary(run.ID, outcome)
-		outcome.Summary = truncate(toOneLine(content), 1000)
+		content, outcome.Summary = missingFinalEvidenceSummary(run.ID, outcome, c.acceptedPlanSteps(finCtx, identity.TenantID, run.ID))
 	}
 	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {
 		if watch, watchErr := d.Control.GetExternalWatch(finCtx, identity.TenantID, watchID); watchErr == nil {
@@ -644,6 +637,12 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	for _, mismatch := range outcome.ClaimMismatches {
 		outcome.Risks = appendUnique(outcome.Risks, mismatch, 8)
+	}
+	if structuredOutcome && !hasFinalContent {
+		content = structuredResultFallback(outcome)
+	}
+	if !structuredOutcome && eventSummary.Completion().CompletionReason == "plan_unresolved" {
+		content, outcome.Summary = unresolvedPlanFallback(outcome, c.acceptedPlanSteps(finCtx, identity.TenantID, run.ID))
 	}
 	content = withVerificationNotice(content, outcome.Verification, outcome.ClaimMismatches)
 	content = withCompletionNotice(content, outcome)
@@ -721,37 +720,27 @@ func (c *RunCoordinator) inheritResumeTargetPlan(ctx context.Context, identity *
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || child == nil || strings.TrimSpace(child.ResumesRunID) == "" {
 		return nil, nil
 	}
-	parent, err := c.srv.Control.LatestRunPlan(ctx, identity.TenantID, child.ResumesRunID)
+	projection, err := c.srv.Control.EnsureInheritedRunPlan(ctx, identity.TenantID, child.ID)
 	if err != nil {
 		return nil, err
 	}
+	if projection != nil {
+		return projection, nil
+	}
 	steps := make([]control.RunPlanStepInput, 0)
-	explanation := "Plan inherited from the continued run"
-	if parent != nil && len(parent.Steps) > 0 {
-		explanation = parent.Explanation
-		for _, step := range parent.Steps {
-			steps = append(steps, control.RunPlanStepInput{
-				Step: step.Step, Status: step.Status, SuccessCriteria: step.SuccessCriteria,
-				VerificationRequired: step.VerificationRequired, RelatedTaskID: step.RelatedTaskID,
-				WorkUnit: step.WorkUnit,
-			})
-		}
-	} else {
-		// Runs created before the durable recovery contract may only have the
-		// historical plan.updated snapshot. Import that bounded snapshot once
-		// into the child rather than keeping two plan authorities thereafter.
-		for _, step := range c.srv.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, child.ResumesRunID) {
-			steps = append(steps, control.RunPlanStepInput{Step: step.Step, Status: step.Status})
-		}
+	// Legacy Runs may only have a plan.updated event. This path cannot assert
+	// source step identity or carry verification evidence.
+	for _, step := range c.srv.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, child.ResumesRunID) {
+		steps = append(steps, control.RunPlanStepInput{Step: step.Step, Status: step.Status})
 	}
 	if len(steps) == 0 {
 		return nil, nil
 	}
-	projection, err := c.srv.Control.SyncRunPlan(ctx, identity.TenantID, child.ID, explanation, steps)
+	legacy, err := c.srv.Control.SyncRunPlan(ctx, identity.TenantID, child.ID, "Plan inherited from the continued run", steps)
 	if err != nil {
 		return nil, err
 	}
-	return &projection, nil
+	return &legacy, nil
 }
 
 // Origins of a run the daemon started on the person's behalf. A turn the

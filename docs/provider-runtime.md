@@ -184,8 +184,13 @@ The primary selection lives only under `models.primary`. `reasoning` and
 `service_tier` are optional. Omission or `auto` means provider/model default;
 the resolver deliberately does not send a forced value. Supported values are
 model capabilities, not a global hardcoded enum. The Model Manager validates
-them when metadata is discoverable and otherwise preserves the explicit value
-for compatible private endpoints.
+them when metadata is discoverable. When capability metadata is unknown, it
+offers `auto` plus a manually entered value and relies on the same contract
+probe used by every model change; unknown is never treated as unsupported.
+Model status keeps the configured value separate from the effective default
+and names its source (`explicit`, `model_default`, `provider_override`, or
+`provider_default`). This lets clients show `auto` honestly without turning a
+display default into a forced wire parameter.
 
 For local onboarding, an enabled auxiliary selection with no provider/model
 defaults to the primary provider/model. It can instead be explicitly disabled
@@ -195,11 +200,13 @@ by `selfmind model`. Interactive `selfmind setup` also opens this summary.
 Main, Background, optional Advanced roles, and Validate & continue are visible
 together. Provider connections remain accessible from the provider picker;
 reasoning and service tier use their compatible defaults without extra pages.
-Setup's Same as Main choice writes `models.auxiliary.follow_primary: true`:
-Background follows later Main provider/model changes, while retaining its own
-background tuning policy. Choosing a named Background model clears this flag,
-even if that model currently matches Main. Existing explicit selections do not
-gain inheritance automatically, and legacy snapshot fingerprints remain stable.
+Setup and the later Model Manager use one Background selector with three
+states: Same as Main, a named independent model, or disabled. Same as Main
+writes `models.auxiliary.follow_primary: true`, so Background follows later Main
+provider/model changes while retaining its own background tuning policy.
+Choosing a named Background model clears this flag, even if that model currently
+matches Main. Existing explicit selections do not gain inheritance automatically,
+and legacy snapshot fingerprints remain stable.
 The
 applied transaction in `model-state.json` is the sole authority for foreground
 and background readiness.
@@ -242,6 +249,14 @@ expires after ten minutes. History is bounded to ten terminal non-secret
 snapshots, and rollback creates a fresh validated transaction from a previous
 applied snapshot.
 
+Every production mutation entrypoint constructs the same transaction service
+from the loaded configuration, including its credential store. A detached
+restart performs a read-only preflight against the exact staged credential
+before stopping the healthy daemon or writing the candidate configuration.
+Missing or unreadable transaction dependencies therefore leave the daemon,
+config, and pending state untouched rather than failing between config commit
+and credential activation.
+
 The state file is `model-state.json` beside the selected `config.yaml`. It
 contains route selections, non-secret provider connection snapshots, separate
 foreground/background and per-role verification evidence, phase transitions, probe
@@ -255,9 +270,13 @@ passes startup probes and real `/health`. Cancellation discards an uncommitted
 stage, and automatic rollback restores provider, route, and credential state as
 one unit. The validated
 candidate is written to YAML only at the
-safe boundary, after the current run is idle. Startup probes it again, then
-records it as running only after runtime construction and the real `/health`
-endpoint succeed. Only a deterministic, model-attributable startup probe
+safe boundary, after the current run is idle. Every changed route already
+passed before commit, so startup re-checks only what a restart can change, the
+new process's reach: one approval-contract probe, or Main's probe when
+background work is disabled. A startup without that prior validation, such as
+a manual edit or a first start, proves what changed. The candidate is recorded
+as running only after runtime construction and the real `/health` endpoint
+succeed. Only a deterministic, model-attributable startup probe
 failure automatically restores the last running snapshot. Network, quota,
 listener, service-manager, and unknown failures preserve the evidence in
 `recovery_required`; the Model Manager's Change status screen offers retry or
@@ -298,22 +317,55 @@ reasoning and service-tier settings survive a model selection only when known
 compatible. Unknown compatibility resets the affected setting to provider
 `auto` with a notice. Explicit values are authoritative.
 
+After a model transaction reaches its safe commit boundary, Model Manager
+keeps both the previous and candidate provider/model plus every explicit
+reasoning value in a presentation-only MRU list. The list is stored as bounded
+`models.remembered` data (24 provider/model pairs and eight reasoning values per
+pair); failed validation and uncommitted drafts never enter it. Remembered
+entries are merged after configured and currently discoverable models, so a
+previous manual model can be selected again without retyping it. On the model
+page, `d` forgets the selected remembered entry. This never changes an active
+route, and a model still supplied by the provider catalogue or selected by a
+route remains visible. Catalogue expiry and refresh continue to own removal of
+provider-supplied models.
+
+Validation and restart waits use the same TUI animation owner as ordinary
+agent work. The progress surface renders the durable transaction phase and
+elapsed time from that phase's timestamp, while one spinner tick chain remains
+active until the operation completes or enters actionable recovery.
+
 Validation has two boundaries. Setup keeps selections in an editable draft until
 Validate & continue probes Main, Background, and all six managed roles using
-their effective selections. It displays per-route results, refuses missing or
-failed evidence, and offers retry or return to the draft. The full Model Manager
-automatically sends the
-appropriate bounded contract probe after each completed selection: a foreground
-probe for Main and a background or maintenance-JSON probe for Background and
-its six managed roles. The final daemon transaction resolves and probes the
-whole draft again inside the daemon environment before changing service state.
-This prevents a shell credential from appearing healthy while the background
-runtime cannot use it. A newly entered API key stays in an opaque staged auth
+their effective selections. Distinct physical endpoint lanes run concurrently,
+contracts sharing one endpoint are serialized, and identical provider wire
+fingerprints are probed once. It displays per-route
+results, refuses missing or failed evidence, and offers retry or return to the
+draft. The full Model Manager automatically validates after each completed
+selection, covering every route the draft changes, including a Background that
+follows Main. Each route gets its bounded contract probe: Main must call a no-op tool,
+accept the exact assistant/tool replay, and return final text. The probe selects
+that exact tool when the protocol and reasoning contract permit it; otherwise it
+allows a bounded number of automatic-selection attempts while preserving the
+same tool-call requirement. Maintenance
+routes use maintenance JSON; `fast_classifier` uses the real structured
+approval-decision contract. The approval probe
+uses the same five-second deadline and the lowest reasoning tier declared by the
+resolved model. A probe that meets a transient provider failure (a 5xx, a
+rate limit, or a dropped connection) is retried once after a short pause
+before it counts as failed. The final daemon transaction resolves the whole
+draft inside the daemon environment before changing service state and reuses a
+passing probe of the identical request, endpoint, and credential from the last
+ten minutes; a route without such evidence is probed there. Selection-time
+validation also runs inside the daemon, so a shell credential cannot appear
+healthy while the background runtime cannot use it. A newly entered API key stays in an opaque staged auth
 record during validation and is never written to YAML; service definitions
 contain paths and non-credential environment only. A failed probe keeps the
 draft editable and never masquerades as verified. Setup waits for the exact
 transaction's applied result and a reachable healthy daemon, reloads the applied
 configuration, then continues into runtime setup and chat in the same invocation.
+The later `selfmind model` flow and the in-chat `/model` use the same completion
+rule and do not treat a restart receipt as completion; recovery reopens the
+actionable manager until retry or restore reaches a verified healthy state.
 Cancelling the model summary does not install a service or trust a workspace.
 
 For Anthropic Messages, `thinking_mode: anthropic` maps an explicit reasoning
@@ -324,13 +376,40 @@ For OpenAI-compatible transports the adapter uses the protocol's
 field is preferred; `extra_body` remains the emergency override at the final
 wire boundary.
 
-Background maintenance does not inherit the primary or auxiliary profile's
-interactive reasoning level. Post-run analysis, memory consolidation, model
-contract probes, and approval triage request disabled reasoning and bounded
-output explicitly; the maintenance provider chain enforces that contract again
-at dispatch. A user-selected `high` or `xhigh` auxiliary profile therefore
-does not multiply routine governance cost, while foreground reasoning remains
-unchanged.
+Disabling reasoning (`none`, `off`, or `disabled`) has no portable
+OpenAI-compatible encoding, so the provider's `thinking_mode` declares it:
+`deepseek` sends `thinking.type=disabled`, `effort_none` sends a literal
+`reasoning_effort: "none"`, and every other mode omits the field because some
+endpoints reject `"none"`. The encoding applies whether the request or the
+route's configured level asks for it. An omitted field selects the provider
+default, so a model that thinks by default keeps thinking: approval triage then
+pays a full reasoning pass for a request that asked for none and can exceed
+`approval_triage_timeout`. Model-change validation
+checks this on the approval route. When the probe answer still carries
+reasoning under the default OpenAI encoding, it repeats the request once with
+`reasoning_effort: "none"`; only if that answer passes the contract with no
+reasoning does the confirmed change record `thinking_mode: effort_none` on a
+provider that declares no thinking_mode. A declared mode is never replaced, and
+the change notice states what was observed and saved.
+
+Approval triage always runs at the resolved model's lowest declared latency
+tier, whatever reasoning the configuration names: disabled when supported,
+`minimal` or `low` when the provider cannot disable reasoning, and the
+compatibility-safe disabled request when capabilities are unknown. Every
+smart-mode tool call waits on that verdict inside the person's turn, so Model
+Manager offers no reasoning choice for `fast_classifier`. Every other
+background role — context compaction, post-run analysis, memory
+consolidation, and skill curation — runs at its route's configured reasoning
+level: an explicit role setting, else the Background route's. When that level
+may reason, the output cap gains the thinking budget of that level (`low=4096`,
+default `8192`, `high=16384`, `xhigh/max=32768`), because some providers count
+reasoning tokens against `max_tokens`. Compaction waits inside the person's
+turn, so it has its own bound, `agent.compaction_timeout` (default 30s); when
+the bound expires the turn continues on deterministic trimming. The
+asynchronous calls and their validation probe use the maintenance call
+timeout. A thinking Background route therefore makes this work slower and
+costlier; set its reasoning, or the role's, to `none` to keep it off. Model-change validation proves the approval JSON request shape before the
+route becomes active.
 
 Natural-language work continuity uses the normal configured Main turn, not
 `fast_classifier`, the auxiliary route, or a second run-external model call.
@@ -408,6 +487,11 @@ adapter preserves and replays `reasoning_content` with the assistant tool call
 before the matching tool result. Dropping it makes the next provider request
 invalid.
 
+OpenAI-compatible tool calls may also carry provider-owned `extra_content`
+(for example a reasoning signature). The adapter stores that object as bounded
+opaque replay metadata and sends it back unchanged with the assistant tool
+call. The kernel never interprets it as instructions, evidence, or authority.
+
 DeepSeek requests also carry an optional `user_id`. SelfMind never sends a raw
 person, tenant, channel, email, or platform ID. `StableProviderUserID` derives
 an opaque, versioned `sm_...` value from the authenticated tenant/person pair;
@@ -415,9 +499,10 @@ it remains stable across channels and runs but changes across people. The
 field is sent only when a provider profile declares
 `user_identity_field: user_id`.
 
-The Model Manager's automatic route validation and `doctor --probe-models`
-validate both the ordinary native tool schema and the complete thinking tool
-loop: reasoning + tool call, tool result replay, then a final assistant answer.
+The Model Manager's foreground route validation exercises the complete native
+tool loop: tool call, opaque metadata replay with the tool result, then a final
+assistant answer. Role diagnostics continue to use each role's actual bounded
+text or JSON contract.
 
 ## Kimi Coding Plan
 

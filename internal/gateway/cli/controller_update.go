@@ -102,6 +102,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, workingTick()
 
+	case MsgBackgroundTick:
+		if msg.RunID != m.backgroundRunID || !m.backgroundDaemonRunActive() {
+			return m, nil
+		}
+		return m, backgroundTick(msg.RunID)
+
 	case MsgTerminalGone:
 		// The controlling terminal is gone. Quit rather than run on against it:
 		// the read loop already ended silently, so only timers are left and the
@@ -159,9 +165,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgModelValidationDone:
-		m.stopModelWait()
-		m.thinking = false
-		m.activityText = ""
+		m.finishModelOperation()
 		if m.modelManager == nil {
 			return m, nil
 		}
@@ -193,30 +197,44 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modelManager.SetRouteValidation(msg.Route, ok, message, msg.Response.CredentialStage)
 		return m, nil
 
-	case MsgModelChangeDone:
-		m.stopModelWait()
-		m.thinking = false
-		m.activityText = ""
-		m.modelApplying = false
+	case MsgModelRememberedForgotten:
+		m.finishModelOperation()
 		if msg.Err != nil {
+			m.addErrorMessage("Could not forget remembered model: " + msg.Err.Error())
+			return m, nil
+		}
+		forgetModelManagerRoute(m.modelManagerRoutes, msg.Provider, msg.Model)
+		if m.modelManager != nil {
+			m.modelManager.ForgetRememberedModel(msg.Provider, msg.Model)
+		}
+		m.setStatusNotice(noticeSuccess, "Forgot remembered model "+msg.Provider+"/"+msg.Model+".")
+		return m, nil
+
+	case MsgModelChangeDone:
+		if msg.Err != nil {
+			m.finishModelOperation()
 			m.addErrorMessage("Model change failed: " + msg.Err.Error())
 			return m, nil
 		}
 		if msg.Response.Change == nil {
+			m.finishModelOperation()
 			m.addErrorMessage("Model change failed: the daemon returned no transaction receipt.")
 			return m, nil
 		}
 		m.modelManager = nil
 		change := msg.Response.Change
+		applyModelManagerChange(m.modelManagerRoutes, *change)
 		m.modelManagerStatus.ConfiguredPrimary = selectionDisplay(change.Candidate.Primary)
 		m.modelManagerStatus.ConfiguredBackground = selectionDisplay(change.Candidate.Auxiliary)
 		m.modelManagerStatus.PrimaryProvider = change.Candidate.Primary.Provider
 		m.modelManagerStatus.PrimaryModel = change.Candidate.Primary.Model
 		m.modelManagerStatus.PrimaryReasoning = change.Candidate.Primary.Reasoning
+		m.modelManagerStatus.PrimaryReasoningLabel = reasoningStatusLabel(change.Candidate.Primary, modelchange.RouteTuning{})
 		m.modelManagerStatus.PrimaryServiceTier = change.Candidate.Primary.ServiceTier
 		m.modelManagerStatus.BackgroundProvider = change.Candidate.Auxiliary.Provider
 		m.modelManagerStatus.BackgroundModel = change.Candidate.Auxiliary.Model
 		m.modelManagerStatus.BackgroundReasoning = change.Candidate.Auxiliary.Reasoning
+		m.modelManagerStatus.BackgroundReasoningLabel = reasoningStatusLabel(change.Candidate.Auxiliary, modelchange.RouteTuning{})
 		m.modelManagerStatus.BackgroundServiceTier = change.Candidate.Auxiliary.ServiceTier
 		m.modelManagerStatus.RoleOverrides = make(map[string]components.ModelManagerSubmission)
 		for _, route := range modelchange.ManagedRoleRoutes() {
@@ -238,11 +256,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Response.RestartScheduled {
 			m.addMessage("notice", fmt.Sprintf("Model change %s validated and saved. Running remains %s until the safe restart is healthy.", change.ID, m.displayModelName()))
-			if m.modelManagerOnly && !m.modelSetup {
-				return m, m.quitNow()
-			}
-			return m, m.observeModelChange(false, 100*time.Millisecond)
+			m.modelApplying = true
+			progress := m.startModelOperation("Waiting for the configured daemon to become healthy")
+			return m, tea.Batch(progress, m.observeModelChange(false, 100*time.Millisecond))
 		} else {
+			m.finishModelOperation()
 			m.addMessage("notice", fmt.Sprintf("Model change %s validated and saved. Run `selfmind gateway restart --drain` to apply it.", change.ID))
 			if m.modelSetup {
 				m.modelSetupError = fmt.Errorf("model change is saved but could not schedule a restart; run `selfmind gateway restart --drain`, then resume setup")
@@ -268,8 +286,8 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		observedID := m.modelChangeID
 		status := msg.Observation.Status
 		m.applyModelStatus(status)
-		if m.modelSetup && observedID != "" && status.Pending == nil {
-			if cmd, handled := m.completeModelSetup(observedID, msg.Observation); handled {
+		if observedID != "" && status.Pending == nil {
+			if cmd, handled := m.completeManagedModelChange(observedID, msg.Observation); handled {
 				return m, cmd
 			}
 		}
@@ -281,9 +299,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.addMessage("notice", fmt.Sprintf("Model change %s is taking longer than 30 seconds. SelfMind is still waiting for a safe run boundary or gateway health.", status.Pending.ID))
 			}
 			if status.Pending.Status == modelchange.StatusRecoveryRequired {
+				m.finishModelOperation()
 				m.addErrorMessage(fmt.Sprintf("Model change %s requires recovery: %s", status.Pending.ID, status.Pending.Failure))
+				m.reopenModelManager()
 				if m.modelSetup {
-					m.modelManager = components.NewModelManagerWithTheme(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height, m.common.Theme)
 					m.modelManager.SetSetupMode()
 				}
 			} else {
@@ -316,19 +335,21 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgModelRecoveryDone:
 		if msg.Err != nil {
+			m.finishModelOperation()
 			m.addErrorMessage("Model recovery failed: " + msg.Err.Error())
+			m.reopenModelManager()
+			if m.modelSetup {
+				m.modelManager.SetSetupMode()
+			}
 			return m, nil
 		}
 		m.addMessage("notice", "Model recovery action accepted: "+msg.Action+".")
-		if m.modelManagerOnly && !m.modelSetup {
-			return m, m.quitNow()
-		}
-		return m, m.observeModelChange(false, 100*time.Millisecond)
+		m.modelApplying = true
+		progress := m.startModelOperation("Waiting for model recovery to reach a healthy state")
+		return m, tea.Batch(progress, m.observeModelChange(false, 100*time.Millisecond))
 
 	case MsgModelManagerOpen:
-		m.stopModelWait()
-		m.thinking = false
-		m.activityText = ""
+		m.finishModelOperation()
 		if msg.Err != nil {
 			m.addErrorMessage("Could not load model routes: " + msg.Err.Error())
 			if m.modelSetup {
@@ -375,6 +396,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.approvalPrompt != nil {
 			return m.handleKey(msg)
 		}
+		if m.modelApplying {
+			if msg.String() == "ctrl+c" {
+				return m, m.quitNow()
+			}
+			return m, nil
+		}
 		if m.modelSetup && m.modelManager == nil {
 			if msg.String() == "ctrl+c" {
 				return m, m.quitNow()
@@ -386,30 +413,41 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// it resolves: the wizard's own answer is already given, and a
 			// second Enter would post a duplicate apply the daemon rejects as a
 			// pending conflict.
-			if m.modelApplying {
-				return m, nil
-			}
 			action := m.modelManager.Update(msg)
 			if action.RecoveryAction != "" {
 				m.modelManager = nil
-				return m, m.recoverModelChange(action.RecoveryAction)
+				m.modelApplying = true
+				m.thinkingStart = time.Time{}
+				progress := m.startModelOperation("Applying model recovery")
+				return m, tea.Batch(progress, m.recoverModelChange(action.RecoveryAction))
+			}
+			if action.ForgetModel != nil {
+				m.modelApplying = true
+				m.modelChangePhase = ""
+				m.modelChangePhaseAt = time.Time{}
+				m.thinkingStart = time.Time{}
+				progress := m.startModelOperation("Forgetting remembered model")
+				return m, tea.Batch(progress, m.forgetRememberedModel(action.ForgetModel.Provider, action.ForgetModel.Model))
 			}
 			if action.ValidationRoute != "" {
 				if len(action.Draft) == 0 {
 					m.modelManager.SetRouteValidation(action.ValidationRoute, true, "", "")
 					return m, nil
 				}
-				m.thinking = true
-				m.thinkingStart = time.Now()
-				m.activityText = "Validating model selection"
-				return m, m.validateModelManager(action.ValidationRoute, action.Draft, action.ProviderDraft, m.modelManager.CredentialStage())
+				m.modelApplying = true
+				m.modelChangePhase = ""
+				m.modelChangePhaseAt = time.Time{}
+				m.thinkingStart = time.Time{}
+				progress := m.startModelOperation("Validating model selection")
+				return m, tea.Batch(progress, m.validateModelManager(action.ValidationRoute, action.Draft, action.ProviderDraft, m.modelManager.CredentialStage()))
 			}
 			if action.Closed && (len(action.Draft) > 0 || len(action.ProviderDraft) > 0) {
-				m.thinking = true
-				m.thinkingStart = time.Now()
-				m.activityText = "Applying model changes"
 				m.modelApplying = true
-				return m, m.submitModelManager(action.Draft, action.ProviderDraft, m.modelManager.CredentialStage())
+				m.modelChangePhase = ""
+				m.modelChangePhaseAt = time.Time{}
+				m.thinkingStart = time.Time{}
+				progress := m.startModelOperation("Applying model changes")
+				return m, tea.Batch(progress, m.submitModelManager(action.Draft, action.ProviderDraft, m.modelManager.CredentialStage()))
 			}
 			if action.Closed {
 				m.modelManager = nil
@@ -509,7 +547,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.thinking = false
 		m.activityText = ""
 		if !newerDaemonRun {
-			m.activePlanJSON = ""
+			m.clearActivePlan()
 			m.toolExecuting = ""
 			m.finalizeOpenToolMessages("Completion was not observed before the run ended.")
 		}
@@ -580,7 +618,8 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.daemonRunOwned = localMatch || queuedMatch
 		m.runStatus = "working"
 		m.runTokens = 0
-		m.activePlanJSON = ""
+		m.lastRequestTokens = 0
+		m.clearActivePlan()
 		if !localMatch {
 			m.stopModelWait()
 			m.thinking = false
@@ -606,6 +645,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addMessage("notice", "Queued task started: "+title)
 		}
 		if m.backgroundDaemonRunActive() {
+			if !m.backgroundTickRunning {
+				m.backgroundTickRunning = true
+				return m, backgroundTick(msg.RunID)
+			}
 			return m, spinnerCmd
 		}
 		return m, workingTick()
@@ -631,6 +674,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		awaitingSynchronousDone := m.daemonRunAwaitingDone
 		m.daemonRunOwned = false
 		m.daemonRunActive = false
+		m.backgroundTickRunning = false
 		m.daemonRunID = ""
 		m.daemonRunQueueID = ""
 		m.daemonRunStarted = time.Time{}
@@ -654,7 +698,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.thinking = false
 		m.activityText = ""
 		m.toolExecuting = ""
-		m.activePlanJSON = ""
+		m.clearActivePlan()
 		m.finalizeOpenToolMessages("Completion was not observed before the run ended.")
 		if m.processState().HasStreamContent() {
 			m.finalizeLiveStream("", llm.AssistantPhaseFinalAnswer)
@@ -686,7 +730,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.watchedTaskTitle = ""
 		m.watchCancel = nil
 		m.toolExecuting = ""
-		m.activePlanJSON = ""
+		m.clearActivePlan()
 		if msg.Cancelled {
 			// This terminal detached from a still-running daemon task. Its durable
 			// tool ledger remains authoritative; transient spectator rows need not
@@ -772,7 +816,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case MsgToolStart:
-		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
+		if m.backgroundRunEvent(msg.Event) {
+			m.backgroundToolCount++
+			m.backgroundLastAction = toolAction(msg.ToolName, nil, "", false)
 			return m, spinnerCmd
 		}
 		// Anonymous mutable rows cannot be completed deterministically and would
@@ -816,15 +865,17 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgPlanUpdated:
-		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
+		if m.backgroundRunEvent(msg.Event) {
+			m.applyBackgroundPlanSnapshot(msg.Content, msg.Event)
 			return m, spinnerCmd
 		}
 		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
-		if content := strings.TrimSpace(textutil.CleanUTF8(msg.Content)); content != "" {
-			m.activePlanJSON = content
-		}
+		m.applyPlanSnapshot(msg.Content, msg.Event)
 		return m, spinnerCmd
 
 	case MsgToolOutput:
@@ -896,6 +947,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// increment (no double counting).
 		if msg.Run > 0 {
 			m.runTokens = msg.Run
+		}
+		if msg.LastRequest > 0 {
+			m.lastRequestTokens = msg.LastRequest
 		}
 		return m, nil
 
@@ -1021,7 +1075,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+l":
 			m.messages = []ChatMessage{}
 			m.clearLiveStream()
-			m.activePlanJSON = ""
+			m.clearActivePlan()
 			return m, m.clearHybridScreen()
 		case "enter":
 			// Enter accepts an eligible completion before the immutable submission
@@ -1077,6 +1131,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.clarifyReq = tools.ClarifyRequest{}
 				m.runStatus = "working"
 				m.runTokens = 0
+				m.lastRequestTokens = 0
 				waitCmd := m.startModelWait("Waiting for the model to respond")
 				return m, tea.Batch(waitCmd, workingTick())
 			}
@@ -1109,12 +1164,13 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Echo the compact display form: a 200-line paste or an attached
 			// image shows as its token, not as the expanded payload.
 			m.addMessage("user", display)
-			m.activePlanJSON = ""
+			m.clearActivePlan()
 			m.steerCh = make(chan string, 16)
 			m.localRequestActive = true
 			m.localRequestInput = input
 			m.runStatus = "working"
 			m.runTokens = 0
+			m.lastRequestTokens = 0
 			waitCmd := m.startModelWait("Waiting for the model to choose the first step")
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFn = cancel

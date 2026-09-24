@@ -73,7 +73,7 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 		return nil, err
 	}
 	defer tx.Rollback()
-	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, plan)
+	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, plan, false)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 // compatibility API and the durable Run-plan projection. Keeping plan steps
 // and their coarser work-unit attribution in one transaction prevents a crash
 // from publishing only half of the execution structure.
-func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runID string, plan []WorkUnitPlanInput) ([]RunWorkUnit, error) {
+func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runID string, plan []WorkUnitPlanInput, replace bool) ([]RunWorkUnit, error) {
 	var personID, workspaceID, primaryTaskID string
 	if err := tx.QueryRowContext(ctx, `SELECT person_id, COALESCE(workspace_id,''), thread_id FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).
 		Scan(&personID, &workspaceID, &primaryTaskID); err != nil {
@@ -130,7 +130,11 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 				return nil, fmt.Errorf("related task %s is not owned by run person", item.RelatedTaskID)
 			}
 		}
-		unit, err := resolvePlanWorkUnit(runID, item, existing, byID, used)
+		var unit *RunWorkUnit
+		var err error
+		if !replace {
+			unit, err = resolvePlanWorkUnit(runID, item, existing, byID, used)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +188,7 @@ func resolvePlanWorkUnit(runID string, item WorkUnitPlanInput, existing []RunWor
 	}
 	if item.RelatedTaskID != "" {
 		for i := range existing {
-			if !used[existing[i].ID] && existing[i].RelatedTaskID == item.RelatedTaskID {
+			if !used[existing[i].ID] && existing[i].PlanStatus != "cancelled" && existing[i].RelatedTaskID == item.RelatedTaskID {
 				return &existing[i], nil
 			}
 		}
@@ -192,7 +196,7 @@ func resolvePlanWorkUnit(runID string, item WorkUnitPlanInput, existing []RunWor
 	goal := normalizeWorkUnitGoal(item.GoalDigest)
 	if goal != "" {
 		for i := range existing {
-			if !used[existing[i].ID] && normalizeWorkUnitGoal(existing[i].GoalDigest) == goal {
+			if !used[existing[i].ID] && existing[i].PlanStatus != "cancelled" && normalizeWorkUnitGoal(existing[i].GoalDigest) == goal {
 				return &existing[i], nil
 			}
 		}
@@ -232,7 +236,7 @@ func upsertProjectedWorkUnitTx(ctx context.Context, tx *sql.Tx, unit *RunWorkUni
 		if !workUnitTerminal(status) {
 			if unit.PlanStatus == "completed" {
 				status = WorkUnitCompleted
-				verification, refs, _ = workUnitEvidenceProjectionTx(ctx, tx, unit.RunID, startedCursor, finishCursor)
+				verification, refs, _, _ = workUnitEvidenceProjectionTx(ctx, tx, unit.RunID, startedCursor, finishCursor)
 			} else {
 				status = WorkUnitCancelled
 				verification, refs = "", "[]"
@@ -320,12 +324,35 @@ type workUnitEvidence struct {
 	} `json:"command"`
 }
 
-func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64, stepIDs ...string) (string, string, string) {
+// workUnitEvidenceProjectionTx also reports how many plan-bound checks it
+// considered, or -1 when the evidence could not be read. With a step filter,
+// zero means no check in the window is bound to that step.
+func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64, stepIDs ...string) (string, string, string, int) {
+	knownPlanSteps := map[string]bool{}
+	stepRows, stepErr := tx.QueryContext(ctx, `SELECT DISTINCT step_id FROM run_plan_steps WHERE run_id=?`, runID)
+	if stepErr != nil {
+		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
+	}
+	for stepRows.Next() {
+		var stepID string
+		if stepRows.Scan(&stepID) != nil {
+			_ = stepRows.Close()
+			return "blocked", "[]", "Verification obligation identities are unreadable.", -1
+		}
+		knownPlanSteps[stepID] = true
+	}
+	if err := stepRows.Err(); err != nil {
+		_ = stepRows.Close()
+		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
+	}
+	if err := stepRows.Close(); err != nil {
+		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(payload_json,'{}') FROM task_events
 		WHERE run_id=? AND COALESCE(cursor,0)>? AND COALESCE(cursor,0)<=? AND type='evidence.recorded'
 		ORDER BY COALESCE(cursor,0), rowid`, runID, startedCursor, finishedCursor)
 	if err != nil {
-		return "blocked", "[]", "Verification evidence is unavailable."
+		return "blocked", "[]", "Verification evidence is unavailable.", -1
 	}
 	defer rows.Close()
 	var mutations []verification.Mutation
@@ -333,13 +360,13 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 	for rows.Next() {
 		var raw string
 		if rows.Scan(&raw) != nil {
-			return "blocked", "[]", "Verification evidence is unreadable."
+			return "blocked", "[]", "Verification evidence is unreadable.", -1
 		}
 		var payload struct {
 			Evidence workUnitEvidence `json:"evidence"`
 		}
 		if json.Unmarshal([]byte(raw), &payload) != nil || payload.Evidence.Kind == "" || (payload.Evidence.Kind == "verification" && payload.Evidence.Command == nil) {
-			return "blocked", "[]", "Verification evidence is malformed."
+			return "blocked", "[]", "Verification evidence is malformed.", -1
 		}
 		evidence := payload.Evidence
 		if evidence.Kind == "mutation" {
@@ -355,13 +382,25 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 		if evidence.Kind != "verification" || evidence.Command == nil {
 			continue
 		}
-		if len(stepIDs) > 0 && evidence.Command.Binding != nil && evidence.Command.Binding.Version == 3 && evidence.Command.Binding.StepID != stepIDs[0] {
-			continue
+		binding := evidence.Command.Binding
+		// Versions 1 and 2 predate persisted plan-step identity. Their runtime
+		// default target was the server-issued step id, which is enough to
+		// restore the durable obligation without interpreting prose.
+		if verification.ValidBinding(binding) && binding.StepID == "" && knownPlanSteps[binding.Target] {
+			copy := *binding
+			copy.Version = 3
+			copy.StepID = binding.Target
+			binding = &copy
 		}
-		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: evidence.Command.Binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
+		if len(stepIDs) > 0 {
+			if !verification.ValidBinding(binding) || binding.Version != 3 || binding.StepID != stepIDs[0] {
+				continue
+			}
+		}
+		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
 	}
 	if err := rows.Err(); err != nil {
-		return "blocked", "[]", "Verification evidence is unavailable."
+		return "blocked", "[]", "Verification evidence is unavailable.", -1
 	}
 	state, summary := verification.StateWithMutations(mutations, checks)
 	refs := []string{}
@@ -375,7 +414,7 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 	if state == "stale" {
 		state = "not_run"
 	}
-	return state, string(refsJSON), summary
+	return state, string(refsJSON), summary, len(checks)
 }
 
 func (s *Store) ListRunWorkUnits(ctx context.Context, tenantID, runID string) ([]RunWorkUnit, error) {

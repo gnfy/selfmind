@@ -15,12 +15,19 @@ import (
 // could be the background route. The plain OK probe must stay unconstrained.
 func TestMaintenanceProbeAsksForJSONModeAndPlainProbeDoesNot(t *testing.T) {
 	rt := modelruntime.Runtime{Model: "any"}
-	maintenance := modelProbeRequest(rt, false, true)
+	maintenance := modelProbeRequest(rt, false, modelProbeContractMaintenance)
 	format, _ := maintenance.Options["response_format"].(map[string]interface{})
 	if format["type"] != maintenanceResponseFormat || maintenanceResponseFormat != "json_object" {
 		t.Fatalf("maintenance probe response_format = %#v", maintenance.Options["response_format"])
 	}
-	plain := modelProbeRequest(rt, true, false)
+	if _, ok := maintenance.Options["temperature"]; ok {
+		t.Fatalf("maintenance probe must leave provider temperature policy intact: %#v", maintenance.Options)
+	}
+	approval := modelProbeRequest(modelruntime.Runtime{Model: "any", ReasoningLevels: []string{"low", "medium", "high"}}, false, modelProbeContractApproval)
+	if _, ok := approval.Options["temperature"]; ok {
+		t.Fatalf("approval probe must leave provider temperature policy intact: %#v", approval.Options)
+	}
+	plain := modelProbeRequest(rt, true, modelProbeContractPlain)
 	if _, ok := plain.Options["response_format"]; ok {
 		t.Fatalf("the plain probe must not constrain output: %#v", plain.Options)
 	}
@@ -55,13 +62,13 @@ func (p *scriptedProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan 
 // and not the next. The probe used to fail on the empty field alone, so a
 // healthy route validated one day and not the next. The interoperability
 // question is whether the follow-up turn is accepted, and that is the test.
-func TestThinkingToolLoopAcceptsAToolCallWithoutReasoningContent(t *testing.T) {
+func TestNativeToolLoopAcceptsAToolCallWithoutReasoningContent(t *testing.T) {
 	provider := &scriptedProvider{responses: []*llm.ChatResponse{
-		{ToolCalls: []llm.ToolCall{{ID: "call_1", Function: "selfmind_thinking_check", Args: `{"value":"ping"}`}}},
+		{ToolCalls: []llm.ToolCall{{ID: "call_1", Function: "selfmind_model_check", Args: `{"value":"ping"}`}}},
 		{Content: "called it, ok"},
 	}}
 	rt := modelruntime.Runtime{Model: "deepseek-v4-flash-vision-exp"}
-	if err := probeThinkingToolLoop(context.Background(), provider, rt); err != nil {
+	if err := probeNativeToolLoop(context.Background(), provider, rt); err != nil {
 		t.Fatalf("a tool call without reasoning_content must not fail the probe: %v", err)
 	}
 	if len(provider.requests) != 2 {
@@ -76,9 +83,9 @@ func TestThinkingToolLoopAcceptsAToolCallWithoutReasoningContent(t *testing.T) {
 
 // A model that never makes the call is still a broken route: the relaxation is
 // about an optional field, not about the tool call itself.
-func TestThinkingToolLoopStillRequiresTheToolCall(t *testing.T) {
+func TestNativeToolLoopStillRequiresTheToolCall(t *testing.T) {
 	provider := &scriptedProvider{responses: []*llm.ChatResponse{{Content: "I will not call tools."}}}
-	if err := probeThinkingToolLoop(context.Background(), provider, modelruntime.Runtime{Model: "m"}); err == nil {
+	if err := probeNativeToolLoop(context.Background(), provider, modelruntime.Runtime{Model: "m"}); err == nil {
 		t.Fatal("a response with no tool call passed the tool-loop probe")
 	}
 }

@@ -11,7 +11,7 @@ import (
 	"selfmind/internal/kernel/llm"
 )
 
-func TestProcessSurfaceGroupsToolsUnderActionNarration(t *testing.T) {
+func TestProcessSurfaceKeepsToolsInFlatChronologicalStream(t *testing.T) {
 	surface := newProcessSurface()
 	surface.Update(processEvent{
 		kind:    processStreamDelta,
@@ -29,17 +29,16 @@ func TestProcessSurfaceGroupsToolsUnderActionNarration(t *testing.T) {
 	if len(effects.commits) != 1 {
 		t.Fatalf("commits = %+v, want one action narration", effects.commits)
 	}
-	groupID := effects.commits[0].ProcessGroupID
-	if groupID == 0 || effects.commits[0].AssistantPhase != llm.AssistantPhaseCommentary {
-		t.Fatalf("action commit = %+v, want grouped commentary", effects.commits[0])
+	if effects.commits[0].AssistantPhase != llm.AssistantPhaseCommentary {
+		t.Fatalf("action commit = %+v, want commentary", effects.commits[0])
 	}
 
 	frame := ansi.Strip(surface.Render(processViewport{width: 80, maxRows: 10}))
-	if !strings.Contains(frame, "  ◦ ") {
-		t.Fatalf("active tool must be visually nested under its action: %q", frame)
+	if !strings.HasPrefix(frame, "  ◦ ") {
+		t.Fatalf("active tool must remain chronological at the subordinate tool level: %q", frame)
 	}
-	if len(surface.tools) != 1 || surface.tools[0].ProcessGroupID != groupID {
-		t.Fatalf("active tools = %+v, want group %d", surface.tools, groupID)
+	if len(surface.tools) != 1 || surface.tools[0].ToolCallID != "call-1" {
+		t.Fatalf("active tools = %+v, want call-1", surface.tools)
 	}
 }
 
@@ -63,17 +62,13 @@ func TestTUIRoutesNarrationAndToolsThroughProcessSurface(t *testing.T) {
 	if len(model.messages) != 1 {
 		t.Fatalf("committed messages = %+v, want only the action narration", model.messages)
 	}
-	groupID := model.messages[0].ProcessGroupID
-	if groupID == 0 {
-		t.Fatalf("action narration is not grouped: %+v", model.messages[0])
-	}
 	frame := ansi.Strip(model.renderActiveBlock(80))
-	if !strings.Contains(frame, "  ◦ ") {
-		t.Fatalf("active tool is not nested in the production frame: %q", frame)
+	if !strings.HasPrefix(frame, "  ◦ ") {
+		t.Fatalf("active tool is not at the subordinate tool level in the production frame: %q", frame)
 	}
 }
 
-func TestTUIToolCompletionPreservesProcessGroup(t *testing.T) {
+func TestTUIToolCompletionCommitsAfterNarrationWithoutVisualGrouping(t *testing.T) {
 	model := NewController("", "", nil, "").model
 	model.width = 80
 	model.height = 24
@@ -92,17 +87,16 @@ func TestTUIToolCompletionPreservesProcessGroup(t *testing.T) {
 	if len(model.messages) != 2 {
 		t.Fatalf("messages = %+v, want narration and completed tool", model.messages)
 	}
-	groupID := model.messages[0].ProcessGroupID
 	tool := model.messages[1]
-	if groupID == 0 || tool.ProcessGroupID != groupID || !tool.Committed || tool.IsRunning {
-		t.Fatalf("grouped tool = %+v, narration group = %d", tool, groupID)
+	if !tool.Committed || tool.IsRunning {
+		t.Fatalf("completed tool = %+v", tool)
 	}
 	if len(model.processState().tools) != 0 {
 		t.Fatalf("completed tool remained active: %+v", model.processState().tools)
 	}
 	rendered := ansi.Strip(renderCell(tool, 80))
 	if !strings.HasPrefix(rendered, "  • ") {
-		t.Fatalf("committed tool is not nested: %q", rendered)
+		t.Fatalf("committed tool lost the chronological tool-level gutter: %q", rendered)
 	}
 }
 
@@ -144,7 +138,7 @@ func TestProcessSurfaceUnknownPhasePreviewResolvesAtBoundary(t *testing.T) {
 		t.Fatalf("commits = %+v, want one final answer", effects.commits)
 	}
 	final := effects.commits[0]
-	if final.AssistantPhase != llm.AssistantPhaseFinalAnswer || final.ProcessGroupID != 0 || final.Content != "Deployment is ready." {
+	if final.AssistantPhase != llm.AssistantPhaseFinalAnswer || final.Content != "Deployment is ready." {
 		t.Fatalf("resolved final = %+v", final)
 	}
 	if active := strings.TrimSpace(surface.Render(processViewport{width: 80, maxRows: 10})); active != "" {

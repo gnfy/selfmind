@@ -253,6 +253,21 @@ func TestUserAgentsRootIsDiscoveredBelowUserRoot(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAncestorDiscoveryStopsBeforeConfiguredHome(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "home", "person")
+	t.Setenv("HOME", home)
+	start := filepath.Join(home, "work", "repo", "subdir")
+	dirs := skillRootAncestors(start)
+	if len(dirs) != 3 {
+		t.Fatalf("ancestor dirs=%v", dirs)
+	}
+	for _, dir := range dirs {
+		if dir == home {
+			t.Fatalf("account home was classified as a workspace ancestor: %v", dirs)
+		}
+	}
+}
+
 // Two roots can share both scope and source, so the qualified form alone cannot
 // separate them. The refusal then names each candidate by path, which is what
 // the person can type back.

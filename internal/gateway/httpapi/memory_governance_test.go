@@ -205,3 +205,21 @@ func TestMemoryGovernanceBackoffEscalatesAndCaps(t *testing.T) {
 		t.Errorf("backoff should reach the cap %s, got %s", memoryGovernanceMaxRetryDelay, previous)
 	}
 }
+
+func TestMemoryGovernanceWakeDelayBoundsDurableScheduleRescan(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input time.Duration
+		want  time.Duration
+	}{
+		{"minimum", 0, memoryGovernanceMinimumWake},
+		{"short retry", time.Minute, time.Minute},
+		{"long durable due", 24 * time.Hour, memoryGovernanceLivenessScan},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := memoryGovernanceWakeDelay(test.input); got != test.want {
+				t.Fatalf("wake delay=%s want=%s", got, test.want)
+			}
+		})
+	}
+}

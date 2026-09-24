@@ -29,8 +29,11 @@ type dailyQualityStats struct {
 	RecoveryRuns            int
 	RecoveryStatuses        map[string]int
 	RecoveryGuardrails      map[string]int
-	PostFailureApprovals    int
 	WaitGroupOutcomes       map[string]int
+	LogicalChains           int
+	LogicalChainStatuses    map[string]int
+	ResumeEdges             int
+	ResumeOrigins           map[string]int
 	ApprovalModelCalls      int
 	ApprovalUsageMissing    int
 	ApprovalInputTokens     int64
@@ -39,15 +42,21 @@ type dailyQualityStats struct {
 	ApprovalCacheMissTokens int64
 	ApprovalUsageByRole     map[string]int
 	ProviderCalls           int
+	ProviderRoutes          map[string]dailyRouteUsage
 	InputTokens             int64
 	OutputTokens            int64
 	CacheReadTokens         int64
 	CacheMissTokens         int64
 	ProviderLatencyMS       int64
 	ToolCalls               int
+	ToolDispatched          int
+	ToolRejectedPreDispatch int
 	ToolFailures            int
 	ToolPolicyRedirects     int
+	ToolRedirectReasons     map[string]int
 	ToolFailureClasses      map[string]int
+	ToolFailurePhases       map[string]int
+	ToolEffectStates        map[string]int
 	ToolCallsByName         map[string]int
 	ApprovalCounts          map[string]int
 	RecallCandidates        int
@@ -70,6 +79,15 @@ type dailyQualityStats struct {
 	ContextToolSchemaTokens int64
 	FingerprintStates       map[string]int
 	ProviderPrefixHashes    map[string]bool
+}
+
+type dailyRouteUsage struct {
+	Calls           int
+	DurationMS      int64
+	InputTokens     int64
+	CacheReadTokens int64
+	OutputTokens    int64
+	ReasoningTokens int64
 }
 
 func parseDailyReportWindow(input string) (time.Duration, error) {
@@ -105,9 +123,15 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		RecoveryStatuses:       make(map[string]int),
 		RecoveryGuardrails:     make(map[string]int),
 		WaitGroupOutcomes:      make(map[string]int),
+		LogicalChainStatuses:   make(map[string]int),
+		ResumeOrigins:          make(map[string]int),
 		ApprovalCounts:         make(map[string]int),
 		MemoryDisposition:      make(map[string]int),
 		ToolFailureClasses:     make(map[string]int),
+		ProviderRoutes:         make(map[string]dailyRouteUsage),
+		ToolRedirectReasons:    make(map[string]int),
+		ToolFailurePhases:      make(map[string]int),
+		ToolEffectStates:       make(map[string]int),
 		ToolCallsByName:        make(map[string]int),
 		RecallCandidateSources: make(map[string]int),
 		RecallSelectedSources:  make(map[string]int),
@@ -135,8 +159,11 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		}
 	}
 	terminalRuns := make(map[string]bool)
-	failedToolRuns := make(map[string]bool)
-	for _, event := range events {
+	terminalStatus := make(map[string]string)
+	terminalOrder := make(map[string]int)
+	resumeParents := make(map[string]string)
+	startedTools := make(map[string]bool)
+	for eventIndex, event := range events {
 		switch event.Type {
 		case "run.finished", "run.interrupted", "run.failed", "run.cancelled":
 			if event.RunID != "" && terminalRuns[event.RunID] {
@@ -151,6 +178,10 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 				status = strings.TrimPrefix(event.Type, "run.")
 			}
 			stats.RunStatuses[status]++
+			if event.RunID != "" {
+				terminalStatus[event.RunID] = status
+				terminalOrder[event.RunID] = eventIndex
+			}
 			if runOrigins[event.RunID] == runOriginApproval {
 				stats.ContinuationStatuses[status]++
 			} else if runOrigins[event.RunID] == runOriginRecovery {
@@ -190,13 +221,32 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			}
 		case "provider.call.usage":
 			var p struct {
-				InputTokens     int64 `json:"input_tokens"`
-				OutputTokens    int64 `json:"output_tokens"`
-				CacheReadTokens int64 `json:"cache_read_input_tokens"`
-				CacheMissTokens int64 `json:"cache_miss_input_tokens"`
-				DurationMS      int64 `json:"duration_ms"`
+				Provider        string `json:"provider"`
+				Model           string `json:"model"`
+				Role            string `json:"role"`
+				InputTokens     int64  `json:"input_tokens"`
+				OutputTokens    int64  `json:"output_tokens"`
+				ReasoningTokens int64  `json:"reasoning_output_tokens"`
+				CacheReadTokens int64  `json:"cache_read_input_tokens"`
+				CacheMissTokens int64  `json:"cache_miss_input_tokens"`
+				DurationMS      int64  `json:"duration_ms"`
 			}
 			if json.Unmarshal(event.Payload, &p) == nil {
+				route := "unattributed"
+				if p.Provider != "" && p.Model != "" {
+					route = truncate(toOneLine(p.Provider+"/"+p.Model), 120)
+					if p.Role != "" && p.Role != "coding_agent" {
+						route = truncate(toOneLine(p.Role+":"+route), 120)
+					}
+				}
+				usage := stats.ProviderRoutes[route]
+				usage.Calls++
+				usage.DurationMS += p.DurationMS
+				usage.InputTokens += p.InputTokens
+				usage.CacheReadTokens += p.CacheReadTokens
+				usage.OutputTokens += p.OutputTokens
+				usage.ReasoningTokens += p.ReasoningTokens
+				stats.ProviderRoutes[route] = usage
 				stats.ProviderCalls++
 				stats.InputTokens += p.InputTokens
 				stats.OutputTokens += p.OutputTokens
@@ -219,29 +269,54 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 					}
 				}
 			}
+		case "tool.started":
+			stats.ToolDispatched++
+			var p struct {
+				ToolCallID string `json:"tool_call_id"`
+			}
+			if json.Unmarshal(event.Payload, &p) == nil && strings.TrimSpace(p.ToolCallID) != "" {
+				startedTools[event.RunID+"\x00"+p.ToolCallID] = true
+			}
 		case "tool.completed":
 			stats.ToolCalls++
 			var p struct {
 				ToolName      string `json:"tool_name"`
 				Tool          string `json:"tool"`
+				ToolCallID    string `json:"tool_call_id"`
 				Error         string `json:"error"`
 				ErrorCategory string `json:"error_category"`
 				ErrorCode     string `json:"error_code"`
+				FailurePhase  string `json:"failure_phase"`
+				EffectState   string `json:"effect_state"`
 			}
-			if json.Unmarshal(event.Payload, &p) == nil && strings.TrimSpace(p.Error) != "" {
-				if strings.TrimSpace(event.RunID) != "" {
-					failedToolRuns[event.RunID] = true
-				}
+			decoded := json.Unmarshal(event.Payload, &p) == nil
+			if decoded && strings.TrimSpace(p.ToolCallID) != "" && !startedTools[event.RunID+"\x00"+p.ToolCallID] {
+				stats.ToolRejectedPreDispatch++
+			}
+			if decoded && strings.TrimSpace(p.Error) != "" {
 				category := strings.TrimSpace(p.ErrorCategory)
 				if category == "" {
 					category = "unknown"
 				}
 				if category == "policy_redirect" {
 					stats.ToolPolicyRedirects++
+					code := strings.TrimSpace(p.ErrorCode)
+					if code == "" {
+						code = "unspecified"
+					}
+					stats.ToolRedirectReasons[code]++
 				} else {
 					stats.ToolFailures++
 					stats.ToolFailureClasses[category]++
+					phase := strings.TrimSpace(p.FailurePhase)
+					if phase == "" {
+						phase = "unknown"
+					}
+					stats.ToolFailurePhases[phase]++
 				}
+			}
+			if state := strings.TrimSpace(p.EffectState); state != "" {
+				stats.ToolEffectStates[state]++
 			}
 			if code := strings.TrimSpace(p.ErrorCode); code != "" && isRecoveryGuardrailCode(code) {
 				stats.RecoveryGuardrails[code]++
@@ -255,8 +330,18 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			}
 		case "approval.requested", "approval.approved", "approval.rejected", "approval.parked", "approval.expired", "approval.archived":
 			stats.ApprovalCounts[strings.TrimPrefix(event.Type, "approval.")]++
-			if event.Type == "approval.requested" && failedToolRuns[event.RunID] {
-				stats.PostFailureApprovals++
+		case "run.resumed":
+			var p struct {
+				ResumesRunID string `json:"resumes_run_id"`
+			}
+			if json.Unmarshal(event.Payload, &p) == nil && event.RunID != "" && strings.TrimSpace(p.ResumesRunID) != "" {
+				resumeParents[event.RunID] = strings.TrimSpace(p.ResumesRunID)
+				stats.ResumeEdges++
+				origin := strings.TrimSpace(runOrigins[event.RunID])
+				if origin == "" {
+					origin = "user"
+				}
+				stats.ResumeOrigins[origin]++
 			}
 		case "run.recovery_scheduled":
 			var p struct {
@@ -342,6 +427,27 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			}
 		}
 	}
+	chainLatestRun := make(map[string]string)
+	for runID := range terminalStatus {
+		root := runID
+		seen := map[string]bool{root: true}
+		for {
+			parent := strings.TrimSpace(resumeParents[root])
+			if parent == "" || seen[parent] {
+				break
+			}
+			root = parent
+			seen[root] = true
+		}
+		latest := chainLatestRun[root]
+		if latest == "" || terminalOrder[runID] > terminalOrder[latest] {
+			chainLatestRun[root] = runID
+		}
+	}
+	stats.LogicalChains = len(chainLatestRun)
+	for _, runID := range chainLatestRun {
+		stats.LogicalChainStatuses[terminalStatus[runID]]++
+	}
 	return stats
 }
 
@@ -418,13 +524,14 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		since.Local().Format(time.RFC3339), generatedAt.Local().Format(time.RFC3339),
 		generatedAt.Local().Format(time.RFC3339), len(events), coverage)
 	fmt.Fprintf(&sb, "Runs at turn completion: %s\n", formatCountMap(stats.RunStatuses))
+	fmt.Fprintf(&sb, "Logical work chains: %d, latest outcomes %s; resume edges %d (%s)\n",
+		stats.LogicalChains, formatCountMap(stats.LogicalChainStatuses), stats.ResumeEdges, formatCountMap(stats.ResumeOrigins))
 	fmt.Fprintf(&sb, "Completion reasons: %s\n", formatCountMap(stats.CompletionReasons))
 	fmt.Fprintf(&sb, "External outcomes: %s\n", formatCountMap(stats.ExternalStatuses))
 	fmt.Fprintf(&sb, "Automatic recovery: scheduled %s; %d child run(s), outcomes %s; guardrails %s\n",
 		formatCountMap(stats.RecoveryScheduled), stats.RecoveryRuns,
 		formatCountMap(stats.RecoveryStatuses), formatCountMap(stats.RecoveryGuardrails))
-	fmt.Fprintf(&sb, "Durable waits: groups %s; post-failure approvals %d\n",
-		formatCountMap(stats.WaitGroupOutcomes), stats.PostFailureApprovals)
+	fmt.Fprintf(&sb, "Durable waits: groups %s\n", formatCountMap(stats.WaitGroupOutcomes))
 	if waitsErr == nil {
 		oldest := "none"
 		if !waits.OldestGroupAt.IsZero() {
@@ -435,6 +542,7 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
+	fmt.Fprintf(&sb, "Model routes: %s\n", formatDailyRouteUsage(stats.ProviderRoutes))
 	fmt.Fprintf(&sb, "Approval model (separate from Main and maintenance): %d responses, input %d, cache read %d, uncached %d, output %d; usage unavailable for %d responses; roles %s\n", stats.ApprovalModelCalls, stats.ApprovalInputTokens, stats.ApprovalCacheReadTokens, stats.ApprovalCacheMissTokens, stats.ApprovalOutputTokens, stats.ApprovalUsageMissing, formatCountMap(stats.ApprovalUsageByRole))
 	if stats.ContextSamples > 0 {
 		avgRequest := stats.ContextEstimatedTokens / int64(stats.ContextSamples)
@@ -447,15 +555,22 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 			stats.ContextSamples, avgRequest, avgSchemas, schemaShare,
 			formatCountMap(stats.FingerprintStates), len(stats.ProviderPrefixHashes))
 	}
-	fmt.Fprintf(&sb, "Tools: %d calls, %d failed (%d%%), %d policy redirects; failures by class: %s\n",
-		stats.ToolCalls, stats.ToolFailures, toolFailureRate, stats.ToolPolicyRedirects, formatCountMap(stats.ToolFailureClasses))
+	fmt.Fprintf(&sb, "Tools: %d outcome(s), %d dispatched, %d rejected before dispatch; %d failed (%d%%), %d policy redirects (%s); failures by class: %s; phase: %s; effect certainty: %s\n",
+		stats.ToolCalls, stats.ToolDispatched, stats.ToolRejectedPreDispatch,
+		stats.ToolFailures, toolFailureRate, stats.ToolPolicyRedirects, formatCountMap(stats.ToolRedirectReasons), formatCountMap(stats.ToolFailureClasses),
+		formatCountMap(stats.ToolFailurePhases), formatCountMap(stats.ToolEffectStates))
 	if searches := stats.ToolCallsByName["tool_search"]; searches > 0 {
 		fmt.Fprintf(&sb, "Deferred tool discovery: %d tool_search call(s), %d%% of tool calls\n", searches, searches*100/max(stats.ToolCalls, 1))
 	}
 	if triageErr != nil {
 		fmt.Fprintf(&sb, "Approvals: %s; triage: unavailable\n", formatCountMap(stats.ApprovalCounts))
 	} else {
-		fmt.Fprintf(&sb, "Approvals: %s; triage: %s\n", formatCountMap(stats.ApprovalCounts), formatCountMap(triage.Counts))
+		triageTotal := 0
+		for _, count := range triage.Counts {
+			triageTotal += count
+		}
+		fmt.Fprintf(&sb, "Approvals: %s; automatic triage decisions %d (%s; excludes explicit capability requests)\n",
+			formatCountMap(stats.ApprovalCounts), triageTotal, formatCountMap(triage.Counts))
 	}
 	if backlogErr != nil {
 		sb.WriteString("Approval backlog now: unavailable\n")
@@ -597,4 +712,38 @@ func formatCountMap(counts map[string]int) string {
 		parts = append(parts, key+" "+strconv.Itoa(counts[key]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func formatDailyRouteUsage(routes map[string]dailyRouteUsage) string {
+	if len(routes) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(routes))
+	for key, usage := range routes {
+		if usage.Calls > 0 {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return "none"
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		usage := routes[key]
+		if len(parts) == 8 {
+			parts = append(parts, fmt.Sprintf("%d more route(s)", len(keys)-8))
+			break
+		}
+		cachePercent, reasoningPercent := int64(0), int64(0)
+		if usage.InputTokens > 0 {
+			cachePercent = usage.CacheReadTokens * 100 / usage.InputTokens
+		}
+		if usage.OutputTokens > 0 {
+			reasoningPercent = usage.ReasoningTokens * 100 / usage.OutputTokens
+		}
+		parts = append(parts, fmt.Sprintf("%s %d calls, avg %dms, cache %d%%, reasoning %d%%",
+			key, usage.Calls, usage.DurationMS/int64(usage.Calls), cachePercent, reasoningPercent))
+	}
+	return strings.Join(parts, "; ")
 }

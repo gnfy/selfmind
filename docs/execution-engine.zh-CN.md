@@ -135,12 +135,44 @@ ExecutionRequest
   → EnvironmentResolver     （按 lease 取 snapshot）
   → ToolEnvironmentProfile  （catalog 匹配 + 叠加）
   → SandboxPlanner          （→ SandboxPlan + ProcessMaterial）
-  → SandboxBackend          （bwrap | macOS host）
+  → SandboxBackend          （bwrap | seatbelt | host）
   → ProcessRunner
   → FailureClassifier
   → RecoveryPolicy          （至多一次）
   → ExecutionResult
 ```
+
+### 5.1.1 后端强度不等价（macOS seatbelt）
+
+平台由 `IsolationBackendForPlatform` 选择：Linux 用 bubblewrap，macOS 用
+`/usr/bin/sandbox-exec`，其余平台没有隔离后端、退回审批受控的 host 执行。三处
+判断（有效模式、`ContainmentAssessment.Enforced`、host-escape 归类）都问后端的
+`Available()`，不再各自写 `GOOS == "linux"`。
+
+两个后端**实施同一份 `sandbox.Policy`，但强度不同**。seatbelt 是权限过滤器，
+不是命名空间，因此有三条必须记录的差异：
+
+| 契约 | bubblewrap | seatbelt |
+| --- | --- | --- |
+| 工作区外只读 | `--ro-bind / /` | `(allow file-read*)` + 默认拒写 |
+| 写限定在声明根 | `--bind-try` 每根 | `(allow file-write* (subpath (param …)))` 每根 |
+| 关闭出网 | `--unshare-net` | `(deny default)` 下不发放 network 规则 |
+| PID / IPC / UTS 命名空间 | 有 | **无** |
+| `OverlayMounts` / `SynthesizedDirs` | 有 | **无，计划被拒绝** |
+| `$SELFMIND_RUN_TMP` 与 `/tmp` | 同一目录（双重绑定） | **不同**；`/tmp` 在可写根之外 |
+
+后两条有具体后果：
+
+- 需要挂载的计划（catalog 里只有 `aws` 的 SSO token cache 用 `MapRWAt`，其余八个
+  profile 靠环境变量重定向）在 macOS 上**被显式拒绝**，而不是悄悄忽略——忽略会让
+  工具状态指回宿主。`auto` 退回 host + 审批并说明原因；`isolated` 或
+  `required` 则失败，不降级。
+- `TMPDIR` 已指向 run scratch（`executionenv/scratch.go`），所以 `mktemp` 一类仍在
+  可写视图内；依赖字面 `/tmp` 的命令在 macOS 沙箱里会被拒写。
+
+路径以 `sandbox-exec -D` 参数传入，不插值进 policy 文本，因此路径无法终止字符串
+字面量并注入规则；非绝对或未规范化的路径一律拒绝渲染（fail closed），退回审批，
+而不是丢掉一个可写根后产生难以定位的权限失败。
 
 ### 5.2 类型边界
 
@@ -229,9 +261,9 @@ type ExecutionResult struct {
 持久证据投影。缺口在 Main 仍能修复时返回；最终化仍重读证据，不能把早先的通过
 当成对后来变更的豁免。证据查询失败或记录损坏保留 blocked，不能当作无验证需求。
 
-`verify.check.local_dependencies` 由 Main 声明判据依赖的本地文件/目录，运行时
+`verify.local_dependencies` 由 Main 声明当前观察方法读取的本地文件/目录，运行时
 归一化并约束路径，再按实际文件变更判断新鲜度。显式空数组只适用于不依赖本地
-文件的判据；省略该字段保留全 Run 文件变更失效规则。版本 2 只赋予新声明依赖
+文件的观察；省略该字段保留全 Run 文件变更失效规则。版本 2 只赋予新声明依赖
 语义；旧绑定不升级、不重写历史结果。判据充分性仍由 Main 判断，声明本身不授予
 权限，也不证明目标完成。
 
@@ -762,6 +794,11 @@ macOS：本轮统一 `SandboxPlan` 语义即可。Linux 由 bubblewrap 实现；
   环境已经不存在的代理变量。再次执行 `selfmind gateway service install` 或 setup
   会用当前 shell 的安全代理值刷新服务定义；普通重启只使用当前进程或既有服务
   定义，不从旧进程恢复已消失的代理。
+- snapshot 中的代理值在每次执行前按实际网络视图投影：隔离网络不向子进程暴露
+  标准代理变量；共享网络保留远端代理和可达的 loopback 代理。若 loopback 监听
+  已失效，只从该次子进程环境移除，并在 `SandboxPlan.proxy_mode` 与执行事件中记录
+  非敏感原因。模型无需记忆 `unset HTTPS_PROXY` 一类前缀；执行引擎也不按云厂商、
+  项目或命令正文分支。
 
 ### P1：可观测性（第 9 步）
 
@@ -821,11 +858,23 @@ L2 可见 / 可撤销 | `/approvals list` 渲染人类可读、不含 raw hash�
 
 ### 14.2 验证义务与检查方法
 
-Main 声明验收标准，运行时解析当前 Run 的证据引用。`verify.check.replaces`
-与 `reason` 可以继承原检查的标准、目标、依赖与版本；显式修改这些身份仍须
-通过原约束。历史无绑定证据不自动获得替换权限。未声明 `check` 时，仅在当前
-步骤明确要求验证且有标准时生成保守绑定；只有显式 `step_id` 使用版本 3 的
-步骤归属。运行时不猜测一次检查在语义上覆盖哪些其他步骤。
+Main 通过扁平的 `verify.criterion`、`target`、`local_dependencies` 声明检查；旧版
+`check` 对象只在工具边界迁移已发布字段，未知字段仍会拒绝。`replaces` 与
+`reason` 引用同一 Run 的原检查：标准、目标与 cwd 不变，省略的依赖继承；若
+纠正后的观察方法读取不同输入，Main 可显式声明新的依赖集合并保留原因。历史无
+绑定证据不自动获得替换权限。公开接口不要求 Main 复制 `step_id`；运行时优先
+绑定活动的 `verification_required` 步骤；若活动步骤是诊断步骤，则只在同一工作
+单元内按持久计划顺序选择最早的 pending 验证义务，不跨越下一个工作单元，也不
+匹配模型文本。替代重验在原步骤仍属于活动工作单元时保留该步骤身份，即使 Main
+改了状态；原步骤被重新规划移除，或其工作单元已冻结时，声明的重验才归属新的
+活动 required 步骤，并且不改写历史工作单元。运行时不猜测一次检查在语义上
+覆盖哪些其他步骤。
+
+`verification_required` 表示该步骤声称一个独立验收条件已经通过，并要求成功的
+验证证据。诊断性、允许失败的观察不会设置它；失败仍作为证据保留。同一个检查
+是工作步骤的证据，不应再建第二个 required 步骤来表示“运行检查”。
+失败结果会要求保持原步骤进行中；成功替代会提示取消仅表示同一次重试的冗余
+步骤，而不会把一份证据静默复制给另一个验证义务。
 
 拒绝完成返回有界的阻塞证据 ID、标准、目标与 cwd。步骤归属与 Run 最终检查
 均保留未解决失败。依赖路径始终以工具 cwd 为基准，不解释 shell 内部的 cd；

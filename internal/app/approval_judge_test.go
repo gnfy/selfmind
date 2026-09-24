@@ -2,6 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -140,10 +145,11 @@ func TestConfiguredApprovalJudgeUsesConfiguredTimeout(t *testing.T) {
 	}
 }
 
-// TestConfiguredApprovalJudgeReasoningFollowsExplicitRoleOnly: the judge's own
-// role entry may opt into a reasoning tier; the inherited auxiliary reasoning
-// is tuned for other background work and must not leak into the verdict path.
-func TestConfiguredApprovalJudgeReasoningFollowsExplicitRoleOnly(t *testing.T) {
+// TestConfiguredApprovalJudgeIgnoresConfiguredReasoning: every smart-mode tool
+// call waits on the verdict inside the person's turn, so no configured level —
+// inherited from the background route or set on the judge's own role — may
+// slow it down.
+func TestConfiguredApprovalJudgeIgnoresConfiguredReasoning(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "openai", Model: "primary-model"}
 	cfg.Models.Auxiliary = config.ModelSelectionConfig{Provider: "openai", Model: "aux-model", Reasoning: "high"}
@@ -156,16 +162,33 @@ func TestConfiguredApprovalJudgeReasoningFollowsExplicitRoleOnly(t *testing.T) {
 	if got := judge.reasoningEffort(); got != "none" {
 		t.Fatalf("auxiliary reasoning leaked into the judge: %q", got)
 	}
-	cfg.Models.Roles = map[string]config.ModelRoleConfig{
-		string(llm.RoleFastClassifier): {Provider: "openai", Model: "fast-model", APIKey: "test-key", Reasoning: "low"},
+	for _, level := range []string{"low", "high", "xhigh"} {
+		cfg.Models.Roles = map[string]config.ModelRoleConfig{
+			string(llm.RoleFastClassifier): {Provider: "openai", Model: "fast-model", APIKey: "test-key", Reasoning: level},
+		}
+		cfg.Normalize()
+		judge, ok = NewConfiguredApprovalJudge(nil, cfg, "default").(*llmApprovalJudge)
+		if !ok || judge == nil {
+			t.Fatalf("configured judge = %T", judge)
+		}
+		if got := judge.reasoningEffort(); got != "none" {
+			t.Fatalf("explicit fast_classifier reasoning %q reached the judge: %q", level, got)
+		}
 	}
+}
+
+func TestConfiguredApprovalJudgeUsesProviderCapabilityFloor(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "google", Model: "gemini-3.8-flash"}
+	cfg.Models.Auxiliary = config.ModelSelectionConfig{Provider: "google", Model: "gemini-3.8-flash"}
+	cfg.Providers.Google.APIKey = "test-key"
 	cfg.Normalize()
-	judge, ok = NewConfiguredApprovalJudge(nil, cfg, "default").(*llmApprovalJudge)
+	judge, ok := NewConfiguredApprovalJudge(nil, cfg, "default").(*llmApprovalJudge)
 	if !ok || judge == nil {
 		t.Fatalf("configured judge = %T", judge)
 	}
 	if got := judge.reasoningEffort(); got != "low" {
-		t.Fatalf("explicit role reasoning must win: %q", got)
+		t.Fatalf("gemini 3 approval reasoning = %q, want lowest supported tier", got)
 	}
 }
 
@@ -202,5 +225,77 @@ func TestApprovalJudgePreservesFullUsage(t *testing.T) {
 	r, err := j.JudgeResponse(context.Background(), "review")
 	if err != nil || r.Usage == nil || r.Usage.InputTokens != 100 || r.Usage.CacheReadInputTokens != 70 || !r.Usage.CacheUsageReported || r.OutputTokens != 20 {
 		t.Fatalf("usage lost: %+v %v", r, err)
+	}
+}
+
+// The judge asks for no reasoning, and that intent must reach the wire. It did
+// not: judge.reasoningEffort() returned "none" all along — the assertion the
+// tests above make — while the adapter dropped the value, so a model that
+// reasons by default spent ~400 reasoning tokens per verdict and timed out
+// behind the 10s triage budget. Only the request body shows that, so this
+// drives the real judge from a YAML declaration to the bytes it sends.
+func TestApprovalJudgeDisablesReasoningOnTheWireWhenTheProviderDeclaresHow(t *testing.T) {
+	judgeBody := func(t *testing.T, quirks string) map[string]interface{} {
+		t.Helper()
+		var got map[string]interface{}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("content-type", "application/json")
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"ok\"}"},"finish_reason":"stop"}]}`)
+		}))
+		defer server.Close()
+
+		// Mirrors a real custom OpenAI-compatible provider serving both Main
+		// and Background, with the judge inheriting Background.
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		yaml := fmt.Sprintf(`
+providers:
+  custom:
+    bailian:
+      base_url: %q
+      protocol: openai-compatible
+      auth: bearer
+      api_key: test-key
+%s
+models:
+  primary:
+    provider: bailian
+    model: qwen3.8-flash
+    reasoning: high
+  auxiliary:
+    follow_primary: true
+    provider: bailian
+    model: qwen3.8-flash
+`, server.URL, quirks)
+		if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.LoadConfig(config.Options{Path: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		judge, ok := NewConfiguredApprovalJudge(nil, cfg, "default").(*llmApprovalJudge)
+		if !ok || judge == nil {
+			t.Fatalf("configured judge = %T", judge)
+		}
+		if _, err := judge.JudgeResponse(context.Background(), "verdict please"); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	declared := judgeBody(t, "      quirks:\n        thinking_mode: effort_none")
+	if declared["reasoning_effort"] != "none" {
+		t.Fatalf("declared effort_none: the judge must send reasoning_effort \"none\", got %#v", declared["reasoning_effort"])
+	}
+
+	// The constraint that must change the result: without the declaration the
+	// provider keeps the conservative omission — the exact request that reached
+	// production and let the model reason by default.
+	undeclared := judgeBody(t, "")
+	if _, present := undeclared["reasoning_effort"]; present {
+		t.Fatalf("an undeclared provider must keep omitting the parameter, got %#v", undeclared["reasoning_effort"])
 	}
 }

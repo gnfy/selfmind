@@ -128,3 +128,65 @@ func TestProviderConnectionAndRouteCommitTogether(t *testing.T) {
 		t.Fatalf("status=%+v err=%v", status, err)
 	}
 }
+
+// A probe that proves how a provider turns reasoning off must leave that
+// encoding in config.yaml once the change commits, so every later approval
+// request uses it without the person having to know the setting exists. A
+// thinking_mode the person declared is never replaced.
+func TestConfirmedChangeRecordsProbedThinkingMode(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		declared  string
+		want      string
+		wantSaved bool
+	}{
+		{name: "undeclared provider", want: "effort_none", wantSaved: true},
+		{name: "declared provider keeps its mode", declared: "omit", want: "omit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, path := newTestService(t)
+			cfg := mustLoadConfig(t, path)
+			cfg.Providers.Custom = append(cfg.Providers.Custom, config.CustomProvider{
+				Name: "lab", BaseURL: "https://lab.example/v1", Protocol: "openai-compatible", Auth: "bearer",
+				Quirks: config.ProviderQuirks{ThinkingMode: tc.declared},
+			})
+			if err := config.SaveConfig(path, cfg); err != nil {
+				t.Fatal(err)
+			}
+			service.Validate = func(_ context.Context, _ *config.Config, routes []Route) []ProbeResult {
+				results := make([]ProbeResult, 0, len(routes))
+				for _, route := range routes {
+					results = append(results, ProbeResult{
+						Route: route, OK: true, Provider: "lab", Model: "lab-model",
+						ThinkingMode: "effort_none", Notice: "The approval model kept reasoning when asked not to.",
+					})
+				}
+				return results
+			}
+			status, err := service.Inspect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate := status.Configured
+			candidate.Auxiliary = config.ModelSelectionConfig{Provider: "lab", Model: "lab-model"}
+			prepared, err := service.Prepare(context.Background(), PrepareRequest{Candidate: candidate, Source: "test"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.BeginDraining(prepared.Change.ID); err != nil {
+				t.Fatal(err)
+			}
+			provider, ok := mustLoadConfig(t, path).Providers.CustomProvider("lab")
+			if !ok || provider.Quirks.ThinkingMode != tc.want {
+				t.Fatalf("committed thinking_mode = %q, want %q", provider.Quirks.ThinkingMode, tc.want)
+			}
+			notices := strings.Join(ProbeNotices(prepared.Change.Probes), " ")
+			if saved := strings.Contains(notices, "Saved quirks.thinking_mode: effort_none for provider lab."); saved != tc.wantSaved {
+				t.Fatalf("notices %q: saved=%t, want %t", notices, saved, tc.wantSaved)
+			}
+			if kept := strings.Contains(notices, "declares thinking_mode: omit, so it was left unchanged"); kept == tc.wantSaved {
+				t.Fatalf("notices %q must say why a declared mode was kept", notices)
+			}
+		})
+	}
+}

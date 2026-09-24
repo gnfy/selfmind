@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,10 +12,10 @@ import (
 // request_permissions is the REVERSE channel of the approval funnel (batch C3).
 //
 // Every other path asks the person one question per operation, discovered one
-// failure at a time: write outside the workspace → ask; reach a host → ask; touch
-// a second directory → ask again. For work whose shape is known up front ("I need
-// to write under /srv/site and fetch from api.github.com"), that is the wrong
-// shape of conversation — the person answers five questions that were really one.
+// failure at a time: write outside the workspace → ask; reach a host → ask; run
+// one release command → ask; run the next already-known command → ask again. For
+// work whose shape is known up front, that is the wrong shape of conversation —
+// the person answers five questions that were really one.
 //
 // This tool lets the agent state the bundle ONCE, before starting, and receive a
 // single decision. It is not a new authority: every permission it can request is
@@ -25,9 +26,10 @@ import (
 //
 // Safety properties, in order of importance:
 //
-//   - No new authority. Only path-root and network-host rules; never host
-//     execution, never credential access, never a broader class than the rules
-//     the per-call path would have offered anyway.
+//   - No broad new authority. Paths and hosts use the existing narrow rules.
+//     Commands are exact, run-local, environment-bound declarations; arbitrary
+//     code, opaque shells, destructive host operations, and external tools stay
+//     on their ordinary single-call path.
 //   - Refusal is a decision. A refused bundle returns the user-rejection contract
 //     so the model does not retry a variant or fall back to per-call asks.
 //   - Already-granted requests do not re-ask. The tool reports them as satisfied,
@@ -39,6 +41,18 @@ import (
 // a plan, it is a fishing expedition, and it would not fit on an approval surface.
 const requestPermissionsMaxItems = 8
 
+// Exact declarations are displayed and stored with the approval request. A
+// large payload belongs on the ordinary one-call surface, where it cannot
+// multiply the size and review burden of a bundle.
+const requestPermissionsMaxEffectBytes = 8 * 1024
+
+type requestedPermissionItem struct {
+	Key     string
+	Label   string
+	RunOnly bool
+	Effect  map[string]interface{}
+}
+
 // RequestPermissionsTool is the tool registration. It runs under the same
 // middleware, scope, and safety layers as every other tool.
 type RequestPermissionsTool struct {
@@ -49,12 +63,14 @@ func NewRequestPermissionsTool() *RequestPermissionsTool {
 	return &RequestPermissionsTool{
 		BaseTool: BaseTool{
 			name: "request_permissions",
-			description: "Ask the person ONCE for the filesystem roots and network hosts this task needs, " +
-				"instead of being interrupted per command. Use it when you already know the work needs to write " +
-				"outside the workspace or reach specific hosts. Requests already granted are reported as satisfied " +
-				"without asking again. A refusal is the person's decision: do not retry a variant.",
+			description: "Ask the person ONCE for a bounded phase whose permissions are already known: filesystem roots, " +
+				"network hosts, and exact statically known commands. Exact commands are valid only in this run and only while " +
+				"their arguments, workspace, identity, and execution environment remain unchanged. Do not declare commands " +
+				"that depend on earlier output. Arbitrary code, opaque shell scripts, destructive host commands, and external " +
+				"tools must use their ordinary single-call approval. A refusal is the person's decision: do not retry a variant.",
 			schema: ToolSchema{
-				Type: "object",
+				Type:                 "object",
+				AdditionalProperties: rejectAdditionalProperties(),
 				Properties: map[string]PropertyDef{
 					"paths": {
 						Type:        "array",
@@ -65,6 +81,19 @@ func NewRequestPermissionsTool() *RequestPermissionsTool {
 						Type:        "array",
 						Description: "Hostnames the task needs to reach (bare host, no scheme or path), e.g. api.github.com.",
 						Items:       &PropertyDef{Type: "string"},
+					},
+					"effects": {
+						Type:        "array",
+						Description: "Exact commands known before this phase starts. Each item names a registered built-in exec tool and its complete public arguments. Do not include values produced by an earlier command.",
+						Items: &PropertyDef{
+							Type:                 "object",
+							AdditionalProperties: rejectAdditionalProperties(),
+							Properties: map[string]PropertyDef{
+								"tool":           {Type: "string", Description: "Registered built-in exec tool, such as terminal or verify."},
+								"arguments_json": {Type: "string", Description: "JSON object containing the complete public arguments for the exact future call."},
+							},
+							Required: []string{"tool", "arguments_json"},
+						},
 					},
 					"reason": {
 						Type:        "string",
@@ -87,33 +116,45 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 	if reason == "" {
 		return "", fmt.Errorf("reason is required: state in one line what the permissions are for")
 	}
-	requested, err := requestedPermissionRules(args, scope)
+	rules, err := requestedPermissionRules(args, scope)
 	if err != nil {
 		return "", err
+	}
+	requested := make([]requestedPermissionItem, 0, len(rules))
+	for _, rule := range rules {
+		requested = append(requested, requestedPermissionItem{Key: rule.Key, Label: rule.Label})
+	}
+	effects, err := requestedPermissionEffects(args, scope)
+	if err != nil {
+		return "", err
+	}
+	requested = append(requested, effects...)
+	if len(requested) > requestPermissionsMaxItems {
+		return "", fmt.Errorf("request at most %d permissions at a time; narrow the list to one reviewable phase", requestPermissionsMaxItems)
 	}
 	if len(requested) == 0 {
 		return "No permissions requested: workspace-scoped writes and sandboxed execution need no grant. Proceed.", nil
 	}
 
 	ctx := contextFromArgs(args)
-	var already, pending []ApprovalRuleCandidate
-	for _, rule := range requested {
-		granted := scope.runGrants != nil && scope.runGrants.has(rule.Key)
-		if scope.Grants != nil {
+	var already, pending []requestedPermissionItem
+	for _, item := range requested {
+		granted := scope.runGrants != nil && scope.runGrants.has(item.Key)
+		if !item.RunOnly && scope.Grants != nil {
 			persisted := false
 			if scope.StandingGrants.Allowed {
-				persisted, _ = scope.Grants.IsApprovalGranted(ctx, scope.TenantID, scope.PersonID, scope.WorkspaceID, rule.Key, scope.StandingGrants.NotAfter)
+				persisted, _ = scope.Grants.IsApprovalGranted(ctx, scope.TenantID, scope.PersonID, scope.WorkspaceID, item.Key, scope.StandingGrants.NotAfter)
 			}
 			granted = granted || persisted
 		}
 		if granted {
-			already = append(already, rule)
+			already = append(already, item)
 			continue
 		}
-		pending = append(pending, rule)
+		pending = append(pending, item)
 	}
 	if len(pending) == 0 {
-		return "Already granted: " + describePermissionRules(already) + ". Proceed without asking again.", nil
+		return "Already granted: " + describePermissionItems(already) + ". Proceed without asking again.", nil
 	}
 	if scope.Approval == nil {
 		return "", rejectOperation(rejectionCodeCapability, "operation rejected: these permissions need approval and no approval surface is attached to this run")
@@ -123,14 +164,17 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 	// answer can pick the bundle exactly as offered — the same offered-only rule
 	// the per-operation path enforces.
 	decision, approvalErr := scope.Approval(ctx, ToolApprovalRequest{
-		TenantID:   scope.TenantID,
-		PersonID:   scope.PersonID,
-		TaskID:     scope.TaskID,
-		RunID:      scope.RunID,
-		Channel:    scope.Channel,
-		ToolName:   "request_permissions",
-		Reason:     reason,
-		Args:       map[string]interface{}{"permissions": describePermissionRules(pending)},
+		TenantID: scope.TenantID,
+		PersonID: scope.PersonID,
+		TaskID:   scope.TaskID,
+		RunID:    scope.RunID,
+		Channel:  scope.Channel,
+		ToolName: "request_permissions",
+		Reason:   reason,
+		Args: map[string]interface{}{
+			"permissions": describePermissionItems(pending),
+			"effects":     permissionEffectDisplays(pending),
+		},
 		GrantClass: "the displayed permission bundle",
 		// This tool has no useful one-off side effect. Its only positive answer is
 		// the exact displayed bundle, bounded to the live run.
@@ -158,13 +202,13 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 		return "", rejectOperation(rejectionCodeApproval, "operation rejected: the permission bundle was not approved for this run")
 	}
 	grantScope := "run"
-	for _, rule := range pending {
-		recordApprovalGrant(ctx, scope, grantScope, rule.Key, approvalGrantExpiry(grantScope, args))
+	for _, item := range pending {
+		recordApprovalGrant(ctx, scope, grantScope, item.Key, approvalGrantExpiry(grantScope, args))
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Granted (%s): %s.", grantScope, describePermissionRules(pending))
+	fmt.Fprintf(&sb, "Granted (%s): %s.", grantScope, describePermissionItems(pending))
 	if len(already) > 0 {
-		fmt.Fprintf(&sb, " Already held: %s.", describePermissionRules(already))
+		fmt.Fprintf(&sb, " Already held: %s.", describePermissionItems(already))
 	}
 	sb.WriteString(" Proceed; these no longer prompt.")
 	return sb.String(), nil
@@ -218,6 +262,103 @@ func requestedPermissionRules(args map[string]interface{}, scope ExecutionScope)
 	return rules, nil
 }
 
+// requestedPermissionEffects validates commands without executing them. The
+// live call will be normalized again and will pass the hard floor, current
+// explicit-deny policy, capability checks, and workspace scope again. This
+// function only creates an exact run-local key for that later comparison.
+func requestedPermissionEffects(args map[string]interface{}, scope ExecutionScope) ([]requestedPermissionItem, error) {
+	raw, present := args["effects"]
+	if !present {
+		return nil, nil
+	}
+	values, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("effects must be an array")
+	}
+	registry, _ := args["_registry"].(*Registry)
+	if len(values) > 0 && registry == nil {
+		return nil, fmt.Errorf("exact command declarations require the active tool registry")
+	}
+	seen := map[string]struct{}{}
+	items := make([]requestedPermissionItem, 0, len(values))
+	for index, value := range values {
+		effect, ok := value.(map[string]interface{})
+		if !ok {
+			return nil, fmt.Errorf("effects[%d] must be an object", index)
+		}
+		toolName := strings.TrimSpace(stringArg(effect, "tool"))
+		argumentsJSON := strings.TrimSpace(stringArg(effect, "arguments_json"))
+		if toolName == "" || argumentsJSON == "" {
+			return nil, fmt.Errorf("effects[%d] needs tool and arguments_json", index)
+		}
+		var publicArgs map[string]interface{}
+		if err := json.Unmarshal([]byte(argumentsJSON), &publicArgs); err != nil || publicArgs == nil {
+			return nil, fmt.Errorf("effects[%d].arguments_json must be a JSON object", index)
+		}
+		for name := range publicArgs {
+			if strings.HasPrefix(strings.TrimSpace(name), "_") {
+				return nil, fmt.Errorf("effects[%d].arguments_json contains reserved runtime argument %q", index, name)
+			}
+		}
+		tool, registered := registry.Get(toolName)
+		if !registered {
+			return nil, fmt.Errorf("effects[%d] names unavailable tool %q", index, toolName)
+		}
+		policy := executionPolicyForTool(tool)
+		if policy.Origin != ToolSchemaOriginBuiltin || !isExecTool(toolName) || toolName == "execute_code" {
+			return nil, fmt.Errorf("effects[%d] %q cannot be phase-approved; use its ordinary single-call approval", index, toolName)
+		}
+		prepared, prepareErr := registry.PrepareToolArguments(toolName, publicArgs)
+		if prepareErr != nil {
+			return nil, fmt.Errorf("effects[%d] %s: %w", index, toolName, prepareErr)
+		}
+		prepared["_tool_name"] = toolName
+		prepared[toolExecutionPolicyArg] = policy
+		annotateEffectiveSandboxMode(prepared)
+		projectRoot := approvalProjectRoot("", scope, prepared)
+		if blocked, blockReason := hardlineToolCall(projectRoot, toolName, prepared); blocked {
+			return nil, fmt.Errorf("effects[%d] cannot be declared: hard safety policy blocks %s", index, blockReason)
+		}
+		command := strings.TrimSpace(execCommandPayload(toolName, prepared))
+		segments, unparsed := expandCommandSegments(command, 0)
+		if command == "" || unparsed {
+			return nil, fmt.Errorf("effects[%d] is opaque or incomplete; use its ordinary single-call approval", index)
+		}
+		if egress, _ := egressCommand(command, segments); egress {
+			return nil, fmt.Errorf("effects[%d] is an arbitrary network command; use its ordinary single-call approval", index)
+		}
+		dangerous, dangerReason := dangerousToolCall(projectRoot, toolName, prepared)
+		if dangerous && strings.TrimSpace(dangerReason) != HostEscapeApprovalReason {
+			return nil, fmt.Errorf("effects[%d] is destructive or otherwise sensitive; use its ordinary single-call approval", index)
+		}
+		canonical, marshalErr := json.Marshal(approvalArgs(prepared))
+		if marshalErr != nil {
+			return nil, fmt.Errorf("effects[%d] arguments cannot be normalized: %w", index, marshalErr)
+		}
+		if len(canonical) > requestPermissionsMaxEffectBytes {
+			return nil, fmt.Errorf("effects[%d] is too large for a reviewable bundle; use its ordinary single-call approval", index)
+		}
+		key := approvalDeclaredEffectKey(toolName, prepared, scope, true)
+		if key == "" {
+			return nil, fmt.Errorf("effects[%d] could not be bound to this run", index)
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		items = append(items, requestedPermissionItem{
+			Key: key, Label: fmt.Sprintf("exact %s command: %s", toolName, truncateRunes(toSingleLine(RedactSensitive(command)), 180)),
+			RunOnly: true,
+			Effect: map[string]interface{}{
+				"tool":    toolName,
+				"args":    approvalDisplayArgs(prepared),
+				"summary": ApprovalChangeSummary(toolName, prepared),
+			},
+		})
+	}
+	return items, nil
+}
+
 // validatePermissionRoot returns the directory a path rule would authorize, ""
 // when the path is already inside the scope's roots, or an error when the request
 // is too broad to be a rule.
@@ -254,6 +395,27 @@ func describePermissionRules(rules []ApprovalRuleCandidate) string {
 		labels = append(labels, rule.Label)
 	}
 	return strings.Join(labels, ", ")
+}
+
+func describePermissionItems(items []requestedPermissionItem) string {
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		labels = append(labels, item.Label)
+	}
+	return strings.Join(labels, ", ")
+}
+
+func permissionEffectDisplays(items []requestedPermissionItem) []interface{} {
+	displays := make([]interface{}, 0, len(items))
+	for _, item := range items {
+		if item.Effect != nil {
+			displays = append(displays, item.Effect)
+		}
+	}
+	if len(displays) == 0 {
+		return nil
+	}
+	return displays
 }
 
 // stringSliceArg reads a string array argument, tolerating a single string (a

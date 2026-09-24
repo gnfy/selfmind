@@ -31,6 +31,20 @@ func reasoningDisabled(value string) bool {
 	}
 }
 
+// ReasoningHeadroom is the output budget a bounded request must add when it
+// runs at the given reasoning effort: zero when reasoning is disabled,
+// otherwise the budget the Anthropic adapter reserves for thinking. Some
+// OpenAI-compatible providers count reasoning tokens against max_tokens
+// (DeepSeek V4 does), so a cap sized for the answer alone is spent thinking
+// before the answer starts. An empty effort is the provider default, which may
+// reason.
+func ReasoningHeadroom(effort string) int {
+	if reasoningDisabled(effort) {
+		return 0
+	}
+	return thinkingBudget(effort)
+}
+
 // Message is one conversation entry.
 type Message struct {
 	Role             string
@@ -113,6 +127,12 @@ type ToolCall struct {
 	ID       string
 	Function string
 	Args     string
+	// ReplayMetadata is opaque provider data that accompanied this tool call
+	// and must be sent back unchanged with the assistant message. Some
+	// OpenAI-compatible providers use it to bind a later tool result to the
+	// model's preceding reasoning. The kernel never interprets or authorizes
+	// anything from this field.
+	ReplayMetadata json.RawMessage `json:"replay_metadata,omitempty"`
 }
 
 type UsageStats struct {
@@ -161,6 +181,31 @@ type Provider interface {
 	ChatCompletion(ctx context.Context, messages []Message) (string, error)
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+}
+
+// ProviderRouteInfo is presentation-safe routing identity for usage evidence.
+// It contains no endpoint, credential, or request content. A dynamic role
+// router resolves it for the call; transparent wrappers forward the probe.
+type ProviderRouteInfo struct {
+	Provider string
+	Model    string
+}
+
+type ProviderRouteDescriber interface {
+	DescribeProviderRoute() ProviderRouteInfo
+}
+
+func DescribeProviderRoute(p Provider) ProviderRouteInfo {
+	if p == nil {
+		return ProviderRouteInfo{}
+	}
+	if describer, ok := p.(ProviderRouteDescriber); ok {
+		return describer.DescribeProviderRoute()
+	}
+	if inner, ok := unwrapProvider(p); ok {
+		return DescribeProviderRoute(inner)
+	}
+	return ProviderRouteInfo{Model: GetModelName(p)}
 }
 
 // RequestFingerprint describes the provider-adapter request shape without

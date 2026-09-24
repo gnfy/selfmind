@@ -262,7 +262,7 @@ func (m *uiModel) statusLine() string {
 	parts := []string{
 		st.Status.Value.Render(header),
 		st.Status.Value.Render(dir),
-		st.Status.Label.Render(formatUsageSession(m.runTokens, m.totalTokens, m.tokenLimit)),
+		st.Status.Label.Render(formatUsageSessionRequest(m.runTokens, m.totalTokens, m.lastRequestTokens, m.tokenLimit, m.tokenLimitSource)),
 	}
 	if m.modelChangePhase != "" {
 		phase := strings.ReplaceAll(string(m.modelChangePhase), "_", " ")
@@ -288,6 +288,22 @@ func (m *uiModel) statusLine() string {
 		} else {
 			state = "background task"
 		}
+		if !m.daemonRunStarted.IsZero() {
+			elapsed := time.Since(m.daemonRunStarted)
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			state += " " + elapsed.Truncate(time.Second).String()
+		}
+		if m.backgroundPlanTotal > 0 {
+			state += fmt.Sprintf(" · plan %d/%d", m.backgroundPlanResolved, m.backgroundPlanTotal)
+		}
+		if m.backgroundToolCount > 0 {
+			state += fmt.Sprintf(" · %d actions", m.backgroundToolCount)
+		}
+		if m.backgroundLastAction != "" {
+			state += " · " + m.backgroundLastAction
+		}
 		stateStyle = st.Status.Warning
 	case m.daemonRunActive && !m.daemonRunStarted.IsZero():
 		state = fmt.Sprintf("working %.1fs", time.Since(m.daemonRunStarted).Seconds())
@@ -299,6 +315,9 @@ func (m *uiModel) statusLine() string {
 			count = 1
 		}
 		state = fmt.Sprintf("queued %d", count)
+	case m.runStatus == "interrupted":
+		state = "needs attention"
+		stateStyle = st.Status.Warning
 	}
 	parts = append(parts, stateStyle.Render(state))
 

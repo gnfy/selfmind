@@ -88,6 +88,16 @@ func TestEventToStreamMapping(t *testing.T) {
 			},
 		},
 		{
+			name:    "provider call carries latest request usage",
+			ev:      control.Event{ID: "5b", Type: "provider.call.usage", Payload: mustJSON(map[string]any{"input_tokens": 60951, "output_tokens": 120})},
+			wantTyp: "provider.call.usage",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.Usage == nil || se.Usage.InputTokens != 60951 || se.Usage.OutputTokens != 120 {
+					t.Fatalf("bad provider.call.usage mapping: %+v", se)
+				}
+			},
+		},
+		{
 			name:    "learning classified maps to learning.review",
 			ev:      control.Event{ID: "4", Type: "learning.memory.saved", Payload: mustJSON(map[string]any{"message": "saved a fact"})},
 			wantTyp: "learning.review",

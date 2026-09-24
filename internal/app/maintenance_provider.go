@@ -38,12 +38,14 @@ const auxiliaryFloorSlot = "auxiliary"
 // stays the logical role being served so telemetry attributes a floor call to
 // the work that needed it. maxOutputTokens is the resolved model's output
 // ceiling; the chain clamps each request to the route that actually serves it.
+// reasoning is the route's configured level, which maintenance follows.
 type namedMaintenanceProvider struct {
 	slot            string
 	role            llm.ModelRole
 	provider        llm.Provider
 	route           maintenanceRouteIdentity
 	maxOutputTokens int
+	reasoning       string
 }
 
 type maintenanceProviderChain struct {
@@ -136,10 +138,10 @@ func buildMaintenanceCandidate(mem *memory.MemoryManager, cfg *config.Config, te
 		tenantID = "default"
 	}
 	applyDynamicKeyGetter(provider, mem, tenantID, providerName)
-	route, maxOutput := maintenanceRouteIdentityFor(cfg, slot.role, slot.roleCfg)
+	route, maxOutput, reasoning := maintenanceRouteIdentityFor(cfg, slot.role, slot.roleCfg)
 	return namedMaintenanceProvider{
 		slot: slot.slot, role: slot.role, provider: provider,
-		route: route, maxOutputTokens: maxOutput,
+		route: route, maxOutputTokens: maxOutput, reasoning: reasoning,
 	}, true
 }
 
@@ -234,7 +236,6 @@ func (c *maintenanceProviderChain) ChatCompletion(ctx context.Context, messages 
 }
 
 func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	req = boundedMaintenanceRequest(req)
 	var failures []string
 	var lastErr error
 	anyRetryable := false
@@ -255,7 +256,7 @@ func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest
 			continue
 		}
 		started := time.Now()
-		resp, callErr := candidate.provider.Chat(ctx, boundOutputForCandidate(req, candidate))
+		resp, callErr := candidate.provider.Chat(ctx, boundOutputForCandidate(withReasoningHeadroom(req, candidate), candidate))
 		if callErr == nil && resp != nil && (strings.TrimSpace(resp.Content) != "" || len(resp.ToolCalls) > 0) {
 			c.recordSuccess(ctx, candidate)
 			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallSucceeded,
@@ -328,7 +329,6 @@ func maintenanceContractAttempt(req llm.ChatRequest) int {
 }
 
 func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
-	req = boundedMaintenanceRequest(req)
 	var failures []string
 	var lastErr error
 	anyRetryable := false
@@ -348,7 +348,7 @@ func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatR
 			continue
 		}
 		started := time.Now()
-		stream, callErr := candidate.provider.StreamChat(ctx, boundOutputForCandidate(req, candidate))
+		stream, callErr := candidate.provider.StreamChat(ctx, boundOutputForCandidate(withReasoningHeadroom(req, candidate), candidate))
 		if callErr == nil && stream != nil {
 			return c.observeStream(ctx, candidate, index, triggerClass, stream, probe, maintenanceBatchSize(req), started), nil
 		}
@@ -386,17 +386,21 @@ func boundOutputForCandidate(req llm.ChatRequest, candidate namedMaintenanceProv
 	return req
 }
 
-// boundedMaintenanceRequest keeps background control work predictable even
-// when models.auxiliary is configured with deep reasoning for ad-hoc use. The
-// foreground primary route is untouched; only this maintenance-only chain
-// installs the protocol-neutral disabled value translated by each adapter.
-func boundedMaintenanceRequest(req llm.ChatRequest) llm.ChatRequest {
-	options := make(map[string]interface{}, len(req.Options)+1)
-	for key, value := range req.Options {
-		options[key] = value
+// withReasoningHeadroom widens a bounded request for the reasoning the serving
+// route may do. Maintenance runs at each route's configured reasoning level
+// (a request may still name its own), and a provider that counts reasoning
+// against max_tokens would otherwise spend a cap sized for the JSON answer on
+// thinking and return a truncated contract. boundOutputForCandidate still
+// clamps the result to the route's ceiling.
+func withReasoningHeadroom(req llm.ChatRequest, candidate namedMaintenanceProvider) llm.ChatRequest {
+	if req.MaxTokens <= 0 {
+		return req
 	}
-	options["reasoning_effort"] = maintenanceReasoningEffort
-	req.Options = options
+	effort := candidate.reasoning
+	if requested, ok := req.Options["reasoning_effort"].(string); ok && strings.TrimSpace(requested) != "" {
+		effort = requested
+	}
+	req.MaxTokens += llm.ReasoningHeadroom(effort)
 	return req
 }
 
@@ -584,11 +588,11 @@ func DescribeMaintenanceFallback(cfg *config.Config, role string) MaintenanceFal
 		return summary
 	}
 	seen := make(map[string]struct{}, len(slots))
-	if route, _ := maintenanceRouteIdentityFor(cfg, slots[0].role, slots[0].roleCfg); route.ID != "" {
+	if route, _, _ := maintenanceRouteIdentityFor(cfg, slots[0].role, slots[0].roleCfg); route.ID != "" {
 		seen[route.ID] = struct{}{}
 	}
 	for _, slot := range slots[1:] {
-		route, _ := maintenanceRouteIdentityFor(cfg, slot.role, slot.roleCfg)
+		route, _, _ := maintenanceRouteIdentityFor(cfg, slot.role, slot.roleCfg)
 		if route.ID == "" {
 			continue
 		}

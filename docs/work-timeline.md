@@ -101,8 +101,11 @@ language-independent evidence exists:
 - the final handoff contains next steps or changed files.
 
 Lifecycle tools (`finish_run`, `update_plan`, `work_select`,
-`queue_user_input`) and read-only tools are not evidence. An OBSERVE
-projection never demotes an evidence-bearing Thread.
+`queue_user_input`) and read-only tools are not evidence. Neither is a command
+the dispatcher proved read-only: the ledger records it with effect class
+`observation`, so `git status` alone does not make a question resumable work.
+The replay class stays `side_effect` for recovery. An OBSERVE projection never
+demotes an evidence-bearing Thread.
 
 A tool-free direct answer remains unlisted by default. Promotion is monotonic
 for automation: it never hides a listed Thread and never reopens an archived
@@ -152,15 +155,39 @@ explicit /new, /resume, /choose
   identical execution roots), has no unfinished loop checkpoint, and the
   interaction has produced no effect yet, `work_select(resume)` claims the
   parent atomically at tool time (`ClaimInteractionContinuation`): the
-  interaction Run moves onto the parent's Thread, the parent's plan is restored
-  as a durable `plan.updated` event, and the parent's bounded resume context is
-  the tool result, so Main continues in the same turn with one Run and no
+  interaction Run moves onto the parent's Thread, its own versioned Plan is
+  imported in that claim transaction with stable logical step ids and exact
+  source-step references, and `plan.updated` announces the committed snapshot.
+  Work Units remain Run-local; an echoed parent Work Unit id is translated only
+  when it belongs to that exact source step, while unrelated stale ids fail.
+  The bounded resume context follows exact lineage for prior-step evidence as
+  historical context, each check with its age at selection. Main may
+  explicitly adopt an unchanged successful check with a reason in
+  `update_plan`; the runtime verifies its source step, criterion, scope, and
+  that the child recorded no file change — the rule that makes a check stale
+  inside one Run — before accepting it. A read-only look first never forfeits
+  adoption. Other checks stay open. Main continues in the same turn with one Run and no
   queue; one pre-effect correction re-points that claim
   (`RetargetInteractionContinuation`). A workspace, execution-root, or
   checkpoint mismatch creates a correctly scoped transfer child at
   finalization, because a Run's execution domain never changes in place.
+- Repeating an identical `update_plan` after a verification precondition fails
+  remains blocked until the accepted Plan version or a successful check bound
+  to one of its current steps changes. The retry guard uses that durable
+  evidence revision; it does not treat a cosmetic argument rewrite, an
+  unrelated check, or a failed check as progress. A rejected multi-step close
+  reports every open verification obligation, each with its next action,
+  without committing part of the proposed snapshot.
+- A Run that ends without final prose renders its result from runtime state,
+  never from progress narration: a structured `finish_run` outcome when one was
+  recorded, otherwise the accepted Plan's completed and open steps followed by
+  recorded file and verification evidence. Display bounds count characters, so
+  CJK text keeps the same visible length as ASCII.
 - Read-only discovery uses the same trusted registration facts for dispatch,
-  recovery, and plan-progress accounting. Captured `tool_output` artifacts are
+  recovery, and plan-progress accounting. A proven read-only command (ledger
+  effect class `observation`) is discovery too and leaves the selection window
+  open; an unproven command still closes it, so Attention guidance asks Main to
+  select before running commands. Captured `tool_output` artifacts are
   observation storage and follow the continuing Run; originating mutations
   still block implicit selection through their execution ledger. Deliverable
   artifacts and pending human/external control objects retain their guards.
@@ -197,8 +224,12 @@ queue. Prose such as “resume after approval” has no routing authority.
 4. an unclaimed resumable Run with no child that is still the latest Run of
    its Thread; a later Run in the same Thread causally supersedes an older
    parked one. An `interrupted` Run counts only when it left work evidence (a
-   plan, a non-lifecycle side-effect tool row, an approval, clarification, or
-   watcher, a resume edge, or next steps).
+   plan, a non-lifecycle side-effect tool row that is not a proven
+   observation, an approval, clarification, or watcher, a resume edge, or next
+   steps). A Run whose typed completion reason
+   is `work_selection_rejected` records a refused relationship decision rather
+   than unfinished historical work, so it remains in history but does not
+   enter Attention or `/resume`.
 
 Items are person-partitioned; same-channel items rank first, then stronger
 live signals outrank recency. `/status`, the attach
@@ -262,8 +293,9 @@ assembled from separately budgeted slices:
 
 1. latest user message;
 2. bounded work-spine tail and compaction summary;
-3. exact parent-Run handoff, events, artifacts, plan, and checkpoint when one
-   was validated;
+3. exact parent-Run handoff, events, artifacts, inherited Plan, source-step
+   evidence summary, and bounded selected results from a completed checkpoint;
+   only an incomplete checkpoint restores the full loop ledger;
 4. workspace conventions and current state;
 5. person preferences;
 6. bounded recall hits.

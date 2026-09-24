@@ -148,6 +148,46 @@ func TestWatcherLifecycleLeavesOneTranscriptNotice(t *testing.T) {
 	}
 }
 
+func TestBackgroundFinalizationShowsBoundedLiveProgress(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	runID := "run_finalizing"
+	updated, tick := model.Update(MsgDaemonRunStarted{
+		RunID: runID, WatchID: "watch_123", Origin: "external_watch", Started: time.Now().Add(-3 * time.Second),
+		Event: uiEventRef{Source: eventSourceDaemon, RunID: runID, EventID: "start"},
+	})
+	m := updated.(*uiModel)
+	if tick == nil {
+		t.Fatal("background status has no elapsed-time tick")
+	}
+	updated, _ = m.Update(MsgToolStart{ToolName: "update_plan", ToolCallID: "call_1", Event: uiEventRef{Source: eventSourceDaemon, RunID: runID, EventID: "tool"}})
+	m = updated.(*uiModel)
+	updated, _ = m.Update(MsgPlanUpdated{Content: `{"plan":[{"status":"completed"},{"status":"in_progress"}]}`, Event: uiEventRef{Source: eventSourceDaemon, RunID: runID, EventID: "plan"}})
+	m = updated.(*uiModel)
+	line := m.statusLine()
+	for _, want := range []string{"background watcher finalizing", "plan 1/2", "1 actions", "Updating plan"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("missing %q in status %q", want, line)
+		}
+	}
+	if len(m.messages) != 0 || m.activePlanJSON != "" {
+		t.Fatalf("background progress leaked into transcript or foreground plan: %+v %q", m.messages, m.activePlanJSON)
+	}
+	updated, tick = m.Update(MsgBackgroundTick{RunID: runID})
+	m = updated.(*uiModel)
+	if tick == nil {
+		t.Fatal("background status stopped refreshing")
+	}
+	updated, _ = m.Update(MsgDaemonRunFinished{RunID: runID, Status: "interrupted", Summary: "Plan remains open.", Event: uiEventRef{Source: eventSourceDaemon, RunID: runID, EventID: "finish"}})
+	m = updated.(*uiModel)
+	if m.runStatus != "interrupted" || !isTerminalRunStatus(m.runStatus) || !strings.Contains(m.statusLine(), "needs attention") {
+		t.Fatalf("unresolved plan looked complete: status=%q line=%q", m.runStatus, m.statusLine())
+	}
+	_, tick = m.Update(MsgBackgroundTick{RunID: runID})
+	if tick != nil {
+		t.Fatal("background elapsed-time tick survived run completion")
+	}
+}
+
 // Collapsing the lifecycle to one line must not collapse its outcomes: a check
 // that could never observe the external state has to stay distinguishable from a
 // completed operation, both on the status bar and in the one transcript cell.

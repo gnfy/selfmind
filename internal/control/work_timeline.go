@@ -228,12 +228,15 @@ const nonWorkToolNamesSQL = `('update_plan', 'finish_run', 'queue_user_input', '
 // call id that never reached dispatch and therefore touched nothing. A `failed`
 // row still counts: a command that ran and exited non-zero (a failing build or
 // test) is real work, and the ledger cannot currently distinguish that from a
-// guardrail refusal without a durable effect-state column.
+// guardrail refusal without a durable effect-state column. A command the
+// dispatcher proved read-only (effect_class 'observation') is a look, not work,
+// whatever its exit status: `git status` alone does not make a Q&A resumable.
 const runWorkEvidenceSQL = `(COALESCE(r.resumes_run_id, '') != ''
 	OR EXISTS (SELECT 1 FROM run_plan_steps s WHERE s.tenant_id = r.tenant_id AND s.run_id = r.id
 	     GROUP BY s.plan_version HAVING COUNT(*) > 1)
 	OR EXISTS (SELECT 1 FROM tool_ledger l WHERE l.tenant_id = r.tenant_id AND l.run_id = r.id
-	     AND COALESCE(l.retry_class, '') != 'read_only' AND l.tool_name NOT IN ` + nonWorkToolNamesSQL + `
+	     AND COALESCE(l.retry_class, '') != 'read_only' AND COALESCE(l.effect_class, '') != 'observation'
+	     AND l.tool_name NOT IN ` + nonWorkToolNamesSQL + `
 	     AND COALESCE(l.status, '') != 'planned')
 	OR EXISTS (SELECT 1 FROM approval_requests a WHERE a.tenant_id = r.tenant_id AND a.run_id = r.id)
 	OR EXISTS (SELECT 1 FROM clarify_requests c WHERE c.tenant_id = r.tenant_id AND c.run_id = r.id)
@@ -250,6 +253,10 @@ const runWorkEvidenceSQL = `(COALESCE(r.resumes_run_id, '') != ''
 const resumableRunConditionSQL = `r.status IN ` + resumableRunStatusSQL + `
 	AND COALESCE(r.attention_dismissed_at, 0) = 0
 	AND COALESCE(r.resumed_by_run_id, '') = ''
+	AND COALESCE((SELECT json_extract(outcome.payload_json, '$.outcome.completion_reason')
+	     FROM task_events outcome WHERE outcome.run_id = r.id
+	       AND outcome.type IN ('run.finished','run.interrupted')
+	     ORDER BY COALESCE(outcome.cursor,0) DESC, outcome.rowid DESC LIMIT 1), '') != 'work_selection_rejected'
 	AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.tenant_id = r.tenant_id AND child.resumes_run_id = r.id)
 	AND NOT EXISTS (SELECT 1 FROM runs newer WHERE newer.tenant_id = r.tenant_id AND newer.thread_id = r.thread_id
 	     AND newer.id <> COALESCE(r.resumes_run_id, '')

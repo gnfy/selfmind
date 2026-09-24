@@ -248,6 +248,31 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 				typedAssistantPhase = false
 				currentAssistantPhase = llm.AssistantPhaseUnspecified
 			}
+			// Kernel-owned fallback answers (for example after a bounded tool or
+			// iteration limit) are carried by turn.completed because they did not
+			// come from provider token deltas. Materialize that content exactly
+			// once when no final answer was streamed, so a locally completed turn
+			// cannot become a missing_final_response at the gateway boundary.
+			if event.EventType == "turn.completed" && !hasFinalContent && strings.TrimSpace(event.Content) != "" {
+				fallback := llm.StreamEvent{
+					EventType: "stream", Content: event.Content,
+					Phase: llm.AssistantPhaseFinalAnswer,
+				}
+				if task != nil {
+					c.srv.events().publishAssistant(task, run, fallback)
+				}
+				if observer != nil {
+					observer(fallback)
+				}
+				summary.Observe(fallback)
+				c.recordStreamEvent(ctx, channel, task, run, fallback)
+				sawStream = true
+				typedAssistantPhase = true
+				currentAssistantPhase = llm.AssistantPhaseFinalAnswer
+				finalContent.Reset()
+				finalContent.WriteString(event.Content)
+				hasFinalContent = true
+			}
 			if event.EventType == "stream" && task != nil {
 				c.srv.events().publishAssistant(task, run, event)
 			}

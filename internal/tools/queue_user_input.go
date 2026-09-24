@@ -29,7 +29,8 @@ func (t *QueueUserInputTool) Description() string {
 
 func (t *QueueUserInputTool) Schema() ToolSchema {
 	return ToolSchema{
-		Type: "object",
+		Type:                 "object",
+		AdditionalProperties: rejectAdditionalProperties(),
 		Properties: map[string]PropertyDef{
 			"input_id": {
 				Type:        "string",

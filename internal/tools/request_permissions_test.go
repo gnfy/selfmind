@@ -152,3 +152,207 @@ func TestRequestPermissionsWorkspaceOnlyNeedsNothing(t *testing.T) {
 		t.Fatalf("result = %q", out)
 	}
 }
+
+func TestRequestPermissionsBatchesExactCommandsWithoutBypassingLivePolicy(t *testing.T) {
+	withExecSandboxPolicy(t, false, false, false)
+	resetTriageTelemetryForTest(t)
+	root := t.TempDir()
+	asks := 0
+	capturedEffects := 0
+	cleanup := SetExecutionScope("person-phase", ExecutionScope{
+		TenantID: "tenant-phase", PersonID: "person-phase", TaskID: "task-phase", RunID: "run-phase",
+		WorkspaceID: "ws-phase", WorkspaceRoot: root, AllowedRoots: []string{root},
+		ApprovalMode: ApprovalSmart,
+		IntentSnapshot: func() RunIntentSnapshot {
+			return RunIntentSnapshot{ModelAuthorization: true, RawUserText: "publish the release"}
+		},
+		Approval: func(_ context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
+			asks++
+			if req.ToolName == "request_permissions" {
+				effects, _ := req.Args["effects"].([]interface{})
+				capturedEffects = len(effects)
+				return ToolApprovalDecision{Approved: true, ApprovalID: "apr-phase", Scope: "run", Outcome: ApprovalOutcomeApproved}, nil
+			}
+			return ToolApprovalDecision{Approved: true, ApprovalID: "apr-single", Outcome: ApprovalOutcomeApproved}, nil
+		},
+	})
+	defer cleanup()
+
+	registry := NewRegistry()
+	registry.Register(NewRequestPermissionsTool())
+	registry.Register(NewExecuteCommandTool())
+	command := "aws codebuild start-build --project-name site --profile release"
+	out, err := registry.Dispatch("request_permissions", map[string]interface{}{
+		"_tenant_id": "person-phase",
+		"effects": []interface{}{
+			map[string]interface{}{"tool": "terminal", "arguments_json": `{"command":"aws codebuild start-build --project-name site --profile release"}`},
+			map[string]interface{}{"tool": "terminal", "arguments_json": `{"command":"gh run watch 123 --exit-status"}`},
+		},
+		"reason": "dispatch and observe this release phase",
+	})
+	if err != nil {
+		t.Fatalf("request exact command phase: %v", err)
+	}
+	if asks != 1 || capturedEffects != 2 || !strings.Contains(out, "Granted (run)") {
+		t.Fatalf("bundle result asks=%d effects=%d out=%q", asks, capturedEffects, out)
+	}
+
+	ran := 0
+	exec := SmartApprovalMiddleware(root)(func(map[string]interface{}) (string, error) {
+		ran++
+		return "ok", nil
+	})
+	call := func(value string) error {
+		_, callErr := exec(map[string]interface{}{
+			"_tenant_id": "person-phase", "_tool_name": "terminal", "command": value,
+		})
+		return callErr
+	}
+	if err := call(command); err != nil {
+		t.Fatalf("declared command: %v", err)
+	}
+	if asks != 1 || ran != 1 {
+		t.Fatalf("declared command re-asked: asks=%d ran=%d", asks, ran)
+	}
+	if stats := TriageDiagnostics("tenant-phase", "person-phase"); stats.BundleHits != 1 {
+		t.Fatalf("bundle reuse was not observable: %+v", stats)
+	}
+
+	if err := call("aws codebuild start-build --project-name other --profile release"); err != nil {
+		t.Fatalf("changed command: %v", err)
+	}
+	if asks != 2 || ran != 2 {
+		t.Fatalf("changed arguments reused the declaration: asks=%d ran=%d", asks, ran)
+	}
+}
+
+func TestRequestPermissionsExactCommandsFailClosed(t *testing.T) {
+	withExecSandboxPolicy(t, false, false, false)
+	root := t.TempDir()
+	asks := 0
+	cleanup := SetExecutionScope("person-phase-closed", ExecutionScope{
+		TenantID: "tenant-phase", PersonID: "person-phase-closed", TaskID: "task-phase", RunID: "run-phase-closed",
+		WorkspaceID: "ws-phase", WorkspaceRoot: root, AllowedRoots: []string{root},
+		ApprovalMode: ApprovalSmart,
+		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
+			asks++
+			return ToolApprovalDecision{Approved: true, Scope: "run"}, nil
+		},
+	})
+	defer cleanup()
+	registry := NewRegistry()
+	registry.Register(NewRequestPermissionsTool())
+	registry.Register(NewExecuteCommandTool())
+	registry.Register(NewExecuteCodeTool())
+
+	for _, tc := range []struct {
+		name string
+		tool string
+		args map[string]interface{}
+	}{
+		{name: "hard floor", tool: "terminal", args: map[string]interface{}{"command": "shutdown -h now"}},
+		{name: "opaque script", tool: "terminal", args: map[string]interface{}{"command": "bash deploy.sh"}},
+		{name: "arbitrary network client", tool: "terminal", args: map[string]interface{}{"command": "curl https://example.com/release"}},
+		{name: "arbitrary code", tool: "execute_code", args: map[string]interface{}{"code": "print('release')", "language": "python"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := registry.Dispatch("request_permissions", map[string]interface{}{
+				"_tenant_id": "person-phase-closed",
+				"effects":    []interface{}{map[string]interface{}{"tool": tc.tool, "arguments_json": MarshalArgs(tc.args)}},
+				"reason":     "run one phase",
+			})
+			if err == nil {
+				t.Fatalf("%s must stay on single-call approval", tc.name)
+			}
+		})
+	}
+	if asks != 0 {
+		t.Fatalf("invalid exact declarations reached the person %d times", asks)
+	}
+}
+
+func TestDeclaredEffectKeyChangesWithExecutionIdentity(t *testing.T) {
+	withExecSandboxPolicy(t, false, false, false)
+	args := map[string]interface{}{"_tool_name": "terminal", "command": "aws codebuild start-build --project-name site"}
+	annotateEffectiveSandboxMode(args)
+	scope := ExecutionScope{
+		TenantID: "tenant", PersonID: "person", TaskID: "task", RunID: "run", WorkspaceID: "workspace",
+		EnvironmentSnapshotID: "snapshot", EnvironmentGeneration: 1, EnvironmentFingerprint: "environment",
+		PrincipalFingerprint: "principal", CredentialSourceHash: "credentials",
+	}
+	first := approvalDeclaredEffectKey("terminal", args, scope, true)
+	scope.EnvironmentGeneration++
+	if second := approvalDeclaredEffectKey("terminal", args, scope, true); first == "" || first == second {
+		t.Fatalf("environment change did not invalidate exact phase grant: %q / %q", first, second)
+	}
+	scope.EnvironmentGeneration--
+	scope.PrincipalFingerprint = "other-principal"
+	if second := approvalDeclaredEffectKey("terminal", args, scope, true); first == second {
+		t.Fatal("principal change did not invalidate exact phase grant")
+	}
+}
+
+func TestDeclaredEffectDoesNotOverrideCurrentExplicitDeny(t *testing.T) {
+	withExecSandboxPolicy(t, false, false, false)
+	root := t.TempDir()
+	asks := 0
+	scope := ExecutionScope{
+		TenantID: "tenant-deny", PersonID: "person-deny", TaskID: "task-deny", RunID: "run-deny",
+		WorkspaceID: "ws-deny", WorkspaceRoot: root, AllowedRoots: []string{root}, ApprovalMode: ApprovalSmart,
+		IntentSnapshot: func() RunIntentSnapshot {
+			return RunIntentSnapshot{ModelAuthorization: true, RawUserText: "prepare the release"}
+		},
+		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
+			asks++
+			if asks == 1 {
+				return ToolApprovalDecision{Approved: true, Scope: "run"}, nil
+			}
+			return ToolApprovalDecision{Approved: true}, nil
+		},
+	}
+	cleanup := SetExecutionScope("person-deny", scope)
+	registry := NewRegistry()
+	registry.Register(NewRequestPermissionsTool())
+	registry.Register(NewExecuteCommandTool())
+	command := "aws codebuild start-build --project-name site"
+	if _, err := registry.Dispatch("request_permissions", map[string]interface{}{
+		"_tenant_id": "person-deny",
+		"effects": []interface{}{map[string]interface{}{
+			"tool": "terminal", "arguments_json": MarshalArgs(map[string]interface{}{"command": command}),
+		}},
+		"reason": "release phase",
+	}); err != nil {
+		cleanup()
+		t.Fatalf("request phase: %v", err)
+	}
+	installed, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": "person-deny"})
+	cleanup()
+	if !ok || installed.runGrants == nil {
+		t.Fatal("missing live run grant set")
+	}
+	installed.IntentSnapshot = func() RunIntentSnapshot {
+		return RunIntentSnapshot{
+			ModelAuthorization: true,
+			RawUserText:        "do not run commands yet",
+			ExplicitDeny:       []string{"do not run commands yet"},
+			DenyScopes: []DenyScope{{
+				Marker: "do not", Clause: "do not run commands yet", Classes: []OperationClass{OpClassExec}, Resolved: true,
+			}},
+		}
+	}
+	cleanup = SetExecutionScope("person-deny", installed)
+	defer cleanup()
+	ran := false
+	exec := SmartApprovalMiddleware(root)(func(map[string]interface{}) (string, error) {
+		ran = true
+		return "ok", nil
+	})
+	if _, err := exec(map[string]interface{}{
+		"_tenant_id": "person-deny", "_tool_name": "terminal", "command": command,
+	}); err != nil {
+		t.Fatalf("human-confirmed deny override: %v", err)
+	}
+	if asks != 2 || !ran {
+		t.Fatalf("declared effect bypassed current deny: asks=%d ran=%v", asks, ran)
+	}
+}

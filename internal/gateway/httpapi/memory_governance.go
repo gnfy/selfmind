@@ -21,6 +21,11 @@ const (
 	// historical backlog instead of waiting 24 hours between batches.
 	memoryGovernanceBacklogRetryDelay = 4 * time.Hour
 	memoryGovernanceMinimumWake       = time.Second
+	// A long durable next_due_at must not become one equally long in-memory
+	// timer. Laptop sleep can pause the monotonic timer component, so a daemon
+	// that wakes after the wall-clock due time needs a bounded, model-free
+	// rescan instead of waiting out the pre-sleep remainder.
+	memoryGovernanceLivenessScan = 5 * time.Minute
 	// memoryGovernanceMaxRetryDelay caps the escalating backoff. A pass that
 	// keeps crashing must slow down instead of re-burning model budget at the
 	// base retry rate forever.
@@ -38,6 +43,16 @@ func memoryGovernanceBackoff(consecutiveFailures int) time.Duration {
 	}
 	if delay > memoryGovernanceMaxRetryDelay {
 		delay = memoryGovernanceMaxRetryDelay
+	}
+	return delay
+}
+
+func memoryGovernanceWakeDelay(delay time.Duration) time.Duration {
+	if delay < memoryGovernanceMinimumWake {
+		return memoryGovernanceMinimumWake
+	}
+	if delay > memoryGovernanceLivenessScan {
+		return memoryGovernanceLivenessScan
 	}
 	return delay
 }
@@ -102,10 +117,7 @@ func (d *Server) StartMemoryGovernance(ctx context.Context) func() {
 				return
 			case <-timer.C:
 				delay = d.runMemoryGovernancePassAt(ctx, time.Now())
-				if delay < memoryGovernanceMinimumWake {
-					delay = memoryGovernanceMinimumWake
-				}
-				timer.Reset(delay)
+				timer.Reset(memoryGovernanceWakeDelay(delay))
 			}
 		}
 	}()

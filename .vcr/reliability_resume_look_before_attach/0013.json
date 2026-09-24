@@ -1,0 +1,413 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Report"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Result"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "value"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " contains"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " followed"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " acceptance"
+    },
+    {
+      "content": " condition"
+    },
+    {
+      "content": " passes"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Evidence"
+    },
+    {
+      "content": ":\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "od"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": " value"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "000"
+    },
+    {
+      "content": "000"
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": " R"
+    },
+    {
+      "content": " E"
+    },
+    {
+      "content": " A"
+    },
+    {
+      "content": " D"
+    },
+    {
+      "content": " Y"
+    },
+    {
+      "content": " \\"
+    },
+    {
+      "content": "n"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": "),"
+    },
+    {
+      "content": " confirming"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " trailing"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "\\"
+    },
+    {
+      "content": "n"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " extra"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " recorded"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "verify"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " this"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " acceptance"
+    },
+    {
+      "content": " condition"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "target"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "value"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " criterion"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "'"
+    },
+    {
+      "content": "READ"
+    },
+    {
+      "content": "Y"
+    },
+    {
+      "content": "\\n"
+    },
+    {
+      "content": "'"
+    },
+    {
+      "content": "`)"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " reused"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " since"
+    },
+    {
+      "content": " nothing"
+    },
+    {
+      "content": " has"
+    },
+    {
+      "content": " changed"
+    },
+    {
+      "content": " since"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " ran"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": "-only"
+    },
+    {
+      "content": " inspection"
+    },
+    {
+      "content": " occurred"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "value"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " modified"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " resumed"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " finished"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "done"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 6422,
+        "output_tokens": 132,
+        "cache_read_input_tokens": 3200,
+        "cache_miss_input_tokens": 3222,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 4,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

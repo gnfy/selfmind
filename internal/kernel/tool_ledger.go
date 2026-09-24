@@ -164,6 +164,21 @@ func ToolExecutionStrategy(name string, retryClass ToolRetryClass) string {
 	return "mutate"
 }
 
+// ToolEffectObservation is the effect class of a call the dispatcher proved
+// read-only. Replay stays governed by the retry class: a proven `git status`
+// remains side_effect for recovery, yet it changed nothing a continuation or
+// the work list should treat as work.
+const ToolEffectObservation = "observation"
+
+// ToolEffectClass records what a call could have changed, separately from
+// whether it is safe to replay.
+func ToolEffectClass(retryClass ToolRetryClass, metadata ...ToolExecutionMetadata) string {
+	if len(metadata) > 0 && metadata[0].ObservationOnly {
+		return ToolEffectObservation
+	}
+	return string(retryClass)
+}
+
 type toolLedgerKey struct{}
 
 // WithToolLedger installs the per-run tool ledger.

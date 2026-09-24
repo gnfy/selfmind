@@ -14,16 +14,30 @@ import (
 // the owned Run, including rechecks after a work unit closes. Historical bindings
 // retain their current-work-unit boundary; closed projections are never rewritten.
 func (s *Store) ValidateVerificationReplacement(ctx context.Context, tenant, runID string, b verification.Binding, cwd string) error {
-	startedCursor := int64(0)
-	if b.Version >= 2 && verification.ValidBinding(&b) {
-		run, err := s.GetRun(ctx, tenant, runID)
-		if err != nil {
-			return err
-		}
-		if run == nil {
-			return fmt.Errorf("verification Run is unavailable")
-		}
-	} else {
+	run, err := s.GetRun(ctx, tenant, runID)
+	if err != nil {
+		return err
+	}
+	if run == nil {
+		return fmt.Errorf("verification Run is unavailable")
+	}
+	var raw string
+	var evidenceCursor int64
+	err = s.db.QueryRowContext(ctx, `SELECT cursor,payload_json FROM task_events WHERE run_id=? AND type='evidence.recorded' AND json_extract(payload_json,'$.evidence.tool_call_id')=? ORDER BY cursor DESC LIMIT 1`, runID, b.Replaces).Scan(&evidenceCursor, &raw)
+	if err != nil {
+		return fmt.Errorf("verification reference %q is outside the permitted Run evidence window", b.Replaces)
+	}
+	var payload struct {
+		Evidence workUnitEvidence `json:"evidence"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil || payload.Evidence.Kind != "verification" || payload.Evidence.Command == nil {
+		return fmt.Errorf("reference is not verification evidence")
+	}
+	// Replacement authority comes from the stored evidence contract, never
+	// from a caller-supplied version. Historical bindings remain limited to the
+	// currently open work unit; declared dependency contracts can be rechecked
+	// later without rewriting the closed unit.
+	if payload.Evidence.Command.Binding == nil || payload.Evidence.Command.Binding.Version < 2 {
 		units, err := s.ListRunWorkUnits(ctx, tenant, runID)
 		if err != nil {
 			return err
@@ -37,24 +51,15 @@ func (s *Store) ValidateVerificationReplacement(ctx context.Context, tenant, run
 		if unit == nil {
 			return fmt.Errorf("keep the work unit open before replacing historical verification")
 		}
-		startedCursor = unit.StartedCursor
-	}
-	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT payload_json FROM task_events WHERE run_id=? AND type='evidence.recorded' AND cursor>? AND json_extract(payload_json,'$.evidence.tool_call_id')=? ORDER BY cursor DESC LIMIT 1`, runID, startedCursor, b.Replaces).Scan(&raw)
-	if err != nil {
-		return fmt.Errorf("verification reference %q is outside the permitted Run evidence window", b.Replaces)
-	}
-	var payload struct {
-		Evidence workUnitEvidence `json:"evidence"`
-	}
-	if json.Unmarshal([]byte(raw), &payload) != nil || payload.Evidence.Kind != "verification" || payload.Evidence.Command == nil {
-		return fmt.Errorf("reference is not verification evidence")
+		if evidenceCursor <= unit.StartedCursor {
+			return fmt.Errorf("verification reference %q is outside the permitted Run evidence window", b.Replaces)
+		}
 	}
 	e := payload.Evidence
 	old := verification.Check{ToolCallID: e.ToolCallID, Binding: e.Command.Binding, CWD: e.Command.CWD, StartedAt: e.StartedAt, FinishedAt: e.FinishedAt}
 	next := verification.Check{Binding: &b, CWD: cwd, StartedAt: time.Now().UnixNano()}
-	if !verification.CanReplace(old, next) {
-		return fmt.Errorf("verification replacement must preserve the recorded criterion, target, local dependencies and working directory; original criterion=%q target=%q cwd=%q", bindingCriterion(old.Binding), bindingTarget(old.Binding), old.CWD)
+	if mismatch := verification.ReplacementMismatch(old, next); mismatch != "" {
+		return fmt.Errorf("verification replacement must preserve the recorded criterion, target and working directory: %s; original criterion=%q target=%q cwd=%q", mismatch, bindingCriterion(old.Binding), bindingTarget(old.Binding), old.CWD)
 	}
 	return nil
 }

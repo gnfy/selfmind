@@ -2469,6 +2469,13 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		run.TaskID, run.InputSummary, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
 		return nil, err
 	}
+	if run.ResumesRunID != "" {
+		// The exact-parent claim and durable Plan import are one transition.
+		// A failed import must leave neither a child Run nor a claimed parent.
+		if _, err := s.inheritRunPlanTx(ctx, tx, run.TenantID, run.ID, run.ResumesRunID, false); err != nil {
+			return nil, err
+		}
+	}
 	// A run with no Thread has nothing to touch.
 	if run.TaskID != "" {
 		if _, err = tx.ExecContext(ctx,

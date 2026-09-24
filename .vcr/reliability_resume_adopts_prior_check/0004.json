@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am recording the task status as waiting for user confirmation before reporting the result."
+    },
+    {
+      "usage": {
+        "input_tokens": 11133,
+        "output_tokens": 16,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 98,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1332,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_350767",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"waiting_user\",\"summary\":\"Verification step completed. Awaiting user confirmation before reporting the result.\",\"files\":[\"value.txt\"],\"tests\":[\"python3 assert open('value.txt', 'rb').read() == b'READY\\\\n'\"],\"done\":[\"Verified value.txt content using verify tool\"],\"next_steps\":[\"Wait for user confirmation before reporting verification findings\"]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EtIICs8IAWkUfRM0NxHNS9BoxQNh5IvC8bd6hBbOoiQQw0vbvxIkM4/wh2HtSdekf1TpHpH4RCvs29+Xm7il1GB86xQIIp0CeSiX/4Ncdhe2Jd3yX0ZtmMJG+cguFKyotcysXM4mMzk4V+WPSI4T2zCgSDB32SmIOOJ0wULySH/rw0I3MuKypZjwnIJQLELexoiUFUa3XsTgZ6qAi6iiSd4FRk8rS9Xle0gC/N4y1nQdL/q4QCyzPlYZVIhcfsr9Wpo7j3wI4QPB2utp1DU0hX5F3xvzntgAK79+oQ78EHKEt56rjrHxLTsHiV1lL03HAIDsf+I6+N31i015TkQVMQLwv4arsmg25l5Yqv5uBAYTWJ+T9Yv2Vo4/I4Wa/nKveO1IgFRIfmObUDDop3D2IDktSEMVuIalnxjzmXOfnNoWUpgUe5oekKy44t5FSzXElvzCKECDd5e6jY9pElIKbmICOr7kRDlvhtsP4mwPUinp3qcUDisehJ6hTvxSa1R1j3/1GoFyadvY2qiRkDVpUwD8dctXBZ7sesS1Ra6FemiWfa831hCJ+O12mIIlw83wvW5mkclrYSdsOpXmKBC8qKzN02UyT4CTMED6SW6L6Cvxv8Lo2Yc2XS4sdMyAAbNxmRB6ClGiXhkQXFVYan1IZobZP78h7g3kM95DExvesgysqWo9f+Rdbs8jnvYlb8Jjk5IaAk63z/b8h9zSLJFRF1ZNmJCIrutfrLN5ajF3p5gOC8+OCtJcHEbUHFVXWt5obn30z3gpx/54mXUqhmXXC7WkukpWUjoqURtqa7VOHay0nA9Ug+yh/KCJ7BjOwsgNweMK/iUXYbejLIrCXgqk2tM3sDFsqJvQ/vTMnXK7nDUX3BnTUHRtaL+QZQZaKNnVW4pOlxbo3hEXCjilGVKsi/XX0Lv7q2c3XyyP1lCEZr1KbHB3Ug4JsKfuu+nT7evxXpr5T3urwQyS4NhQlbm/s/SNjIQEWeGpfBHFv67j14e1H0fitX0eMPR+6girvucTcCneDSW2jJuJhboNvu1y/Xm+W8KDHGLKQAxqyb1+doQqGq0+gTuHaa5IveLfNfzES7OgeGsOLB6hq0UDYTzzi/189bXtySBqJB5FPfIgLo+BjOsczxRQnCrT44waET9hlaxBJRlX3UOPg59ByYYW19JragCf2OtVoTNHDt+2CgC/YMulVuxgonE/WB98MuhppeXTF6aDNUzAm+jk5Glw5HklVtsiJ14TXYTRA+IeSp/UN05pMF3zNAo2hQcP3JalQKZhemObZIPRAFhwVhnHYUfkm1Xjmh0WtJaKu2Geir100l7G+b0SGOTugdUa49+S5NiXbA9j60YGOOwtqMOYMFhUboU+O+DWCbqfKZoWXt86xz+PQgEMWgFAaCbMVDYPchHViSqqT/Kigj4YZVYcIEnQcgTeINZSX6UeGuzV6FjsNts0jU3ZF7MzhL6CE9xUZM7i21A="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

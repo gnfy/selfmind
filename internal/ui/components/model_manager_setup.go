@@ -137,7 +137,7 @@ func (m *ModelManager) chooseSetup() (ModelManagerAction, bool) {
 			m.beginRoute("primary")
 		case 1:
 			m.route = "background"
-			m.screen, m.index = modelScreenSetupBackground, 0
+			m.screen, m.index = modelScreenBackground, 0
 		case 2:
 			m.screen, m.index = modelScreenRoles, 0
 		case 3:
@@ -146,31 +146,6 @@ func (m *ModelManager) chooseSetup() (ModelManagerAction, bool) {
 			return ModelManagerAction{Closed: true}, true
 		case 5:
 			m.screen, m.index = modelScreenStatus, 0
-		}
-		return none, true
-	case modelScreenSetupBackground:
-		primary := m.setupSelection("primary")
-		models := m.setupBackgroundModels()
-		switch {
-		case m.index == 0:
-			m.setDraft(ModelManagerSubmission{Route: "background", Reset: true})
-			m.screen, m.index = modelScreenMenu, 3
-		case m.index <= len(models):
-			m.route = "background"
-			m.alignToSelection(ModelManagerSubmission{Provider: primary.Provider, Model: models[m.index-1].ID})
-			m.alignTuningOptions()
-			return m.finishSetupSelection(), true
-		case m.index == len(models)+1:
-			m.beginRoute("background")
-		case m.index == len(models)+2:
-			enabled := false
-			selection := m.setupSelection("background")
-			selection.Reset = false
-			selection.Enabled = &enabled
-			m.setDraft(selection)
-			m.screen, m.index = modelScreenMenu, 3
-		default:
-			m.screen, m.index = modelScreenMenu, 1
 		}
 		return none, true
 	case modelScreenModel:
@@ -197,16 +172,6 @@ func (m *ModelManager) chooseSetup() (ModelManagerAction, bool) {
 	return none, false
 }
 
-func (m *ModelManager) setupBackgroundModels() []ModelManagerModel {
-	primary := m.setupSelection("primary")
-	for _, provider := range m.providers {
-		if provider.ID == primary.Provider {
-			return provider.Models
-		}
-	}
-	return nil
-}
-
 func (m *ModelManager) setupOptions() ([]string, bool) {
 	switch m.screen {
 	case modelScreenMenu:
@@ -219,12 +184,6 @@ func (m *ModelManager) setupOptions() ([]string, bool) {
 			options = append(options, "Change status / recovery")
 		}
 		return options, true
-	case modelScreenSetupBackground:
-		options := []string{"Same as Main"}
-		for _, model := range m.setupBackgroundModels() {
-			options = append(options, model.ID)
-		}
-		return append(options, "Another Provider…", "Disable background model work", "Back"), true
 	case modelScreenSetupValidation:
 		if m.setupValidating {
 			return nil, true
@@ -252,7 +211,7 @@ func (m *ModelManager) setupOptions() ([]string, bool) {
 
 func (m *ModelManager) backSetup() bool {
 	switch m.screen {
-	case modelScreenSetupBackground:
+	case modelScreenBackground:
 		m.screen, m.index = modelScreenMenu, 1
 	case modelScreenSetupValidation:
 		m.screen, m.index = modelScreenMenu, 3
@@ -264,7 +223,7 @@ func (m *ModelManager) backSetup() bool {
 		if m.route != "background" {
 			return false
 		}
-		m.screen, m.index = modelScreenSetupBackground, 0
+		m.screen, m.index = modelScreenBackground, 0
 	default:
 		return false
 	}
@@ -277,8 +236,6 @@ func (m *ModelManager) setupScreenTitle() (string, bool) {
 		return "Which models should SelfMind use?", true
 	case modelScreenRoles:
 		return "Advanced roles (optional) · default to Background", true
-	case modelScreenSetupBackground:
-		return "What should Background use?", true
 	case modelScreenSetupValidation:
 		if m.setupValidating {
 			return "Checking model routes…", true
@@ -295,9 +252,6 @@ func (m *ModelManager) setupDetailLines() []string {
 	var lines []string
 	if m.screen == modelScreenMenu {
 		lines = append(lines, "Background work makes additional model calls.")
-	}
-	if m.screen == modelScreenSetupBackground {
-		lines = append(lines, "Main: "+m.setupRouteLabel("primary"), "Same as Main follows changes; a named model stays independent.")
 	}
 	if m.screen == modelScreenSetupValidation {
 		for _, probe := range m.setupValidation {

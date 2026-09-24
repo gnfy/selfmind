@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -21,19 +22,71 @@ type verificationBindingResolver interface {
 	ResolveVerification(context.Context, verification.Binding, string) (*verification.Binding, error)
 }
 
-func verificationBindingProperty() PropertyDef {
-	return PropertyDef{Type: "object", Description: "Stable proof obligation. Omission binds only to an active verification_required plan step; otherwise provide an explicit criterion and target or step_id. For a correction supply replaces and reason; omitted identity and dependency fields are inherited from the recorded check. Use terminal for exploratory probes that do not test an acceptance condition.", Properties: map[string]PropertyDef{
-		"step_id":            {Type: "string", Description: "Existing plan step whose acceptance criterion this check proves. Omit criterion to inherit its durable criterion; never invent a step id."},
+// legacyVerificationStepIDArg is produced only by the compatibility
+// normalizer. Native model arguments cannot forge underscore-prefixed runtime
+// fields because the kernel removes them before dispatch.
+const legacyVerificationStepIDArg = "_legacy_verification_step_id"
+
+func verificationBindingProperties() map[string]PropertyDef {
+	return map[string]PropertyDef{
 		"criterion":          {Type: "string", Description: "Observable condition being verified; preserve it across retries."},
 		"target":             {Type: "string", Description: "Exact artifact or operation this condition concerns."},
 		"replaces":           {Type: "string", Description: "Previous verification evidence id in this Run, only when correcting or retrying that check. Checks without declared local_dependencies retain their original open-work-unit boundary."},
 		"reason":             {Type: "string", Description: "Why the new attempt addresses the old failure without changing the acceptance condition."},
-		"local_dependencies": {Type: "array", Items: &PropertyDef{Type: "string"}, Description: "Local files or directories whose changes can invalidate this criterion, including source, configuration and check scripts. Relative to cwd. Use [] only when this criterion is independent of local files (for example a direct external observation). Omission conservatively depends on all local changes. Preserve this declaration when replacing a check; declaring inputs does not prove the criterion or grant permission."},
-	}}
+		"local_dependencies": {Type: "array", Items: &PropertyDef{Type: "string"}, Description: "Local files or directories read by this observation method whose changes can invalidate its result, including source, configuration and check scripts. Relative to cwd. Use [] only for a direct external observation independent of local files. Omission conservatively depends on all local changes; on replacement, omission inherits the prior declaration while an explicit value describes the corrected method. Declaring inputs does not prove the criterion or grant permission."},
+	}
+}
+
+func normalizeVerificationArgs(args map[string]interface{}) (map[string]interface{}, error) {
+	out := make(map[string]interface{}, len(args)+6)
+	for key, value := range args {
+		out[key] = value
+	}
+	raw, exists := out["check"]
+	if !exists {
+		return out, nil
+	}
+	legacy, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("parameter check must be an object, got %T", raw)
+	}
+	properties := verificationBindingProperties()
+	for key, value := range legacy {
+		destination := key
+		if key == "step_id" {
+			// step_id was part of the published nested shape. Keep accepting it
+			// for old clients and replays, but do not republish it in the flat
+			// schema: the runtime validates and owns this association.
+			destination = legacyVerificationStepIDArg
+		} else if _, known := properties[key]; !known {
+			return nil, fmt.Errorf("unknown parameter: check.%s", key)
+		}
+		if current, present := out[destination]; present && !reflect.DeepEqual(current, value) {
+			return nil, fmt.Errorf("conflicting verification parameter: %s", destination)
+		}
+		out[destination] = value
+	}
+	delete(out, "check")
+	return out, nil
 }
 
 func prepareVerificationBinding(args map[string]interface{}) (*verification.Binding, error) {
-	raw, explicit := args["check"]
+	normalized, err := normalizeVerificationArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	raw := map[string]interface{}{}
+	explicit := false
+	for name := range verificationBindingProperties() {
+		if value, ok := normalized[name]; ok {
+			raw[name] = value
+			explicit = true
+		}
+	}
+	if value, ok := normalized[legacyVerificationStepIDArg]; ok {
+		raw["step_id"] = value
+		explicit = true
+	}
 	encoded, err := json.Marshal(raw)
 	if err != nil {
 		return nil, err
@@ -45,7 +98,7 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 	b.Version = 1
 	b.ResolvedLocalDependencies = nil // Only runtime resolution may populate this.
 	b.UnresolvedLocalDependencies = nil
-	if err := resolveVerificationDependencies(args, &b); err != nil {
+	if err := resolveVerificationDependencies(normalized, &b); err != nil {
 		return nil, err
 	}
 	b.Criterion = strings.TrimSpace(b.Criterion)
@@ -53,13 +106,13 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 	b.Replaces = strings.TrimSpace(b.Replaces)
 	b.Reason = strings.TrimSpace(b.Reason)
 	if resolver, ok := runPlanProjectionFromArgs(args).(verificationBindingResolver); ok {
-		resolved, err := resolver.ResolveVerification(ContextFromArgs(args), b, stringArg(args, "cwd"))
+		resolved, err := resolver.ResolveVerification(ContextFromArgs(normalized), b, stringArg(normalized, "cwd"))
 		if err != nil {
 			return nil, err
 		}
 		if resolved != nil {
 			b = *resolved
-			if err := resolveVerificationDependencies(args, &b); err != nil {
+			if err := resolveVerificationDependencies(normalized, &b); err != nil {
 				return nil, err
 			}
 		} else if !explicit {
@@ -79,7 +132,7 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 		if !ok {
 			return nil, fmt.Errorf("verification replacement is unavailable without a durable run evidence resolver")
 		}
-		if err := validator.ValidateVerification(ContextFromArgs(args), b, stringArg(args, "cwd")); err != nil {
+		if err := validator.ValidateVerification(ContextFromArgs(normalized), b, stringArg(normalized, "cwd")); err != nil {
 			return nil, err
 		}
 	}

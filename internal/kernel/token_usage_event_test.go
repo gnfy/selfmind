@@ -89,4 +89,7 @@ func TestTokenUpdatedEventCarriesCacheAccounting(t *testing.T) {
 	if providerCall.Payload["transport"] != "stream" || providerCall.Payload["status"] != "succeeded" {
 		t.Fatalf("provider call metadata = %+v", providerCall.Payload)
 	}
+	if providerCall.Payload["role"] != "coding_agent" {
+		t.Fatalf("provider call role = %+v", providerCall.Payload)
+	}
 }

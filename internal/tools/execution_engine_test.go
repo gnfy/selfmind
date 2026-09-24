@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ func TestSandboxPlanSerializationCarriesNoEnvironment(t *testing.T) {
 		Env:              []string{"PATH=/usr/bin", "GCLOUD_TOKEN=super-secret", "HOME=/home/u"},
 		Profiles:         []string{"gcloud"},
 		ProfileNotes:     []string{"credentials withheld"},
+		ProxyMode:        proxyModeOmittedUnreachableLoopback,
 		CopiedStateFiles: 6,
 		SnapshotID:       "envsnap_1_abcd",
 		Generation:       1,
@@ -45,8 +47,14 @@ func TestSandboxPlanSerializationCarriesNoEnvironment(t *testing.T) {
 	if strings.Contains(rendered, material.ScratchTmp) {
 		t.Fatalf("plan must not embed a node-local scratch path: %s", rendered)
 	}
-	if plan.Version != SandboxPlanVersion || plan.Backend != bubblewrapBackendName || plan.NetworkMode != "shared" {
+	// The plan names the backend that would actually enforce it on this host,
+	// which is what makes it auditable by whoever runs it — not one hardcoded
+	// backend that happens to be right on Linux.
+	if plan.Version != SandboxPlanVersion || plan.Backend != SandboxBackendName(SandboxIsolated) || plan.NetworkMode != "shared" {
 		t.Fatalf("unexpected plan: %+v", plan)
+	}
+	if plan.ProxyMode != proxyModeOmittedUnreachableLoopback || strings.Contains(rendered, "127.0.0.1") {
+		t.Fatalf("plan must retain the proxy decision without an endpoint: %s", rendered)
 	}
 	// A plan with an empty binding cannot be audited or verified by whoever runs
 	// it, so the identity fields must actually be populated.
@@ -74,8 +82,28 @@ func TestProcessMaterialDoesNotSerializeAndCopies(t *testing.T) {
 }
 
 func TestSandboxBackendSelection(t *testing.T) {
-	if SandboxBackendName(SandboxIsolated) != bubblewrapBackendName {
-		t.Fatal("isolated mode must select the bubblewrap backend")
+	// Isolation is per-platform, so the mapping is the invariant, not one
+	// backend name. A platform with no backend must fall back to host rather
+	// than name an enforcement mechanism it does not have.
+	for goos, want := range map[string]string{
+		"linux":   bubblewrapBackendName,
+		"darwin":  seatbeltBackendName,
+		"windows": "",
+		"plan9":   "",
+	} {
+		backend := IsolationBackendForPlatform(goos)
+		if want == "" {
+			if backend != nil {
+				t.Fatalf("%s must have no isolation backend, got %q", goos, backend.Name())
+			}
+			continue
+		}
+		if backend == nil || backend.Name() != want {
+			t.Fatalf("%s must isolate with %q, got %v", goos, want, backend)
+		}
+	}
+	if name := SandboxBackendName(SandboxIsolated); name != IsolationBackendForPlatform(runtime.GOOS).Name() {
+		t.Fatalf("isolated mode must select this platform's backend, got %q", name)
 	}
 	if SandboxBackendName(SandboxHost) != hostBackendName {
 		t.Fatal("host mode must select the host backend")

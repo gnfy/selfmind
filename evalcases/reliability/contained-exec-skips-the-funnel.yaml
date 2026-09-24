@@ -1,0 +1,65 @@
+id: reliability_contained_exec_skips_the_funnel
+title: "A sandbox-contained read runs without a judge call or a human ask"
+suite: reliability
+workspace: isolated
+channel: cli
+# Full-auto would make this vacuous: it returns before containment is consulted
+# at all. Smart mode is the only mode where the release is a decision.
+approval_mode: smart
+require_cassette: true
+requires:
+  commands: [cat, wc]
+
+# This case exists because the release it pins was inert in production for the
+# whole deployment and every Go test stayed green. The containment branch lives
+# below the gateway's own scope assembly: unit tests build their own scope, so
+# they proved the middleware in isolation while `/diag` reported `contained 0`
+# against 2480 real triage decisions. Only a case on the production path sees
+# the assembled scope.
+setup:
+  files:
+    notes.md: "alpha\nbeta\ngamma\n"
+
+turns:
+  - input: >-
+      统计工作区里 notes.md 有多少行，只用一条命令，不要联网，不要读任何工作区以外的文件。
+
+expect:
+  status: completed
+  max_tool_calls: 3
+  max_tool_errors: 0
+  max_duration_seconds: 120
+  contains:
+    - "3"
+  must_not_contain:
+    - "<tool>"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+
+assert_state:
+  # The command reached the person's own workspace and nothing else, so the
+  # runtime can already prove its blast radius.
+  - on: events
+    type: tool.sandbox
+    payload_contains: '"mode":"isolated"'
+  # Released by containment...
+  - on: approval_triage
+    status: contained
+    count_gte: 1
+  # ...which is a different outcome from the judge approving it. Without this
+  # line the case passes either way, and "either way" is exactly the regression:
+  # a semantic review placed above containment still answers yes, just after a
+  # model call and often after asking the person.
+  - on: approval_triage
+    status: approved
+    count_lte: 0
+  - on: approval_triage
+    status: escalated
+    count_lte: 0
+  # Nobody was interrupted.
+  - on: approval
+    count_lte: 0

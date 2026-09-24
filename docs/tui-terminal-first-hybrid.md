@@ -59,7 +59,12 @@ stays canonical.
   terminal input cannot reliably distinguish Shift+Enter from Enter. The
   former `[[...]]` spelling is ordinary text. Tokens remain
   real editor text so cursor movement, wide-character wrapping, history recall,
-  exact expansion, and delete-to-detach keep one contract. On a local macOS,
+  exact expansion, and delete-to-detach keep one contract. Every rendered input
+  frame also carries a zero-width caret target to the terminal output writer,
+  which returns the hidden real cursor to the painted Composer caret after
+  Bubble Tea redraws the status row. Native IME preedit text and candidate
+  windows therefore stay with the Composer across streaming updates, wrapping,
+  and wide characters. On a local macOS,
   Linux, or WSL session, `Ctrl+V` asks SelfMind to attach an image from the GUI
   clipboard; macOS `Cmd+V` remains the terminal application's text-paste
   shortcut and is not a reliable image signal. `/paste-image` provides the same
@@ -86,15 +91,16 @@ stays canonical.
   glyphs and font weight. `NO_COLOR` and a no-color terminal profile are a hard
   floor. Mainline prose, including action narration in every writing system,
   uses the terminal's default foreground; the `› ` marker and semantic action
-  verbs share Accent. Tool evidence is nested one level below its action and
-  uses a readable Secondary color rather than ANSI `Faint`. Approval uses no
+  verbs share Accent. Each tool call stays in chronological order as a flat
+  action row followed by bounded evidence in a readable Secondary color rather
+  than ANSI `Faint`. Approval uses no
   background fill. ANSI-16 terminals receive a bounded basic-color mapping;
   richer terminals receive adaptive dark/light colors. Until a
   provider phase resolves, streaming text is a
   neutral preview; completed Markdown blocks render semantically while the
   mutable tail remains literal, preventing lists and fences from changing
   shape on every token. The private `processSurface` owns this mutable stream,
-  active tool correlation, grouping, and immutable commit effects. It caps the
+  active tool correlation and immutable commit effects. It caps the
   process frame at ten rows (or the smaller measured terminal budget), keeps
   the composer/status visible, and shares one Dot spinner at 10 FPS. Exactly
   one tick chain spans the whole animating turn — it starts with the structured
@@ -140,6 +146,11 @@ not force reasoning/service-tier pages. Validate & continue shows per-route
 daemon evidence before applying; the configured daemon must become healthy
 before the same invocation enters the keyboard-driven workspace/trust/safety/
 Start at login page and chat. Back to models never authorizes runtime writes.
+After setup, validated model changes remember both sides of each switch and
+their explicit reasoning values in a bounded MRU list. Remembered models are
+labelled in the picker and can be removed with `d`; deletion affects only local
+picker history. Model validation and restart pages reuse the single Dot
+animation chain and show phase elapsed time instead of a static wait screen.
 
 After guided setup, the startup identity band shows Main, Background, every
 explicit role-model override, and the logical workspace without exposing
@@ -147,7 +158,10 @@ launchd/systemd details. Each displayed route includes one normal-contrast
 sentence describing its responsibility; inherited roles are represented by the
 Background description instead of six duplicate rows. It uses full-width open
 horizontal rules with no side rails or background fill. `MAIN` combines model,
-provider, and explicit reasoning, `/model` stays right-aligned when it fits,
+provider, and reasoning. An explicit level is shown directly; `auto` remains
+visible and includes a known effective default (for example `auto→high`)
+instead of disappearing after a model-status refresh. `/model` stays
+right-aligned when it fits,
 and all values and descriptions wrap losslessly instead of being truncated on
 narrow terminals. Until
 the first successful non-command local task, it also shows one read-only starter
@@ -307,7 +321,7 @@ substrate). Document results in this file.
   than a red execution failure, while a command that actually ran and failed
   remains visibly failed.
 - Active command output is a bounded three-line tail. A terminal run state
-  (`done`, `error`, or `cancelled`) finalizes every unfinished tool cell as an
+  (`done`, `error`, `cancelled`, or `interrupted`) finalizes every unfinished tool cell as an
   interrupted error before committing it. Only an intentional spectator detach
   discards its transient projection because the daemon run remains active. Thus
   no terminal run leaves a `Running` row in the redraw region.
@@ -316,10 +330,16 @@ substrate). Document results in this file.
   actionable line only.
 - Production-path coverage, not renderer-only tests, guards canonical child
   identity, orphan completion routing, and terminal cleanup.
-- Action/tool grouping is shipped through `processSurface`: narration owns a
-  stable process-group id, active and completed tools retain that id, member
-  errors use the same terminal cleanup, and tools render one indentation level
-  below the action. Existing `Exploring` aggregation remains unchanged.
+- Tool calls stay flat and chronological. `processSurface` correlates starts,
+  live output, completion, and errors by call id, then commits each final cell
+  after the narration that introduced it. No visual group state is retained.
+  Readable hierarchy comes from a fixed gutter rather than a stored group:
+  commentary stays at the outer level, every tool action steps inward once, and
+  typed evidence steps inward again. Implementation names and durations remain
+  subordinate metadata. A completed `batch_read` reports only its aggregate;
+  its child calls already provide the chronological targets and evidence, so
+  the parent never repeats that list. Existing `Exploring` aggregation remains
+  unchanged.
 
 ### H2e - Bounded reasoning-process projection
 
@@ -343,6 +363,11 @@ substrate). Document results in this file.
 
 - A plan is active run state, not an append-only transcript cell. The daemon's
   latest `plan.updated` snapshot replaces the previous snapshot in memory.
+- Digest reattachment and live events feed one reducer. `run_id` owns the
+  projection, durable `plan_version` orders complete snapshots, and the event
+  cursor breaks equal-version replay ties. A lower version, a late event from a
+  prior Run, or an unversioned compatibility event cannot move a versioned Plan
+  backward. This projects the existing RunPlan; it is not a second Plan store.
 - The heading distinguishes PROVENANCE, and nothing else: work planned in this
   line of work renders as `Plan`, a snapshot inherited from the run being
   resumed as `Resumed plan`. Revision count gets no word of its own — every
@@ -361,7 +386,9 @@ substrate). Document results in this file.
   terminal height.
 - Terminal run states, cancellation, `/clear`, and a new user turn clear stale
   active plan state. Plan height is included in transcript layout calculations
-  so it cannot cover history or move the composer off screen.
+  so it cannot cover history or move the composer off screen. One reducer owns
+  digest and live snapshots, keyed by exact Run, durable plan version, and event
+  cursor; an older or foreign event cannot replace the current checklist.
 - `update_plan` snapshots must describe every current step. Before a run may
   complete successfully, all steps must be resolved; an unresolved plan is
   repaired through the agent loop or leaves the run resumable rather than
@@ -370,6 +397,15 @@ substrate). Document results in this file.
   child before Main starts and emits that child snapshot immediately. Plan
   state therefore survives multi-turn transfer instead of depending on a
   display-only replay event.
+
+The status bar resolves context length through the same model runtime metadata
+as execution. Explicit configuration and provider model metadata render as a
+declared context window. Provider/profile tables and built-in model-family
+fallbacks render with `ctx est`; `/status` includes the exact provenance label.
+Unknown metadata remains `ctx ?` rather than inventing a number. `req` is the
+actual input-plus-output usage of the latest provider call, while `run` and
+`session` are cumulative counters; a long tool loop therefore cannot be
+mistaken for one request exceeding the displayed context capacity.
 
 ### H2b - Physical-row-safe structured tool cells
 
@@ -383,10 +419,18 @@ substrate). Document results in this file.
   semantic titles such as `Ran tests`, `Searched files`, or
   `Ran Google Cloud command`; here-doc bodies never become titles. Unknown
   commands retain only a bounded first command, with a maximum two-row header.
+- Every ordinary tool cell leads with a semantic action and concrete target,
+  followed by one bounded evidence row. The implementation name and elapsed
+  time remain subordinate header metadata. Typed renderers summarize work
+  selection, Skill activation/pages, file reads, and read batches; an opaque
+  `completed` marker is never presented as evidence. A successful batch puts
+  its aggregate in the action row; a partial or failed batch may use one
+  evidence row for its outcome. Failures keep the diagnostic and observed
+  effect text supplied by the runtime.
 - Tool action verbs carry a stable semantic color without overriding outcome:
   run/command verbs are magenta, read/list/search verbs are cyan, file/memory
   mutation verbs are yellow, and plan/lifecycle verbs are blue. The independent
-  status bullet remains dim while running, green for successful commands, and
+  status bullet remains dim while running, green for successful calls, and
   red for failures, so a failed `Search` is still visibly a failure.
 - Command output is limited to five physical rows using a head/tail preview and
   a hidden-row count. The durable tool event remains unchanged; the transcript
@@ -427,8 +471,10 @@ substrate). Document results in this file.
   observation is transient status-bar state
   (`Watcher <id> | status: succeeded | task: waiting_finalization`, or
   `blocked_environment` when the check never observed the external state), and
-  the finalization run itself renders as `background watcher finalizing`
-  instead of exposing its internal prompt. The
+  the finalization run itself renders as `background watcher finalizing` with
+  elapsed time, accepted plan progress, and a bounded action count in the
+  status line instead of exposing its internal prompt. A finalization whose
+  plan is unresolved shows `needs attention` when it stops. The
   current user run is never interrupted; finalization still obeys the
   per-person durable queue.
 - The transient observation is owned by its exact watcher ID. Its matching

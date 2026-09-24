@@ -67,3 +67,17 @@ func TestRunTokensFromEvent(t *testing.T) {
 		t.Fatalf("empty event = %d, want 0", got)
 	}
 }
+
+func TestProviderCallUsageStaysSeparateFromRunTotal(t *testing.T) {
+	m := NewController("", "", nil, "").model
+	m.runTokens = 268000
+	updated, _ := m.Update(MsgTokens{LastRequest: 60951})
+	m = updated.(*uiModel)
+	if m.runTokens != 268000 || m.lastRequestTokens != 60951 {
+		t.Fatalf("run=%d latest=%d", m.runTokens, m.lastRequestTokens)
+	}
+	line := formatUsageSessionRequest(m.runTokens, 2_900_000, m.lastRequestTokens, 131072, "built-in fallback")
+	if line != "61.0K req · 268K run · 2.9M session · 131.1K ctx est" {
+		t.Fatalf("usage line = %q", line)
+	}
+}

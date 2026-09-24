@@ -57,12 +57,12 @@ func TestCorrectedVerificationCanCloseRequiredWorkUnit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add("bad", "failed", "broken parser", &verification.Binding{Version: 1, Criterion: "all records exported", Target: "report.csv"}, 10)
+	add("bad", "failed", "broken parser", &verification.Binding{Version: 3, StepID: plan.Plan.Steps[0].StepID, Criterion: "all records exported", Target: "report.csv"}, 10)
 	steps := []RunPlanStepInput{{StepID: plan.Plan.Steps[0].StepID, Step: "Check result", Status: "completed"}}
 	if _, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "premature", steps); err == nil {
 		t.Fatal("failed evidence closed unit")
 	}
-	replacement := &verification.Binding{Version: 1, Criterion: "all records exported", Target: "report.csv", Replaces: "bad", Reason: "Correct header parsing while still counting every data row"}
+	replacement := &verification.Binding{Version: 3, StepID: plan.Plan.Steps[0].StepID, Criterion: "all records exported", Target: "report.csv", Replaces: "bad", Reason: "Correct header parsing while still counting every data row"}
 	if err = store.ValidateVerificationReplacement(ctx, identity.TenantID, run.ID, *replacement, "/workspace"); err != nil {
 		t.Fatal(err)
 	}
@@ -80,6 +80,40 @@ func TestCorrectedVerificationCanCloseRequiredWorkUnit(t *testing.T) {
 	var count int
 	if err = store.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM task_events WHERE run_id=? AND type='evidence.recorded'", run.ID).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("history lost: %d %v", count, err)
+	}
+}
+
+func TestLegacyImplicitPlanCheckCanBeCorrectedWithoutPoisoningTheStep(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, run := newRecoveryFixture(t)
+	plan, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "verify release", []RunPlanStepInput{{Step: "Check release", Status: "in_progress", SuccessCriteria: "remote state is merged", VerificationRequired: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepID := plan.Plan.Steps[0].StepID
+	add := func(id, status, command string, start int64) {
+		t.Helper()
+		// This is the historical implicit binding shape: target carried the
+		// runtime step id, but StepID and version 3 did not yet exist.
+		binding := &verification.Binding{Version: 1, Criterion: "remote state is merged", Target: stepID}
+		data, _ := json.Marshal(map[string]interface{}{"evidence": map[string]interface{}{"tool_call_id": id, "kind": "verification", "status": status, "started_at_unix_nano": start, "finished_at_unix_nano": start + 1, "command": map[string]interface{}{"command": command, "cwd": "/workspace", "binding": binding}}})
+		if _, appendErr := store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "evidence.recorded", Payload: data}); appendErr != nil {
+			t.Fatal(appendErr)
+		}
+	}
+	add("bad-reader", "failed", "unsupported reader", 10)
+	add("correct-reader", "succeeded", "supported API", 20)
+	completed := []RunPlanStepInput{{StepID: stepID, Step: "Check release", Status: "completed"}}
+	projection, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "verified", completed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.WorkUnits) != 1 || projection.WorkUnits[0].VerificationState != "passed" {
+		t.Fatalf("projection=%+v", projection.WorkUnits)
+	}
+	var evidenceCount int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_events WHERE run_id=? AND type='evidence.recorded'`, run.ID).Scan(&evidenceCount); err != nil || evidenceCount != 2 {
+		t.Fatalf("attempt history count=%d err=%v", evidenceCount, err)
 	}
 }
 
@@ -115,7 +149,7 @@ func TestDeclaredVerificationCanBeRecheckedAfterUnitCloses(t *testing.T) {
 	}
 	empty := []string{}
 	b.LocalDependencies = &empty
-	if err := store.ValidateVerificationReplacement(ctx, identity.TenantID, run.ID, b, "/workspace"); err == nil {
-		t.Fatal("dropped dependency accepted")
+	if err := store.ValidateVerificationReplacement(ctx, identity.TenantID, run.ID, b, "/workspace"); err != nil {
+		t.Fatalf("corrected method dependency declaration rejected: %v", err)
 	}
 }

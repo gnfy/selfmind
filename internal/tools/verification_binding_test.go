@@ -20,9 +20,9 @@ func TestVerificationDependenciesNormalizeAndPreserveAliases(t *testing.T) {
 	if err := os.Symlink(source, alias); err != nil {
 		t.Fatal(err)
 	}
-	b, err := prepareVerificationBinding(map[string]interface{}{"cwd": root, "check": map[string]interface{}{
-		"criterion": "value", "target": "source", "local_dependencies": []string{"alias", "./alias"},
-	}})
+	b, err := prepareVerificationBinding(map[string]interface{}{
+		"cwd": root, "criterion": "value", "target": "source", "local_dependencies": []string{"alias", "./alias"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestVerificationDependenciesNormalizeAndPreserveAliases(t *testing.T) {
 		t.Fatalf("lost alias mutation: %+v", e)
 	}
 	// The same declared path must remain recheckable after its referent changes.
-	next, err := prepareVerificationBinding(map[string]interface{}{"cwd": root, "check": map[string]interface{}{"criterion": "value", "target": "source", "local_dependencies": []string{"alias"}}})
+	next, err := prepareVerificationBinding(map[string]interface{}{"cwd": root, "criterion": "value", "target": "source", "local_dependencies": []string{"alias"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,11 +77,12 @@ func TestVerificationDependencyContractVersions(t *testing.T) {
 		{"too many", make([]string, 33), true, 0, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			check := map[string]interface{}{"criterion": "value", "target": "source", "version": 999, "resolved_local_dependencies": []string{"/forged/path"}}
+			args := map[string]interface{}{"criterion": "value", "target": "source"}
 			if test.present {
-				check["local_dependencies"] = test.deps
+				args["local_dependencies"] = test.deps
 			}
-			b, err := prepareVerificationBinding(map[string]interface{}{"cwd": t.TempDir(), "check": check})
+			args["cwd"] = t.TempDir()
+			b, err := prepareVerificationBinding(args)
 			if (err != nil) != test.invalid {
 				t.Fatalf("err=%v", err)
 			}
@@ -103,7 +104,7 @@ func TestVerificationDependenciesRespectExecutionScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{outside, "escape/file"} {
-		_, err := prepareVerificationBinding(map[string]interface{}{"_tenant_id": "dependency-scope", "cwd": root, "check": map[string]interface{}{"criterion": "value", "target": "source", "local_dependencies": []string{path}}})
+		_, err := prepareVerificationBinding(map[string]interface{}{"_tenant_id": "dependency-scope", "cwd": root, "criterion": "value", "target": "source", "local_dependencies": []string{path}})
 		if err == nil {
 			t.Fatalf("accepted out-of-scope dependency %q", path)
 		}
@@ -113,7 +114,7 @@ func TestVerificationDependenciesRespectExecutionScope(t *testing.T) {
 func TestMissingDependencyCannotClaimUnrelatedMutation(t *testing.T) {
 	root := t.TempDir()
 	for _, path := range []string{"wrong-root/input.txt", "nested/nested/config.json"} {
-		b, err := prepareVerificationBinding(map[string]interface{}{"cwd": root, "check": map[string]interface{}{"criterion": "input is valid", "target": "input", "local_dependencies": []string{path}}})
+		b, err := prepareVerificationBinding(map[string]interface{}{"cwd": root, "criterion": "input is valid", "target": "input", "local_dependencies": []string{path}})
 		if err != nil {
 			t.Fatal(err)
 		}

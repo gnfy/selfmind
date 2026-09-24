@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am resuming the waiting run to continue the planned reporting step."
+    },
+    {
+      "usage": {
+        "input_tokens": 12120,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 56,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 552,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_318189",
+          "Function": "work_select",
+          "Args": "{\"run_id\":\"{{SELFMIND_VCR_RUN_2}}\",\"action\":\"resume\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EugBCuUBAWkUfRMg8gcPDo7HdmW7iL6gFhVzpPC/IFuOSqpp71ILzCtoiePMz9ZodUvm9dHaLvSnuWbSb6fuTOMBNM3aC8FAvyiGDP/zSFsZym1Z09DGeZgkAsyIDDMMV6t3Xyu/1sCdq5m7XXXMaTdIpwPa/OFbKGoFHimam8pN8ec3JSfobA8kCDo5/yzbYjWHPL7fG7NNWkJn22WGq/RuQSed5ijKW2jiNxdTQMIUaDVjLipcromYcWS5qFX/yE0diyVOa40u4L7N4BHeUd9tniQ58zyfJXtuceJBrBUGoSW1a4X2t6AFcw=="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

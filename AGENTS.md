@@ -134,9 +134,9 @@ daemon must not expose that directory as a product runtime Skill.
 - Derive sandbox views and compatibility from typed scope, `ToolProfile`, and
   platform conventions. Do not add project- or vendor-specific branches to
   generic execution code.
-- Linux and macOS x64/arm64 are official targets. Linux has the strongest
-  isolation. macOS uses approval-controlled host execution until a reviewed
-  native sandbox exists. Native Windows is unsupported; use WSL.
+- Linux and macOS x64/arm64 are official targets. Both enforce isolation from
+  one policy, at different strength: ask the backend, not the platform. Native
+  Windows is unsupported; use WSL.
 
 ## Identity, Runs, and Delivery
 
@@ -282,16 +282,10 @@ daemon must not expose that directory as a product runtime Skill.
 - Skills are instruction assets, not auto-executed scripts. Their scripts still
   pass through normal tools and safety. Catalog replacement preserves
   provenance; automatic curation governs writable, unpinned agent-created
-  assets only. Three independent, comparable, verified work units using
-  eligible built-in tools may publish to the control-managed logical-workspace
-  root without granting execution authority;
-  network/delete/external/delegated effects and user-global widening still
-  require management. Ordinary success is observation, never shadow evidence.
-  A repair includes the failed section, changes at most three declared sections,
-  and uses daemon-derived class thresholds: deterministic interface drift may
-  publish after one attributable verified recovery, semantic drift requires
-  three independent recoveries, and transient/not-applicable evidence cannot
-  auto-publish.
+  assets only and never grants execution authority. Network, delete, external,
+  and delegated effects and user-global widening still require management.
+  Ordinary success is observation, never shadow evidence. Publication and
+  repair thresholds live in `docs/skills-architecture.md`.
 
 ## UI and Commands
 

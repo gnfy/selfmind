@@ -32,7 +32,9 @@ import (
 //
 // 2 adds SynthesizedDirs: a node that ignores them mounts overlay targets that
 // do not exist, which aborts the sandbox instead of degrading.
-const SandboxPlanVersion = 2
+// 3 adds ProxyMode so a plan records when snapshot proxy values were omitted
+// because the execution network could not reach them.
+const SandboxPlanVersion = 3
 
 // SandboxPlan is the serializable description of an execution boundary.
 //
@@ -62,6 +64,9 @@ type SandboxPlan struct {
 	SynthesizedDirs []SandboxSynthesizedDir `json:"synthesized_dirs,omitempty"`
 	// NetworkMode is "isolated" or "shared".
 	NetworkMode string `json:"network_mode"`
+	// ProxyMode is a non-secret route decision. It never carries an endpoint or
+	// environment value.
+	ProxyMode string `json:"proxy_mode,omitempty"`
 	// Profiles are the tool environment profiles applied.
 	Profiles []string `json:"profiles,omitempty"`
 	// Backend names the enforcement mechanism ("bubblewrap", "host").
@@ -172,10 +177,7 @@ func planFromMaterial(material execMaterial, decision SandboxDecision) SandboxPl
 	if decision.NetworkShared {
 		network = "shared"
 	}
-	backend := hostBackendName
-	if decision.Mode == SandboxIsolated {
-		backend = bubblewrapBackendName
-	}
+	backend := SandboxBackendName(decision.Mode)
 	return SandboxPlan{
 		Version:       SandboxPlanVersion,
 		SnapshotID:    material.SnapshotID,
@@ -187,6 +189,7 @@ func planFromMaterial(material execMaterial, decision SandboxDecision) SandboxPl
 		SynthesizedDirs: append([]SandboxSynthesizedDir{},
 			material.SynthesizedDirs...),
 		NetworkMode: network,
+		ProxyMode:   material.ProxyMode,
 		Profiles:    append([]string{}, material.Profiles...),
 		Backend:     backend,
 		Mode:        decision.Mode,
@@ -210,6 +213,7 @@ type SandboxSynthesizedDir struct {
 
 const (
 	bubblewrapBackendName = "bubblewrap"
+	seatbeltBackendName   = "seatbelt"
 	hostBackendName       = "host"
 )
 
@@ -253,7 +257,7 @@ func classifyHostEscape(decision SandboxDecision, programs []string, payload str
 	if strings.Contains(lower, "sudo ") || strings.Contains(lower, "/etc/") || strings.Contains(lower, "systemctl") {
 		return HostEscapeHostWrite
 	}
-	if runtime.GOOS != "linux" || !ExecSandboxAvailable() {
+	if !ExecSandboxAvailable() {
 		// The host cannot isolate at all: not an avoidable escape.
 		return HostEscapeHostWrite
 	}
@@ -334,13 +338,16 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 			emitProfilePreparation(runCtx, req.ToolName, req.ToolCallID, material)
 		}
 
-		cmd, attemptDecision, sandboxErr := sandboxedCommandWithMaterial(runCtx, argv, material,
+		cmd, attemptDecision, attemptPlan, sandboxErr := sandboxedCommandWithMaterial(runCtx, argv, material,
 			req.Sandbox, runtime.GOOS, ExecSandboxAvailable(), req.NetworkShared)
 		if sandboxErr != nil {
 			return result, enrichToolFailure(req.ToolName, sandboxErr, "")
 		}
 		decision = attemptDecision
-		result.Plan = planFromMaterial(material, decision)
+		// The plan comes back from the construction site rather than being
+		// rebuilt here: only that site knows the projection it applied for the
+		// decision it resolved.
+		result.Plan = attemptPlan
 		result.ProfilesMatched = material.Profiles
 		result.ScratchBytes = material.ScratchBytes
 		if args != nil {
@@ -355,6 +362,7 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 				"mode":               string(decision.Mode),
 				"reason":             decision.Reason,
 				"network":            decision.NetworkShared,
+				"proxy_mode":         result.Plan.ProxyMode,
 				"profiles":           material.Profiles,
 				"snapshot_id":        result.Plan.SnapshotID,
 				"generation":         result.Plan.Generation,

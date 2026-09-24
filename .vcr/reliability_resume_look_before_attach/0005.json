@@ -1,0 +1,320 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Ver"
+    },
+    {
+      "reasoning_content": "ification"
+    },
+    {
+      "reasoning_content": " passed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " mark"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " report"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Note"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " passed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " report"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " said"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Then"
+    },
+    {
+      "reasoning_content": " stop"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " wait"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " my"
+    },
+    {
+      "reasoning_content": " confirmation"
+    },
+    {
+      "reasoning_content": " before"
+    },
+    {
+      "reasoning_content": " reporting"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " keep"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " distinct"
+    },
+    {
+      "reasoning_content": " pending"
+    },
+    {
+      "reasoning_content": " reporting"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " record"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " give"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " minimal"
+    },
+    {
+      "reasoning_content": " message"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " doesn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " reveal"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " result"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Update"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "alone"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12133,
+        "output_tokens": 371,
+        "cache_read_input_tokens": 11904,
+        "cache_miss_input_tokens": 229,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 97,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_DOpn2hPPYwW7Shk2iG8w2236",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Read value.txt bytes to determine exact content\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"success_criteria\": \"Exact byte content of value.txt is known without modifying it\"}, {\"status\": \"completed\", \"step\": \"Verify acceptance condition: value.txt contains exactly READY followed by a newline\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\", \"success_criteria\": \"A recorded verify check exits 0 only if value.txt is exactly b'READY\\\\n'\", \"verification_required\": true}, {\"status\": \"pending\", \"step\": \"Report result to user (blocked until user confirms)\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\", \"success_criteria\": \"User has confirmed, then the verification result is reported\"}]}"
+        }
+      ]
+    }
+  ]
+}

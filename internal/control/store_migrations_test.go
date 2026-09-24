@@ -36,6 +36,56 @@ func TestCurrentControlSchemaSkipsFullIntegrityCheck(t *testing.T) {
 	}
 }
 
+func TestVersionSixteenPlanRowsMigrateWithoutInheritedAuthority(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "legacy plan", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "legacy plan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "legacy", []RunPlanStepInput{{Step: "inspect", Status: "completed"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`ALTER TABLE run_plan_steps DROP COLUMN source_step_id`,
+		`ALTER TABLE run_plan_steps DROP COLUMN source_plan_version`,
+		`ALTER TABLE run_plan_steps DROP COLUMN prior_verification_reused`,
+		`ALTER TABLE run_plan_steps DROP COLUMN reuse_reason`,
+		`DELETE FROM schema_migrations WHERE version=17`,
+	} {
+		if _, err := store.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("migrate v16 plan store: %v", err)
+	}
+	defer migrated.Close()
+	plan, err := migrated.LatestRunPlan(ctx, identity.TenantID, run.ID)
+	if err != nil || plan == nil || len(plan.Steps) != 1 || plan.Steps[0].SourceStepID != "" || plan.Steps[0].SourcePlanVersion != 0 {
+		t.Fatalf("historical row acquired source authority: plan=%+v err=%v", plan, err)
+	}
+	if migrated.SchemaStatus().Version != CurrentControlSchemaVersion || migrated.SchemaStatus().MigrationBackup == "" {
+		t.Fatalf("v16 migration did not back up and advance: %+v", migrated.SchemaStatus())
+	}
+}
+
 func TestVersionOneControlStoreMigratesMemoryGovernanceSchedule(t *testing.T) {
 	dir := t.TempDir()
 	store, err := OpenStore(dir)

@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "value.txt DONE\\n DONE newline 验收条件 检查报告"
+}

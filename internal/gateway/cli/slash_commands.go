@@ -173,7 +173,7 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: metaByName("/clear"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			m.messages = []ChatMessage{}
-			m.activePlanJSON = ""
+			m.clearActivePlan()
 			return m.clearHybridScreen()
 		},
 	},

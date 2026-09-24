@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,7 +59,7 @@ func TestOpenAIAdapterChatUsesNativeTools(t *testing.T) {
 			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("content-type", "application/json")
-		fmt.Fprint(w, `{"choices":[{"message":{"content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`)
+		fmt.Fprint(w, `{"choices":[{"message":{"content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"README.md\"}"},"extra_content":{"google":{"thought_signature":"signed-step"}}}]}}],"usage":{"prompt_tokens":2,"completion_tokens":3}}`)
 	}))
 	defer server.Close()
 
@@ -82,8 +83,92 @@ func TestOpenAIAdapterChatUsesNativeTools(t *testing.T) {
 	if len(resp.ToolCalls) != 1 || resp.ToolCalls[0].ID != "call-1" || resp.ToolCalls[0].Function != "read_file" {
 		t.Fatalf("unexpected tool calls: %+v", resp.ToolCalls)
 	}
+	if got := string(resp.ToolCalls[0].ReplayMetadata); got != `{"google":{"thought_signature":"signed-step"}}` {
+		t.Fatalf("replay metadata = %s", got)
+	}
 	if resp.Usage.InputTokens != 2 || resp.Usage.OutputTokens != 3 {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+}
+
+func TestOpenAIAdapterReplaysOpaqueToolCallMetadata(t *testing.T) {
+	var got OpenAIRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"done"}}]}`)
+	}))
+	defer server.Close()
+
+	adapter := NewOpenAIAdapter("test-key")
+	adapter.BaseURL = server.URL
+	_, err := adapter.Chat(context.Background(), ChatRequest{
+		Messages: []Message{
+			{Role: "user", Content: "inspect"},
+			{Role: "assistant", ToolCalls: []ToolCall{{
+				ID: "call-1", Function: "read_file", Args: `{}`,
+				ReplayMetadata: json.RawMessage(`{"google":{"thought_signature":"signed-step"}}`),
+			}}},
+			{Role: "tool", ToolCallID: "call-1", Content: "ok"},
+		},
+		Tools: []ToolDefinition{{Name: "read_file", Parameters: map[string]interface{}{"type": "object"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) < 2 || len(got.Messages[1].ToolCalls) != 1 {
+		t.Fatalf("assistant tool call missing: %+v", got.Messages)
+	}
+	if metadata := string(got.Messages[1].ToolCalls[0].ExtraContent); metadata != `{"google":{"thought_signature":"signed-step"}}` {
+		t.Fatalf("replayed metadata = %s", metadata)
+	}
+}
+
+func TestFinalAnswerWithoutNewToolsKeepsPairedToolHistory(t *testing.T) {
+	messages := []Message{
+		{Role: "user", Content: "inspect"},
+		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Function: "read_file", Args: `{}`}}},
+		{Role: "tool", ToolCallID: "call-1", Content: "verified"},
+	}
+	req := ChatRequest{Messages: messages}
+	openai := openAIRequestFromChat("test-model", req, false)
+	if len(openai.Tools) != 0 || len(openai.Messages) != 3 || len(openai.Messages[1].ToolCalls) != 1 ||
+		openai.Messages[2].Role != "tool" || openai.Messages[2].ToolCallID != "call-1" {
+		t.Fatalf("OpenAI final-answer request broke the native pair: %+v", openai)
+	}
+	anthropic := (&AnthropicAdapter{}).requestFromChat(req, false)
+	if len(anthropic.Tools) != 0 || len(anthropic.Messages) != 3 {
+		t.Fatalf("Anthropic final-answer request lost history: %+v", anthropic)
+	}
+	assistant, _ := json.Marshal(anthropic.Messages[1].Content)
+	result, _ := json.Marshal(anthropic.Messages[2].Content)
+	if !strings.Contains(string(assistant), `"type":"tool_use"`) || !strings.Contains(string(result), `"type":"tool_result"`) {
+		t.Fatalf("Anthropic final-answer request broke the native pair: assistant=%s result=%s", assistant, result)
+	}
+}
+
+func TestOpenAIStreamRepeatedUsageSnapshotsCountOnlyOnce(t *testing.T) {
+	stream := strings.Join([]string{
+		`data: {"choices":[{"delta":{"content":"a"}}],"usage":{"prompt_tokens":100,"completion_tokens":1,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20}}`,
+		`data: {"choices":[{"delta":{"content":"b"}}],"usage":{"prompt_tokens":100,"completion_tokens":2,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20}}`,
+		`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":2,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20}}`,
+		`data: [DONE]`,
+	}, "\n\n") + "\n\n"
+	response := &http.Response{Body: io.NopCloser(strings.NewReader(stream))}
+	var total UsageStats
+	for event := range openAIStreamEvents(response) {
+		if event.Usage == nil {
+			continue
+		}
+		total.InputTokens += event.Usage.InputTokens
+		total.OutputTokens += event.Usage.OutputTokens
+		total.CacheReadInputTokens += event.Usage.CacheReadInputTokens
+		total.CacheMissInputTokens += event.Usage.CacheMissInputTokens
+	}
+	if total.InputTokens != 100 || total.OutputTokens != 2 || total.CacheReadInputTokens != 80 || total.CacheMissInputTokens != 20 {
+		t.Fatalf("repeated usage snapshots were double counted: %+v", total)
 	}
 }
 
@@ -380,6 +465,9 @@ func TestOpenAIAdapterStreamAccumulatesToolCalls(t *testing.T) {
 								"index": 0,
 								"id":    "call-1",
 								"type":  "function",
+								"extra_content": map[string]interface{}{
+									"google": map[string]interface{}{"thought_signature": "stream-signed-step"},
+								},
 								"function": map[string]interface{}{
 									"name":      "read_file",
 									"arguments": "{\"path\"",
@@ -441,6 +529,9 @@ func TestOpenAIAdapterStreamAccumulatesToolCalls(t *testing.T) {
 	}
 	if len(calls) != 1 || calls[0].ID != "call-1" || calls[0].Function != "read_file" || calls[0].Args != `{"path":"README.md"}` {
 		t.Fatalf("unexpected streamed tool calls: %+v", calls)
+	}
+	if got := string(calls[0].ReplayMetadata); got != `{"google":{"thought_signature":"stream-signed-step"}}` {
+		t.Fatalf("streamed replay metadata = %s", got)
 	}
 }
 
@@ -1178,5 +1269,88 @@ func TestOpenAIRequestCarriesSystemPromptAsLeadingSystemMessage(t *testing.T) {
 	none := openAIRequestFromChat("m", ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}}, false)
 	if len(none.Messages) != 1 || none.Messages[0].Role != "user" {
 		t.Fatalf("an empty system prompt produced a message: %+v", none.Messages)
+	}
+}
+
+// Disabling reasoning is encoded per provider. "Send nothing" only means "no
+// reasoning" on a model that does not reason by default; one that does applies
+// its own default and reasons anyway. This drives a real Chat through an HTTP
+// server so the assertion is on the bytes that leave the process, after every
+// later rewrite and omitempty marshalling.
+func TestDisabledReasoningEncodingFollowsTheThinkingModeQuirk(t *testing.T) {
+	// The level reaches the adapter either on the request or as the route's
+	// configured default; "disabled" must be encoded the same way from both.
+	wire := func(t *testing.T, fromRoute bool, mode, effort string) map[string]interface{} {
+		t.Helper()
+		var got map[string]interface{}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			w.Header().Set("content-type", "application/json")
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"{}"}}]}`)
+		}))
+		defer server.Close()
+		adapter := NewOpenAIAdapter("test-key")
+		adapter.BaseURL = server.URL
+		adapter.Quirks = ProviderQuirks{ThinkingMode: mode}
+		req := ChatRequest{Messages: []Message{{Role: "user", Content: "verdict"}}}
+		if fromRoute {
+			adapter.ReasoningEffort = effort
+		} else {
+			req.Options = map[string]interface{}{"reasoning_effort": effort}
+		}
+		if _, err := adapter.Chat(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	for _, fromRoute := range []bool{false, true} {
+		source := "request"
+		if fromRoute {
+			source = "route"
+		}
+		// The fix: a provider that declares effort_none receives the literal
+		// value. Every spelling of "disabled" converges on it.
+		for _, effort := range []string{"none", "off", "disabled", " NONE "} {
+			body := wire(t, fromRoute, "effort_none", effort)
+			if body["reasoning_effort"] != "none" {
+				t.Fatalf("%s effort_none + %q: reasoning_effort = %#v, want \"none\"", source, effort, body["reasoning_effort"])
+			}
+			if _, present := body["thinking"]; present {
+				t.Fatalf("%s effort_none + %q: no thinking object may be sent, got %#v", source, effort, body["thinking"])
+			}
+		}
+
+		// The constraint that must not change: every other OpenAI-compatible
+		// mode omits the parameter, because some endpoints reject a value they
+		// do not list.
+		for _, mode := range []string{"", "openai", "omit"} {
+			body := wire(t, fromRoute, mode, "none")
+			if _, present := body["reasoning_effort"]; present {
+				t.Fatalf("%s mode %q must omit reasoning_effort when disabled, got %#v", source, mode, body["reasoning_effort"])
+			}
+			if _, present := body["thinking"]; present {
+				t.Fatalf("%s mode %q must not invent a thinking object, got %#v", source, mode, body["thinking"])
+			}
+		}
+
+		// DeepSeek keeps its own disabled encoding.
+		body := wire(t, fromRoute, "deepseek", "none")
+		if _, present := body["reasoning_effort"]; present {
+			t.Fatalf("%s deepseek must omit reasoning_effort when disabled, got %#v", source, body["reasoning_effort"])
+		}
+		if thinking, _ := body["thinking"].(map[string]interface{}); thinking["type"] != "disabled" {
+			t.Fatalf("%s deepseek must send thinking disabled, got %#v", source, body["thinking"])
+		}
+
+		// The quirk governs disabling only: any other level passes through
+		// unchanged.
+		for _, effort := range []string{"low", "high"} {
+			if got := wire(t, fromRoute, "effort_none", effort)["reasoning_effort"]; got != effort {
+				t.Fatalf("%s effort_none must pass %q through unchanged, got %#v", source, effort, got)
+			}
+		}
 	}
 }

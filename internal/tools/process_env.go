@@ -3,15 +3,29 @@ package tools
 import (
 	"crypto/sha256"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"selfmind/internal/executionenv"
 )
 
 type CredentialRef = executionenv.CredentialRef
 type EnvironmentLease = executionenv.Lease
+
+const (
+	proxyModeInherited                  = "inherited"
+	proxyModeOmittedForIsolatedNetwork  = "omitted_for_isolated_network"
+	proxyModeOmittedUnreachableLoopback = "omitted_unreachable_loopback"
+)
+
+type processProxyDecision struct {
+	Mode       string
+	Suppressed int
+}
 
 // ProcessEnvPolicy controls which daemon variables may reach a child process.
 // Operator tool credentials are deliberately preserved in this first cut:
@@ -45,6 +59,108 @@ func BuildProcessEnv(parent []string, policy ProcessEnvPolicy) []string {
 		out = append(out, entry)
 	}
 	return out
+}
+
+// adaptProcessEnvForNetwork derives the proxy portion of one child environment
+// from the execution plan's network view. Environment snapshots remain
+// immutable; this is a per-invocation projection, just like the sandbox's
+// writable and network views.
+//
+// An isolated network cannot reach any daemon-advertised proxy. A shared
+// network can normally reach the same routes as the daemon, but a loopback
+// proxy may have stopped since the snapshot was taken. In that one decidable
+// case we omit the unusable proxy and record the decision, instead of making
+// every CLI discover the stale listener independently. Non-loopback proxies
+// are preserved: probing remote infrastructure here would add latency and
+// cannot distinguish a transient failure from an intentional route policy.
+func adaptProcessEnvForNetwork(parent []string, networkShared bool, reachable func(string) bool) ([]string, processProxyDecision) {
+	decision := processProxyDecision{Mode: proxyModeInherited}
+	if reachable == nil {
+		reachable = loopbackProxyReachable
+	}
+	result := make([]string, 0, len(parent))
+	observed := make(map[string]bool)
+	for _, entry := range parent {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || !isProxyRouteVariable(name) {
+			result = append(result, entry)
+			continue
+		}
+		if !networkShared {
+			decision.Mode = proxyModeOmittedForIsolatedNetwork
+			decision.Suppressed++
+			continue
+		}
+		address, loopback := loopbackProxyAddress(value)
+		if !loopback {
+			result = append(result, entry)
+			continue
+		}
+		available, seen := observed[address]
+		if !seen {
+			available = reachable(address)
+			observed[address] = available
+		}
+		if available {
+			result = append(result, entry)
+			continue
+		}
+		decision.Mode = proxyModeOmittedUnreachableLoopback
+		decision.Suppressed++
+	}
+	return result, decision
+}
+
+func isProxyRouteVariable(name string) bool {
+	switch strings.ToUpper(strings.TrimSpace(name)) {
+	case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY":
+		return true
+	default:
+		return false
+	}
+}
+
+func loopbackProxyAddress(value string) (string, bool) {
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return "", false
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", false
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return "", false
+	}
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return "", false
+	}
+	port := parsed.Port()
+	if port == "" {
+		switch strings.ToLower(parsed.Scheme) {
+		case "http":
+			port = "80"
+		case "https":
+			port = "443"
+		default:
+			return "", false
+		}
+	}
+	return net.JoinHostPort(host, port), true
+}
+
+func loopbackProxyReachable(address string) bool {
+	conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 func isSelfMindControlEnv(name string) bool {

@@ -10,6 +10,7 @@ import (
 // unknown tools and unknown subcommands remain approval-gated.
 type observationRule struct {
 	program        string
+	external       bool // this read-only client observes an external service
 	prefixes       [][]string
 	reject         []string
 	anyArgs        bool
@@ -31,16 +32,32 @@ var observationRules = []observationRule{
 	// class"). `trap` can carry a command body, and `read`/`declare`/`local`
 	// bind names a later segment may expand, so neither belongs here: this list
 	// must mean "runs and changes nothing outside the shell".
-	{program: "cd", anyArgs: true}, {program: "set", anyArgs: true},
-	{program: "export", anyArgs: true}, {program: "umask", anyArgs: true},
-	{program: "true", anyArgs: true}, {program: "false", anyArgs: true},
-	{program: "test", anyArgs: true}, {program: "[", anyArgs: true}, {program: ":", anyArgs: true},
-	{program: "which", anyArgs: true},
+	//
+	// credentialSafe here means the program cannot EMIT a credential: its output
+	// is derived only from its own arguments — which the parser has already
+	// proven to be static literals — or it produces no output at all. None of
+	// them opens a file and prints what is inside.
+	//
+	// It matters because a credentialed payload requires EVERY program in it to
+	// be credential-safe, and 73 of one corpus's commands died on a leading
+	// `cd` and another 32 on an `echo` banner. That is the same shape as the
+	// original fatigue (an unknown first segment disqualifying the rest), one
+	// level in.
+	//
+	// `set` and `export` are deliberately NOT here although they carry no file
+	// access: with no operands both print the whole variable environment, which
+	// is exactly the emission this flag is meant to exclude.
+	{program: "cd", anyArgs: true, credentialSafe: true}, {program: "set", anyArgs: true},
+	{program: "export", anyArgs: true}, {program: "umask", anyArgs: true, credentialSafe: true},
+	{program: "true", anyArgs: true, credentialSafe: true}, {program: "false", anyArgs: true, credentialSafe: true},
+	{program: "test", anyArgs: true, credentialSafe: true}, {program: "[", anyArgs: true, credentialSafe: true},
+	{program: ":", anyArgs: true, credentialSafe: true},
+	{program: "which", anyArgs: true, credentialSafe: true},
 	// Ordinary read-only filters. They dominate the middle of a pipeline, and
 	// without them a single `| head` disqualified an otherwise provable command.
 	// Each one that CAN write names the flag that does so in reject.
 	{program: "tr", anyArgs: true}, {program: "cut", anyArgs: true},
-	{program: "nl", anyArgs: true}, {program: "seq", anyArgs: true},
+	{program: "nl", anyArgs: true}, {program: "seq", anyArgs: true, credentialSafe: true},
 	{program: "paste", anyArgs: true}, {program: "comm", anyArgs: true},
 	{program: "column", anyArgs: true}, {program: "diff", anyArgs: true},
 	{program: "od", anyArgs: true},
@@ -56,28 +73,28 @@ var observationRules = []observationRule{
 	// and this catalog also decides what a durable watcher may re-run unattended.
 	// `od` stays because every operand it takes is an input.
 	{program: "ls", anyArgs: true}, {program: "pwd", anyArgs: true},
-	{program: "printf", anyArgs: true}, {program: "echo", anyArgs: true}, {program: "sleep", anyArgs: true},
+	{program: "printf", anyArgs: true, credentialSafe: true}, {program: "echo", anyArgs: true, credentialSafe: true}, {program: "sleep", anyArgs: true, credentialSafe: true},
 	{program: "cat", anyArgs: true}, {program: "head", anyArgs: true},
 	{program: "tail", anyArgs: true}, {program: "wc", anyArgs: true},
 	{program: "stat", anyArgs: true}, {program: "file", anyArgs: true},
 	{program: "readlink", anyArgs: true}, {program: "realpath", anyArgs: true},
-	{program: "basename", anyArgs: true}, {program: "dirname", anyArgs: true},
+	{program: "basename", anyArgs: true, credentialSafe: true}, {program: "dirname", anyArgs: true, credentialSafe: true},
 	{program: "grep", anyArgs: true}, {program: "rg", anyArgs: true, reject: []string{"--pre", "--pre-glob"}},
 	{program: "jq", anyArgs: true, credentialSafe: true, reject: []string{"-i", "--in-place"}},
 	{program: "yq", anyArgs: true, reject: []string{"-i", "--inplace"}},
-	{program: "git", prefixes: [][]string{{"status"}, {"diff"}, {"log"}, {"show"}, {"rev-parse"}, {"merge-base"}, {"ls-files"}, {"ls-tree"}, {"cat-file"}, {"describe"}, {"remote", "get-url"}}},
-	{program: "gcloud", credentialSafe: true, prefixes: [][]string{{"auth", "list"}, {"builds", "list"}, {"builds", "describe"}, {"builds", "triggers", "list"}, {"builds", "triggers", "describe"}, {"run", "services", "list"}, {"run", "services", "describe"}, {"container", "clusters", "list"}, {"container", "clusters", "describe"}, {"projects", "list"}, {"projects", "describe"}, {"projects", "get-iam-policy"}, {"config", "list"}, {"config", "get-value"}}},
-	{program: "aws", credentialSafe: true, prefixes: [][]string{{"sts", "get-caller-identity"}, {"codebuild", "batch-get-builds"}, {"codebuild", "batch-get-projects"}, {"codebuild", "list-builds"}, {"codebuild", "list-builds-for-project"}, {"codepipeline", "get-pipeline-execution"}, {"codepipeline", "list-pipeline-executions"}, {"iam", "get-role"}, {"iam", "get-role-policy"}, {"iam", "get-policy"}, {"iam", "get-policy-version"}, {"iam", "list-roles"}, {"iam", "list-policies"}, {"iam", "list-role-policies"}, {"iam", "list-attached-role-policies"}, {"iam", "simulate-principal-policy"}, {"kms", "describe-key"}, {"kms", "get-key-policy"}, {"kms", "list-keys"}, {"kms", "list-aliases"}, {"ssm", "describe-parameters"}}},
-	{program: "kubectl", credentialSafe: true, prefixes: [][]string{{"get"}, {"describe"}, {"diff"}, {"logs"}, {"version"}, {"cluster-info"}, {"auth", "can-i"}}, reject: []string{"secret", "secrets", "--raw"}},
-	{program: "helm", credentialSafe: true, prefixes: [][]string{{"list"}, {"status"}, {"history"}, {"show"}, {"search"}, {"template"}, {"lint"}, {"env"}, {"version"}}},
+	{program: "git", prefixes: [][]string{{"status"}, {"diff"}, {"log"}, {"show"}, {"rev-parse"}, {"merge-base"}, {"ls-files"}, {"ls-tree"}, {"cat-file"}, {"describe"}, {"remote", "get-url"}, {"ls-remote"}}},
+	{program: "gcloud", external: true, credentialSafe: true, prefixes: [][]string{{"auth", "list"}, {"builds", "list"}, {"builds", "describe"}, {"builds", "triggers", "list"}, {"builds", "triggers", "describe"}, {"run", "services", "list"}, {"run", "services", "describe"}, {"container", "clusters", "list"}, {"container", "clusters", "describe"}, {"projects", "list"}, {"projects", "describe"}, {"projects", "get-iam-policy"}, {"config", "list"}, {"config", "get-value"}, {"artifacts", "repositories", "list"}, {"artifacts", "docker", "images", "list"}, {"artifacts", "docker", "tags", "list"}, {"artifacts", "docker", "versions", "list"}}},
+	{program: "aws", external: true, credentialSafe: true, prefixes: [][]string{{"sts", "get-caller-identity"}, {"codebuild", "batch-get-builds"}, {"codebuild", "batch-get-projects"}, {"codebuild", "list-builds"}, {"codebuild", "list-builds-for-project"}, {"codepipeline", "get-pipeline-execution"}, {"codepipeline", "list-pipeline-executions"}, {"iam", "get-role"}, {"iam", "get-role-policy"}, {"iam", "get-policy"}, {"iam", "get-policy-version"}, {"iam", "list-roles"}, {"iam", "list-policies"}, {"iam", "list-role-policies"}, {"iam", "list-attached-role-policies"}, {"iam", "simulate-principal-policy"}, {"kms", "describe-key"}, {"kms", "get-key-policy"}, {"kms", "list-keys"}, {"kms", "list-aliases"}, {"ssm", "describe-parameters"}, {"logs", "get-log-events"}}},
+	{program: "kubectl", external: true, credentialSafe: true, prefixes: [][]string{{"get"}, {"describe"}, {"diff"}, {"logs"}, {"version"}, {"cluster-info"}, {"auth", "can-i"}}, reject: []string{"secret", "secrets", "--raw"}},
+	{program: "helm", external: true, credentialSafe: true, prefixes: [][]string{{"list"}, {"status"}, {"history"}, {"show"}, {"search"}, {"template"}, {"lint"}, {"env"}, {"version"}}},
 	// `gh api` defaults to GET but can perform every method through the same
 	// subcommand, so the verb decides whether this is an observation. A
 	// substring reject list is not enough to decide that: it read `-X=DELETE`
 	// and `-XDELETE` as GETs. ghObservationSafe parses the verb with the same
 	// function the class derivation uses. A request body still disqualifies the
 	// call outright, whatever its verb.
-	{program: "gh", credentialSafe: true, verify: ghObservationSafe, reject: []string{"--input", "--field", "-f ", "-f=", "--raw-field", "-f'"}, prefixes: [][]string{{"pr", "view"}, {"pr", "list"}, {"pr", "status"}, {"run", "view"}, {"run", "list"}, {"repo", "view"}, {"status"}, {"api"}}},
-	{program: "argocd", credentialSafe: true, prefixes: [][]string{{"app", "get"}, {"app", "list"}, {"app", "diff"}, {"app", "manifests"}, {"version"}, {"account", "get-user-info"}}},
+	{program: "gh", external: true, credentialSafe: true, verify: ghObservationSafe, reject: []string{"--input", "--field", "-f ", "-f=", "--raw-field", "-f'"}, prefixes: [][]string{{"pr", "view"}, {"pr", "list"}, {"pr", "status"}, {"run", "view"}, {"run", "list"}, {"repo", "view"}, {"release", "view"}, {"release", "list"}, {"status"}, {"api"}}},
+	{program: "argocd", external: true, credentialSafe: true, prefixes: [][]string{{"app", "get"}, {"app", "list"}, {"app", "diff"}, {"app", "manifests"}, {"version"}, {"account", "get-user-info"}}},
 }
 
 var observationRuleByProgram = func() map[string]observationRule {
@@ -108,9 +125,18 @@ func deterministicObservationExec(toolName string, args map[string]interface{}) 
 	}
 	credentialed, _ := args[credentialReadArgKey].(bool)
 	for _, fields := range commands {
+		// The catalog vouches for the tool a bare name resolves to, not for
+		// whatever file sits at a path: `./cat` or `bin/git` may be a workspace
+		// script that only borrows a catalogued basename.
+		if strings.Contains(fields[0], "/") {
+			return false
+		}
 		program := strings.ToLower(filepath.Base(fields[0]))
 		rule, ok := observationRuleByProgram[program]
-		if !ok || (credentialed && !rule.credentialSafe) {
+		// credentialSafe is per program; filterReadsOnlyStdin judges the
+		// invocation, releasing a filter that provably opened no file. It only
+		// widens, and fails closed on anything it cannot parse.
+		if !ok || (credentialed && !rule.credentialSafe && !filterReadsOnlyStdin(program, fields[1:])) {
 			return false
 		}
 		commandArgs, ok := observationCommandArgs(program, fields[1:])

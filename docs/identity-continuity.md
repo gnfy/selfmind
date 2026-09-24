@@ -177,8 +177,9 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
 
 ### Main-turn continuity implementation
 
-`docs/plans/main-turn-work-continuity.md` owns rule 3's implementation and
-operational evidence. Durable active steer, one idle Main turn, progressive
+The archived `docs/plans/main-turn-work-continuity.md` records rule 3's
+implementation; its remaining operational evidence is the Phase-1 continuity
+gate in `docs/STATUS.md`. Durable active steer, one idle Main turn, progressive
 work-history tools, OBSERVE projection, validated continuation commits, and
 explicit delivery override are the current default:
 

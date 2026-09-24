@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12831,
+        "output_tokens": 169,
+        "cache_read_input_tokens": 12416,
+        "cache_miss_input_tokens": 415,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_cFqPwXxgImb6CiO5COXk7809",
+          "Function": "finish_run",
+          "Args": "{\"files\": [\"value.txt\"], \"next_steps\": [\"Send the confirmation and I will report the verification result\"], \"status\": \"waiting_user\", \"summary\": \"Acceptance check for value.txt is complete and recorded via verify; the reporting step is held pending until you confirm.\", \"tests\": [\"verify (custom): python3 exit-0 byte-equality check against b'READY\\\\n' on value.txt - passed\"]}"
+        }
+      ]
+    }
+  ]
+}

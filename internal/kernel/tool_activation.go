@@ -144,10 +144,21 @@ func inProgressWorkUnitSequence(toolName, raw string) int {
 	return 0
 }
 
-// activatedToolNamesFromSearchResult parses the activation names out of one
-// tool_search result body.
+// activatedToolNamesFromSearchResult parses deferred capability activations.
+// A paged Skill atomically exposes its mandatory reader so the model cannot be
+// instructed to call a tool that is still absent from its catalogue.
 func activatedToolNamesFromSearchResult(toolName, raw string) []string {
-	if strings.TrimSpace(toolName) != "tool_search" {
+	switch strings.TrimSpace(toolName) {
+	case "skill_select":
+		var result struct {
+			DeliveryMode string `json:"delivery_mode"`
+		}
+		if json.Unmarshal([]byte(raw), &result) == nil && result.DeliveryMode == SkillDeliveryModePaged {
+			return []string{"skill_view"}
+		}
+		return nil
+	case "tool_search":
+	default:
 		return nil
 	}
 	var results []struct {

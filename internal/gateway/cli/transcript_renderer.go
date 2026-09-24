@@ -134,7 +134,11 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	if version == "" {
 		version = "dev"
 	}
-	mainValue := renderStartupModelValue(modelName, providerName, m.modelManagerStatus.PrimaryReasoning, styles)
+	mainReasoning := m.modelManagerStatus.PrimaryReasoningLabel
+	if mainReasoning == "" {
+		mainReasoning = m.modelManagerStatus.PrimaryReasoning
+	}
+	mainValue := renderStartupModelValue(modelName, providerName, mainReasoning, styles)
 
 	lines := []string{
 		styles.startupBrand.Render(">_ SelfMind") + styles.startupSubtle.Render("  "+version),
@@ -150,10 +154,14 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	if backgroundStatusKnown && !m.modelManagerStatus.BackgroundEnabled {
 		backgroundValue = styles.startupValue.Render("disabled")
 	} else if m.modelManagerStatus.BackgroundProvider != "" || m.modelManagerStatus.BackgroundModel != "" {
+		backgroundReasoning := m.modelManagerStatus.BackgroundReasoningLabel
+		if backgroundReasoning == "" {
+			backgroundReasoning = m.modelManagerStatus.BackgroundReasoning
+		}
 		backgroundValue = renderStartupModelValue(
 			m.modelManagerStatus.BackgroundModel,
 			m.modelManagerStatus.BackgroundProvider,
-			m.modelManagerStatus.BackgroundReasoning,
+			backgroundReasoning,
 			styles,
 		)
 	} else if background := strings.TrimSpace(m.backgroundModelName); background != "" {
@@ -251,7 +259,7 @@ func renderStartupModelValue(model, provider, reasoning string, styles transcrip
 	if provider != "" && !strings.EqualFold(provider, model) && !strings.EqualFold(provider, "active") {
 		parts = append(parts, styles.startupValue.Render(provider))
 	}
-	if reasoning != "" && !strings.EqualFold(reasoning, "auto") {
+	if reasoning != "" {
 		parts = append(parts, styles.startupValue.Render(reasoning))
 	}
 	return strings.Join(parts, styles.startupSubtle.Render(" · "))
@@ -473,26 +481,23 @@ func styleToolActionWithStyles(label, action string, styles transcriptStyles) st
 	return styled
 }
 
-// toolHeaderLine renders the codex-style cell header: a status bullet (◦ dim
-// while running, • green on command success, • red on failure, • dim otherwise)
-// followed by the bold action title.
-func toolHeaderLineWithStyles(label, action string, running, isErr, isCommand bool, duration float64, width int, styles transcriptStyles) string {
+// toolHeaderLine renders one chronological tool event. The action and target
+// lead; the implementation name and elapsed time stay visible as subordinate
+// metadata so the row is understandable without becoming opaque.
+func toolHeaderLineWithStyles(label, action string, running, isErr, isSuccess bool, duration float64, width int, styles transcriptStyles) string {
 	var bullet string
 	switch {
 	case running:
 		bullet = styles.toolBulletRun.Render(glyphBulletHollow)
 	case isErr:
 		bullet = styles.toolBulletErr.Render(glyphBullet)
-	case isCommand:
+	case isSuccess:
 		bullet = styles.toolBulletOK.Render(glyphBullet)
 	default:
 		bullet = styles.toolBulletDim.Render(glyphBullet)
 	}
 	action = strings.TrimSpace(sanitizeTerminalText(action))
-	suffix := ""
-	if duration > 0 {
-		suffix = fmt.Sprintf(" %.1fs", duration)
-	}
+	suffix := toolHeaderSuffix(label, duration, width)
 	available := width - 2 - runewidth.StringWidth(suffix)
 	if available < 12 {
 		available = 12
@@ -513,22 +518,53 @@ func toolHeaderLineWithStyles(label, action string, running, isErr, isCommand bo
 	return sb.String()
 }
 
-func renderProcessToolMessageWithStyles(msg ChatMessage, width int, styles transcriptStyles) string {
-	if msg.ProcessGroupID == 0 {
-		return renderToolMessageWithStyles(msg, width, styles)
+func toolHeaderSuffix(label string, duration float64, width int) string {
+	label = strings.TrimSpace(sanitizeTerminalText(label))
+	parts := make([]string, 0, 2)
+	if duration > 0 {
+		parts = append(parts, fmt.Sprintf("%.1fs", duration))
 	}
-	inner := renderToolMessageWithStyles(msg, max(8, width-2), styles)
-	if inner == "" {
+	if label != "" {
+		parts = append(parts, label)
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	lines := strings.Split(strings.TrimRight(inner, "\n"), "\n")
-	for i := range lines {
-		lines[i] = "  " + lines[i]
+	suffix := " " + strings.Join(parts, glyphDot)
+	maxSuffixWidth := width - 14
+	if maxSuffixWidth <= 1 {
+		return ""
 	}
-	return strings.Join(lines, "\n") + "\n"
+	if runewidth.StringWidth(suffix) <= maxSuffixWidth {
+		return suffix
+	}
+	if duration > 0 {
+		durationOnly := fmt.Sprintf(" %.1fs", duration)
+		if runewidth.StringWidth(durationOnly) <= maxSuffixWidth {
+			return durationOnly
+		}
+	}
+	if label == "" {
+		return ""
+	}
+	return " " + truncateToWidth(label, maxSuffixWidth-1)
+}
+
+func renderProcessToolMessageWithStyles(msg ChatMessage, width int, styles transcriptStyles) string {
+	return renderToolMessageWithStyles(msg, width, styles)
 }
 
 func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptStyles) string {
+	// Commentary owns the outer transcript level. Every tool cell steps inward
+	// once, while its existing evidence connectors step inward again. Subtract
+	// the gutter before wrapping so indentation never pushes a row past the
+	// terminal width.
+	const gutterWidth = 2
+	cell := renderToolMessageBodyWithStyles(msg, max(8, width-gutterWidth), styles)
+	return indentRenderedToolCell(cell, strings.Repeat(" ", gutterWidth))
+}
+
+func renderToolMessageBodyWithStyles(msg ChatMessage, width int, styles transcriptStyles) string {
 	label := msg.ToolName
 	if label == "" {
 		label = "tool"
@@ -539,8 +575,12 @@ func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptSt
 		args = map[string]interface{}{}
 	}
 
-	done := !msg.IsRunning && (msg.Content != "" || msg.Duration > 0)
-	action := toolAction(label, args, done)
+	done := !msg.IsRunning
+	actionContent := msg.Content
+	if msg.IsError {
+		actionContent = ""
+	}
+	action := toolAction(label, args, actionContent, done)
 	if msg.IsSkipped {
 		action = replaceToolActionVerb(action, "Skipped")
 	} else if msg.IsError {
@@ -549,14 +589,14 @@ func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptSt
 	isCmd := isCommandTool(label)
 	var sb strings.Builder
 	if !done {
-		sb.WriteString(toolHeaderLineWithStyles(label, action, true, false, isCmd, 0, width, styles) + "\n")
+		sb.WriteString(toolHeaderLineWithStyles(label, action, true, false, false, 0, width, styles) + "\n")
 		if detail := strings.TrimSpace(msg.RunningDetail); detail != "" {
-			sb.WriteString("  " + glyphCorner + " " + truncateToWidth(detail, width-6) + "\n")
+			appendToolEvidenceLines(&sb, []string{truncateToWidth(detail, width-6)}, styles)
 		}
 		if isCmd {
 			sb.WriteString(renderCommandOutputBlockWithStyles(label, msg.Content, width, styles))
-		} else if result := toolResultLine(label, msg.Content, width-6); result != "" {
-			sb.WriteString("  " + glyphCorner + " " + result + "\n")
+		} else {
+			appendToolEvidenceLines(&sb, toolResultLines(label, args, msg.Content, width-6), styles)
 		}
 		return sb.String()
 	}
@@ -588,12 +628,10 @@ func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptSt
 	}
 
 	// The red bullet conveys failure; duration stays visually subordinate.
-	sb.WriteString(toolHeaderLineWithStyles(label, action, false, msg.IsError, isCmd && !msg.IsSkipped, msg.Duration, width, styles))
+	sb.WriteString(toolHeaderLineWithStyles(label, action, false, msg.IsError, !msg.IsError && !msg.IsSkipped, msg.Duration, width, styles))
 	sb.WriteString("\n")
 	if !isCmd {
-		if result := toolResultLine(label, msg.Content, width-6); result != "" {
-			sb.WriteString("  " + glyphCorner + " " + result + "\n")
-		}
+		appendToolEvidenceLines(&sb, toolResultLines(label, args, msg.Content, width-6), styles)
 	}
 	// Command tools use a bounded physical-row head/tail preview. File-editing
 	// tools retain their compact colored diff.
@@ -605,6 +643,38 @@ func renderToolMessageWithStyles(msg ChatMessage, width int, styles transcriptSt
 		}
 	}
 	return sb.String()
+}
+
+func indentRenderedToolCell(cell, indent string) string {
+	if cell == "" || indent == "" {
+		return cell
+	}
+	trailingNewline := strings.HasSuffix(cell, "\n")
+	lines := strings.Split(strings.TrimSuffix(cell, "\n"), "\n")
+	for index, line := range lines {
+		if line != "" {
+			lines[index] = indent + line
+		}
+	}
+	result := strings.Join(lines, "\n")
+	if trailingNewline {
+		result += "\n"
+	}
+	return result
+}
+
+func appendToolEvidenceLines(sb *strings.Builder, lines []string, styles transcriptStyles) {
+	for index, line := range lines {
+		line = strings.TrimSpace(sanitizeTerminalText(line))
+		if line == "" {
+			continue
+		}
+		connector := glyphCorner
+		if index < len(lines)-1 {
+			connector = "├"
+		}
+		sb.WriteString("  " + connector + " " + styles.toolEvidence.Render(line) + "\n")
+	}
 }
 
 func replaceToolActionVerb(action, verb string) string {
@@ -1049,7 +1119,7 @@ func renderDigestMessageWithStyles(content string, width int, styles transcriptS
 	return styles.toolEvidence.Render(strings.TrimRight(sb.String(), "\n"))
 }
 
-func toolAction(label string, args map[string]interface{}, done bool) string {
+func toolAction(label string, args map[string]interface{}, content string, done bool) string {
 	detail := toolDetail(args, "path", "pattern", "query", "command", "name", "action")
 	switch label {
 	case "terminal", "execute_command", "shell":
@@ -1085,10 +1155,49 @@ func toolAction(label string, args map[string]interface{}, done bool) string {
 		}
 		return "Reading " + valueOr(detail, "web page")
 	case "batch_read":
+		count := toolArrayLength(args, "operations")
 		if done {
-			return "Read file batch"
+			if count > 0 && batchReadAllSucceeded(content) {
+				return fmt.Sprintf("Completed %d/%d reads", count, count)
+			}
+			if count > 0 {
+				return fmt.Sprintf("Completed %d reads", count)
+			}
+			return "Completed read batch"
+		}
+		if count > 0 {
+			return fmt.Sprintf("Reading %d items", count)
 		}
 		return "Reading file batch"
+	case "work_select":
+		runID := compactToolIdentifier(toolDetail(args, "run_id"))
+		switch strings.ToLower(toolDetail(args, "action")) {
+		case "observe":
+			if done {
+				return "Inspected run " + valueOr(runID, "history")
+			}
+			return "Inspecting run " + valueOr(runID, "history")
+		default:
+			if done {
+				return "Continued run " + valueOr(runID, "history")
+			}
+			return "Continuing run " + valueOr(runID, "history")
+		}
+	case "skill_select":
+		detail = toolDetail(args, "name")
+		if detail == "" && done {
+			detail = selectedSkillName(content)
+		}
+		if done {
+			return "Selected Skill " + valueOr(detail, "")
+		}
+		return "Selecting Skill " + valueOr(detail, "")
+	case "skill_view":
+		detail = toolDetail(args, "name")
+		if done {
+			return "Read Skill " + valueOr(detail, "instructions")
+		}
+		return "Reading Skill " + valueOr(detail, "instructions")
 	case "patch":
 		if done {
 			return "Edited with patch"
@@ -1132,6 +1241,20 @@ func toolAction(label string, args map[string]interface{}, done bool) string {
 	}
 }
 
+func selectedSkillName(content string) string {
+	var payload struct {
+		Name string `json:"name"`
+	}
+	if json.Unmarshal([]byte(content), &payload) == nil && strings.TrimSpace(payload.Name) != "" {
+		return strings.TrimSpace(sanitizeTerminalText(payload.Name))
+	}
+	name, state, found := strings.Cut(strings.TrimSpace(content), glyphDot)
+	if found && strings.EqualFold(strings.TrimSpace(state), "activated") {
+		return strings.TrimSpace(sanitizeTerminalText(name))
+	}
+	return ""
+}
+
 func toolDetail(args map[string]interface{}, keys ...string) string {
 	for _, key := range keys {
 		if v, ok := args[key].(string); ok && strings.TrimSpace(v) != "" {
@@ -1141,7 +1264,28 @@ func toolDetail(args map[string]interface{}, keys ...string) string {
 	return ""
 }
 
-func toolResultLine(label, content string, width int) string {
+func toolArrayLength(args map[string]interface{}, key string) int {
+	values, _ := args[key].([]interface{})
+	return len(values)
+}
+
+func compactToolIdentifier(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 16 {
+		return value
+	}
+	prefix := ""
+	rest := value
+	if idx := strings.Index(value, "_"); idx >= 0 && idx < 8 {
+		prefix, rest = value[:idx+1], value[idx+1:]
+	}
+	if len(rest) <= 8 {
+		return value
+	}
+	return prefix + rest[:8] + "…"
+}
+
+func toolResultLine(label string, args map[string]interface{}, content string, width int) string {
 	switch label {
 	case "ls_r", "list_files":
 		return truncateToWidth(formatListFilesResult(content), width)
@@ -1157,9 +1301,137 @@ func toolResultLine(label, content string, width int) string {
 		return truncateToWidth(formatCommandResult(content), width)
 	case "read_file", "cat":
 		return truncateToWidth(formatFileReadResult(content), width)
+	case "skill_select":
+		parts := make([]string, 0, 2)
+		summary := strings.TrimSpace(formatGenericToolResult(content))
+		if name := selectedSkillName(content); name != "" {
+			summary = strings.TrimSpace(strings.TrimPrefix(summary, name+glyphDot))
+		}
+		if summary != "" && !isOpaqueToolResult(summary) {
+			parts = append(parts, summary)
+		}
+		if reason := toolDetail(args, "reason"); reason != "" {
+			parts = append(parts, "reason: "+reason)
+		}
+		return truncateToWidth(strings.Join(parts, glyphDot), width)
+	case "skill_view":
+		if summary := compactSkillViewResult(args, content); summary != "" {
+			return truncateToWidth(summary, width)
+		}
+		parts := make([]string, 0, 3)
+		if section := toolDetail(args, "section"); section != "" {
+			parts = append(parts, "section "+section)
+		}
+		if file := toolDetail(args, "file_path"); file != "" {
+			parts = append(parts, "file "+file)
+		}
+		if offset, ok := numericToolArg(args, "offset_bytes"); ok && offset > 0 {
+			parts = append(parts, fmt.Sprintf("from byte %d", offset))
+		}
+		return truncateToWidth(strings.Join(parts, glyphDot), width)
+	case "batch_read":
+		return truncateToWidth(formatBatchReadArgs(args), width)
 	default:
-		return truncateToWidth(formatGenericToolResult(content), width)
+		summary := formatGenericToolResult(content)
+		if isOpaqueToolResult(summary) {
+			return ""
+		}
+		return truncateToWidth(summary, width)
 	}
+}
+
+func toolResultLines(label string, args map[string]interface{}, content string, width int) []string {
+	if label != "batch_read" {
+		if line := toolResultLine(label, args, content, width); line != "" {
+			return []string{line}
+		}
+		return nil
+	}
+	// Child operations already appear as chronological tool cells. Repeating
+	// their full target list in the parent completion row obscures the hierarchy
+	// and can consume several terminal rows. The parent contributes only the
+	// aggregate result, and a fully successful aggregate is already stated in
+	// its semantic header.
+	if batchReadAllSucceeded(content) {
+		return nil
+	}
+	lines := make([]string, 0, 1)
+	outcome := formatGenericToolResult(content)
+	if !isOpaqueToolResult(outcome) && outcome != "" {
+		lines = append(lines, truncateToWidth(outcome, width))
+	}
+	return lines
+}
+
+func batchReadAllSucceeded(content string) bool {
+	outcome := strings.ToLower(strings.TrimSpace(formatGenericToolResult(content)))
+	return strings.Contains(outcome, "all succeeded")
+}
+
+func compactSkillViewResult(args map[string]interface{}, content string) string {
+	summary := strings.TrimSpace(formatGenericToolResult(content))
+	if isOpaqueToolResult(summary) {
+		return ""
+	}
+	name := toolDetail(args, "name")
+	if name != "" {
+		summary = strings.TrimSpace(strings.TrimPrefix(summary, name+glyphDot))
+	}
+	return summary
+}
+
+func isOpaqueToolResult(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "completed", "complete", "success", "succeeded", "ok":
+		return true
+	default:
+		return false
+	}
+}
+
+func numericToolArg(args map[string]interface{}, key string) (int, bool) {
+	value, ok := args[key]
+	if !ok {
+		return 0, false
+	}
+	switch n := value.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case json.Number:
+		value, err := n.Int64()
+		return int(value), err == nil
+	default:
+		return 0, false
+	}
+}
+
+func formatBatchReadArgs(args map[string]interface{}) string {
+	operations, _ := args["operations"].([]interface{})
+	if len(operations) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, min(len(operations), 3))
+	for _, raw := range operations {
+		op, _ := raw.(map[string]interface{})
+		name := toolDetail(op, "tool")
+		target := toolDetail(op, "path", "pattern", "file_glob")
+		if name == "" {
+			continue
+		}
+		if target != "" {
+			name += " " + target
+		}
+		parts = append(parts, name)
+		if len(parts) == 3 {
+			break
+		}
+	}
+	if remaining := len(operations) - len(parts); remaining > 0 {
+		parts = append(parts, fmt.Sprintf("+%d more", remaining))
+	}
+	return strings.Join(parts, glyphDot)
 }
 
 // formatCommandResult condenses raw command output into a one-line header.

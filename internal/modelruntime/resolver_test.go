@@ -363,6 +363,49 @@ func TestResolverRejectsUnknownQuirkValues(t *testing.T) {
 	}
 }
 
+func TestResolverDeepSeekAutoKeepsProviderDefaultUnforced(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-flash"}},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"deepseek": {APIKey: "test-key"},
+		},
+	}
+	cfg.Normalize()
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.ReasoningEffort != "" {
+		t.Fatalf("auto reasoning forced wire value %q", rt.ReasoningEffort)
+	}
+	if rt.DefaultReasoning != "high" {
+		t.Fatalf("default reasoning = %q", rt.DefaultReasoning)
+	}
+	if len(rt.ReasoningLevels) != 3 || rt.ReasoningLevels[0] != "none" || rt.ReasoningLevels[2] != "xhigh" {
+		t.Fatalf("reasoning levels = %v", rt.ReasoningLevels)
+	}
+}
+
+func TestLowestLatencyReasoningUsesDeclaredCapabilityFloor(t *testing.T) {
+	tests := []struct {
+		name   string
+		levels []string
+		want   string
+	}{
+		{name: "unknown stays compatible", want: "none"},
+		{name: "disable when supported", levels: []string{"none", "high"}, want: "none"},
+		{name: "minimal before low", levels: []string{"low", "minimal", "medium"}, want: "minimal"},
+		{name: "lowest declared tier", levels: []string{"low", "medium", "high"}, want: "low"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LowestLatencyReasoning(Runtime{ReasoningLevels: tt.levels}); got != tt.want {
+				t.Fatalf("LowestLatencyReasoning() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolverContextLengthOverrides(t *testing.T) {
 	cfg := &config.Config{
 		Model: config.ModelConfig{Provider: "kimi-coding", Default: "kimi-for-coding", ContextLength: 131072},

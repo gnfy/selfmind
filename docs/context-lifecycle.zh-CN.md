@@ -75,6 +75,9 @@ LLM system prompt: # DURABLE TASK CONTEXT
   remaining、files、tests、risks。
 - 精确 parent Run 的 artifacts：kind、name、uri、mime、metadata summary。
 - 精确 parent Run 的 events：type、channel、payload 摘要。
+- 精确 parent Run 已完成轮次的 checkpoint 只抽取有限数量的去重工具结果片段
+  （按人和 Run 精确读取、再次脱敏、总量受限）；它们是历史观察，不是当前验证
+  或执行权限。完整工具记录仍留在 checkpoint 和 artifact，不跨 Run 原样重放。
 - 没有精确 parent（无或多个未认领可续 Run）时，full 模式降级为 bounded task
   card：不含 handoff、artifacts、events；`context.scope` 事件记录降级。
   resume 用户消息块与 loop checkpoint 恢复受同一 parent 门控。
@@ -236,6 +239,9 @@ kept verbatim. 这取代了旧的"默认直接丢弃最旧消息"行为——长
 - 摘要用便宜的 `memory_extract` 角色 provider(`Agent.SetSummaryProvider` →
   `ContextEngine.SetSummaryProvider`),不占用主 coding provider;只在越过阈值那一
   刻做一次有界调用,绝不每轮调用,所以流式首 token 不受影响。
+- 摘要调用使用 summarizer 路由配置的推理等级(显式的 `models.roles.summarizer`,
+  否则 Background 路由),开启思考时输出上限加上对应等级的推理余量;单次压缩受
+  `agent.compaction_timeout`(默认 30 秒)约束,超时即退回确定性裁剪。
 - 摘要 prompt 强制保留 `## Relevant Files`(任务目标、决策、下一步,以及所有
   创建/修改/读取的文件路径)。另有一个确定性兜底:从工具调用参数
   (`path`/`file_path`/`output_path`/`workdir` 和 V4A `patch`/`apply_patch` 头)

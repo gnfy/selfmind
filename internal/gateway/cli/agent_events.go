@@ -244,6 +244,13 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 		if run := runTokensFromEvent(event); run > 0 {
 			m.program.Send(MsgTokens{Run: run, Event: ref})
 		}
+	case "provider.call.usage":
+		// This is one real provider request, unlike token.updated which is the
+		// cumulative total across the run. Keep the two measures separate so a
+		// long tool loop does not look as if one request exceeded the context.
+		if request := runTokensFromEvent(event); request > 0 {
+			m.program.Send(MsgTokens{LastRequest: request, Event: ref})
+		}
 	case "approval.requested":
 		payloadString := func(key string) string {
 			if event.Payload == nil {

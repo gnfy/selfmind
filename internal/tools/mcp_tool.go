@@ -54,6 +54,7 @@ func (t *MCPTool) Execute(args map[string]interface{}) (string, error) {
 func convertJSONSchema(input map[string]interface{}) ToolSchema {
 	props := make(map[string]PropertyDef)
 	var required []string
+	var additional *bool
 
 	if propsRaw, ok := input["properties"].(map[string]interface{}); ok {
 		for name, propRaw := range propsRaw {
@@ -70,8 +71,11 @@ func convertJSONSchema(input map[string]interface{}) ToolSchema {
 			}
 		}
 	}
+	if value, ok := input["additionalProperties"].(bool); ok {
+		additional = &value
+	}
 
-	return ToolSchema{Type: "object", Properties: props, Required: required}
+	return ToolSchema{Type: "object", Properties: props, Required: required, AdditionalProperties: additional}
 }
 
 func convertJSONSchemaProperty(prop map[string]interface{}) PropertyDef {
@@ -108,6 +112,9 @@ func convertJSONSchemaProperty(prop map[string]interface{}) PropertyDef {
 				p.Required = append(p.Required, name)
 			}
 		}
+	}
+	if value, ok := prop["additionalProperties"].(bool); ok {
+		p.AdditionalProperties = &value
 	}
 	return p
 }

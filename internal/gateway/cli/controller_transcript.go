@@ -91,7 +91,7 @@ func (m *uiModel) finalizeOpenToolMessages(reason string) int {
 
 func isTerminalRunStatus(status string) bool {
 	switch status {
-	case "done", "error", "cancelled":
+	case "done", "error", "cancelled", "interrupted":
 		return true
 	default:
 		return false

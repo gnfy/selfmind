@@ -32,7 +32,7 @@ func TestDeclaredInputsBoundInvalidation(t *testing.T) {
 	}
 }
 
-func TestReplacementCannotNarrowDeclaredInputs(t *testing.T) {
+func TestReplacementMethodMayChangeDeclaredInputs(t *testing.T) {
 	old := scopedCheck("old", "failed", "/project/src")
 	next := old
 	next.ToolCallID = "next"
@@ -47,12 +47,12 @@ func TestReplacementCannotNarrowDeclaredInputs(t *testing.T) {
 	}
 	empty := []string{}
 	b.LocalDependencies = &empty
-	if CanReplace(old, next) {
-		t.Fatal("replacement silently dropped dependency")
+	if !CanReplace(old, next) {
+		t.Fatal("corrected method could not declare its actual dependencies")
 	}
 	b.Version = 1
 	b.LocalDependencies = nil
-	if CanReplace(old, next) {
-		t.Fatal("replacement changed contract version")
+	if !CanReplace(old, next) {
+		t.Fatal("storage contract change altered the proof obligation")
 	}
 }

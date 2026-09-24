@@ -248,7 +248,7 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 		case <-timer.C:
 		}
 	}
-	_ = drain // Accepted for an explicit upgrade command; restart already drains by default.
+	_ = drain // Kept as an explicit spelling of the default safe restart policy.
 	if err := validatePromptWorkspaceForRestart(a.configPath); err != nil {
 		fmt.Fprintf(a.stderr, "Prompt validation failed; the running gateway was not restarted: %v\n", err)
 		fmt.Fprintln(a.stderr, "Fix the active prompt workspace, then run `selfmind prompt validate`.")
@@ -263,10 +263,20 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
 	var modelChanges *modelchange.Service
 	if modelRestart {
-		modelChanges = &modelchange.Service{ConfigPath: a.configPath}
+		cfg, err := config.LoadConfig(config.Options{Path: a.configPath})
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		modelChanges = modelchange.NewService(cfg, nil)
+		if err := modelChanges.PreflightRestart(modelChangeID); err != nil {
+			fmt.Fprintf(a.stderr, "Model restart preflight failed; the running gateway was not stopped: %v\n", err)
+			return 1
+		}
 	}
+	requireSafeBoundary := !*force
 	ctx, cancel := contextWithTimeout(a.ctx, timeout)
-	if modelRestart {
+	if requireSafeBoundary {
 		cancel()
 		ctx, cancel = context.WithCancel(a.ctx)
 	}
@@ -280,13 +290,14 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 			return 1
 		}
 	}
-	if err := gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
+	shutdownOptions := gatewayrt.StopOptions{
 		URL:                 a.gatewayURL(),
 		DataDir:             dataDir,
 		Force:               *force,
 		Timeout:             timeout,
 		Reason:              restartReason,
-		WaitForSafeBoundary: modelRestart,
+		WaitForSafeBoundary: requireSafeBoundary,
+		RequireSafeBoundary: requireSafeBoundary,
 		Abort: func() bool {
 			if modelChanges == nil {
 				return false
@@ -306,7 +317,30 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 				return true
 			}
 		},
-	}); err != nil {
+	}
+	var shutdownErr error
+	reportedLegacyWait := false
+	for {
+		shutdownErr = gatewayrt.RequestShutdown(ctx, shutdownOptions)
+		if requireSafeBoundary && errors.Is(shutdownErr, gatewayrt.ErrShutdownDeferred) {
+			// A pre-upgrade daemon does not understand the unbounded-drain field,
+			// but service reconciliation guarantees that its bounded attempt did
+			// not interrupt active work. Let it serve approvals and clarifications
+			// while active work continues, then retry at the next idle boundary.
+			if !reportedLegacyWait {
+				fmt.Fprintln(a.stdout, "Active work is still running; waiting for a safe restart boundary.")
+				reportedLegacyWait = true
+			}
+			if err := waitForGatewayIdle(ctx, a.gatewayURL()); err != nil {
+				shutdownErr = err
+				break
+			}
+			continue
+		}
+		break
+	}
+	if shutdownErr != nil {
+		err := shutdownErr
 		if modelRestart && errors.Is(err, gatewayrt.ErrShutdownAborted) {
 			fmt.Fprintf(a.stdout, "Model change %s was cancelled or replaced before restart.\n", modelChangeID)
 			return 0
@@ -363,6 +397,32 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 		return a.waitForModelRestart(modelChanges, modelChangeID)
 	}
 	return 0
+}
+
+func waitForGatewayIdle(ctx context.Context, gatewayURL string) error {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		data, statusCode, err := gatewayrt.RequestStatus(ctx, gatewayURL)
+		if err != nil {
+			return fmt.Errorf("inspect gateway while waiting for a safe restart boundary: %w", err)
+		}
+		if statusCode >= 400 {
+			return fmt.Errorf("inspect gateway while waiting for a safe restart boundary: HTTP %d", statusCode)
+		}
+		var status api.GatewayStatusResponse
+		if err := json.Unmarshal(data, &status); err != nil {
+			return fmt.Errorf("decode gateway status while waiting for a safe restart boundary: %w", err)
+		}
+		if status.ActiveRunCount == 0 && !status.Draining {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func modelChangeReasonID(reason string) (string, bool) {

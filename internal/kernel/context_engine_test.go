@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"selfmind/internal/kernel/llm"
 )
@@ -141,6 +142,7 @@ func TestSummarizerRetriesOnlyAfterExplicitTruncation(t *testing.T) {
 	engine := NewContextEngine(200, 10)
 	engine.SetSummaryProvider(provider)
 	engine.SetSummaryOutputLimit(8192)
+	engine.SetSummaryReasoning("none") // only the summary budget is under test
 
 	got := engine.TruncateMessages(compactionFixture())
 	if len(provider.requests) != 2 {
@@ -155,6 +157,88 @@ func TestSummarizerRetriesOnlyAfterExplicitTruncation(t *testing.T) {
 		}
 	}
 	t.Fatal("successful retry did not produce a compaction summary")
+}
+
+// Compaction runs at the summarizer route's configured reasoning level, so it
+// names no level of its own, and its request leaves room for that reasoning
+// because some providers (DeepSeek V4) count reasoning tokens against
+// max_tokens. The route's own ceiling still bounds the request.
+func TestSummarizerFollowsTheRouteReasoning(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		reasoning string
+		routeCap  int
+		want      int
+	}{
+		{name: "thinking route", reasoning: "high", want: 4096 + 16384},
+		{name: "provider default may reason", want: 4096 + 8192},
+		{name: "route with reasoning off", reasoning: "none", want: 4096},
+		{name: "route ceiling still wins", reasoning: "high", routeCap: 6000, want: 6000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &sequenceSummarizer{responses: []llm.ChatResponse{{Content: "## Active Task\nbuild the app", FinishReason: "stop"}}}
+			engine := NewContextEngine(200, 10)
+			engine.SetSummaryProvider(provider)
+			engine.SetSummaryOutputLimit(tc.routeCap)
+			engine.SetSummaryReasoning(tc.reasoning)
+			engine.TruncateMessages(compactionFixture())
+			if len(provider.requests) != 1 {
+				t.Fatalf("summary calls = %d, want 1", len(provider.requests))
+			}
+			if got := provider.requests[0].MaxTokens; got != tc.want {
+				t.Fatalf("summary request max_tokens = %d, want %d", got, tc.want)
+			}
+			if got, named := provider.requests[0].Options["reasoning_effort"]; named {
+				t.Fatalf("compaction must run at the route's configured reasoning, but named %#v", got)
+			}
+		})
+	}
+}
+
+// deadlineSummarizer records the deadline compaction gave it and then waits
+// for that deadline, like a route still thinking.
+type deadlineSummarizer struct {
+	remaining time.Duration
+}
+
+func (p *deadlineSummarizer) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "", nil
+}
+
+func (p *deadlineSummarizer) Chat(ctx context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		p.remaining = time.Until(deadline)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (p *deadlineSummarizer) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	ch := make(chan llm.StreamEvent)
+	close(ch)
+	return ch, nil
+}
+
+// Compaction waits inside the person's turn, so its bound is configured on its
+// own; when it expires the turn continues on deterministic trimming.
+func TestSummarizerUsesTheConfiguredBound(t *testing.T) {
+	provider := &deadlineSummarizer{}
+	engine := NewContextEngine(200, 10)
+	engine.SetSummaryProvider(provider)
+	engine.SetSummaryTimeout(150 * time.Millisecond)
+	started := time.Now()
+	got := engine.TruncateMessages(compactionFixture())
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("compaction waited %s; the configured bound is 150ms", elapsed)
+	}
+	if provider.remaining <= 0 || provider.remaining > 150*time.Millisecond {
+		t.Fatalf("summarizer deadline was %s away, want at most the configured 150ms", provider.remaining)
+	}
+	for _, message := range got {
+		if strings.Contains(message.Content, "[CONTEXT COMPACTION") {
+			t.Fatal("an expired compaction must fall back to trimming, not inject a summary")
+		}
+	}
 }
 
 func TestSummarizerHonorsSmallerRouteLimitAndRejectsTruncatedOutput(t *testing.T) {

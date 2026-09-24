@@ -39,6 +39,10 @@ type llmSkillCurator struct {
 	skillStorage *tools.SkillStorage
 	prompts      *promptassets.Snapshot
 	budget       kernel.RuntimeContextBudget
+	// reasoning is the route's configured level. The curator runs at it, so
+	// its output cap leaves room for the thinking a provider may count
+	// against max_tokens.
+	reasoning string
 }
 
 type skillCuratorWire struct {
@@ -64,7 +68,11 @@ func NewConfiguredSkillCurator(mem *memory.MemoryManager, cfg *config.Config, te
 		return nil
 	}
 	budget := kernel.RuntimeContextBudgetForContextTokens(codingContextLength(cfg))
-	return &llmSkillCurator{provider: provider, store: store, skillStorage: skillStorage, prompts: prompts, budget: budget}
+	reasoning := ""
+	if runtime, err := ResolveModelRuntime(context.Background(), cfg, string(llm.RoleSkillCurator)); err == nil {
+		reasoning = runtime.ReasoningEffort
+	}
+	return &llmSkillCurator{provider: provider, store: store, skillStorage: skillStorage, prompts: prompts, budget: budget, reasoning: reasoning}
 }
 
 func (c *llmSkillCurator) ProposeSkillCuration(ctx context.Context, tenantID, payloadJSON string) (string, error) {
@@ -113,9 +121,9 @@ func (c *llmSkillCurator) ProposeSkillCuration(ctx context.Context, tenantID, pa
 			"<skill_delivery_budget main_bytes=%q main_tokens=%q note=%q/>\n<skill_evidence_digest>\n%s\n</skill_evidence_digest>",
 			fmt.Sprintf("%d", c.runtimeBudget().SkillMainBytes), fmt.Sprintf("%d", c.runtimeBudget().SkillMainTokens),
 			"The exact main-body byte budget is lower after reserving sorted resource paths and the activation envelope.", payloadJSON)}},
-		MaxTokens: 6144,
+		MaxTokens: 6144 + llm.ReasoningHeadroom(c.reasoning),
 		Options: map[string]interface{}{
-			"temperature": 0, "reasoning_effort": "none", "maintenance_kind": "skill_curator",
+			"temperature": 0, "maintenance_kind": "skill_curator",
 		},
 	})
 	if err != nil {

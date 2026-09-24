@@ -293,7 +293,7 @@ func TestPersistentLearningGuidanceMentionsOnlyAvailableSurfaces(t *testing.T) {
 func TestWorkContinuityGuidanceRequiresScopedProgressiveInspection(t *testing.T) {
 	defs := []map[string]interface{}{{"name": "work_search"}, {"name": "work_inspect"}, {"name": "work_select"}}
 	guidance := workContinuityGuidanceForDefinitions(defs)
-	for _, required := range []string{"work_search", "work_inspect", "work_select", "evidence", "new work"} {
+	for _, required := range []string{"work_search", "work_inspect", "work_select", "evidence", "new work", "user takeover"} {
 		if !strings.Contains(guidance, required) {
 			t.Fatalf("continuity guidance missing %q: %s", required, guidance)
 		}

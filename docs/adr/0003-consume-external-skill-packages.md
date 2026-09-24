@@ -153,9 +153,10 @@ catalog omits.
 
 ## Consequences
 
-Delivery is sequenced by `docs/plans/external-skill-packages.md`, which holds
-the active plan slot and owns the batch order and its evidence. Two consequences
-of these decisions belong here rather than to any batch.
+Delivery was sequenced by `docs/plans/external-skill-packages.md`, which owned
+the batch order and its evidence; all four batches landed and the plan closed
+on 2026-09-24. Two consequences of these decisions belong here rather than to
+any batch.
 
 A selection made in the `$` completion writes an existing `/<reference>` slash
 invocation rather than a new protocol field. The reference is the qualified name

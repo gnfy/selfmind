@@ -17,8 +17,8 @@ turns:
       with command "test -f absent-reader" and omit check. That unavailable reader
       is an intentionally failed method for the same acceptance condition.
       Keep the plan open. Correct the method with verify using
-      "test \"$(cat value.txt)\" = READY", and supply only check.replaces with
-      the first verification evidence id and check.reason explaining why the
+      "test \"$(cat value.txt)\" = READY", and supply only replaces with
+      the first verification evidence id and reason explaining why the
       corrected reader checks the unchanged condition. Do not repeat criterion,
       target, or dependencies: they must be inherited from the recorded obligation.
       Use the same cwd for both checks. Complete the plan and finish after the

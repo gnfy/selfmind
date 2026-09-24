@@ -474,33 +474,41 @@ func (t *ExecuteCommandTool) ExecuteResult(args map[string]interface{}) (kernel.
 type VerifyTool struct{ BaseTool }
 
 func NewVerifyTool() *VerifyTool {
+	schema := ToolSchema{
+		Type:                 "object",
+		AdditionalProperties: rejectAdditionalProperties(),
+		Properties: map[string]PropertyDef{
+			"command":         {Type: "string", Description: "Full verification command to execute"},
+			"cwd":             {Type: "string", Description: "Working directory", Default: "."},
+			"timeout":         {Type: "integer", Description: "Timeout in seconds", Default: 120},
+			"execution_class": toolExecutionClassProperty(),
+			"kind": {
+				Type:        "string",
+				Description: "Verification category",
+				Enum:        []string{"test", "build", "lint", "typecheck", "syntax", "smoke", "custom"},
+				Default:     "custom",
+			},
+			"sandbox": {
+				Type:        "string",
+				Description: "Execution isolation: auto prefers an isolated filesystem sandbox whose network follows exec_sandbox.allow_network; isolated requires it; host uses host credentials/network and requires approval",
+				Enum:        []string{"auto", "isolated", "host"},
+				Default:     "auto",
+			},
+		},
+		Required: []string{"command"},
+	}
+	for name, property := range verificationBindingProperties() {
+		schema.Properties[name] = property
+	}
 	return &VerifyTool{BaseTool: BaseTool{
 		name:        "verify",
-		description: "Run a test, build, lint, typecheck, syntax, smoke, or custom verification command and record its exit status as durable run evidence",
-		schema: ToolSchema{
-			Type: "object",
-			Properties: map[string]PropertyDef{
-				"check":           verificationBindingProperty(),
-				"command":         {Type: "string", Description: "Full verification command to execute"},
-				"cwd":             {Type: "string", Description: "Working directory", Default: "."},
-				"timeout":         {Type: "integer", Description: "Timeout in seconds", Default: 120},
-				"execution_class": toolExecutionClassProperty(),
-				"kind": {
-					Type:        "string",
-					Description: "Verification category",
-					Enum:        []string{"test", "build", "lint", "typecheck", "syntax", "smoke", "custom"},
-					Default:     "custom",
-				},
-				"sandbox": {
-					Type:        "string",
-					Description: "Execution isolation: auto prefers an isolated filesystem sandbox whose network follows exec_sandbox.allow_network; isolated requires it; host uses host credentials/network and requires approval",
-					Enum:        []string{"auto", "isolated", "host"},
-					Default:     "auto",
-				},
-			},
-			Required: []string{"command"},
-		},
+		description: "Run a test, build, lint, typecheck, syntax, smoke, or custom verification command and record its exit status as durable run evidence. Declare criterion and target directly; the runtime binds the check to the in_progress verification_required plan step, so make the step you are verifying in_progress first.",
+		schema:      schema,
 	}}
+}
+
+func (t *VerifyTool) NormalizeArguments(args map[string]interface{}) (map[string]interface{}, error) {
+	return normalizeVerificationArgs(args)
 }
 
 func (t *VerifyTool) Execute(args map[string]interface{}) (string, error) {
@@ -509,6 +517,11 @@ func (t *VerifyTool) Execute(args map[string]interface{}) (string, error) {
 }
 
 func (t *VerifyTool) ExecuteResult(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
+	var err error
+	args, err = normalizeVerificationArgs(args)
+	if err != nil {
+		return kernel.ToolDispatchResult{}, err
+	}
 	if strings.TrimSpace(stringArg(args, "command")) == "" {
 		return kernel.ToolDispatchResult{}, fmt.Errorf("command is required")
 	}

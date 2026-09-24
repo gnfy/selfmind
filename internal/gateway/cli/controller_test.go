@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -1127,6 +1128,67 @@ func TestStartupCardExplainsRoutesAndShowsOnlyExplicitRoleOverrides(t *testing.T
 	}
 }
 
+func TestModelStatusRefreshKeepsAutoReasoningVisibleWithEffectiveDefault(t *testing.T) {
+	controller := NewController("deepseek", "deepseek-flash", nil, "")
+	model := controller.model
+	selection := config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-flash"}
+	status := modelchange.Status{
+		Running:          modelchange.Snapshot{Primary: selection, Auxiliary: selection},
+		Configured:       modelchange.Snapshot{Primary: selection, Auxiliary: selection},
+		RunningTuning:    modelchange.TuningSnapshot{Primary: modelchange.RouteTuning{Reasoning: "high", ReasoningSource: "model_default"}},
+		ConfiguredTuning: modelchange.TuningSnapshot{Primary: modelchange.RouteTuning{Reasoning: "high", ReasoningSource: "model_default"}},
+	}
+	model.applyModelStatus(status)
+	if model.modelMeta != "auto→high" {
+		t.Fatalf("model meta = %q", model.modelMeta)
+	}
+	rendered := stripANSI(strings.Join(model.renderStartupCard(100), "\n"))
+	if !strings.Contains(rendered, "deepseek-flash · deepseek · auto→high") {
+		t.Fatalf("startup card omitted effective reasoning:\n%s", rendered)
+	}
+}
+
+func TestModelManagerUsesProviderReasoningCapabilitiesForDynamicAlias(t *testing.T) {
+	models := modelManagerModels("deepseek", []string{"deepseek-flash"}, nil, nil)
+	if len(models) != 1 || !reflect.DeepEqual(models[0].Reasoning, []string{"none", "high", "xhigh"}) {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
+func TestModelManagerMergesConfiguredCatalogAndRememberedModels(t *testing.T) {
+	models := modelManagerModels("google", []string{"catalog-model"}, []config.RememberedModelConfig{
+		{Provider: "google", Model: "retired-manual", Reasoning: []string{"high", "custom"}},
+	}, []config.ModelSelectionConfig{{Provider: "google", Model: "configured-model"}})
+	if len(models) != 3 {
+		t.Fatalf("models = %+v", models)
+	}
+	if !models[0].Configured || models[0].ID != "configured-model" {
+		t.Fatalf("configured model was not kept first: %+v", models[0])
+	}
+	if !models[1].Available || models[1].ID != "catalog-model" {
+		t.Fatalf("catalog model metadata = %+v", models[1])
+	}
+	if !models[2].Remembered || models[2].Available || models[2].Configured || models[2].ID != "retired-manual" ||
+		!reflect.DeepEqual(models[2].Reasoning, []string{"high", "custom"}) {
+		t.Fatalf("remembered model metadata = %+v", models[2])
+	}
+}
+
+func TestApplyModelManagerChangeKeepsBothSidesSelectable(t *testing.T) {
+	providers := []components.ModelManagerProvider{{
+		ID: "google", Models: []components.ModelManagerModel{{ID: "old", Configured: true, Available: true}},
+	}}
+	applyModelManagerChange(providers, modelchange.Change{
+		Previous:      modelchange.Snapshot{Primary: config.ModelSelectionConfig{Provider: "google", Model: "old", Reasoning: "low"}},
+		Candidate:     modelchange.Snapshot{Primary: config.ModelSelectionConfig{Provider: "google", Model: "new", Reasoning: "high"}},
+		ChangedRoutes: []modelchange.Route{modelchange.RoutePrimary},
+	})
+	models := providers[0].Models
+	if len(models) != 2 || !models[0].Remembered || models[0].Configured || !models[1].Remembered || !models[1].Configured {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
 func TestEveryManagedRoleHasStartupDescription(t *testing.T) {
 	for _, role := range modelchange.ManagedRoleRoutes() {
 		if description := startupRoleDescription(string(role)); strings.TrimSpace(description) == "" {
@@ -1516,8 +1578,26 @@ func TestControllerUsesResolvedContextLength(t *testing.T) {
 	if model.tokenLimit != 262144 {
 		t.Fatalf("tokenLimit = %d, want Kimi context length", model.tokenLimit)
 	}
+	if model.tokenLimitSource != "built-in profile" {
+		t.Fatalf("tokenLimitSource = %q", model.tokenLimitSource)
+	}
 	if got := formatUsage(0, model.tokenLimit); got != "0 run · 262.1K ctx" {
 		t.Fatalf("usage = %q", got)
+	}
+	if line := stripANSI(model.statusLine()); !strings.Contains(line, "262.1K ctx est") {
+		t.Fatalf("estimated context source is not visible: %q", line)
+	}
+}
+
+func TestExplicitContextLengthIsNotMarkedEstimated(t *testing.T) {
+	cfg := testKimiConfig()
+	cfg.Models.Primary.ContextLength = 32000
+	model := NewController("", "", cfg, "").model
+	if model.tokenLimit != 32000 || model.tokenLimitSource != "explicit config" {
+		t.Fatalf("context = %d from %q", model.tokenLimit, model.tokenLimitSource)
+	}
+	if line := stripANSI(model.statusLine()); !strings.Contains(line, "32K ctx") || strings.Contains(line, "ctx est") {
+		t.Fatalf("explicit context source was mislabeled: %q", line)
 	}
 }
 
@@ -1715,7 +1795,17 @@ func TestModelManagerApplyShowsProgressAndIgnoresRepeatKeys(t *testing.T) {
 	press := func(key tea.KeyMsg) {
 		_, cmd := model.Update(key)
 		if cmd != nil {
-			cmd()
+			if batch, ok := cmd().(tea.BatchMsg); ok {
+				for _, nested := range batch {
+					if nested != nil {
+						msg := nested()
+						switch msg.(type) {
+						case MsgModelValidationDone:
+							_, _ = model.Update(msg)
+						}
+					}
+				}
+			}
 		}
 	}
 	enter := tea.KeyMsg{Type: tea.KeyEnter}

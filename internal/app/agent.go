@@ -246,6 +246,15 @@ func summarizerOutputLimit(cfg *config.Config) int {
 	return roleCfg.MaxTokens
 }
 
+// summarizerReasoning is the summarizer route's configured reasoning level:
+// an explicit role setting, else the Background route's. Compaction runs at it.
+func summarizerReasoning(cfg *config.Config) string {
+	if runtime, err := ResolveModelRuntime(context.Background(), cfg, string(llm.RoleSummarizer)); err == nil {
+		return runtime.ReasoningEffort
+	}
+	return ""
+}
+
 func llmQuirks(q modelruntime.ProviderQuirks) llm.ProviderQuirks {
 	return llm.ProviderQuirks{
 		AuthHeader:        q.AuthHeader,
@@ -778,6 +787,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, p
 	// (kept OFF the main coding provider) instead of dropping oldest turns.
 	agent.SetSummaryProvider(summaryProvider)
 	agent.SetSummaryOutputLimit(summarizerOutputLimit(cfg))
+	agent.SetSummaryPolicy(summarizerReasoning(cfg), cfg.Agent.CompactionTimeoutDuration())
 	// Carry the cheap triage provider so the gateway can build the smart-mode
 	// approval judge (H2) from it, without kernel depending on concrete tools.
 	agent.SetApprovalJudgeProvider(judgeProvider)

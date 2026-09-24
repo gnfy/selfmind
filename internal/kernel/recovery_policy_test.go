@@ -47,6 +47,25 @@ func TestStrategyRecoveryPolicyBlocksRepeatedAndCosmeticRetries(t *testing.T) {
 	}
 }
 
+func TestPreparationFailureSurvivesUnrelatedSuccessfulProbe(t *testing.T) {
+	policy := NewStrategyRecoveryPolicy()
+	invalid := RecoveryAttempt{
+		PlanVersion: 1, PlanStepID: "step-a", ToolName: "finish_run",
+		InputSignature: "finish_run\x00invalid", EnvironmentGeneration: 2, PreparationState: "schema-1",
+	}
+	policy.RecordPreparationFailure(RecoveryFailure{
+		Attempt: invalid, FailureClass: "invalid_input", Retryability: "corrected_input",
+		EffectState: "not_dispatched",
+	})
+	policy.RecordSuccess(RecoveryAttempt{
+		PlanVersion: 1, PlanStepID: "step-a", ToolName: "read_file",
+		InputSignature: "read_file\x00status", EnvironmentGeneration: 2, PreparationState: "schema-7",
+	})
+	if err := policy.BeforePreparation(invalid); err == nil || !recoveryErrorCode(err, "tool_arguments_repeated") {
+		t.Fatalf("unrelated success released malformed control call: %T %v", err, err)
+	}
+}
+
 // Shell commands carry their target in the command text. Two aws subcommands
 // are different targets, while an env prefix or an extra flag is the same
 // target — so a corrected command is a correction and a re-flagged one is a

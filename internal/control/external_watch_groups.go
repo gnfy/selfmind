@@ -117,6 +117,21 @@ func (s *Store) ResolveExternalWatchGroup(ctx context.Context, tenantID, groupID
 	}
 	resolution.Group = group
 	if group.Status != ExternalWatchPending {
+		// Only the winner owns the aggregate's event, notification and child
+		// Run. A non-winning terminal member can be left unmarked by an older
+		// row or a crash between group settlement and compensation. Settle its
+		// own bookkeeping without producing a second aggregate result.
+		if triggerWatchID != "" && triggerWatchID != group.WinnerWatchID {
+			now := time.Now().Unix()
+			if _, err := tx.ExecContext(ctx, `UPDATE external_watches SET
+				status=CASE WHEN status IN ('pending','running') THEN 'cancelled' ELSE status END,
+				last_error=CASE WHEN status IN ('pending','running') THEN 'wait group reached its aggregate verdict' ELSE last_error END,
+				finalized=1, notified=1, finished_at=COALESCE(finished_at, ?), updated_at=?
+				WHERE tenant_id=? AND wait_group_id=? AND id=? AND COALESCE(finalized,0)=0`,
+				now, now, tenantID, groupID, triggerWatchID); err != nil {
+				return resolution, err
+			}
+		}
 		resolution.Terminal = true
 		resolution.Status = group.Status
 		return resolution, tx.Commit()

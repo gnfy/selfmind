@@ -184,6 +184,15 @@ func TestExplicitResumeRestoresParkedRunPlan(t *testing.T) {
 	if childPlan == nil || len(childPlan.Steps) != 2 || childPlan.Steps[1].Step != "deploy to production" || childPlan.Steps[1].Status != "in_progress" {
 		t.Fatalf("continuation did not inherit durable plan state: %+v", childPlan)
 	}
+	parentPlan, err := store.LatestRunPlan(ctx, parked.TenantID, waiting.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if childPlan.Steps[0].StepID != parentPlan.Steps[0].StepID ||
+		childPlan.Steps[0].SourceStepID != parentPlan.Steps[0].StepID ||
+		childPlan.Steps[1].SourceStepID != parentPlan.Steps[1].StepID {
+		t.Fatalf("continuation lost exact parent-step lineage: parent=%+v child=%+v", parentPlan, childPlan)
+	}
 	selected := daemon.coordinator().selectedTaskRuntimeContextWithMode(ctx, parked, resp.Run, nil, "cli", "cli", "finish", attachContextFull, waiting)
 	prompt := selected.Prompt(8000)
 	for _, required := range []string{childPlan.Steps[1].StepID, "the requested revision is serving", "verification_required=true"} {

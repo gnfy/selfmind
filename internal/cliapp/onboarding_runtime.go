@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -163,7 +162,7 @@ func (a *App) printRuntimeChoice(choice onboardingRuntimeChoice) {
 }
 
 func onboardingProtectionSummary() string {
-	if runtime.GOOS == "linux" && tools.ExecSandboxAvailable() {
+	if tools.ExecSandboxAvailable() {
 		return "isolated execution with approval controls"
 	}
 	return "approval-controlled host execution"

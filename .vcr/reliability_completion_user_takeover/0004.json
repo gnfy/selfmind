@@ -3,48 +3,372 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Now"
+      "content": "I"
     },
     {
-      "reasoning_content": " update"
+      "content": " read"
     },
     {
-      "reasoning_content": " plan"
+      "content": " and"
     },
     {
-      "reasoning_content": " and"
+      "content": " reviewed"
     },
     {
-      "reasoning_content": " finish"
+      "content": " `"
     },
     {
-      "reasoning_content": "_run"
+      "content": "d"
     },
     {
-      "reasoning_content": "."
+      "content": "raft"
     },
     {
-      "finish_reason": "tool_calls"
+      "content": ".txt"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": " Its"
+    },
+    {
+      "content": " entire"
+    },
+    {
+      "content": " contents"
+    },
+    {
+      "content": " are"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "D"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": " ready"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " there"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " further"
+    },
+    {
+      "content": " text"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " review"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ve"
+    },
+    {
+      "content": " recorded"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " outcome"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " delivery"
+    },
+    {
+      "content": " preserved"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " outstanding"
+    },
+    {
+      "content": " rather"
+    },
+    {
+      "content": " than"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Done"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " reviewed"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`.\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Open"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " obtain"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " recipient"
+    },
+    {
+      "content": " from"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " deliver"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "raft"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`.\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Nothing"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " sent"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " did"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " guess"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " recipient"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Tell"
+    },
+    {
+      "content": " me"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " recipient"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "end"
+    },
+    {
+      "content": "point"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " deliver"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " To"
+    },
+    {
+      "content": " actually"
+    },
+    {
+      "content": " send"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " also"
+    },
+    {
+      "content": " need"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " delivery"
+    },
+    {
+      "content": " capability"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "end"
+    },
+    {
+      "content": "point"
+    },
+    {
+      "content": " available"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " turn"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
     },
     {
       "usage": {
-        "input_tokens": 13187,
-        "output_tokens": 224,
-        "cache_read_input_tokens": 12928,
-        "cache_miss_input_tokens": 259,
+        "input_tokens": 11889,
+        "output_tokens": 119,
+        "cache_read_input_tokens": 3584,
+        "cache_miss_input_tokens": 8305,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 7,
+        "reasoning_output_tokens": 0,
         "cache_usage_reported": true
       }
-    },
-    {
-      "tool_calls": [
-        {
-          "ID": "call_00_7LHZ3XsudQBwG65CXdre4648",
-          "Function": "update_plan",
-          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Read and review draft.txt in the workspace\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"verification_required\": true}, {\"status\": \"in_progress\", \"step\": \"Record the outcome and keep delivery pending on the user-specified recipient\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"pending\", \"step\": \"Deliver the reviewed draft to the recipient once the user provides it\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}]}"
-        }
-      ]
     }
   ]
 }

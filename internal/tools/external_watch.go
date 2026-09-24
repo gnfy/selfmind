@@ -36,7 +36,8 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 		name:        "watch_external",
 		description: "Register a durable daemon-side read-only observation of state that gates later work, including external operations and local readiness signals. The command must be PROVABLY read-only by static inspection before registration is attempted — see the command field. Define completion criteria and remaining verification before waiting. Select the exact object and field; a condition match only resumes the task, not proves the whole goal. Registration hands off as waiting_external once every declared group is fully registered; incomplete groups must be filled in this run. Grouped registration retains already-satisfied members, so an explicitly requested group can establish a handoff even when every member is ready.",
 		schema: ToolSchema{
-			Type: "object",
+			Type:                 "object",
+			AdditionalProperties: rejectAdditionalProperties(),
 			Properties: map[string]PropertyDef{
 				"description": {Type: "string", Description: "Short user-facing description of what is being watched"},
 				// "Read-only command that checks the external state" promised a

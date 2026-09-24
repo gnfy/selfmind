@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,211 @@ func TestCoerceArgsRejectsInvalidNumbers(t *testing.T) {
 	}
 }
 
+func TestStrictControlToolRejectsUnknownArgumentsBeforeInvocation(t *testing.T) {
+	registry := NewRegistry()
+	invoked := false
+	registry.Register(&MockTool{BaseTool: BaseTool{
+		name: "strict_control",
+		schema: ToolSchema{
+			Type:                 "object",
+			AdditionalProperties: rejectAdditionalProperties(),
+			Properties: map[string]PropertyDef{
+				"check": {
+					Type:                 "object",
+					AdditionalProperties: rejectAdditionalProperties(),
+					Properties: map[string]PropertyDef{
+						"step_id": {Type: "string"},
+					},
+				},
+			},
+		},
+		handler: func(args map[string]interface{}) (string, error) {
+			invoked = true
+			return "ok", nil
+		},
+	}})
+
+	result, err := registry.DispatchResult("strict_control", map[string]interface{}{"checks": []interface{}{}})
+	if err == nil || !strings.Contains(err.Error(), "unknown parameter: checks") {
+		t.Fatalf("top-level typo error=%v", err)
+	}
+	if result.Invoked == nil || *result.Invoked || invoked {
+		t.Fatalf("invalid arguments reached execution: result=%+v invoked=%v", result, invoked)
+	}
+
+	_, err = registry.DispatchResult("strict_control", map[string]interface{}{
+		"check": map[string]interface{}{"step": "invented"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unknown parameter: check.step") {
+		t.Fatalf("nested typo error=%v", err)
+	}
+	if invoked {
+		t.Fatal("nested invalid arguments reached execution")
+	}
+	var recovery interface {
+		ToolFailurePhase() string
+		ToolEffectState() string
+		ToolStateChanged() bool
+	}
+	if !errors.As(err, &recovery) || recovery.ToolFailurePhase() != "preparation" ||
+		recovery.ToolEffectState() != "not_dispatched" || recovery.ToolStateChanged() {
+		t.Fatalf("invalid arguments lost pre-dispatch facts: %T %v", err, err)
+	}
+}
+
+func TestPreparedInvocationSurvivesCatalogueRefreshWithoutReresolution(t *testing.T) {
+	registry := NewRegistry()
+	invoked := false
+	registry.Register(&MockTool{BaseTool: BaseTool{
+		name: "dynamic_tool",
+		schema: ToolSchema{
+			Type:                 "object",
+			AdditionalProperties: rejectAdditionalProperties(),
+			Properties:           map[string]PropertyDef{"value": {Type: "string"}},
+		},
+		handler: func(args map[string]interface{}) (string, error) {
+			invoked = true
+			return taskStringArg(args, "value"), nil
+		},
+	}})
+
+	prepared, err := registry.PrepareToolArguments("dynamic_tool", map[string]interface{}{"value": "snapshot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.Unregister("dynamic_tool")
+	result, err := registry.DispatchResult("dynamic_tool", prepared)
+	if err != nil || result.Output != "snapshot" || !invoked || result.Invoked == nil || !*result.Invoked {
+		t.Fatalf("prepared invocation changed during refresh: result=%+v invoked=%v err=%v", result, invoked, err)
+	}
+	_, err = registry.PrepareToolArguments("dynamic_tool", map[string]interface{}{"value": "new"})
+	var stable interface {
+		error
+		ToolErrorCode() string
+		ToolErrorCategory() string
+	}
+	var recovery interface {
+		ToolRetryability() string
+		ToolEffectState() string
+	}
+	if err == nil || !errors.As(err, &stable) || !errors.As(err, &recovery) ||
+		stable.ToolErrorCode() != "tool_unavailable" || stable.ToolErrorCategory() != "blocked_tool_capability" ||
+		recovery.ToolRetryability() != "different_strategy" || recovery.ToolEffectState() != "not_dispatched" {
+		t.Fatal("catalogue refresh did not affect a later invocation")
+	}
+}
+
+func TestOpenToolSchemaPreservesUnknownArguments(t *testing.T) {
+	registry := NewRegistry()
+	var received map[string]interface{}
+	registry.Register(&MockTool{BaseTool: BaseTool{
+		name: "open_tool",
+		schema: ToolSchema{Type: "object", Properties: map[string]PropertyDef{
+			"known": {Type: "integer"},
+		}},
+		handler: func(args map[string]interface{}) (string, error) {
+			received = args
+			return "ok", nil
+		},
+	}})
+
+	if _, err := registry.Dispatch("open_tool", map[string]interface{}{"known": "7", "extension": "kept"}); err != nil {
+		t.Fatal(err)
+	}
+	if received["known"] != 7 || received["extension"] != "kept" {
+		t.Fatalf("open schema lost or failed to coerce arguments: %#v", received)
+	}
+}
+
+func TestRunLifecycleSteeringAndHumanWaitSchemasAreClosedRecursively(t *testing.T) {
+	for _, tool := range []Tool{
+		NewUpdatePlanTool(), NewFinishRunTool(), NewVerifyTool(), NewClarifyTool(), NewExternalWatchTool(nil),
+		NewWorkSelectTool(nil), NewQueueUserInputTool(nil), NewRequestPermissionsTool(), NewSetDeliveryTargetTool(nil),
+	} {
+		definition := ToToolDefinition(tool)
+		function := definition["function"].(map[string]interface{})
+		parameters := function["parameters"].(map[string]interface{})
+		if parameters["additionalProperties"] != false {
+			t.Fatalf("%s root schema is open: %#v", tool.Name(), parameters)
+		}
+	}
+
+	plan := ToToolDefinition(NewUpdatePlanTool())["function"].(map[string]interface{})["parameters"].(map[string]interface{})
+	steps := plan["properties"].(map[string]interface{})["plan"].(map[string]interface{})["items"].(map[string]interface{})
+	if steps["additionalProperties"] != false {
+		t.Fatalf("update_plan step schema is open: %#v", steps)
+	}
+	verify := ToToolDefinition(NewVerifyTool())["function"].(map[string]interface{})["parameters"].(map[string]interface{})
+	verifyProperties := verify["properties"].(map[string]interface{})
+	if _, nested := verifyProperties["check"]; nested || verifyProperties["criterion"] == nil || verifyProperties["target"] == nil {
+		t.Fatalf("verify schema did not expose the canonical flat obligation: %#v", verifyProperties)
+	}
+
+	registry := NewRegistry()
+	registry.Register(NewRequestPermissionsTool())
+	if _, err := registry.PrepareToolArguments("request_permissions", map[string]interface{}{
+		"path": "/srv/site", "reason": "publish the site",
+	}); err == nil || !strings.Contains(err.Error(), "unknown parameter: path") {
+		t.Fatalf("permission typo degraded into an empty request: %v", err)
+	}
+}
+
+func TestVerifyLegacyCheckObjectNormalizesBeforeStrictValidation(t *testing.T) {
+	tool := NewVerifyTool()
+	normalized, err := tool.NormalizeArguments(map[string]interface{}{
+		"command": "true", "kind": "smoke",
+		"check": map[string]interface{}{
+			"criterion": "condition holds", "target": "artifact",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized["criterion"] != "condition holds" || normalized["target"] != "artifact" || normalized["kind"] != "smoke" {
+		t.Fatalf("legacy verify shape lost fields: %#v", normalized)
+	}
+	if _, present := normalized["check"]; present {
+		t.Fatalf("legacy wrapper reached strict validation: %#v", normalized)
+	}
+	if err := ValidateArgs(tool.Schema(), normalized); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.NormalizeArguments(map[string]interface{}{"command": "true", "check": map[string]interface{}{"checks": true}}); err == nil || !strings.Contains(err.Error(), "check.checks") {
+		t.Fatalf("unknown legacy field did not fail closed: %v", err)
+	}
+	if _, err := tool.NormalizeArguments(map[string]interface{}{"command": "true", "check": map[string]interface{}{"kind": "smoke"}}); err == nil || !strings.Contains(err.Error(), "check.kind") {
+		t.Fatalf("unpublished nested kind typo did not fail closed: %v", err)
+	}
+}
+
+func TestVerifyLegacyNestedStepIDRemainsCompatibilityOnly(t *testing.T) {
+	tool := NewVerifyTool()
+	definition := ToToolDefinition(tool)
+	function, _ := definition["function"].(map[string]interface{})
+	parameters, _ := function["parameters"].(map[string]interface{})
+	properties, _ := parameters["properties"].(map[string]interface{})
+	if _, published := properties["step_id"]; published {
+		t.Fatal("runtime-owned step_id was republished")
+	}
+
+	normalized, err := tool.NormalizeArguments(map[string]interface{}{
+		"command": "true",
+		"check":   map[string]interface{}{"step_id": "step_server", "criterion": "ready", "target": "artifact"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized[legacyVerificationStepIDArg] != "step_server" {
+		t.Fatalf("legacy step id was not retained for runtime validation: %#v", normalized)
+	}
+	if _, public := normalized["step_id"]; public {
+		t.Fatal("legacy step id leaked into the flat public shape")
+	}
+	if err := ValidateArgs(tool.Schema(), normalized); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestToToolDefinitionOmitsEmptyRequired(t *testing.T) {
 	definition := ToToolDefinition(NewDelegateTool())
 	function, ok := definition["function"].(map[string]interface{})
@@ -159,6 +365,33 @@ func TestDispatcherExposesTrustedToolExecutionMetadata(t *testing.T) {
 	mixed := disp.ToolExecutionMetadata("terminal", map[string]interface{}{"command": "rm stale.txt; curl https://example.com"})
 	if !containsMetadataClass(mixed.OperationClasses, "delete") || !containsMetadataClass(mixed.OperationClasses, "network") {
 		t.Fatalf("mixed-effect command metadata=%+v", mixed)
+	}
+}
+
+// ObservationOnly follows the deterministic proof and nothing else. Where the
+// command runs is a risk question: a host-executed read is still a read, and
+// this test has no isolated sandbox, so every call below counts as host.
+func TestDispatcherMarksProvenObservationOnly(t *testing.T) {
+	reg := NewRegistry()
+	disp := &Dispatcher{registry: reg}
+	reg.Register(NewExecuteCommandTool())
+	reg.Register(NewWriteFileTool())
+	for command, want := range map[string]bool{
+		"wc -c value.txt && od -An -c value.txt":                                      true,
+		"ls -la; echo '---'; od -c value.txt 2>/dev/null || echo 'value.txt missing'": true,
+		"git status --short":    true,
+		"echo DONE > value.txt": false,
+		"rm stale.txt":          false,
+		"python3 -c 'print(1)'": false,
+		"sed -i 's/a/b/' x.txt": false,
+		"./cat value.txt":       false,
+	} {
+		if got := disp.ToolExecutionMetadata("terminal", map[string]interface{}{"command": command}).ObservationOnly; got != want {
+			t.Errorf("%q observation_only=%v, want %v", command, got, want)
+		}
+	}
+	if disp.ToolExecutionMetadata("write_file", map[string]interface{}{"file_path": "a.txt", "content": "x"}).ObservationOnly {
+		t.Error("a file write is never an observation")
 	}
 }
 

@@ -1,4 +1,310 @@
 {
-  "method": "completion",
-  "completion": "receipt-prerequisites READY_A wait-group durable-external-observation resume"
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " register"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " two"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " observations"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": " group"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " can"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " both"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " same"
+    },
+    {
+      "reasoning_content": " block"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Command"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "printf"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "_A"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "'"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "_A"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " And"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "printf"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "_B"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "'"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "Y"
+    },
+    {
+      "reasoning_content": "_B"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Group"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": "-pr"
+    },
+    {
+      "reasoning_content": "erequisites"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " mode"
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " size"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " interval"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " timeout"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "60"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Plan"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " set"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Register"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": " both"
+    },
+    {
+      "content": " prerequisite"
+    },
+    {
+      "content": " observations"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": " all"
+    },
+    {
+      "content": "-group"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11093,
+        "output_tokens": 473,
+        "cache_read_input_tokens": 10624,
+        "cache_miss_input_tokens": 469,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 78,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ThiwJ6uY0shoKSaq6A8w1284",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"printf 'READY_A\\\\n'\", \"description\": \"Prerequisite A readiness (READY_A)\", \"success_pattern\": \"READY_A\", \"interval_seconds\": 5, \"timeout_seconds\": 60, \"wait_group\": \"receipt-prerequisites\", \"wait_group_mode\": \"all\", \"wait_group_size\": 2, \"cwd\": \".\"}"
+        },
+        {
+          "ID": "call_01_aJwlLeBnOlK4vwQ1Pk8e7184",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"printf 'READY_B\\\\n'\", \"description\": \"Prerequisite B readiness (READY_B)\", \"success_pattern\": \"READY_B\", \"interval_seconds\": 5, \"timeout_seconds\": 60, \"wait_group\": \"receipt-prerequisites\", \"wait_group_mode\": \"all\", \"wait_group_size\": 2, \"cwd\": \".\"}"
+        }
+      ]
+    }
+  ]
 }

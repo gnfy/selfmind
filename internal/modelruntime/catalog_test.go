@@ -46,6 +46,35 @@ func TestDiscoverCodexModelDescriptorFromLocalCache(t *testing.T) {
 	}
 }
 
+func TestDiscoverModelDescriptorUsesProviderCapabilitiesForDynamicModelAlias(t *testing.T) {
+	got, ok := DiscoverModelDescriptor("deepseek", "deepseek-flash")
+	if !ok {
+		t.Fatal("descriptor was not discovered")
+	}
+	if got.DefaultReasoning != "high" {
+		t.Fatalf("default reasoning = %q", got.DefaultReasoning)
+	}
+	if len(got.SupportedReasoning) != 3 || got.SupportedReasoning[0] != "none" || got.SupportedReasoning[2] != "xhigh" {
+		t.Fatalf("reasoning levels = %v", got.SupportedReasoning)
+	}
+	if got.CapabilitySource != "built-in provider profile" {
+		t.Fatalf("capability source = %q", got.CapabilitySource)
+	}
+}
+
+func TestDiscoverGemini3ReasoningCapabilities(t *testing.T) {
+	got, ok := DiscoverModelDescriptor("google", "gemini-3.8-flash")
+	if !ok {
+		t.Fatal("gemini 3 capability metadata was not discovered")
+	}
+	if got.DefaultReasoning != "medium" || len(got.SupportedReasoning) != 3 || got.SupportedReasoning[0] != "low" {
+		t.Fatalf("gemini reasoning metadata = %+v", got)
+	}
+	if got.CapabilitySource != "built-in model-family compatibility" {
+		t.Fatalf("capability source = %q", got.CapabilitySource)
+	}
+}
+
 func TestCatalogReportsStaleCacheInsteadOfPresentingItAsLive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "model_cache.json")
 	profile := ProviderProfile{ID: "openai", ModelList: ModelListOpenAICompatible, FallbackModels: []string{"fallback"}}

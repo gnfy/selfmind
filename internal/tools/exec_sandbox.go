@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"selfmind/internal/executionenv"
-	"selfmind/internal/tools/sandbox"
 )
 
 // SandboxMode is the per-call execution contract exposed by exec tools.
@@ -84,16 +83,15 @@ func ExecSandboxAllowsNetwork() bool {
 func ExecSandboxDiagnostics() ExecSandboxDiagnostic {
 	enabled, required, network := execSandboxPolicy()
 	available := ExecSandboxAvailable()
-	backend := "host"
+	isolation := IsolationBackendForPlatform(runtime.GOOS)
+	backend := hostBackendName
 	switch {
-	case runtime.GOOS == "linux" && available && enabled:
-		backend = "bubblewrap"
-	case runtime.GOOS == "linux":
-		backend = "host (bubblewrap unavailable or disabled)"
-	case runtime.GOOS == "darwin":
-		backend = "approval-controlled host"
+	case isolation == nil:
+		backend = "host (no isolation backend on " + runtime.GOOS + ")"
+	case available && enabled:
+		backend = isolation.Name()
 	default:
-		backend = "unsupported host"
+		backend = "host (" + isolationUnavailableReason(runtime.GOOS) + " or disabled)"
 	}
 	networkMode := "isolated"
 	if network {
@@ -106,7 +104,7 @@ func ExecSandboxDiagnostics() ExecSandboxDiagnostic {
 		Backend:     backend,
 		Network:     networkMode,
 		Platform:    runtime.GOOS + "/" + runtime.GOARCH,
-		Environment: "daemon environment filtered by BuildProcessEnv",
+		Environment: "daemon environment filtered by BuildProcessEnv and projected into the execution network view",
 	}
 }
 
@@ -114,7 +112,21 @@ func ExecSandboxDiagnostics() ExecSandboxDiagnostic {
 // the dispatcher has installed its process-wide policy yet. CLI diagnostics
 // use this before a gateway is started.
 func ExecSandboxAvailable() bool {
-	return runtime.GOOS == "linux" && sandbox.Available()
+	backend := IsolationBackendForPlatform(runtime.GOOS)
+	return backend != nil && backend.Available()
+}
+
+// isolationUnavailableReason explains, per platform convention, why a host that
+// has an isolation backend still cannot use it. It stays a derivation from the
+// platform rather than a branch inside the exec path.
+func isolationUnavailableReason(goos string) string {
+	switch goos {
+	case "linux":
+		return "bubblewrap or unprivileged user namespaces unavailable"
+	case "darwin":
+		return "sandbox-exec unavailable"
+	}
+	return "no isolation backend on " + goos
 }
 
 // ExecSandboxPromptNote renders the model-facing one-liner about the effective
@@ -130,7 +142,7 @@ func ExecSandboxPromptNote() string {
 		return ""
 	}
 	if network {
-		return "Shell/exec tools run inside an OS sandbox: the filesystem outside the workspace is read-only; network shares the daemon host namespace and inherits the daemon's proxy and DNS settings. A command that must write outside the workspace can request sandbox=host (approval required) once.\n"
+		return "Shell/exec tools run inside an OS sandbox: the filesystem outside the workspace is read-only; network shares the daemon host namespace, and proxy settings are projected into that network view. A command that must write outside the workspace can request sandbox=host (approval required) once.\n"
 	}
 	return "Shell/exec tools run inside an OS sandbox: the filesystem outside the workspace is read-only and network is disabled by default. Commands that clearly need egress request the workspace-scoped network:shared capability before execution. A timeout alone is not proof of a network problem, and missing credentials are not a reason to switch to host execution.\n"
 }
@@ -164,7 +176,7 @@ func effectiveSandboxModeForPolicy(requested SandboxMode, enabled, required bool
 	if requested == SandboxIsolated || required {
 		return SandboxIsolated
 	}
-	if enabled && runtime.GOOS == "linux" && ExecSandboxAvailable() {
+	if enabled && ExecSandboxAvailable() {
 		return SandboxIsolated
 	}
 	return SandboxHost
@@ -220,10 +232,11 @@ func sandboxedCommandForPlatform(
 	sandboxAvailable bool,
 	networkOverride ...bool,
 ) (*exec.Cmd, SandboxDecision, error) {
-	return sandboxedCommandWithMaterial(ctx, inner, execMaterial{
+	cmd, decision, _, err := sandboxedCommandWithMaterial(ctx, inner, execMaterial{
 		WritableRoots: []string{writableRoot},
 		Env:           currentToolProcessEnv(),
 	}, requested, goos, sandboxAvailable, networkOverride...)
+	return cmd, decision, err
 }
 
 // execMaterial is everything the sandbox needs that is derived from the request
@@ -256,8 +269,11 @@ type execMaterial struct {
 	// explainable from the event stream alone.
 	ProfilesFromInventory []string
 	ProfileNotes          []string
-	CopiedStateFiles      int
-	CopiedStateBytes      int64
+	// ProxyMode records the runtime-owned projection of snapshot proxy values
+	// into this invocation's network view. It contains no endpoint or secret.
+	ProxyMode        string
+	CopiedStateFiles int
+	CopiedStateBytes int64
 	// ScratchBytes is the run's accumulated scratch size, reported as evidence
 	// so an unbounded run is visible before it fills the disk.
 	ScratchBytes int64
@@ -282,22 +298,32 @@ func sandboxedCommandWithMaterial(
 	goos string,
 	sandboxAvailable bool,
 	networkOverride ...bool,
-) (*exec.Cmd, SandboxDecision, error) {
+) (*exec.Cmd, SandboxDecision, SandboxPlan, error) {
 	if len(inner) == 0 {
-		return nil, SandboxDecision{}, fmt.Errorf("sandbox command is empty")
+		return nil, SandboxDecision{}, SandboxPlan{}, fmt.Errorf("sandbox command is empty")
 	}
-	env := material.Env
-	if len(env) == 0 {
-		env = currentToolProcessEnv()
+	if len(material.Env) == 0 {
+		material.Env = currentToolProcessEnv()
 	}
-	plain := func(decision SandboxDecision) (*exec.Cmd, SandboxDecision, error) {
-		plan := planFromMaterial(material, decision)
-		processMaterial := ProcessMaterial{env: env, scratchTmp: strings.TrimSpace(material.ScratchTmp)}
+	// The proxy projection belongs to the RESOLVED decision, not the request.
+	// `auto` degrades to host execution carrying the daemon's own network, so
+	// projecting from the request stripped a proxy the command could actually
+	// reach and produced a self-contradictory record: network_mode "shared"
+	// beside proxy_mode "omitted_for_isolated_network". Resolving it here also
+	// gives the legacy adapter the same projection, which it previously skipped
+	// entirely.
+	resolve := func(decision SandboxDecision) (SandboxPlan, ProcessMaterial) {
+		projected := adaptExecMaterialForNetwork(material, decision.NetworkShared)
+		return planFromMaterial(projected, decision),
+			ProcessMaterial{env: projected.Env, scratchTmp: strings.TrimSpace(projected.ScratchTmp)}
+	}
+	plain := func(decision SandboxDecision) (*exec.Cmd, SandboxDecision, SandboxPlan, error) {
+		plan, processMaterial := resolve(decision)
 		cmd, err := SandboxBackendForMode(SandboxHost).Command(ctx, inner, plan, processMaterial)
 		if err != nil {
-			return nil, SandboxDecision{}, err
+			return nil, SandboxDecision{}, SandboxPlan{}, err
 		}
-		return cmd, decision, nil
+		return cmd, decision, plan, nil
 	}
 	enabled, required, network := execSandboxPolicy()
 	if len(networkOverride) > 0 {
@@ -306,19 +332,19 @@ func sandboxedCommandWithMaterial(
 
 	if requested == SandboxHost {
 		if required {
-			return nil, SandboxDecision{}, fmt.Errorf("host execution is disabled because exec_sandbox.required is true")
+			return nil, SandboxDecision{}, SandboxPlan{}, fmt.Errorf("host execution is disabled because exec_sandbox.required is true")
 		}
 		return plain(SandboxDecision{Mode: SandboxHost, Reason: "explicit host execution", NetworkShared: true})
 	}
 	if !enabled {
 		if requested == SandboxIsolated || required {
-			return nil, SandboxDecision{}, fmt.Errorf("isolated execution was requested but exec_sandbox.enabled is false")
+			return nil, SandboxDecision{}, SandboxPlan{}, fmt.Errorf("isolated execution was requested but exec_sandbox.enabled is false")
 		}
 		return plain(SandboxDecision{Mode: SandboxHost, Reason: "exec sandbox disabled by configuration", NetworkShared: true})
 	}
-	if goos != "linux" {
+	if IsolationBackendForPlatform(goos) == nil {
 		if requested == SandboxIsolated || required {
-			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable on %s", goos)
+			return nil, SandboxDecision{}, SandboxPlan{}, fmt.Errorf("isolated execution is unavailable on %s", goos)
 		}
 		return plain(SandboxDecision{
 			Mode:          SandboxHost,
@@ -328,22 +354,31 @@ func sandboxedCommandWithMaterial(
 	}
 	if !sandboxAvailable {
 		if requested == SandboxIsolated || required {
-			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable (install bubblewrap and enable unprivileged user namespaces)")
+			return nil, SandboxDecision{}, SandboxPlan{}, fmt.Errorf("isolated execution is unavailable (%s)", isolationUnavailableReason(goos))
 		}
-		return plain(SandboxDecision{Mode: SandboxHost, Reason: "bubblewrap or unprivileged user namespaces unavailable", NetworkShared: true})
+		return plain(SandboxDecision{Mode: SandboxHost, Reason: isolationUnavailableReason(goos), NetworkShared: true})
 	}
 
 	decision := SandboxDecision{Mode: SandboxIsolated, NetworkShared: network}
-	plan := planFromMaterial(material, decision)
-	processMaterial := ProcessMaterial{env: env, scratchTmp: strings.TrimSpace(material.ScratchTmp)}
+	plan, processMaterial := resolve(decision)
 	cmd, err := SandboxBackendForMode(SandboxIsolated).Command(ctx, inner, plan, processMaterial)
 	if err != nil {
+		// Reached when the backend exists and the host can run it, but THIS
+		// plan is not enforceable — on macOS, a plan whose tool state needs a
+		// mount. Isolation was still promised, so a required run fails rather
+		// than quietly widening; otherwise it degrades to an approval-gated
+		// host run with the reason visible.
 		if requested == SandboxIsolated || required {
-			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable (install bubblewrap and enable unprivileged user namespaces)")
+			return nil, SandboxDecision{}, SandboxPlan{}, fmt.Errorf("isolated execution is unavailable (%s cannot enforce this plan)",
+				SandboxBackendName(SandboxIsolated))
 		}
-		return plain(SandboxDecision{Mode: SandboxHost, Reason: "bubblewrap or unprivileged user namespaces unavailable", NetworkShared: true})
+		return plain(SandboxDecision{
+			Mode:          SandboxHost,
+			Reason:        SandboxBackendName(SandboxIsolated) + " cannot enforce this plan (mount-backed tool state)",
+			NetworkShared: true,
+		})
 	}
-	return cmd, decision, nil
+	return cmd, decision, plan, nil
 }
 
 func sandboxedShellCommand(ctx context.Context, command, writableRoot string, requested SandboxMode, networkOverride ...bool) (*exec.Cmd, SandboxDecision, error) {

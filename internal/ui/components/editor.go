@@ -47,6 +47,12 @@ var pasteLineBreakRe = regexp.MustCompile(`\r\n|\r|\n`)
 
 const maxComposerInputLines = 6
 
+// TerminalCursorMarker is a zero-width handoff point for terminal clients.
+// The editor paints its own caret, while native input methods place preedit
+// text and candidate windows at the terminal's real cursor. The CLI replaces
+// this marker with a renderer-safe terminal cursor target before drawing.
+const TerminalCursorMarker = "\x1b]777;selfmind-editor-caret\x1b\\"
+
 // Editor wraps textarea + textinput with large-paste detection.
 // When a multi-line paste exceeds the configured thresholds, the actual
 // content is stored here and a placeholder token is shown in the textarea.
@@ -929,9 +935,9 @@ func renderEditorValue(value, placeholder string, height, width int, textStyle, 
 func renderEditorCursorLine(row string, width int, textStyle, cursorStyle lipgloss.Style, cursorVisible bool, cursorOffset int) string {
 	before, cursorText, after := editorCursorParts(row, width, cursorOffset)
 	if !cursorVisible {
-		return textStyle.Render(before + cursorText + after)
+		return textStyle.Render(before) + TerminalCursorMarker + textStyle.Render(cursorText+after)
 	}
-	return textStyle.Render(before) + cursorStyle.Render(cursorText) + textStyle.Render(after)
+	return textStyle.Render(before) + TerminalCursorMarker + cursorStyle.Render(cursorText) + textStyle.Render(after)
 }
 
 // editorCursorParts splits one display row around the cursor. cursorOffset is
@@ -986,7 +992,7 @@ func renderEmptyEditorLine(placeholder string, width int, placeholderStyle, curs
 	if cursorVisible {
 		cursorStyleToUse = cursorStyle
 	}
-	cursor := cursorStyleToUse.Render(" ")
+	cursor := TerminalCursorMarker + cursorStyleToUse.Render(" ")
 	available := width - 1
 	if available < 0 {
 		available = 0

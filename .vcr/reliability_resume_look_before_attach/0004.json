@@ -1,0 +1,29 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11923,
+        "output_tokens": 168,
+        "cache_read_input_tokens": 11520,
+        "cache_miss_input_tokens": 403,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_BckniXig0Xy56uMxHOet8013",
+          "Function": "verify",
+          "Args": "{\"command\": \"python3 -c \\\"import sys; d=open('value.txt','rb').read(); print(repr(d)); sys.exit(0 if d==b'READY\\\\n' else 1)\\\"\", \"criterion\": \"value.txt contains exactly READY followed by a newline (bytes b'READY\\\\n', nothing else)\", \"target\": \"value.txt\", \"kind\": \"custom\", \"local_dependencies\": [\"value.txt\"]}"
+        }
+      ]
+    }
+  ]
+}

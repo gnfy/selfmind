@@ -6,10 +6,49 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"selfmind/internal/kernel"
+	"selfmind/internal/verification"
 )
+
+type evidenceVerificationProjection struct{}
+
+func (evidenceVerificationProjection) Project(context.Context, PlanState) (PlanProjectionResult, error) {
+	return PlanProjectionResult{}, nil
+}
+func (evidenceVerificationProjection) ValidateCompletion(context.Context) error { return nil }
+func (evidenceVerificationProjection) ValidateVerification(context.Context, verification.Binding, string) error {
+	return nil
+}
+func (evidenceVerificationProjection) ResolveVerification(_ context.Context, binding verification.Binding, _ string) (*verification.Binding, error) {
+	binding.Version = 3
+	binding.StepID = "step-required"
+	return &binding, nil
+}
+
+func TestSuccessfulReplacementExplainsThatEvidenceDoesNotMoveToAnotherObligation(t *testing.T) {
+	events := make(chan string, 1)
+	ctx := kernel.WithEventChannel(context.Background(), events)
+	ctx = WithRunPlanProjection(ctx, evidenceVerificationProjection{})
+	exec := EvidenceMiddleware()(func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
+		code := 0
+		return kernel.ToolDispatchResult{Process: &kernel.ToolProcessResult{Started: true, ExitCode: &code}}, nil
+	})
+	result, err := exec(map[string]interface{}{
+		"_context": ctx, "_tool_name": "verify", "_tool_call_id": "corrected-check",
+		"command": "true", "cwd": "/workspace", "criterion": "output is valid", "target": "output.txt",
+		"replaces": "failed-check", "reason": "correct the observation method while preserving the condition",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result.Output, "remains bound to the original verification obligation") || !strings.Contains(result.Output, "cancel any separate step created only for this retry") {
+		t.Fatalf("missing replacement scope guidance: %q", result.Output)
+	}
+	_ = readEvidenceEvent(t, events)
+}
 
 func TestEvidenceMiddlewareRecordsObservedFileMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "observed.txt")
@@ -68,6 +107,31 @@ func TestEvidenceMiddlewareRecordsFailedVerificationExitCode(t *testing.T) {
 	}
 	if evidence.Command.ExitCode != 2 || evidence.Command.Kind != "test" || evidence.Command.Command != "go test ./..." {
 		t.Fatalf("unexpected command evidence: %+v", evidence.Command)
+	}
+}
+
+func TestFailedBoundVerificationExplainsThatTheSameObligationRemainsOpen(t *testing.T) {
+	events := make(chan string, 1)
+	ctx := kernel.WithEventChannel(context.Background(), events)
+	ctx = WithRunPlanProjection(ctx, evidenceVerificationProjection{})
+
+	exec := EvidenceMiddleware()(func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
+		code := 1
+		return kernel.ToolDispatchResult{Process: &kernel.ToolProcessResult{Started: true, ExitCode: &code}}, errors.New("check failed")
+	})
+	result, err := exec(map[string]interface{}{
+		"_context": ctx, "_tool_name": "verify", "_tool_call_id": "failed-check",
+		"command": "false", "cwd": "/workspace", "criterion": "output is valid", "target": "output.txt",
+	})
+	if err == nil {
+		t.Fatal("failed verification unexpectedly succeeded")
+	}
+	if !strings.Contains(result.Output, "obligation remains open") || !strings.Contains(result.Output, "same check with replaces") || !strings.Contains(result.Output, "exactly its existing plan step in_progress") {
+		t.Fatalf("missing correction guidance: %q", result.Output)
+	}
+	evidence := readEvidenceEvent(t, events)
+	if evidence.Command == nil || evidence.Command.Binding == nil || evidence.Command.Binding.StepID != "step-required" {
+		t.Fatalf("evidence binding=%+v", evidence.Command)
 	}
 }
 

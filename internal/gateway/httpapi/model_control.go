@@ -185,11 +185,11 @@ func formatModelStatus(status modelchange.Status) string {
 	} else {
 		fmt.Fprintln(&out, "Background readiness: disabled")
 	}
-	formatRouteLine(&out, "Running primary", status.Running.Primary)
-	formatRouteLine(&out, "Running background", status.Running.Auxiliary)
+	formatRouteLineWithTuning(&out, "Running primary", status.Running.Primary, status.RunningTuning.Primary)
+	formatRouteLineWithTuning(&out, "Running background", status.Running.Auxiliary, status.RunningTuning.Auxiliary)
 	if status.Configured != status.Running {
-		formatRouteLine(&out, "Configured primary", status.Configured.Primary)
-		formatRouteLine(&out, "Configured background", status.Configured.Auxiliary)
+		formatRouteLineWithTuning(&out, "Configured primary", status.Configured.Primary, status.ConfiguredTuning.Primary)
+		formatRouteLineWithTuning(&out, "Configured background", status.Configured.Auxiliary, status.ConfiguredTuning.Auxiliary)
 	}
 	if status.Pending != nil {
 		fmt.Fprintf(&out, "Pending: %s (%s), routes=%s\n", status.Pending.ID, status.Pending.Status, joinModelRoutes(status.Pending.ChangedRoutes))
@@ -224,11 +224,19 @@ func readinessLabel(ready bool, reason string) string {
 }
 
 func formatRouteLine(out *strings.Builder, label string, selection config.ModelSelectionConfig) {
+	formatRouteLineWithTuning(out, label, selection, modelchange.RouteTuning{})
+}
+
+func formatRouteLineWithTuning(out *strings.Builder, label string, selection config.ModelSelectionConfig, tuning modelchange.RouteTuning) {
 	if selection.Enabled != nil && !*selection.Enabled {
 		fmt.Fprintf(out, "%s: disabled\n", label)
 		return
 	}
-	fmt.Fprintf(out, "%s: %s/%s reasoning=%s", label, dash(selection.Provider), dash(selection.Model), auto(selection.Reasoning))
+	reasoning := auto(selection.Reasoning)
+	if strings.TrimSpace(selection.Reasoning) == "" && strings.TrimSpace(tuning.Reasoning) != "" {
+		reasoning = "auto→" + strings.TrimSpace(tuning.Reasoning)
+	}
+	fmt.Fprintf(out, "%s: %s/%s reasoning=%s", label, dash(selection.Provider), dash(selection.Model), reasoning)
 	if strings.TrimSpace(selection.ServiceTier) != "" {
 		fmt.Fprintf(out, " service_tier=%s", selection.ServiceTier)
 	}

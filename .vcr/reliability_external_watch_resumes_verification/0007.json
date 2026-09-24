@@ -1,4 +1,5 @@
 {
+  "plan_binding_version": 1,
   "method": "stream",
   "events": [
     {
@@ -20,43 +21,25 @@
       "reasoning_content": " Use"
     },
     {
-      "reasoning_content": " cmp"
+      "reasoning_content": " verify"
     },
     {
-      "reasoning_content": " against"
+      "reasoning_content": " tool"
     },
     {
-      "reasoning_content": " printf"
-    },
-    {
-      "reasoning_content": " '"
-    },
-    {
-      "reasoning_content": "VER"
-    },
-    {
-      "reasoning_content": "IFIED"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "'.\n\n"
-    },
-    {
-      "reasoning_content": "verify"
+      "reasoning_content": " with"
     },
     {
       "reasoning_content": " command"
     },
     {
-      "reasoning_content": ":"
+      "reasoning_content": " grep"
     },
     {
-      "reasoning_content": " `"
+      "reasoning_content": " -"
     },
     {
-      "reasoning_content": "printf"
+      "reasoning_content": "qx"
     },
     {
       "reasoning_content": " '"
@@ -68,19 +51,7 @@
       "reasoning_content": "IFIED"
     },
     {
-      "reasoning_content": "\\n"
-    },
-    {
       "reasoning_content": "'"
-    },
-    {
-      "reasoning_content": " |"
-    },
-    {
-      "reasoning_content": " cmp"
-    },
-    {
-      "reasoning_content": " -"
     },
     {
       "reasoning_content": " receipt"
@@ -89,31 +60,79 @@
       "reasoning_content": ".txt"
     },
     {
-      "reasoning_content": "`\n\n"
+      "reasoning_content": " plus"
     },
     {
-      "reasoning_content": "Also"
+      "reasoning_content": " ensure"
     },
     {
-      "reasoning_content": " could"
+      "reasoning_content": " single"
     },
     {
-      "reasoning_content": " add"
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " craft"
     },
     {
       "reasoning_content": " a"
     },
     {
-      "reasoning_content": " check"
+      "reasoning_content": " command"
     },
     {
       "reasoning_content": " that"
     },
     {
-      "reasoning_content": " file"
+      "reasoning_content": " fails"
     },
     {
-      "reasoning_content": " has"
+      "reasoning_content": " if"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " isn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "single"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": ","
     },
     {
       "reasoning_content": " no"
@@ -125,16 +144,478 @@
       "reasoning_content": " content"
     },
     {
+      "reasoning_content": "):\n\n"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": "["
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ]"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " fails"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " extra"
+    },
+    {
+      "reasoning_content": " lines"
+    },
+    {
+      "reasoning_content": "/"
+    },
+    {
+      "reasoning_content": "wh"
+    },
+    {
+      "reasoning_content": "ites"
+    },
+    {
+      "reasoning_content": "pace"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " ignores"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "lines"
+    },
+    {
       "reasoning_content": "."
     },
     {
-      "reasoning_content": " cmp"
+      "reasoning_content": " Combine"
     },
     {
-      "reasoning_content": " does"
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": "-count"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " maybe"
+    },
+    {
+      "reasoning_content": " unnecessary"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": "'ll"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "g"
+    },
+    {
+      "reasoning_content": "rep"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "qx"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "'"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " \u0026\u0026"
+    },
+    {
+      "reasoning_content": " ["
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "wc"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "l"
+    },
+    {
+      "reasoning_content": " \u003c"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "eq"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": " ]"
+    },
+    {
+      "reasoning_content": "`\n\n"
+    },
+    {
+      "reasoning_content": "H"
+    },
+    {
+      "reasoning_content": "mm"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " w"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": "l"
+    },
+    {
+      "reasoning_content": " counts"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "lines"
+    },
+    {
+      "reasoning_content": ";"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " If"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " had"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " without"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "'d"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Since"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " wrote"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " fine"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " if"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " checker"
+    },
+    {
+      "reasoning_content": " expects"
     },
     {
       "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " fine"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": " simpler"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " robust"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "["
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ]"
+    },
+    {
+      "reasoning_content": "`."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " clean"
+    },
+    {
+      "reasoning_content": "est"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": "-content"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Do"
     },
     {
       "reasoning_content": " that"
@@ -143,79 +624,247 @@
       "reasoning_content": ".\n\n"
     },
     {
-      "reasoning_content": "Let"
+      "reasoning_content": "But"
     },
     {
-      "reasoning_content": " me"
+      "reasoning_content": " grep"
     },
     {
-      "reasoning_content": " run"
+      "reasoning_content": " -"
     },
     {
-      "reasoning_content": " verify"
+      "reasoning_content": "qx"
+    },
+    {
+      "reasoning_content": " combined"
+    },
+    {
+      "reasoning_content": " ensures"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": "-ex"
+    },
+    {
+      "reasoning_content": "act"
     },
     {
       "reasoning_content": "."
     },
     {
-      "content": "Now"
+      "reasoning_content": " I"
     },
     {
-      "content": " verifying"
+      "reasoning_content": "'ll"
     },
     {
-      "content": " the"
+      "reasoning_content": " do"
     },
     {
-      "content": " exact"
+      "reasoning_content": " the"
     },
     {
-      "content": " content"
+      "reasoning_content": " cat"
     },
     {
-      "content": " with"
+      "reasoning_content": " comparison"
     },
     {
-      "content": " a"
+      "reasoning_content": " as"
     },
     {
-      "content": " byte"
+      "reasoning_content": " it"
     },
     {
-      "content": "-for"
+      "reasoning_content": "'s"
     },
     {
-      "content": "-by"
+      "reasoning_content": " strict"
     },
     {
-      "content": "te"
+      "reasoning_content": "est"
     },
     {
-      "content": " comparison"
+      "reasoning_content": " for"
     },
     {
-      "content": "."
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "ex"
+    },
+    {
+      "reasoning_content": "actly"
+    },
+    {
+      "reasoning_content": " VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Command"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "test"
+    },
+    {
+      "reasoning_content": " \"$"
+    },
+    {
+      "reasoning_content": "("
+    },
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " receipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": ")\""
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " c"
+    },
+    {
+      "reasoning_content": "wd"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " root"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "c"
+    },
+    {
+      "reasoning_content": "riterion"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "rece"
+    },
+    {
+      "reasoning_content": "ipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " contains"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " VER"
+    },
+    {
+      "reasoning_content": "IFIED"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " entire"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " local"
+    },
+    {
+      "reasoning_content": "_d"
+    },
+    {
+      "reasoning_content": "ependencies"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " [\""
+    },
+    {
+      "reasoning_content": "rece"
+    },
+    {
+      "reasoning_content": "ipt"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": "\"]."
     },
     {
       "finish_reason": "tool_calls"
     },
     {
       "usage": {
-        "input_tokens": 13339,
-        "output_tokens": 161,
-        "cache_read_input_tokens": 13184,
-        "cache_miss_input_tokens": 155,
+        "input_tokens": 13144,
+        "output_tokens": 428,
+        "cache_read_input_tokens": 12928,
+        "cache_miss_input_tokens": 216,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 52,
+        "reasoning_output_tokens": 281,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_vLzZ575eU9g9F6ZtICXk1979",
+          "ID": "call_00_g3rxkKKSIuGF3eudGoG30763",
           "Function": "verify",
-          "Args": "{\"command\": \"printf 'VERIFIED\\\\n' | cmp - receipt.txt\", \"cwd\": \".\", \"kind\": \"smoke\", \"timeout\": 30}"
+          "Args": "{\"command\": \"test \\\"$(cat receipt.txt)\\\" = \\\"VERIFIED\\\"\", \"criterion\": \"receipt.txt contains exactly VERIFIED as its entire content\", \"kind\": \"custom\", \"target\": \"receipt.txt\", \"cwd\": \".\", \"local_dependencies\": [\"receipt.txt\"]}"
         }
       ]
     }

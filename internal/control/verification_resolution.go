@@ -45,46 +45,136 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 		if b.LocalDependencies == nil {
 			b.LocalDependencies = old.LocalDependencies
 		}
+		b.StepID = old.StepID
 		b.Version = old.Version
+		// Step identity is runtime-owned execution context, not part of Main's
+		// semantic proof obligation. A later work unit may deliberately recheck
+		// the same condition after its declared inputs changed. Bind that attempt
+		// to the one active verification step while preserving criterion, target,
+		// dependencies, and the explicit replacement edge.
+		plan, planErr := s.LatestRunPlan(ctx, tenant, runID)
+		if planErr != nil {
+			return nil, planErr
+		}
+		if plan != nil {
+			oldStepFound := false
+			oldWorkUnitClosed := false
+			for _, step := range plan.Steps {
+				if step.StepID == old.StepID {
+					oldStepFound = true
+					break
+				}
+			}
+			if oldStepFound {
+				var status string
+				if queryErr := s.db.QueryRowContext(ctx, `SELECT COALESCE(w.status,'')
+					FROM run_plan_steps p
+					LEFT JOIN run_work_units w ON w.run_id=p.run_id AND w.id=p.work_unit_id
+					WHERE p.tenant_id=? AND p.run_id=?
+					  AND p.plan_version=(SELECT MAX(version) FROM run_plan_versions WHERE tenant_id=? AND run_id=?)
+					  AND p.step_id=? LIMIT 1`, normalizeTenant(tenant), runID,
+					normalizeTenant(tenant), runID, old.StepID).Scan(&status); queryErr != nil {
+					return nil, queryErr
+				}
+				oldWorkUnitClosed = workUnitTerminal(status)
+			}
+			// A complete plan snapshot may deliberately remove an obsolete step.
+			// Its historical evidence keeps the old association, but a correction
+			// must attach to the current active obligation rather than an id that can
+			// no longer be projected by the current plan. A completed step that is
+			// still inside an active work unit retains its identity: step status is
+			// model judgment, not authority to move a replacement. Once the owning
+			// work unit is frozen, a declared dependency recheck belongs to the new
+			// active required step and does not rewrite that historical projection.
+			if old.StepID == "" || !oldStepFound || oldWorkUnitClosed {
+				for _, step := range plan.Steps {
+					if step.Status == "in_progress" && step.VerificationRequired {
+						b.StepID = step.StepID
+						b.Version = 3
+						break
+					}
+				}
+			}
+		}
 		if err := s.ValidateVerificationReplacement(ctx, tenant, runID, b, cwd); err != nil {
 			return nil, err
 		}
 		return &b, nil
 	}
-	// An explicit standalone obligation remains standalone. Only a requested
-	// plan reference, or an otherwise omitted binding, derives plan identity.
-	if b.StepID == "" && (b.Criterion != "" || b.Target != "") {
-		return &b, nil
-	}
+	explicitStandalone := b.StepID == "" && (b.Criterion != "" || b.Target != "")
 	plan, err := s.LatestRunPlan(ctx, tenant, runID)
 	if err != nil {
 		return nil, err
 	}
 	if plan != nil {
-		for _, step := range plan.Steps {
-			if (b.StepID != "" && step.StepID != b.StepID) || (b.StepID == "" && step.Status != "in_progress") {
-				continue
+		selected := -1
+		if b.StepID != "" {
+			for i := range plan.Steps {
+				if plan.Steps[i].StepID == b.StepID {
+					selected = i
+					break
+				}
 			}
-			if b.StepID == "" && !step.VerificationRequired {
-				return nil, nil
+		} else {
+			// Main may run a check after producing the input but before sending
+			// the next plan snapshot. Select only from the active work unit:
+			// its active required step wins, otherwise plan order selects the
+			// earliest pending obligation. This carries runtime identity without
+			// matching model prose or jumping into a later independent objective.
+			active := -1
+			for i := range plan.Steps {
+				if plan.Steps[i].Status == "in_progress" {
+					active = i
+					break
+				}
 			}
+			if active >= 0 {
+				start, end := active, len(plan.Steps)
+				for start > 0 && !isRunPlanBoundary(plan.Steps, start) {
+					start--
+				}
+				for i := active + 1; i < len(plan.Steps); i++ {
+					if isRunPlanBoundary(plan.Steps, i) {
+						end = i
+						break
+					}
+				}
+				for i := start; i < end; i++ {
+					step := plan.Steps[i]
+					if !step.VerificationRequired || (step.Status != "pending" && step.Status != "in_progress") {
+						continue
+					}
+					if step.Status == "in_progress" {
+						selected = i
+						break
+					}
+					if selected < 0 {
+						// Plan order is the runtime-owned execution order. If Main
+						// verifies after finishing a diagnostic step but before sending
+						// the transition snapshot, the earliest pending obligation is
+						// the only deterministic target that does not inspect prose.
+						selected = i
+					}
+				}
+			}
+		}
+		if selected >= 0 {
+			step := plan.Steps[selected]
 			if strings.TrimSpace(step.SuccessCriteria) == "" {
 				if b.StepID == "" {
 					return nil, nil
 				}
 				return nil, fmt.Errorf("declare an observable plan criterion before binding verification to step %s", step.StepID)
 			}
-			if b.Criterion != "" && b.Criterion != step.SuccessCriteria {
-				return nil, fmt.Errorf("verification must preserve plan criterion %q", step.SuccessCriteria)
+			if b.Criterion == "" {
+				b.Criterion = step.SuccessCriteria
 			}
-			b.Criterion = step.SuccessCriteria
-			if b.StepID != "" {
-				b.Version = 3
-			} else if b.LocalDependencies != nil {
-				b.Version = 2
-			} else {
-				b.Version = 1
-			}
+			// Once the runtime selects a plan step, persist that server-issued
+			// identity even when Main omitted step_id. The active step is only a
+			// selection hint; the recorded evidence must not depend on whichever
+			// step happens to be active when it is projected later.
+			b.StepID = step.StepID
+			b.Version = 3
 			if b.Target == "" {
 				b.Target = step.StepID
 			}
@@ -93,6 +183,9 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 	}
 	if b.StepID != "" {
 		return nil, fmt.Errorf("verification step %q does not belong to the current Run plan", b.StepID)
+	}
+	if explicitStandalone {
+		return &b, nil
 	}
 	return nil, nil
 }

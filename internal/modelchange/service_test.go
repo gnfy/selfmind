@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +115,35 @@ func TestCredentialStageSharesModelChangeCommitAndHealthyBoundaries(t *testing.T
 	}
 	if credentials.finalizes != 1 || credentials.rollbacks != 0 {
 		t.Fatalf("healthy credential transaction = %+v", credentials)
+	}
+}
+
+func TestRestartPreflightRejectsMissingCredentialTransactionBeforeConfigCommit(t *testing.T) {
+	service, path := newTestService(t)
+	service.Credentials = &fakeCredentialTransaction{}
+	before := SnapshotFromConfig(mustLoadConfig(t, path))
+	candidate := before
+	candidate.Primary.Model = "credential-candidate"
+	prepared, err := service.Prepare(context.Background(), PrepareRequest{
+		Candidate: candidate, Source: "cli", CredentialStage: "stage-preflight",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	restartProcess := &Service{ConfigPath: path}
+	if err := restartProcess.PreflightRestart(prepared.Change.ID); err == nil || !strings.Contains(err.Error(), "credential transaction support is unavailable") {
+		t.Fatalf("preflight error = %v", err)
+	}
+	if got := SnapshotFromConfig(mustLoadConfig(t, path)); got != before {
+		t.Fatalf("preflight changed config: got %+v want %+v", got, before)
+	}
+	status, err := restartProcess.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Pending == nil || status.Pending.Status != StatusAwaitingSafeBoundary {
+		t.Fatalf("preflight changed transaction state: %+v", status.Pending)
 	}
 }
 
@@ -981,6 +1011,69 @@ func newTestService(t *testing.T) (*Service, string) {
 	return service, path
 }
 
+func TestRememberSnapshotSelectionsKeepsModelAndReasoningHistory(t *testing.T) {
+	cfg := &config.Config{}
+	snapshot := Snapshot{
+		Primary:   config.ModelSelectionConfig{Provider: "google", Model: "gemini-custom", Reasoning: "high"},
+		Auxiliary: config.ModelSelectionConfig{Provider: "google", Model: "gemini-custom", Reasoning: "low"},
+	}
+	rememberSnapshotSelections(cfg, snapshot, []Route{RoutePrimary, RouteAuxiliary})
+	if len(cfg.Models.Remembered) != 1 {
+		t.Fatalf("remembered = %+v", cfg.Models.Remembered)
+	}
+	got := cfg.Models.Remembered[0]
+	if got.Provider != "google" || got.Model != "gemini-custom" || len(got.Reasoning) != 2 || got.Reasoning[0] != "low" || got.Reasoning[1] != "high" {
+		t.Fatalf("remembered entry = %+v", got)
+	}
+}
+
+func TestForgetRememberedModelDoesNotChangeRoute(t *testing.T) {
+	service, path := newTestService(t)
+	cfg := mustLoadConfig(t, path)
+	cfg.Models.RememberModel("google", "retired-model", "high")
+	before := SnapshotFromConfig(cfg)
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ForgetRememberedModel("google", "retired-model"); err != nil {
+		t.Fatal(err)
+	}
+	after := mustLoadConfig(t, path)
+	if len(after.Models.Remembered) != 0 {
+		t.Fatalf("remembered = %+v", after.Models.Remembered)
+	}
+	if got := SnapshotFromConfig(after); got != before {
+		t.Fatalf("route changed while forgetting history: before=%+v after=%+v", before, got)
+	}
+}
+
+func TestBeginDrainingRemembersBothSidesOfModelSwitch(t *testing.T) {
+	service, path := newTestService(t)
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := status.Configured
+	candidate.Primary = config.ModelSelectionConfig{Provider: "google", Model: "gemini-next", Reasoning: "high"}
+	prepared, err := service.Prepare(context.Background(), PrepareRequest{Candidate: candidate, Source: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.BeginDraining(prepared.Change.ID); err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustLoadConfig(t, path)
+	if len(cfg.Models.Remembered) != 2 {
+		t.Fatalf("remembered = %+v", cfg.Models.Remembered)
+	}
+	if got := cfg.Models.Remembered[0]; got.Provider != "google" || got.Model != "gemini-next" || !reflect.DeepEqual(got.Reasoning, []string{"high"}) {
+		t.Fatalf("new selection = %+v", got)
+	}
+	if got := cfg.Models.Remembered[1]; got.Provider != "codex-cli" || got.Model != "gpt-current" || !reflect.DeepEqual(got.Reasoning, []string{"medium"}) {
+		t.Fatalf("previous selection = %+v", got)
+	}
+}
+
 func newUnverifiedTestService(t *testing.T) (*Service, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -1017,4 +1110,84 @@ func mustLoadConfig(t *testing.T, path string) *config.Config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+// A change whose routes all passed before commit re-checks only what a
+// restart can break, the new process's reach. The approval route is the one
+// every smart-mode tool call waits on, so it alone is probed again; with
+// background work disabled there is none and Main stands in. A startup that
+// has no prior validation still proves what changed.
+func TestStartupAfterValidatedChangeRechecksOnlyTheApprovalRoute(t *testing.T) {
+	record := func(service *Service) *[][]Route {
+		var calls [][]Route
+		inner := service.Validate
+		service.Validate = func(ctx context.Context, cfg *config.Config, routes []Route) []ProbeResult {
+			calls = append(calls, append([]Route(nil), routes...))
+			return inner(ctx, cfg, routes)
+		}
+		return &calls
+	}
+	for _, tc := range []struct {
+		name              string
+		disableBackground bool
+		want              Route
+	}{
+		{name: "approval route", want: RouteFastClassifier},
+		{name: "background disabled", disableBackground: true, want: RoutePrimary},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, _ := newTestService(t)
+			calls := record(service)
+			status, err := service.Inspect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate := status.Configured
+			candidate.Primary = config.ModelSelectionConfig{Provider: "google", Model: "gemini-next", Reasoning: "high"}
+			if tc.disableBackground {
+				disabled := false
+				candidate.Auxiliary.Enabled = &disabled
+			}
+			prepared, err := service.Prepare(context.Background(), PrepareRequest{Candidate: candidate, Source: "local-cli"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if prepared.Change.ValidatedAt.IsZero() {
+				t.Fatal("a change validated before commit must record it")
+			}
+			if _, err := service.BeginDraining(prepared.Change.ID); err != nil {
+				t.Fatal(err)
+			}
+			*calls = nil
+			if _, _, err := service.ReconcileStartup(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(*calls) != 1 || len((*calls)[0]) != 1 || (*calls)[0][0] != tc.want {
+				t.Fatalf("startup probed %v, want only %s", *calls, tc.want)
+			}
+			healthy, err := service.MarkStartupHealthy()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !healthy.ModelReady() {
+				t.Fatalf("validated change did not become ready after the recheck: %+v", healthy)
+			}
+		})
+	}
+
+	t.Run("manual edit without prior validation", func(t *testing.T) {
+		service, path := newTestService(t)
+		calls := record(service)
+		cfg := mustLoadConfig(t, path)
+		cfg.Models.Auxiliary.Model = "gpt-background-manual"
+		if err := config.SaveConfig(path, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := service.ReconcileStartup(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(*calls) != 1 || len((*calls)[0]) != 1 || (*calls)[0][0] != RouteAuxiliary {
+			t.Fatalf("a manual edit must be proven where it changed, not rechecked as approval only: %v", *calls)
+		}
+	})
 }

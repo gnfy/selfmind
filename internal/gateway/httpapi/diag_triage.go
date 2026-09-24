@@ -44,8 +44,8 @@ func (d *Server) smartTriageDiagLines(ctx context.Context, identity *control.Ide
 	if stats.Total() == 0 {
 		sb.WriteString("no dangerous operation reached triage yet\n")
 	} else {
-		fmt.Fprintf(&sb, "contained %d, grant-hit %d, exact-run-hit %d, auto-approved %d, blocked %d, escalated %d, unavailable %d, human-ask %d\n",
-			stats.Contained, stats.GrantHits, stats.ExactRunHits, stats.Approved, stats.Denied, stats.Escalated, stats.Unavailable, stats.HumanAsks)
+		fmt.Fprintf(&sb, "contained %d, grant-hit %d, exact-run-hit %d, bundle-hit %d, auto-approved %d, blocked %d, escalated %d, unavailable %d, human-ask %d\n",
+			stats.Contained, stats.GrantHits, stats.ExactRunHits, stats.BundleHits, stats.Approved, stats.Denied, stats.Escalated, stats.Unavailable, stats.HumanAsks)
 	}
 	if human.Requested > 0 {
 		fmt.Fprintf(&sb, "- human requests %d; statuses %s; choices %s; avg response %s; tools %s\n",
@@ -82,6 +82,7 @@ func triageStatsFromDurable(stats control.ApprovalTriageStats) tools.TriageStats
 		Contained:    stats.Counts[string(tools.TriageOutcomeContained)],
 		GrantHits:    stats.Counts[string(tools.TriageOutcomeGrantHit)],
 		ExactRunHits: stats.Counts[string(tools.TriageOutcomeExactRunHit)],
+		BundleHits:   stats.Counts[string(tools.TriageOutcomeBundleHit)],
 		HumanAsks:    stats.Counts[string(tools.TriageOutcomeHumanAsk)],
 		LastError:    stats.LastError,
 		LastErrorAt:  stats.LastErrorAt,

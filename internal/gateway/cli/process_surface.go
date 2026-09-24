@@ -52,12 +52,10 @@ type processViewport struct {
 // correlation, height budgeting, and the transition to immutable transcript
 // cells from the Bubble Tea controller.
 type processSurface struct {
-	assistantText  string
-	livePhase      llm.AssistantPhase
-	nextGroupID    uint64
-	currentGroupID uint64
-	tools          []ChatMessage
-	knownTools     map[string]struct{}
+	assistantText string
+	livePhase     llm.AssistantPhase
+	tools         []ChatMessage
+	knownTools    map[string]struct{}
 }
 
 func newProcessSurface() *processSurface {
@@ -101,14 +99,13 @@ func (s *processSurface) Update(event processEvent) processEffects {
 		}
 		s.knownTools[key] = struct{}{}
 		s.tools = append(s.tools, ChatMessage{
-			Role:           "tool",
-			ToolName:       event.toolName,
-			ToolCallID:     event.toolCallID,
-			RunID:          event.runID,
-			ToolArgs:       event.toolArgs,
-			IsRunning:      true,
-			Timestamp:      time.Now(),
-			ProcessGroupID: s.currentGroupID,
+			Role:       "tool",
+			ToolName:   event.toolName,
+			ToolCallID: event.toolCallID,
+			RunID:      event.runID,
+			ToolArgs:   event.toolArgs,
+			IsRunning:  true,
+			Timestamp:  time.Now(),
 		})
 		return effects
 	case processToolOutput:
@@ -148,7 +145,6 @@ func (s *processSurface) Update(event processEvent) processEffects {
 		if message, ok := s.resolveAssistant(phase, event.content); ok {
 			effects.commits = append(effects.commits, message)
 		}
-		s.currentGroupID = 0
 		s.knownTools = make(map[string]struct{})
 		return effects
 	}
@@ -302,13 +298,6 @@ func (s *processSurface) resolveAssistant(phase llm.AssistantPhase, authoritativ
 		Content:        content,
 		AssistantPhase: phase,
 		Timestamp:      time.Now(),
-	}
-	if phase == llm.AssistantPhaseCommentary {
-		s.nextGroupID++
-		s.currentGroupID = s.nextGroupID
-		message.ProcessGroupID = s.currentGroupID
-	} else {
-		s.currentGroupID = 0
 	}
 	return message, true
 }

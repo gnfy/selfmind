@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"runtime"
 	"strings"
 )
 
@@ -47,7 +46,7 @@ func assessExecContainment(toolName string, args map[string]interface{}) Contain
 	case SandboxIsolated:
 		assessment.Filesystem = containmentFilesystemIsolated
 		enabled, _, _ := execSandboxPolicyForArgs(args)
-		assessment.Enforced = enabled && runtime.GOOS == "linux" && ExecSandboxAvailable()
+		assessment.Enforced = enabled && ExecSandboxAvailable()
 	}
 	if networkSharedArg(args) {
 		assessment.Network = containmentNetworkShared

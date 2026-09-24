@@ -1,0 +1,54 @@
+id: reliability_resume_adopts_prior_check
+title: "An exact continuation can retain a still-valid prior check"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [python3]
+setup:
+  files:
+    value.txt: "READY\n"
+turns:
+  - input: >-
+      Check whether value.txt contains exactly READY followed by a newline.
+      Use a plan with a verification_required step for that acceptance condition,
+      run verify to establish it, and mark the step completed. Then stop and
+      wait for my confirmation before reporting the result: keep a distinct
+      pending reporting step and record waiting_user with finish_run. Do not
+      modify value.txt.
+    assert_state:
+      - on: run
+        field: status
+        eq: waiting_user
+  - input: >-
+      I confirm. value.txt and the acceptance condition have not changed since
+      your successful check. Continue the exact waiting work and report the
+      verified result. Judge whether the prior observation still suffices;
+      avoid repeating the check solely because this is a new turn. Complete
+      the plan and record a done outcome with finish_run. Do not modify files.
+expect:
+  status: completed
+  verification_state: passed
+  max_tool_errors: 0
+  max_duration_seconds: 300
+assert_state:
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: work.selection_committed
+    payload_contains: '"commit_mode":"direct"'
+    count_gte: 1
+  - on: events
+    type: plan.updated
+    payload_contains: '"source":"resumed_run"'
+    count_gte: 1
+  - on: file
+    path: value.txt
+    contains: READY
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

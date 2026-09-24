@@ -3,70 +3,28 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Confirmed"
+      "reasoning_content": "Now"
     },
     {
-      "reasoning_content": ":"
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " have"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " exact"
     },
     {
       "reasoning_content": " run"
     },
     {
-      "reasoning_content": "_d"
-    },
-    {
-      "reasoning_content": "79"
-    },
-    {
-      "reasoning_content": "b"
-    },
-    {
-      "reasoning_content": "549"
-    },
-    {
-      "reasoning_content": "9"
-    },
-    {
-      "reasoning_content": " is"
-    },
-    {
-      "reasoning_content": " waiting"
-    },
-    {
-      "reasoning_content": "_user"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " same"
-    },
-    {
-      "reasoning_content": " workspace"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " next"
-    },
-    {
-      "reasoning_content": " steps"
-    },
-    {
-      "reasoning_content": " matching"
-    },
-    {
       "reasoning_content": "."
     },
     {
-      "reasoning_content": " Now"
-    },
-    {
-      "reasoning_content": " call"
+      "reasoning_content": " Call"
     },
     {
       "reasoning_content": " work"
@@ -81,77 +39,62 @@
       "reasoning_content": "."
     },
     {
-      "content": "Confirmed"
+      "content": "确认"
     },
     {
-      "content": " it"
+      "content": "了"
     },
     {
-      "content": "'s"
+      "content": "这次"
     },
     {
-      "content": " the"
+      "content": "等待"
     },
     {
-      "content": " waiting"
+      "content": "中的"
     },
     {
-      "content": " run"
+      "content": "运行"
     },
     {
-      "content": " with"
+      "content": "，"
     },
     {
-      "content": " the"
+      "content": "现在"
     },
     {
-      "content": " matching"
+      "content": "声明"
     },
     {
-      "content": " hand"
+      "content": "接"
     },
     {
-      "content": "off"
+      "content": "续"
     },
     {
-      "content": "."
+      "content": "它"
     },
     {
-      "content": " Claim"
-    },
-    {
-      "content": "ing"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " continuation"
-    },
-    {
-      "content": " now"
-    },
-    {
-      "content": "."
+      "content": "。"
     },
     {
       "finish_reason": "tool_calls"
     },
     {
       "usage": {
-        "input_tokens": 13720,
-        "output_tokens": 122,
-        "cache_read_input_tokens": 12544,
-        "cache_miss_input_tokens": 1176,
+        "input_tokens": 14811,
+        "output_tokens": 102,
+        "cache_read_input_tokens": 13312,
+        "cache_miss_input_tokens": 1499,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 26,
+        "reasoning_output_tokens": 12,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_Qgo0goebVTQi6SDVo4wj3994",
+          "ID": "call_00_QpuyXbUICnfbeDLV7h7N4257",
           "Function": "work_select",
           "Args": "{\"action\": \"resume\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
         }

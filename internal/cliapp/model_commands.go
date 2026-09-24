@@ -512,7 +512,7 @@ func (a *App) requestModelChange(parent context.Context, request api.ModelChange
 }
 
 func (a *App) performModelRecovery(cfg *config.Config, action, id string) (*modelchange.Service, string, error) {
-	service := &modelchange.Service{ConfigPath: cfg.Path}
+	service := modelchange.NewService(cfg, nil)
 	status, err := service.Inspect()
 	if err != nil {
 		return nil, "", err
@@ -654,7 +654,7 @@ func (a *App) commitModelCandidate(cfg *config.Config, target modelchange.Route,
 	} else if err != nil {
 		return modelApplyReceipt{}, err
 	}
-	service := &modelchange.Service{ConfigPath: cfg.Path, Validate: a.modelChangeValidator()}
+	service := modelchange.NewService(cfg, a.modelChangeValidator())
 	legacyDaemon := a.modelDaemonRunning()
 	status, err := service.Inspect()
 	if err != nil {

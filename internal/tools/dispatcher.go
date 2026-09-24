@@ -76,16 +76,36 @@ var deferredReviewedCohort = map[string]struct{}{
 
 // Registry 是全局工具注册表
 type Registry struct {
-	mu        sync.RWMutex
-	tools     map[string]Tool
-	schemas   map[string]compiledToolSchema
-	clarifyFn ClarifyHandler
+	mu          sync.RWMutex
+	tools       map[string]Tool
+	schemas     map[string]compiledToolSchema
+	generations map[string]uint64
+	generation  uint64
+	clarifyFn   ClarifyHandler
 	// middleware 链
 	middleware []ResultMiddleware
 	// attributionFn observes completed calls so implicit Skill use can be
 	// recorded. It is not a middleware: middlewares govern whether and how a
 	// call runs, while this only watches what already ran.
 	attributionFn SkillAttributionObserver
+}
+
+const preparedToolInvocationArg = "_prepared_tool_invocation"
+
+// preparedToolInvocation is an in-process dispatch capability. Its unexported
+// concrete type prevents model or external JSON input from manufacturing one.
+// Retaining the exact Tool and middleware snapshot makes a catalogue refresh
+// affect the next call without changing a call already validated by the kernel.
+type preparedToolInvocation struct {
+	registry   *Registry
+	name       string
+	tool       Tool
+	middleware []ResultMiddleware
+}
+
+func preparedToolFromArgs(registry *Registry, name string, args map[string]interface{}) (*preparedToolInvocation, bool) {
+	prepared, ok := args[preparedToolInvocationArg].(*preparedToolInvocation)
+	return prepared, ok && prepared != nil && prepared.registry == registry && prepared.name == name && prepared.tool != nil
 }
 
 // SkillAttributionObserver is notified after a tool call completes without
@@ -108,8 +128,9 @@ func (r *Registry) skillAttributionObserver() SkillAttributionObserver {
 }
 
 var globalRegistry = &Registry{
-	tools:   make(map[string]Tool),
-	schemas: make(map[string]compiledToolSchema),
+	tools:       make(map[string]Tool),
+	schemas:     make(map[string]compiledToolSchema),
+	generations: make(map[string]uint64),
 }
 
 // GlobalRegistry returns the singleton global tool registry.
@@ -121,8 +142,9 @@ func GlobalRegistry() *Registry {
 // NewRegistry creates a new tool registry (can be used for isolation)
 func NewRegistry() *Registry {
 	return &Registry{
-		tools:   make(map[string]Tool),
-		schemas: make(map[string]compiledToolSchema),
+		tools:       make(map[string]Tool),
+		schemas:     make(map[string]compiledToolSchema),
+		generations: make(map[string]uint64),
 	}
 }
 
@@ -132,14 +154,21 @@ func (r *Registry) Register(t Tool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.ensureMaps()
+	r.generation++
 	r.tools[t.Name()] = t
 	r.schemas[t.Name()] = compiled
+	r.generations[t.Name()] = r.generation
 }
 
 // Unregister removes a tool from the registry
 func (r *Registry) Unregister(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.ensureMaps()
+	if _, toolExists := r.tools[name]; toolExists {
+		r.generation++
+		r.generations[name] = r.generation
+	}
 	delete(r.tools, name)
 	delete(r.schemas, name)
 }
@@ -176,24 +205,16 @@ func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, e
 
 func (r *Registry) DispatchResult(name string, args map[string]interface{}) (kernel.ToolDispatchResult, error) {
 	originalArgs := args
-	if err := r.schemaAvailabilityError(name); err != nil {
+	prepared, err := r.PrepareToolArguments(name, args)
+	if err != nil {
 		return kernel.ToolDispatchResult{Invoked: new(bool)}, err
 	}
-	t, ok := r.Get(name)
+	args = prepared
+	invocation, ok := preparedToolFromArgs(r, name, args)
 	if !ok {
-		return kernel.ToolDispatchResult{Invoked: new(bool)}, fmt.Errorf("tool %s not found", name)
+		return kernel.ToolDispatchResult{Invoked: new(bool)}, toolArgumentPreparationError(fmt.Errorf("tool %s has no valid prepared invocation", name))
 	}
-	if len(t.Schema().Properties) > 0 {
-		coerced, coerceErr := CoerceArgs(t.Schema(), args)
-		if coerceErr != nil {
-			return kernel.ToolDispatchResult{Invoked: new(bool)}, fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr)
-		}
-		args = coerced
-	}
-	if err := ValidateArgs(t.Schema(), args); err != nil {
-		return kernel.ToolDispatchResult{Invoked: new(bool)}, fmt.Errorf("argument validation failed for %s: %w", name, err)
-	}
-	exec := r.wrapResult(t, r.Middlewares())
+	exec := r.wrapResult(invocation.tool, invocation.middleware)
 	result, err := exec(args)
 	if err == nil {
 		if observe := r.skillAttributionObserver(); observe != nil {
@@ -211,6 +232,99 @@ func (r *Registry) DispatchResult(name string, args map[string]interface{}) (ker
 		}
 	}
 	return result, err
+}
+
+// PrepareToolArguments normalizes compatibility shapes, coerces scalar JSON
+// values, and validates the complete recursive schema before the kernel records
+// any execution evidence. It is deliberately idempotent because direct callers
+// enter through DispatchResult, while the Agent also invokes this boundary
+// before its durable side-effect ledger.
+func (r *Registry) PrepareToolArguments(name string, args map[string]interface{}) (map[string]interface{}, error) {
+	if _, ok := preparedToolFromArgs(r, name, args); ok {
+		return args, nil
+	}
+	if _, reserved := args[preparedToolInvocationArg]; reserved {
+		return nil, toolArgumentPreparationError(fmt.Errorf("reserved runtime argument: %s", preparedToolInvocationArg))
+	}
+	r.mu.RLock()
+	t, toolOK := r.tools[name]
+	compiled, schemaOK := r.schemas[name]
+	middleware := append([]ResultMiddleware(nil), r.middleware...)
+	r.mu.RUnlock()
+	if !toolOK {
+		return nil, toolAvailabilityPreparationError(
+			fmt.Errorf("tool %s not found", name), "tool_unavailable",
+		)
+	}
+	if schemaOK && compiled.Report.Status == ToolSchemaQuarantined {
+		reason := "invalid schema"
+		for _, issue := range compiled.Report.Issues {
+			if issue.Severity == ToolSchemaError {
+				reason = issue.Code + " at " + issue.Path
+				break
+			}
+		}
+		return nil, toolAvailabilityPreparationError(
+			fmt.Errorf("tool %s unavailable: schema quarantined (%s)", name, reason), "tool_schema_unavailable",
+		)
+	}
+	if !schemaOK {
+		return nil, toolAvailabilityPreparationError(
+			fmt.Errorf("tool %s unavailable: schema is not registered", name), "tool_schema_unavailable",
+		)
+	}
+	if normalizer, ok := t.(ToolArgumentNormalizer); ok {
+		var normalizeErr error
+		args, normalizeErr = normalizer.NormalizeArguments(args)
+		if normalizeErr != nil {
+			return nil, toolArgumentPreparationError(fmt.Errorf("failed to normalize arguments for %s: %w", name, normalizeErr))
+		}
+	}
+	coerced, coerceErr := CoerceArgs(t.Schema(), args)
+	if coerceErr != nil {
+		return nil, toolArgumentPreparationError(fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr))
+	}
+	args = coerced
+	if err := ValidateArgs(t.Schema(), args); err != nil {
+		return nil, toolArgumentPreparationError(fmt.Errorf("argument validation failed for %s: %w", name, err))
+	}
+	args[preparedToolInvocationArg] = &preparedToolInvocation{
+		registry: r, name: name, tool: t, middleware: middleware,
+	}
+	return args, nil
+}
+
+func toolArgumentPreparationError(err error) error {
+	return newStableToolRecoveryError(
+		err,
+		"tool_arguments_invalid",
+		"invalid_input",
+		err.Error(),
+		"Correct the arguments to match the published tool schema.",
+		"preparation",
+		"corrected_input",
+		"not_dispatched",
+		false,
+		"inspect_tool_schema",
+		"correct_arguments",
+	)
+}
+
+func toolAvailabilityPreparationError(err error, code string) error {
+	return newStableToolRecoveryError(
+		err,
+		code,
+		"blocked_tool_capability",
+		err.Error(),
+		"Refresh tool discovery or choose another available capability; argument edits cannot restore an unavailable tool.",
+		"preparation",
+		"different_strategy",
+		"not_dispatched",
+		false,
+		"refresh_tool_catalog",
+		"choose_available_tool",
+		"report_actionable_blocker",
+	)
 }
 
 // ToolDefinitions returns all tools as LLM-compatible tool definitions
@@ -310,6 +424,16 @@ func (r *Registry) ensureMaps() {
 	if r.schemas == nil {
 		r.schemas = make(map[string]compiledToolSchema)
 	}
+	if r.generations == nil {
+		r.generations = make(map[string]uint64)
+	}
+}
+
+func (r *Registry) ToolPreparationState(name string) string {
+	r.mu.RLock()
+	generation := r.generations[name]
+	r.mu.RUnlock()
+	return fmt.Sprintf("%d", generation)
 }
 
 func (r *Registry) schemaAvailabilityError(name string) error {
@@ -498,7 +622,15 @@ func (d *Dispatcher) GetTool(name string) (Tool, bool) {
 // ToolExecutionMetadata exposes daemon-owned registry facts to the kernel's
 // durable event stream. Model-provided arguments cannot override this view.
 func (d *Dispatcher) ToolExecutionMetadata(name string, args map[string]interface{}) kernel.ToolExecutionMetadata {
-	t, ok := d.registry.Get(name)
+	var t Tool
+	prepared, preparedOK := preparedToolFromArgs(d.registry, name, args)
+	if preparedOK {
+		t = prepared.tool
+	}
+	if t == nil {
+		t, _ = d.registry.Get(name)
+	}
+	ok := t != nil
 	if !ok {
 		return kernel.ToolExecutionMetadata{Origin: string(ToolSchemaOriginExternal), RiskLevel: string(ToolRiskHigh)}
 	}
@@ -524,13 +656,17 @@ func (d *Dispatcher) ToolExecutionMetadata(name string, args map[string]interfac
 	classes := operationClassesFor(name, classifiedArgs, dangerous)
 	classes = uniqueOperationClasses(classes)
 	classNames := make([]string, 0, len(classes))
+	observation := false
 	for _, class := range classes {
 		classNames = append(classNames, string(class))
+		// operationClassesFor marks an exec call observe only when the
+		// deterministic proof holds, wherever the command will run.
+		observation = observation || (class == OpClassObserve && isExecTool(name))
 	}
 	return kernel.ToolExecutionMetadata{
 		Origin: string(policy.Origin), Category: policy.Category,
 		RiskLevel: string(policy.Risk), ReadOnly: policy.ReadOnly,
-		OperationClasses: classNames,
+		OperationClasses: classNames, ObservationOnly: observation,
 	}
 }
 

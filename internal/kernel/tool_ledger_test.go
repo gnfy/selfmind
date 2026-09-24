@@ -61,6 +61,31 @@ func TestDispatchRetryClassificationUsesTrustedRegistration(t *testing.T) {
 	}
 }
 
+// A proven observation changes what the ledger says the call could have
+// touched, never whether it may be replayed: recovery keeps the side_effect
+// retry class and the mutate strategy for a terminal read.
+func TestLedgerRecordsProvenObservationWithoutWideningReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata ToolExecutionMetadata
+		want     string
+	}{
+		{"proven read", ToolExecutionMetadata{Origin: "builtin", ObservationOnly: true}, ToolEffectObservation},
+		{"unproven command", ToolExecutionMetadata{Origin: "builtin"}, string(ToolRetrySideEffect)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ledger := &capturingToolLedger{}
+			ctx := WithToolLedger(WithTaskRuntimeContext(context.Background(), TaskRuntimeContext{RunID: "run-look"}), ledger)
+			agent := &Agent{backend: registeredRetryBackend{metadata: tc.metadata}}
+			result := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{ID: "call", Function: "terminal", Args: `{"command":"git status"}`})
+			entry := ledger.entry
+			if !result.success || entry.EffectClass != tc.want || entry.RetryClass != ToolRetrySideEffect || entry.Strategy != "mutate" {
+				t.Fatalf("result=%+v entry=%+v want effect class %s", result, entry, tc.want)
+			}
+		})
+	}
+}
+
 type registeredRetryBackend struct {
 	successfulToolBackend
 	metadata ToolExecutionMetadata

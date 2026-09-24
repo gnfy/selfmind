@@ -1,0 +1,64 @@
+id: reliability_resume_look_before_attach
+title: "A proven read-only terminal look before selecting keeps the continuation attachable"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+# Pairs with mutation-blocks-resume (a write closes the selection window) and
+# artifact-read-before-resume (an artifact read does not): a terminal command
+# the dispatcher proves read-only is discovery too. Replay re-executes the
+# recorded terminal call first, so a boundary that treats it as an effect
+# rejects the selection and fails this case.
+requires:
+  commands: [od, hexdump, python3]
+setup:
+  files:
+    value.txt: "READY\n"
+turns:
+  - input: >-
+      Check whether value.txt contains exactly READY followed by a newline.
+      Use a plan with a verification_required step for that acceptance condition,
+      run verify to establish it, and mark the step completed. Then stop and
+      wait for my confirmation before reporting the result: keep a distinct
+      pending reporting step and record waiting_user with finish_run. Do not
+      modify value.txt.
+    assert_state:
+      - on: run
+        field: status
+        eq: waiting_user
+      - on: events
+        type: evidence.recorded
+        payload_contains: '"tool_name":"verify"}'
+        count_gte: 1
+  - input: >-
+      继续。在调用 work_select 之前，先用 terminal 只运行这一条命令看一下 value.txt：
+      od -c value.txt（不要加别的命令或重定向）。然后接上刚才等待中的那项工作，把它完成并报告。不要修改文件。
+expect:
+  status: completed
+  max_tool_errors: 0
+  max_duration_seconds: 300
+assert_state:
+  - on: run
+    field: resumes_run_id
+    empty: false
+  - on: events
+    type: tool.started
+    payload_contains: '"observation_only":true'
+    count_gte: 1
+  - on: events
+    type: work.selection_committed
+    count_gte: 1
+  - on: events
+    type: work.selection_rejected
+    count_lte: 0
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 1
+    count_lte: 1
+  - on: file
+    path: value.txt
+    contains: READY
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

@@ -206,6 +206,19 @@ jobs:
         if: needs.metadata.outputs.prerelease != 'true'
         run: go test ./...
 
+      # Same exec sandbox as the CI eval job: the corpus replays containment
+      # releases that only an enforcing bubblewrap backend can reproduce.
+      - name: Enable the Linux exec sandbox
+        if: needs.metadata.outputs.prerelease != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --die-with-parent --unshare-pid --unshare-ipc --unshare-uts --unshare-net \
+            --ro-bind / / --dev /dev --proc /proc --tmpfs /tmp true
+
       - name: Complete provider-offline release corpus
         if: needs.metadata.outputs.prerelease != 'true'
         run: go run ./cmd/selfmind selfcheck --profile local-full --skip-go

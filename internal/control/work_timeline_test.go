@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -418,6 +419,85 @@ func TestWorkTimelineAttentionForChannelPrefersSameChannel(t *testing.T) {
 	unpreferred, err := timeline.AttentionForChannel(ctx, identity.TenantID, identity.PersonID, "", 10)
 	if err != nil || len(unpreferred) != 2 || unpreferred[0].RunID != imRun.ID {
 		t.Fatalf("empty channel preference must equal plain attention: %+v err=%v", unpreferred, err)
+	}
+}
+
+func TestRejectedWorkSelectionDoesNotCreateResumableAttention(t *testing.T) {
+	ctx := context.Background()
+	store, identity, timeline := newTimelineFixture(t)
+	thread, err := timeline.CreateInteraction(ctx, ThreadCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "ambiguous historical selection",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, thread.legacyTask(), "cli", thread.Title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]interface{}{"outcome": map[string]interface{}{
+		"status": "waiting_user", "completion_reason": "work_selection_rejected", "resumable": true,
+	}})
+	if _, err := store.AppendEvent(ctx, Event{TaskID: thread.ID, RunID: run.ID, Type: "run.finished", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+
+	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(attention) != 0 {
+		t.Fatalf("a rejected selector became resumable work: %+v", attention)
+	}
+	stored, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil || stored == nil || stored.Status != "waiting_user" {
+		t.Fatalf("attention projection rewrote run history: run=%+v err=%v", stored, err)
+	}
+}
+
+func TestRejectedWorkSelectionUsesDurableEventOrder(t *testing.T) {
+	ctx := context.Background()
+	store, identity, timeline := newTimelineFixture(t)
+	thread, err := timeline.CreateInteraction(ctx, ThreadCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "event order",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, thread.legacyTask(), "cli", thread.Title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	rejected, _ := json.Marshal(map[string]interface{}{"outcome": map[string]interface{}{
+		"status": "waiting_user", "completion_reason": "work_selection_rejected", "resumable": true,
+	}})
+	accepted, _ := json.Marshal(map[string]interface{}{"outcome": map[string]interface{}{
+		"status": "waiting_user", "completion_reason": "waiting_user", "resumable": true,
+	}})
+	rejectedEvent, err := store.AppendEvent(ctx, Event{TaskID: thread.ID, RunID: run.ID, Type: "run.finished", Payload: rejected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	acceptedEvent, err := store.AppendEvent(ctx, Event{TaskID: thread.ID, RunID: run.ID, Type: "run.finished", Payload: accepted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a wall-clock jump: cursor order remains authoritative even when
+	// the older event has the later timestamp.
+	if _, err := store.db.ExecContext(ctx, `UPDATE task_events SET created_at = CASE id WHEN ? THEN ? WHEN ? THEN ? END WHERE id IN (?,?)`,
+		rejectedEvent.ID, time.Now().Add(time.Hour).Unix(), acceptedEvent.ID, time.Now().Unix(), rejectedEvent.ID, acceptedEvent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil || len(attention) != 1 || attention[0].RunID != run.ID {
+		t.Fatalf("latest durable outcome was not authoritative: attention=%+v err=%v", attention, err)
 	}
 }
 
@@ -855,6 +935,58 @@ func TestWorkEvidenceIgnoresNeverDispatchedLedgerRow(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].RunID != run.ID {
 		t.Fatalf("a dispatched side-effect row is work evidence: %+v", items)
+	}
+}
+
+// A question answered by one proven read — `git status`, `pwd && ls` — did no
+// work, so an interruption must not turn it into resumable Attention. The same
+// row without the observation proof still counts.
+func TestWorkEvidenceIgnoresProvenObservation(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	identity, err := store.ResolveOrCreateAccount(ctx, DefaultTenantID, "cli", "owner", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	timeline := NewWorkTimeline(store)
+	thread, err := timeline.CreateInteraction(ctx, ThreadCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "look only",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, thread.legacyTask(), "cli", "look only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO tool_ledger
+		(tenant_id, run_id, tool_call_id, tool_name, args_hash, retry_class, effect_id, plan_version,
+		 plan_step_id, strategy, effect_class, environment_generation, status, created_at, updated_at)
+		VALUES (?, ?, 'call-look', 'terminal', 'hash', 'side_effect', '', 0, '', 'mutate', 'observation', 0, 'completed', 1, 1)`,
+		identity.TenantID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: run.ID, TaskID: thread.ID, RunStatus: "interrupted", Summary: "cut off",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("a look-only interruption must not be attention: %+v", items)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE tool_ledger SET effect_class = 'side_effect' WHERE run_id = ?`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	items, err = timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].RunID != run.ID {
+		t.Fatalf("an unproven command stays work evidence: %+v", items)
 	}
 }
 

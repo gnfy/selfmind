@@ -6,8 +6,8 @@ import (
 )
 
 // max_duration_seconds is a REPLAY assertion. Recording the same case pays
-// full model latency — measured at 288s live against 40s on replay for
-// smoke_skill_architecture_007 — so holding a recording to the replay budget
+// full model latency — measured at 288s live against 40s on replay for a
+// repository-inspection case — so holding a recording to the replay budget
 // kills it part-way and leaves a truncated cassette.
 func TestRecordingGetsItsOwnFloorButReplayKeepsTheCaseBudget(t *testing.T) {
 	c := &Case{}

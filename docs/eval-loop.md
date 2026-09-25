@@ -383,7 +383,7 @@ The full gate still runs every locally provable release case before pushing.
 
 Do NOT filter on `max_duration_seconds` instead. It is an author-chosen ceiling
 with little relation to cost: `continuity_resume` declares 420s and replays in
-one second, while the genuinely slow case declares 540s.
+one second.
 
 ### Recording a `workspace: "."` case
 

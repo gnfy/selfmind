@@ -552,7 +552,7 @@ func finalizeLeftoverRuns(ctx context.Context, store *control.Store, tenantID st
 // max_duration_seconds is a REPLAY assertion: it bounds how long the case may
 // take when the model's answers come from a cassette and only the tools really
 // run. Recording the same case pays full model latency on every call, and the
-// gap is large — smoke_skill_architecture_007 takes 288s live and 40s on
+// gap is large — a repository-inspection case took 288s live and 40s on
 // replay, a factor of seven. Holding a recording to the replay budget makes
 // any case with a realistic budget impossible to record: the run is killed
 // part-way and leaves a truncated cassette.

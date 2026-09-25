@@ -2,9 +2,14 @@ package cliapp
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -33,7 +38,12 @@ type workflowJobDef struct {
 	Needs          any               `yaml:"needs"`
 	Permissions    map[string]string `yaml:"permissions"`
 	TimeoutMinutes int               `yaml:"timeout-minutes"`
-	Steps          []workflowStepDef `yaml:"steps"`
+	Strategy       struct {
+		Matrix struct {
+			Include []map[string]string `yaml:"include"`
+		} `yaml:"matrix"`
+	} `yaml:"strategy"`
+	Steps []workflowStepDef `yaml:"steps"`
 }
 
 type workflowStepDef struct {
@@ -169,6 +179,116 @@ func TestCIEvalKeepsDiagnosticsWhenCorpusRunsOutOfTime(t *testing.T) {
 			t.Fatalf("%s diagnostics must upload after a failure or cancellation: if=%q", job, upload.If)
 		}
 	}
+}
+
+// The control race job selects tests by name, and the rest of the package
+// runs without -race. That is sound only while control starts no goroutine of
+// its own, so that a data race needs a test racing store connections, and
+// while every such test matches the filter in both gates.
+func TestRaceGatesCoverEveryConcurrentControlTest(t *testing.T) {
+	production, concurrent := controlGoroutineSites(t)
+	if len(production) > 0 {
+		t.Fatalf("internal/control now starts goroutines (%s); race-test the whole package instead of filtering by name", strings.Join(production, ", "))
+	}
+	if len(concurrent) == 0 {
+		t.Fatal("found no concurrent control test; the goroutine scan no longer sees the package's tests")
+	}
+	for _, workflowName := range []string{"ci.yml", "release.yml"} {
+		entries := map[string]map[string]string{}
+		for _, entry := range loadWorkflowContract(t, workflowName).Jobs["race"].Strategy.Matrix.Include {
+			entries[entry["name"]] = entry
+		}
+		filter := entries["control"]["tests"]
+		pattern, err := regexp.Compile(filter)
+		if filter == "" || err != nil {
+			t.Fatalf("%s control race job needs a valid test filter: %q (%v)", workflowName, filter, err)
+		}
+		for _, name := range concurrent {
+			if !pattern.MatchString(name) {
+				t.Errorf("%s control race filter %q skips concurrent test %s", workflowName, filter, name)
+			}
+		}
+		for _, name := range []string{"runpool", "httpapi"} {
+			if entries[name] == nil || entries[name]["tests"] != "" {
+				t.Errorf("%s race job %s must run every test: %v", workflowName, name, entries[name])
+			}
+		}
+	}
+}
+
+// controlGoroutineSites reports goroutines started by internal/control's
+// production code, and the top-level tests that start one directly or through
+// a helper declared in the package's test files.
+func controlGoroutineSites(t *testing.T) ([]string, []string) {
+	t.Helper()
+	dir := filepath.Join("..", "..", "internal", "control")
+	paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	var production []string
+	spawns := map[string]bool{}
+	calls := map[string][]string{}
+	for _, path := range paths {
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		isTest := strings.HasSuffix(path, "_test.go")
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				started := false
+				switch n := node.(type) {
+				case *ast.GoStmt:
+					started = true
+				case *ast.CallExpr:
+					if sel, ok := n.Fun.(*ast.SelectorExpr); ok {
+						if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "time" && sel.Sel.Name == "AfterFunc" {
+							started = true
+						}
+					}
+					if isTest {
+						if callee, ok := n.Fun.(*ast.Ident); ok {
+							calls[fn.Name.Name] = append(calls[fn.Name.Name], callee.Name)
+						}
+					}
+				}
+				if started {
+					if isTest {
+						spawns[fn.Name.Name] = true
+					} else {
+						production = append(production, fset.Position(node.Pos()).String())
+					}
+				}
+				return true
+			})
+		}
+	}
+	// A test is concurrent when it, or any test-file helper it reaches, starts
+	// a goroutine.
+	for changed := true; changed; {
+		changed = false
+		for caller, callees := range calls {
+			for _, callee := range callees {
+				if spawns[callee] && !spawns[caller] {
+					spawns[caller], changed = true, true
+				}
+			}
+		}
+	}
+	var concurrent []string
+	for name := range spawns {
+		if strings.HasPrefix(name, "Test") {
+			concurrent = append(concurrent, name)
+		}
+	}
+	sort.Strings(concurrent)
+	return production, concurrent
 }
 
 // A cancelled main push run leaves that SHA without the successful exact-SHA

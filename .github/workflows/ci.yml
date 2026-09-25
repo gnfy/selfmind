@@ -134,8 +134,14 @@ jobs:
         include:
           - name: runpool
             package: ./internal/runpool
+          # control starts no goroutine of its own, so only a test that races
+          # store connections against each other can reveal a data race there.
+          # Its other tests run without -race in the core job, where they take
+          # a twentieth of the time. A contract test fails if a goroutine-
+          # spawning control test escapes this filter.
           - name: control
             package: ./internal/control
+            tests: "Concurrent|CrossConnection|AcrossConnections|AcrossStoreConnections"
           - name: httpapi
             package: ./internal/gateway/httpapi
     env:
@@ -151,7 +157,9 @@ jobs:
           cache: true
 
       - name: Race-sensitive runtime tests
-        run: go test -race -timeout 12m ${{ matrix.package }}
+        env:
+          RACE_TESTS: ${{ matrix.tests }}
+        run: go test -race -timeout 12m -run "${RACE_TESTS:-.}" ${{ matrix.package }}
 
   eval:
     name: Provider-offline eval

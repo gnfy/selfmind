@@ -241,8 +241,11 @@ jobs:
         include:
           - name: runpool
             package: ./internal/runpool
+          # Same selection as CI: control starts no goroutine of its own, and
+          # its other tests run without -race in the stable gate.
           - name: control
             package: ./internal/control
+            tests: "Concurrent|CrossConnection|AcrossConnections|AcrossStoreConnections"
           - name: httpapi
             package: ./internal/gateway/httpapi
     env:
@@ -265,7 +268,9 @@ jobs:
 
       - name: Race-sensitive runtime tests
         if: needs.metadata.outputs.prerelease != 'true'
-        run: go test -race -timeout 12m ${{ matrix.package }}
+        env:
+          RACE_TESTS: ${{ matrix.tests }}
+        run: go test -race -timeout 12m -run "${RACE_TESTS:-.}" ${{ matrix.package }}
 
   build:
     name: Build ${{ matrix.goos }}-${{ matrix.goarch }}

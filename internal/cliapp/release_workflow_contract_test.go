@@ -28,18 +28,20 @@ type workflowTriggers struct {
 }
 
 type workflowJobDef struct {
-	Name        string            `yaml:"name"`
-	If          string            `yaml:"if"`
-	Needs       any               `yaml:"needs"`
-	Permissions map[string]string `yaml:"permissions"`
-	Steps       []workflowStepDef `yaml:"steps"`
+	Name           string            `yaml:"name"`
+	If             string            `yaml:"if"`
+	Needs          any               `yaml:"needs"`
+	Permissions    map[string]string `yaml:"permissions"`
+	TimeoutMinutes int               `yaml:"timeout-minutes"`
+	Steps          []workflowStepDef `yaml:"steps"`
 }
 
 type workflowStepDef struct {
-	Name string `yaml:"name"`
-	If   string `yaml:"if"`
-	Run  string `yaml:"run"`
-	Uses string `yaml:"uses"`
+	Name           string `yaml:"name"`
+	If             string `yaml:"if"`
+	Run            string `yaml:"run"`
+	Uses           string `yaml:"uses"`
+	TimeoutMinutes int    `yaml:"timeout-minutes"`
 }
 
 func loadWorkflowContract(t *testing.T, name string) workflowContract {
@@ -143,6 +145,28 @@ func TestCIWorkflowSeparatesFastPRFromCompleteParallelMainGate(t *testing.T) {
 		// and verifies all four).
 		if !strings.Contains(run, "smoke-npm-packages.sh 0.0.0-ci "+platform) {
 			t.Fatalf("%s must smoke exactly its own platform %s; run steps:\n%s", job, platform, run)
+		}
+	}
+}
+
+// A corpus that runs out of time must still leave its logs. The step limit
+// stops the corpus before the job limit, so an overrun is a failed step with
+// minutes left for the upload. A job-level timeout cancels the job and skips
+// failure() steps: the 2026-09-24 main run lost its logs that way after its
+// corpus had already passed.
+func TestCIEvalKeepsDiagnosticsWhenCorpusRunsOutOfTime(t *testing.T) {
+	workflow := loadWorkflowContract(t, "ci.yml")
+	evalJob := workflow.Jobs["eval"]
+	for _, name := range []string{"Fast provider-offline PR corpus", "Complete provider-offline main corpus"} {
+		step := workflowStep(t, evalJob, name)
+		if step.TimeoutMinutes <= 0 || evalJob.TimeoutMinutes-step.TimeoutMinutes < 3 {
+			t.Fatalf("%s must stop at least 3 minutes before the job limit: step=%d job=%d", name, step.TimeoutMinutes, evalJob.TimeoutMinutes)
+		}
+	}
+	for _, job := range []string{"eval", "macos"} {
+		upload := workflowStep(t, workflow.Jobs[job], "Upload eval diagnostics")
+		if !strings.Contains(upload.If, "failure()") || !strings.Contains(upload.If, "cancelled()") {
+			t.Fatalf("%s diagnostics must upload after a failure or cancellation: if=%q", job, upload.If)
 		}
 	}
 }

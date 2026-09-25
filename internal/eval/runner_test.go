@@ -326,6 +326,35 @@ func TestNewRuntimeHarnessCredentiallessReplayBuildsAuxiliaryRoles(t *testing.T)
 	}
 }
 
+// No person answers an eval approval. Full-auto still asks for capability
+// escalations such as network:shared, so the prompt-failure budget must not
+// depend on the approval mode: under the production budget one full-auto case
+// parked 494 seconds on a Linux runner before its turn deadline.
+func TestNewRuntimeHarnessFailsUnansweredApprovalsPromptlyInEveryMode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boots the full gateway harness")
+	}
+	_, cfgPath := writeRunnerFixtures(t)
+	for _, mode := range []string{"", "full-auto", "smart"} {
+		c := writeRunnerCase(t, "approval_wait_"+strings.ReplaceAll(firstNonEmpty(mode, "default"), "-", "_"), "")
+		c.ApprovalMode = mode
+		root, err := makeEvalTempRoot(c.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cleanupEvalTempRoot(root) })
+		harness, err := newRuntimeHarness(RunOptions{ConfigPath: cfgPath}, c, filepath.Join(root, "data"))
+		if err != nil {
+			t.Fatalf("newRuntimeHarness(%q): %v", mode, err)
+		}
+		wait, unattended := harness.server.ApprovalWait, harness.server.ApprovalWaitUnattended
+		harness.Close()
+		if wait <= 0 || wait > time.Second || unattended <= 0 || unattended > time.Second {
+			t.Fatalf("approval mode %q waits for a person who cannot answer: attended=%s unattended=%s", mode, wait, unattended)
+		}
+	}
+}
+
 func TestRegisterDaemonOwnedEvalToolsIncludesWorkContinuityBroker(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {

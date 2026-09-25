@@ -561,6 +561,10 @@ func finalizeLeftoverRuns(ctx context.Context, store *control.Store, tenantID st
 // because that is the property the case is asserting.
 const recordingTurnBudgetFloor = 15 * time.Minute
 
+// evalApprovalWait bounds every approval wait in an eval run. No person can
+// answer, so the wait only has to let the pending row settle.
+const evalApprovalWait = 100 * time.Millisecond
+
 func turnBudget(c *Case, opts RunOptions) time.Duration {
 	budget := resolveTurnBudget(c, opts)
 	if llm.VCRRecordMode() && budget < recordingTurnBudgetFloor {
@@ -747,10 +751,14 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// path inside the isolated data dir.
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
+	// No human is attached to eval, so an unexpected ask must fail promptly in
+	// every approval mode. Full-auto still asks for capability escalations such
+	// as network:shared, and the production budget parked such a call until 30
+	// seconds before the turn deadline: 494 of one case's 510 seconds on a
+	// Linux runner whose sandbox withheld the network.
+	server.ApprovalWait, server.ApprovalWaitUnattended = evalApprovalWait, evalApprovalWait
 	if c.ApprovalMode == "smart" {
 		server.ApprovalJudge = appcore.NewConfiguredApprovalJudge(mem, cfg, tenantID)
-		// No human is attached to eval. An unexpected ask must fail promptly.
-		server.ApprovalWait, server.ApprovalWaitUnattended = 100*time.Millisecond, 100*time.Millisecond
 	}
 	if caseNeedsPostRunMaintenance(c) {
 		server.PostRunAnalyzer = appcore.NewConfiguredPostRunAnalyzer(mem, cfg, tenantID, evalPrompts, controlStore)

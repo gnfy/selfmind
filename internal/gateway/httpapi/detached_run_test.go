@@ -331,11 +331,16 @@ func TestStopStillCancelsDetachedRun(t *testing.T) {
 // TestSyncRunKeepsCallerDeadline pins the deadline carry-over: a deadline on
 // the request ctx is a bound on the RUN (eval turn budgets), so detaching from
 // connection-cancellation must not drop it.
+// The deadline must outlast run setup, or it tests setup instead of the
+// detached run. Setup takes about 85ms under -race on a workstation, but a
+// loaded CI runner once needed more than 300ms: the turn expired before its
+// Run existed and returned 500 (2026-09-25).
 func TestSyncRunKeepsCallerDeadline(t *testing.T) {
 	provider := newSlowLLMProvider("never finishes on its own")
 	daemon, _, _ := newDetachedRunServer(t, provider)
 
-	turnCtx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	const deadline = 2 * time.Second
+	turnCtx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 	start := time.Now()
 	resp, status := daemon.ProcessMessage(turnCtx, api.MessageRequest{
@@ -344,7 +349,12 @@ func TestSyncRunKeepsCallerDeadline(t *testing.T) {
 		Channel:        "cli",
 		Content:        "run past the deadline",
 	})
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
+	select {
+	case <-provider.started:
+	default:
+		t.Fatalf("the %s deadline expired before the run reached the provider; setup outran the budget: status=%d resp=%+v", deadline, status, resp)
+	}
+	if elapsed := time.Since(start); elapsed > deadline+5*time.Second {
 		t.Fatalf("deadline was not enforced on the detached run (took %s)", elapsed)
 	}
 	if status != http.StatusOK || resp.Turn == nil || resp.Turn.Status != "cancelled" {

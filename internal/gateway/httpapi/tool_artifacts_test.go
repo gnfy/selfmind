@@ -8,16 +8,13 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 )
 
 func newSinkHarness(t *testing.T) (*toolArtifactSink, *control.Store, string) {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := control.OpenStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := controltest.NewStoreInDir(t, dir)
 	identity, err := store.ResolveOrCreateAccount(context.Background(), "tenant", "cli", "local", "Tester")
 	if err != nil {
 		t.Fatal(err)

@@ -109,11 +109,7 @@ func TestModelChangeDrainLeavesNewWorkQueuedForNextDaemon(t *testing.T) {
 func TestIncompleteModelReadinessQueuesNewWorkInsteadOfStartingIt(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	store, err := control.OpenStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStoreInDir(t, root)
 	configPath := root + "/config.yaml"
 	if _, err := config.LoadConfig(config.Options{Path: configPath, CreateIfMissing: true}); err != nil {
 		t.Fatal(err)
@@ -148,11 +144,7 @@ func TestIncompleteModelReadinessQueuesNewWorkInsteadOfStartingIt(t *testing.T) 
 func TestIncompleteModelReadinessStillSteersActiveContinuation(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
-	store, err := control.OpenStore(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStoreInDir(t, root)
 	configPath := root + "/config.yaml"
 	if _, err := config.LoadConfig(config.Options{Path: configPath, CreateIfMissing: true}); err != nil {
 		t.Fatal(err)

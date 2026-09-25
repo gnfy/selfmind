@@ -66,6 +66,7 @@ func (c *testMemoryConsolidator) Mode() string              { return "shadow" }
 func TestMemoryGovernanceScheduleSurvivesRestartClock(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
+	controltest.SeedDir(t, dir)
 	store, err := control.OpenStore(dir)
 	if err != nil {
 		t.Fatal(err)

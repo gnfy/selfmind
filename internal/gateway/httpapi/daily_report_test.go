@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 )
 
 func TestParseDailyReportWindow(t *testing.T) {
@@ -23,11 +24,7 @@ func TestParseDailyReportWindow(t *testing.T) {
 
 func TestDailyQualityReportMarksUnavailableEvidenceInsteadOfZeros(t *testing.T) {
 	dir := t.TempDir()
-	store, err := control.OpenStore(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStoreInDir(t, dir)
 	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "user-a", "User A")
 	if err != nil {
 		t.Fatal(err)

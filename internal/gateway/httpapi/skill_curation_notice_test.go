@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/control/controltest"
 )
 
 func curationEvent(t *testing.T, eventType, name, hash string, promoted bool, blocked string) control.Event {
@@ -106,11 +107,7 @@ func TestCurationNoticeIsBounded(t *testing.T) {
 // A wiring defect in the surface that exists to end invisibility is invisible
 // by construction.
 func TestCurationNoticeReadsTheRunsOwnCurationEvents(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := controltest.NewStore(t)
 	ctx := context.Background()
 
 	task, err := store.CreateTask(ctx, control.TaskCreate{

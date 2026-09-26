@@ -660,6 +660,19 @@ providers:
   并给出具体恢复操作。因网络失败的后台学习任务会保留网络路由指纹；直连/代理或
   本地监听状态改变后，下一个 maintenance sweep 会自动释放任务，显式 managed
   restart 也会给予一次新的尝试。
+- **停止原因。** 适配器原样传出各 provider 的 finish/stop reason；
+  `llm.ClassifyStopReason`（`stop_reason.go`）是唯一一张把 OpenAI、OpenAI 兼容、
+  Responses、Anthropic 取值映射为 `complete`、`length`、`interrupted`、
+  `filtered`、`missing`、`other` 的表。每个 `provider.call.usage` 事件都记录限长后的
+  原始 `finish_reason` 与归类后的 `stop_reason`（调用失败时为 `unterminated` 或
+  `error`）。`length` 与 `interrupted` 的回复会从断点续写，没有剩余轮次时以可恢复的
+  未完成状态结束（`output_limit` / `provider_interrupted`）。`filtered` 的回复不续写：
+  本轮以可恢复的未完成状态结束（`provider_filtered`），其中的工具调用一律不执行。
+  单独的 `missing` 不算截断证据，因为不少 provider 不返回停止原因。
+- **未终止的流。** 流在协议终止事件（`data: [DONE]`、`response.completed`/
+  `response.incomplete`、`message_stop`）之前正常关闭、且从未报告停止原因时，
+  收到的只是前缀。适配器会抛出可重试的 `stream_unterminated` 错误，循环经由非流式
+  回退从已收到的部分续写，而不会把前缀当成最终回答。
 - **不做游标续传。** `store=false` 时服务端从未持久化响应，无法用
   `previous_response_id` 续传——重试始终是整体重发，不要尝试部分续传。
 

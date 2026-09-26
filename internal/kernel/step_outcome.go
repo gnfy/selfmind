@@ -29,7 +29,7 @@ const (
 // turnCompletion is the typed, single-sourced result of a finished turn.
 type turnCompletion struct {
 	Status    string // "completed" | "incomplete"
-	Reason    string // completed | output_limit | tool_budget_exhausted | plan_unresolved | max_iterations
+	Reason    string // completed | output_limit | provider_interrupted | provider_filtered | tool_budget_exhausted | plan_unresolved | max_iterations
 	Resumable bool
 }
 
@@ -39,6 +39,8 @@ type completionSignals struct {
 	ToolBudgetExhausted bool
 	PlanUnresolved      bool
 	OutputLimited       bool // model stopped for output length AND no room to continue
+	OutputInterrupted   bool // the provider halted the reply AND no room to continue
+	OutputFiltered      bool // the provider filtered the reply before it finished
 	IterationCapped     bool // hit the hard safety iteration ceiling
 }
 
@@ -52,6 +54,10 @@ func resolveTurnCompletion(s completionSignals) turnCompletion {
 	switch {
 	case s.OutputLimited:
 		return turnCompletion{Status: "incomplete", Reason: "output_limit", Resumable: true}
+	case s.OutputInterrupted:
+		return turnCompletion{Status: "incomplete", Reason: "provider_interrupted", Resumable: true}
+	case s.OutputFiltered:
+		return turnCompletion{Status: "incomplete", Reason: "provider_filtered", Resumable: true}
 	case s.ToolBudgetExhausted && strings.TrimSpace(s.FinishStatus) == "":
 		return turnCompletion{Status: "incomplete", Reason: "tool_budget_exhausted", Resumable: true}
 	case s.PlanUnresolved:

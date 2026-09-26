@@ -177,6 +177,10 @@ func humanCompletionReason(reason string) string {
 		return "tool budget exhausted"
 	case "output_limit":
 		return "model output limit reached"
+	case "provider_interrupted":
+		return "model provider interrupted the reply"
+	case "provider_filtered":
+		return "model provider filtered the reply"
 	case "max_iterations":
 		return "iteration limit reached"
 	default:

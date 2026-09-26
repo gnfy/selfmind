@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 )
 
@@ -775,7 +776,13 @@ func splitMessage(content string, max int) []string {
 	for len(content) > max {
 		cut := strings.LastIndex(content[:max], "\n")
 		if cut < max/2 {
-			cut = max
+			// No usable line break: cut at the limit, moved back so that no
+			// multi-byte character is split between two messages. Only a limit
+			// shorter than one character leaves nothing, and then the byte cut
+			// stands so the loop still advances.
+			if cut = textutil.RuneBoundary(content, max); cut == 0 {
+				cut = max
+			}
 		}
 		parts = append(parts, strings.TrimSpace(content[:cut]))
 		content = strings.TrimSpace(content[cut:])

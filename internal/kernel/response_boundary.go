@@ -1,11 +1,20 @@
 package kernel
 
+import "selfmind/internal/kernel/llm"
+
 // A syntactically valid call is not evidence of a complete model response.
 // Keep this refusal distinct from a tool that ran and failed or an unknown
-// external effect. No dispatch claim or tool budget is consumed.
-type incompleteToolResponseError struct{}
+// external effect. No dispatch claim or tool budget is consumed. stopped names
+// what cut the response short.
+type incompleteToolResponseError struct{ stopped llm.StopReason }
 
-func (incompleteToolResponseError) Error() string {
+func (e incompleteToolResponseError) Error() string {
+	switch e.stopped {
+	case llm.StopFiltered:
+		return "Tool call was not executed because the model provider filtered the response."
+	case llm.StopInterrupted:
+		return "Tool call was not executed because the model provider interrupted the response."
+	}
 	return "Tool call was not executed because the model response reached its output limit."
 }
 func (e incompleteToolResponseError) ModelSafeMessage() string { return e.Error() }

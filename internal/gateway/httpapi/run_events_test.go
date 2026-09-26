@@ -102,6 +102,62 @@ func TestAggregateGatewayResponseUsesTypedAssistantPhase(t *testing.T) {
 	}
 }
 
+// The run's own answer arrives on the result channel, which never drops. When
+// the kernel reports that live deltas were lost, that whole answer replaces the
+// streamed copy, and live events the forwarder delivers after it cannot change
+// it. Without that report the streamed copy stands, as it always has.
+func TestAggregateGatewayResponseTakesTheWholeAnswerWhenDeltasWereLost(t *testing.T) {
+	whole := "The report begins and ends here."
+	lost := map[string]interface{}{"stream_incomplete": true}
+	for _, tc := range []struct {
+		name   string
+		events []llm.StreamEvent
+		want   string
+	}{
+		{name: "lost deltas", want: whole, events: []llm.StreamEvent{
+			{EventType: "stream", Content: "The report begins"},
+			{Content: whole, Payload: lost},
+		}},
+		{name: "live delta after the whole answer", want: whole, events: []llm.StreamEvent{
+			{EventType: "stream", Content: "The report begins"},
+			{Content: whole, Payload: lost},
+			{EventType: "stream", Content: " and ends"},
+		}},
+		{name: "stale tool start after the whole answer", want: whole, events: []llm.StreamEvent{
+			{EventType: "stream", Content: "The report begins"},
+			{Content: whole, Payload: lost},
+			{EventType: "tool.started", ToolName: "read_file"},
+		}},
+		{name: "whole answer before any live delta", want: whole, events: []llm.StreamEvent{
+			{Content: whole},
+			{EventType: "stream", Content: whole},
+		}},
+		{name: "nothing lost", want: "The report begins", events: []llm.StreamEvent{
+			{EventType: "stream", Content: "The report begins"},
+			{Content: whole},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := make(chan llm.StreamEvent, len(tc.events))
+			for _, event := range tc.events {
+				stream <- event
+			}
+			close(stream)
+			server := &Server{}
+			content, _, _, hasFinal, err := server.coordinator().aggregateGatewayResponse(
+				context.Background(), "cli", nil, nil,
+				&router.HandleResponse{Stream: stream, IsStreaming: true},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !hasFinal || content != tc.want {
+				t.Fatalf("content=%q hasFinal=%v, want %q", content, hasFinal, tc.want)
+			}
+		})
+	}
+}
+
 // TestCLIAsyncResultRoutesToPreferredIM encodes the continuity promise for
 // fire-and-forget terminal runs: the final answer must reach the person's
 // preferred IM endpoint instead of vanishing (observed live: a rejected

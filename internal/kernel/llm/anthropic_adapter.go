@@ -284,6 +284,9 @@ func anthropicStreamEventsForProvider(resp *http.Response, provider string) <-ch
 		scanner.Buffer(make([]byte, 4096), 2*1024*1024)
 		inputTokensSent := false
 		lastOutputTokens := 0
+		// A stop_reason proves the reply ended even when message_stop never
+		// arrives. Without either, a clean EOF has cut the reply short.
+		sawStop := false
 		toolDeltas := make(map[int]*ToolCall)
 		semanticOutput := false
 		finish := func() {
@@ -380,6 +383,7 @@ func anthropicStreamEventsForProvider(resp *http.Response, provider string) <-ch
 				}
 			case "message_delta":
 				if chunk.Delta.StopReason != "" {
+					sawStop = true
 					ch <- StreamEvent{FinishReason: chunk.Delta.StopReason}
 				}
 				if chunk.Usage.OutputTokens > lastOutputTokens {
@@ -394,6 +398,12 @@ func anthropicStreamEventsForProvider(resp *http.Response, provider string) <-ch
 		}
 		if err := scanner.Err(); err != nil {
 			ch <- StreamEvent{Err: err}
+			return
+		}
+		if !sawStop {
+			// The body closed cleanly before message_stop and without a
+			// stop_reason: what arrived is a prefix, not a finished reply.
+			ch <- StreamEvent{Err: streamUnterminatedError(provider)}
 			return
 		}
 		finish()

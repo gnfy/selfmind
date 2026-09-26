@@ -900,7 +900,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			},
 		})
 	}
-	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats) {
+	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats, finishReason string, callErr error) {
 		route := llm.DescribeProviderRoute(a.activeLLM())
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type: "provider.call.usage",
@@ -922,6 +922,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"cache_creation_reported":     usage.CacheCreationReported,
 				"uncached_input_tokens":       uncachedInputTokens(usage),
 				"billed_input_tokens":         uncachedInputTokens(usage),
+				"finish_reason":               boundedFinishReason(finishReason),
+				"stop_reason":                 providerCallStopReason(finishReason, callErr),
 			},
 		})
 	}
@@ -1185,6 +1187,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 
 	var continuedAnswer strings.Builder
+	// streamLost records that some answer text never reached the event
+	// consumer; turn.completed carries it so the gap stays visible.
+	streamLost := false
 
 	maxIterations := a.maxIterations
 	if strategy.MaxIterations > 0 && (maxIterations <= 0 || strategy.MaxIterations < maxIterations) {
@@ -1388,7 +1393,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if strings.TrimSpace(content) == "" || eventCh == nil {
 				return
 			}
-			EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content, Phase: phase})
+			if !EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content, Phase: phase}) {
+				streamLost = true
+				reportStreamLoss(ctx)
+			}
 		}
 		flushPendingStream := func() {
 			if suppressLegacyToolStream {
@@ -1473,7 +1481,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		streamCh, err := a.streamChatWithRetry(streamCtx, messages, iterationStrategy)
 		if err != nil {
 			streamCancel()
-			emitProviderCallUsage(i, "stream", "failed", streamCallStarted, llm.UsageStats{})
+			emitProviderCallUsage(i, "stream", "failed", streamCallStarted, llm.UsageStats{}, "", err)
 			if ctx.Err() != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
 			}
@@ -1497,10 +1505,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			fallbackCallStarted := time.Now()
 			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, fallbackMessages, iterationStrategy)
 			if fallbackErr != nil {
-				emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{})
+				emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{}, "", fallbackErr)
 				return "", totalUsage, fmt.Errorf("llm chat: %w; non-stream fallback failed: %v", err, fallbackErr)
 			}
-			emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage)
+			emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage, fallbackResp.FinishReason, nil)
 			appendRecoveredChatResponse(fallbackResp)
 		} else {
 			streamStarted := time.Now()
@@ -1570,7 +1578,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if streamErr != nil {
 				streamStatus = "failed"
 			}
-			emitProviderCallUsage(i, "stream", streamStatus, streamCallStarted, streamCallUsage)
+			emitProviderCallUsage(i, "stream", streamStatus, streamCallStarted, streamCallUsage, finishReason, streamErr)
 
 			if streamErr != nil {
 				if ctx.Err() != nil {
@@ -1615,10 +1623,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					fallbackCallStarted := time.Now()
 					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, recoveryMessages, iterationStrategy)
 					if fallbackErr != nil {
-						emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{})
+						emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{}, "", fallbackErr)
 						return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
 					}
-					emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage)
+					emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage, fallbackResp.FinishReason, nil)
 					appendRecoveredChatResponse(fallbackResp)
 					streamErr = nil
 				}
@@ -1628,10 +1636,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		resp := textutil.CleanUTF8(fullResp.String())
 		legacyMarkupPresent := legacyToolMarkerIndex(resp) >= 0
 		nativeCalls = normalizeToolCallIDs(nativeCalls, i)
-		outputLimited := responseStoppedForOutputLimit(finishReason)
+		stopped := llm.ClassifyStopReason(finishReason)
+		outputLimited := stopped.Continuable()
+		// A filtered reply is cut short like one that ran out of output, but
+		// asking the model to continue would only ask it to route around the
+		// provider's decision, so it ends the turn unfinished instead.
+		outputFiltered := stopped == llm.StopFiltered
+		outputCut := outputLimited || outputFiltered
 		calls := nativeCalls
 		var droppedForBudget, droppedForLifecycle, deferredAcrossWorkUnitBoundary, deferredAcrossWatchHandoff int
-		if outputLimited {
+		if outputCut {
 			if len(calls) == 0 {
 				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i)
 			}
@@ -1668,14 +1682,14 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// Sync turn to external memory providers after each assistant response
 		a.syncTurn(ctx, tenantID, messages)
 
-		if outputLimited {
+		if outputCut {
 			for idx, call := range calls {
-				result := a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, incompleteToolResponseError{})
+				result := a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, incompleteToolResponseError{stopped: stopped})
 				messages = append(messages, result.msg)
 				history.Steps = append(history.Steps, result.step)
 			}
 		}
-		if len(calls) > 0 && !outputLimited {
+		if len(calls) > 0 && !outputCut {
 			if !nativeToolActivityAnnounced {
 				emitAgentActivity(eventCh, toolCallActivity(calls), "tool_selection", i)
 			}
@@ -1781,7 +1795,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 				completion := resolveTurnCompletion(completionSignals{FinishStatus: handoff.Status})
 				recordStep(i, StepCompleteTurn, handoff.Status)
-				emitTurnCompleted(eventCh, answer, completion)
+				emitTurnCompleted(eventCh, answer, completion, streamLost)
 				return answer, totalUsage, nil
 			}
 			if deferredAcrossWorkUnitBoundary > 0 {
@@ -1832,29 +1846,47 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		if outputLimited {
+			interrupted := stopped == llm.StopInterrupted
 			continuationHint := "Continue from the exact point where your previous answer stopped. Do not repeat earlier content. Finish the remaining answer completely."
 			if len(calls) > 0 || legacyMarkupPresent {
 				resp = "The model reached its output limit before the tool request was complete. No tools from that response were executed."
+				if interrupted {
+					resp = "The model provider interrupted the reply before the tool request was complete. No tools from that response were executed."
+				}
 				continuationHint = "Your previous response was cut off. None of its tool calls were executed. Re-issue only the still-needed calls with complete arguments; do not continue partial arguments."
 			} else if resp != "" {
 				continuedAnswer.WriteString(resp)
 			}
 			if i+1 < maxIterations {
-				emitAgentActivity(eventCh, "Continuing because the model reached its output limit", "continuation", i)
+				activity, detail := "Continuing because the model reached its output limit", "output_limit_continue"
+				if interrupted {
+					activity, detail = "Continuing because the model provider interrupted the reply", "provider_interrupted_continue"
+				}
+				emitAgentActivity(eventCh, activity, "continuation", i)
 				messages = append(messages, llm.Message{
 					Role:    "user",
 					Content: continuationHint,
 				})
-				recordStep(i, StepContinueModel, "output_limit_continue")
+				recordStep(i, StepContinueModel, detail)
 				continue
 			}
 			history.Outcome = continuedAnswer.String()
 			if len(calls) > 0 || legacyMarkupPresent {
 				history.Outcome = strings.TrimSpace(history.Outcome + "\n" + resp)
 			}
-			completion := resolveTurnCompletion(completionSignals{OutputLimited: true})
+			completion := resolveTurnCompletion(completionSignals{OutputLimited: !interrupted, OutputInterrupted: interrupted})
 			recordStep(i, StepCompleteTurn, completion.Reason)
-			emitTurnCompleted(eventCh, history.Outcome, completion, "finish_reason", finishReason)
+			emitTurnCompleted(eventCh, history.Outcome, completion, streamLost, "finish_reason", finishReason)
+			return history.Outcome, totalUsage, nil
+		}
+		if outputFiltered {
+			if len(calls) > 0 || legacyMarkupPresent {
+				resp = "The model provider filtered the reply before its tool request was complete. No tools from that response were executed."
+			}
+			history.Outcome = strings.TrimSpace(continuedAnswer.String() + resp)
+			completion := resolveTurnCompletion(completionSignals{OutputFiltered: true})
+			recordStep(i, StepCompleteTurn, completion.Reason)
+			emitTurnCompleted(eventCh, history.Outcome, completion, streamLost, "finish_reason", finishReason)
 			return history.Outcome, totalUsage, nil
 		}
 		if continuedAnswer.Len() > 0 {
@@ -1905,7 +1937,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			PlanUnresolved:      planUnresolved,
 		})
 		recordStep(i, StepCompleteTurn, completion.Reason)
-		emitTurnCompleted(eventCh, resp, completion)
+		emitTurnCompleted(eventCh, resp, completion, streamLost)
 		return resp, totalUsage, nil
 	}
 
@@ -1924,7 +1956,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, outcome, messages)
 	completion := resolveTurnCompletion(completionSignals{IterationCapped: true})
 	recordStep(maxIterations, StepCompleteTurn, completion.Reason)
-	emitTurnCompleted(eventCh, outcome, completion)
+	emitTurnCompleted(eventCh, outcome, completion, streamLost)
 	return outcome, totalUsage, nil
 }
 
@@ -2031,11 +2063,14 @@ func toolNamesForTrace(calls []llm.ToolCall) string {
 // emitTurnCompleted is the single turn.completed emission point. Extra
 // key/value pairs are appended to the payload (used for finish_reason on the
 // output-limit path).
-func emitTurnCompleted(eventCh chan string, content string, c turnCompletion, extra ...string) {
+func emitTurnCompleted(eventCh chan string, content string, c turnCompletion, streamLost bool, extra ...string) {
 	payload := map[string]interface{}{
 		"status":            c.Status,
 		"completion_reason": c.Reason,
 		"resumable":         c.Resumable,
+	}
+	if streamLost {
+		payload["stream_incomplete"] = true
 	}
 	for i := 0; i+1 < len(extra); i += 2 {
 		payload[extra[i]] = extra[i+1]
@@ -2054,14 +2089,27 @@ func lastAssistantContent(messages []llm.Message) string {
 	return ""
 }
 
-func responseStoppedForOutputLimit(reason string) bool {
-	reason = strings.ToLower(strings.TrimSpace(reason))
-	switch reason {
-	case "max_tokens", "length", "max_output_tokens", "output_limit":
-		return true
-	default:
-		return strings.Contains(reason, "max_token") || strings.Contains(reason, "length")
+// providerCallStopReason records how a provider call ended. A failed call has
+// no reply to classify, and a stream that closed before its terminal event is
+// named separately because what it delivered was a prefix.
+func providerCallStopReason(finishReason string, err error) string {
+	switch {
+	case llm.IsStreamUnterminated(err):
+		return "unterminated"
+	case err != nil:
+		return "error"
 	}
+	return string(llm.ClassifyStopReason(finishReason))
+}
+
+// boundedFinishReason keeps the provider's raw value for diagnosis without
+// letting an unexpected payload grow the event.
+func boundedFinishReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if len(reason) > 64 {
+		return textutil.TruncateBytes(reason, 64)
+	}
+	return reason
 }
 
 func splitUTF8PrefixKeepTail(s string, keepBytes int) (string, string) {

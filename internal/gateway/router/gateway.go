@@ -209,13 +209,21 @@ func (g *Gateway) runAgentStreaming(ctx context.Context, unifiedUID, channel, in
 	go func() {
 		defer close(respChan)
 		defer recoverStreamPanic(respChan)
-		resp, usage, err := g.runConversation(ctx, unifiedUID, channel, input)
+		runCtx, streamLost := kernel.WithStreamLossReport(ctx)
+		resp, usage, err := g.runConversation(runCtx, unifiedUID, channel, input)
 		if err != nil {
 			respChan <- llm.StreamEvent{Err: err}
 			return
 		}
 		if resp != "" {
-			respChan <- llm.StreamEvent{Content: resp}
+			final := llm.StreamEvent{Content: resp}
+			if streamLost() {
+				// This channel never drops, unlike the live event channel. When
+				// some answer deltas were lost there, a consumer that assembled
+				// the answer from them must take this whole copy instead.
+				final.Payload = map[string]interface{}{"stream_incomplete": true}
+			}
+			respChan <- final
 		}
 		respChan <- llm.StreamEvent{Usage: &usage}
 	}()

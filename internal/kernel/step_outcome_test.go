@@ -16,6 +16,8 @@ func TestResolveTurnCompletion(t *testing.T) {
 	}{
 		{"clean completion", completionSignals{}, "completed", "completed", false},
 		{"output limit wins over all", completionSignals{OutputLimited: true, ToolBudgetExhausted: true, PlanUnresolved: true, IterationCapped: true}, "incomplete", "output_limit", true},
+		{"provider interruption without room to continue", completionSignals{OutputInterrupted: true, ToolBudgetExhausted: true}, "incomplete", "provider_interrupted", true},
+		{"filtered reply", completionSignals{OutputFiltered: true, PlanUnresolved: true}, "incomplete", "provider_filtered", true},
 		{"budget exhausted no finish", completionSignals{ToolBudgetExhausted: true}, "incomplete", "tool_budget_exhausted", true},
 		{"finish status suppresses budget signal", completionSignals{ToolBudgetExhausted: true, FinishStatus: "done"}, "completed", "completed", false},
 		{"plan unresolved", completionSignals{PlanUnresolved: true}, "incomplete", "plan_unresolved", true},

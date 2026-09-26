@@ -654,6 +654,24 @@ absorbs these without touching the wire contract:
   learning failures retain a network-route fingerprint. A direct/proxy or local
   listener state change releases those jobs on the next maintenance sweep; an
   explicit managed restart also grants one fresh attempt.
+- **Stop reasons.** Adapters pass each provider's raw finish or stop reason
+  through unchanged; `llm.ClassifyStopReason` (`stop_reason.go`) is the one
+  table that maps OpenAI, OpenAI-compatible, Responses, and Anthropic values to
+  `complete`, `length`, `interrupted`, `filtered`, `missing`, or `other`. Every
+  `provider.call.usage` event records the bounded raw `finish_reason` and the
+  classified `stop_reason` (`unterminated` or `error` for a failed call). A
+  `length` or `interrupted` reply is continued from where it stopped and, when
+  no iteration remains, ends incomplete and resumable (`output_limit` /
+  `provider_interrupted`). A `filtered` reply is not continued: the turn ends
+  incomplete and resumable (`provider_filtered`) and its tool calls never run.
+  `missing` alone is not evidence of a cut, because several providers omit the
+  reason.
+- **Unterminated streams.** A stream that closes cleanly before its protocol
+  terminator (`data: [DONE]`, `response.completed`/`response.incomplete`,
+  `message_stop`) without having reported a stop reason delivered only a
+  prefix. The adapter raises a retryable `stream_unterminated` error, so the
+  loop continues from the partial text through the non-stream fallback instead
+  of presenting the prefix as the answer.
 - **No cursor resume.** With `store=false` the server never persisted the
   response, so `previous_response_id` resume is impossible — a retry is always
   a full re-send. Do not attempt partial-resume.

@@ -235,6 +235,10 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 	hasFinalContent := false
 	typedAssistantPhase := false
 	currentAssistantPhase := llm.AssistantPhaseUnspecified
+	// answerFixed is set once the run's own answer has been adopted. Live events
+	// can still arrive after it, because the forwarder interleaves the two
+	// channels; they must not change or extend that answer.
+	answerFixed := false
 	var summary router.EventSummary
 	observer := streamObserverFromContext(ctx)
 	for event := range resp.Stream {
@@ -242,7 +246,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			// Assistant prose emitted before a tool call is progress narration,
 			// not the final answer. Keep publishing it live, but only materialize
 			// prose produced after the last tool starts as the run's answer.
-			if event.EventType == "tool.started" {
+			if event.EventType == "tool.started" && !answerFixed {
 				finalContent.Reset()
 				hasFinalContent = false
 				typedAssistantPhase = false
@@ -286,7 +290,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			}
 			if event.EventType == "stream" {
 				sawStream = true
-				if event.Phase != llm.AssistantPhaseUnspecified {
+				if event.Phase != llm.AssistantPhaseUnspecified && !answerFixed {
 					if event.Phase == llm.AssistantPhaseFinalAnswer && currentAssistantPhase != llm.AssistantPhaseFinalAnswer {
 						finalContent.Reset()
 						hasFinalContent = false
@@ -295,7 +299,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 					currentAssistantPhase = event.Phase
 				}
 				materialize := !typedAssistantPhase || currentAssistantPhase == llm.AssistantPhaseFinalAnswer
-				if materialize {
+				if materialize && !answerFixed {
 					finalContent.WriteString(event.Content)
 					if strings.TrimSpace(event.Content) != "" {
 						hasFinalContent = true
@@ -310,6 +314,10 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 		if event.Err != nil {
 			return finalContent.String(), usage, summary, hasFinalContent, event.Err
 		}
+		// An untyped content event is the run's own answer from the result
+		// channel, which never drops. It stands in when nothing streamed, and it
+		// replaces the streamed copy when the kernel reports that some of those
+		// deltas never reached this consumer.
 		if event.Content != "" && !sawStream {
 			streamEvent := llm.StreamEvent{EventType: "stream", Content: event.Content}
 			if task != nil {
@@ -321,7 +329,13 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			finalContent.WriteString(event.Content)
 			if strings.TrimSpace(event.Content) != "" {
 				hasFinalContent = true
+				answerFixed = true
 			}
+		} else if incomplete, _ := event.Payload["stream_incomplete"].(bool); incomplete && strings.TrimSpace(event.Content) != "" {
+			finalContent.Reset()
+			finalContent.WriteString(event.Content)
+			hasFinalContent = true
+			answerFixed = true
 		}
 		if event.Usage != nil {
 			usage = *event.Usage

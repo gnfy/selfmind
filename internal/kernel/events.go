@@ -116,22 +116,28 @@ func DecodeAgentEvent(raw string) (AgentEvent, bool) {
 	return event, true
 }
 
-func EmitAgentEvent(ch chan string, event AgentEvent) {
+// EmitAgentEvent reports whether the event reached ch. A full channel drops an
+// ordinary event at once and gives a critical one a short grace period, so a
+// slow consumer never stalls the run.
+func EmitAgentEvent(ch chan string, event AgentEvent) bool {
 	if ch == nil {
-		return
+		return false
 	}
 	encoded := EncodeAgentEvent(event)
 	select {
 	case ch <- encoded:
+		return true
 	default:
 		if !isCriticalAgentEvent(event.Type) {
-			return
+			return false
 		}
 		timer := time.NewTimer(50 * time.Millisecond)
 		defer timer.Stop()
 		select {
 		case ch <- encoded:
+			return true
 		case <-timer.C:
+			return false
 		}
 	}
 }

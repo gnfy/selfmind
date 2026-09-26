@@ -262,7 +262,12 @@ end-to-end path requires a live approval-triggering run to exercise.)
 - **Unified live streaming is shipped**: `/v1/events/stream` carries durable
   task/run events and ephemeral assistant deltas in one `RunEvent` envelope.
   Durable events resume with `Last-Event-ID`; the synchronous message response
-  remains the final-answer source of truth. CLI consumes both classes, while
+  remains the final-answer source of truth. The daemon assembles that answer
+  from the run's live deltas, which the kernel's event channel may drop when
+  its consumer falls behind. When the kernel reports such a loss
+  (`stream_incomplete` on `turn.completed` and on the run's result), the run's
+  own answer, which arrives on a channel that never drops, replaces the
+  assembled copy. CLI consumes both classes, while
   IM/cron deliberately project low-frequency milestones and the final result.
 - **Real multi-terminal soak** at `SELFMIND_WORKERS>1` to validate ordering,
   provider pressure and workspace serialization under sustained load.

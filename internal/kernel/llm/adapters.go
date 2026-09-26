@@ -554,6 +554,62 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 		var leftover []byte
 		toolDeltas := make(map[int]*OpenAIToolCall)
 		var priorUsage UsageStats
+		// A finish_reason proves the reply ended even when the closing [DONE]
+		// never arrives. Without either, a clean EOF has cut the reply short.
+		sawStop := false
+
+		// handle processes one SSE line and reports whether it was [DONE].
+		handle := func(line []byte) bool {
+			dataPart, ok := sseDataBytes(line)
+			if !ok {
+				return false
+			}
+			if bytes.Equal(dataPart, []byte("[DONE]")) {
+				if len(toolDeltas) > 0 {
+					ch <- StreamEvent{ToolCalls: orderedOpenAIToolCalls(toolDeltas)}
+				}
+				return true
+			}
+
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content          *string               `json:"content"`
+						ReasoningContent *string               `json:"reasoning_content"`
+						ToolCalls        []openAIToolCallDelta `json:"tool_calls"`
+					} `json:"delta"`
+					FinishReason string `json:"finish_reason"`
+				} `json:"choices"`
+				Usage *openAIStreamUsage `json:"usage"`
+			}
+			if err := json.Unmarshal(dataPart, &chunk); err != nil {
+				return false
+			}
+
+			if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != nil && *chunk.Choices[0].Delta.Content != "" {
+				ch <- StreamEvent{Content: *chunk.Choices[0].Delta.Content}
+			}
+			if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.ReasoningContent != nil && *chunk.Choices[0].Delta.ReasoningContent != "" {
+				ch <- StreamEvent{ReasoningContent: *chunk.Choices[0].Delta.ReasoningContent}
+			}
+			if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
+				accumulateOpenAIToolDeltas(toolDeltas, chunk.Choices[0].Delta.ToolCalls)
+			}
+			if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != "" {
+				sawStop = true
+				ch <- StreamEvent{FinishReason: chunk.Choices[0].FinishReason}
+			}
+			if chunk.Usage != nil {
+				// OpenAI-compatible usage values are cumulative snapshots for
+				// this response. Some providers repeat them on several SSE
+				// chunks; the agent loop sums events, so send only new counts.
+				stats := openAIUsageDelta(chunk.Usage.usageStats(), &priorUsage)
+				if stats != (UsageStats{}) {
+					ch <- StreamEvent{Usage: &stats}
+				}
+			}
+			return false
+		}
 
 		for {
 			n, err := reader.Read(buf)
@@ -569,58 +625,27 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 				}
 
 				for _, line := range lines {
-					dataPart, ok := sseDataBytes(line)
-					if !ok {
-						continue
-					}
-					if bytes.Equal(dataPart, []byte("[DONE]")) {
-						if len(toolDeltas) > 0 {
-							ch <- StreamEvent{ToolCalls: orderedOpenAIToolCalls(toolDeltas)}
-						}
+					if handle(line) {
 						return
-					}
-
-					var chunk struct {
-						Choices []struct {
-							Delta struct {
-								Content          *string               `json:"content"`
-								ReasoningContent *string               `json:"reasoning_content"`
-								ToolCalls        []openAIToolCallDelta `json:"tool_calls"`
-							} `json:"delta"`
-							FinishReason string `json:"finish_reason"`
-						} `json:"choices"`
-						Usage *openAIStreamUsage `json:"usage"`
-					}
-					if err := json.Unmarshal(dataPart, &chunk); err != nil {
-						continue
-					}
-
-					if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != nil && *chunk.Choices[0].Delta.Content != "" {
-						ch <- StreamEvent{Content: *chunk.Choices[0].Delta.Content}
-					}
-					if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.ReasoningContent != nil && *chunk.Choices[0].Delta.ReasoningContent != "" {
-						ch <- StreamEvent{ReasoningContent: *chunk.Choices[0].Delta.ReasoningContent}
-					}
-					if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-						accumulateOpenAIToolDeltas(toolDeltas, chunk.Choices[0].Delta.ToolCalls)
-					}
-					if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != "" {
-						ch <- StreamEvent{FinishReason: chunk.Choices[0].FinishReason}
-					}
-					if chunk.Usage != nil {
-						// OpenAI-compatible usage values are cumulative snapshots for
-						// this response. Some providers repeat them on several SSE
-						// chunks; the agent loop sums events, so send only new counts.
-						stats := openAIUsageDelta(chunk.Usage.usageStats(), &priorUsage)
-						if stats != (UsageStats{}) {
-							ch <- StreamEvent{Usage: &stats}
-						}
 					}
 				}
 			}
 			if err != nil {
 				if err != io.EOF {
 					ch <- StreamEvent{Err: err}
+					break
+				}
+				// A server may omit the final newline; that line is still data.
+				if len(leftover) > 0 && handle(leftover) {
+					return
+				}
+				switch {
+				case !sawStop:
+					ch <- StreamEvent{Err: streamUnterminatedError("")}
+				case len(toolDeltas) > 0:
+					// The reply finished without its closing [DONE]; the calls it
+					// announced are complete.
+					ch <- StreamEvent{ToolCalls: orderedOpenAIToolCalls(toolDeltas)}
 				}
 				break
 			}

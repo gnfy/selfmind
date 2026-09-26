@@ -25,6 +25,22 @@ func TruncateBytes(s string, max int) string {
 	return s[:cut]
 }
 
+// RuneBoundary returns the start of the character that contains byte i of s,
+// so s[:RuneBoundary(s, i)] never ends inside a multi-byte character. It
+// returns len(s) when i is past the end.
+func RuneBoundary(s string, i int) int {
+	if i <= 0 {
+		return 0
+	}
+	if i >= len(s) {
+		return len(s)
+	}
+	for i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
+}
+
 func Truncate(s string, max int) string {
 	if max <= 0 {
 		return ""

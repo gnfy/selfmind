@@ -12,6 +12,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/runpool"
 	"selfmind/internal/tools"
@@ -1009,6 +1010,9 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		defer cancel()
 		decisions := buildApprovalDecisions(req)
 		persistentArgs := tools.ApprovalPersistentArgs(req.ToolName, req.Args)
+		// A delegated sub-agent asks through the parent run; the person should
+		// know the call is not the main agent's own.
+		delegated := kernel.DelegationNamespace(ctx) != ""
 		approval, err := store.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
 			TenantID:                 identity.TenantID,
 			PersonID:                 identity.PersonID,
@@ -1042,6 +1046,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				// The authoritative answer set for this ask (batch B1). Every
 				// surface renders THIS list instead of inventing one.
 				"decisions": decisions,
+				"delegated": delegated,
 			}),
 		})
 		if err != nil {
@@ -1084,6 +1089,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				"triage_rationale": req.TriageRationale,
 				"triage_risk":      req.TriageRisk,
 				"decisions":        decisions,
+				"delegated":        delegated,
 			}),
 		}, "approval_id", approval.ID)
 		resumeWatchdog := runpool.BeginPersonWait(ctx, runpool.PhaseWaitingApproval)

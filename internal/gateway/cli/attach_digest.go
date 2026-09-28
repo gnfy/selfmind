@@ -164,7 +164,7 @@ func approvalRequestFromDigest(item api.DigestApproval) MsgApprovalRequest {
 		Containment: item.Containment, TriageState: item.TriageState,
 		Rationale: item.Rationale, Risk: item.Risk, CodePreview: item.CodePreview,
 		CodeSHA256: item.CodeSHA256, CodeLines: item.CodeLines,
-		CodeBytes: item.CodeBytes, Options: options,
+		CodeBytes: item.CodeBytes, Options: options, Delegated: item.Delegated,
 	}
 }
 

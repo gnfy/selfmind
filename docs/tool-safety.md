@@ -195,9 +195,10 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   call's namespace, as are the call ids its loop generates for a provider that
   sends none, so its calls never collide with the parent's or a sibling's. Only
   its tool activity, evidence, and usage reach the parent's event stream,
-  marked `delegated`. A human wait that ends its turn, such as an unanswered
-  approval, parks the parent run on the same wait instead of returning as its
-  report; a batch keeps the other goals' results for the parent.
+  marked `delegated`. Every approval surface names its asks as a sub-agent's,
+  and a human wait that ends its turn, such as an unanswered approval, parks
+  the parent run on the same wait instead of returning as its report; a batch
+  keeps the other goals' results for the parent.
 
 ### External MCP tools
 

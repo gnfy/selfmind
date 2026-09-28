@@ -20,12 +20,14 @@ func TestApprovalPromptRendersDecisionContext(t *testing.T) {
 		Cwd:           "/mnt/d/wwwroot/ai/selfmind",
 		ChangeSummary: "2 files +48/-12",
 		GrantClass:    `"python3" commands`,
+		Delegated:     true,
 	})
 	view := prompt.View(90)
 
 	for _, want := range []string{
 		"Would you like to run the following command?",
 		"$ python3 scripts/report.py",
+		"from: a delegated sub-agent of this run",
 		"change: 2 files +48/-12",
 		"/mnt/d/wwwroot/ai/selfmind",
 		"env envsnap_1_789c4317",
@@ -40,7 +42,7 @@ func TestApprovalPromptRendersDecisionContext(t *testing.T) {
 	}
 	// Absent context must not leave empty label rows behind.
 	bare := NewApprovalPrompt("read_file", "notes.md", "").View(90)
-	for _, unwanted := range []string{"where:", "change:", "reason:", "remembering allows:"} {
+	for _, unwanted := range []string{"where:", "change:", "reason:", "remembering allows:", "from:"} {
 		if strings.Contains(bare, unwanted) {
 			t.Fatalf("panel with no context must omit %q:\n%s", unwanted, bare)
 		}

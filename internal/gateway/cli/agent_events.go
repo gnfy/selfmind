@@ -295,7 +295,8 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 				CodeBytes:     payloadTokenCount(approvalArg("code_bytes")),
 				// The daemon's own answer set for this ask. Absent (older daemon)
 				// leaves it nil and the panel falls back to its built-in options.
-				Options: approvalOptionsFromPayload(event.Payload),
+				Options:   approvalOptionsFromPayload(event.Payload),
+				Delegated: event.Payload["delegated"] == true,
 			})
 		}
 	case "approval.parked":

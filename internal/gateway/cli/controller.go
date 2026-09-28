@@ -338,6 +338,8 @@ type MsgApprovalRequest struct {
 	Rationale string
 	Risk      string
 	Options   []components.ApprovalOption
+	// Delegated means a sub-agent of the run made the call.
+	Delegated bool
 }
 
 // MsgApprovalResolved closes a matching approval panel or queued request when

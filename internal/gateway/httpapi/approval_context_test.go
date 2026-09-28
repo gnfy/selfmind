@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/kernel"
 	"selfmind/internal/tools"
 )
 
@@ -64,6 +65,9 @@ func TestToolApprovalHandlerPublishesDecisionContext(t *testing.T) {
 	if payload.TriageState != tools.TriageStateUnavailable {
 		t.Fatalf("row payload TriageState = %q", payload.TriageState)
 	}
+	if payload.Delegated {
+		t.Fatal("the main agent's own call is marked as a sub-agent's")
+	}
 
 	// 2. The event carries the same context: it is the TUI's only source.
 	event := findApprovalRequestedEvent(t, store, task.ID)
@@ -93,6 +97,47 @@ func TestToolApprovalHandlerPublishesDecisionContext(t *testing.T) {
 		}
 		if !got.decision.Approved {
 			t.Fatal("handler should report the approval")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("handler did not observe the decision")
+	}
+}
+
+// A delegated sub-agent asks through the parent run's approval handler. Every
+// surface says so: the person is not approving the main agent's own call.
+func TestToolApprovalHandlerMarksSubAgentCalls(t *testing.T) {
+	srv, store, identity, task, _ := newApprovalTestServer(t)
+	coordinator := &RunCoordinator{srv: srv}
+	ctx := kernel.WithDelegationNamespace(context.Background(), "call_delegate")
+	decided := make(chan error, 1)
+	go func() {
+		_, err := coordinator.toolApprovalHandler(identity, task, nil, "cli")(ctx, tools.ToolApprovalRequest{
+			TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+			ToolName: "terminal", Reason: "force push rewrites remote history",
+			Args:        map[string]interface{}{"command": "git push --force"},
+			Environment: "envsnap_1_789c4317",
+		})
+		decided <- err
+	}()
+	pending := waitForPendingApproval(t, store, identity)
+	var payload approvalPayload
+	if err := json.Unmarshal(pending.Payload, &payload); err != nil || !payload.Delegated {
+		t.Fatalf("row payload = %s, err=%v; want it marked delegated", pending.Payload, err)
+	}
+	if line := approvalSummaryLine(pending, ""); !strings.HasPrefix(line, "[terminal, sub-agent]") {
+		t.Fatalf("summary line %q does not name the sub-agent", line)
+	}
+	var eventPayload map[string]interface{}
+	if err := json.Unmarshal(findApprovalRequestedEvent(t, store, task.ID).Payload, &eventPayload); err != nil || eventPayload["delegated"] != true {
+		t.Fatalf("event payload = %v, err=%v; want it marked delegated", eventPayload, err)
+	}
+	if _, err := store.RespondApprovalRequest(context.Background(), identity.TenantID, identity.PersonID, pending.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-decided:
+		if err != nil {
+			t.Fatal(err)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("handler did not observe the decision")

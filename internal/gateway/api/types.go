@@ -554,6 +554,7 @@ type DigestApproval struct {
 	CodeLines     int                `json:"code_lines,omitempty"`
 	CodeBytes     int                `json:"code_bytes,omitempty"`
 	Decisions     []ApprovalDecision `json:"decisions,omitempty"`
+	Delegated     bool               `json:"delegated,omitempty"`
 }
 
 // DigestClarify carries a pending question's id plus its one-line summary;

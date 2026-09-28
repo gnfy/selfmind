@@ -142,6 +142,8 @@ type approvalPayload struct {
 	TriageRationale     string `json:"triage_rationale,omitempty"`
 	TriageRisk          string `json:"triage_risk,omitempty"`
 	TriageAuthorization string `json:"triage_authorization,omitempty"`
+	// Delegated means a sub-agent of the run made the call, not the main agent.
+	Delegated bool `json:"delegated,omitempty"`
 }
 
 func decodeApprovalPayload(approval control.ApprovalRequest) approvalPayload {
@@ -176,6 +178,9 @@ func approvalArgsPreview(args map[string]interface{}, maxChars int) string {
 func approvalSummaryLine(approval control.ApprovalRequest, taskTitle string) string {
 	p := decodeApprovalPayload(approval)
 	label := fallback(p.Tool, approval.ActionType)
+	if p.Delegated {
+		label += ", sub-agent"
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[%s]", label)
 	if preview := approvalArgsPreview(p.Args, 80); preview != "" {

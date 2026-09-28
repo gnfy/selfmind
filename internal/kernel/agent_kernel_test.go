@@ -1412,3 +1412,98 @@ func TestMidTurnCompactionFiresWithinRun(t *testing.T) {
 		t.Fatal("expected a context.compacted event from mid-turn compaction")
 	}
 }
+
+// stalePlanProvider opens a plan, then performs distinct command work one call
+// at a time. replanAfter, when set, sends one fresh snapshot after that many
+// commands; openSteps false opens a plan whose steps are all done.
+type stalePlanProvider struct {
+	commands, replanAfter int
+	openSteps             bool
+	requests              []llm.ChatRequest
+	script                []llm.ToolCall
+}
+
+func (p *stalePlanProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "done", nil
+}
+
+func (p *stalePlanProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "done"}, nil
+}
+
+func (p *stalePlanProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	if p.script == nil {
+		status := "in_progress"
+		if !p.openSteps {
+			status = "completed"
+		}
+		plan := func(id string) llm.ToolCall {
+			return llm.ToolCall{ID: id, Function: "update_plan", Args: fmt.Sprintf(`{"plan":[{"step":"run the checks","status":%q},{"step":"report","status":"%s"}]}`, status, map[bool]string{true: "pending", false: "completed"}[p.openSteps])}
+		}
+		p.script = append(p.script, plan("plan-open"))
+		for i := 1; i <= p.commands; i++ {
+			p.script = append(p.script, llm.ToolCall{ID: fmt.Sprintf("cmd-%d", i), Function: "terminal", Args: fmt.Sprintf(`{"command":"check-%d"}`, i)})
+			if i == p.replanAfter {
+				p.script = append(p.script, plan("plan-again"))
+			}
+		}
+	}
+	p.requests = append(p.requests, req)
+	ch := make(chan llm.StreamEvent, 1)
+	if step := len(p.requests) - 1; step < len(p.script) {
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{p.script[step]}}
+	} else {
+		ch <- llm.StreamEvent{Content: "All checks finished."}
+	}
+	close(ch)
+	return ch, nil
+}
+
+func runStalePlanTurn(t *testing.T, provider *stalePlanProvider) []AgentEvent {
+	t.Helper()
+	agent := NewAgent(memory.NewMemoryManager(&mockStorage{}), &planEscalationBackend{}, provider, "helpful", 32, 1, nil)
+	events := make(chan string, 1024)
+	ctx := WithTaskStrategy(WithEventChannel(context.Background(), events), planEscalationStrategy(PlanPolicyOptional))
+	if _, _, err := agent.RunConversation(ctx, "user123", "cli", "run the release checks"); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	var reminders []AgentEvent
+	for raw := range events {
+		if event, ok := DecodeAgentEvent(raw); ok && event.Type == "strategy.plan_stale_reminder" {
+			reminders = append(reminders, event)
+		}
+	}
+	return reminders
+}
+
+const stalePlanWording = "the visible plan was last updated"
+
+// A plan with open steps that does not move while the work does gets one
+// reminder at the tail of the next request. One run once kept its first step
+// in progress for 58 tool calls.
+func TestStalePlanIsRemindedAfterManyActions(t *testing.T) {
+	provider := &stalePlanProvider{commands: planStaleReminderThreshold + 1, openSteps: true}
+	reminders := runStalePlanTurn(t, provider)
+	if len(reminders) != 1 || fmt.Sprint(reminders[0].Payload["actions_since_plan_update"]) != fmt.Sprint(planStaleReminderThreshold) {
+		t.Fatalf("stale plan reminders = %+v, want one after %d actions", reminders, planStaleReminderThreshold)
+	}
+	if !requestsContainUserText(provider.requests, stalePlanWording) || !requestsContainUserText(provider.requests, `starting with "run the checks"`) {
+		t.Fatal("the stale plan reminder did not reach the model")
+	}
+}
+
+// Updating the plan restarts the count, and a plan with nothing open is not
+// stale however long the work takes.
+func TestStalePlanReminderWaitsForOpenStepsAndNewActions(t *testing.T) {
+	for name, provider := range map[string]*stalePlanProvider{
+		"replanned":    {commands: planStaleReminderThreshold + 4, replanAfter: 8, openSteps: true},
+		"nothing open": {commands: planStaleReminderThreshold + 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if reminders := runStalePlanTurn(t, provider); len(reminders) != 0 || requestsContainUserText(provider.requests, stalePlanWording) {
+				t.Fatalf("reminded without a stale open plan: %+v", reminders)
+			}
+		})
+	}
+}

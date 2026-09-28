@@ -371,6 +371,9 @@ substrate). Document results in this file.
   that reaches it anyway; the presence heartbeat reports the count, which the
   daily report shows. `/attach` is the only way to render another session's
   progress here.
+- The pinned plan's heading says how many of its run's tool actions ago it
+  last changed (`· updated N actions ago`), so a plan that stopped moving reads
+  as possibly stale rather than as the current state.
 - Digest reattachment and live events feed one reducer. `run_id` owns the
   projection, durable `plan_version` orders complete snapshots, and the event
   cursor breaks equal-version replay ties. A lower version, a late event from a

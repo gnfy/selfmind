@@ -1234,6 +1234,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	// multi-step work escalates the plan guidance below.
 	planEvidenceTools := 0
 	planGuidanceEscalated := false
+	// Tool actions since the last successful plan update, and the count at the
+	// last stale-plan reminder, so each reminder waits for new actions.
+	actionsSincePlanUpdate, actionsAtPlanReminder := 0, 0
 	successfulFinishStatus := ""
 	var finishRepair finishCorrection
 	tryExtendToolBudget := func(iteration int) bool {
@@ -1383,6 +1386,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"threshold":            planGuidanceEscalationThreshold,
 				"previous_plan_policy": string(previousPlanPolicy),
 				"plan_policy":          string(iterationStrategy.PlanPolicy),
+			}})
+		}
+		// Stale plan reminder, at the same seam and appended at the tail so the
+		// cached request prefix survives. It only says the plan has not moved
+		// for a while; the model decides whether the plan is still true.
+		if successfulFinishStatus == "" && !toolBudgetExhausted && planSeen &&
+			shouldRemindStalePlan(iterationStrategy, len(unresolvedPlanSteps), actionsSincePlanUpdate, actionsAtPlanReminder) {
+			actionsAtPlanReminder = actionsSincePlanUpdate
+			messages = append(messages, llm.Message{Role: "user", Content: planStaleReminder(actionsSincePlanUpdate, unresolvedPlanSteps)})
+			EmitAgentEvent(eventCh, AgentEvent{Type: "strategy.plan_stale_reminder", Payload: map[string]interface{}{
+				"iteration": i, "actions_since_plan_update": actionsSincePlanUpdate,
+				"open_steps": len(unresolvedPlanSteps), "threshold": planStaleReminderThreshold,
 			}})
 		}
 		var fullResp strings.Builder
@@ -1717,6 +1732,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				if unresolved, ok := unresolvedPlanStepsFromToolCall(calls[idx]); ok {
 					planSeen = true
 					unresolvedPlanSteps = unresolved
+					actionsSincePlanUpdate, actionsAtPlanReminder = 0, 0
 				}
 				if status, ok := finishRunStatusFromToolCall(calls[idx]); ok {
 					successfulFinishStatus = status
@@ -1758,6 +1774,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			for _, res := range results {
 				history.Steps = append(history.Steps, res.step)
 				messages = append(messages, res.msg)
+				if planSeen && !isLifecycleToolName(res.toolName) {
+					actionsSincePlanUpdate++
+				}
 				if res.success && !isLifecycleToolName(res.toolName) {
 					if _, seen := successfulActionEvidence[res.signature]; !seen {
 						successfulActionEvidence[res.signature] = struct{}{}

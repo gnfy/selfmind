@@ -128,3 +128,13 @@ func planGuidanceEscalationNudge(strategy TaskStrategy, planEvidenceTools int) s
 		planToolGuidance(strategy.WithPlanRequired()) +
 		"Do not perform extra tool work for the plan itself: describe the work already done and what genuinely remains, then continue. If only one step remains, send a one-step snapshot and finish normally.\n"
 }
+
+// planStaleReminder tells the model that its visible plan has not moved for a
+// while. It changes nothing: the model decides whether the plan is still true.
+func planStaleReminder(actionsSinceUpdate int, openSteps []string) string {
+	first := ""
+	if len(openSteps) > 0 {
+		first = strings.TrimSpace(openSteps[0])
+	}
+	return fmt.Sprintf("SelfMind: the visible plan was last updated %d tool action(s) ago and still has %d open step(s), starting with %q. If the work has moved on, send a complete update_plan snapshot with the real progress in the same response as your next action; if the plan is still accurate, just continue. Do not do extra tool work for the plan.\n", actionsSinceUpdate, len(openSteps), first)
+}

@@ -19,6 +19,7 @@ func (m *uiModel) applyPlanSnapshot(content string, ref uiEventRef) bool {
 	runID := strings.TrimSpace(ref.RunID)
 	version := planSnapshotVersion(content)
 	m.activePlanJSON = content
+	m.activePlanActions = 0
 	if runID != "" {
 		m.activePlanRunID = runID
 	}
@@ -88,6 +89,19 @@ func (m *uiModel) clearActivePlan() {
 	m.activePlanRunID = ""
 	m.activePlanVersion = 0
 	m.activePlanCursor = 0
+	m.activePlanActions = 0
+}
+
+// countPlanAction notes one tool action of the plan's run, so the pinned plan
+// can say how long ago it last moved; the model alone decides to update it.
+func (m *uiModel) countPlanAction(runID string) {
+	if m.activePlanJSON == "" {
+		return
+	}
+	if runID = strings.TrimSpace(runID); runID != "" && m.activePlanRunID != "" && runID != m.activePlanRunID {
+		return
+	}
+	m.activePlanActions++
 }
 
 func planSnapshotVersion(content string) int {

@@ -310,9 +310,13 @@ func TestVerificationReplacementBindsAfterOriginalStepIsReplannedAway(t *testing
 		t.Fatal(err)
 	}
 
-	replanned, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "replace obsolete step", []RunPlanStepInput{{
-		Step: "Check replacement route", Status: "in_progress", SuccessCriteria: "route is reachable", VerificationRequired: true,
-	}})
+	// The snapshot drops the obsolete step and changes the plan's length, so
+	// nothing matches it by position: the new check is a new step. A same-length
+	// rewording would keep the open step's id instead.
+	replanned, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "replace obsolete step", []RunPlanStepInput{
+		{Step: "Check replacement route", Status: "in_progress", SuccessCriteria: "route is reachable", VerificationRequired: true},
+		{Step: "Retire the obsolete route", Status: "pending"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

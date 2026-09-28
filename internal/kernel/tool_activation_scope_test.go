@@ -166,6 +166,18 @@ func TestUpdatePlanIsolatesMixedToolCallBatch(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "select" || deferred != 2 {
 		t.Fatalf("work-selection boundary=%+v deferred=%d; selection must win before scoped work", got, deferred)
 	}
+	// Closing the plan and recording the outcome is one response: finish_run
+	// after update_plan is closure, not work in a new unit.
+	closure := []llm.ToolCall{
+		{ID: "finish-early", Function: "finish_run"},
+		{ID: "plan", Function: "update_plan"},
+		{ID: "write", Function: "apply_patch"},
+		{ID: "finish", Function: "finish_run"},
+	}
+	got, deferred = isolateWorkUnitBoundaryCall(closure)
+	if len(got) != 2 || got[0].ID != "plan" || got[1].ID != "finish" || deferred != 2 {
+		t.Fatalf("closing batch=%+v deferred=%d; want the plan update and the finish_run after it", got, deferred)
+	}
 }
 
 func TestInProgressWorkUnitSequenceIgnoresOtherTools(t *testing.T) {

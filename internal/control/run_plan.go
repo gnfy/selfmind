@@ -508,8 +508,12 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 			currentIDs = append(currentIDs, step.StepID)
 		}
 	}
-	used := map[string]bool{}
-	out := make([]RunPlanStep, 0, len(input))
+	// Identity first, for the whole snapshot: an explicit id, then unchanged
+	// wording, then position. Resolving every exact match before any
+	// positional one keeps position from taking a step that a later item
+	// names word for word.
+	items := make([]RunPlanStepInput, len(input))
+	claimed := map[string]bool{}
 	for i, item := range input {
 		item.StepID = strings.TrimSpace(item.StepID)
 		item.Step = strings.TrimSpace(item.Step)
@@ -538,20 +542,46 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 				// from a unique semantic identity; ambiguity or changed text remains
 				// a stale-precondition error and cannot retarget another step.
 				staleID := item.StepID
-				item.StepID = uniqueRunPlanStepMatch(previous.Steps, item, used, i == 0)
+				item.StepID = uniqueRunPlanStepMatch(previous.Steps, item, claimed, i == 0)
 				if item.StepID == "" {
 					return nil, &StalePlanStepReferenceError{StepID: staleID, RunID: runID, Current: currentIDs}
 				}
 			}
 		} else if previous != nil {
 			for _, candidate := range previous.Steps {
-				if used[candidate.StepID] || !sameRunPlanIdentity(candidate, item, i == 0) {
+				if claimed[candidate.StepID] || !sameRunPlanIdentity(candidate, item, i == 0) {
 					continue
 				}
 				item.StepID = candidate.StepID
 				break
 			}
 		}
+		if item.StepID != "" {
+			claimed[item.StepID] = true
+		}
+		items[i] = item
+	}
+	// A reworded step without an id keeps the id of the step at its position,
+	// provided that step is still open and no other item claimed it. Minting
+	// a new id instead replaced an unfinished plan with steps born completed,
+	// and the steps it replaced vanished unfinished. Position means something
+	// only while the snapshot keeps the plan's length: an inserted or removed
+	// step would shift every later match.
+	for i := range items {
+		if items[i].StepID != "" || items[i].Step == "" || previous == nil || len(items) != len(previous.Steps) {
+			continue
+		}
+		candidate := previous.Steps[i]
+		if claimed[candidate.StepID] || candidate.Status == "completed" || candidate.Status == "cancelled" ||
+			!sameRunPlanBoundary(candidate, items[i], i == 0) {
+			continue
+		}
+		items[i].StepID = candidate.StepID
+		claimed[candidate.StepID] = true
+	}
+	used := map[string]bool{}
+	out := make([]RunPlanStep, 0, len(items))
+	for i, item := range items {
 		if item.StepID == "" {
 			item.StepID = "step_" + uuid.NewString()
 		}
@@ -623,10 +653,14 @@ func uniqueRunPlanStepMatch(previous []RunPlanStep, next RunPlanStepInput, used 
 }
 
 func sameRunPlanIdentity(previous RunPlanStep, next RunPlanStepInput, first bool) bool {
-	previousBoundary := previous.WorkUnit
+	return normalizeRunPlanText(previous.Step) == normalizeRunPlanText(next.Step) && sameRunPlanBoundary(previous, next, first)
+}
+
+// sameRunPlanBoundary reports whether two steps sit alike in the work-unit
+// structure: same related task, and both a boundary or both not.
+func sameRunPlanBoundary(previous RunPlanStep, next RunPlanStepInput, first bool) bool {
 	nextBoundary := first || next.WorkUnit || next.WorkUnitID != "" || next.RelatedTaskID != ""
-	return normalizeRunPlanText(previous.Step) == normalizeRunPlanText(next.Step) &&
-		previous.RelatedTaskID == next.RelatedTaskID && previousBoundary == nextBoundary
+	return previous.RelatedTaskID == next.RelatedTaskID && previous.WorkUnit == nextBoundary
 }
 
 func normalizeRunPlanText(value string) string {

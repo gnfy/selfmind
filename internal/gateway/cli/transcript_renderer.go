@@ -964,6 +964,12 @@ const (
 // header (codex puts it in a persistent status bar, which SelfMind lacks).
 // Returns "" only if content isn't parseable plan JSON (caller falls back).
 func renderPlanCellWithStyles(content string, duration float64, width int, styles transcriptStyles) string {
+	return renderPlanCellNoted(content, duration, width, styles, "")
+}
+
+// renderPlanCellNoted renders a plan cell whose heading ends with note, such as
+// how long ago the pinned plan last moved.
+func renderPlanCellNoted(content string, duration float64, width int, styles transcriptStyles, note string) string {
 	var payload struct {
 		Explanation string `json:"explanation"`
 		Source      string `json:"source"`
@@ -1021,7 +1027,7 @@ func renderPlanCellWithStyles(content string, duration float64, width int, style
 		heading = "Resumed plan"
 	}
 	sb.WriteString(styles.planSecondary.Render(glyphBullet) + " " + styles.planHeader.Render(heading) +
-		styles.planSecondary.Render(fmt.Sprintf(" · %d/%d", completed, len(payload.Plan))) + "\n")
+		styles.planSecondary.Render(fmt.Sprintf(" · %d/%d", completed, len(payload.Plan))+note) + "\n")
 	// Tree prefix: first block line gets "  └ ", the rest a flat 4-space indent.
 	for i, ln := range block {
 		if i == 0 {

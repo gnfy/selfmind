@@ -869,6 +869,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			toolArgs: msg.Args, runID: msg.Event.RunID,
 		})
 		m.applyProcessEffects(effects)
+		m.countPlanAction(msg.Event.RunID)
 		m.stopModelWait()
 		m.thinking = false
 		m.activityText = ""

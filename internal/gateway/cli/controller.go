@@ -173,6 +173,7 @@ type uiModel struct {
 	activePlanRunID       string    // Run that owns the current canonical plan projection
 	activePlanVersion     int       // Durable RunPlan version; rejects out-of-order snapshots
 	activePlanCursor      int64     // Event cursor tie-breaker for equal/legacy versions
+	activePlanActions     int       // Tool actions the plan's run started since this snapshot
 	runStatus             string    // ready | queued | working | done | error | cancelled
 	queuedCount           int       // requests submitted by this TUI and accepted into the daemon queue
 	queuedInputs          []string  // local queue acknowledgements awaiting run.started

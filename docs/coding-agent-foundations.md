@@ -52,6 +52,13 @@ own tool evidence, never the request text, and it stays guidance — no plan is
 fabricated and no completion is blocked. Plans update at meaningful progress or
 scope changes; they do not require a transition around every tool call. Stable
 step IDs preserve work-unit attribution without asking the model to repeat it.
+A snapshot that omits ids keeps each step's id by unchanged wording, and a
+reworded step keeps the id of the open step at its position when the snapshot
+keeps the plan's length, so rewording cannot silently replace unfinished steps.
+A plan with open steps that has not changed for 12 tool actions gets a one-line
+reminder at the tail of the next model call, again only after another 12; the
+model decides whether it is still true. The final answer is not a plan step,
+and `finish_run` may follow the final `update_plan` in the same response.
 
 Progress snapshots retain an existing step's acceptance condition and required
 verification flag when omitted; cancellation remains explicit. A changed

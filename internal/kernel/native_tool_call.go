@@ -300,10 +300,21 @@ func isolateWorkUnitBoundaryCall(calls []llm.ToolCall) ([]llm.ToolCall, int) {
 			return []llm.ToolCall{call}, len(calls) - 1
 		}
 	}
-	for _, call := range calls {
-		if strings.TrimSpace(call.Function) == "update_plan" {
-			return []llm.ToolCall{call}, len(calls) - 1
+	for i, call := range calls {
+		if strings.TrimSpace(call.Function) != "update_plan" {
+			continue
 		}
+		kept := []llm.ToolCall{call}
+		// A finish_run after the plan update closes the run; it is not work in
+		// the next unit, so it keeps its place and a run can close its plan and
+		// record its outcome in one response.
+		for _, later := range calls[i+1:] {
+			if strings.TrimSpace(later.Function) == "finish_run" {
+				kept = append(kept, later)
+				break
+			}
+		}
+		return kept, len(calls) - len(kept)
 	}
 	return calls, 0
 }

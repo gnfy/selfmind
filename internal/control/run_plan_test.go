@@ -136,8 +136,9 @@ func TestRunPlanIssuesStableStepIDsAndVersionsCompleteSnapshots(t *testing.T) {
 		t.Fatalf("reorder retargeted stable step ids: %+v", second.Plan.Steps)
 	}
 
-	// Exact semantic identity preserves ids when a provider omits them. This is
-	// compatibility for existing cassettes/providers; array position is not used.
+	// Exact wording preserves ids when a provider omits them, whatever the
+	// order. Position is only a fallback for a reworded open step; see
+	// TestRewordedPlanKeepsOpenStepsByPosition.
 	third, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "same steps", []RunPlanStepInput{
 		{Step: "Inspect state", Status: "completed", SuccessCriteria: "inputs recorded", WorkUnitID: second.Plan.Steps[0].WorkUnitID, WorkUnit: true},
 		{Step: "Verify behavior", Status: "completed"},

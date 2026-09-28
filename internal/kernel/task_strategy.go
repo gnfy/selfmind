@@ -69,6 +69,23 @@ const (
 // classification of the user's input.
 const planGuidanceEscalationThreshold = 2
 
+// planStaleReminderThreshold is how many tool actions a Run may perform after
+// its last plan update, with steps still open, before the next model call is
+// reminded that the visible plan may be out of date. Plan updates stay the
+// model's; one run went 58 tool calls without one and showed its first step
+// in progress for seven minutes.
+const planStaleReminderThreshold = 12
+
+// shouldRemindStalePlan decides whether the visible plan is stale enough to
+// remind the model: steps are still open and enough actions happened since
+// the plan was last updated, or since the last reminder.
+func shouldRemindStalePlan(strategy TaskStrategy, openSteps, actionsSinceUpdate, actionsAtReminder int) bool {
+	if openSteps == 0 || !strategy.normalized().AllowsTool("update_plan") {
+		return false
+	}
+	return actionsSinceUpdate-actionsAtReminder >= planStaleReminderThreshold
+}
+
 // countsTowardPlanEvidence reports whether one completed tool call is evidence
 // that this Run is doing genuinely multi-step work. Lifecycle bookkeeping is
 // not work, and a provably read-only observation is not either: a turn that

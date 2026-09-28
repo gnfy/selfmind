@@ -87,7 +87,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: 91107f7dbc73893d
+    source_hash: f556fa8ea38fb2b1
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -115,7 +115,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: 5e0f520084ec2095
+    source_hash: 30ec8b0d36f6bca8
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference

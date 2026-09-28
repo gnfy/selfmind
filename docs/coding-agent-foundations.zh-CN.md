@@ -132,8 +132,11 @@ macOS 支持 CLI、daemon、Provider、workspace 工具和 LaunchAgent 生命周
   系统不通过关键词分类器判断是否适用；提示词自身声明适用边界，并要求模型在其他
   任务中忽略它。委派 Agent 保留面向父 Agent 的专用身份，不继承 Persona、
   Progress Updates 或 Persistent Learning。
-  委派上下文会保留父任务的取消、workspace/run 权限、artifact 和事件证据，但使用
-  全新的策略与延迟工具激活状态。父任务拥有的计划、结束、watch、memory 与 Skill
+  委派上下文会保留父任务的取消、workspace/run 权限和 artifact，但使用全新的策略
+  与延迟工具激活状态，也不保留对话记忆。子 Agent 默认使用父 run 的模型（`delegation`
+  另行指定时除外），以父 run 的 person 身份执行工具，只把工具活动、证据和用量标记为
+  delegated 转发到父事件流；它的流式文本和轮次生命周期不进入父事件流。父任务拥有的
+  计划、结束、watch、memory 与 Skill
   变更工具不会下放；结果以 evidence/files/tests/blockers 的结构化交接返回；
 - `background/memory_extract.md`、`background/background_review.md`、
   `background/skill_curator.md`、`background/summarizer.md` 与

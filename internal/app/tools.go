@@ -102,8 +102,9 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	_, _ = tools.ReloadSkillToolsForTenant(tenantID, registry, tools.WithSkillStorage(nil, storage))
 
-	disp.InjectDelegateFn(MakeDelegateFn(mem, disp, cfg.Delegation, prompts))
-	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(mem, disp, cfg.Delegation, prompts))
+	delegationModel := delegationModelSource(cfg, mem, tenantID, ag)
+	disp.InjectDelegateFn(MakeDelegateFn(disp, cfg.Delegation, prompts, delegationModel))
+	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(disp, cfg.Delegation, prompts, delegationModel))
 
 	// 2. Register approval middleware
 	root, _ := os.Getwd()

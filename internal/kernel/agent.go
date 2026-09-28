@@ -328,6 +328,12 @@ func (a *Agent) Provider() llm.Provider {
 	return a.llm
 }
 
+// ActiveProvider is the transport the current run uses: its per-run choice
+// when one is set, else the default coding provider.
+func (a *Agent) ActiveProvider() llm.Provider {
+	return a.activeLLM()
+}
+
 // ProviderToolCatalogPreview renders the daemon's actual foreground tool
 // surface through the active provider adapter. Gateway status and doctor use
 // this read-only snapshot; request preflight uses the same llm contract.
@@ -1187,6 +1193,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 
 	var continuedAnswer strings.Builder
+	callIDPrefix := delegatedCallIDPrefix(ctx)
 	// streamLost records that some answer text never reached the event
 	// consumer; turn.completed carries it so the gap stays visible.
 	streamLost := false
@@ -1635,7 +1642,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		flushPendingStream()
 		resp := textutil.CleanUTF8(fullResp.String())
 		legacyMarkupPresent := legacyToolMarkerIndex(resp) >= 0
-		nativeCalls = normalizeToolCallIDs(nativeCalls, i)
+		nativeCalls = normalizeToolCallIDs(nativeCalls, i, callIDPrefix)
 		stopped := llm.ClassifyStopReason(finishReason)
 		outputLimited := stopped.Continuable()
 		// A filtered reply is cut short like one that ran out of output, but
@@ -1647,7 +1654,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		var droppedForBudget, droppedForLifecycle, deferredAcrossWorkUnitBoundary, deferredAcrossWatchHandoff int
 		if outputCut {
 			if len(calls) == 0 {
-				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i)
+				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix)
 			}
 		} else {
 			calls, droppedForBudget = filterToolCallsByStrategyAndBudget(nativeCalls, iterationStrategy, actionToolsUsed)
@@ -1655,7 +1662,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			droppedForBudget += droppedForLifecycle
 			if len(calls) == 0 {
 				var legacyDropped int
-				calls, legacyDropped = filterToolCallsByStrategyAndBudget(legacyToolCallsToLLM(ExtractToolCalls(resp), i), iterationStrategy, actionToolsUsed)
+				calls, legacyDropped = filterToolCallsByStrategyAndBudget(legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix), iterationStrategy, actionToolsUsed)
 				var legacyLifecycleDropped int
 				calls, legacyLifecycleDropped = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
 				droppedForBudget += legacyDropped
@@ -1775,6 +1782,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			handoff, handoffReady := lifecycleHandoffFromToolResults(results)
 			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
 			if handoffReady {
+				if handoff.Status == "waiting_user" {
+					reportTurnPause(ctx, TurnPause{Reason: handoff.CompletionReason, Message: strings.TrimSpace(handoff.Message), NeedApproval: handoff.NeedApprove})
+				}
 				payload := map[string]interface{}{
 					"status":            handoff.Status,
 					"summary":           handoff.Summary,

@@ -259,11 +259,11 @@ func isLifecycleToolName(name string) bool {
 	}
 }
 
-func legacyToolCallsToLLM(calls []ToolCall, iteration int) []llm.ToolCall {
+func legacyToolCallsToLLM(calls []ToolCall, iteration int, idPrefix string) []llm.ToolCall {
 	out := make([]llm.ToolCall, 0, len(calls))
 	for i, c := range calls {
 		out = append(out, llm.ToolCall{
-			ID:       fmt.Sprintf("legacy-toolcall-%d-%d", iteration, i),
+			ID:       idPrefix + fmt.Sprintf("legacy-toolcall-%d-%d", iteration, i),
 			Function: c.Name,
 			Args:     c.Args,
 		})
@@ -271,12 +271,12 @@ func legacyToolCallsToLLM(calls []ToolCall, iteration int) []llm.ToolCall {
 	return out
 }
 
-func normalizeToolCallIDs(calls []llm.ToolCall, iteration int) []llm.ToolCall {
+func normalizeToolCallIDs(calls []llm.ToolCall, iteration int, idPrefix string) []llm.ToolCall {
 	out := make([]llm.ToolCall, len(calls))
 	copy(out, calls)
 	for i := range out {
 		if out[i].ID == "" {
-			out[i].ID = fmt.Sprintf("toolcall-%d-%d", iteration, i)
+			out[i].ID = idPrefix + fmt.Sprintf("toolcall-%d-%d", iteration, i)
 		}
 	}
 	return out

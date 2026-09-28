@@ -180,8 +180,12 @@ The directory beside the active config file is the only source (normally
   ignore it. Delegated agents keep a dedicated
   parent-facing identity and do not inherit Persona, Progress Updates, or
   Persistent Learning. A delegation fork preserves parent cancellation,
-  workspace/run authority, artifacts, and event evidence, but starts fresh
-  strategy and deferred-tool state. Parent-owned plan, finalization, watch,
+  workspace/run authority, and artifacts, but starts fresh strategy and
+  deferred-tool state and keeps no conversation memory. A sub-agent runs on the
+  parent run's model unless `delegation` names another, acts as the parent
+  run's person, and relays only its tool activity, evidence, and usage to the
+  parent's event stream, marked delegated; its streamed text and turn lifecycle
+  stay its own. Parent-owned plan, finalization, watch,
   memory, and Skill mutation tools are not delegated; results return as a
   structured evidence/files/tests/blockers handoff.
 - `background/memory_extract.md`, `background/background_review.md`,

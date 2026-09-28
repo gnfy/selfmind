@@ -396,7 +396,7 @@ flight_recorder:
 ```yaml
 cron:
   enabled: true       # 定时作业（日报、存活探针）
-delegation:           # 多智能体子任务；留空则用默认模型策略
+delegation:           # 子代理；留空则使用父 run 的模型
   provider: ""
   model: ""
   api_key: ""

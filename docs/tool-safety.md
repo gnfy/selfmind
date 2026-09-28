@@ -190,6 +190,14 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   sub-agent's calls meet the parent's safety floor, approvals, workspace scope,
   and guardrails. Never expose or mutate the shared parent dispatcher. Fan-out
   remains bounded by `max_subtasks` and `max_concurrent`.
+- A sub-agent is one step of the parent run. Its calls act as the parent run's
+  person and are claimed in the parent run's tool ledger under the delegating
+  call's namespace, as are the call ids its loop generates for a provider that
+  sends none, so its calls never collide with the parent's or a sibling's. Only
+  its tool activity, evidence, and usage reach the parent's event stream,
+  marked `delegated`. A human wait that ends its turn, such as an unanswered
+  approval, parks the parent run on the same wait instead of returning as its
+  report; a batch keeps the other goals' results for the parent.
 
 ### External MCP tools
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
 
@@ -76,6 +77,11 @@ func (t *DelegateTool) Execute(args map[string]interface{}) (string, error) {
 }
 
 func (t *DelegateTool) ExecuteContext(ctx context.Context, args map[string]interface{}) (string, error) {
+	// The delegating call names the sub-execution, which keeps its tool calls
+	// distinct in this run's ledger.
+	if callID, _ := args["_tool_call_id"].(string); strings.TrimSpace(callID) != "" {
+		ctx = kernel.WithDelegationNamespace(ctx, callID)
+	}
 	contextStr, _ := args["context"].(string)
 	toolsets, _ := args["toolsets"].(string)
 	toolList := splitToolsets(toolsets)

@@ -203,7 +203,6 @@ func (h *MultiAgentHost) buildSubBackend(toolsets []string) kernel.AgentBackend 
 		return h.backend
 	}
 
-	subRegistry := tools.NewRegistry()
 	allToolNames := disp.ListTools()
 
 	requestedTools := make(map[string]bool)
@@ -234,22 +233,13 @@ func (h *MultiAgentHost) buildSubBackend(toolsets []string) kernel.AgentBackend 
 		}
 	}
 
-	for _, name := range allToolNames {
+	// The subset keeps the parent's policy chain, as in single-goal delegation.
+	return disp.Subset(func(name string) bool {
 		if name == "delegate_task" || parentOwnedDelegationTool(name) {
-			continue
+			return false
 		}
-		if requestedTools[name] {
-			if t, ok := disp.GetTool(name); ok {
-				subRegistry.Register(t)
-			}
-		} else if len(toolsets) == 0 {
-			if t, ok := disp.GetTool(name); ok {
-				subRegistry.Register(t)
-			}
-		}
-	}
-
-	return tools.NewDispatcherWithRegistry(subRegistry)
+		return requestedTools[name] || len(toolsets) == 0
+	})
 }
 
 // normalizeToolset normalizes common toolset aliases.

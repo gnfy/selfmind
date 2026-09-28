@@ -78,14 +78,17 @@ func makeDelegateFnAtDepth(mem *memory.MemoryManager, backend kernel.AgentBacken
 		}
 
 		subBackend := buildDelegateSubBackend(mem, backend, cfg, prompts, toolsets, depth)
-		subAgent := kernel.NewAgent(mem, subBackend, provider, delegateSubAgentSoul, maxIter, maxRetries, nil)
-		subAgent.SetPromptProfile(kernel.PromptProfileDelegation)
-		subAgent.SetPromptSnapshot(prompts)
-
-		fullPrompt := delegatedTaskPrompt(goal, contextStr, toolsets)
-
-		return subAgent.RunConversation(kernel.ForkDelegationContext(ctx), "system", "delegation", fullPrompt)
+		return runDelegatedGoal(ctx, mem, subBackend, provider, prompts, maxIter, maxRetries, delegatedTaskPrompt(goal, contextStr, toolsets))
 	}
+}
+
+// runDelegatedGoal runs one sub-agent loop on the parent's forked context,
+// which keeps the parent's execution authority and drops its loop state.
+func runDelegatedGoal(ctx context.Context, mem *memory.MemoryManager, backend kernel.AgentBackend, provider llm.Provider, prompts *promptassets.Snapshot, maxIter, maxRetries int, prompt string) (string, llm.UsageStats, error) {
+	subAgent := kernel.NewAgent(mem, backend, provider, delegateSubAgentSoul, maxIter, maxRetries, nil)
+	subAgent.SetPromptProfile(kernel.PromptProfileDelegation)
+	subAgent.SetPromptSnapshot(prompts)
+	return subAgent.RunConversation(kernel.ForkDelegationContext(ctx), "system", "delegation", prompt)
 }
 
 // buildDelegateSubBackend builds a fresh, bounded backend for a sub-agent at the
@@ -105,9 +108,6 @@ func buildDelegateSubBackend(mem *memory.MemoryManager, backend kernel.AgentBack
 		// carry delegate_task, so there is no recursion mine to defuse.
 		return backend
 	}
-
-	subRegistry := tools.NewRegistry()
-	allTools := disp.ListTools()
 
 	// Decide which parent tools to copy. Empty toolsets => copy everything
 	// (preserving prior behavior), otherwise map toolset names to tools.
@@ -134,28 +134,25 @@ func buildDelegateSubBackend(mem *memory.MemoryManager, backend kernel.AgentBack
 		}
 	}
 
-	for _, name := range allTools {
+	// The subset keeps the parent's policy chain, so the sub-agent's calls meet
+	// the same safety floor, approvals and workspace scope as the parent's.
+	sub := disp.Subset(func(name string) bool {
 		// delegate_task is never copied from the parent; it is re-added below
 		// only when the depth budget allows, so leaf sub-agents cannot recurse.
 		if name == "delegate_task" || parentOwnedDelegationTool(name) {
-			continue
+			return false
 		}
-		if want != nil && !want[name] {
-			continue
-		}
-		if t, ok := disp.GetTool(name); ok {
-			subRegistry.Register(t)
-		}
-	}
+		return want == nil || want[name]
+	})
 
 	if depth < maxDepth {
 		nested := tools.NewDelegateTool()
 		nested.RegisterDelegateFn(makeDelegateFnAtDepth(mem, backend, cfg, prompts, depth+1))
 		nested.RegisterBatchDelegateFn(makeDelegateBatchFnAtDepth(mem, backend, cfg, prompts, depth+1))
-		subRegistry.Register(nested)
+		sub.RegisterTool(nested)
 	}
 
-	return tools.NewDispatcherWithRegistry(subRegistry)
+	return sub
 }
 
 // parentOwnedDelegationTool prevents a worker from mutating the parent run's

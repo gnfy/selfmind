@@ -260,8 +260,9 @@ daemon must not expose that directory as a product runtime Skill.
 - Only clearly read-only batches may run concurrently. Writes, terminals,
   process control, mutation, delegation, and unknown tools are sequential unless
   a reviewed policy says otherwise.
-- Delegation is depth-bounded. Sub-agents receive cloned dispatchers and never
-  mutate the parent's backend.
+- Delegation is depth-bounded. Sub-agents receive cloned dispatchers that keep
+  the parent's middleware chain and run scope, and never mutate the parent's
+  backend.
 - Tool results have raw capture, model-bounded content, and compact user preview
   surfaces. Large output is artifact-backed and recoverable; normal UI never
   dumps raw protocol JSON.

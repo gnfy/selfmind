@@ -231,6 +231,8 @@ func SetExecutionScope(personKey string, scope ExecutionScope) func() {
 	}
 }
 
+const runExecutionScopeKeyPrefix = "run:"
+
 // ExecutionScopeKeyForRun builds the run-scoped key. Empty for a scope with no
 // run (a local CLI helper), which then resolves by person as before.
 func ExecutionScopeKeyForRun(runID string) string {
@@ -238,7 +240,16 @@ func ExecutionScopeKeyForRun(runID string) string {
 	if runID == "" {
 		return ""
 	}
-	return "run:" + runID
+	return runExecutionScopeKeyPrefix + runID
+}
+
+// invocationExecutionScopeKey is the scope key named by the call's trusted,
+// gateway-created invocation scope.
+func invocationExecutionScopeKey(args map[string]interface{}) string {
+	if scope, ok := InvocationScopeFromArgs(args); ok {
+		return strings.TrimSpace(scope.ExecutionScopeKey)
+	}
+	return ""
 }
 
 func currentExecutionScope(args map[string]interface{}) (ExecutionScope, bool) {
@@ -248,13 +259,24 @@ func currentExecutionScope(args map[string]interface{}) (ExecutionScope, bool) {
 
 func currentExecutionScopeAny(args map[string]interface{}) (ExecutionScope, bool) {
 	// Prefer the run-scoped key: it identifies exactly one execution even when
-	// the process serves several.
-	if key := executionScopeKeyFromContext(contextFromArgs(args)); key != "" {
+	// the process serves several. A delegated sub-agent's context drops the
+	// parent's key, but its trusted invocation scope names the same run.
+	runKeyNamed := false
+	for _, key := range [...]string{executionScopeKeyFromContext(contextFromArgs(args)), invocationExecutionScopeKey(args)} {
+		if key == "" {
+			continue
+		}
 		if value, ok := executionScopes.Load(key); ok {
 			if scope, ok := value.(ExecutionScope); ok {
 				return scope, true
 			}
 		}
+		runKeyNamed = runKeyNamed || strings.HasPrefix(key, runExecutionScopeKeyPrefix)
+	}
+	if runKeyNamed {
+		// A call that belongs to a run resolves that run's scope or none:
+		// whatever scope the person key holds may be another execution's.
+		return ExecutionScope{}, false
 	}
 	tenantID, _ := args["_tenant_id"].(string)
 	if tenantID == "" {
@@ -275,6 +297,12 @@ func WorkspaceScopeMiddleware() Middleware {
 		return func(args map[string]interface{}) (string, error) {
 			scope, ok := currentExecutionScope(args)
 			if !ok {
+				if _, installed := currentExecutionScopeAny(args); !installed && runScopedToolCall(args) {
+					// The call belongs to a run whose scope is gone: running it
+					// unscoped would resolve paths against the daemon, not the
+					// run's workspace.
+					return "", fmt.Errorf("tool call was not executed: this run's workspace scope is not available")
+				}
 				return next(args)
 			}
 
@@ -319,6 +347,23 @@ func WorkspaceScopeMiddleware() Middleware {
 			return next(args)
 		}
 	}
+}
+
+// runScopedToolCall reports whether a call to one of the tools the middleware
+// confines (keep in step with its switch) names a run, through its context or
+// its trusted invocation scope.
+func runScopedToolCall(args map[string]interface{}) bool {
+	switch toolName, _ := args["_tool_name"].(string); toolName {
+	case "terminal", "verify", "watch_external", "read_file", "write_file", "search_files", "ls_r", "vision_analyze", "patch":
+	default:
+		return false
+	}
+	for _, key := range [...]string{executionScopeKeyFromContext(contextFromArgs(args)), invocationExecutionScopeKey(args)} {
+		if strings.HasPrefix(key, runExecutionScopeKeyPrefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isLocalImageRef mirrors vision_analyze's own local-vs-remote split: anything

@@ -19,10 +19,18 @@ before changing `internal/tools`, execution middleware, or kernel tool dispatch.
   path scheduling consume the same typed roots. An external additional root
   makes the aggregate scope untrusted, while a nested root already covered by
   a trusted workspace does not reduce that workspace's trust.
+- A call resolves the scope of the run it belongs to: the run key on its
+  context, or the key named by its trusted `_invocation_scope`, which a
+  delegated sub-agent's forked context still carries. A call that names a run
+  never falls back to the person-level scope, which may belong to another
+  execution, and a confined filesystem or process call whose run scope is gone
+  is refused rather than run against the daemon's directory. Calls without a
+  run, such as local helpers, still resolve by person.
 - `vision_analyze`'s local-path branch is a filesystem read and obeys the
   scope like `read_file` (`WorkspaceScopeMiddleware`); its http(s) branch
   stays with the tool's SSRF check. Any new tool that reads a caller-supplied
-  path must join the middleware's scoped-tool list, never `os.ReadFile` raw.
+  path must join the middleware's scoped-tool list and `runScopedToolCall`,
+  never `os.ReadFile` raw.
 - Message attachments (e.g. TUI clipboard-pasted images) enter a run only via
   the gateway import channel (`httpapi/attachments.go`): files are copied into
   the person-partitioned `<data>/attachments/<person>/<run>/` store and that
@@ -175,10 +183,13 @@ the unchanged script cannot turn arbitrary arguments into mutation.
 - Clearly read-only calls may run in parallel. Terminal execution, writes,
   patches, process control, memory or skill mutation, delegation, and unknown
   tools run sequentially by default.
-- Delegation depth is enforced structurally. `buildDelegateSubBackend` creates
-  a fresh child dispatcher and removes `delegate_task` at the configured depth
-  limit. Never expose or mutate the shared parent dispatcher. Fan-out remains
-  bounded by `max_subtasks` and `max_concurrent`.
+- Delegation depth is enforced structurally. `buildDelegateSubBackend` builds
+  the child dispatcher as a `Subset` of the parent's registry and removes
+  `delegate_task` at the configured depth limit. A subset has fewer tools but
+  the same middleware chain, clarify handler, and attribution observer, so a
+  sub-agent's calls meet the parent's safety floor, approvals, workspace scope,
+  and guardrails. Never expose or mutate the shared parent dispatcher. Fan-out
+  remains bounded by `max_subtasks` and `max_concurrent`.
 
 ### External MCP tools
 
@@ -902,5 +913,6 @@ Changes in this domain need focused coverage for:
 - bounded, ambiguity-safe patch misses on large files;
 - host grants scoped by workspace and command family;
 - smart triage fail-closed behavior;
-- delegation depth and parent-backend isolation;
+- delegation depth and parent-backend isolation, with delegated calls kept
+  under the parent's policy chain and run scope;
 - UTF-8-safe previews, artifact spooling, and model truncation recovery.

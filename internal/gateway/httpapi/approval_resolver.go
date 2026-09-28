@@ -346,8 +346,8 @@ func parseApprovalScopeWord(word string) string {
 }
 
 // tryHandleBareApprovalReply resolves a conversational y/n against the person's
-// pending approvals. It only claims the message when at least one approval is
-// pending, so a bare "y" with nothing pending reaches the agent unchanged. One
+// pending approvals. It only claims the message when an approval this session
+// may answer is pending, so a bare "y" otherwise reaches the agent unchanged. One
 // pending → decide it. Several pending (only possible with parallel runs, since
 // the per-person active-run guard serializes interactive approvals) → the word
 // is ambiguous, so return the numbered list and ask for /approve <n>.
@@ -363,6 +363,23 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 		return false, "", nil
 	}
 	sortApprovalsForDisplay(pending)
+	// A bare reply answers this session's own approval. One that another open
+	// terminal is waiting on stays that terminal's to answer, or /approve's.
+	var answerable []control.ApprovalRequest
+	for _, approval := range pending {
+		if d.answersImplicitly(identity, channel, approval.RequestedChannel) {
+			answerable = append(answerable, approval)
+		}
+	}
+	switch {
+	case len(answerable) == 0:
+		// Every pending approval waits on another open terminal. This
+		// session's words stay its own input: an answer to its own question
+		// or an ordinary message. /approve answers across sessions.
+		return false, "", nil
+	case len(answerable) == 1:
+		pending = answerable
+	}
 	if len(pending) > 1 {
 		titles := d.taskTitlesFor(ctx, identity.TenantID, pending)
 		verb := "approve"

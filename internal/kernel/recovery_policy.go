@@ -116,7 +116,7 @@ func (p *strategyRecoveryPolicy) RecordPreparationFailure(failure RecoveryFailur
 }
 
 func (p *strategyRecoveryPolicy) BeforeDispatch(attempt RecoveryAttempt) error {
-	if p == nil || lifecycleTool(attempt.ToolName) {
+	if p == nil || IsRunBookkeepingTool(attempt.ToolName) {
 		return nil
 	}
 	p.mu.Lock()
@@ -161,7 +161,7 @@ func (p *strategyRecoveryPolicy) BeforeDispatch(attempt RecoveryAttempt) error {
 }
 
 func (p *strategyRecoveryPolicy) RecordFailure(failure RecoveryFailure) {
-	if p == nil || lifecycleTool(failure.Attempt.ToolName) {
+	if p == nil || IsRunBookkeepingTool(failure.Attempt.ToolName) {
 		return
 	}
 	// A guardrail or policy refusal never ran the tool, so it is not evidence
@@ -368,7 +368,11 @@ func recoveryCosmeticArg(key string) bool {
 	}
 }
 
-func lifecycleTool(name string) bool {
+// IsRunBookkeepingTool reports a call that records the run's own plan or
+// outcome rather than acting on the task. Recovery policy skips it, clients
+// draw no tool cell for it, and prose around it stays part of the run's
+// answer: a model often writes its answer in the same response as finish_run.
+func IsRunBookkeepingTool(name string) bool {
 	switch strings.TrimSpace(name) {
 	case "update_plan", "finish_run":
 		return true

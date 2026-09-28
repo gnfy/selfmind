@@ -93,16 +93,9 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("target run is unavailable for the current person")
 	}
 	if action == "resume" {
-		candidates, err := t.store.ListUnresolvedRuns(ctx, scope.ControlTenantID, scope.PersonID, target.TaskID, 20)
+		resumable, candidates, err := runIsResumable(ctx, t.store, scope.ControlTenantID, scope.PersonID, target)
 		if err != nil {
 			return "", err
-		}
-		resumable := false
-		for _, candidate := range candidates {
-			if candidate.ID == target.ID {
-				resumable = true
-				break
-			}
 		}
 		if !resumable {
 			return "", notResumableRun(target, candidates)
@@ -420,6 +413,22 @@ func workSelectionResult(status, action, runID, message string) string {
 func mustToolJSON(value interface{}) json.RawMessage {
 	encoded, _ := json.Marshal(value)
 	return encoded
+}
+
+// runIsResumable reports whether run can still be resumed, with the unresolved
+// runs of the same work. work_inspect asks the same question, so its notice
+// never proposes a resume that work_select refuses.
+func runIsResumable(ctx context.Context, store *control.Store, tenantID, personID string, run *control.Run) (bool, []control.Run, error) {
+	candidates, err := store.ListUnresolvedRuns(ctx, tenantID, personID, run.TaskID, 20)
+	if err != nil {
+		return false, nil, err
+	}
+	for _, candidate := range candidates {
+		if candidate.ID == run.ID {
+			return true, candidates, nil
+		}
+	}
+	return false, candidates, nil
 }
 
 // notResumableRun refuses to resume a run that has nothing left to resume and

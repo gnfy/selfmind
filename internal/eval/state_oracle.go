@@ -19,6 +19,7 @@ import (
 type WorldState struct {
 	ApprovalTriage      map[string]int
 	approvalTriageError error
+	eventsError         error
 	Task                *control.Task
 	Run                 *control.Run
 	Handoff             *control.Handoff
@@ -41,7 +42,7 @@ func CollectWorldState(ctx context.Context, store *control.Store, mem *memory.Me
 	if subjectTaskID != "" {
 		w.Task, _ = store.GetTask(ctx, identity.TenantID, subjectTaskID)
 		w.Handoff, _ = store.LatestHandoff(ctx, subjectTaskID)
-		w.Events, _ = store.ListTaskEvents(ctx, subjectTaskID, 200)
+		w.Events, w.eventsError = subjectTaskEvents(ctx, store, subjectTaskID)
 		w.Artifacts, _ = store.ListTaskArtifacts(ctx, subjectTaskID, 50)
 	}
 	if subjectRunID != "" {
@@ -69,6 +70,27 @@ func CollectWorldState(ctx context.Context, store *control.Store, mem *memory.Me
 		}
 	}
 	return w
+}
+
+// subjectTaskEvents reads every event of the subject task. Reading only the
+// newest 200 made a live run's early milestones look missing once a slower
+// model's progress heartbeats filled that window. A read failure is returned,
+// so a predicate reports it instead of counting zero events.
+func subjectTaskEvents(ctx context.Context, store *control.Store, taskID string) ([]control.Event, error) {
+	const page = 500
+	var out []control.Event
+	var cursor int64
+	for {
+		events, err := store.ListTaskEventsAfter(ctx, taskID, cursor, page)
+		if err != nil {
+			return out, fmt.Errorf("read task events: %w", err)
+		}
+		out = append(out, events...)
+		if len(events) < page {
+			return out, nil
+		}
+		cursor = events[len(events)-1].Cursor
+	}
 }
 
 // EvaluateStatePredicates runs each predicate against the world snapshot and
@@ -111,6 +133,9 @@ func dispatchPredicate(p StatePredicate, w WorldState) (bool, string) {
 		}
 		return evalFieldedObject(p, handoffStringFields(w.Handoff), handoffListFields(w.Handoff))
 	case "events":
+		if w.eventsError != nil {
+			return false, w.eventsError.Error()
+		}
 		return evalCount(p, countEvents(w.Events, p.Type, p.PayloadContains))
 	case "artifact", "artifacts":
 		return evalArtifacts(p, w.Artifacts)

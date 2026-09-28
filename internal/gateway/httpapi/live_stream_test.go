@@ -169,3 +169,78 @@ func TestEventReplayKeepsTheSessionAudience(t *testing.T) {
 		t.Fatalf("a client naming no session replayed session detail:\n%s", body)
 	}
 }
+
+// Two terminals of one person, end to end through the gateway. Terminal A
+// starts a task; terminal B types while it runs. B is told its message went to
+// A's task, and B's stream carries only the person-wide facts of A's run —
+// never its text; A's stream carries its run in full. Whatever B's input
+// becomes, its detail reaches B alone.
+func TestTwoTerminalsSeeOnlyTheirOwnSessionsDetail(t *testing.T) {
+	provider := newSlowLLMProvider("the answer for A")
+	daemon, _, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity, err := daemon.Control.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	subA, closeA := daemon.events().subscribe(identity.PersonID, "session-a", "")
+	defer closeA()
+	subB, closeB := daemon.events().subscribe(identity.PersonID, "session-b", "")
+	defer closeB()
+
+	if resp, _ := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "session-a", Content: "long task in A", Async: true}); !resp.Accepted {
+		t.Fatalf("A's task not accepted: %+v", resp)
+	}
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("A's run never reached the provider")
+	}
+	receipt, _ := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "session-b", Content: "also check the logs"})
+	if receipt.Turn == nil || receipt.Turn.Status != "accepted" || !strings.Contains(receipt.Content, "running in another session") {
+		t.Fatalf("B's receipt = %+v", receipt)
+	}
+	provider.releaseNow()
+	waitUntil(t, 10*time.Second, func() bool { return daemon.coordinator().currentActive(identity.PersonID) == nil }, "runs did not finish")
+
+	collect := func(sub *runEventSubscriber) []api.RunEvent {
+		var events []api.RunEvent
+		for {
+			select {
+			case event := <-sub.ch:
+				events = append(events, event)
+			case <-time.After(200 * time.Millisecond):
+				return events
+			}
+		}
+	}
+	seenA, seenB := collect(subA), collect(subB)
+	textOf := func(events []api.RunEvent, channel string) string {
+		var text strings.Builder
+		for _, event := range events {
+			if event.Type == "assistant.delta" && event.Channel == channel {
+				text.Write(event.Payload)
+			}
+		}
+		return text.String()
+	}
+	if !strings.Contains(textOf(seenA, "session-a"), "the answer for A") {
+		t.Fatalf("A did not receive its own run's text: %+v", seenA)
+	}
+	for _, check := range []struct {
+		name    string
+		events  []api.RunEvent
+		foreign string
+	}{{"B", seenB, "session-a"}, {"A", seenA, "session-b"}} {
+		sawLifecycle := false
+		for _, event := range check.events {
+			if event.Channel == check.foreign && !personWideRunEventTypes[event.Type] {
+				t.Fatalf("terminal %s received another session's %s", check.name, event.Type)
+			}
+			sawLifecycle = sawLifecycle || (event.Type == "run.started" && event.Channel == check.foreign)
+		}
+		if check.name == "B" && !sawLifecycle {
+			t.Fatalf("terminal B was not told that A's run started: %+v", check.events)
+		}
+	}
+}

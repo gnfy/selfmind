@@ -202,11 +202,13 @@ The Git tag is the single version source. Release builds inject:
 The npm launcher and every native package use the same version. `control.db`
 migrations are forward-only, explicitly versioned, and restart-safe. A legacy
 database is integrity-checked and copied with SQLite's consistent snapshot
-mechanism under `<data-dir>/backups/` before its first schema transition. The
-migration verifies that historical approval/run/queue/task states did not gain
-new executable meaning before recording the new version. An older unsupported
-binary rejects a newer schema before any write; it never recreates or discards
-user data.
+mechanism under `<data-dir>/backups/` before its first schema transition. Each
+migration keeps the three newest `control-vOLD-to-vNEW-TIME.db` backups by the
+time in their names and removes older ones; a file without that time is left
+alone. The migration verifies that historical approval/run/queue/task states
+did not gain new executable meaning before recording the new version. An older
+unsupported binary rejects a newer schema before any write; it never recreates
+or discards user data.
 
 If a migrated installation must be recovered, stop the gateway and use the
 explicit backup path reported by the failed migration:

@@ -4,7 +4,18 @@
 >
 > Owner / approver：SelfMind project owner
 >
-> 下次评审：当前 active plan 得出 verdict 后，最迟 2026-09-12
+> Verdict（2026-09-28，owner 批准）：P1 中的双窗口事件归属作为正确性工作批准，不开放并发，
+> 已在本地 CLI 实现：运行事件按会话受众分发，断线回放按同一规则过滤；`/attach <run_id>`
+> 只观察、不移动最终投递；审批和澄清只在发起会话弹出；插话回执写明输入去向。P0 中子代理
+> 继承父级策略链和 run scope、插话转为独立排队时保留自己的执行目录（schema v18）也已实现。
+> 现状以 `docs/STATUS.md` 为准。其余 P0/P1 项和 P2–P5 继续暂停，`max_active_per_person`
+> 保持 1；开放并发仍须先有新的 active implementation plan。
+>
+> 2026-09-29：实施路径改由 `docs/plans/session-concurrency.zh-CN.md` 承担（paused，等待 active
+> 位置），替换本文 §12 的推进顺序。本文的终态与不变量保留；§5 的 dirty / 非 Git 快照与多仓库
+> 组合视图、§6 的资源占用声明、§9 的跨仓库变更集留作后续选项。
+>
+> 下次评审：2026-10-28
 > 当前唯一活跃优先级仍以 `docs/STATUS.md` 为准。本文不授权实现 SaaS、
 > 多租户、远程控制面或独立 Runner；任何实施批次必须先进入活跃计划。
 

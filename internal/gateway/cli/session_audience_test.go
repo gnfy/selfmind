@@ -109,8 +109,8 @@ func TestAnotherSessionsHumanWaitsAreReportedNotArmed(t *testing.T) {
 	if m.clarifyMode {
 		t.Fatal("another session's question captured this terminal's input")
 	}
-	if !strings.Contains(m.statusMsg, "Which bucket?") || !strings.Contains(m.statusMsg, "A plain message here answers it") {
-		t.Fatalf("status = %q, want the waiting question and what typing here does", m.statusMsg)
+	if !strings.Contains(m.statusMsg, "Which bucket?") || !strings.Contains(m.statusMsg, "Answer it in that session") {
+		t.Fatalf("status = %q, want the waiting question and where to answer it", m.statusMsg)
 	}
 
 	m.Update(MsgApprovalRequest{ID: "apr_b", Tool: "terminal", Target: "make test", Channel: "session-b"})
@@ -160,5 +160,27 @@ func TestStartupDigestReportsAnotherSessionsWork(t *testing.T) {
 	}
 	if model.otherRunID != "run_a" || !strings.Contains(model.statusMsg, "approval waiting") {
 		t.Fatalf("other session not reported: run=%q status=%q", model.otherRunID, model.statusMsg)
+	}
+}
+
+// A sub-agent's tool calls show in the parent run's transcript marked as the
+// sub-agent's, so the person can tell which agent read or ran what.
+func TestSubAgentToolCallsAreMarked(t *testing.T) {
+	m, _ := newApprovalTestModel()
+	m.Update(MsgDaemonRunStarted{RunID: "run_a", Input: "delegate", Event: sessionRef("run_a", "ev0", "", false)})
+	m.Update(MsgToolStart{ToolName: "read_file", ToolCallID: "sub_1", Args: `{"path":"notes.txt"}`, Delegated: true, Event: sessionRef("run_a", "ev1", "", true)})
+	m.Update(MsgToolStart{ToolName: "read_file", ToolCallID: "own_1", Args: `{"path":"plan.md"}`, Event: sessionRef("run_a", "ev2", "", true)})
+	live := stripANSI(m.viewActiveRegion())
+	marked, unmarked := false, true
+	for _, line := range strings.Split(live, "\n") {
+		if strings.Contains(line, "notes.txt") && strings.Contains(line, "sub-agent") {
+			marked = true
+		}
+		if strings.Contains(line, "plan.md") && strings.Contains(line, "sub-agent") {
+			unmarked = false
+		}
+	}
+	if !marked || !unmarked {
+		t.Fatalf("sub-agent marking wrong (marked=%v, own call unmarked=%v):\n%s", marked, unmarked, live)
 	}
 }

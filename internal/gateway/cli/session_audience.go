@@ -115,9 +115,9 @@ func (m *uiModel) otherSessionApprovalResolved(id string) bool {
 	return true
 }
 
-// otherSessionClarify records a question another session's run waits on. Any
-// plain reply from the person answers the one pending question, so the notice
-// says that a message typed here would answer it.
+// otherSessionClarify records a question another session's run waits on.
+// While that terminal is open it takes the answer; a plain message typed here
+// stays this session's own input.
 func (m *uiModel) otherSessionClarify(question string) {
 	m.otherClarify = textutil.Truncate(strings.TrimSpace(question), 80)
 	m.refreshOtherSessionNotice()
@@ -140,7 +140,7 @@ func (m *uiModel) refreshOtherSessionNotice() {
 	case len(m.otherApprovals) > 1:
 		kind, text = noticeWarning, "Other session: approvals waiting — /approvals lists them, /approve answers them here."
 	case m.otherClarify != "":
-		kind, text = noticeWarning, "Other session: question waiting — “"+m.otherClarify+"”. A plain message here answers it."
+		kind, text = noticeWarning, "Other session: question waiting — “"+m.otherClarify+"”. Answer it in that session."
 	case m.otherRunID != "":
 		kind, text = noticeInfo, "Other session: working on “"+m.otherRunTitle+"” — /attach to watch it here."
 	}

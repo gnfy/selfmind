@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"selfmind/internal/control"
@@ -16,6 +17,8 @@ import (
 // "Runtime attachment model"). While a run blocks on a clarify_requests row, a
 // plain non-command reply from the person IS the answer — it must resolve the
 // question rather than be queued as new work or steered into the running task.
+// The one exception is another open terminal's question: a plain message typed
+// in a different terminal is that terminal's own input ("Session audience").
 //
 // Precedence in the inbound stack (tryHandleControlCommand): a bare y/n
 // approval reply is tried FIRST, so if an approval is somehow also pending it
@@ -79,9 +82,41 @@ func (d *Server) tryHandleClarifyAnswer(ctx context.Context, identity *control.I
 		return pending[i].CreatedAt.Before(pending[j].CreatedAt)
 	})
 	target := pending[0]
+	// A question another open terminal asked is that terminal's to answer with
+	// plain text: a message typed here is this session's own input, and here
+	// the question takes the named form "N: answer". With no other terminal
+	// open on a question — one window, or an IM question — any plain reply
+	// answers, as before. Numbers always count the whole list, so a listing and
+	// the reply that picks from it agree.
+	answerable := make(map[string]bool, len(pending))
+	for _, clarify := range pending {
+		if d.answersImplicitly(identity, channel, clarify.Channel) {
+			answerable[clarify.ID] = true
+		}
+	}
+	if len(answerable) < len(pending) {
+		if picked, rest, named := pickNamedClarify(answer, pending); named {
+			target, answer = picked, rest
+			pending = []control.ClarifyRequest{picked}
+		} else if len(answerable) == 0 {
+			return false, "", nil
+		} else if _, _, numbered := pickClarifyNumber(answer, pending, ":", "：", ".", "。"); len(answerable) == 1 && !numbered {
+			// An unnumbered reply answers this session's one question. A
+			// numbered one is read against the whole list below, like the
+			// listing it answers, so it never lands on a different question.
+			// "2 buckets" is an answer here: a bare space picks a question
+			// only once a listing has asked for a number.
+			for _, clarify := range pending {
+				if answerable[clarify.ID] {
+					target = clarify
+				}
+			}
+			pending = []control.ClarifyRequest{target}
+		}
+	}
 	if len(pending) > 1 {
 		picked, rest, ok := pickNumberedClarify(answer, pending)
-		if !ok {
+		if !ok || !answerable[picked.ID] {
 			var sb strings.Builder
 			sb.WriteString("Several questions are waiting. Prefix your answer with the question number (for example \"1: use the staging bucket\"):\n")
 			for i, clarify := range pending {
@@ -151,13 +186,53 @@ func (d *Server) answerClarifyTarget(ctx context.Context, identity *control.Iden
 	return clarify, nil
 }
 
-// pickNumberedClarify parses the "N: answer" disambiguation prefix. It accepts
-// ASCII and CJK colons plus a period separator, and requires N to name one of
-// the listed pending questions; anything else is not a pick.
-func pickNumberedClarify(answer string, pending []control.ClarifyRequest) (control.ClarifyRequest, string, bool) {
-	for _, sep := range []string{":", "：", ".", "。", " "} {
+// pickNamedClarify reads only the unmistakable "N: answer" form, which may
+// answer a question another terminal asked. The looser forms below stay for
+// choosing among this session's own questions.
+func pickNamedClarify(answer string, pending []control.ClarifyRequest) (control.ClarifyRequest, string, bool) {
+	for _, sep := range []string{":", "："} {
 		before, after, found := strings.Cut(answer, sep)
-		if !found {
+		if !found || !clarifyPrefixSeparated(sep, after) {
+			continue
+		}
+		index, err := strconv.Atoi(strings.TrimSpace(before))
+		rest := strings.TrimSpace(after)
+		if err == nil && index >= 1 && index <= len(pending) && rest != "" {
+			return pending[index-1], rest, true
+		}
+	}
+	return control.ClarifyRequest{}, "", false
+}
+
+// clarifyPrefixSeparated keeps "1:30" and "1.5" answers: an ASCII colon or
+// period names a question only when a space follows it, as in "1: staging".
+func clarifyPrefixSeparated(sep, after string) bool {
+	return (sep != ":" && sep != ".") || strings.HasPrefix(after, " ")
+}
+
+// answersImplicitly reports whether a plain reply from replyChannel may answer
+// a human wait raised in waitChannel: its own session always, another only
+// while no terminal is open as that session.
+func (d *Server) answersImplicitly(identity *control.IdentityContext, replyChannel, waitChannel string) bool {
+	waitChannel = strings.TrimSpace(waitChannel)
+	if identity == nil || waitChannel == "" || waitChannel == strings.TrimSpace(replyChannel) {
+		return true
+	}
+	return !d.events().sessionAttached(identity.PersonID, waitChannel)
+}
+
+// pickNumberedClarify parses the "N: answer" disambiguation prefix. It accepts
+// ASCII and CJK colons and periods or a space after N, and requires N to name
+// one of the listed pending questions; anything else is not a pick.
+func pickNumberedClarify(answer string, pending []control.ClarifyRequest) (control.ClarifyRequest, string, bool) {
+	return pickClarifyNumber(answer, pending, ":", "：", ".", "。", " ")
+}
+
+// pickClarifyNumber reads "N<separator>answer" for the given separators.
+func pickClarifyNumber(answer string, pending []control.ClarifyRequest, separators ...string) (control.ClarifyRequest, string, bool) {
+	for _, sep := range separators {
+		before, after, found := strings.Cut(answer, sep)
+		if !found || !clarifyPrefixSeparated(sep, after) {
 			continue
 		}
 		index := 0

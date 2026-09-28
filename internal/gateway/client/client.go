@@ -368,6 +368,7 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 			ToolName:   str(p["tool"]),
 			ToolCallID: str(p["tool_call_id"]),
 			ToolArgs:   str(p["args"]),
+			Payload:    p,
 		}, true
 	case ev.Type == "tool.completed":
 		se := llm.StreamEvent{

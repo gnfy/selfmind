@@ -329,3 +329,31 @@ func TestBackgroundReviewPromptExplainsSessionSearch(t *testing.T) {
 		})
 	}
 }
+
+// A provider without native tool calls reads the catalog as text. One catalog
+// renders one prompt, in a fixed parameter order, so the cached prefix
+// survives the next request; a parameter without a description renders as
+// its name and type, not as a formatting artifact.
+func TestTextToolCatalogIsStableAndClean(t *testing.T) {
+	def := map[string]interface{}{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name": "search_files", "description": "Search files.",
+			"parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{
+				"query": map[string]interface{}{"type": "string", "description": "What to find."},
+				"path":  map[string]interface{}{"type": "string"},
+				"limit": map[string]interface{}{"type": "integer", "description": "Result cap."},
+			}},
+		},
+	}
+	first := buildToolUsePrompt([]map[string]interface{}{def}, false, DefaultTaskStrategy(), PromptProfileForeground)
+	for i := 0; i < 20; i++ {
+		if again := buildToolUsePrompt([]map[string]interface{}{def}, false, DefaultTaskStrategy(), PromptProfileForeground); again != first {
+			t.Fatalf("the text catalog changed between renders:\n%s\n---\n%s", first, again)
+		}
+	}
+	want := "- limit (integer): Result cap.\n- path (string)\n- query (string): What to find.\n"
+	if !strings.Contains(first, want) || strings.Contains(first, "%!") {
+		t.Fatalf("parameters rendered as:\n%s", first)
+	}
+}

@@ -212,7 +212,12 @@ explicit /new, /resume, /choose
   receipt means no promised automatic continuation.
 - Active user input is durably steered. Main decides at a safe checkpoint
   whether it updates current work, creates a new plan item, or queues
-  independent work. Daemon-originated content never steers from text.
+  independent work. Daemon-originated content never steers from text. The
+  input keeps the workspace and execution roots its own request froze, so
+  work queued from it, by Main or because the run ended first, runs there
+  rather than with the roots of the run it was steered into. Input that
+  arrived without roots, such as guidance posted to one run, and rows
+  accepted before schema v18 keep that run's roots.
 
 Approval, clarification, and external-watch completion carry structured ids
 through the durable queue. Watch finalization claims its exact parent before
@@ -311,7 +316,10 @@ assembled from separately budgeted slices:
 6. bounded recall hits.
 
 `work_search` is the complete local structured/FTS base. `work_inspect` reads
-one exact, person-owned Run with bounded output. `semantic_recall` may expand a
+one exact, person-owned Run with bounded output; its next-step notice uses the
+resumability rule `work_select` enforces, so it proposes resuming only a Run
+that selection will accept and names the resumable Run of the same work when
+the inspected one is settled. `semantic_recall` may expand a
 query, but it is optional, fail-open, and never selects a parent. Recall misses
 can be repaired in-turn by broader search, exact inspection, workspace reads,
 or a user clarification.

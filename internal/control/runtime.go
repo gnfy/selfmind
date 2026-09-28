@@ -322,6 +322,39 @@ func (s *Store) ListTaskEvents(ctx context.Context, taskID string, limit int) ([
 	return out, rows.Err()
 }
 
+// ListTaskEventsAfter pages one task's events in append order, starting after
+// cursor, so a reader can see every event of a long run.
+func (s *Store) ListTaskEventsAfter(ctx context.Context, taskID string, cursor int64, limit int) ([]Event, error) {
+	if taskID == "" {
+		return nil, fmt.Errorf("task id is required")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT cursor, id, thread_id, COALESCE(run_id, ''), type, visibility, COALESCE(channel, ''),
+		        COALESCE(payload_json, '{}'), created_at
+		 FROM task_events WHERE thread_id = ? AND cursor > ? ORDER BY cursor ASC LIMIT ?`,
+		taskID, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var payload string
+		var created int64
+		if err := rows.Scan(&e.Cursor, &e.ID, &e.TaskID, &e.RunID, &e.Type, &e.Visibility, &e.Channel, &payload, &created); err != nil {
+			return nil, err
+		}
+		e.Payload = json.RawMessage(payload)
+		e.CreatedAt = time.Unix(created, 0)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // LatestPersonEventCursor returns the durable append cursor visible to one
 // person. The explicit daemon-wide sequence is never reused by cleanup or
 // VACUUM, so it is suitable for SSE Last-Event-ID across daemon restarts.

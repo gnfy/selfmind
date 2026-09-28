@@ -10,7 +10,6 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
-	"selfmind/internal/kernel/llm"
 )
 
 // classifyIntent leaves semantic interpretation to Main inside the Run.
@@ -25,13 +24,6 @@ func (d *Server) tryHandleIntentClarification(identity *control.IdentityContext,
 
 func (d *Server) tryHandleDirectIntent(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (bool, api.MessageResponse) {
 	return false, api.MessageResponse{}
-}
-
-func aggregateDirectResponse(resp *router.HandleResponse) (string, llm.UsageStats, error) {
-	if resp == nil {
-		return "", llm.UsageStats{}, nil
-	}
-	return router.AggregateFinalResponse(resp)
 }
 
 // resumePinKey is the person_settings key holding the one-shot "attach the

@@ -239,18 +239,44 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 	// can still arrive after it, because the forwarder interleaves the two
 	// channels; they must not change or extend that answer.
 	answerFixed := false
+	// paragraphBreak marks answer prose that a bookkeeping call interrupted:
+	// the prose after it starts a new response and a new paragraph. keptLen is
+	// how much answer prose that call kept, so a final answer the plan gate
+	// sends back can be dropped without the prose before it.
+	paragraphBreak := false
+	keptLen := 0
 	var summary router.EventSummary
 	observer := streamObserverFromContext(ctx)
 	for event := range resp.Stream {
 		if event.EventType != "" {
 			// Assistant prose emitted before a tool call is progress narration,
 			// not the final answer. Keep publishing it live, but only materialize
-			// prose produced after the last tool starts as the run's answer.
+			// prose produced after the last tool starts as the run's answer. A
+			// bookkeeping call does not end that prose: a model often writes its
+			// answer in the same response as finish_run, and resetting there left
+			// only the closing line after it.
 			if event.EventType == "tool.started" && !answerFixed {
+				if kernel.IsRunBookkeepingTool(event.ToolName) {
+					paragraphBreak = paragraphBreak || hasFinalContent
+					keptLen = finalContent.Len()
+				} else {
+					finalContent.Reset()
+					hasFinalContent = false
+					typedAssistantPhase = false
+					currentAssistantPhase = llm.AssistantPhaseUnspecified
+					paragraphBreak = false
+					keptLen = 0
+				}
+			}
+			// The plan gate sent the last final answer back; the model answers
+			// again after reconciling, so that answer is dropped like the kernel
+			// drops it.
+			if event.EventType == "agent.thinking" && event.Payload["phase"] == kernel.PlanReconciliationPhase && !answerFixed {
+				kept := finalContent.String()[:min(keptLen, finalContent.Len())]
 				finalContent.Reset()
-				hasFinalContent = false
-				typedAssistantPhase = false
-				currentAssistantPhase = llm.AssistantPhaseUnspecified
+				finalContent.WriteString(kept)
+				hasFinalContent = strings.TrimSpace(kept) != ""
+				paragraphBreak = hasFinalContent
 			}
 			// Kernel-owned fallback answers (for example after a bounded tool or
 			// iteration limit) are carried by turn.completed because they did not
@@ -276,6 +302,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 				finalContent.Reset()
 				finalContent.WriteString(event.Content)
 				hasFinalContent = true
+				paragraphBreak, keptLen = false, 0
 			}
 			if event.EventType == "stream" && task != nil {
 				c.srv.events().publishAssistant(task, run, channel, event)
@@ -294,14 +321,24 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 					if event.Phase == llm.AssistantPhaseFinalAnswer && currentAssistantPhase != llm.AssistantPhaseFinalAnswer {
 						finalContent.Reset()
 						hasFinalContent = false
+						paragraphBreak, keptLen = false, 0
 					}
 					typedAssistantPhase = true
 					currentAssistantPhase = event.Phase
 				}
 				materialize := !typedAssistantPhase || currentAssistantPhase == llm.AssistantPhaseFinalAnswer
 				if materialize && !answerFixed {
-					finalContent.WriteString(event.Content)
-					if strings.TrimSpace(event.Content) != "" {
+					content := event.Content
+					if paragraphBreak && strings.TrimSpace(content) != "" {
+						kept := strings.TrimRight(finalContent.String(), " \t\r\n")
+						keptLen = len(kept)
+						finalContent.Reset()
+						finalContent.WriteString(kept + "\n\n")
+						content = strings.TrimLeft(content, " \t\r\n")
+						paragraphBreak = false
+					}
+					finalContent.WriteString(content)
+					if strings.TrimSpace(content) != "" {
 						hasFinalContent = true
 					}
 				}

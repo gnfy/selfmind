@@ -36,6 +36,7 @@ type processEvent struct {
 	duration    float64
 	allowOrphan bool
 	reason      string
+	delegated   bool
 }
 
 type processEffects struct {
@@ -105,6 +106,7 @@ func (s *processSurface) Update(event processEvent) processEffects {
 			RunID:      event.runID,
 			ToolArgs:   event.toolArgs,
 			IsRunning:  true,
+			Delegated:  event.delegated,
 			Timestamp:  time.Now(),
 		})
 		return effects

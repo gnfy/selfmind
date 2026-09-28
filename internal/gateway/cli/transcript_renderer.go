@@ -586,6 +586,9 @@ func renderToolMessageBodyWithStyles(msg ChatMessage, width int, styles transcri
 	} else if msg.IsError {
 		action = replaceToolActionVerb(action, "Failed")
 	}
+	if msg.Delegated {
+		action += " · sub-agent"
+	}
 	isCmd := isCommandTool(label)
 	var sb strings.Builder
 	if !done {

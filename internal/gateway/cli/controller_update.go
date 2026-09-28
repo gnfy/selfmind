@@ -866,7 +866,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		effects := m.processState().Update(processEvent{
 			kind: processToolStarted, toolName: msg.ToolName, toolCallID: msg.ToolCallID,
-			toolArgs: msg.Args, runID: msg.Event.RunID,
+			toolArgs: msg.Args, runID: msg.Event.RunID, delegated: msg.Delegated,
 		})
 		m.applyProcessEffects(effects)
 		m.countPlanAction(msg.Event.RunID)

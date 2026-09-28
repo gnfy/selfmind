@@ -72,6 +72,7 @@ type ChatMessage struct {
 	IsError        bool    // Fix: add IsError flag
 	IsSkipped      bool    // tool was refused before dispatch; warning, not execution failure
 	IsRunning      bool
+	Delegated      bool // a sub-agent of the run made this tool call
 	RunningDetail  string
 	NoticeKind     noticeKind // structured semantics for notice-role cells; never inferred from prose
 	// Committed is set in terminal-first hybrid mode once this message has been
@@ -1258,7 +1259,9 @@ type MsgToolStart struct {
 	ToolName   string
 	ToolCallID string
 	Args       string
-	Event      uiEventRef
+	// Delegated marks a call a sub-agent of the run made.
+	Delegated bool
+	Event     uiEventRef
 }
 
 type MsgToolOutput struct {

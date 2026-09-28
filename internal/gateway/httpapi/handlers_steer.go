@@ -68,6 +68,7 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 		Platform:       fallback(req.Platform, active.Platform),
 		PlatformUserID: fallback(req.PlatformUserID, active.PlatformUserID),
 		WorkspaceID:    active.WorkspaceID,
+		ExecutionRoots: active.ExecutionRoots,
 		ApprovalMode:   active.ApprovalMode,
 		Content:        text,
 	})
@@ -130,6 +131,9 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 		Platform:       fallback(req.Platform, active.Platform),
 		PlatformUserID: fallback(req.PlatformUserID, active.PlatformUserID),
 		WorkspaceID:    fallback(req.WorkspaceID, active.WorkspaceID),
+		// The roots this request froze, for when Main queues the input as its
+		// own work instead of applying it to this run.
+		ExecutionRoots: req.ExecutionRoots,
 		ApprovalMode:   fallback(req.ApprovalMode, active.ApprovalMode),
 		Content:        text,
 	})

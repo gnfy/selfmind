@@ -790,3 +790,11 @@ func writeTestRunEvent(w http.ResponseWriter, event api.RunEvent) {
 	data, _ := json.Marshal(event)
 	_, _ = w.Write([]byte("event: " + event.Type + "\ndata: " + string(data) + "\n\n"))
 }
+
+// A sub-agent's tool call keeps its mark on the way to the terminal.
+func TestToolStartKeepsTheSubAgentMark(t *testing.T) {
+	event, ok := eventToStream(control.Event{Type: "tool.started", Payload: []byte(`{"tool":"read_file","tool_call_id":"sub_1","args":"{}","delegated":true}`)})
+	if !ok || event.ToolName != "read_file" || event.Payload["delegated"] != true {
+		t.Fatalf("event = %+v ok=%v", event, ok)
+	}
+}

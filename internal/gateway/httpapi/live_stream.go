@@ -97,6 +97,23 @@ func (b *runEventBroker) subscribe(personID, session, attached string) (*runEven
 	}
 }
 
+// sessionAttached reports whether a client is subscribed as this session of
+// the person right now: a terminal that asked a question and is still open.
+func (b *runEventBroker) sessionAttached(personID, session string) bool {
+	session = strings.TrimSpace(session)
+	if b == nil || session == "" {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, sub := range b.subs[personID] {
+		if sub.session == session {
+			return true
+		}
+	}
+	return false
+}
+
 // recordClientDrops adds a terminal's report of dropped other-session detail
 // events and returns the person's total since the daemon started.
 func (b *runEventBroker) recordClientDrops(personID string, n int64) int64 {

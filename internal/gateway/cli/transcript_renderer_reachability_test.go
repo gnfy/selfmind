@@ -6,7 +6,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -17,11 +16,9 @@ import (
 // unit test is useful for formatting, but it is not evidence of production
 // message-path integration.
 func TestTranscriptRenderersHaveProductionReferences(t *testing.T) {
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test source path")
-	}
-	dir := filepath.Dir(currentFile)
+	// go test runs in the package directory. The source path runtime.Caller
+	// reports is not a real path under -trimpath, which the CI jobs build with.
+	dir := "."
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)

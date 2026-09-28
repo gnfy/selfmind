@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/control/controltest"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 )
@@ -121,5 +122,61 @@ func TestRunSteerEndpoint(t *testing.T) {
 	steerCh <- kernel.SteeringInput{Content: "queued-2"}
 	if rec := steer("overflow"); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("full-buffer status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Guidance posted to /v1/runs/steer is for that exact run, so it carries the
+// run's roots into separate work. The endpoint passed none, and work queued
+// from it lost the run's --add-dir root.
+func TestRunSteerEndpointKeepsTheRunsRoots(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	t.Setenv("SELF_DAEMON_TOKEN", "")
+	store := controltest.NewStore(t)
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Steerable task", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := []executionenv.RootBinding{
+		{Path: "/work/app", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace},
+		{Path: "/data/shared", Role: executionenv.RootRoleAdditional, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceCLIAddDir},
+	}
+	run, err := store.StartRunWithOptions(ctx, task, "cli", "long coding task", control.StartRunOptions{ExecutionRoots: roots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok := daemon.coordinator().beginActive(identity.PersonID, &activeRun{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Channel: "cli", ExecutionRoots: roots, StartedAt: time.Now(), Steer: make(chan kernel.SteeringInput, 1),
+	}); !ok {
+		t.Fatal("could not register active run")
+	}
+	defer daemon.coordinator().endActive(identity.PersonID)
+
+	body, _ := json.Marshal(api.RunSteerRequest{Platform: "cli", PlatformUserID: "local", Channel: "cli", Text: "separately, bump the changelog"})
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs/steer", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("steer status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	rows, err := store.ListUnconsumedSteering(ctx, identity.TenantID, run.ID, 10)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("steering rows = %+v err=%v", rows, err)
+	}
+	queued, err := store.QueueSteeringAsIndependent(ctx, identity.TenantID, identity.PersonID, run.ID, rows[0].ID)
+	if err != nil || queued == nil {
+		t.Fatalf("queued=%+v err=%v", queued, err)
+	}
+	var paths []string
+	for _, root := range queued.ExecutionRoots {
+		paths = append(paths, root.Path)
+	}
+	if strings.Join(paths, ",") != "/work/app,/data/shared" {
+		t.Fatalf("queued work roots = %v, want the run's roots with its --add-dir", paths)
 	}
 }

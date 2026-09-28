@@ -1193,6 +1193,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 
 	var continuedAnswer strings.Builder
+	// answerCarry holds answer prose written since the last action tool, in
+	// responses whose only calls recorded the plan or outcome. The final answer
+	// keeps it: a model often writes its answer in the same response as
+	// finish_run and then closes with one line. A final answer the plan gate
+	// sends back is not carried; the model answers again after reconciling.
+	var answerCarry strings.Builder
 	callIDPrefix := delegatedCallIDPrefix(ctx)
 	// streamLost records that some answer text never reached the event
 	// consumer; turn.completed carries it so the gap stays visible.
@@ -1798,6 +1804,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					"live_bytes":   liveToolResultBytes(messages), "iteration": i,
 				}})
 			}
+			if onlyBookkeepingCalls(calls) && !legacyMarkupPresent {
+				carryAnswerProse(&answerCarry, resp)
+			} else {
+				answerCarry.Reset()
+			}
 			handoff, handoffReady := lifecycleHandoffFromToolResults(results)
 			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
 			if handoffReady {
@@ -1931,7 +1942,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if i+1 >= maxIterations {
 				maxIterations = i + 2
 			}
-			emitAgentActivity(eventCh, "The visible plan still has unresolved steps; reconciling final progress", "plan_reconciliation", i)
+			emitAgentActivity(eventCh, "The visible plan still has unresolved steps; reconciling final progress", PlanReconciliationPhase, i)
 			messages = append(messages, llm.Message{
 				Role: "user",
 				// This used to read "mark finished steps completed and steps
@@ -1951,6 +1962,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		// No tool calls — task complete
+		if carried := strings.TrimSpace(answerCarry.String()); carried != "" {
+			if closing := strings.TrimSpace(resp); closing != "" {
+				resp = carried + "\n\n" + closing
+			} else {
+				resp = carried
+			}
+		}
 		history.Outcome = resp
 
 		completion := resolveTurnCompletion(completionSignals{
@@ -2077,6 +2095,34 @@ func uncachedInputTokens(usage llm.UsageStats) int {
 		return max(usage.CacheMissInputTokens, 0)
 	}
 	return max(usage.InputTokens-usage.CacheReadInputTokens, 0)
+}
+
+// PlanReconciliationPhase marks the activity event emitted when the plan gate
+// sends a final answer back. That answer is not the run's answer.
+const PlanReconciliationPhase = "plan_reconciliation"
+
+// onlyBookkeepingCalls reports a response whose calls only recorded the run's
+// plan or outcome, so its prose may be the answer rather than narration.
+func onlyBookkeepingCalls(calls []llm.ToolCall) bool {
+	for _, call := range calls {
+		if !IsRunBookkeepingTool(call.Function) {
+			return false
+		}
+	}
+	return len(calls) > 0
+}
+
+// carryAnswerProse appends one response's prose to the carried answer as its
+// own paragraph.
+func carryAnswerProse(carry *strings.Builder, prose string) {
+	prose = strings.TrimSpace(prose)
+	if prose == "" {
+		return
+	}
+	if carry.Len() > 0 {
+		carry.WriteString("\n\n")
+	}
+	carry.WriteString(prose)
 }
 
 // toolNamesForTrace renders a compact tool-name list for the agent.step trace.

@@ -259,7 +259,11 @@ watcher and background notices — and reports another session's work in one
 status line. Live delivery and reconnect replay apply the same audience, and a
 client that names no session receives only those person-wide facts. Only the
 requesting session arms an approval panel or question prompt; the others say
-what waits and answer it through `/approve`. A message typed while another
+what waits. While the asking terminal is open, only it answers with plain text
+(a question's answer, a bare y/n); another terminal answers an approval with
+`/approve` or a question with the named form `N: answer`, and its plain message
+stays its own input. With the asking terminal closed, or for an IM question,
+any endpoint answers with plain text as before. A message typed while another
 session's run is active is steered into that run with a receipt naming it.
 Watching another session's run is explicit: `/attach`, or resuming that
 session with `selfmind --resume <session>`. A parked approval answered from a

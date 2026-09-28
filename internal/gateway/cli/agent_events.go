@@ -197,7 +197,8 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 		if isHiddenLifecycleTool(event.ToolName) {
 			return
 		}
-		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs, Event: ref})
+		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs,
+			Delegated: event.Payload["delegated"] == true, Event: ref})
 	case "tool.completed":
 		if isHiddenLifecycleTool(event.ToolName) {
 			return
@@ -348,13 +349,11 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 	}
 }
 
+// isHiddenLifecycleTool names the run's bookkeeping calls, which draw no tool
+// cell. The gateway keeps prose around the same calls in the run's answer, so
+// the answer that replaces the live text at the end says what streamed here.
 func isHiddenLifecycleTool(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "update_plan", "finish_run":
-		return true
-	default:
-		return false
-	}
+	return kernel.IsRunBookkeepingTool(name)
 }
 
 func clarifyChoicesFromPayload(payload map[string]interface{}) []string {

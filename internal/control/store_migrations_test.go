@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"selfmind/internal/executionenv"
 )
 
 func TestCurrentControlSchemaSkipsFullIntegrityCheck(t *testing.T) {
@@ -63,7 +65,7 @@ func TestVersionSixteenPlanRowsMigrateWithoutInheritedAuthority(t *testing.T) {
 		`ALTER TABLE run_plan_steps DROP COLUMN source_plan_version`,
 		`ALTER TABLE run_plan_steps DROP COLUMN prior_verification_reused`,
 		`ALTER TABLE run_plan_steps DROP COLUMN reuse_reason`,
-		`DELETE FROM schema_migrations WHERE version=17`,
+		`DELETE FROM schema_migrations WHERE version>=17`,
 	} {
 		if _, err := store.db.ExecContext(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -628,5 +630,130 @@ func TestMigrationInvariantsRejectOrphansAndResumeEdgeChanges(t *testing.T) {
 	}
 	if err := verifyMigrationInvariants(ctx, db, before); err == nil || !strings.Contains(err.Error(), "run_resume_edges") {
 		t.Fatalf("dropped resume edge error=%v", err)
+	}
+}
+
+// A steering row accepted before v18 recorded no roots of its own. The upgrade
+// leaves it that way, so work queued from it keeps the roots of the run it was
+// steered into, exactly as before.
+func TestVersionSeventeenSteeringRowsKeepTheirRunsRoots(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "legacy steering", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRoots := []executionenv.RootBinding{{Path: "/work/a", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace}}
+	run, err := store.StartRunWithOptions(ctx, task, "cli", "legacy steering", StartRunOptions{ExecutionRoots: runRoots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := store.AcceptSteering(ctx, SteeringMessage{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: run.ID, TaskID: task.ID,
+		Content:        "accepted before v18",
+		ExecutionRoots: []executionenv.RootBinding{{Path: "/work/b", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`ALTER TABLE steering_mailbox DROP COLUMN execution_roots_json`,
+		`DELETE FROM schema_migrations WHERE version>=18`,
+	} {
+		if _, err := store.db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("migrate v17 steering store: %v", err)
+	}
+	defer migrated.Close()
+	if migrated.SchemaStatus().Version != CurrentControlSchemaVersion || migrated.SchemaStatus().MigrationBackup == "" {
+		t.Fatalf("v17 migration did not back up and advance: %+v", migrated.SchemaStatus())
+	}
+	queued, err := migrated.QueueSteeringAsIndependent(ctx, identity.TenantID, identity.PersonID, run.ID, msg.ID)
+	if err != nil || queued == nil {
+		t.Fatalf("queue historical steering: %+v err=%v", queued, err)
+	}
+	if len(queued.ExecutionRoots) != 1 || queued.ExecutionRoots[0].Path != "/work/a" {
+		t.Fatalf("historical row acquired roots it never recorded: %+v", queued.ExecutionRoots)
+	}
+}
+
+// Pruning keeps the newest migration backups by the time in their names. It
+// sorted whole names, so control-v17-… came before control-v8-…: the v17→v18
+// migration deleted that morning's backup and kept two from a month before.
+func TestMigrationBackupPruningKeepsTheNewestByTime(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		existing  []string
+		keep      string
+		remaining []string // in directory order
+	}{
+		{
+			name: "the v17 to v18 incident",
+			existing: []string{
+				"control-v8-to-v9-20260901T104900.302612000Z.db",
+				"control-v9-to-v10-20260902T041441.212305000Z.db",
+				"control-v17-to-v18-20260928T075542.019362000Z.db",
+			},
+			keep: "control-v17-to-v18-20260928T112039.676076000Z.db",
+			remaining: []string{
+				"control-v17-to-v18-20260928T075542.019362000Z.db",
+				"control-v17-to-v18-20260928T112039.676076000Z.db",
+				"control-v9-to-v10-20260902T041441.212305000Z.db",
+			},
+		},
+		{
+			name: "any version width, and a copy without a time is kept",
+			existing: []string{
+				"control-v98-to-v99-20261101T000000.000000000Z.db",
+				"control-v99-to-v100-20261115T000000.000000000Z.db",
+				"control-v100-to-v101-20261120T000000.000000000Z.db",
+				"control-v100-to-v101-copied-by-hand.db",
+			},
+			keep: "control-v101-to-v102-20261201T000000.000000000Z.db",
+			remaining: []string{
+				"control-v100-to-v101-20261120T000000.000000000Z.db",
+				"control-v100-to-v101-copied-by-hand.db",
+				"control-v101-to-v102-20261201T000000.000000000Z.db",
+				"control-v99-to-v100-20261115T000000.000000000Z.db",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range append(append([]string(nil), tc.existing...), tc.keep) {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("snapshot"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := pruneControlBackups(dir, filepath.Join(dir, tc.keep), 3); err != nil {
+				t.Fatal(err)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, entry := range entries {
+				got = append(got, entry.Name())
+			}
+			if strings.Join(got, "\n") != strings.Join(tc.remaining, "\n") {
+				t.Fatalf("kept:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(tc.remaining, "\n"))
+			}
+		})
 	}
 }

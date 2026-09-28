@@ -59,6 +59,10 @@ A plan with open steps that has not changed for 12 tool actions gets a one-line
 reminder at the tail of the next model call, again only after another 12; the
 model decides whether it is still true. The final answer is not a plan step,
 and `finish_run` may follow the final `update_plan` in the same response.
+Prose in a response whose only calls are `update_plan` or `finish_run` stays
+part of the final answer rather than narration, so an answer written beside
+`finish_run` survives a closing line after it; a final answer the plan gate
+sends back is not kept.
 
 Progress snapshots retain an existing step's acceptance condition and required
 verification flag when omitted; cancellation remains explicit. A changed

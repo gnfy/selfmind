@@ -396,12 +396,14 @@ func validateExternalWatchStatic(args map[string]interface{}) error {
 	return nil
 }
 
+// invalidExternalWatchSpec names what is wrong: the reason is about the model's
+// own arguments, and without it the one correction the hint allows is a guess.
 func invalidExternalWatchSpec(err error) error {
 	return newStableToolRecoveryError(
 		err,
 		"watch_spec_invalid", "invalid_request",
-		"The durable watcher specification is invalid, so registration was not attempted.",
-		"Correct the watcher command or state patterns once before choosing another strategy.",
+		"The durable watcher specification is invalid ("+truncateRunes(toSingleLine(err.Error()), 240)+"), so registration was not attempted.",
+		"Correct that argument once before choosing another strategy.",
 		"preparation", "same_strategy_after_correction", "not_dispatched", false,
 	)
 }

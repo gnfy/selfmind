@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 17
+const CurrentControlSchemaVersion = 18
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -510,6 +510,16 @@ DROP TABLE IF EXISTS task_references;`)
 				return err
 			}
 			return ensureMigrationColumn(ctx, db, "run_plan_steps", "reuse_reason", "TEXT NOT NULL DEFAULT ''")
+		},
+	},
+	{
+		Version: 18,
+		Name:    "steering-execution-roots",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Input steered into another run keeps the roots its own request
+			// froze, for when it is queued as separate work. Historical rows stay
+			// NULL — nothing was recorded — and keep the run's roots, as before.
+			return ensureMigrationColumn(ctx, db, "steering_mailbox", "execution_roots_json", "TEXT")
 		},
 	},
 }
@@ -1063,7 +1073,7 @@ func backupControlDatabase(ctx context.Context, db *sql.DB, dataDir string, from
 	if err := os.MkdirAll(backupDir, 0700); err != nil {
 		return "", err
 	}
-	name := fmt.Sprintf("control-v%d-to-v%d-%s.db", fromVersion, toVersion, time.Now().UTC().Format("20060102T150405.000000000Z"))
+	name := fmt.Sprintf("control-v%d-to-v%d-%s.db", fromVersion, toVersion, time.Now().UTC().Format(controlBackupTimeLayout))
 	path := filepath.Join(backupDir, name)
 	quoted := strings.ReplaceAll(path, "'", "''")
 	if _, err := db.ExecContext(ctx, "VACUUM INTO '"+quoted+"'"); err != nil {
@@ -1086,6 +1096,14 @@ func backupControlDatabase(ctx context.Context, db *sql.DB, dataDir string, from
 	return path, nil
 }
 
+// controlBackupTimeLayout stamps each migration backup's name; pruning reads
+// the time back from it.
+const controlBackupTimeLayout = "20060102T150405.000000000Z"
+
+// pruneControlBackups keeps the newest retain migration backups by the time in
+// their names. Sorting whole names put control-v17-… before control-v8-…, so
+// every two-digit migration deleted the previous backup and kept the oldest
+// ones. A name without a readable time is never deleted.
 func pruneControlBackups(dir, keepPath string, retain int) error {
 	if retain < 1 {
 		retain = 1
@@ -1094,16 +1112,29 @@ func pruneControlBackups(dir, keepPath string, retain int) error {
 	if err != nil {
 		return err
 	}
-	sort.Strings(paths)
-	removeCount := len(paths) - retain
-	for _, candidate := range paths {
+	type datedBackup struct {
+		path string
+		at   time.Time
+	}
+	var backups []datedBackup
+	for _, path := range paths {
+		name := strings.TrimSuffix(filepath.Base(path), ".db")
+		at, err := time.Parse(controlBackupTimeLayout, name[strings.LastIndex(name, "-")+1:])
+		if err != nil {
+			continue
+		}
+		backups = append(backups, datedBackup{path: path, at: at})
+	}
+	sort.Slice(backups, func(i, j int) bool { return backups[i].at.Before(backups[j].at) })
+	removeCount := len(backups) - retain
+	for _, backup := range backups {
 		if removeCount <= 0 {
 			break
 		}
-		if candidate == keepPath {
+		if backup.path == keepPath {
 			continue
 		}
-		if err := os.Remove(candidate); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(backup.path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 		removeCount--

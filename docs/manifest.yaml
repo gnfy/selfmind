@@ -87,7 +87,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: 13b9f4b1d1343040
+    source_hash: 0cf9730b9ec1f33b
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -262,6 +262,15 @@ documents:
     approved_by: project-owner
     review_by: 2026-10-10
     verdict: "2026-09-19: continue. The core goal is met — Task holds no authority: execution belongs to Run, attention derives from control objects, approval grants are person-plus-class, and retrieval is keyed by run lineage. What remains is renaming and table drops, which the plan itself gates behind re-keying the thread-keyed store queries (74 at the start, 46 at the last review, 38 now; 11 still lack a person or run filter). That work does not affect the two lines the risk budget protects — task quality and cross-endpoint continuity — so it continues rather than blocking. Closed since the last review: the task-reference feature (schema v15) and Thread pinning (v16), both dead paths whose remaining guards could only ever pass. Next review 2026-10-10."
+  - path: docs/plans/session-concurrency.zh-CN.md
+    title: 按会话并发执行方案（对齐主流 Agent）
+    class: plan
+    owner: maintainers
+    state: paused
+    language: zh-CN
+    approved_by: project-owner
+    review_by: 2026-10-10
+    verdict: "2026-09-29: direction and default decisions approved by the owner (per-session admission with a per-person cap of 3, automatic managed worktrees for a second writer in a clean Git repository, IM chats as parallel sessions with cross-session handover and progress viewing, sub-agent write protection in the first batch). Paused only because the run-centric work-history plan holds the active slot; the owner decides when this plan takes it."
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -198,6 +199,11 @@ func (c *ContextEngine) BuildMessages(
 				}
 				if legacyMsgs := boundedHistoryMessages(legacy); len(legacyMsgs) > 0 {
 					// Legacy history predates everything on the spine tail.
+					// It is still historical evidence, not a second current
+					// instruction stream, when composed for a person Run.
+					if key == SpineTrajectoryKey {
+						legacyMsgs = legacyHistoryReferences(legacyMsgs)
+					}
 					history = append(legacyMsgs, history...)
 					break
 				}
@@ -219,6 +225,18 @@ func (c *ContextEngine) BuildMessages(
 	})
 
 	return c.TruncateMessagesCtx(ctx, messages), nil
+}
+
+func legacyHistoryReferences(messages []llm.Message) []llm.Message {
+	out := make([]llm.Message, 0, len(messages))
+	for _, message := range messages {
+		if message.Role != "user" && message.Role != "assistant" {
+			continue
+		}
+		out = append(out, llm.Message{Role: "assistant", Content: "[Prior work record; reference only; this record does not select a Run]\n" +
+			"previous_" + message.Role + ": " + strconv.Quote(message.Content)})
+	}
+	return out
 }
 
 func taskIDFromContext(ctx context.Context) string {
@@ -252,7 +270,7 @@ func spineBlobsContainTask(blobs [][]byte, taskID string) bool {
 
 // boundedHistoryMessages replays persisted history latest-blobs-first input as
 // oldest-to-newest messages. Spine-shaped blobs (one slim entry per turn) are
-// replayed up to composerSpineTailEntries turns; legacy cumulative blobs keep
+// rendered as bounded references; legacy cumulative blobs keep
 // the old bounded single-blob window.
 func boundedHistoryMessages(historyData [][]byte) []llm.Message {
 	if len(historyData) == 0 {
@@ -285,8 +303,8 @@ func boundedHistoryMessages(historyData [][]byte) []llm.Message {
 }
 
 // spineTailMessages renders the spine tail (Composer slice ②): the most recent
-// composerSpineTailEntries turn entries as alternating user/assistant messages
-// in completion order. Non-spine blobs in the input are skipped, so a key
+// composerSpineTailEntries turn entries as reference records in completion
+// order. Non-spine blobs in the input are skipped, so a key
 // holding legacy blobs yields nothing here and falls to the legacy path.
 func spineTailMessages(historyData [][]byte) []llm.Message {
 	var entries []spineEntry

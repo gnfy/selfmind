@@ -1,0 +1,50 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to look up"
+    },
+    {
+      "reasoning_content": " the work history to"
+    },
+    {
+      "reasoning_content": " find information about B"
+    },
+    {
+      "reasoning_content": "ETA-"
+    },
+    {
+      "reasoning_content": "462."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11247,
+        "output_tokens": 69,
+        "cache_read_input_tokens": 10240,
+        "cache_miss_input_tokens": 1007,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 19,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "work_search",
+          "Args": "{\"limit\": 8, \"query\": \"BETA-462 工作 B 记下\"}"
+        }
+      ]
+    }
+  ]
+}

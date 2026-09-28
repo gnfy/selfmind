@@ -1,0 +1,152 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user asks about work"
+    },
+    {
+      "reasoning_content": " A's"
+    },
+    {
+      "reasoning_content": " cod"
+    },
+    {
+      "reasoning_content": "ename. This is"
+    },
+    {
+      "reasoning_content": " a status"
+    },
+    {
+      "reasoning_content": "/result question about prior"
+    },
+    {
+      "reasoning_content": " work — use work"
+    },
+    {
+      "reasoning_content": "_select with"
+    },
+    {
+      "reasoning_content": " observe for run_b"
+    },
+    {
+      "reasoning_content": "5857"
+    },
+    {
+      "reasoning_content": "a13-"
+    },
+    {
+      "reasoning_content": "3127"
+    },
+    {
+      "reasoning_content": "-4c6"
+    },
+    {
+      "reasoning_content": "e-9cb"
+    },
+    {
+      "reasoning_content": "5-23"
+    },
+    {
+      "reasoning_content": "48f5"
+    },
+    {
+      "reasoning_content": "3813"
+    },
+    {
+      "reasoning_content": "86.\n\n"
+    },
+    {
+      "reasoning_content": "Per instructions: \""
+    },
+    {
+      "reasoning_content": "When the"
+    },
+    {
+      "reasoning_content": " evidence supports one exact"
+    },
+    {
+      "reasoning_content": " relationship"
+    },
+    {
+      "reasoning_content": ", call work_select"
+    },
+    {
+      "reasoning_content": " with observe for a"
+    },
+    {
+      "reasoning_content": " status/result question"
+    },
+    {
+      "reasoning_content": ".\" The user asks"
+    },
+    {
+      "reasoning_content": " a read-only question"
+    },
+    {
+      "reasoning_content": " about prior"
+    },
+    {
+      "reasoning_content": " work A. So"
+    },
+    {
+      "reasoning_content": " observe"
+    },
+    {
+      "reasoning_content": ".\n\nThen output"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " \"A=AL"
+    },
+    {
+      "reasoning_content": "PHA-73"
+    },
+    {
+      "reasoning_content": "1\"."
+    },
+    {
+      "content": "Recorded A"
+    },
+    {
+      "content": " in the earlier run"
+    },
+    {
+      "content": "; I'll confirm"
+    },
+    {
+      "content": " that reference before answering"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 10756,
+        "output_tokens": 210,
+        "cache_read_input_tokens": 7168,
+        "cache_miss_input_tokens": 3588,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 116,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "work_select",
+          "Args": "{\"action\": \"observe\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -33,6 +33,15 @@ type turnCompletion struct {
 	Resumable bool
 }
 
+// outcomeLabel names how the turn ended for its work-history record: the
+// status, with the reason when the turn stopped short.
+func (c turnCompletion) outcomeLabel() string {
+	if c.Status == "completed" || c.Reason == "" {
+		return c.Status
+	}
+	return c.Status + ": " + c.Reason
+}
+
 // completionSignals is the loop state that decides how a turn is reported.
 type completionSignals struct {
 	FinishStatus        string // structured finish_run status, "" if none

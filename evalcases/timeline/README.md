@@ -25,3 +25,4 @@ SELFMIND_EVAL_VCR=record selfmind eval run evalcases/timeline
 | 13 | Ambiguous continuation → deterministic exact-Run candidates, no model | `timeline-run-candidates.yaml` |
 | 14 | Natural-language IM progress → CLI run card, no new run (v8 continuity) | `timeline-natural-progress-cross-endpoint.yaml` (fast-classifier cassette) |
 | 15 | Same-channel bare confirmation ("确认执行") resumes the waiting run that asked for it (Main-turn continuity) | `timeline-confirm-after-waiting-run.yaml` (seeded `waiting_user` run; `work_search` lists it as `unresolved_run` without a literal hit, `work.selection_committed` resume asserted) |
+| 16 | A and B remain distinguishable when both are open in one workspace | `timeline-interleaved-work.yaml` (return to A after B; prior spine turns are references) plus Go: `light_task_layer_test.go` (same/cross-workspace, missing final answer, exact Run provenance) |

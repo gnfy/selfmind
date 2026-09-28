@@ -19,6 +19,16 @@ Attention projection derived from Runs and pending control objects.
 The person-level work spine supplies bounded continuity across CLI, IM, cron,
 and HTTP. A Thread may improve search and display, but a mistaken automatic
 grouping must never select execution scope, permissions, or prompt context.
+Each prior spine turn enters a new Run as a provenance-marked reference record,
+including its exact Run ID when available and how that turn ended
+(`turn_outcome`: a `finish_run` status, `completed`, or `incomplete: <reason>`).
+The outcome describes that turn, not the Run's current state. Its former user
+text is quoted data, not a live user-role message. An absent final answer means
+only that the spine did not record one; it does not prove that the prior Run is
+pending. The current
+input remains the sole active user instruction. A and B may both remain open in
+one workspace or different workspaces; Main uses exact Run inspection and the
+validated selection path to continue either one.
 
 ## Domain model
 

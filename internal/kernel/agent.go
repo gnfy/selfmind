@@ -1791,7 +1791,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				messages = append(messages, llm.Message{Role: "assistant", Content: answer})
 				history.Steps = append(history.Steps, answer)
 				history.Outcome = answer
-				a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, answer, messages)
+				a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, answer, handoff.Status, messages)
 				a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 				completion := resolveTurnCompletion(completionSignals{FinishStatus: handoff.Status})
 				recordStep(i, StepCompleteTurn, handoff.Status)
@@ -1924,18 +1924,19 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// No tool calls — task complete
 		history.Outcome = resp
 
-		// Append this turn to the spine under the same key used to load it
-		// (slim entry: user text + final answer + touched paths), and refresh
-		// the task-coherent FTS index.
-		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, messages)
-
-		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
-
 		completion := resolveTurnCompletion(completionSignals{
 			FinishStatus:        successfulFinishStatus,
 			ToolBudgetExhausted: toolBudgetExhausted,
 			PlanUnresolved:      planUnresolved,
 		})
+
+		// Append this turn to the spine under the same key used to load it
+		// (slim entry: user text + final answer + touched paths + how the turn
+		// ended), and refresh the task-coherent FTS index.
+		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, completion.outcomeLabel(), messages)
+
+		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
+
 		recordStep(i, StepCompleteTurn, completion.Reason)
 		emitTurnCompleted(eventCh, resp, completion, streamLost)
 		return resp, totalUsage, nil
@@ -1953,8 +1954,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		outcome = "SelfMind reached the safety iteration limit before finishing. The collected evidence and next steps are in this task's events; reply \"continue\" to resume."
 	}
 	history.Outcome = outcome
-	a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, outcome, messages)
 	completion := resolveTurnCompletion(completionSignals{IterationCapped: true})
+	a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, outcome, completion.outcomeLabel(), messages)
 	recordStep(maxIterations, StepCompleteTurn, completion.Reason)
 	emitTurnCompleted(eventCh, outcome, completion, streamLost)
 	return outcome, totalUsage, nil
@@ -2537,12 +2538,12 @@ func (a *Agent) autoRecallWithBudget(ctx context.Context, tenantID, query string
 // tool intermediates and the system prompt stay in run events, not the spine.
 // Internal-subsystem keys keep the legacy full-blob shape (their history is
 // run-local scaffolding, not the person's work record).
-func (a *Agent) saveHistory(ctx context.Context, tenantID, histKey, channel, userInput, finalAnswer string, messages []llm.Message) {
+func (a *Agent) saveHistory(ctx context.Context, tenantID, histKey, channel, userInput, finalAnswer, outcome string, messages []llm.Message) {
 	if a.memory == nil {
 		return
 	}
 	if histKey == SpineTrajectoryKey {
-		entry := buildSpineEntry(ctx, userInput, finalAnswer, messages)
+		entry := buildSpineEntry(ctx, userInput, finalAnswer, outcome, messages)
 		if strings.TrimSpace(entry.User) != "" || strings.TrimSpace(entry.Assistant) != "" {
 			if data, err := json.Marshal(entry); err == nil {
 				a.memory.SaveTrajectory(ctx, tenantID, histKey, data)

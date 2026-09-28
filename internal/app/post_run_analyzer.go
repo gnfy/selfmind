@@ -531,9 +531,7 @@ func (a *llmPostRunAnalyzer) outputContractError(ctx context.Context, err error)
 }
 
 func maintenanceFinishReasonTruncated(reason string) bool {
-	reason = strings.ToLower(strings.TrimSpace(reason))
-	return reason == "length" || reason == "max_tokens" || reason == "max_output_tokens" ||
-		strings.Contains(reason, "max_token")
+	return llm.ClassifyStopReason(reason) == llm.StopLength
 }
 
 func finishReason(resp *llm.ChatResponse) string {

@@ -159,9 +159,12 @@ func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (to
 		result.ProtocolStatus = "received"
 	}
 	if resp != nil {
-		switch strings.ToLower(strings.TrimSpace(resp.FinishReason)) {
-		case "length", "max_tokens", "max_output_tokens", "incomplete":
+		// A verdict cut short or filtered is not a verdict, however it parses.
+		switch stop := llm.ClassifyStopReason(resp.FinishReason); {
+		case stop.Continuable():
 			result.ProtocolStatus = "output_limit"
+		case stop == llm.StopFiltered:
+			result.ProtocolStatus = "output_filtered"
 		}
 		if len(resp.ToolCalls) > 0 {
 			result.ProtocolStatus = "unexpected_tool_call"

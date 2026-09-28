@@ -759,9 +759,7 @@ func (c *ContextEngine) summarizeSpan(ctx context.Context, sp llm.Provider, span
 }
 
 func summaryFinishReasonTruncated(reason string) bool {
-	reason = strings.ToLower(strings.TrimSpace(reason))
-	return reason == "length" || reason == "max_tokens" || reason == "max_output_tokens" ||
-		strings.Contains(reason, "max_token")
+	return llm.ClassifyStopReason(reason) == llm.StopLength
 }
 
 // missingPaths returns the harvested paths not already textually present in the

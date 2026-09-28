@@ -11,7 +11,7 @@ import (
 func TestClassifyStopReasonAcrossProtocols(t *testing.T) {
 	for want, raws := range map[StopReason][]string{
 		StopComplete:    {"stop", "tool_calls", "end_turn", "tool_use", "completed", "STOP"},
-		StopLength:      {"length", "max_tokens", "max_output_tokens", "MAX_TOKENS", "model_context_window_exceeded"},
+		StopLength:      {"length", "max_tokens", "max_output_tokens", "MAX_TOKENS", "token_limit", "model_context_window_exceeded"},
 		StopFiltered:    {"content_filter", "refusal", "SAFETY"},
 		StopInterrupted: {"insufficient_system_resource", "aborted", "pause_turn", "incomplete", "error"},
 		StopMissing:     {"", "  "},

@@ -38,7 +38,7 @@ func ClassifyStopReason(raw string) StopReason {
 		return StopMissing
 	case "stop", "end_turn", "stop_sequence", "tool_calls", "tool_use", "function_call", "completed":
 		return StopComplete
-	case "length", "max_tokens", "max_output_tokens", "output_limit", "model_context_window_exceeded":
+	case "length", "max_tokens", "max_output_tokens", "output_limit", "token_limit", "model_context_window_exceeded":
 		return StopLength
 	case "content_filter", "safety", "recitation", "refusal", "blocklist", "prohibited_content", "spii":
 		return StopFiltered

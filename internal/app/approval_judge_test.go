@@ -205,14 +205,19 @@ func TestApprovalJudgeNilProviderStaysNil(t *testing.T) {
 }
 
 func TestApprovalJudgeRejectsIncompleteDecision(t *testing.T) {
-	for _, reason := range []string{"length", "max_tokens"} {
+	// The judge reads the same stop classification as the answer path: a
+	// verdict cut short, halted, or filtered is not a verdict however it parses.
+	for reason, class := range map[string]string{
+		"length": "output_limit", "max_tokens": "output_limit", "incomplete": "output_limit",
+		"aborted": "output_limit", "content_filter": "output_filtered",
+	} {
 		t.Run(reason, func(t *testing.T) {
 			provider := &judgeCaptureProvider{response: &llm.ChatResponse{
 				Content:      `{"outcome":"approve","risk_level":"low","user_authorization":"high","rationale":"Allowed"}`,
 				FinishReason: reason, Usage: llm.UsageStats{OutputTokens: 1024, ReasoningOutputTokens: 1000},
 			}}
 			_, err := NewApprovalJudge(provider).Judge(context.Background(), "review")
-			if err == nil || !strings.Contains(err.Error(), "output_limit") {
+			if err == nil || !strings.Contains(err.Error(), class) {
 				t.Fatalf("incomplete decision must not authorize execution: %v", err)
 			}
 		})

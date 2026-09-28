@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -107,5 +108,54 @@ func TestWorkSelectRejectsForeignRun(t *testing.T) {
 		"_invocation_scope": kernel.ToolInvocationScope{ControlTenantID: alice.TenantID, PersonID: alice.PersonID, TaskID: aliceTask.ID, RunID: aliceRun.ID},
 	}); err == nil {
 		t.Fatal("foreign target must fail closed")
+	}
+}
+
+// Resuming a run that has nothing left to resume is refused with what to do
+// instead. qwen twice tried to resume a finished run named in its work
+// history, retried, and reported the bare refusal to the person.
+func TestWorkSelectSaysWhatToDoInsteadOfResumingSettledWork(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	person, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
+	finishedTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "release notes", Channel: "cli"})
+	finished, _ := store.StartRun(ctx, finishedTask, "cli", "write the release notes")
+	_ = store.FinishRun(ctx, person.TenantID, finished.ID, "done")
+	lineTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "migration", Channel: "cli"})
+	older, _ := store.StartRun(ctx, lineTask, "cli", "start the migration")
+	_ = store.FinishRun(ctx, person.TenantID, older.ID, "done")
+	latest, _ := store.StartRun(ctx, lineTask, "cli", "continue the migration")
+	_ = store.FinishRun(ctx, person.TenantID, latest.ID, "interrupted")
+	currentTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "continue", Channel: "cli"})
+	current, _ := store.StartRun(ctx, currentTask, "cli", "继续")
+	scope := kernel.ToolInvocationScope{ControlTenantID: person.TenantID, PersonID: person.PersonID, TaskID: currentTask.ID, RunID: current.ID}
+
+	tool := NewWorkSelectTool(store)
+	for _, tc := range []struct {
+		target string
+		want   []string
+	}{
+		{finished.ID, []string{"is done; it has nothing left to resume", "Do not retry resume", "in the current run"}},
+		{older.ID, []string{"the resumable run of the same work is " + latest.ID, "Resume " + latest.ID + " instead"}},
+	} {
+		_, err := tool.Execute(map[string]interface{}{"action": "resume", "run_id": tc.target, "_invocation_scope": scope})
+		var refusal interface {
+			ToolErrorCode() string
+			ModelSafeMessage() string
+			ToolRecoveryHint() string
+		}
+		if !errors.As(err, &refusal) || refusal.ToolErrorCode() != "work_run_not_resumable" {
+			t.Fatalf("resume %s: err=%v, want a typed not-resumable refusal", tc.target, err)
+		}
+		text := refusal.ModelSafeMessage() + " " + refusal.ToolRecoveryHint()
+		for _, want := range tc.want {
+			if !strings.Contains(text, want) {
+				t.Errorf("resume %s: refusal %q, want %q", tc.target, text, want)
+			}
+		}
 	}
 }

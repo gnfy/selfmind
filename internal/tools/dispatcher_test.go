@@ -714,3 +714,31 @@ func TestSubsetDispatchesThroughTheParentPolicyChain(t *testing.T) {
 		t.Fatal("registering into the subset changed the parent")
 	}
 }
+
+// A lifecycle call with a missing or unknown argument is refused before it
+// runs; the refusal says what the schema expects there, so the model can fix
+// the call in one step. qwen once spent a retry on each of these.
+func TestArgumentRefusalsSayWhatIsExpected(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(NewFinishRunTool())
+	registry.Register(NewUpdatePlanTool())
+	for _, tc := range []struct {
+		tool string
+		args map[string]interface{}
+		want []string
+	}{
+		{"finish_run", map[string]interface{}{"summary": "Released."},
+			[]string{"missing required parameter: status", "expected a string, one of done", "waiting_user"}},
+		{"finish_run", map[string]interface{}{"status": "done", "summary": "Released.", "result": "ok"},
+			[]string{"unknown parameter: result", "accepts only done, files, need_approve, next_steps, risks, status, summary, tests"}},
+		{"update_plan", map[string]interface{}{"plan": []interface{}{map[string]interface{}{"step": "publish"}}},
+			[]string{"missing required parameter: plan[0].status", "expected a string, one of pending, in_progress, completed"}},
+	} {
+		_, err := registry.DispatchResult(tc.tool, tc.args)
+		for _, want := range tc.want {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s %v: error %v, want it to contain %q", tc.tool, tc.args, err, want)
+			}
+		}
+	}
+}

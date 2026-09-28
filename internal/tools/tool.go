@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -316,7 +317,7 @@ func ValidateArgs(schema ToolSchema, args map[string]interface{}) error {
 func validateObject(path string, value map[string]interface{}, properties map[string]PropertyDef, required []string, additional *bool, root bool) error {
 	for _, name := range required {
 		if _, ok := value[name]; !ok {
-			return fmt.Errorf("missing required parameter: %s", joinParameterPath(path, name))
+			return fmt.Errorf("missing required parameter: %s — expected %s", joinParameterPath(path, name), expectedParameter(properties[name]))
 		}
 	}
 	for name, item := range value {
@@ -326,7 +327,7 @@ func validateObject(path string, value map[string]interface{}, properties map[st
 		def, ok := properties[name]
 		if !ok {
 			if additional != nil && !*additional {
-				return fmt.Errorf("unknown parameter: %s", joinParameterPath(path, name))
+				return fmt.Errorf("unknown parameter: %s — this object accepts only %s", joinParameterPath(path, name), acceptedParameters(properties))
 			}
 			continue
 		}
@@ -364,6 +365,45 @@ func validateProperty(path string, value interface{}, def PropertyDef) error {
 		}
 	}
 	return nil
+}
+
+// expectedParameter says what a parameter's schema asks for, so the model can
+// correct a failed call in one step instead of rereading the whole schema.
+func expectedParameter(def PropertyDef) string {
+	kind := strings.TrimSpace(def.Type)
+	if kind == "" {
+		return "a value"
+	}
+	text := "a " + kind
+	if strings.ContainsRune("aeiou", rune(kind[0])) {
+		text = "an " + kind
+	}
+	switch {
+	case len(def.Enum) > 0:
+		text += ", one of " + strings.Join(def.Enum, ", ")
+	case kind == "object" && len(def.Required) > 0:
+		text += " with " + strings.Join(def.Required, ", ")
+	case kind == "array" && def.Items != nil:
+		text += "; each item " + expectedParameter(*def.Items)
+	}
+	return text
+}
+
+// acceptedParameters lists an object's parameter names, sorted and bounded.
+func acceptedParameters(properties map[string]PropertyDef) string {
+	names := make([]string, 0, len(properties))
+	for name := range properties {
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return "no parameters"
+	}
+	sort.Strings(names)
+	const shown = 16
+	if len(names) > shown {
+		return strings.Join(names[:shown], ", ") + fmt.Sprintf(", and %d more", len(names)-shown)
+	}
+	return strings.Join(names, ", ")
 }
 
 func stringInList(value string, values []string) bool {
@@ -433,7 +473,7 @@ func coerceObject(path string, args map[string]interface{}, properties map[strin
 		def, ok := properties[name]
 		if !ok {
 			if additional != nil && !*additional {
-				return nil, fmt.Errorf("unknown parameter: %s", joinParameterPath(path, name))
+				return nil, fmt.Errorf("unknown parameter: %s — this object accepts only %s", joinParameterPath(path, name), acceptedParameters(properties))
 			}
 			// Open schemas preserve fields instead of silently discarding them.
 			coerced[name] = value

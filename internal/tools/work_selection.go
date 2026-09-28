@@ -105,7 +105,7 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 			}
 		}
 		if !resumable {
-			return "", fmt.Errorf("target run is no longer resumable")
+			return "", notResumableRun(target, candidates)
 		}
 	}
 	raw, err := t.store.RunWorkSelection(ctx, scope.ControlTenantID, scope.PersonID, scope.RunID)
@@ -420,4 +420,26 @@ func workSelectionResult(status, action, runID, message string) string {
 func mustToolJSON(value interface{}) json.RawMessage {
 	encoded, _ := json.Marshal(value)
 	return encoded
+}
+
+// notResumableRun refuses to resume a run that has nothing left to resume and
+// says what to do instead, so the model neither retries the resume nor reports
+// the refusal to the person as a failure: work that builds on a finished run
+// continues in the current one.
+func notResumableRun(target *control.Run, candidates []control.Run) error {
+	status := strings.TrimSpace(target.Status)
+	if status == "" {
+		status = "settled"
+	}
+	message := fmt.Sprintf("Run %s is %s; it has nothing left to resume.", target.ID, status)
+	hint := "Do not retry resume for this run. Do the requested work in the current run; for that run's outcome or files, use work_inspect or work_select with action observe."
+	for _, candidate := range candidates {
+		if candidate.ID != target.ID {
+			message = fmt.Sprintf("Run %s is %s; the resumable run of the same work is %s.", target.ID, status, candidate.ID)
+			hint = "Resume " + candidate.ID + " instead if the request continues that work; otherwise do the requested work in the current run."
+			break
+		}
+	}
+	return newStableToolRecoveryError(errors.New(message), "work_run_not_resumable", "invalid_input", message, hint,
+		"preparation", "different_strategy", "not_dispatched", false, "continue_in_current_run", "work_inspect")
 }

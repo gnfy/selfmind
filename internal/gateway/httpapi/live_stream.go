@@ -19,6 +19,34 @@ import (
 type runEventSubscriber struct {
 	ch  chan api.RunEvent
 	gap atomic.Bool
+	// session is the subscribing client's session; attached is the one run it
+	// explicitly observes. A client that names neither sees only what concerns
+	// the person as a whole.
+	session  string
+	attached string
+}
+
+// personWideRunEventTypes reach every session of the person: the run lifecycle
+// and the human waits, so a window knows that work runs or waits elsewhere
+// without receiving that work's transcript.
+var personWideRunEventTypes = map[string]bool{
+	"run.started": true, "run.steered": true, "run.finished": true,
+	"run.cancelled": true, "run.interrupted": true, "run.failed": true,
+	"approval.requested": true, "approval.approved": true, "approval.rejected": true,
+	"approval.expired": true, "approval.archived": true, "approval.parked": true,
+	"clarify.requested": true, "background.notice": true, "external_watch.completed": true,
+}
+
+// wants decides one event's audience, identically for live delivery and for
+// replay, so a reconnect cannot show a session more than the live stream did.
+func (s *runEventSubscriber) wants(event api.RunEvent) bool {
+	if personWideRunEventTypes[event.Type] || event.Channel == "" {
+		return true
+	}
+	if s.attached != "" && event.RunID == s.attached {
+		return true
+	}
+	return s.session != "" && event.Channel == s.session
 }
 
 // runEventBroker serializes the daemon-local live view. Durable appends are
@@ -29,6 +57,10 @@ type runEventBroker struct {
 	nextID uint64
 	subs   map[string]map[uint64]*runEventSubscriber
 	seq    map[string]uint64
+	// clientDrops counts, per person, the other-session detail events their
+	// terminals report having received and dropped: the audience filter's
+	// miss count, which should stay zero.
+	clientDrops map[string]int64
 }
 
 func newRunEventBroker(store *control.Store) *runEventBroker {
@@ -42,8 +74,8 @@ func newRunEventBroker(store *control.Store) *runEventBroker {
 	return b
 }
 
-func (b *runEventBroker) subscribe(personID string) (*runEventSubscriber, func()) {
-	sub := &runEventSubscriber{ch: make(chan api.RunEvent, 256)}
+func (b *runEventBroker) subscribe(personID, session, attached string) (*runEventSubscriber, func()) {
+	sub := &runEventSubscriber{ch: make(chan api.RunEvent, 256), session: session, attached: attached}
 	b.mu.Lock()
 	b.nextID++
 	id := b.nextID
@@ -65,20 +97,32 @@ func (b *runEventBroker) subscribe(personID string) (*runEventSubscriber, func()
 	}
 }
 
+// recordClientDrops adds a terminal's report of dropped other-session detail
+// events and returns the person's total since the daemon started.
+func (b *runEventBroker) recordClientDrops(personID string, n int64) int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.clientDrops == nil {
+		b.clientDrops = make(map[string]int64)
+	}
+	b.clientDrops[personID] += n
+	return b.clientDrops[personID]
+}
+
+func (b *runEventBroker) clientDropCount(personID string) int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.clientDrops[personID]
+}
+
 func (b *runEventBroker) publishDurable(event control.Event) {
 	if event.PersonID == "" {
 		return
 	}
-	b.publish(api.RunEvent{
-		EventID: event.ID, Cursor: event.Cursor,
-		TenantID: event.TenantID, PersonID: event.PersonID,
-		TaskID: event.TaskID, RunID: event.RunID, Type: event.Type,
-		Durability: api.EventDurable, CreatedAt: event.CreatedAt,
-		Payload: event.Payload,
-	})
+	b.publish(durableRunEvent(event))
 }
 
-func (b *runEventBroker) publishAssistant(task *control.Task, run *control.Run, event llm.StreamEvent) {
+func (b *runEventBroker) publishAssistant(task *control.Task, run *control.Run, channel string, event llm.StreamEvent) {
 	if task == nil || event.Content == "" {
 		return
 	}
@@ -89,7 +133,7 @@ func (b *runEventBroker) publishAssistant(task *control.Task, run *control.Run, 
 	}
 	b.publish(api.RunEvent{
 		TenantID: task.TenantID, PersonID: task.PersonID,
-		TaskID: task.ID, RunID: runID, Type: "assistant.delta",
+		TaskID: task.ID, RunID: runID, Channel: channel, Type: "assistant.delta",
 		Durability: api.EventEphemeral, CreatedAt: time.Now(), Payload: payload,
 	})
 }
@@ -106,6 +150,9 @@ func (b *runEventBroker) publish(event api.RunEvent) {
 	b.seq[key]++
 	event.LiveSeq = b.seq[key]
 	for _, sub := range b.subs[event.PersonID] {
+		if !sub.wants(event) {
+			continue
+		}
 		select {
 		case sub.ch <- event:
 		default:
@@ -166,12 +213,13 @@ func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	sub, unsubscribe := d.events().subscribe(identity.PersonID)
+	query := r.URL.Query()
+	sub, unsubscribe := d.events().subscribe(identity.PersonID, strings.TrimSpace(query.Get("session")), strings.TrimSpace(query.Get("run")))
 	defer unsubscribe()
 	cursor, explicitCursor := requestedEventCursor(r)
 	if !explicitCursor {
 		cursor, _ = d.Control.LatestPersonEventCursor(r.Context(), identity.TenantID, identity.PersonID)
-	} else if !d.replayPersonEvents(r.Context(), w, flusher, identity, &cursor) {
+	} else if !d.replayPersonEvents(r.Context(), w, flusher, identity, sub, &cursor) {
 		return
 	}
 	writeRunEventSSE(w, api.RunEvent{
@@ -192,7 +240,7 @@ func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 		case <-heartbeat.C:
 			if sub.gap.Swap(false) {
 				writeRunEventSSE(w, api.RunEvent{Type: "stream.gap", Durability: api.EventEphemeral, PersonID: identity.PersonID, CreatedAt: time.Now()})
-				if !d.replayPersonEvents(r.Context(), w, flusher, identity, &cursor) {
+				if !d.replayPersonEvents(r.Context(), w, flusher, identity, sub, &cursor) {
 					return
 				}
 			}
@@ -201,7 +249,7 @@ func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 		case event := <-sub.ch:
 			if sub.gap.Swap(false) {
 				writeRunEventSSE(w, api.RunEvent{Type: "stream.gap", Durability: api.EventEphemeral, PersonID: identity.PersonID, CreatedAt: time.Now()})
-				if !d.replayPersonEvents(r.Context(), w, flusher, identity, &cursor) {
+				if !d.replayPersonEvents(r.Context(), w, flusher, identity, sub, &cursor) {
 					return
 				}
 			}
@@ -229,14 +277,16 @@ func requestedEventCursor(r *http.Request) (int64, bool) {
 	return cursor, err == nil && cursor >= 0
 }
 
-func (d *Server) replayPersonEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, identity *control.IdentityContext, cursor *int64) bool {
+func (d *Server) replayPersonEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, identity *control.IdentityContext, sub *runEventSubscriber, cursor *int64) bool {
 	for {
 		events, err := d.Control.ListPersonEventsAfter(ctx, identity.TenantID, identity.PersonID, *cursor, 200)
 		if err != nil {
 			return false
 		}
 		for _, event := range events {
-			writeRunEventSSE(w, durableRunEvent(event))
+			if replayed := durableRunEvent(event); sub.wants(replayed) {
+				writeRunEventSSE(w, replayed)
+			}
 			*cursor = event.Cursor
 		}
 		flusher.Flush()
@@ -250,7 +300,7 @@ func durableRunEvent(event control.Event) api.RunEvent {
 	return api.RunEvent{
 		EventID: event.ID, Cursor: event.Cursor, TenantID: event.TenantID,
 		PersonID: event.PersonID, TaskID: event.TaskID, RunID: event.RunID,
-		Type: event.Type, Durability: api.EventDurable,
+		Channel: event.Channel, Type: event.Type, Durability: api.EventDurable,
 		CreatedAt: event.CreatedAt, Payload: event.Payload,
 	}
 }

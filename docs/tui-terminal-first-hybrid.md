@@ -363,6 +363,14 @@ substrate). Document results in this file.
 
 - A plan is active run state, not an append-only transcript cell. The daemon's
   latest `plan.updated` snapshot replaces the previous snapshot in memory.
+- A terminal renders only its own session's runs. Every daemon event names
+  its session; another session's run leaves this terminal's run state, plan,
+  and tool cells untouched and appears as one `Other session:` status line,
+  which names the most pressing of a waiting approval, a waiting question, and
+  running work. The reducer drops and counts another session's detail event
+  that reaches it anyway; the presence heartbeat reports the count, which the
+  daily report shows. `/attach` is the only way to render another session's
+  progress here.
 - Digest reattachment and live events feed one reducer. `run_id` owns the
   projection, durable `plan_version` orders complete snapshots, and the event
   cursor breaks equal-version replay ties. A lower version, a late event from a

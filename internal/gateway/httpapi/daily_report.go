@@ -593,6 +593,8 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	} else {
 		fmt.Fprintf(&sb, "Delivery: %s\n", formatCountMap(deliveryCounts))
 	}
+	fmt.Fprintf(&sb, "Session isolation since daemon start: %d other-session detail event(s) reached a terminal and were dropped (want 0)\n",
+		d.events().clientDropCount(identity.PersonID))
 	fmt.Fprintf(&sb, "Recall: %d candidates (%s), %d selected (%s), %d output-overlap signals (%s; not causal proof); skipped: %s\n",
 		stats.RecallCandidates, formatCountMap(stats.RecallCandidateSources),
 		stats.RecallSelected, formatCountMap(stats.RecallSelectedSources),

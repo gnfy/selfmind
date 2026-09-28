@@ -532,6 +532,17 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.daemonRunActive {
 				m.runStatus = "working"
 			}
+			if runID := strings.TrimSpace(msg.Turn.RunID); runID != "" && runID != m.daemonRunID {
+				// The run is another session's: this message now belongs to that
+				// task, and nothing more of it will appear here. Say so where it
+				// stays readable.
+				title := m.otherRunTitle
+				if runID != m.otherRunID || title == "" {
+					title = msg.Turn.Message
+				}
+				m.addNotice(noticeGuidance, otherSessionReceipt(title))
+				return m, spinnerCmd
+			}
 			noticeID := m.setStatusNotice(noticeGuidance, "Sent to the running task as guidance.")
 			return m, tea.Batch(spinnerCmd, clearStatusNoticeAfter(noticeID, 3*time.Second))
 		}
@@ -596,6 +607,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.acceptEvent(msg.Event) {
 			return m, spinnerCmd
 		}
+		if m.otherSession(msg.Event.Channel) {
+			// Another session's run: say that work runs there, and leave this
+			// terminal's run state, plan and tool cells as they are.
+			m.otherSessionRunStarted(msg)
+			return m, spinnerCmd
+		}
 		localMatch := m.localRequestActive && sameQueuedInput(m.localRequestInput, msg.Input)
 		queuedMatch := m.consumeQueuedRun(msg.QueueID)
 		if !localMatch {
@@ -656,6 +673,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgDaemonRunFinished:
 		if !m.acceptEvent(msg.Event) {
 			return m, spinnerCmd
+		}
+		if m.otherSession(msg.Event.Channel) {
+			return m, tea.Batch(spinnerCmd, m.otherSessionRunFinished(msg))
 		}
 		backgroundWatchID, backgroundOrigin, backgroundRun := m.finishedBackgroundRun(msg.RunID)
 		if backgroundRun {
@@ -759,6 +779,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgApprovalRequest:
+		if m.otherSession(msg.Channel) {
+			m.otherSessionApproval(msg)
+			return m, nil
+		}
 		m.stopModelWait()
 		if m.hasApprovalRequest(msg.ID) {
 			return m, nil
@@ -789,6 +813,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.acceptEvent(msg.Event) {
 			return m, nil
 		}
+		if m.otherSessionApprovalResolved(msg.ID) {
+			return m, nil
+		}
 		return m, m.resolveApprovalElsewhere(msg)
 
 	case MsgApprovalParked:
@@ -799,6 +826,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgClarifyRequest:
+		if m.otherSession(msg.Channel) {
+			m.otherSessionClarify(msg.Question)
+			return m, nil
+		}
 		m.stopModelWait()
 		m.armClarifyPrompt(tools.ClarifyRequest{ID: msg.ID, Question: msg.Question, Choices: msg.Choices}, true)
 		return m, nil

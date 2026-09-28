@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"selfmind/internal/app"
@@ -34,7 +35,7 @@ type Controller struct {
 }
 
 type MessageProcessor func(context.Context, api.MessageRequest) (api.MessageResponse, int)
-type EventWatcher func(context.Context, httpapi.StreamObserver, func(api.RunEvent))
+type EventWatcher func(ctx context.Context, session string, observer httpapi.StreamObserver, onEvent func(api.RunEvent))
 type ModelChangeProcessor func(context.Context, api.ModelChangeRequest) (api.ModelChangeResponse, error)
 type ModelChangeObserver func(context.Context, string) (ModelChangeObservation, error)
 type ModelRecoveryProcessor func(context.Context, string, string) error
@@ -184,6 +185,15 @@ type uiModel struct {
 	daemonRunStarted      time.Time
 	daemonRunAwaitingDone bool // final answer still arrives through MsgAgentDone
 	daemonRunOwned        bool // this terminal submitted the run (locally or via the queue): animate its activity
+	// Other sessions' work, which this terminal reports in one status line and
+	// never renders (session_audience.go): their running run, the approvals
+	// and question they wait on, and the status notice that says so.
+	otherRunID          string
+	otherRunTitle       string
+	otherApprovals      map[string]string
+	otherClarify        string
+	otherNoticeID       uint64
+	foreignDetailEvents atomic.Int64
 	// backgroundRunID is the daemon run whose progress this terminal must NOT
 	// render: the daemon started it on the person's behalf (a watcher
 	// finalization, a cron fire). backgroundOrigin names that initiator and
@@ -340,6 +350,8 @@ type MsgApprovalRequest struct {
 	Options   []components.ApprovalOption
 	// Delegated means a sub-agent of the run made the call.
 	Delegated bool
+	// Channel is the session whose run asks. Only that session arms the panel.
+	Channel string
 }
 
 // MsgApprovalResolved closes a matching approval panel or queued request when
@@ -369,6 +381,8 @@ type MsgClarifyRequest struct {
 	ID       string
 	Question string
 	Choices  []string
+	// Channel is the session whose run asks; only that session arms the prompt.
+	Channel string
 }
 
 type MsgClarifyAnswerResult struct {

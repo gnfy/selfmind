@@ -69,6 +69,10 @@ func TestSteerActiveRunSharedCore(t *testing.T) {
 	if resp.Turn == nil || resp.Turn.Status != "accepted" {
 		t.Fatalf("expected turn status 'accepted', got %+v", resp.Turn)
 	}
+	// The run belongs to another session, so the receipt says where it went.
+	if !strings.Contains(resp.Content, "Long task, which is running in another session") {
+		t.Fatalf("receipt for another session's run = %q", resp.Content)
+	}
 	select {
 	case got := <-steerCh:
 		if got.Content != "also handle the retry path" || got.ID == "" {
@@ -77,6 +81,11 @@ func TestSteerActiveRunSharedCore(t *testing.T) {
 	default:
 		t.Fatal("guidance did not reach the steering channel")
 	}
+	if own, ok := daemon.steerActiveRun(ctx, identity, active, api.MessageRequest{Channel: "cli", Content: "and the timeout path"}); !ok ||
+		strings.Contains(own.Content, "another session") || !strings.Contains(own.Content, "Added your guidance to Long task") {
+		t.Fatalf("receipt from the run's own session = %q (ok=%v)", own.Content, ok)
+	}
+	<-steerCh
 
 	events, err := store.ListTaskEvents(ctx, task.ID, 10)
 	if err != nil {

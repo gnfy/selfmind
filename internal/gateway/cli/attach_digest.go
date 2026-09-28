@@ -107,7 +107,7 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 	m.digestShown = true
 	text := ""
 	if m.startupDigest != nil {
-		text = formatStartupDigest(m.startupDigest)
+		text = formatStartupDigest(m.startupDigest, m.channel)
 	}
 	// The trust question is asked, not printed: it arms a prompt in the active
 	// region alongside whatever the digest had to say.
@@ -124,13 +124,21 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 		if request.ID == "" || m.hasApprovalRequest(request.ID) {
 			continue
 		}
+		if m.otherSession(request.Channel) {
+			m.otherSessionApproval(request)
+			continue
+		}
 		if m.approvalFlowActive() {
 			m.approvalQueue = append(m.approvalQueue, request)
 		} else {
 			m.armApprovalPrompt(request)
 		}
 	}
-	if active := m.startupDigest.ActiveRun; active != nil {
+	if active := m.startupDigest.ActiveRun; active != nil && m.otherSession(active.Channel) {
+		// Another session's run: report it and leave this terminal free. Its
+		// plan and progress are that session's.
+		m.otherSessionRunStarted(MsgDaemonRunStarted{RunID: active.RunID, Input: active.Title})
+	} else if active != nil {
 		// Restore the PINNED plan before the first live event arrives. Attaching
 		// answered "what is running" but not "how far along", and the next
 		// snapshot may be a long tool step away — so progress stayed invisible
@@ -165,6 +173,7 @@ func approvalRequestFromDigest(item api.DigestApproval) MsgApprovalRequest {
 		Rationale: item.Rationale, Risk: item.Risk, CodePreview: item.CodePreview,
 		CodeSHA256: item.CodeSHA256, CodeLines: item.CodeLines,
 		CodeBytes: item.CodeBytes, Options: options, Delegated: item.Delegated,
+		Channel: item.Channel,
 	}
 }
 
@@ -222,10 +231,12 @@ func (m *uiModel) detachWatchedRunForNewTurn() {
 	}
 }
 
-// formatStartupDigest renders the digest as compact event/state sections. Ids
-// are deliberately absent: approvals resolve by ordinal via /approvals on the
-// gateway, tasks resume via /resume — UUID hashes carry no meaning here.
-func formatStartupDigest(digest *api.DigestResponse) string {
+// formatStartupDigest renders the digest as compact event/state sections for
+// the terminal of one session. Ids are deliberately absent: approvals resolve
+// by ordinal via /approvals on the gateway, tasks resume via /resume — UUID
+// hashes carry no meaning here. Another session's approvals and running work
+// are reported, not restored: they are that session's to show.
+func formatStartupDigest(digest *api.DigestResponse, session string) string {
 	if digest.Empty() {
 		return ""
 	}
@@ -256,11 +267,23 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 		}
 		attention = append(attention, fmt.Sprintf("↻ %d earlier %s still %s attention: %s (use /resume to continue)", n, unit, verb, digestTitleList(digest.UnresolvedTasks)))
 	}
-	switch n := len(digest.PendingApprovals); {
+	var ownApprovals []api.DigestApproval
+	otherApprovals := 0
+	for _, approval := range digest.PendingApprovals {
+		if otherSessionChannel(approval.Channel, session) {
+			otherApprovals++
+		} else {
+			ownApprovals = append(ownApprovals, approval)
+		}
+	}
+	switch n := len(ownApprovals); {
 	case n == 1:
-		attention = append(attention, fmt.Sprintf("⚠ 1 approval waiting: %s — interactive choices restored below", digest.PendingApprovals[0].Line))
+		attention = append(attention, fmt.Sprintf("⚠ 1 approval waiting: %s — interactive choices restored below", ownApprovals[0].Line))
 	case n > 1:
 		attention = append(attention, fmt.Sprintf("⚠ %d approvals waiting — see /approvals", n))
+	}
+	if otherApprovals > 0 {
+		attention = append(attention, fmt.Sprintf("⚠ %s waiting in another session — /approvals lists them, /approve answers them here", countNoun(otherApprovals, "approval")))
 	}
 	switch n := len(digest.PendingClarifies); {
 	case n == 1:
@@ -272,7 +295,13 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 		sections = append(sections, strings.Join(attention, "\n"))
 	}
 
-	if active := digest.ActiveRun; active != nil {
+	if active := digest.ActiveRun; active != nil && otherSessionChannel(active.Channel, session) {
+		title := strings.TrimSpace(active.Title)
+		if title == "" {
+			title = "untitled task"
+		}
+		sections = append(sections, fmt.Sprintf("Current:\n▶ Another session is running: %s (%s) — /attach to watch it here; a new task typed here goes to it or queues behind it.", title, formatElapsedShort(active.ElapsedSeconds)))
+	} else if active != nil {
 		lines := []string{"Current:"}
 		title := strings.TrimSpace(active.Title)
 		if title == "" {

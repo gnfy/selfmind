@@ -20,6 +20,7 @@ func eventRefFromRunEvent(event api.RunEvent) uiEventRef {
 		EventID: strings.TrimSpace(event.EventID),
 		Cursor:  event.Cursor,
 		LiveSeq: event.LiveSeq,
+		Channel: strings.TrimSpace(event.Channel),
 	}
 }
 

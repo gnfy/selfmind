@@ -437,8 +437,16 @@ before normal agent dispatch.
 /forget <text|ref>
 /ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)
 /add-dir [path]  (bare = list this session's extra roots)
+/attach [run_id]  (bare = the task running in another session)
 ```
 
+- Each terminal is its own session. It shows its own runs in full; another
+  session's running task, approval, or question appears as one status line,
+  and an approval panel opens only in the session whose run asks.
+  `/attach [run_id]` watches another session's running task here without
+  taking it over: its final answer still goes to the session that started it.
+  A message typed while another session's task runs is sent to that task,
+  which uses it or queues it as separate work, and the terminal says so.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.

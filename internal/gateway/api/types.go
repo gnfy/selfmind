@@ -555,6 +555,8 @@ type DigestApproval struct {
 	CodeBytes     int                `json:"code_bytes,omitempty"`
 	Decisions     []ApprovalDecision `json:"decisions,omitempty"`
 	Delegated     bool               `json:"delegated,omitempty"`
+	// Channel is the session whose run asks; only that session arms the panel.
+	Channel string `json:"channel,omitempty"`
 }
 
 // DigestClarify carries a pending question's id plus its one-line summary;
@@ -576,8 +578,11 @@ type DigestPush struct {
 // renders (bounded, pre-rendered lines) plus the latest progress event, so
 // reopening the CLI answers "how far along is it?" at a glance.
 type DigestActiveRun struct {
-	RunID          string `json:"run_id,omitempty"`
-	TaskID         string `json:"task_id,omitempty"`
+	RunID  string `json:"run_id,omitempty"`
+	TaskID string `json:"task_id,omitempty"`
+	// Channel is the session that started the run. Another session reports it
+	// without re-attaching to it.
+	Channel        string `json:"channel,omitempty"`
 	Title          string `json:"title,omitempty"`
 	ElapsedSeconds int64  `json:"elapsed_seconds"`
 	// PlanSteps is the run's current plan as pre-rendered checklist lines

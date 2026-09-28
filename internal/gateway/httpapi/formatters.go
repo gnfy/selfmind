@@ -294,7 +294,10 @@ func formatBusyRun(active *activeRun) string {
 // formatSteeredIntoRun is the conversational acknowledgement that a
 // continuation was injected into the running task (cross-endpoint steering). No
 // task/run hashes — ids stay in the control plane.
-func formatSteeredIntoRun(active *activeRun) string {
+// formatSteeredIntoRun is the receipt for a message steered into the active
+// run. When that run belongs to another session the receipt says so: the
+// message's effect, and the task's progress, then appear in that session.
+func formatSteeredIntoRun(active *activeRun, fromChannel string) string {
 	if active == nil {
 		return "Added your guidance to the running task."
 	}
@@ -305,6 +308,9 @@ func formatSteeredIntoRun(active *activeRun) string {
 	elapsed := time.Since(active.StartedAt).Round(time.Second)
 	if active.StartedAt.IsZero() || elapsed < 0 {
 		elapsed = 0
+	}
+	if from, owner := strings.TrimSpace(fromChannel), strings.TrimSpace(active.Channel); from != "" && owner != "" && from != owner {
+		return fmt.Sprintf("Sent your message to %s, which is running in another session.\n- status: running\n- elapsed: %s\n\nIt will use it at the next safe step or queue it as separate work; that task's progress stays in its own session.", textutil.Truncate(toOneLine(title), 60), elapsed)
 	}
 	return fmt.Sprintf("Added your guidance to %s.\n- status: running\n- elapsed: %s\n\nIt will pick this up at the next safe step.", textutil.Truncate(toOneLine(title), 60), elapsed)
 }

@@ -154,11 +154,13 @@ type UsageStats struct {
 
 // StreamEvent is one streaming response event.
 type StreamEvent struct {
-	EventID          string
-	Cursor           int64
-	LiveSeq          uint64
-	TaskID           string
-	RunID            string
+	EventID string
+	Cursor  int64
+	LiveSeq uint64
+	TaskID  string
+	RunID   string
+	// Channel is the session a daemon event concerns; empty for the person.
+	Channel          string
 	Durability       string
 	Content          string
 	ReasoningContent string

@@ -22,6 +22,7 @@ import (
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelchange"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 )
@@ -296,6 +297,11 @@ func (d *Server) handlePresencePing(w http.ResponseWriter, r *http.Request) {
 	}
 	if presenceClaimed(r) {
 		d.touchPresence(r.Context(), identity)
+	}
+	if n, err := strconv.ParseInt(r.URL.Query().Get("foreign_session_events"), 10, 64); err == nil && n > 0 {
+		total := d.events().recordClientDrops(identity.PersonID, n)
+		log.Warn("terminal dropped other-session detail events it should never have received",
+			"person", identity.PersonID, "platform", identity.Platform, "count", n, "total_since_start", total)
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

@@ -263,7 +263,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 					Phase: llm.AssistantPhaseFinalAnswer,
 				}
 				if task != nil {
-					c.srv.events().publishAssistant(task, run, fallback)
+					c.srv.events().publishAssistant(task, run, channel, fallback)
 				}
 				if observer != nil {
 					observer(fallback)
@@ -278,7 +278,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 				hasFinalContent = true
 			}
 			if event.EventType == "stream" && task != nil {
-				c.srv.events().publishAssistant(task, run, event)
+				c.srv.events().publishAssistant(task, run, channel, event)
 			}
 			if observer != nil {
 				observer(event)
@@ -321,7 +321,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 		if event.Content != "" && !sawStream {
 			streamEvent := llm.StreamEvent{EventType: "stream", Content: event.Content}
 			if task != nil {
-				c.srv.events().publishAssistant(task, run, streamEvent)
+				c.srv.events().publishAssistant(task, run, channel, streamEvent)
 			}
 			if observer != nil {
 				observer(streamEvent)

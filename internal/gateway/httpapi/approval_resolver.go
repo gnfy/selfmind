@@ -168,7 +168,7 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 			identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input,
 			control.QueuedTask{
 				PersonID: identity.PersonID, Platform: identity.Platform,
-				PlatformUserID: identity.PlatformUserID, Channel: fallback(channel, identity.Platform),
+				PlatformUserID: identity.PlatformUserID, Channel: continuationChannel(identity.Platform, fallback(channel, identity.Platform), sourceRun),
 				Content: content, WorkspaceID: recoveryWorkspaceID(sourceRun, task), TaskID: task.ID,
 				ApprovalID:     resolved.ID,
 				ExecutionRoots: executionRoots,
@@ -548,4 +548,15 @@ func (d *Server) taskTitlesFor(ctx context.Context, tenantID string, approvals [
 		}
 	}
 	return titles
+}
+
+// continuationChannel is the session an approval continuation runs in. A
+// terminal answer names no session the work belongs to, so the continuation
+// stays in its source run's session, whose terminal shows it. An IM answer
+// keeps its own channel, on which IM delivers the result.
+func continuationChannel(platform, answeredOn string, source *control.Run) string {
+	if platform == "cli" && source != nil && strings.TrimSpace(source.Channel) != "" {
+		return source.Channel
+	}
+	return answeredOn
 }

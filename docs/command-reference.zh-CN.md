@@ -361,8 +361,14 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /forget <text|ref>
 /ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)
 /add-dir [path]  (bare = list this session's extra roots)
+/attach [run_id]  (bare = the task running in another session)
 ```
 
+- 每个终端是独立的会话：只完整显示本会话的运行；其他会话正在运行的任务、待处理的
+  审批或问题只以一行状态提示出现，审批面板只在发起该运行的会话里弹出。
+  `/attach [run_id]` 在本终端观察其他会话正在运行的任务而不接管它：最终回复仍发给
+  发起它的会话。其他会话的任务运行期间在这里输入的消息会交给那个任务，由它采用或
+  另行排队，终端会给出回执。
 - `/watchers` 在 CLI 与 IM 中使用同一个按 person 隔离的视图，展示 checker、
   operation、verification、finalization 和 notification 状态；原始命令、环境指纹
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用

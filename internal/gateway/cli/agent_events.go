@@ -164,11 +164,20 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 	m.forwardGatewayEventFrom(event, eventSourceTurn)
 }
 
+// sessionDetailEvents are a run's own progress: only the session that started
+// the run, or a terminal attached to it, renders them.
+var sessionDetailEvents = map[string]bool{
+	"stream": true, "agent.thinking": true, "agent.step": true,
+	"tool.started": true, "tool.completed": true, "tool.output": true, "tool.heartbeat": true,
+	"plan.updated": true, "token.updated": true, "provider.call.usage": true,
+}
+
 func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSource) {
 	if m.program == nil {
 		return
 	}
 	ref := eventRefFromStream(event, source)
+	ref.Detail = sessionDetailEvents[event.EventType]
 	switch event.EventType {
 	case "stream":
 		if event.Content != "" {
@@ -297,6 +306,7 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 				// leaves it nil and the panel falls back to its built-in options.
 				Options:   approvalOptionsFromPayload(event.Payload),
 				Delegated: event.Payload["delegated"] == true,
+				Channel:   ref.Channel,
 			})
 		}
 	case "approval.parked":
@@ -334,7 +344,7 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 				id = v
 			}
 		}
-		m.program.Send(MsgClarifyRequest{ID: id, Question: event.Content, Choices: clarifyChoicesFromPayload(event.Payload)})
+		m.program.Send(MsgClarifyRequest{ID: id, Question: event.Content, Choices: clarifyChoicesFromPayload(event.Payload), Channel: ref.Channel})
 	}
 }
 

@@ -427,6 +427,7 @@ func (c *Controller) Start() {
 		c.model.eventWatchCancel = cancel
 		go c.model.eventWatcher(
 			ctx,
+			c.model.channel,
 			func(event llm.StreamEvent) {
 				c.model.forwardGatewayEventFrom(event, eventSourceDaemon)
 			},

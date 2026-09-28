@@ -78,6 +78,7 @@ var entries = []Entry{
 	{Name: "/resume", Usage: "/resume [n|run_id]  (bare = list what needs attention)", Summary: "List what needs attention, or continue one exact unresolved run.", SyncControl: true, Scope: Gateway},
 	{Name: "/ws", Usage: "/ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)", Summary: "List workspaces, select one for this session, set the default for IM and scheduled work, or change trust.", SyncControl: true, Scope: Gateway},
 	{Name: "/add-dir", Usage: "/add-dir [path]  (bare = list this session's extra roots)", Summary: "Grant this session access to another directory, matching the --add-dir flag.", Scope: Local},
+	{Name: "/attach", Usage: "/attach [run_id]  (bare = the task running in another session)", Summary: "Watch another session's running task here; its answer still goes to that session.", Scope: Local},
 	{Name: "/remember", Usage: "/remember <preference>", Summary: "Save an explicit personal preference to long-term memory (works from any endpoint).", SyncControl: true, Scope: Gateway},
 	{Name: "/forget", Usage: "/forget <text|ref>", Summary: "Forget a remembered preference by its text or memory ref.", SyncControl: true, Scope: Gateway},
 

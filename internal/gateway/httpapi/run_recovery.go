@@ -150,7 +150,7 @@ func (d *Server) recoverApprovalContinuations(ctx context.Context, drain bool) i
 			PersonID:       approval.PersonID,
 			Platform:       route.Platform,
 			PlatformUserID: route.PlatformUserID,
-			Channel:        fallback(channel, route.Platform),
+			Channel:        continuationChannel(route.Platform, fallback(channel, route.Platform), sourceRun),
 			Content:        parkedApprovalDecisionContent(approval.Status, approval.DecisionNote),
 			WorkspaceID:    recoveryWorkspaceID(sourceRun, task),
 			ExecutionRoots: executionRoots,

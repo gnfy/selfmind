@@ -150,7 +150,7 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 		appendRunSteeredEvent(ctx, d.Control, active, record)
 		return api.MessageResponse{
 			Identity: identity,
-			Content:  formatSteeredIntoRun(active),
+			Content:  formatSteeredIntoRun(active, req.Channel),
 			Accepted: true,
 			Turn:     messageTurn("accepted", "running", "running", active.TaskID, active.RunID, active.Summary),
 		}, true

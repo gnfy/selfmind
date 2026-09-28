@@ -163,6 +163,9 @@ daemon must not expose that directory as a product runtime Skill.
   than replayed transcript progress. Approvals and clarifications stay visible.
   CLI streams user-originated progress; IM sends bounded milestones and a final
   result, never token deltas.
+- A run's detail events reach only its session and clients attached to it;
+  other sessions get lifecycle and human waits. Only the asking session arms a
+  panel.
 - Never discard the error from writing an event that parks work on a human
   (approval, clarification, recovery, handoff). A push suppressed because a
   client is attached assumes that client was told; when the write failed, that

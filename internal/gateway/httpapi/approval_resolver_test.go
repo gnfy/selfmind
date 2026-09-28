@@ -695,3 +695,46 @@ func TestApprovalActionTarget(t *testing.T) {
 		}
 	}
 }
+
+// Answering a parked approval from a terminal continues the source run's work
+// in that run's session, so the terminal that started it shows the
+// continuation; the answer's bare "cli" names no session. An IM answer keeps
+// its channel, which IM delivery needs.
+func TestParkedApprovalContinuationStaysInTheSourceRunsSession(t *testing.T) {
+	for _, tc := range []struct {
+		platform, answeredOn, want string
+	}{
+		{"cli", "cli", "session-a"},
+		{"cli", "session-b", "session-a"},
+		{"weixin", "weixin", "weixin"},
+	} {
+		source := &control.Run{Channel: "session-a"}
+		if got := continuationChannel(tc.platform, tc.answeredOn, source); got != tc.want {
+			t.Errorf("%s answer on %q: continuation channel %q, want %q", tc.platform, tc.answeredOn, got, tc.want)
+		}
+	}
+
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "session-a", "publish the release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		ActionType: "tool_call", AuthorizationFingerprint: "resume:v1:session",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ParkApprovalRequest(ctx, identity.TenantID, approval.ID, "waiter gone"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemon.respondApprovalByToken(ctx, identity, approval.ID, "approved", "cli", control.ApprovalDecisionInput{DecisionID: "once"}); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, "approval-resume:"+approval.ID)
+	if err != nil || queued == nil || queued.Channel != "session-a" {
+		t.Fatalf("continuation=%+v err=%v, want it in the source run's session", queued, err)
+	}
+}

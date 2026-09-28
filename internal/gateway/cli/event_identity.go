@@ -24,6 +24,10 @@ type uiEventRef struct {
 	EventID string
 	Cursor  int64
 	LiveSeq uint64
+	// Channel is the session the event concerns. Detail marks a run's text,
+	// tool, plan or usage event, which only its own session renders.
+	Channel string
+	Detail  bool
 }
 
 func eventRefFromStream(event llm.StreamEvent, source eventSource) uiEventRef {
@@ -33,6 +37,7 @@ func eventRefFromStream(event llm.StreamEvent, source eventSource) uiEventRef {
 		EventID: strings.TrimSpace(event.EventID),
 		Cursor:  event.Cursor,
 		LiveSeq: event.LiveSeq,
+		Channel: strings.TrimSpace(event.Channel),
 	}
 }
 
@@ -47,6 +52,9 @@ func (r uiEventRef) key() string {
 }
 
 func (m *uiModel) acceptEvent(ref uiEventRef) bool {
+	if m.foreignDetail(ref) {
+		return false
+	}
 	if ref.Source == eventSourceWatch {
 		if !m.watchingRun {
 			return false

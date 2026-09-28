@@ -188,7 +188,7 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 			CodePreview: codePreview, CodeSHA256: codeSHA256,
 			CodeLines: intFromApprovalArg(payload.Args["code_lines"]),
 			CodeBytes: intFromApprovalArg(payload.Args["code_bytes"]), Decisions: wireDecisions,
-			Delegated: payload.Delegated,
+			Delegated: payload.Delegated, Channel: approval.RequestedChannel,
 		})
 	}
 
@@ -221,6 +221,7 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 		run := &api.DigestActiveRun{
 			RunID:          active.RunID,
 			TaskID:         active.TaskID,
+			Channel:        active.Channel,
 			Title:          strings.TrimSpace(active.Summary),
 			ElapsedSeconds: int64(time.Since(active.StartedAt).Seconds()),
 		}

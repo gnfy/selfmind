@@ -230,3 +230,15 @@ func findApprovalRequestedEvent(t *testing.T, store *control.Store, taskID strin
 	t.Fatal("approval.requested event was never appended")
 	return control.Event{}
 }
+
+// A message steered into another session's run says so: its effect, and that
+// task's progress, appear in the other session.
+func TestSteeredReceiptNamesAnotherSession(t *testing.T) {
+	active := &activeRun{Summary: "publish the release", Channel: "session-a", StartedAt: time.Now()}
+	if got := formatSteeredIntoRun(active, "session-b"); !strings.Contains(got, "running in another session") {
+		t.Fatalf("receipt from another session = %q", got)
+	}
+	if got := formatSteeredIntoRun(active, "session-a"); strings.Contains(got, "another session") || !strings.Contains(got, "Added your guidance") {
+		t.Fatalf("receipt from the run's own session = %q", got)
+	}
+}

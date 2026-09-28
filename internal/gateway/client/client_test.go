@@ -385,7 +385,7 @@ func TestUnifiedEventStreamReconnectsFromDurableCursor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	got := make(chan api.RunEvent, 2)
-	go c.streamEvents(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "tester"}, nil, func(event api.RunEvent) {
+	go c.streamEvents(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "tester"}, "", nil, func(event api.RunEvent) {
 		got <- event
 		if event.Cursor == 12 {
 			cancel()

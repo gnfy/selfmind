@@ -65,6 +65,7 @@ var slashCommandMetas = []slashCommandMeta{
 	registrySlashMeta("/resume"),
 	tuiSlashMeta("/ws", "list or select a workspace"),
 	tuiSlashMeta("/add-dir", "grant this session another directory"),
+	tuiSlashMeta("/attach", "watch another session's running task here"),
 	// /ws is an ALIAS: the catalog resolves it to the /workspace entry and holds
 	// no alias-specific usage or summary, so repeating that entry here would
 	// print the /workspace help row twice. This one row stays local.
@@ -237,6 +238,14 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: metaByName("/add-dir"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleAddDir(args)
+		},
+	},
+	{
+		// Local: observing is this terminal's choice and moves nothing; the
+		// daemon streams an attached run to it whichever session started it.
+		slashCommandMeta: metaByName("/attach"),
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleAttach(args)
 		},
 	},
 }

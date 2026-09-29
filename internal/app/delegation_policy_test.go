@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
@@ -48,6 +49,88 @@ func (t *recordingTool) received() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return append([]string(nil), t.got...)
+}
+
+type overlapProbeProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *overlapProbeProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "done", nil
+}
+func (p *overlapProbeProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "done"}, nil
+}
+func (p *overlapProbeProvider) StreamChat(ctx context.Context, _ llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	out := make(chan llm.StreamEvent, 1)
+	p.started <- struct{}{}
+	go func() {
+		defer close(out)
+		select {
+		case <-p.release:
+			out <- llm.StreamEvent{Content: "done"}
+		case <-ctx.Done():
+			out <- llm.StreamEvent{Err: ctx.Err()}
+		}
+	}()
+	return out, nil
+}
+
+func TestDelegateBatchOnlyOverlapsProvenReadOnlySurfaces(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		toolsets []string
+		overlap  bool
+	}{
+		{name: "read only", toolsets: []string{"read_file"}, overlap: true},
+		{name: "file toolset includes writes", toolsets: []string{"file"}},
+		{name: "unspecified tools copy writes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			disp := tools.NewDispatcherWithRegistry(tools.NewRegistry())
+			disp.RegisterTool(tools.NewReadFileTool())
+			disp.RegisterTool(tools.NewWriteFileTool())
+			provider := &overlapProbeProvider{started: make(chan struct{}, 4), release: make(chan struct{})}
+			cfg := config.DelegationConfig{MaxConcurrent: 2, MaxDepth: 2}
+			batch := MakeDelegateBatchFn(disp, cfg, nil, func() (llm.Provider, error) { return provider, nil })
+			results := make(chan error, 1)
+			go func() {
+				_, err := batch(context.Background(), []tools.DelegateTaskSpec{
+					{Goal: "inspect A", Toolsets: tc.toolsets},
+					{Goal: "inspect B", Toolsets: tc.toolsets},
+				})
+				results <- err
+			}()
+			select {
+			case <-provider.started:
+			case <-time.After(3 * time.Second):
+				t.Fatal("first delegated call never started")
+			}
+			if tc.overlap {
+				select {
+				case <-provider.started:
+				case <-time.After(3 * time.Second):
+					t.Fatal("two proven readers did not overlap")
+				}
+			} else {
+				select {
+				case <-provider.started:
+					t.Fatal("write-capable delegated goals overlapped")
+				case <-time.After(150 * time.Millisecond):
+				}
+			}
+			close(provider.release)
+			select {
+			case err := <-results:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("delegated batch did not finish")
+			}
+		})
+	}
 }
 
 // scriptedStreamProvider streams its responses in turn, then a final answer.

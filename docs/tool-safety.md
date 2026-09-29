@@ -189,7 +189,13 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   the same middleware chain, clarify handler, and attribution observer, so a
   sub-agent's calls meet the parent's safety floor, approvals, workspace scope,
   and guardrails. Never expose or mutate the shared parent dispatcher. Fan-out
-  remains bounded by `max_subtasks` and `max_concurrent`.
+  remains bounded by `max_subtasks` and `max_concurrent`. A delegated batch
+  uses `max_concurrent` only when every cloned child catalogue contains
+  proven built-in read tools. Read-only clones omit nested delegation so that
+  capability cannot widen mid-batch. If any child can write, execute a shell,
+  delegate again, or invoke an unknown/external tool, the batch runs one
+  sub-agent at a time in the shared parent view. Separate isolated child
+  views are required before write-capable fan-out can be enabled.
 - A sub-agent is one step of the parent run. Its calls act as the parent run's
   person and are claimed in the parent run's tool ledger under the delegating
   call's namespace, as are the call ids its loop generates for a provider that

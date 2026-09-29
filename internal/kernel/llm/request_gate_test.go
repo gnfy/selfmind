@@ -151,3 +151,38 @@ func TestRequestGateCancellationReleasesStreamPermit(t *testing.T) {
 		t.Fatalf("stream cancellation stranded the permit: %v", err)
 	}
 }
+
+func TestRequestGateAttributesCanceledCapacityWait(t *testing.T) {
+	gate := NewRequestGate(1)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	provider := gateTestProvider{chat: func(context.Context) (*ChatResponse, error) {
+		close(entered)
+		<-release
+		return &ChatResponse{}, nil
+	}}
+	first := gate.Wrap(provider, "physical-route")
+	second := gate.Wrap(provider, "physical-route")
+	done := make(chan struct{})
+	go func() {
+		_, _ = first.Chat(context.Background(), ChatRequest{})
+		close(done)
+	}()
+	<-entered
+	var observed struct {
+		route, reason, run string
+		duration           time.Duration
+	}
+	gate.SetWaitObserver(func(ctx context.Context, routeID, reason string, duration time.Duration) {
+		observed.route, observed.reason, observed.duration = routeID, reason, duration
+		observed.run = ModelContextFrom(ctx).RunID
+	})
+	ctx, cancel := context.WithTimeout(WithModelContext(context.Background(), ModelContext{RunID: "run-2"}), 25*time.Millisecond)
+	defer cancel()
+	_, err := second.Chat(ctx, ChatRequest{})
+	if !errors.Is(err, context.DeadlineExceeded) || observed.route != "physical-route" || observed.reason != "capacity" || observed.run != "run-2" || observed.duration <= 0 {
+		t.Fatalf("wait = %v, observation = %+v", err, observed)
+	}
+	close(release)
+	<-done
+}

@@ -48,6 +48,29 @@ type Options struct {
 	ConfigPath   string
 }
 
+func installProviderWaitObserver(gate *llm.RequestGate, store *control.Store) {
+	if gate == nil || store == nil {
+		return
+	}
+	gate.SetWaitObserver(func(waitCtx context.Context, routeID, reason string, duration time.Duration) {
+		owner := llm.ModelContextFrom(waitCtx)
+		if owner.RunID == "" {
+			return
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"route_id": routeID, "reason": reason,
+			"duration_ms": duration.Milliseconds(), "canceled": waitCtx.Err() != nil,
+		})
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(waitCtx), 2*time.Second)
+		defer cancel()
+		if _, err := store.AppendEvent(writeCtx, control.Event{
+			RunID: owner.RunID, Type: "model.provider_wait", Visibility: "internal", Payload: payload,
+		}); err != nil {
+			log.Warn("gateway: provider wait attribution failed", "run_id", owner.RunID, "error", err)
+		}
+	})
+}
+
 func Run(ctx context.Context, opts Options) (runErr error) {
 	cfg, err := config.LoadConfig(config.Options{Path: opts.ConfigPath})
 	if err != nil {
@@ -211,6 +234,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return fmt.Errorf("control.OpenStore failed: %w", err)
 	}
 	defer controlStore.Close()
+	installProviderWaitObserver(requestGate, controlStore)
 	recordPromptSnapshotLoaded(controlStore, manager.Snapshot().InstanceID, prompts, promptStatus)
 	if hadUncleanExit {
 		previousUnclean.InstanceID = previousUnclean.StableInstanceID()

@@ -15,7 +15,13 @@ type RequestGate struct {
 	mu            sync.Mutex
 	routes        map[string]*requestRoute
 	maxConcurrent int
+	observeWait   RequestWaitObserver
 }
+
+// RequestWaitObserver receives a completed admission wait, including canceled
+// waits. The route is an opaque digest; observers may use ModelContextFrom(ctx)
+// to attribute it to a Run without seeing prompts or credentials.
+type RequestWaitObserver func(ctx context.Context, routeID, reason string, duration time.Duration)
 
 type requestRoute struct {
 	sem           chan struct{}
@@ -24,11 +30,26 @@ type requestRoute struct {
 	rateFailures  int
 }
 
-func NewRequestGate(maxConcurrent int) *RequestGate {
+func NewRequestGate(maxConcurrent int, observers ...RequestWaitObserver) *RequestGate {
 	if maxConcurrent < 1 {
 		maxConcurrent = 1
 	}
-	return &RequestGate{routes: make(map[string]*requestRoute), maxConcurrent: maxConcurrent}
+	gate := &RequestGate{routes: make(map[string]*requestRoute), maxConcurrent: maxConcurrent}
+	if len(observers) > 0 {
+		gate.observeWait = observers[0]
+	}
+	return gate
+}
+
+// SetWaitObserver is used when the daemon's durable event store becomes
+// available after model-transition startup checks have constructed the gate.
+func (g *RequestGate) SetWaitObserver(observer RequestWaitObserver) {
+	if g == nil {
+		return
+	}
+	g.mu.Lock()
+	g.observeWait = observer
+	g.mu.Unlock()
 }
 
 // Wrap returns a transparent provider wrapper. An absent gate or route means
@@ -45,18 +66,20 @@ func (g *RequestGate) Wrap(provider Provider, routeID string) Provider {
 		g.routes[routeID] = route
 	}
 	g.mu.Unlock()
-	return &gatedProvider{inner: provider, route: route}
+	return &gatedProvider{inner: provider, route: route, routeID: routeID, gate: g}
 }
 
 type gatedProvider struct {
-	inner Provider
-	route *requestRoute
+	inner   Provider
+	route   *requestRoute
+	routeID string
+	gate    *RequestGate
 }
 
 func (p *gatedProvider) Unwrap() Provider { return p.inner }
 
 func (p *gatedProvider) ChatCompletion(ctx context.Context, messages []Message) (string, error) {
-	if err := p.route.acquire(ctx); err != nil {
+	if err := p.acquire(ctx); err != nil {
 		return "", err
 	}
 	defer p.route.release()
@@ -66,7 +89,7 @@ func (p *gatedProvider) ChatCompletion(ctx context.Context, messages []Message) 
 }
 
 func (p *gatedProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	if err := p.route.acquire(ctx); err != nil {
+	if err := p.acquire(ctx); err != nil {
 		return nil, err
 	}
 	defer p.route.release()
@@ -76,7 +99,7 @@ func (p *gatedProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 }
 
 func (p *gatedProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	if err := p.route.acquire(ctx); err != nil {
+	if err := p.acquire(ctx); err != nil {
 		return nil, err
 	}
 	stream, err := p.inner.StreamChat(ctx, req)
@@ -116,7 +139,22 @@ func (p *gatedProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 	return out, nil
 }
 
-func (r *requestRoute) acquire(ctx context.Context) error {
+func (p *gatedProvider) acquire(ctx context.Context) error {
+	started := time.Now()
+	reason, err := p.route.acquire(ctx)
+	if reason != "" {
+		p.gate.mu.Lock()
+		observe := p.gate.observeWait
+		p.gate.mu.Unlock()
+		if observe != nil {
+			observe(ctx, p.routeID, reason, time.Since(started))
+		}
+	}
+	return err
+}
+
+func (r *requestRoute) acquire(ctx context.Context) (string, error) {
+	reason := ""
 	for {
 		r.mu.Lock()
 		wait := time.Until(r.cooldownUntil)
@@ -124,8 +162,13 @@ func (r *requestRoute) acquire(ctx context.Context) error {
 		if wait <= 0 {
 			select {
 			case r.sem <- struct{}{}:
-			case <-ctx.Done():
-				return ctx.Err()
+			default:
+				reason = "capacity"
+				select {
+				case r.sem <- struct{}{}:
+				case <-ctx.Done():
+					return reason, ctx.Err()
+				}
 			}
 			r.mu.Lock()
 			cooling := time.Until(r.cooldownUntil) > 0
@@ -133,19 +176,20 @@ func (r *requestRoute) acquire(ctx context.Context) error {
 			if !cooling {
 				if err := ctx.Err(); err != nil {
 					r.release()
-					return err
+					return reason, err
 				}
-				return nil
+				return reason, nil
 			}
 			r.release()
 			continue
 		}
+		reason = "rate_limit"
 		timer := time.NewTimer(wait)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
 			timer.Stop()
-			return ctx.Err()
+			return reason, ctx.Err()
 		}
 	}
 }

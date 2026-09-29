@@ -630,7 +630,9 @@ absorbs these without touching the wire contract:
   route admits at most two
   concurrent requests; a structured 429 starts a shared, cancellable cooldown
   (including errors emitted after a stream starts). The permit lasts until the
-  stream closes or its context is canceled. This is request admission, not a
+  stream closes or its context is canceled. Capacity and cooldown waits for a
+  known Run are recorded as internal `model.provider_wait` events with route,
+  reason, duration, and cancellation. This is request admission, not a
   complete Run scheduler: a Run waiting on a provider still occupies a worker.
 - The SSE idle watchdog (`responses_adapter.go` `streamIdleTimeout` +
   `streamResponse`) aborts a stream that stalls without new data, emitting a

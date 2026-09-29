@@ -19,7 +19,7 @@ Dated delivery and validation records live in
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
-- Pull requests run the fast offline corpus and core Linux/macOS checks. Main
+- Pull requests into `main` or `develop` run the fast offline corpus and core Linux/macOS checks. Main
   CI runs the complete offline corpus, focused race tests, and package smoke in
   parallel for the exact merge SHA; superseded-run cancellation applies only to
   pull requests so every main SHA keeps its CI evidence. Documentation-only

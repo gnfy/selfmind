@@ -73,7 +73,7 @@ func TestConcurrentIMInputNeedsExactChoiceBeforeSteering(t *testing.T) {
 	<-active[1].Steer
 	input := api.MessageRequest{Platform: "weixin", PlatformUserID: "wx-local", Channel: "chat-one", Content: "please add the missing check", Async: true}
 	response, code := daemon.ProcessMessage(ctx, input)
-	if code != 200 || response.Choice == nil || len(response.Choice.Options) != 3 {
+	if code != 200 || response.Choice == nil || len(response.Choice.Options) != 3 || !strings.Contains(response.Content, "For status only, use /status <run_id>") {
 		t.Fatalf("ambiguous input was not durably parked: code=%d response=%+v", code, response)
 	}
 	if len(active[0].Steer) != 0 || len(active[1].Steer) != 0 {
@@ -276,6 +276,42 @@ func TestMainCoordinationCanQueueExactHistoricalResume(t *testing.T) {
 	queued, err := store.GetQueued(ctx, owner.TenantID, response.Turn.QueueID)
 	if err != nil || queued == nil || queued.ReplyToRunID != oldRun.ID || queued.TaskID != oldTask.ID {
 		t.Fatalf("historical input lost exact parent: %+v, %v", queued, err)
+	}
+}
+
+func TestExactStatusReadsParkedRunWithoutSelectingAnotherWork(t *testing.T) {
+	ctx := context.Background()
+	daemon, store, _ := newDetachedRunServer(t, newSlowLLMProvider("unused"))
+	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: "Parked release", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "finish the parked release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, owner.TenantID, run.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	card, err := daemon.statusRunReply(ctx, owner, run.ID)
+	if err != nil || !strings.Contains(card, "Parked release · waiting_user") || !strings.Contains(card, shortRunID(run.ID)) {
+		t.Fatalf("parked exact status: %q, %v", card, err)
+	}
+	shortCard, err := daemon.statusRunReply(ctx, owner, shortRunID(run.ID))
+	if err != nil || shortCard != card {
+		t.Fatalf("short parked Run ID did not resolve uniquely: %q, %v", shortCard, err)
+	}
+	stranger, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "stranger", "Stranger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := daemon.statusRunReply(ctx, stranger, run.ID)
+	if err != nil || strings.Contains(foreign, "Parked release") {
+		t.Fatalf("foreign exact status leaked: %q, %v", foreign, err)
 	}
 }
 

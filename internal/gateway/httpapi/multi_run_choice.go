@@ -87,7 +87,7 @@ func (d *Server) ambiguousActiveInput(ctx context.Context, identity *control.Ide
 			return d.routeMultiRunChoice(ctx, identity, req, pending, decision.Key), true
 		}
 	}
-	fmt.Fprintf(&message, "Reply with a number, or use /choose %s <number> from another endpoint.", choice.ID)
+	fmt.Fprintf(&message, "Choosing a number submits your original request. For status only, use /status <run_id>.\nReply with a number, or use /choose %s <number> from another endpoint.", choice.ID)
 	content := message.String()
 	return api.MessageResponse{Identity: identity, Content: content, Choice: choice,
 		Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, true

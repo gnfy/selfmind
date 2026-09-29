@@ -200,7 +200,7 @@ func applySkillSeeds(tenantID, skillsBaseDir string, seeds []SeedSkill) error {
 // applyStateSeeds seeds memory facts and an optional current task before the
 // first turn. Files are handled separately (they must land before the harness
 // starts using the workspace).
-func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot, channel string, setup *Setup) (string, error) {
+func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot, channel string, setup *Setup, parkedRunIDs *[]string) (string, error) {
 	if setup == nil || identity == nil {
 		return "", nil
 	}
@@ -305,6 +305,9 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			run, err := store.StartRunWithOptions(ctx, task, channel, strings.TrimSpace(parked.Input), seedOptions)
 			if err != nil {
 				return "", fmt.Errorf("seed parked run %d: %w", i, err)
+			}
+			if parkedRunIDs != nil {
+				*parkedRunIDs = append(*parkedRunIDs, run.ID)
 			}
 			status := strings.TrimSpace(parked.Status)
 			if status == "" {

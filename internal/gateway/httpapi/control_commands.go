@@ -980,7 +980,43 @@ func (d *Server) statusRunReply(ctx context.Context, identity *control.IdentityC
 		selected = active
 	}
 	if selected == nil || selected.RunID == "" {
-		return "That run is not active or not yours.", nil
+		// A stable Run ID remains useful after execution parks or finishes.
+		// Return a bounded Run-owned status card rather than whichever newer
+		// Run now happens to be current on the same Thread.
+		run, err := d.Control.GetRun(ctx, identity.TenantID, ref)
+		if err != nil {
+			return "", err
+		}
+		if run == nil && len(ref) >= len("run_")+8 && strings.HasPrefix(ref, "run_") {
+			recent, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 100)
+			if err != nil {
+				return "", err
+			}
+			matched := ""
+			for _, item := range recent {
+				if !strings.HasPrefix(item.RunID, ref) {
+					continue
+				}
+				if matched != "" {
+					return "Run ID is ambiguous; use the full ID.", nil
+				}
+				matched = item.RunID
+			}
+			if matched != "" {
+				run, err = d.Control.GetRun(ctx, identity.TenantID, matched)
+				if err != nil {
+					return "", err
+				}
+			}
+		}
+		if run == nil || run.PersonID != identity.PersonID || run.ExecutionClass == "coordination" {
+			return "That run is not active or not yours.", nil
+		}
+		candidate, ok := d.continuityCandidateForRun(ctx, identity, *run, nil, 0, nil)
+		if !ok {
+			return "That run is not active or not yours.", nil
+		}
+		return continuityProgressContent(candidate), nil
 	}
 	task, err := d.Control.GetTask(ctx, identity.TenantID, selected.TaskID)
 	if err != nil {

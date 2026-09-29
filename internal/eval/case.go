@@ -107,6 +107,10 @@ type Turn struct {
 	// structured reply edge cross-endpoint cases assert. 0 means no reply
 	// metadata.
 	ReplyToTurn int `yaml:"reply_to_turn" json:"reply_to_turn,omitempty"`
+	// SeededRunOrdinal appends the exact id of a setup.task.parked_runs entry
+	// to this input (1-based). It exercises Run-ID controls without hardcoding
+	// an evaluation database's generated identifier.
+	SeededRunOrdinal int `yaml:"seeded_run_ordinal,omitempty" json:"seeded_run_ordinal,omitempty"`
 	// NativeReplyMessageID simulates adapter-proven reply metadata for the
 	// deterministic invalid-edge path. Successful platform receipts are covered
 	// by sender/store/gateway integration tests, not synthetic eval fixtures.
@@ -221,6 +225,9 @@ func (c *Case) normalize() error {
 		}
 		if turn.ReplyToTurn < 0 || turn.ReplyToTurn > i {
 			return fmt.Errorf("turn %d: reply_to_turn must name an earlier turn (1..%d)", i+1, i)
+		}
+		if turn.SeededRunOrdinal < 0 || (turn.SeededRunOrdinal > 0 && (c.Setup == nil || c.Setup.Task == nil || turn.SeededRunOrdinal > len(c.Setup.Task.ParkedRuns))) {
+			return fmt.Errorf("turn %d: seeded_run_ordinal must name a setup.task.parked_runs entry", i+1)
 		}
 	}
 	if !c.RequiresModel() && c.RequireCassette {

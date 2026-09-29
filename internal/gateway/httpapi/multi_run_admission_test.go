@@ -115,6 +115,107 @@ func TestConcurrentIMInputNeedsExactChoiceBeforeSteering(t *testing.T) {
 	}
 }
 
+type coordinationProvider struct {
+	*slowLLMProvider
+	answer string
+	err    error
+	called int
+	seen   llm.ChatRequest
+	runID  string
+}
+
+func (p *coordinationProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.called++
+	p.seen = req
+	p.runID = llm.ModelContextFrom(ctx).RunID
+	if p.err != nil {
+		return nil, p.err
+	}
+	return &llm.ChatResponse{Content: p.answer}, nil
+}
+
+func TestMainCoordinationRoutesOnlyValidatedChoice(t *testing.T) {
+	for _, tc := range []struct {
+		name, answer string
+		wantRun      int
+		wantQueue    bool
+		wantChoice   bool
+	}{
+		{name: "supplement second run", answer: `{"choice":"2"}`, wantRun: 1},
+		{name: "independent work", answer: `{"choice":"3"}`, wantQueue: true},
+		{name: "ambiguous", answer: `{"choice":"ask"}`, wantChoice: true},
+		{name: "invented target", answer: `{"choice":"run_foreign"}`, wantChoice: true},
+		{name: "malformed", answer: `{"choice":"1"} afterthought`, wantChoice: true},
+		{name: "provider unavailable", wantChoice: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			daemon, store, _ := newDetachedRunServer(t, newSlowLLMProvider("unused"))
+			owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.BindAccount(ctx, owner.TenantID, owner.PersonID, "weixin", "wx-local", "Local on IM"); err != nil {
+				t.Fatal(err)
+			}
+			coord := daemon.coordinator()
+			coord.activeLimit = 2
+			active := make([]*activeRun, 0, 2)
+			for i, title := range []string{"release A", "database B"} {
+				task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: title, Channel: title})
+				if err != nil {
+					t.Fatal(err)
+				}
+				run, err := store.StartRun(ctx, task, title, title)
+				if err != nil {
+					t.Fatal(err)
+				}
+				handle := &activeRun{TenantID: owner.TenantID, PersonID: owner.PersonID, TaskID: task.ID, RunID: run.ID, Channel: title, Summary: title, Steer: make(chan kernel.SteeringInput, 1), StartedAt: run.StartedAt.Add(time.Duration(i) * time.Second)}
+				if !coord.beginActive(owner.PersonID, handle) {
+					t.Fatal("cannot register active run")
+				}
+				active = append(active, handle)
+				defer coord.endActiveRun(owner.PersonID, handle)
+			}
+			provider := &coordinationProvider{slowLLMProvider: newSlowLLMProvider("unused"), answer: tc.answer}
+			if tc.name == "provider unavailable" {
+				provider.err = context.DeadlineExceeded
+			}
+			daemon.MainRoutingProvider = provider
+			response, code := daemon.ProcessMessage(ctx, api.MessageRequest{
+				Platform: "weixin", PlatformUserID: "wx-local", Channel: "chat-one",
+				Content: "please check database B again", Async: true,
+			})
+			if code != 200 || provider.called != 1 || provider.runID == "" || len(provider.seen.Tools) != 0 ||
+				!strings.Contains(provider.seen.SystemPrompt, active[1].RunID) {
+				t.Fatalf("Main routing boundary: code=%d response=%+v called=%d run=%q request=%+v", code, response, provider.called, provider.runID, provider.seen)
+			}
+			coordRun, err := store.GetRun(ctx, owner.TenantID, provider.runID)
+			wantStatus := "done"
+			if tc.name == "invented target" || tc.name == "malformed" || tc.name == "provider unavailable" {
+				wantStatus = "failed"
+			}
+			if err != nil || coordRun == nil || coordRun.ExecutionClass != "coordination" || coordRun.Status != wantStatus {
+				t.Fatalf("coordination Run was not durably closed: %+v, %v", coordRun, err)
+			}
+			if tc.wantRun >= 0 && !tc.wantQueue && !tc.wantChoice {
+				if !response.Accepted || response.Turn == nil || response.Turn.RunID != active[tc.wantRun].RunID || len(active[tc.wantRun].Steer) != 1 {
+					t.Fatalf("Main choice was not committed to exact Run: %+v", response)
+				}
+			} else if tc.wantQueue {
+				if !response.Accepted || response.Turn == nil || response.Turn.QueueID == "" || len(active[0].Steer)+len(active[1].Steer) != 0 {
+					t.Fatalf("new work did not queue independently: %+v", response)
+				}
+			} else if !tc.wantChoice || response.Choice == nil || len(active[0].Steer)+len(active[1].Steer) != 0 {
+				t.Fatalf("uncertain choice was not preserved: %+v", response)
+			} else if pending, err := store.PeekPendingTurnChoice(ctx, owner.TenantID, owner.PersonID,
+				response.Choice.ID, time.Now(), turnChoiceBareWindow); err != nil || pending == nil || !strings.Contains(pending.RequestJSON, "please check database B again") {
+				t.Fatalf("fallback lost the original input: %+v, %v", pending, err)
+			}
+		})
+	}
+}
+
 type countedSlowProvider struct {
 	*slowLLMProvider
 	startedCalls chan struct{}

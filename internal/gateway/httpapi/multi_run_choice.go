@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
@@ -55,6 +56,12 @@ func (d *Server) ambiguousActiveInput(ctx context.Context, identity *control.Ide
 	choice, err := d.createTurnChoice(ctx, identity, req, options, "multi_active")
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}, true
+	}
+	if pending, peekErr := d.Control.PeekPendingTurnChoice(ctx, identity.TenantID, identity.PersonID,
+		choice.ID, time.Now(), turnChoiceBareWindow); peekErr == nil {
+		if selectedKey := d.mainCoordinationSelection(ctx, identity, req, pending); selectedKey != "" {
+			return d.routeMultiRunChoice(ctx, identity, req, pending, selectedKey), true
+		}
 	}
 	fmt.Fprintf(&message, "Reply with a number, or use /choose %s <number> from another endpoint.", choice.ID)
 	content := message.String()

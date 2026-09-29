@@ -253,7 +253,7 @@ const runWorkEvidenceSQL = `(COALESCE(r.resumes_run_id, '') != ''
 // edges, the latest Run of its Thread (a newer Run supersedes older parked
 // state), and for an interrupted Run backed by work evidence. Attention, the
 // settled work list, and dismissal must agree on it.
-const resumableRunConditionSQL = `r.status IN ` + resumableRunStatusSQL + `
+const resumableRunConditionSQL = `r.execution_class = 'work' AND r.status IN ` + resumableRunStatusSQL + `
 	AND COALESCE(r.attention_dismissed_at, 0) = 0
 	AND COALESCE(r.resumed_by_run_id, '') = ''
 	AND COALESCE((SELECT json_extract(outcome.payload_json, '$.outcome.completion_reason')
@@ -366,7 +366,7 @@ const (
 const attentionRankedSQL = `WITH signals AS (
 	SELECT r.thread_id, r.id AS run_id, 'active' AS activity, 1 AS priority, r.started_at AS activity_at
 	  FROM runs r
-	 WHERE r.tenant_id = ? AND r.person_id = ? AND r.status = 'running'
+	 WHERE r.tenant_id = ? AND r.person_id = ? AND r.status = 'running' AND r.execution_class = 'work'
 	UNION ALL
 	SELECT r.thread_id, r.id, 'needs_attention', 2, COALESCE(a.updated_at, a.created_at)
 	  FROM approval_requests a JOIN runs r ON r.id = a.run_id AND r.thread_id = a.thread_id

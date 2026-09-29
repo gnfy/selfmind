@@ -36,8 +36,12 @@ type Server struct {
 	BackgroundRunContext context.Context
 	Control              *control.Store
 	Gateway              *router.Gateway
-	Delivery             *delivery.Service
-	DefaultTenantID      string
+	// MainRoutingProvider is the foreground Main transport used only for a
+	// bounded, tool-free coordination Run when IM has several live work Runs.
+	// Nil keeps the durable human choice fallback.
+	MainRoutingProvider llm.Provider
+	Delivery            *delivery.Service
+	DefaultTenantID     string
 	// PromptSnapshotHash pins durable background jobs to the static prompt
 	// revision active when their evidence was materialized.
 	PromptSnapshotHash string

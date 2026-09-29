@@ -103,6 +103,7 @@ type TaskRunTransition struct {
 
 type Run struct {
 	ID             string                     `json:"id"`
+	ExecutionClass string                     `json:"execution_class,omitempty"`
 	TaskID         string                     `json:"task_id"`
 	TenantID       string                     `json:"tenant_id"`
 	PersonID       string                     `json:"person_id"`
@@ -2035,7 +2036,7 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 func (s *Store) CurrentTask(ctx context.Context, tenantID, personID string) (*Task, error) {
 	var taskID string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT thread_id FROM runs WHERE tenant_id = ? AND person_id = ? AND status = 'running'
+		`SELECT thread_id FROM runs WHERE tenant_id = ? AND person_id = ? AND status = 'running' AND execution_class = 'work'
 		 ORDER BY started_at DESC, id DESC LIMIT 1`, normalizeTenant(tenantID), personID).Scan(&taskID)
 	if err == sql.ErrNoRows {
 		// An explicit /resume pin is a deterministic, one-shot UI selection. It
@@ -2338,7 +2339,10 @@ func (s *Store) StartRunForOwner(ctx context.Context, owner RunOwner, channel, i
 }
 
 type StartRunOptions struct {
-	WorkKey        string
+	WorkKey string
+	// ExecutionClass separates bounded, tool-free Main coordination from work
+	// admission. Empty is ordinary work; callers cannot invent other classes.
+	ExecutionClass string
 	ExecutionRoots []executionenv.RootBinding
 	// MaxActiveRuns is the per-person top-level admission ceiling. A positive
 	// value is checked inside the Run insertion transaction; zero preserves
@@ -2381,13 +2385,22 @@ func (s *Store) startRun(ctx context.Context, owner RunOwner, channel, inputSumm
 	if (strings.TrimSpace(options.QueueID) == "") != (strings.TrimSpace(options.QueueClaimToken) == "") {
 		return nil, fmt.Errorf("queued run requires both queue id and claim token")
 	}
+	if options.ExecutionClass == "" {
+		options.ExecutionClass = "work"
+	}
+	if options.ExecutionClass != "work" && options.ExecutionClass != "coordination" {
+		return nil, fmt.Errorf("unsupported run execution class %q", options.ExecutionClass)
+	}
+	if options.ExecutionClass == "coordination" && (owner.ThreadID != "" || options.QueueID != "" || options.ResumesRunID != "" || len(options.ExecutionRoots) != 0) {
+		return nil, fmt.Errorf("coordination run cannot claim a work scope")
+	}
 	// A parent-claiming creation races other connections by design (the whole
 	// point of the unique parent index). Under WAL, the loser's deferred
 	// transaction reads on a pre-commit snapshot and its write upgrade fails
 	// immediately with SQLITE_BUSY instead of waiting. Retry on a fresh
 	// snapshot: the re-run validation then sees the committed child and
 	// returns ErrResumeTargetClaimed deterministically.
-	if strings.TrimSpace(options.ResumesRunID) != "" || strings.TrimSpace(options.QueueID) != "" || options.MaxActiveRuns > 0 || options.ExclusiveChannel {
+	if strings.TrimSpace(options.ResumesRunID) != "" || strings.TrimSpace(options.QueueID) != "" || options.MaxActiveRuns > 0 || options.ExclusiveChannel || options.ExecutionClass == "coordination" {
 		var run *Run
 		var err error
 		for attempt := 0; attempt < 3; attempt++ {
@@ -2430,6 +2443,7 @@ func isResumeEdgeUniqueViolation(err error) bool {
 func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, inputSummary string, options StartRunOptions) (*Run, error) {
 	run := &Run{
 		ID:                      "run_" + uuid.NewString(),
+		ExecutionClass:          options.ExecutionClass,
 		TaskID:                  strings.TrimSpace(owner.ThreadID),
 		TenantID:                owner.TenantID,
 		PersonID:                owner.PersonID,
@@ -2444,6 +2458,9 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		StartedAt:               time.Now(),
 	}
 	run.WorkUnitID = "wu_" + uuid.NewString()
+	if run.ExecutionClass == "coordination" {
+		run.WorkUnitID = ""
+	}
 	rootsJSON, err := json.Marshal(run.ExecutionRoots)
 	if err != nil {
 		return nil, fmt.Errorf("encode run execution roots: %w", err)
@@ -2455,21 +2472,25 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if options.MaxActiveRuns > 0 {
+	limit := options.MaxActiveRuns
+	if run.ExecutionClass == "coordination" {
+		limit = 1
+	}
+	if limit > 0 {
 		var active int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND person_id = ? AND status = 'running'`,
-			run.TenantID, run.PersonID).Scan(&active); err != nil {
+			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND person_id = ? AND status = 'running' AND execution_class = ?`,
+			run.TenantID, run.PersonID, run.ExecutionClass).Scan(&active); err != nil {
 			return nil, fmt.Errorf("check run capacity: %w", err)
 		}
-		if active >= options.MaxActiveRuns {
+		if active >= limit {
 			return nil, ErrRunCapacity
 		}
 	}
 	if options.ExclusiveChannel {
 		var sameChannel int
 		if err := tx.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND person_id = ? AND channel = ? AND status = 'running'`,
+			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND person_id = ? AND channel = ? AND status = 'running' AND execution_class = 'work'`,
 			run.TenantID, run.PersonID, run.Channel).Scan(&sameChannel); err != nil {
 			return nil, fmt.Errorf("check run channel lane: %w", err)
 		}
@@ -2483,9 +2504,9 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		}
 	}
 	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO runs (id, thread_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, resumes_run_id, recovery_contract_version, status, started_at, heartbeat_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.ResumesRunID, run.RecoveryContractVersion, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		`INSERT INTO runs (id, thread_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, resumes_run_id, recovery_contract_version, status, started_at, heartbeat_at, execution_class)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.ResumesRunID, run.RecoveryContractVersion, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix(), run.ExecutionClass); err != nil {
 		if run.ResumesRunID != "" && isResumeEdgeUniqueViolation(err) {
 			return nil, ErrResumeTargetClaimed
 		}
@@ -2512,14 +2533,16 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 			return nil, err
 		}
 	}
-	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO run_work_units
+	if run.ExecutionClass == "work" {
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO run_work_units
 			 (id, identity_tenant_id, person_id, workspace_id, run_id, sequence, primary_task_id,
 			  related_task_id, goal_digest, plan_status, status, started_at, created_at, started_cursor)
 			 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 'in_progress', 'active', ?, ?, 0)`,
-		run.WorkUnitID, run.TenantID, run.PersonID, run.WorkspaceID, run.ID, run.TaskID,
-		run.TaskID, run.InputSummary, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
-		return nil, err
+			run.WorkUnitID, run.TenantID, run.PersonID, run.WorkspaceID, run.ID, run.TaskID,
+			run.TaskID, run.InputSummary, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+			return nil, err
+		}
 	}
 	if run.ResumesRunID != "" {
 		// The exact-parent claim and durable Plan import are one transition.
@@ -2557,11 +2580,11 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 		`SELECT id, thread_id, tenant_id, person_id, COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), channel,
 		        COALESCE(input_summary, ''), COALESCE(work_key, ''), COALESCE(resumes_run_id, ''),
 		        COALESCE((SELECT id FROM run_work_units WHERE run_id = runs.id ORDER BY sequence LIMIT 1), ''),
-		        COALESCE(recovery_contract_version, 0), status, started_at, finished_at
+		        COALESCE(recovery_contract_version, 0), status, started_at, finished_at, execution_class
 		 FROM runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).
 		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &rootsJSON, &r.Channel,
-			&r.InputSummary, &r.WorkKey, &r.ResumesRunID, &r.WorkUnitID, &r.RecoveryContractVersion, &r.Status, &started, &finished)
+			&r.InputSummary, &r.WorkKey, &r.ResumesRunID, &r.WorkUnitID, &r.RecoveryContractVersion, &r.Status, &started, &finished, &r.ExecutionClass)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

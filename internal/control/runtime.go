@@ -188,7 +188,7 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	if olderThan <= 0 {
 		cutoff = time.Now().Unix()
 	}
-	query := `SELECT id, thread_id, tenant_id, person_id FROM runs
+	query := `SELECT id, thread_id, tenant_id, person_id, execution_class FROM runs
 		 WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) <= ?`
 	args := []any{cutoff}
 	if len(exceptRunIDs) > 0 {
@@ -205,11 +205,12 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 		taskID   string
 		tenantID string
 		personID string
+		class    string
 	}
 	var runs []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.runID, &r.taskID, &r.tenantID, &r.personID); err != nil {
+		if err := rows.Scan(&r.runID, &r.taskID, &r.tenantID, &r.personID, &r.class); err != nil {
 			return 0, err
 		}
 		runs = append(runs, r)
@@ -244,6 +245,11 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	// Events are best-effort observability; append them after the state is
 	// durably committed and log (rather than swallow) any failure.
 	for _, r := range runs {
+		if r.class == "coordination" {
+			// The pending choice retains the original message. A crashed
+			// tool-free judgment has no work effect to resume or notify.
+			continue
+		}
 		outcome := map[string]interface{}{
 			"status":            "interrupted",
 			"completion_reason": "daemon_recovery",

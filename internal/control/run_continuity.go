@@ -33,17 +33,20 @@ var ErrResumeTargetNotResumable = errors.New("parent run is not in a resumable s
 // The unique partial index idx_task_runs_parent_once remains the cross-process
 // backstop for the race this check cannot see.
 func validateResumeClaimTx(ctx context.Context, tx *sql.Tx, child *Run) error {
-	var taskID, personID, status, legacyClaim string
+	var taskID, personID, status, legacyClaim, executionClass string
 	err := tx.QueryRowContext(ctx,
-		`SELECT thread_id, person_id, status, COALESCE(resumed_by_run_id, '')
+		`SELECT thread_id, person_id, status, COALESCE(resumed_by_run_id, ''), execution_class
 		 FROM runs WHERE tenant_id = ? AND id = ?`,
 		child.TenantID, child.ResumesRunID).
-		Scan(&taskID, &personID, &status, &legacyClaim)
+		Scan(&taskID, &personID, &status, &legacyClaim, &executionClass)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("parent run %s not found", child.ResumesRunID)
 	}
 	if err != nil {
 		return err
+	}
+	if executionClass != "work" {
+		return ErrResumeTargetNotResumable
 	}
 	if taskID != child.TaskID || personID != child.PersonID {
 		return fmt.Errorf("parent run %s belongs to a different task or person", child.ResumesRunID)
@@ -100,6 +103,7 @@ func (s *Store) ListUnresolvedRuns(ctx context.Context, tenantID, personID, task
 		        COALESCE(work_key, ''), COALESCE(resumes_run_id, ''), status, started_at, finished_at
 		 FROM runs
 			 WHERE tenant_id = ? AND person_id = ? AND thread_id = ?
+		   AND execution_class = 'work'
 		   AND status IN `+resumableRunStatusSQL+`
 		   AND COALESCE(resumed_by_run_id, '') = ''
 		   AND NOT EXISTS (
@@ -164,6 +168,7 @@ func (s *Store) listUnresolvedRunsForPerson(ctx context.Context, tenantID, perso
 		        COALESCE(r.work_key, ''), COALESCE(r.resumes_run_id, ''), r.status, r.started_at, r.finished_at
 		 FROM runs r
 		 WHERE r.tenant_id = ? AND r.person_id = ?
+		   AND r.execution_class = 'work'
 		   AND r.status IN ` + resumableRunStatusSQL + `
 		   AND COALESCE(r.resumed_by_run_id, '') = ''
 		   AND NOT EXISTS (

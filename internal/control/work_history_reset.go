@@ -142,7 +142,7 @@ func (s *Store) ResetWorkHistory(ctx context.Context, tenantID string) (WorkHist
 		`DELETE FROM run_plan_versions WHERE tenant_id = ?`,
 		`DELETE FROM run_delivery_overrides WHERE tenant_id = ?`,
 		`DELETE FROM execution_leases WHERE tenant_id = ? AND run_id IN (SELECT id FROM reset_run_ids)`,
-		`DELETE FROM task_events WHERE thread_id IN (SELECT id FROM reset_thread_ids)`,
+		`DELETE FROM task_events WHERE thread_id IN (SELECT id FROM reset_thread_ids) OR run_id IN (SELECT id FROM reset_run_ids)`,
 		`DELETE FROM channel_messages WHERE tenant_id = ? AND thread_id IN (SELECT id FROM reset_thread_ids)`,
 		`DELETE FROM task_handoffs WHERE thread_id IN (SELECT id FROM reset_thread_ids)`,
 		`DELETE FROM task_artifacts WHERE thread_id IN (SELECT id FROM reset_thread_ids)`,

@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 19
+const CurrentControlSchemaVersion = 20
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -545,6 +545,15 @@ DROP TABLE IF EXISTS task_references;`)
 			CREATE INDEX IF NOT EXISTS idx_native_im_reply_edges_outbound
 				ON native_im_reply_edges(outbound_id);`)
 			return err
+		},
+	},
+	{
+		Version: 20,
+		Name:    "run-execution-class",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Historical rows are work. A short Main coordination Run has its own
+			// admission slot and cannot consume a work Run's capacity.
+			return ensureMigrationColumn(ctx, db, "runs", "execution_class", "TEXT NOT NULL DEFAULT 'work'")
 		},
 	},
 }

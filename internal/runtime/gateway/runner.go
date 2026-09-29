@@ -348,6 +348,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	gatewayAPI := &httpapi.Server{
 		Control:                controlStore,
 		Gateway:                gwDeps.Gateway,
+		MainRoutingProvider:    agent.Provider(),
 		DefaultTenantID:        defaultTenantID,
 		PromptSnapshotHash:     prompts.Hash(),
 		ToolSchemaReportFunc:   disp.ToolSchemaReport,

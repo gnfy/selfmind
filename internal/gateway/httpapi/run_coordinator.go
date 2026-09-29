@@ -445,7 +445,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// before run creation.
 	parent := parentRes.exact()
 	claimParentID := ""
-	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery || runOrigin(ctx, req) == runOriginWatch) {
+	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery || runOrigin(ctx, req) == runOriginWatch || runOrigin(ctx, req) == runOriginResource) {
 		claimParentID = parent.ID
 	}
 	c.maybeAssignIsolatedGitView(ctx, identity, task, &req, parent != nil)
@@ -927,6 +927,7 @@ const (
 	runOriginCron     = "cron"
 	runOriginApproval = "approval"
 	runOriginRecovery = "recovery"
+	runOriginResource = "resource"
 )
 
 // runOrigin names the initiator of a daemon-started run, or "" for a person's
@@ -1313,6 +1314,8 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	} else if strings.HasPrefix(next.IdempotencyKey, "run-recovery:") {
 		req.Origin = runOriginRecovery
 		req.RecoveryMode = recoveryModeFromQueueKey(next.IdempotencyKey)
+	} else if strings.HasPrefix(next.IdempotencyKey, "external-resource:") {
+		req.Origin = runOriginResource
 	} else if strings.TrimSpace(next.ApprovalID) != "" {
 		req.Origin = runOriginApproval
 	}

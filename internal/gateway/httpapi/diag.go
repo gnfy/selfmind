@@ -152,6 +152,22 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 	} else {
 		sb.WriteString("Environment lease: none (no active run)\n")
 	}
+	if claims, err := d.Control.ListUnresolvedExternalEffects(ctx, identity.TenantID, identity.PersonID, 10); err == nil {
+		if len(claims) == 0 {
+			sb.WriteString("External effects unresolved: none\n")
+		} else {
+			fmt.Fprintf(&sb, "External effects unresolved: %d shown\n", len(claims))
+			for _, claim := range claims {
+				target := claim.TargetKey
+				if target == control.UnknownExternalTarget {
+					target = "unknown target (person-wide)"
+				}
+				fmt.Fprintf(&sb, "- %s | run %s | %s | %s\n", shortOpaqueID(claim.ID), shortOpaqueID(claim.RunID), target, claim.State)
+			}
+		}
+	} else {
+		sb.WriteString("External effects unresolved: unavailable\n")
+	}
 	sb.WriteString("Credential values: hidden\n")
 	return strings.TrimSpace(sb.String()), nil
 }

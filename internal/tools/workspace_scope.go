@@ -28,8 +28,12 @@ type ExecutionScope struct {
 	TaskID        string
 	RunID         string
 	Channel       string
-	TrustLevel    string
-	LeaseID       string
+	// ParallelWork enables the durable external-effect gate for a Run admitted
+	// under a multi-work capacity. It is frozen by the gateway, never supplied
+	// by model arguments or a workspace trust setting.
+	ParallelWork bool
+	TrustLevel   string
+	LeaseID      string
 	// EnvironmentSnapshotID and EnvironmentGeneration mirror the lease's
 	// environment binding so a tool call can resolve its child environment
 	// without a control-plane lookup.
@@ -364,9 +368,9 @@ func WorkspaceScopeMiddleware() Middleware {
 			}
 
 			toolName, _ := args["_tool_name"].(string)
-			if isolatedExecutionView(scope) && isExecTool(toolName) {
+			if (isolatedExecutionView(scope) || scope.ParallelWork) && isExecTool(toolName) {
 				if requested, err := requestedSandboxMode(args); err == nil && requested == SandboxHost {
-					return "", fmt.Errorf("host execution is unavailable for an isolated view")
+					return "", fmt.Errorf("host execution is unavailable for parallel work")
 				}
 			}
 			switch toolName {

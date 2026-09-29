@@ -88,6 +88,13 @@ func (s *Store) ResolveQueuedContinuation(ctx context.Context, q QueuedTask) (re
 			if live > 0 {
 				return q, true, nil
 			}
+			pending, err := s.IsRunExternalResourceWaitPending(ctx, tenantID, current)
+			if err != nil {
+				return q, false, err
+			}
+			if pending {
+				return q, true, nil
+			}
 			q.ReplyToRunID = current
 			return q, false, nil
 		case "interrupted", "waiting_user", "verification_partial", "blocked":

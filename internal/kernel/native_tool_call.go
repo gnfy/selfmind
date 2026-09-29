@@ -688,7 +688,12 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		var boundary interface{ ToolRunPause() (string, string, bool) }
 		if errors.As(err, &boundary) {
 			reason, message, needApproval := boundary.ToolRunPause()
-			pause = &toolLifecycleHandoff{Status: "waiting_user", CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
+			status := "waiting_user"
+			var typed interface{ ToolRunPauseStatus() string }
+			if errors.As(err, &typed) && typed.ToolRunPauseStatus() == "waiting_external" {
+				status = "waiting_external"
+			}
+			pause = &toolLifecycleHandoff{Status: status, CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
 		}
 		return toolExecutionResult{
 			pause:        pause,

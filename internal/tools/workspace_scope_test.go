@@ -117,6 +117,23 @@ func TestIsolatedViewRejectsUnclaimedExternalTools(t *testing.T) {
 	}
 }
 
+func TestParallelWorkRejectsHostEscapeBeforeEffectClaim(t *testing.T) {
+	root := t.TempDir()
+	person := "parallel-host"
+	cleanup := SetExecutionScope(person, ExecutionScope{PersonID: person, RunID: "parallel-run",
+		WorkspaceRoot: root, AllowedRoots: []string{root}, ParallelWork: true})
+	defer cleanup()
+	called := false
+	execute := WorkspaceScopeMiddleware()(func(map[string]interface{}) (string, error) {
+		called = true
+		return "ok", nil
+	})
+	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "terminal",
+		"sandbox": "host", toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}); err == nil || called {
+		t.Fatalf("parallel Run escaped to host before the resource gate: called=%v err=%v", called, err)
+	}
+}
+
 func TestScopePatchContentRewritesPaths(t *testing.T) {
 	root := t.TempDir()
 	scope := ExecutionScope{WorkspaceRoot: root, AllowedRoots: []string{root}}

@@ -68,6 +68,15 @@ func validateResumeClaimTx(ctx context.Context, tx *sql.Tx, child *Run) error {
 		if live > 0 {
 			return ErrResumeTargetNotResumable
 		}
+		var resourceWaits int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_resource_waits
+			WHERE tenant_id = ? AND run_id = ? AND status = 'pending'`,
+			child.TenantID, child.ResumesRunID).Scan(&resourceWaits); err != nil {
+			return err
+		}
+		if resourceWaits > 0 {
+			return ErrResumeTargetNotResumable
+		}
 	default:
 		return ErrResumeTargetNotResumable
 	}

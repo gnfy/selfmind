@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,5 +81,33 @@ func TestManagedGitViewProcessIsConfinedToItsOwnCheckout(t *testing.T) {
 	}
 	if _, err := os.Stat(escape); !os.IsNotExist(err) {
 		t.Fatalf("original checkout was modified: %v", err)
+	}
+
+	// Exercise the ordinary terminal execution engine too. Its sandbox policy
+	// must come from this Run's scope, including after process material and
+	// environment overlays are resolved.
+	tenant := "tenant-" + t.Name()
+	cleanup := SetExecutionScope(tenant, ExecutionScope{
+		TenantID: tenant, PersonID: "person", WorkspaceID: "workspace", RunID: "run-view",
+		WorkspaceRoot: view.Path, AllowedRoots: []string{view.Path},
+		RootBindings: []executionenv.RootBinding{{Path: view.Path, Role: executionenv.RootRolePrimary,
+			AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceExecutionView, GitBaseline: &baseline}},
+		SandboxPolicy: policy, ApprovalMode: ApprovalFullAuto,
+	})
+	defer cleanup()
+	if output, err := NewExecuteCommandTool().Execute(map[string]interface{}{
+		"_tenant_id": tenant, "command": `printf terminal > terminal.txt && git add terminal.txt`,
+		"cwd": view.Path, "timeout": 20,
+	}); err != nil {
+		t.Fatalf("ordinary terminal cannot stage in isolated view: %v: %s", err, output)
+	}
+	if output, err := NewExecuteCommandTool().Execute(map[string]interface{}{
+		"_tenant_id": tenant, "command": fmt.Sprintf("printf escaped > %q", escape),
+		"cwd": view.Path, "timeout": 20,
+	}); err == nil {
+		t.Fatalf("ordinary terminal escaped the isolated view: %s", output)
+	}
+	if _, err := os.Stat(escape); !os.IsNotExist(err) {
+		t.Fatalf("ordinary terminal modified original checkout: %v", err)
 	}
 }

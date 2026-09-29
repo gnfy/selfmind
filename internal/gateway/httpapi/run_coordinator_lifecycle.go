@@ -416,6 +416,7 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 		TenantID:         identity.TenantID,
 		PersonID:         identity.PersonID,
 		ExecutionProfile: req.ExecutionProfile,
+		ParallelWork:     c.activeCapacity() > 1,
 		// Which remembered classes this run may consume. A person's own turn,
 		// and the daemon-started continuations of it (an answered approval, a
 		// finished watcher, a recovered run), carry their decisions. A schedule
@@ -488,6 +489,15 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	// snapshotting it here makes the request self-describing and is what a
 	// separate execution node would receive.
 	scope.SandboxPolicy = tools.CurrentExecSandboxPolicy()
+	if scope.ParallelWork {
+		// A host shell can reach an external target through an otherwise
+		// innocuous command, and no target adapter can prove what that shell
+		// will do. Parallel Runs therefore require enforced isolation before
+		// a local command may bypass the external-effect claim lane.
+		scope.SandboxPolicy.Enabled = true
+		scope.SandboxPolicy.Required = true
+		scope.SandboxPolicy.AllowNetwork = false
+	}
 	for _, binding := range scope.RootBindings {
 		if binding.Source == executionenv.RootSourceExecutionView {
 			// A terminal escape to host execution would make an isolated view

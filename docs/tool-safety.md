@@ -187,6 +187,26 @@ the unchanged script cannot turn arbitrary arguments into mutation.
 - Clearly read-only calls may run in parallel. Terminal execution, writes,
   patches, process control, memory or skill mutation, delegation, and unknown
   tools run sequentially by default.
+- At a test multi-Run capacity, a tool that can affect an external system
+  reserves its targets in `control.db` after approval and before dispatch.
+  Trusted built-in adapters may prove exact target identities and whether a
+  successful return settles the effect. Without that proof, the claim uses a
+  person-wide unknown target and remains unresolved after the call. External
+  tool metadata cannot narrow it. A conflicting call is not executed and
+  creates a durable resource wait bound to the exact Run; the daemon wakes it
+  only after every claimed target has a recorded observation. The wakeup
+  queues a continuation and never replays the failed tool call. A second
+  effect in the same Run also conflicts with its own unresolved first effect.
+  The claim gate rechecks the target when the continuation eventually acts.
+  This wait releases the model worker; if the observation cannot be proved,
+  the target remains visibly occupied rather than being released by time.
+  Restarting or finishing a Run does not release an uncertain claim; a durable
+  observation must do so. Target sets are acquired and observed atomically.
+  Parallel Runs also require an enforced process sandbox for terminal calls;
+  explicit host escape is rejected before approval or claim creation. A
+  proven observation can still inspect an occupied target.
+  Production target adapters and real restart/transport acceptance are still
+  open, so the production per-person active-Run ceiling remains one.
 - Delegation depth is enforced structurally. `buildDelegateSubBackend` builds
   the child dispatcher as a `Subset` of the parent's registry and removes
   `delegate_task` at the configured depth limit. A subset has fewer tools but

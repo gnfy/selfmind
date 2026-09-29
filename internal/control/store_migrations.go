@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 22
+const CurrentControlSchemaVersion = 23
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -587,6 +587,45 @@ DROP TABLE IF EXISTS task_references;`)
 			}
 			_, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_inbound_processing_owner
 				ON inbound_dedup(tenant_id, person_id, state, updated_at) WHERE state <> 'accepted'`)
+			return err
+		},
+	},
+	{
+		Version: 23,
+		Name:    "external-effect-claims",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Old Runs never asserted an external target, so the new table is
+			// deliberately empty after migration. Guessing claims from prose or
+			// tool names would confer false authority to historical work.
+			_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS external_effect_claims (
+				id TEXT PRIMARY KEY,
+				tenant_id TEXT NOT NULL,
+				person_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				effect_id TEXT NOT NULL,
+				target_key TEXT NOT NULL,
+				state TEXT NOT NULL CHECK(state IN ('reserved', 'uncertain', 'observed')),
+				observation_ref TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				UNIQUE(tenant_id, run_id, effect_id, target_key)
+			);
+			CREATE INDEX IF NOT EXISTS idx_external_effect_claims_active
+				ON external_effect_claims(tenant_id, person_id, state, target_key)
+				WHERE state <> 'observed';
+			CREATE TABLE IF NOT EXISTS external_resource_waits (
+				tenant_id TEXT NOT NULL,
+				person_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				effect_id TEXT NOT NULL,
+				targets_json TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('pending', 'queued')),
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (tenant_id, run_id, effect_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_external_resource_waits_pending
+				ON external_resource_waits(status, created_at) WHERE status = 'pending';`)
 			return err
 		},
 	},

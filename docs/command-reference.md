@@ -418,6 +418,8 @@ before normal agent dispatch.
 /model
 /id
 /status [run_id]
+/views [run_id]
+/apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [learning|memory|context|models|delivery|inbound|execution|tools]
@@ -447,6 +449,13 @@ before normal agent dispatch.
   taking it over: its final answer still goes to the session that started it.
   A new message typed in another session stays with that session; an exact
   reply or explicit attach can target the other Run.
+- `/views` lists recent managed Git execution views, and `/views <run_id>`
+  shows committed, uncommitted, and untracked work in one exact owned Run.
+  `/apply <run_id>` delivers a clean committed view as a separate
+  `selfmind/<view_id>` branch in its original repository. It requires the
+  source checkout to be clean and still at the admitted baseline. It never
+  changes the checked-out branch or discards view files; unresolved work or
+  source drift must be reviewed first.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.

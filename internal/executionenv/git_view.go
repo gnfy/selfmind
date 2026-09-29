@@ -183,6 +183,11 @@ func safeGitViewID(id string) bool {
 }
 
 func gitViewCommand(ctx context.Context, root string, args ...string) (string, error) {
+	output, err := gitViewCommandRaw(ctx, root, args...)
+	return strings.TrimSpace(output), err
+}
+
+func gitViewCommandRaw(ctx context.Context, root string, args ...string) (string, error) {
 	gitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(gitCtx, "git", append([]string{"-C", root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}, args...)...)
@@ -191,5 +196,5 @@ func gitViewCommand(ctx context.Context, root string, args ...string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("%w: git %s: %v", ErrGitViewUnavailable, args[0], err)
 	}
-	return strings.TrimSpace(string(output)), nil
+	return string(output), nil
 }

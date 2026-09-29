@@ -342,6 +342,8 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /model
 /id
 /status [run_id]
+/views [run_id]
+/apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [learning|memory|context|models|delivery|inbound|execution|tools]
@@ -367,8 +369,13 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 - 每个终端是独立的会话：只完整显示本会话的运行；其他会话正在运行的任务、待处理的
   审批或问题只以一行状态提示出现，审批面板只在发起该运行的会话里弹出。
   `/attach [run_id]` 在本终端观察其他会话正在运行的任务而不接管它：最终回复仍发给
-  发起它的会话。其他会话的任务运行期间在这里输入的消息会交给那个任务，由它采用或
-  另行排队，终端会给出回执。
+  发起它的会话。在另一个会话输入的普通消息仍属于该会话的新工作；只有精确回复边
+  或显式附着才会指向别的 Run。
+- `/views` 列出最近的受管 Git 执行视图；`/views <run_id>` 查看精确归属的 Run
+  中已提交、未提交和未跟踪的工作。`/apply <run_id>` 只把干净且已提交的视图送成
+  原仓库里独立的 `selfmind/<view_id>` 分支。源 checkout 必须仍干净且保持准入时
+  的基准；命令不改变当前分支或丢弃视图文件。源仓库已变或视图尚未收尾时先人工
+  检查，不能部分覆盖。
 - `/watchers` 在 CLI 与 IM 中使用同一个按 person 隔离的视图，展示 checker、
   operation、verification、finalization 和 notification 状态；原始命令、环境指纹
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用

@@ -158,6 +158,24 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/status":
 		reply, err := d.statusReply(ctx, identity)
 		return true, reply, nil, err
+	case lower == "/views" || strings.HasPrefix(lower, "/views "):
+		parts := strings.Fields(trimmed)
+		if len(parts) > 2 {
+			return true, "Usage: /views [run_id]", nil, nil
+		}
+		runID := ""
+		if len(parts) == 2 {
+			runID = parts[1]
+		}
+		reply, err := d.gitViewsReply(ctx, identity, runID)
+		return true, reply, nil, err
+	case lower == "/apply" || strings.HasPrefix(lower, "/apply "):
+		parts := strings.Fields(trimmed)
+		if len(parts) != 2 {
+			return true, "Usage: /apply <run_id>", nil, nil
+		}
+		reply, err := d.applyGitViewReply(ctx, identity, parts[1])
+		return true, reply, nil, err
 	case lower == "/resume":
 		// Bare /resume IS the attention list. It used to relay to /tasks, which
 		// made "what can I continue" a Task listing and put the ordinal

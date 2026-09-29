@@ -116,29 +116,30 @@ func TestExternalResourceWakeupStartsExactDaemonChild(t *testing.T) {
 		if err != nil {
 			return false
 		}
+		childFinished := false
 		for _, run := range runs {
-			if run.ResumesRunID == waiting.ID {
+			if run.ResumesRunID == waiting.ID && run.Status != "running" {
+				childFinished = true
+			}
+		}
+		if !childFinished {
+			return false
+		}
+		events, err := store.ListTaskEvents(ctx, task.ID, 100)
+		if err != nil {
+			return false
+		}
+		for _, event := range events {
+			if event.Type != "run.started" || event.RunID == waiting.ID {
+				continue
+			}
+			var payload struct {
+				Origin string `json:"origin"`
+			}
+			if json.Unmarshal(event.Payload, &payload) == nil && payload.Origin == runOriginResource {
 				return true
 			}
 		}
 		return false
-	}, "resource wakeup did not start a child of the exact parked Run")
-	events, err := store.ListTaskEvents(ctx, task.ID, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, event := range events {
-		if event.Type != "run.started" || event.RunID == waiting.ID {
-			continue
-		}
-		var payload struct{ Origin string `json:"origin"` }
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			t.Fatal(err)
-		}
-		found = payload.Origin == runOriginResource
-	}
-	if !found {
-		t.Fatal("resource continuation did not preserve its daemon origin")
-	}
+	}, "resource wakeup did not finish an exact daemon-origin child")
 }

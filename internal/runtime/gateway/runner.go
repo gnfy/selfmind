@@ -308,9 +308,14 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Optional multi-worker execution (SELFMIND_WORKERS>1) for the daemon, where
 	// concurrent CLI/IM/cron requests can actually exercise it. Default 1 = the
 	// single-agent serialized path, unchanged.
+	workerCount := 1
 	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, defaultTenantID, prompts, controlStore, requestGate); werr != nil {
+		if cfg.Gateway.MaxActiveWorkRuns > 1 {
+			return fmt.Errorf("initialize parallel agent workers: %w", werr)
+		}
 		log.Warn("worker pool partially enabled", "workers", workers, "error", werr)
 	} else if workers > 1 {
+		workerCount = workers
 		log.Info("agent worker pool enabled", "workers", workers)
 	}
 	defer app.StopCron(gwDeps.CronScheduler)
@@ -459,6 +464,9 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// clipboard-pasted images): files are copied here and the partition
 		// joins the run's scope so tools can read them (httpapi/attachments.go).
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
+	}
+	if err := gatewayAPI.ConfigureWorkRunCapacity(cfg.Gateway.MaxActiveWorkRuns, workerCount); err != nil {
+		return err
 	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
 	maintenanceDebounce, maintenanceMaxWait, maintenanceBatchMax := cfg.Tasks.MaintenanceBatchPolicy()

@@ -62,6 +62,27 @@ func (d *Server) coordinator() *RunCoordinator {
 	return d.runs
 }
 
+// ConfigureWorkRunCapacity is called before the daemon starts accepting
+// requests. The durable admission check and the process registry must use the
+// same ceiling, and each simultaneously executing Run needs its own Agent.
+// Keep the ordinary default at one while parallel-work evidence is gathered.
+func (d *Server) ConfigureWorkRunCapacity(limit, workers int) error {
+	if d == nil || limit < 1 || limit > 3 {
+		return fmt.Errorf("gateway.max_active_work_runs must be between 1 and 3")
+	}
+	if limit > workers {
+		return fmt.Errorf("gateway.max_active_work_runs (%d) requires at least %d agent workers", limit, limit)
+	}
+	c := d.coordinator()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.active) != 0 {
+		return fmt.Errorf("cannot change work Run capacity while Runs are active")
+	}
+	c.activeLimit = limit
+	return nil
+}
+
 func (c *RunCoordinator) beginActive(personID string, run *activeRun) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

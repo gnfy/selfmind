@@ -144,6 +144,40 @@ type QueuedTask struct {
 	CreatedAt         time.Time `json:"created_at"`
 }
 
+// DueQueuedRoute identifies one person with work that may be claimed now.
+// It carries only routing hints; the coordinator still reads and atomically
+// claims the exact queue row after checking capacity and resource conflicts.
+type DueQueuedRoute struct {
+	TenantID, PersonID, Channel, Platform string
+}
+
+func (s *Store) ListDueQueuedRoutes(ctx context.Context, limit int) ([]DueQueuedRoute, error) {
+	if limit < 1 {
+		limit = -1
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT q.tenant_id, q.person_id, q.channel, q.platform
+		FROM task_queue q JOIN (
+			SELECT tenant_id, person_id, MIN(rowid) AS first_row
+			FROM task_queue WHERE status = ? AND COALESCE(not_before, 0) <= ?
+			GROUP BY tenant_id, person_id
+		) due ON q.rowid = due.first_row
+		ORDER BY q.created_at, q.rowid LIMIT ?`,
+		QueueStatusQueued, time.Now().Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var routes []DueQueuedRoute
+	for rows.Next() {
+		var route DueQueuedRoute
+		if err := rows.Scan(&route.TenantID, &route.PersonID, &route.Channel, &route.Platform); err != nil {
+			return nil, err
+		}
+		routes = append(routes, route)
+	}
+	return routes, rows.Err()
+}
+
 // EnqueueQueued appends a new queued task for a person and returns the stored
 // row. Content and person are required; the rest is best-effort routing state.
 func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, error) {
@@ -177,6 +211,10 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	notBefore := q.NotBefore.Unix()
 	if q.NotBefore.IsZero() {
 		notBefore = 0
+	} else if q.NotBefore.Nanosecond() != 0 {
+		// Storage uses whole seconds. Round a deadline up so a periodic drain
+		// never claims a row before its requested (for example, 429) cooldown.
+		notBefore++
 	}
 	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at, attachments_json)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`

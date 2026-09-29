@@ -184,6 +184,52 @@ func TestTaskQueueUsesClassPriorityAndNotBefore(t *testing.T) {
 	}
 }
 
+func TestListDueQueuedRoutesExcludesFutureRowsAndDeduplicatesPerson(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	a, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "a", "A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "b", "B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []QueuedTask{
+		{TenantID: a.TenantID, PersonID: a.PersonID, Channel: "future", Platform: "cli", Content: "later", NotBefore: time.Now().Add(time.Hour)},
+		{TenantID: a.TenantID, PersonID: a.PersonID, Channel: "now", Platform: "cli", Content: "first"},
+		{TenantID: a.TenantID, PersonID: a.PersonID, Channel: "later", Platform: "cli", Content: "second"},
+		{TenantID: b.TenantID, PersonID: b.PersonID, Channel: "b", Platform: "cli", Content: "later b", NotBefore: time.Now().Add(time.Hour)},
+	} {
+		if _, err := store.EnqueueQueued(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	routes, err := store.ListDueQueuedRoutes(ctx, 0)
+	if err != nil || len(routes) != 1 || routes[0].PersonID != a.PersonID || routes[0].Channel != "now" {
+		t.Fatalf("due routes = %+v, err=%v", routes, err)
+	}
+}
+
+func TestQueuedNotBeforeNeverRoundsEarlierThanRequested(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	row, err := store.EnqueueQueued(ctx, QueuedTask{TenantID: owner.TenantID, PersonID: owner.PersonID,
+		Channel: "cli", Platform: "cli", Content: "after deadline", NotBefore: deadline})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetQueued(ctx, owner.TenantID, row.ID)
+	if err != nil || stored == nil || stored.NotBefore.Before(deadline) {
+		t.Fatalf("stored deadline %s precedes requested %s, err=%v", stored.NotBefore, deadline, err)
+	}
+}
+
 func TestQueueIdempotencyIsTenantScoped(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)

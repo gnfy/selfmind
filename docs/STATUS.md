@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-09-29
+**Snapshot:** 2026-09-30
 
 Dated delivery and validation records live in
 [`status-history.md`](status-history.md); this file keeps current state only.
@@ -15,7 +15,7 @@ Dated delivery and validation records live in
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 81 valid YAML cases in the local fast profile; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 87 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -50,6 +50,17 @@ cause of earlier unclassified production parse failures (24 protocol probes did
 not reproduce them); cross-model and sustained live coverage of continuation,
 restart, and Background reasoning; and natural in-place Skill selection quality,
 where a release lookup made unnecessary calls and invalid Skill references.
+
+Parallel-work validation can now opt into `gateway.max_active_work_runs: 2` or
+`3` with at least that many `SELFMIND_WORKERS`; the default remains one and
+startup rejects mismatched capacity. The daemon's existing periodic worker
+also wakes due `not_before` queue rows without a new message or restart.
+An isolated daemon with two fresh CLI sessions and one bound IM chat reached
+two active Runs, routed the IM supplement to its exact target, and finished
+both Runs. First-use account creation now resolves a concurrent winner rather
+than failing one of the sessions.
+Provider capacity/429 waits still hold an Agent worker, so the production
+parallel-work rollout gate remains open.
 
 ## Capability Map
 

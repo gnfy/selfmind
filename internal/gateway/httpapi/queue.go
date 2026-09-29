@@ -179,24 +179,19 @@ func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
 	d.drainQueuedWhenReady(ctx)
 }
 
-// drainQueuedWhenReady is the liveness edge for an in-process transition back
-// to Model Ready (for example cancelling a preview). The coordinator repeats
-// the readiness check immediately before claiming each person's first row.
+// drainQueuedWhenReady also runs on the daemon's regular watch-worker tick so
+// a future not_before queue row becomes runnable without another user turn or
+// a process restart. It only selects due persons; the coordinator repeats
+// readiness, capacity, lineage, and resource checks before claiming a row.
 func (d *Server) drainQueuedWhenReady(ctx context.Context) {
 	if d == nil || d.Control == nil || !d.modelReadyForWork() {
 		return
 	}
-	rows, err := d.Control.ListAllQueued(ctx, control.QueueStatusQueued)
+	rows, err := d.Control.ListDueQueuedRoutes(ctx, 0)
 	if err != nil {
 		return
 	}
-	seen := map[string]bool{}
 	for _, q := range rows {
-		key := q.TenantID + "|" + q.PersonID
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		identity := d.routeIdentityForPerson(ctx, q.TenantID, q.PersonID, q.Channel, q.Platform, nil)
 		d.coordinator().drainQueue(identity)
 	}

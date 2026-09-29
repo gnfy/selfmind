@@ -112,6 +112,10 @@ existing `active map[personID]`), applied before dispatch.
 
 - `SELFMIND_WORKERS=N` — default **1** = today's single-worker serialized
   behavior (no change). `N>1` enables the pool.
+- `gateway.max_active_work_runs` — default **1**. Explicit capacity 2 or 3
+  requires at least as many `SELFMIND_WORKERS`; daemon startup rejects a
+  mismatched or out-of-range setting. This is a controlled test setting while
+  the session-concurrency release gates remain open, not a default rollout.
 - Step 1: an `AgentFactory` that builds a worker Agent from shared deps; wire a
   `Dispatcher` in `RunCoordinator` behind the flag; default 1 keeps the current
   path.

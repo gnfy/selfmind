@@ -38,6 +38,44 @@ func startBlockedRun(t *testing.T, daemon *Server, provider *slowLLMProvider) *c
 	return identity
 }
 
+func TestWatchWorkerWakesDueQueueWithoutNewInboundOrRestart(t *testing.T) {
+	provider := newSlowLLMProvider("done")
+	defer provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: owner.TenantID, PersonID: owner.PersonID, Platform: "cli", PlatformUserID: "local",
+		Channel: "delayed", Content: "work after a delay", NotBefore: time.Now().Add(2 * time.Second),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetQueued(ctx, owner.TenantID, row.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("read stored queue deadline: %+v, %v", stored, err)
+	}
+	daemon.runExternalWatchPass(ctx)
+	if daemon.ActiveRunCount() != 0 {
+		t.Fatal("future queue row launched early")
+	}
+	waitUntil(t, 4*time.Second, func() bool { return !time.Now().Before(stored.NotBefore) }, "queue deadline did not arrive")
+	daemon.runExternalWatchPass(ctx)
+	select {
+	case <-provider.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("due work did not wake on daemon tick")
+	}
+	provider.releaseNow()
+	waitUntil(t, 5*time.Second, func() bool {
+		stored, err := store.GetQueued(ctx, owner.TenantID, row.ID)
+		return err == nil && stored.Status == control.QueueStatusDone
+	}, "woken queue row was not settled")
+}
+
 func TestNaturalLanguageSteersActiveRunIntoMain(t *testing.T) {
 	provider := newSlowLLMProvider("done")
 	defer provider.releaseNow()

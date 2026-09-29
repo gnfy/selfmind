@@ -43,6 +43,30 @@ func TestMultipleActiveRunsRequireExactControl(t *testing.T) {
 	}
 }
 
+func TestConfigureWorkRunCapacityRequiresMatchingWorkersAndIdleRegistry(t *testing.T) {
+	d := &Server{}
+	for _, tc := range []struct {
+		limit, workers int
+		valid          bool
+	}{
+		{0, 3, false}, {4, 4, false}, {2, 1, false}, {3, 2, false},
+		{1, 1, true}, {2, 2, true}, {3, 3, true},
+	} {
+		err := d.ConfigureWorkRunCapacity(tc.limit, tc.workers)
+		if (err == nil) != tc.valid {
+			t.Fatalf("capacity %d workers %d: err=%v", tc.limit, tc.workers, err)
+		}
+		if tc.valid && d.coordinator().activeCapacity() != tc.limit {
+			t.Fatalf("capacity = %d, want %d", d.coordinator().activeCapacity(), tc.limit)
+		}
+	}
+	d.coordinator().active["person"] = map[*activeRun]struct{}{}
+	d.coordinator().active["person"][&activeRun{}] = struct{}{}
+	if err := d.ConfigureWorkRunCapacity(1, 1); err == nil {
+		t.Fatal("changed admission capacity while a Run was active")
+	}
+}
+
 func TestOneCLIChannelCannotOccupyTwoPersonSlots(t *testing.T) {
 	d, _, identity, _, _ := newApprovalTestServer(t)
 	coord := d.coordinator()

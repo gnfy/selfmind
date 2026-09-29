@@ -1595,11 +1595,34 @@ func (s *Store) ResolveOrCreateAccount(ctx context.Context, tenantID, platform, 
 		personID, tenantID, displayName, now, now); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx,
+	accountInsert, err := tx.ExecContext(ctx,
 		`INSERT INTO accounts (id, tenant_id, person_id, platform, platform_user_id, display_name, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
-		accountID, tenantID, personID, platform, platformUserID, displayName, now, now); err != nil {
+		 VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+		 ON CONFLICT(tenant_id, platform, platform_user_id) DO NOTHING`,
+		accountID, tenantID, personID, platform, platformUserID, displayName, now, now)
+	if err != nil {
 		return nil, err
+	}
+	inserted, err := accountInsert.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if inserted == 0 {
+		// Another request bound this platform identity after our initial read.
+		// Discard the person created in this transaction, then read the winner.
+		// Returning the UNIQUE error would reject one of two valid simultaneous
+		// CLI sessions; committing would strand a person with no account.
+		if err := tx.Rollback(); err != nil {
+			return nil, err
+		}
+		winner, err := s.ResolveAccount(ctx, tenantID, platform, platformUserID)
+		if err != nil {
+			return nil, err
+		}
+		if winner == nil {
+			return nil, fmt.Errorf("concurrent account binding disappeared")
+		}
+		return winner, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err

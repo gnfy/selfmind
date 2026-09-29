@@ -85,6 +85,7 @@ func (d *Server) runExternalWatchPass(ctx context.Context) {
 		d.reconcileExternalWatchFinalizations(ctx)
 		d.runExternalWatchNotificationPass(ctx)
 		d.runExternalResourceWaitPass(ctx)
+		d.drainQueuedWhenReady(ctx)
 	}()
 	watches, err := d.Control.ListDueExternalWatches(ctx, externalWatchPassLimit)
 	if err != nil {

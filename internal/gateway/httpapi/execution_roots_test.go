@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,6 +87,64 @@ func TestPrepareRequestExecutionRootsPreservesFrozenCLIOnDrain(t *testing.T) {
 	}
 	if len(req.ExecutionRoots) != 2 || req.ExecutionRoots[1].Path != canonicalStoredDirectory(additionalRoot) {
 		t.Fatalf("frozen roots were not preserved: %#v", req.ExecutionRoots)
+	}
+}
+
+func TestPrepareRequestExecutionRootsCarriesCleanBaselineAcrossActiveWriter(t *testing.T) {
+	root := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+		return strings.TrimSpace(string(output))
+	}
+	git("init", "-q")
+	git("config", "user.name", "Test")
+	git("config", "user.email", "test@example.invalid")
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("base"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "file.txt")
+	git("commit", "-qm", "base")
+	workspace := &control.Workspace{ID: "ws", OwnerPersonID: "person", LocalPath: root}
+	c := &RunCoordinator{activeLimit: 2, active: make(map[string]map[*activeRun]struct{})}
+	first := api.MessageRequest{}
+	if err := c.prepareRequestExecutionRoots(context.Background(), workspace, &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.ExecutionRoots[0].GitBaseline == nil {
+		t.Fatal("clean baseline was not captured before the first writer")
+	}
+	active := &activeRun{PersonID: "person", ExecutionRoots: first.ExecutionRoots}
+	c.active["person"] = map[*activeRun]struct{}{active: {}}
+	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("writer changed it"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := api.MessageRequest{}
+	if err := c.prepareRequestExecutionRoots(context.Background(), workspace, &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.ExecutionRoots[0].GitBaseline == nil || *second.ExecutionRoots[0].GitBaseline != *first.ExecutionRoots[0].GitBaseline {
+		t.Fatalf("second writer lost frozen baseline: %#v", second.ExecutionRoots)
+	}
+	// The accepted queue snapshot keeps the same base even after the active
+	// writer exits and the direct checkout remains dirty.
+	c.active["person"] = nil
+	if err := c.prepareRequestExecutionRoots(context.Background(), workspace, &second); err != nil {
+		t.Fatal(err)
+	}
+	if second.ExecutionRoots[0].GitBaseline == nil || *second.ExecutionRoots[0].GitBaseline != *first.ExecutionRoots[0].GitBaseline {
+		t.Fatalf("queue drain changed admitted base: %#v", second.ExecutionRoots)
+	}
+	additional := api.MessageRequest{ExecutionRoots: second.ExecutionRoots, ClientAdditionalRoots: []string{t.TempDir()}}
+	if err := c.prepareRequestExecutionRoots(withLocalFilesystemAuthority(context.Background()), workspace, &additional); err != nil {
+		t.Fatal(err)
+	}
+	if additional.ExecutionRoots[0].GitBaseline != nil {
+		t.Fatal("a composite root inherited a single-repository baseline")
 	}
 }
 

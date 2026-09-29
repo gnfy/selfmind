@@ -488,6 +488,17 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	// snapshotting it here makes the request self-describing and is what a
 	// separate execution node would receive.
 	scope.SandboxPolicy = tools.CurrentExecSandboxPolicy()
+	for _, binding := range scope.RootBindings {
+		if binding.Source == executionenv.RootSourceExecutionView {
+			// A terminal escape to host execution would make an isolated view
+			// meaningless: an absolute path could still modify the original
+			// checkout. Keep this Run confined even if the person changes mode.
+			scope.SandboxPolicy.Enabled = true
+			scope.SandboxPolicy.Required = true
+			scope.SandboxPolicy.AllowNetwork = false
+			break
+		}
+	}
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
 	scope.Clarify = c.gatewayClarify(ctx, identity, task, run, scope.Channel)
 	scope.ApprovalMode = c.resolveApprovalMode(identity, req.ApprovalMode)
@@ -1464,8 +1475,15 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 		sb.WriteString("This task has a read-only batching recipe backed by a verified candidate-versus-baseline comparison. When several independent local file reads/searches/listings are needed, prefer batch_read with that candidate_id. On any partial failure, follow fallback_required and use ordinary tools. Never batch writes, shell commands, credentials, or network actions.\n")
 	}
 	if workspace != nil && workspace.LocalPath != "" {
+		physicalRoot := workspace.LocalPath
+		for _, binding := range executionRoots {
+			if binding.Role == executionenv.RootRolePrimary {
+				physicalRoot = binding.Path
+				break
+			}
+		}
 		fmt.Fprintf(&sb, "workspace_id: %s\n", workspace.ID)
-		fmt.Fprintf(&sb, "workspace_root: %s\n", workspace.LocalPath)
+		fmt.Fprintf(&sb, "workspace_root: %s\n", physicalRoot)
 		sb.WriteString("workspace_root is authoritative for this turn. Ignore remembered or historical workspace paths unless the user explicitly names one.\n")
 		sb.WriteString("Use workspace_root as the default cwd for local file tools.\n")
 		sb.WriteString("When the user says current project, this repo, this codebase, or names a project without an explicit path, inspect workspace_root first.\n")

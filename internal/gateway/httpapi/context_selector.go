@@ -142,6 +142,9 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 	if workspace != nil {
 		selected.WorkspaceID = firstNonEmptyString(selected.WorkspaceID, workspace.ID)
 		selected.Workspace = workspace.LocalPath
+		if execution, ok := kernel.WorkspaceContextFromContext(ctx); ok && execution.ID == workspace.ID && execution.Root != "" {
+			selected.Workspace = execution.Root
+		}
 	}
 	if includeFull && parent != nil {
 		if handoff, _ := c.srv.Control.RunHandoff(ctx, task.TenantID, task.PersonID, parent.ID); handoff != nil {

@@ -215,6 +215,20 @@ func TestExecSandboxPolicyPerRequest(t *testing.T) {
 	}
 }
 
+func TestRunPolicyCannotFallBackToHostAtCommandConstruction(t *testing.T) {
+	enabled, required, network := execSandboxPolicy()
+	SetExecSandbox(false, false, false)
+	t.Cleanup(func() { SetExecSandbox(enabled, required, network) })
+	policy := &ExecSandboxPolicy{Enabled: true, Required: true}
+	material := execMaterial{WritableRoots: []string{t.TempDir()}, Env: []string{"PATH=/usr/bin:/bin"}}
+	for _, requested := range []SandboxMode{SandboxHost, SandboxAuto} {
+		if _, decision, _, err := sandboxedCommandWithMaterialPolicy(context.Background(), []string{"true"}, material,
+			requested, runtime.GOOS, false, policy); err == nil || decision.Mode == SandboxHost {
+			t.Fatalf("per-run isolation escaped to host: requested=%s decision=%+v error=%v", requested, decision, err)
+		}
+	}
+}
+
 // A run-scoped key resolves exactly its own scope. The person-key fallback
 // cannot pick whichever Run happened to register last while two are active.
 func TestExecutionScopeResolvesByRunKey(t *testing.T) {

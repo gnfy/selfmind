@@ -3,10 +3,10 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
-	"slices"
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/tools"
 )
 
@@ -30,7 +30,7 @@ func (c *RunCoordinator) continuationApprovalIntentAtDepth(ctx context.Context, 
 		return snapshot
 	}
 	parentRun, parentErr := c.srv.Control.GetRun(ctx, identity.TenantID, run.ResumesRunID)
-	if parentErr != nil || parentRun == nil || parentRun.PersonID != identity.PersonID || parentRun.WorkspaceID != run.WorkspaceID || !slices.Equal(parentRun.ExecutionRoots, run.ExecutionRoots) {
+	if parentErr != nil || parentRun == nil || parentRun.PersonID != identity.PersonID || parentRun.WorkspaceID != run.WorkspaceID || !executionenv.EqualRootBindings(parentRun.ExecutionRoots, run.ExecutionRoots) {
 		return unavailableContinuationIntent(snapshot)
 	}
 	var evidence persistedApprovalIntent

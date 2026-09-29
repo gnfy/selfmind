@@ -349,8 +349,26 @@ func WorkspaceScopeMiddleware() Middleware {
 				}
 				return next(args)
 			}
+			if isolatedExecutionView(scope) {
+				policy, known := args[toolExecutionPolicyArg].(toolExecutionPolicy)
+				if !known || policy.Origin != ToolSchemaOriginBuiltin {
+					return "", fmt.Errorf("external tool execution is unavailable in this isolated view until its target can be claimed")
+				}
+				if !policy.ReadOnly {
+					for _, class := range policy.OperationClasses {
+						if class == OpClassNetwork {
+							return "", fmt.Errorf("network mutation is unavailable in this isolated view until its target can be claimed")
+						}
+					}
+				}
+			}
 
 			toolName, _ := args["_tool_name"].(string)
+			if isolatedExecutionView(scope) && isExecTool(toolName) {
+				if requested, err := requestedSandboxMode(args); err == nil && requested == SandboxHost {
+					return "", fmt.Errorf("host execution is unavailable for an isolated view")
+				}
+			}
 			switch toolName {
 			case "terminal", "verify", "watch_external":
 				cwd, _ := args["cwd"].(string)

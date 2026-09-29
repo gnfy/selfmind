@@ -114,6 +114,7 @@ func (c *RunCoordinator) updateActive(ctx context.Context, task *control.Task, r
 	if run != nil {
 		active.RunID = run.ID
 		active.StartedAt = run.StartedAt
+		active.ExecutionRoots = executionenv.CloneRootBindings(run.ExecutionRoots)
 	}
 }
 
@@ -447,6 +448,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery || runOrigin(ctx, req) == runOriginWatch) {
 		claimParentID = parent.ID
 	}
+	c.maybeAssignIsolatedGitView(ctx, identity, task, &req, parent != nil)
 	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
 		WorkKey:          attach.workKey,
 		ExecutionRoots:   req.ExecutionRoots,
@@ -575,7 +577,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		analysisWorkspaceID = workspace.ID
 	}
 	replay := runMaintenanceReplay{WorkspaceID: analysisWorkspaceID, UserInput: req.Content, Attach: attach}
-	if unavailableRoot, statErr := executionRootUnavailable(req.ExecutionRoots); statErr != nil {
+	if unavailableRoot, statErr := executionRootUnavailable(ctx, req.ExecutionRoots); statErr != nil {
 		summary := fmt.Sprintf("The workspace environment is unavailable: %s", unavailableRoot)
 		outcome := api.RunOutcome{
 			Status:           "waiting_user",
@@ -1355,11 +1357,24 @@ func queuedResourcesReady(q control.QueuedTask, active []*activeRun) bool {
 			return false
 		}
 		rPaths := writableRootPaths(running.ExecutionRoots)
-		if len(qPaths) == 0 || len(rPaths) == 0 || runpool.PathsConflict(qPaths, rPaths) {
+		if len(qPaths) == 0 || len(rPaths) == 0 {
+			return false
+		}
+		if runpool.PathsConflict(qPaths, rPaths) && !independentGitViewCandidate(q.ExecutionRoots, running.ExecutionRoots) {
 			return false
 		}
 	}
 	return true
+}
+
+func independentGitViewCandidate(queued, active []executionenv.RootBinding) bool {
+	if len(queued) != 1 || len(active) != 1 {
+		return false
+	}
+	q, held := queued[0], active[0]
+	return q.Source == executionenv.RootSourceWorkspace && held.Source == executionenv.RootSourceWorkspace &&
+		q.Role == executionenv.RootRolePrimary && held.Role == executionenv.RootRolePrimary &&
+		q.Writable() && held.Writable() && q.Path == held.Path && q.GitBaseline != nil && held.GitBaseline != nil && *q.GitBaseline == *held.GitBaseline
 }
 
 func writableRootPaths(bindings []executionenv.RootBinding) []string {

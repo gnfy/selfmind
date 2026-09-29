@@ -37,9 +37,20 @@ func isSQLiteBusy(err error) bool {
 
 type Store struct {
 	db              *sql.DB
+	dataDir         string
 	events          *eventAppendBus
 	schemaVersion   int
 	migrationBackup string
+}
+
+// ExecutionViewsDir is the daemon-owned physical home for isolated run views.
+// It is a location, not execution authority; the exact view must still be
+// durably bound to a Run before tools can use it.
+func (s *Store) ExecutionViewsDir() string {
+	if s == nil || s.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(s.dataDir, "execution-views")
 }
 
 type IdentityContext struct {
@@ -187,6 +198,11 @@ func OpenStore(dataDir string) (*Store, error) {
 	if dataDir == "" {
 		return nil, fmt.Errorf("data dir is required")
 	}
+	absolute, err := filepath.Abs(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve data dir: %w", err)
+	}
+	dataDir = absolute
 	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -204,7 +220,7 @@ func OpenStore(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("configure sqlite: %w", err)
 	}
-	store := &Store{db: db, events: newEventAppendBus()}
+	store := &Store{db: db, dataDir: dataDir, events: newEventAppendBus()}
 	if err := store.prepareAndMigrateSchema(context.Background(), dataDir, dbPath, existing, quickCheckDB); err != nil {
 		db.Close()
 		return nil, err
@@ -222,6 +238,11 @@ func OpenExistingStoreReadOnly(dataDir string) (*Store, error) {
 	if dataDir == "" {
 		return nil, fmt.Errorf("data dir is required")
 	}
+	absolute, err := filepath.Abs(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve data dir: %w", err)
+	}
+	dataDir = absolute
 	dbPath := filepath.Join(dataDir, "control.db")
 	existing, err := nonEmptyRegularFile(dbPath)
 	if err != nil {
@@ -240,7 +261,7 @@ func OpenExistingStoreReadOnly(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("configure read-only sqlite: %w", err)
 	}
-	store := &Store{db: db, events: newEventAppendBus()}
+	store := &Store{db: db, dataDir: dataDir, events: newEventAppendBus()}
 	version, versioned, err := store.readSchemaVersion(context.Background())
 	if err != nil {
 		db.Close()

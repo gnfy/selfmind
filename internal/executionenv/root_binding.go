@@ -29,6 +29,9 @@ type RootBinding struct {
 	AccessCap   string `json:"access_cap"`
 	Source      string `json:"source"`
 	ContextRoot bool   `json:"context_root,omitempty"`
+	// GitBaseline is captured before a write-capable Run changes a clean
+	// checkout. It is not authority to bypass the physical-root lock.
+	GitBaseline *GitBaseline `json:"git_baseline,omitempty"`
 }
 
 func (b RootBinding) Writable() bool {
@@ -41,7 +44,32 @@ func CloneRootBindings(in []RootBinding) []RootBinding {
 	}
 	out := make([]RootBinding, len(in))
 	copy(out, in)
+	for i := range out {
+		if in[i].GitBaseline != nil {
+			baseline := *in[i].GitBaseline
+			out[i].GitBaseline = &baseline
+		}
+	}
 	return out
+}
+
+func EqualRootBindings(a, b []RootBinding) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		left, right := a[i], b[i]
+		if left.Path != right.Path || left.Role != right.Role || left.AccessCap != right.AccessCap || left.Source != right.Source || left.ContextRoot != right.ContextRoot {
+			return false
+		}
+		if (left.GitBaseline == nil) != (right.GitBaseline == nil) {
+			return false
+		}
+		if left.GitBaseline != nil && *left.GitBaseline != *right.GitBaseline {
+			return false
+		}
+	}
+	return true
 }
 
 func RootPaths(bindings []RootBinding) []string {

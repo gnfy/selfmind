@@ -38,6 +38,17 @@ func ExecutionCapabilityMiddleware() Middleware {
 			if !hasScope || strings.TrimSpace(scope.WorkspaceID) == "" {
 				return next(args)
 			}
+			if isolatedExecutionView(scope) {
+				// Until a trusted adapter can claim the external target, an
+				// isolated Git checkout is a file-only view. A remembered
+				// workspace network or credential grant cannot silently turn it
+				// into a second deploy writer.
+				if commandClearlyNeedsNetwork(toolName, args) {
+					return "", fmt.Errorf("networked execution is unavailable in this isolated view until its external target can be claimed")
+				}
+				args["_network_shared"] = false
+				return next(args)
+			}
 
 			fingerprint := executionCapabilityFingerprint(scope.WorkspaceID, executionenv.CapabilityNetworkShared)
 			// An operator policy that ALLOWS egress is not a reason to hand it
@@ -106,6 +117,15 @@ func ExecutionCapabilityMiddleware() Middleware {
 			return output, fmt.Errorf("network:shared was approved; retry the command once explicitly with the granted capability (the failed command was not automatically replayed): %w", err)
 		}
 	}
+}
+
+func isolatedExecutionView(scope ExecutionScope) bool {
+	for _, binding := range scope.RootBindings {
+		if binding.Source == executionenv.RootSourceExecutionView {
+			return true
+		}
+	}
+	return false
 }
 
 func approveNetworkCapability(args map[string]interface{}, scope ExecutionScope, fingerprint string) error {

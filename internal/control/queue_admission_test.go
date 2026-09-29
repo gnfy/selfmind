@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"selfmind/internal/executionenv"
 )
 
 func TestClaimedQueueRunCreationBindsAtomically(t *testing.T) {
@@ -59,6 +61,37 @@ func TestClaimedQueueRunCreationBindsAtomically(t *testing.T) {
 	}
 	if changed, err := store.FinishQueuedClaim(ctx, identity.TenantID, queued.ID, token, QueueStatusDone); err != nil || !changed {
 		t.Fatalf("bound claimant could not finish row: changed=%v err=%v", changed, err)
+	}
+}
+
+func TestCleanGitAdmissionBaselineSurvivesQueueAndRunReload(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := &executionenv.GitBaseline{Root: "/work", CommonDir: "/work/.git", Commit: "0123456789012345678901234567890123456789"}
+	roots := []executionenv.RootBinding{{Path: "/work", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace, GitBaseline: baseline}}
+	queued, err := store.EnqueueQueued(ctx, QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Channel: "terminal-a", Content: "work", ExecutionRoots: roots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readQueue, err := store.GetQueued(ctx, identity.TenantID, queued.ID)
+	if err != nil || readQueue.ExecutionRoots[0].GitBaseline == nil || *readQueue.ExecutionRoots[0].GitBaseline != *baseline {
+		t.Fatalf("queue lost Git baseline: %+v, %v", readQueue, err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "work", Channel: "terminal-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunWithOptions(ctx, task, "terminal-a", "work", StartRunOptions{ExecutionRoots: readQueue.ExecutionRoots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil || readRun.ExecutionRoots[0].GitBaseline == nil || *readRun.ExecutionRoots[0].GitBaseline != *baseline {
+		t.Fatalf("run lost Git baseline: %+v, %v", readRun, err)
 	}
 }
 

@@ -299,6 +299,19 @@ func sandboxedCommandWithMaterial(
 	sandboxAvailable bool,
 	networkOverride ...bool,
 ) (*exec.Cmd, SandboxDecision, SandboxPlan, error) {
+	return sandboxedCommandWithMaterialPolicy(ctx, inner, material, requested, goos, sandboxAvailable, nil, networkOverride...)
+}
+
+func sandboxedCommandWithMaterialPolicy(
+	ctx context.Context,
+	inner []string,
+	material execMaterial,
+	requested SandboxMode,
+	goos string,
+	sandboxAvailable bool,
+	policy *ExecSandboxPolicy,
+	networkOverride ...bool,
+) (*exec.Cmd, SandboxDecision, SandboxPlan, error) {
 	if len(inner) == 0 {
 		return nil, SandboxDecision{}, SandboxPlan{}, fmt.Errorf("sandbox command is empty")
 	}
@@ -326,6 +339,9 @@ func sandboxedCommandWithMaterial(
 		return cmd, decision, plan, nil
 	}
 	enabled, required, network := execSandboxPolicy()
+	if policy != nil {
+		enabled, required, network = policy.Enabled, policy.Required, policy.AllowNetwork
+	}
 	if len(networkOverride) > 0 {
 		network = networkOverride[0]
 	}

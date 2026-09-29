@@ -77,6 +77,39 @@ func TestExecutionCapabilityMiddlewareApprovesBeforeKnownNetworkCommand(t *testi
 	}
 }
 
+func TestIsolatedGitViewCannotInheritOrRequestNetwork(t *testing.T) {
+	withExecSandboxPolicy(t, true, false, true)
+	store := &capabilityStoreStub{granted: true}
+	approvals := 0
+	person := "isolated-view-network"
+	cleanup := SetExecutionScope(person, ExecutionScope{
+		TenantID: "tenant", PersonID: person, RunID: "run-isolated", WorkspaceID: "workspace",
+		WorkspaceRoot: "/managed/view", AllowedRoots: []string{"/managed/view"},
+		RootBindings:    []executionenv.RootBinding{{Path: "/managed/view", Source: executionenv.RootSourceExecutionView}},
+		CapabilityStore: store, TrustLevel: executionenv.TrustTrusted,
+		SandboxPolicy: &ExecSandboxPolicy{Enabled: true, Required: true},
+		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
+			approvals++
+			return ToolApprovalDecision{Approved: true}, nil
+		},
+	})
+	defer cleanup()
+	calls := 0
+	executor := ExecutionCapabilityMiddleware()(func(args map[string]interface{}) (string, error) {
+		calls++
+		if args["_network_shared"] != false {
+			t.Fatalf("isolated view gained network: %+v", args)
+		}
+		return "local", nil
+	})
+	if _, err := executor(map[string]interface{}{"_tenant_id": person, "_tool_name": "terminal", "command": "curl https://example.test"}); err == nil || calls != 0 || approvals != 0 {
+		t.Fatalf("known network call escaped: calls=%d approvals=%d err=%v", calls, approvals, err)
+	}
+	if _, err := executor(map[string]interface{}{"_tenant_id": person, "_tool_name": "terminal", "command": "git status"}); err != nil || calls != 1 {
+		t.Fatalf("local command failed: calls=%d err=%v", calls, err)
+	}
+}
+
 func TestExecutionCapabilityMiddlewareNeverReplaysUnknownCommand(t *testing.T) {
 	withExecSandboxPolicy(t, true, true, false)
 	store := &capabilityStoreStub{}

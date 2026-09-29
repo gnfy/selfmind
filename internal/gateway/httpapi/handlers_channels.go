@@ -240,6 +240,17 @@ func messageRequestFromIM(platform string, payload map[string]interface{}) api.M
 	if msg := nestedMap(payload, "message"); msg != nil {
 		req.Content = firstNonEmpty(contentText(msg["content"]), mapString(msg, "content"), mapString(msg, "text"), req.Content)
 		req.Channel = firstNonEmpty(mapString(msg, "chat_id"), mapString(msg, "group_id"), mapString(msg, "channel_id"), req.Channel)
+		if strings.EqualFold(platform, "telegram") {
+			if chat := nestedMap(msg, "chat"); chat != nil {
+				req.Channel = firstNonEmpty(mapString(chat, "id"), req.Channel)
+			}
+			if from := nestedMap(msg, "from"); from != nil {
+				req.PlatformUserID = firstNonEmpty(mapString(from, "id"), req.PlatformUserID)
+			}
+			if reply := nestedMap(msg, "reply_to_message"); reply != nil {
+				req.NativeReplyMessageID = mapString(reply, "message_id")
+			}
+		}
 	}
 	if author := nestedMap(payload, "author"); author != nil {
 		req.PlatformUserID = firstNonEmpty(mapString(author, "id"), mapString(author, "user_id"), req.PlatformUserID)

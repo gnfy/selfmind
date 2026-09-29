@@ -1252,12 +1252,13 @@ func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *c
 		return
 	}
 	base := delivery.Message{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
-		TaskID:   taskID,
-		RunID:    runID,
-		Content:  clarifyNotificationText(*clarify),
-		Kind:     delivery.KindClarify,
+		TenantID:  identity.TenantID,
+		PersonID:  identity.PersonID,
+		TaskID:    taskID,
+		RunID:     runID,
+		Content:   clarifyNotificationText(*clarify),
+		Kind:      delivery.KindClarify,
+		ClarifyID: clarify.ID,
 	}
 	if c.routePendingNotification(ctx, identity, channel, base, liveSurfaceInformed) && c.srv.Control != nil {
 		_ = c.srv.Control.MarkClarifyNotified(ctx, identity.TenantID, clarify.ID)
@@ -1352,12 +1353,13 @@ func (c *RunCoordinator) escrowClarifyNotification(ctx context.Context, clarify 
 	}
 	identity := &control.IdentityContext{TenantID: clarify.TenantID, PersonID: clarify.PersonID}
 	base := delivery.Message{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
-		TaskID:   clarify.TaskID,
-		RunID:    clarify.RunID,
-		Content:  clarifyNotificationText(*clarify),
-		Kind:     delivery.KindClarify,
+		TenantID:  identity.TenantID,
+		PersonID:  identity.PersonID,
+		TaskID:    clarify.TaskID,
+		RunID:     clarify.RunID,
+		Content:   clarifyNotificationText(*clarify),
+		Kind:      delivery.KindClarify,
+		ClarifyID: clarify.ID,
 	}
 	if c.deliverToPreferredIM(ctx, identity, base) {
 		_ = c.srv.Control.MarkClarifyNotified(ctx, identity.TenantID, clarify.ID)

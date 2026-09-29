@@ -19,13 +19,27 @@ import (
 func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (bool, string, *api.DigestWorkspace, error) {
 	trimmed := strings.TrimSpace(req.Content)
 	lower := strings.ToLower(trimmed)
+	// A platform-proven reply edge outranks implicit person-wide prompts. In a
+	// multi-run chat, a short answer must not resolve a different live request.
+	if req.NativeReplyMessageID != "" && req.ClarifyID != "" {
+		if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, req.ClarifyID, trimmed, req.Channel); handled {
+			return true, reply, nil, err
+		}
+	}
 	// Conversational approval: a bare "y"/"n" (or 好/可以/不行 …) answers a
 	// pending approval without the /approve ceremony, so IM feels like asking
 	// a human assistant. Only claimed when an approval is actually pending —
 	// otherwise the word falls through to the agent (and to the continuation
 	// cue handling for "ok"/"可以"). Runs before the "/" gate below.
-	if handled, reply, err := d.tryHandleBareApprovalReply(ctx, identity, trimmed, req.Channel); handled {
+	approvalTarget := ""
+	if req.NativeReplyMessageID != "" {
+		approvalTarget = req.ApprovalID
+	}
+	if handled, reply, err := d.tryHandleBareApprovalReplyTo(ctx, identity, trimmed, req.Channel, approvalTarget); handled {
 		return true, reply, nil, err
+	}
+	if approvalTarget != "" && !command.LooksLikeCommand(trimmed) {
+		return true, "Reply with an offered approval choice, or use /approve <approval_id>.", nil, nil
 	}
 	// Pending question: a plain (non-slash) reply while a clarify_requests row is
 	// pending IS the answer (G3) — resolve it here, above the new-task/queue

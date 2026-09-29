@@ -352,6 +352,10 @@ func parseApprovalScopeWord(word string) string {
 // the per-person active-run guard serializes interactive approvals) → the word
 // is ambiguous, so return the numbered list and ask for /approve <n>.
 func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *control.IdentityContext, content, channel string) (bool, string, error) {
+	return d.tryHandleBareApprovalReplyTo(ctx, identity, content, channel, "")
+}
+
+func (d *Server) tryHandleBareApprovalReplyTo(ctx context.Context, identity *control.IdentityContext, content, channel, approvalID string) (bool, string, error) {
 	decision, grantScope, shortcut, ok := parseBareApprovalReply(content)
 	if !ok || d == nil || d.Control == nil || identity == nil {
 		return false, "", nil
@@ -363,11 +367,24 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 		return false, "", nil
 	}
 	sortApprovalsForDisplay(pending)
+	if approvalID != "" {
+		matched := false
+		for _, candidate := range pending {
+			if candidate.ID == approvalID {
+				pending = []control.ApprovalRequest{candidate}
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return true, "That approval is no longer pending; no other approval was changed.", nil
+		}
+	}
 	// A bare reply answers this session's own approval. One that another open
 	// terminal is waiting on stays that terminal's to answer, or /approve's.
 	var answerable []control.ApprovalRequest
 	for _, approval := range pending {
-		if d.answersImplicitly(identity, channel, approval.RequestedChannel) {
+		if approvalID != "" || d.answersImplicitly(identity, channel, approval.RequestedChannel) {
 			answerable = append(answerable, approval)
 		}
 	}

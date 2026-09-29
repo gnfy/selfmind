@@ -106,9 +106,13 @@ type Turn struct {
 	// actual run id and sends it as MessageRequest.ReplyToRunID — the
 	// structured reply edge cross-endpoint cases assert. 0 means no reply
 	// metadata.
-	ReplyToTurn int    `yaml:"reply_to_turn" json:"reply_to_turn,omitempty"`
-	ApprovalID  string `yaml:"approval_id,omitempty" json:"approval_id,omitempty"`
-	ClarifyID   string `yaml:"clarify_id,omitempty" json:"clarify_id,omitempty"`
+	ReplyToTurn int `yaml:"reply_to_turn" json:"reply_to_turn,omitempty"`
+	// NativeReplyMessageID simulates adapter-proven reply metadata for the
+	// deterministic invalid-edge path. Successful platform receipts are covered
+	// by sender/store/gateway integration tests, not synthetic eval fixtures.
+	NativeReplyMessageID string `yaml:"native_reply_message_id,omitempty" json:"native_reply_message_id,omitempty"`
+	ApprovalID           string `yaml:"approval_id,omitempty" json:"approval_id,omitempty"`
+	ClarifyID            string `yaml:"clarify_id,omitempty" json:"clarify_id,omitempty"`
 	// WaitForMaintenance runs one immediately-due post-run maintenance pass
 	// before the next turn. It is opt-in because wiring maintenance into every
 	// historical case would change the model-call cassette contract. Use it for

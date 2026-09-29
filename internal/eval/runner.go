@@ -321,6 +321,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			Channel:               channel,
 			Content:               turn.Input,
 			ReplyToRunID:          replyToRunID,
+			NativeReplyMessageID:  turn.NativeReplyMessageID,
 			ApprovalID:            turn.ApprovalID,
 			ClarifyID:             turn.ClarifyID,
 			ClientCWD:             workspace,

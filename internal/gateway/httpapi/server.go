@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -353,6 +355,18 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	identity, err := d.Control.ResolveOrCreateAccount(ctx, req.TenantID, req.Platform, req.PlatformUserID, req.DisplayName)
 	if err != nil {
 		return api.MessageResponse{Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
+	}
+	if req.NativeReplyMessageID != "" && !command.LooksLikeCommand(req.Content) {
+		edge, lookupErr := d.Control.NativeIMReplyTarget(ctx, identity.TenantID, identity.PersonID,
+			req.Platform, req.Channel, req.NativeReplyMessageID)
+		if lookupErr != nil || edge == nil || (edge.RunID == "" && edge.ApprovalID == "" && edge.ClarifyID == "") {
+			content := "That replied-to message is not linked to your work here. Use /status and an exact run or request ID."
+			if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+				return api.MessageResponse{Identity: identity, Error: lookupErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", lookupErr.Error())}, http.StatusInternalServerError
+			}
+			return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, http.StatusOK
+		}
+		req.ReplyToRunID, req.ApprovalID, req.ClarifyID = edge.RunID, edge.ApprovalID, edge.ClarifyID
 	}
 	// Any inbound message is a presence beat for its endpoint: a CLI turn
 	// marks the terminal attached, an IM message refreshes that account's

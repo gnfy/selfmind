@@ -47,6 +47,30 @@ func TestConcurrentIMInputNeedsExactChoiceBeforeSteering(t *testing.T) {
 		active = append(active, handle)
 		defer coord.endActiveRun(owner.PersonID, handle)
 	}
+	if _, err := store.BindAccount(ctx, owner.TenantID, owner.PersonID, "telegram", "tg-local", "Local on Telegram"); err != nil {
+		t.Fatal(err)
+	}
+	linked, err := store.EnqueueDelivery(ctx, control.Delivery{
+		TenantID: owner.TenantID, PersonID: owner.PersonID, Platform: "telegram", PlatformUserID: "tg-local",
+		Channel: "chat-one", TaskID: active[1].TaskID, RunID: active[1].RunID, Content: "Work B is running",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimDelivery(ctx, linked.ID); err != nil || !claimed {
+		t.Fatalf("claim outbound reply source: %v, %v", claimed, err)
+	}
+	if err := store.MarkDeliverySentWithNativeID(ctx, linked.ID, "501"); err != nil {
+		t.Fatal(err)
+	}
+	linkedReply, code := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "telegram", PlatformUserID: "tg-local", Channel: "chat-one",
+		Content: "add a test to B", NativeReplyMessageID: "501", Async: true,
+	})
+	if code != 200 || !linkedReply.Accepted || len(active[0].Steer) != 0 || len(active[1].Steer) != 1 {
+		t.Fatalf("native reply did not target B alone: code=%d response=%+v", code, linkedReply)
+	}
+	<-active[1].Steer
 	input := api.MessageRequest{Platform: "weixin", PlatformUserID: "wx-local", Channel: "chat-one", Content: "please add the missing check", Async: true}
 	response, code := daemon.ProcessMessage(ctx, input)
 	if code != 200 || response.Choice == nil || len(response.Choice.Options) != 3 {

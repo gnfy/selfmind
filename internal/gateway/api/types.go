@@ -184,6 +184,9 @@ type MessageRequest struct {
 	// continuation parent; an invalid, foreign, stale, or already-claimed id
 	// fails closed and is never downgraded to ordinary routing.
 	ReplyToRunID string `json:"reply_to_run_id,omitempty"`
+	// NativeReplyMessageID is set only by a verified IM adapter from the
+	// platform's reply metadata. Public /v1/message JSON cannot assert it.
+	NativeReplyMessageID string `json:"-"`
 	// ApprovalID and ClarifyID are structured return edges. Adapters may attach
 	// them when the platform proves which pending interaction the user answered;
 	// the gateway validates person ownership before using either id.

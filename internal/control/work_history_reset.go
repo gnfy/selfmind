@@ -151,6 +151,7 @@ func (s *Store) ResetWorkHistory(ctx context.Context, tenantID string) (WorkHist
 		`DELETE FROM approval_triage_events WHERE tenant_id = ?`,
 		`DELETE FROM clarify_requests WHERE tenant_id = ?`,
 		`DELETE FROM notifications WHERE tenant_id = ? AND thread_id IN (SELECT id FROM reset_thread_ids)`,
+		`DELETE FROM native_im_reply_edges WHERE tenant_id = ?`,
 		`DELETE FROM outbound_messages WHERE tenant_id = ? AND (thread_id IN (SELECT id FROM reset_thread_ids) OR run_id IN (SELECT id FROM reset_run_ids))`,
 		`DELETE FROM task_queue WHERE tenant_id = ?`,
 		`DELETE FROM effect_receipts WHERE tenant_id = ?`,

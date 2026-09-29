@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 18
+const CurrentControlSchemaVersion = 19
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -520,6 +520,31 @@ DROP TABLE IF EXISTS task_references;`)
 			// froze, for when it is queued as separate work. Historical rows stay
 			// NULL — nothing was recorded — and keep the run's roots, as before.
 			return ensureMigrationColumn(ctx, db, "steering_mailbox", "execution_roots_json", "TEXT")
+		},
+	},
+	{
+		Version: 19,
+		Name:    "native-im-reply-edges",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			if err := ensureMigrationColumn(ctx, db, "outbound_messages", "clarify_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS native_im_reply_edges (
+				platform TEXT NOT NULL,
+				channel TEXT NOT NULL,
+				message_id TEXT NOT NULL,
+				outbound_id TEXT NOT NULL,
+				tenant_id TEXT NOT NULL,
+				person_id TEXT NOT NULL,
+				run_id TEXT NOT NULL DEFAULT '',
+				approval_id TEXT NOT NULL DEFAULT '',
+				clarify_id TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				PRIMARY KEY (platform, channel, message_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_native_im_reply_edges_outbound
+				ON native_im_reply_edges(outbound_id);`)
+			return err
 		},
 	},
 }

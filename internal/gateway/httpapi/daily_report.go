@@ -43,6 +43,8 @@ type dailyQualityStats struct {
 	ApprovalUsageByRole     map[string]int
 	ProviderCalls           int
 	ProviderRoutes          map[string]dailyRouteUsage
+	ProviderWaits           map[string]dailyProviderWaitUsage
+	ProviderWaitingRuns     map[string]bool
 	InputTokens             int64
 	OutputTokens            int64
 	CacheReadTokens         int64
@@ -90,6 +92,12 @@ type dailyRouteUsage struct {
 	ReasoningTokens int64
 }
 
+type dailyProviderWaitUsage struct {
+	Count      int
+	DurationMS int64
+	Canceled   int
+}
+
 func parseDailyReportWindow(input string) (time.Duration, error) {
 	window := defaultDailyReportWindow
 	fields := strings.Fields(input)
@@ -129,6 +137,8 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		MemoryDisposition:      make(map[string]int),
 		ToolFailureClasses:     make(map[string]int),
 		ProviderRoutes:         make(map[string]dailyRouteUsage),
+		ProviderWaits:          make(map[string]dailyProviderWaitUsage),
+		ProviderWaitingRuns:    make(map[string]bool),
 		ToolRedirectReasons:    make(map[string]int),
 		ToolFailurePhases:      make(map[string]int),
 		ToolEffectStates:       make(map[string]int),
@@ -165,6 +175,28 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 	startedTools := make(map[string]bool)
 	for eventIndex, event := range events {
 		switch event.Type {
+		case "model.provider_wait":
+			var p struct {
+				Reason     string `json:"reason"`
+				DurationMS int64  `json:"duration_ms"`
+				Canceled   bool   `json:"canceled"`
+			}
+			if json.Unmarshal(event.Payload, &p) == nil {
+				reason := strings.TrimSpace(p.Reason)
+				if reason == "" {
+					reason = "unknown"
+				}
+				wait := stats.ProviderWaits[reason]
+				wait.Count++
+				wait.DurationMS += max(p.DurationMS, 0)
+				if p.Canceled {
+					wait.Canceled++
+				}
+				stats.ProviderWaits[reason] = wait
+				if event.RunID != "" {
+					stats.ProviderWaitingRuns[event.RunID] = true
+				}
+			}
 		case "run.finished", "run.interrupted", "run.failed", "run.cancelled":
 			if event.RunID != "" && terminalRuns[event.RunID] {
 				continue
@@ -543,6 +575,8 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
 	fmt.Fprintf(&sb, "Model routes: %s\n", formatDailyRouteUsage(stats.ProviderRoutes))
+	fmt.Fprintf(&sb, "Provider admission waits: %s; %d affected Run(s)\n",
+		formatDailyProviderWaitUsage(stats.ProviderWaits), len(stats.ProviderWaitingRuns))
 	fmt.Fprintf(&sb, "Approval model (separate from Main and maintenance): %d responses, input %d, cache read %d, uncached %d, output %d; usage unavailable for %d responses; roles %s\n", stats.ApprovalModelCalls, stats.ApprovalInputTokens, stats.ApprovalCacheReadTokens, stats.ApprovalCacheMissTokens, stats.ApprovalOutputTokens, stats.ApprovalUsageMissing, formatCountMap(stats.ApprovalUsageByRole))
 	if stats.ContextSamples > 0 {
 		avgRequest := stats.ContextEstimatedTokens / int64(stats.ContextSamples)
@@ -712,6 +746,23 @@ func formatCountMap(counts map[string]int) string {
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		parts = append(parts, key+" "+strconv.Itoa(counts[key]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatDailyProviderWaitUsage(waits map[string]dailyProviderWaitUsage) string {
+	if len(waits) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(waits))
+	for reason := range waits {
+		keys = append(keys, reason)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, reason := range keys {
+		wait := waits[reason]
+		parts = append(parts, fmt.Sprintf("%s %d (%dms, %d canceled)", reason, wait.Count, wait.DurationMS, wait.Canceled))
 	}
 	return strings.Join(parts, ", ")
 }

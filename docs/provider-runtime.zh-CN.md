@@ -642,7 +642,8 @@ providers:
   逻辑角色拆开；每条线路最多同时两个请求。结构化 429 会触发共享、可取消的冷却，
   包括流启动后才返回的错误；流结束或上下文取消才释放请求名额。这只是请求准入，
   已知 Run 的容量或冷却等待会以内部 `model.provider_wait` 事件记录线路、原因、时长及
-  是否取消。这不是完整的 Run 调度：等待 provider 的 Run 目前仍占用 worker。
+  是否取消；日报按原因汇总并统计受影响的 Run 数。这不是完整的 Run 调度：等待
+  provider 的 Run 目前仍占用 worker。
 - SSE 空闲看门狗（`responses_adapter.go`）在流长时间无新数据时中止并抛出可重试的
   空闲错误，让循环重连；由配置驱动
   （`SELFMIND_STREAM_IDLE_TIMEOUT` 环境变量 > 配置默认 > 180s），且从不改动

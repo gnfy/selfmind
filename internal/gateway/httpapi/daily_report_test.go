@@ -46,6 +46,7 @@ func TestDailyQualityReportMarksUnavailableEvidenceInsteadOfZeros(t *testing.T) 
 	}
 	for _, want := range []string{
 		"triage: unavailable", "Approval backlog now: unavailable", "Delivery: unavailable",
+		"Provider admission waits: none; 0 affected Run(s)",
 		"Maintenance: unavailable", "Evidence gaps: unavailable:", "Zero values from those sources were not reported as evidence",
 	} {
 		if !strings.Contains(report, want) {
@@ -59,6 +60,9 @@ func TestCollectDailyQualityStats(t *testing.T) {
 	events := []control.Event{
 		{RunID: "run_1", Type: "run.finished", Payload: payload(map[string]interface{}{"outcome": map[string]interface{}{"status": "done", "completion_reason": "completed"}})},
 		{Type: "provider.call.usage", Payload: payload(map[string]interface{}{"provider": "bailian", "model": "qwen-example", "role": "coding_agent", "input_tokens": 100, "output_tokens": 7, "reasoning_output_tokens": 3, "cache_read_input_tokens": 80, "cache_miss_input_tokens": 20, "duration_ms": 900})},
+		{RunID: "run_1", Type: "model.provider_wait", Payload: payload(map[string]interface{}{"route_id": "opaque-a", "reason": "rate_limit", "duration_ms": 2000})},
+		{RunID: "run_1", Type: "model.provider_wait", Payload: payload(map[string]interface{}{"route_id": "opaque-a", "reason": "capacity", "duration_ms": 150, "canceled": true})},
+		{RunID: "run_resume", Type: "model.provider_wait", Payload: payload(map[string]interface{}{"route_id": "opaque-a", "reason": "rate_limit", "duration_ms": 500})},
 		{RunID: "run_resume", Type: "run.started", Payload: payload(map[string]interface{}{"origin": "approval", "source_approval_id": "apr_1"})},
 		{RunID: "run_resume", Type: "run.resumed", Payload: payload(map[string]interface{}{"resumes_run_id": "run_1"})},
 		{RunID: "run_resume", Type: "provider.call.usage", Payload: payload(map[string]interface{}{"input_tokens": 40, "output_tokens": 5, "cache_read_input_tokens": 30, "cache_miss_input_tokens": 10, "duration_ms": 300})},
@@ -90,6 +94,9 @@ func TestCollectDailyQualityStats(t *testing.T) {
 	}
 	if route := stats.ProviderRoutes["bailian/qwen-example"]; route.Calls != 1 || route.DurationMS != 900 || route.ReasoningTokens != 3 || !strings.Contains(formatDailyRouteUsage(stats.ProviderRoutes), "unattributed 1 calls") {
 		t.Fatalf("provider routes lost attribution or legacy unknown state: %+v", stats.ProviderRoutes)
+	}
+	if waits := stats.ProviderWaits; waits["rate_limit"].Count != 2 || waits["rate_limit"].DurationMS != 2500 || waits["capacity"].Count != 1 || waits["capacity"].Canceled != 1 || len(stats.ProviderWaitingRuns) != 2 || !strings.Contains(formatDailyProviderWaitUsage(waits), "rate_limit 2 (2500ms, 0 canceled)") {
+		t.Fatalf("provider wait attribution lost: %+v runs=%+v", waits, stats.ProviderWaitingRuns)
 	}
 }
 

@@ -22,6 +22,7 @@ expect:
     - "Evidence window:"
     - "scanned"
     - "Model:"
+    - "Provider admission waits:"
     - "Automatic recovery:"
     - "Durable waits:"
     - "Approval backlog now:"

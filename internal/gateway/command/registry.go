@@ -60,7 +60,7 @@ var entries = []Entry{
 	{Name: "/help", Usage: "/help", Summary: "Show this help.", SyncControl: true, Scope: Gateway},
 	{Name: "/model", Usage: "/model", Summary: "Open or describe Main, Background, and optional role model settings.", SyncControl: true, Scope: Gateway},
 	{Name: "/id", Usage: "/id", Summary: "Show your resolved account identity.", SyncControl: true, Scope: Gateway},
-	{Name: "/status", Usage: "/status", Summary: "Show what is happening right now.", SyncControl: true, Scope: Gateway},
+	{Name: "/status", Usage: "/status [run_id]", Summary: "Show all active runs or one run's details.", SyncControl: true, Scope: Gateway},
 	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
 	{Name: "/watchers", Usage: "/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]", Summary: "List, inspect, or cancel durable external watchers.", SyncControl: true, Scope: Gateway},
 	{Name: "/diag", Usage: "/diag [learning|memory|context|models|delivery|execution|tools]", Summary: "Show runtime and subsystem diagnostics, including tool-schema health.", SyncControl: true, Scope: Gateway},

@@ -217,7 +217,7 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 		})
 	}
 
-	if active := d.coordinator().currentActive(identity.PersonID); active != nil {
+	for _, active := range d.coordinator().activeRunsForPerson(identity.PersonID) {
 		run := &api.DigestActiveRun{
 			RunID:          active.RunID,
 			TaskID:         active.TaskID,
@@ -231,15 +231,16 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 			if task, err := d.Control.GetTask(ctx, identity.TenantID, active.TaskID); err == nil && task != nil && strings.TrimSpace(task.Title) != "" {
 				run.Title = strings.TrimSpace(task.Title)
 			}
-			// Current progress (owner request 2026-07-05): reuse the SAME plan
-			// source /status uses (latest plan.updated task event) plus the most
-			// recent progress event, so re-attach shows where the run stands,
-			// bounded to a glanceable few lines.
-			run.PlanSteps = digestPlanLines(d.latestPlanForTask(ctx, active.TaskID))
-			run.PlanJSON = d.latestPlanPayloadForTask(ctx, active.TaskID)
-			run.LatestActivity = d.latestActivityForTask(ctx, active.TaskID)
+			// Bind progress to this exact Run; a shared Thread can have another
+			// continuation whose latest task event belongs elsewhere.
+			run.PlanSteps = digestPlanLines(d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, active.TaskID, active.RunID))
+			run.PlanJSON = d.latestPlanPayloadForRun(ctx, identity, active.TaskID, active.RunID)
+			run.LatestActivity = d.latestActivityForRun(ctx, identity, control.Run{ID: active.RunID, TaskID: active.TaskID})
 		}
-		out.ActiveRun = run
+		out.ActiveRuns = append(out.ActiveRuns, *run)
+	}
+	if len(out.ActiveRuns) == 1 {
+		out.ActiveRun = &out.ActiveRuns[0]
 	}
 
 	// Effective approval mode: the person's persisted /mode preference, or

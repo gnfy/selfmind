@@ -295,7 +295,18 @@ func formatStartupDigest(digest *api.DigestResponse, session string) string {
 		sections = append(sections, strings.Join(attention, "\n"))
 	}
 
-	if active := digest.ActiveRun; active != nil && otherSessionChannel(active.Channel, session) {
+	if len(digest.ActiveRuns) > 1 {
+		lines := []string{fmt.Sprintf("Current: %d runs are active", len(digest.ActiveRuns))}
+		for _, active := range digest.ActiveRuns {
+			title := strings.TrimSpace(active.Title)
+			if title == "" {
+				title = "untitled task"
+			}
+			lines = append(lines, fmt.Sprintf("▶ %s  %s (%s)", digestShortRunID(active.RunID), title, formatElapsedShort(active.ElapsedSeconds)))
+		}
+		lines = append(lines, "Use /status <run_id> for details; each session keeps its own progress.")
+		sections = append(sections, strings.Join(lines, "\n"))
+	} else if active := digest.ActiveRun; active != nil && otherSessionChannel(active.Channel, session) {
 		title := strings.TrimSpace(active.Title)
 		if title == "" {
 			title = "untitled task"
@@ -320,6 +331,13 @@ func formatStartupDigest(digest *api.DigestResponse, session string) string {
 		sections = append(sections, strings.Join(lines, "\n"))
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+func digestShortRunID(id string) string {
+	if strings.HasPrefix(id, "run_") && len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 // digestTitleList joins up to three task titles; the rest collapse into a

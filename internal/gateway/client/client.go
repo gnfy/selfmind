@@ -751,15 +751,16 @@ var (
 	ErrSteerBusy = errors.New("steering buffer is full; try again in a moment")
 )
 
-// SteerRun forwards mid-turn user guidance to the daemon's active run
+// SteerRun forwards mid-turn user guidance to this client's focused run
 // (POST /v1/runs/steer). In client mode the run executes inside the daemon
 // process, so the TUI's local steering channel can never reach it — this call
 // is the only path by which mid-run input reaches the agent loop.
-func (c *Client) SteerRun(text string) error {
+func (c *Client) SteerRun(runID, channel, text string) error {
 	req := api.RunSteerRequest{
 		Platform:       "cli",
 		PlatformUserID: clientUserID(),
-		Channel:        "cli",
+		Channel:        channel,
+		RunID:          runID,
 		Text:           text,
 	}
 	body, _ := json.Marshal(req)

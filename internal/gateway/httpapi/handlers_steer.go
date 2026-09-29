@@ -37,6 +37,10 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "text is required", http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.Channel) == "" {
+		http.Error(w, "run_id and channel are required", http.StatusBadRequest)
+		return
+	}
 	identity, err := d.Control.ResolveOrCreateAccount(
 		r.Context(),
 		d.tenantID(req.TenantID),
@@ -48,11 +52,14 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	active := d.coordinator().currentActive(identity.PersonID)
-	if active == nil || active.Steer == nil {
+	active := d.coordinator().activeForRun(identity.PersonID, strings.TrimSpace(req.RunID))
+	if active == nil || active.Steer == nil || strings.TrimSpace(req.Channel) != active.Channel {
 		// 409: nothing to steer — the run may have finished between the user's
-		// keystroke and this request. Clients must surface this honestly.
-		writeError(w, http.StatusConflict, fmt.Errorf("no active run to steer"))
+		// keystroke and this request. This thin-client endpoint has no source
+		// execution scope, so it is only safe for the run's own session.
+		// Cross-session exact replies use /v1/message, which freezes the
+		// sender's scope if Main turns the guidance into separate work.
+		writeError(w, http.StatusConflict, fmt.Errorf("no matching active run to steer"))
 		return
 	}
 	// Durability BEFORE acknowledgement (Loop Engineering P0-A): the mailbox

@@ -104,6 +104,8 @@ func TestInjectedSkillStorageContainsWritesWithoutCreatingSiblingSkills(t *testi
 }
 
 func TestManagedWorkspaceSkillStorageIsIsolatedAndDoesNotWriteTheRepository(t *testing.T) {
+	// Keep checkout-ancestor Skills out of this isolated storage fixture.
+	t.Chdir(t.TempDir())
 	base := filepath.Join(t.TempDir(), "assets")
 	storage, err := NewSkillStorage(base)
 	if err != nil {

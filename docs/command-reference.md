@@ -417,7 +417,7 @@ before normal agent dispatch.
 /help
 /model
 /id
-/status
+/status [run_id]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [learning|memory|context|models|delivery|execution|tools]
@@ -445,8 +445,8 @@ before normal agent dispatch.
   and an approval panel opens only in the session whose run asks.
   `/attach [run_id]` watches another session's running task here without
   taking it over: its final answer still goes to the session that started it.
-  A message typed while another session's task runs is sent to that task,
-  which uses it or queues it as separate work, and the terminal says so.
+  A new message typed in another session stays with that session; an exact
+  reply or explicit attach can target the other Run.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.
@@ -458,6 +458,8 @@ before normal agent dispatch.
   and removing historical remembered grants.
 - `/mode` accepts `on-request`, `read-only`, `auto-edit`, `full-auto`, or
   `smart`.
+- `/status` lists all active Runs when more than one is executing;
+  `/status <run_id>` shows one active Run without selecting by recency.
 - `/notify` chooses the bound IM destination for CLI-origin progress and final
   notifications.
 - `/new [title]` keeps its existing task-label behavior. `/new --run <request>`
@@ -471,7 +473,8 @@ before normal agent dispatch.
   clears ONE listed item without running it — the exit a stale item otherwise
   lacked, since retention never archives anything with pending human input and
   pinning an item to dismiss it starts the work you were putting down. Naming
-  the executing Run routes to bare `/stop`, which cancels it. The compatibility
+  an executing Run cancels that Run only. With multiple active Runs, bare
+  `/stop` asks for an exact Run ID. The compatibility
   `Task.status` field on the wire carries the derived vocabulary `active`,
   `needs_attention`, `monitoring`, or `resumable` for Attention, `done` for
   settled listed work, and `archived` for archived Threads; the value is

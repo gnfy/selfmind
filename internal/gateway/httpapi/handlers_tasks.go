@@ -224,6 +224,11 @@ func (d *Server) subjectThreadID(ctx context.Context, identity *control.Identity
 	if d == nil || d.Control == nil || identity == nil {
 		return "", nil
 	}
+	if d.coordinator().activeCount(identity.PersonID) > 1 {
+		// A subject-less request is a presentation convenience, not permission
+		// to choose one of several live Threads by recency.
+		return "", nil
+	}
 	if active := d.coordinator().currentActive(identity.PersonID); active != nil && strings.TrimSpace(active.TaskID) != "" {
 		return active.TaskID, nil
 	}
@@ -295,6 +300,17 @@ func (d *Server) handleCurrentTask(w http.ResponseWriter, r *http.Request) {
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(activeRuns) > 1 {
+		statuses := make([]api.ActiveRunStatus, 0, len(activeRuns))
+		for _, active := range activeRuns {
+			if status := formatActiveRunStatus(active); status != nil {
+				statuses = append(statuses, *status)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "active_runs": statuses})
 		return
 	}
 	task, err := d.Control.CurrentTask(r.Context(), identity.TenantID, identity.PersonID)

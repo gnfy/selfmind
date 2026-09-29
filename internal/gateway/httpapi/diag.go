@@ -178,6 +178,8 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 			title = "(starting)"
 		}
 		fmt.Fprintf(&sb, "Active run: %s (%s elapsed)\n", truncate(toOneLine(title), 60), time.Since(active.StartedAt).Round(time.Second))
+	} else if count := d.coordinator().activeCount(identity.PersonID); count > 1 {
+		fmt.Fprintf(&sb, "Active runs: %d (use /status for exact run IDs)\n", count)
 	} else {
 		sb.WriteString("Active run: none\n")
 	}

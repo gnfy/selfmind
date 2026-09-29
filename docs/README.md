@@ -49,8 +49,8 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 ## Plan
 
 - [Daily-Driver Runtime Closure](plans/daily-driver-closure.md) - paused, en
-- [Run 为中心的工作历史方案（移除 Task）](plans/run-centric-work-history.zh-CN.md) - active, zh-CN
-- [按会话并发执行方案（对齐主流 Agent）](plans/session-concurrency.zh-CN.md) - paused, zh-CN
+- [Run 为中心的工作历史方案（移除 Task）](plans/run-centric-work-history.zh-CN.md) - paused, zh-CN
+- [同一人多 Run 稳定并行方案](plans/session-concurrency.zh-CN.md) - active, zh-CN
 
 ## Reference
 

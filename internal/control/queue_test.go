@@ -370,16 +370,10 @@ func TestQueueClaimRejectsStaleWorker(t *testing.T) {
 	}
 }
 
-func TestDoneSystemQueueOnlyRequeuesWithoutSuccessfulRunEvent(t *testing.T) {
+func TestBoundSystemQueueNeverReplaysWithoutSuccessfulRunEvent(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	task, err := store.CreateTask(ctx, TaskCreate{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "finalization",
-	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,24 +394,18 @@ func TestDoneSystemQueueOnlyRequeuesWithoutSuccessfulRunEvent(t *testing.T) {
 	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusDone); err != nil {
 		t.Fatal(err)
 	}
-	if requeued, err := store.RequeueDoneSystemQueuedIfUnmaterialized(ctx, identity.TenantID, row.ID, 2); err != nil || !requeued {
-		t.Fatalf("incomplete done row requeue = %v, %v; want true", requeued, err)
+	if requeued, err := store.RequeueSystemQueued(ctx, identity.TenantID, row.ID, 2); err != nil || requeued {
+		t.Fatalf("incomplete bound row requeue = %v, %v; want false", requeued, err)
 	}
-
-	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusStarted); err != nil {
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusFailed); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.BindQueuedRun(ctx, identity.TenantID, row.ID, "run_complete"); err != nil {
-		t.Fatal(err)
+	if requeued, err := store.RequeueSystemQueued(ctx, identity.TenantID, row.ID, 2); err != nil || requeued {
+		t.Fatalf("failed bound row requeue = %v, %v; want false", requeued, err)
 	}
-	if _, err := store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: "run_complete", Type: "run.finished"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusDone); err != nil {
-		t.Fatal(err)
-	}
-	if requeued, err := store.RequeueDoneSystemQueuedIfUnmaterialized(ctx, identity.TenantID, row.ID, 2); err != nil || requeued {
-		t.Fatalf("completed done row requeue = %v, %v; want false", requeued, err)
+	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
+	if err != nil || got == nil || got.RunID != "run_incomplete" || got.Restarts != 0 {
+		t.Fatalf("bound identity changed: %+v, %v", got, err)
 	}
 }
 
@@ -468,7 +456,7 @@ func TestRequeueStartedQueuedSettlesMaterializedRunWithoutReplay(t *testing.T) {
 	}
 }
 
-func TestRequeueStartedQueuedReplaysUntilFinalResultIsDurable(t *testing.T) {
+func TestRequeueStartedQueuedSettlesCompletedRunWithPendingDelivery(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
@@ -497,12 +485,12 @@ func TestRequeueStartedQueuedReplaysUntilFinalResultIsDurable(t *testing.T) {
 	}
 
 	requeued, dropped, err := store.RequeueStartedQueued(ctx)
-	if err != nil || requeued != 1 || dropped != 0 {
-		t.Fatalf("reconcile pending outbox row = %d/%d, %v; want 1/0", requeued, dropped, err)
+	if err != nil || requeued != 0 || dropped != 0 {
+		t.Fatalf("reconcile pending outbox row = %d/%d, %v; want no replay", requeued, dropped, err)
 	}
 	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
-	if err != nil || got == nil || got.Status != QueueStatusQueued || got.RunID != "" {
-		t.Fatalf("pending outbox row = %+v, %v; want queued for replay", got, err)
+	if err != nil || got == nil || got.Status != QueueStatusDone || got.RunID != "run_materialized" {
+		t.Fatalf("pending outbox row = %+v, %v; want completed Run binding", got, err)
 	}
 }
 
@@ -524,7 +512,7 @@ func TestEffectReceiptsAreTenantScoped(t *testing.T) {
 	}
 }
 
-func TestRequeueStartedQueuedReopensFailedBoundRun(t *testing.T) {
+func TestRequeueStartedQueuedKeepsUncertainBoundRunForExactRecovery(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
@@ -547,12 +535,12 @@ func TestRequeueStartedQueuedReopensFailedBoundRun(t *testing.T) {
 	}
 
 	requeued, dropped, err := store.RequeueStartedQueued(ctx)
-	if err != nil || requeued != 1 || dropped != 0 {
-		t.Fatalf("reconcile failed started row = %d/%d, %v; want 1/0", requeued, dropped, err)
+	if err != nil || requeued != 0 || dropped != 1 {
+		t.Fatalf("reconcile uncertain bound row = %d/%d, %v; want 0/1", requeued, dropped, err)
 	}
 	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
-	if err != nil || got == nil || got.Status != QueueStatusQueued || got.Restarts != 1 || got.RunID != "" {
-		t.Fatalf("reopened row = %+v, %v; want queued with cleared run", got, err)
+	if err != nil || got == nil || got.Status != QueueStatusFailed || got.Restarts != 0 || got.RunID != "run_failed" {
+		t.Fatalf("uncertain row = %+v, %v; want failed with exact run retained", got, err)
 	}
 }
 

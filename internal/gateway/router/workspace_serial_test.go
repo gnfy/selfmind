@@ -24,12 +24,12 @@ func TestWorkspaceSerialKeyWriteVsRead(t *testing.T) {
 		ctx  context.Context
 		want string
 	}{
-		{"no workspace", ctxWith(false, kernel.ToolModeFull, true), ""},
+		{"no workspace", ctxWith(false, kernel.ToolModeFull, true), "unscoped"},
 		{"write turn serializes", ctxWith(true, kernel.ToolModeLocalWrite, true), "wsA"},
 		{"full turn serializes", ctxWith(true, kernel.ToolModeFull, true), "wsA"},
-		{"read-only turn runs concurrent", ctxWith(true, kernel.ToolModeLocalRead, true), ""},
+		{"read hint keeps open tools serialized", ctxWith(true, kernel.ToolModeLocalRead, true), "wsA"},
 		{"no-tools turn runs concurrent", ctxWith(true, kernel.ToolModeNone, true), ""},
-		{"web-only turn runs concurrent", ctxWith(true, kernel.ToolModeWeb, true), ""},
+		{"web hint keeps open tools serialized", ctxWith(true, kernel.ToolModeWeb, true), "wsA"},
 		// No strategy pinned: conservatively serialize (an agent turn could write).
 		{"unknown strategy serializes", ctxWith(true, "", false), "wsA"},
 	}
@@ -52,7 +52,7 @@ func TestWorkspaceSerialPathsIncludesEveryBoundContextRoot(t *testing.T) {
 		t.Fatalf("serial paths = %#v", got)
 	}
 
-	readCtx := kernel.WithTaskStrategy(ctx, kernel.TaskStrategy{ToolMode: kernel.ToolModeLocalRead})
+	readCtx := kernel.WithTaskStrategy(ctx, kernel.TaskStrategy{ToolMode: kernel.ToolModeNone})
 	if got := workspaceSerialPaths(readCtx); len(got) != 0 {
 		t.Fatalf("read-only serial paths = %#v", got)
 	}

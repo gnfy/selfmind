@@ -1,9 +1,9 @@
 # Run 为中心的工作历史方案（移除 Task）
 
-> 生命周期：active  
+> 生命周期：paused（2026-09-29 起让出 active 位置给 `session-concurrency.zh-CN.md`；以 `docs/manifest.yaml` 为准）
 > 日期：2026-09-04  
 > 审批：项目所有者  
-> 复审日期：2026-10-10（2026-09-19 复审裁决：继续；以 `docs/manifest.yaml` 为准）  
+> 复审日期：2026-11-10（2026-09-29 裁决：暂停；2026-09-19 裁决：继续；以 `docs/manifest.yaml` 为准）
 > 取代：`task-capsule-work-history-redesign.zh-CN.md`（归档）、
 > `threaded-work-history-redesign.zh-CN.md`（已归档）  
 > 范围：Task/Thread 的移除、执行恢复关系、检索键、命令面、审批授权作用域。  

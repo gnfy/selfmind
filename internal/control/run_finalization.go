@@ -324,9 +324,28 @@ func (s *Store) EffectOwnedByRun(ctx context.Context, tenantID, effectKey, runID
 	return owner == runID, err
 }
 
+// RunAssistantContent reads the exact final reply committed with one Run.
+// Delivery compensation uses this durable text instead of invoking the model
+// or replaying any tool effects after a crash.
+func (s *Store) RunAssistantContent(ctx context.Context, tenantID, personID, runID string) (string, error) {
+	var content sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT m.content FROM runs r
+		 LEFT JOIN channel_messages m
+		   ON m.id = 'msg_run_' || r.id || '_assistant'
+		  AND m.tenant_id = r.tenant_id AND m.person_id = r.person_id
+		  AND m.thread_id = r.thread_id AND m.role = 'assistant'
+		 WHERE r.tenant_id = ? AND r.person_id = ? AND r.id = ?`,
+		normalizeTenant(tenantID), personID, runID).Scan(&content)
+	if err != nil {
+		return "", err
+	}
+	return content.String, nil
+}
+
 // MarkEffectDeliveryEnqueued records that the logical effect's result crossed
-// the durable outbox boundary. Queue recovery may settle the source row only
-// after this bit is true.
+// the durable outbox boundary. Recovery retries delivery from the committed
+// Run output while this bit is false; it never reruns the source work.
 func (s *Store) MarkEffectDeliveryEnqueued(ctx context.Context, tenantID, effectKey string) error {
 	if strings.TrimSpace(effectKey) == "" {
 		return nil

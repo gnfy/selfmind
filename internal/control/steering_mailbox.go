@@ -300,15 +300,35 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 		return err
 	}
 	executionRoots := m.queuedExecutionRoots(run)
+	workspaceID := m.WorkspaceID
+	taskID, replyToRunID := "", ""
+	// Ordinary unconsumed steering remains Main-owned and may be unrelated
+	// new work. A choice-backed row is different: the person explicitly named
+	// this exact Run and RoutePendingTurnChoice verified that edge in the same
+	// transaction that accepted the mailbox input. Preserve its selected work
+	// and scope across a crash or a last-model-step race.
+	if strings.HasPrefix(m.ID, "steer_choice_choice_") {
+		if run == nil || run.PersonID != m.PersonID {
+			return fmt.Errorf("choice-backed steering target is unavailable for its owner")
+		}
+		taskID = run.TaskID
+		workspaceID = run.WorkspaceID
+		executionRoots = executionenv.CloneRootBindings(run.ExecutionRoots)
+		if continuityRunResumableForQueue(run.Status) {
+			replyToRunID = run.ID
+		}
+	}
 	if _, err := s.EnqueueQueued(ctx, QueuedTask{
 		TenantID:       m.TenantID,
 		PersonID:       m.PersonID,
+		TaskID:         taskID,
+		ReplyToRunID:   replyToRunID,
 		Channel:        m.Channel,
 		Platform:       m.Platform,
 		PlatformUserID: m.PlatformUserID,
 		Content:        m.Content,
 		ApprovalMode:   m.ApprovalMode,
-		WorkspaceID:    m.WorkspaceID,
+		WorkspaceID:    workspaceID,
 		ExecutionRoots: executionRoots,
 		// Guidance the run never consumed becomes queued work, and it keeps its
 		// files: dropping them here would lose the attachment a second time,

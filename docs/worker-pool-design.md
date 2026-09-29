@@ -21,7 +21,7 @@ Two concurrent turns on one Agent would clobber these. The `WithX` methods are
 construction-time config, not per-run.
 
 Already present (reuse): `RunCoordinator` holds a per-person active-run registry
-(`internal/gateway/httpapi/run_coordinator.go` `active map[personID]*activeRun`).
+(`internal/gateway/httpapi/run_coordinator.go`, keyed by person and exact Run handle).
 `RunConversation` is invoked from the gateway router (`router/gateway.go:119/164`),
 the local CLI path (`cli/agent_events.go:116`), and delegation sub-agents
 (`app/multi_agent.go:165`, `app/delegation.go:80` — these already build a
@@ -45,12 +45,13 @@ single-threaded by construction, so it's uncontended).
 
 ## 3. Scheduler / queue policy (RunCoordinator becomes the dispatcher)
 
-- **Per-person**: at most one active interactive run per human — keep the
-  existing `active map[personID]` guard (reject/queue a 2nd run for the same
-  person, as today).
+- **Per-person**: production still admits at most one active interactive Run
+  per human. A transaction checks the capacity when creating each Run; the
+  registry retains cancel/steer handles for several Runs but is not authority.
 - **Per-workspace write-serialization**: a turn that may write files acquires a
   per-workspace token; concurrent same-workspace writes queue (avoid clobber).
-  Read-only / no-workspace turns skip it.
+  Enforced read-only turns skip it; an unknown workspace takes a conservative
+  person-scoped token.
 - **Cross-workspace + read-only** turns dispatch to any free worker
   concurrently.
 - **Per-provider** concurrency cap + 429 backoff (esp. Kimi static key — no
@@ -62,9 +63,21 @@ single-threaded by construction, so it's uncontended).
 Durable queue ownership (shipped 2026-08-08) is a lease, not a status guess.
 Claiming a row atomically writes an opaque claim token, lease deadline, and
 attempt generation; only that token may bind the created run or renew the
-lease. Recovery may requeue a started system row only after the lease expires.
+lease. Run creation and queue binding now commit in one transaction. Boot
+retries an unbound claim, while a bound Run with uncertain effects keeps its
+identity for exact-Run recovery instead of being blindly dispatched again.
+The claim path refuses legacy queued rows already bound to a Run. A completed
+watcher finalization whose result delivery was interrupted retries only the
+durable outbound result, using the original Run's recorded reply.
 This contract is deliberately runner-ready: a future remote worker can carry
 the same token without changing queue semantics.
+
+At a test capacity above one, the queue scans due rows in priority/FIFO order
+and leaves a directory-blocked source in place while another source with
+non-overlapping physical roots may fill a free slot. It uses the worker pool's
+symlink-aware root identity and preserves per-source order; the worker pool
+still makes the final lock decision. Unknown roots remain conservatively
+blocked behind any active Run. Production's person limit remains one.
 
 ## 3a. Scheduling primitive — shipped
 
@@ -84,13 +97,16 @@ existing `active map[personID]`), applied before dispatch.
 - `app.MaybeEnableWorkerPool` reads `SELFMIND_WORKERS` (default 1), builds N-1
   fully independent worker agents (own `InitAgent`+`InitTools`, sharing only the
   serialized memory/skill stores + global auth manager), and enables the pool;
-  wired in `cliapp/root.go`. **N=1 is a no-op → default path byte-identical.**
+  wired in the daemon runner (`internal/runtime/gateway/runner.go`), the only
+  execution path. **N=1 is a no-op → default path byte-identical.**
 - Tests: `runpool` (race), `TestWorkerCountParsesEnv`, `TestWorkspaceSerialKey`,
   `TestEnableWorkerPoolWiring`. Existing suite green at default.
 - **Pending: real soak** at `SELFMIND_WORKERS=4` (CLI + WeChat + cron) before
   raising the default — the concurrent-execution correctness can't be fully
-  headless-verified. Also: the daemon (`selfmind gateway run`) path should call
-  `MaybeEnableWorkerPool` too (currently wired in the local CLI path).
+  headless-verified. While one run per person holds, N>1 only overlaps
+  different people's runs; the session-concurrency plan
+  (`docs/plans/session-concurrency.zh-CN.md`) owns the default change
+  and the soak.
 
 ## 4. Flag & rollout (zero risk until opted in)
 
@@ -227,15 +243,15 @@ events. Person-partitioned memory/session reads use structured daemon APIs;
 commands not yet supported remotely return a clear notice rather than opening a
 second local ownership path.
 
-### 8c. Workspace serialization: write-only — shipped
+### 8c. Workspace serialization: enforced capability — shipped
 
-`workspaceSerialKey` now consults the per-turn `TaskStrategy`: only turns that
-can write (`ToolModeLocalWrite`/`Full` → `TaskStrategy.MayWriteWorkspace()`)
-take the per-workspace exclusive key; read-only turns (`None`/`Web`/`LocalRead`)
-return an empty key and run concurrently on the same workspace — an
-Exclusive-vs-SharedRead split. When no strategy is pinned we
-conservatively serialize (an agent turn could write). Tested in
-`router/workspace_serial_test.go`.
+`workspaceSerialKey` uses the final tool capability, not a `ToolMode` hint.
+The normal agent-first surface exposes write tools even when the mode says
+`LocalRead` or `Web`, so these turns still take the physical-root lock. A
+no-action turn or a trusted verification-only recovery (whose dispatch guard
+refuses mutation) can share a read view. Missing roots take a person-scoped
+fallback lock rather than the empty key. Tested in
+`router/workspace_serial_test.go` and `router/gateway_pool_test.go`.
 
 ### 8d. Daemon-only ownership — shipped
 

@@ -249,7 +249,7 @@ type uiModel struct {
 	skillCompletion   []tools.SkillCompletionCandidate
 	toolDispatchFn    func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
 	approvalResponder func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope is daemon-issued; grantKey is a rule the ask offered)
-	steerFn           func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
+	steerFn           func(runID, channel, text string) error                        // client mode: forward guidance to this window's run
 	// Interactive approval panel state (see approval_flow.go). approvalPrompt is
 	// the active panel; approvalQueue holds requests that arrived while one was
 	// already up (FIFO re-arm).
@@ -584,7 +584,7 @@ func (c *Controller) SetApprovalResponder(fn func(approvalID, decision, scope, g
 // (gateway POST /v1/runs/steer). When the run executes inside the daemon, the
 // process-local steering channel can never reach it, so input typed during a
 // run must go through this function instead. Only set in client mode.
-func (c *Controller) SetSteerFunc(fn func(text string) error) {
+func (c *Controller) SetSteerFunc(fn func(runID, channel, text string) error) {
 	if c == nil || c.model == nil {
 		return
 	}
@@ -1082,27 +1082,42 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // explicit transcript notice: guidance must never appear accepted when it
 // was not.
 func (m *uiModel) injectMidRunGuidance(input string) tea.Cmd {
-	m.addMessage("user", input)
-	m.editor.Reset()
 	kind := noticeGuidance
 	status := ""
+	accepted := false
 	switch {
 	case m.clientMode && m.steerFn != nil:
-		if err := m.steerFn(input); err != nil {
+		if m.daemonRunID == "" || m.channel == "" {
+			m.addErrorMessage("The running task has no exact run or session yet; guidance was not sent. Your draft is still in the composer.")
+			kind = noticeWarning
+			status = "Guidance was not accepted by the daemon."
+		} else if err := m.steerFn(m.daemonRunID, m.channel, input); err != nil {
 			m.addErrorMessage(fmt.Sprintf("The daemon did not accept the guidance: %v", err))
 			kind = noticeWarning
 			status = "Guidance was not accepted by the daemon."
 		} else {
+			accepted = true
 			status = "Sent to the running task as guidance."
 		}
+	case m.clientMode:
+		kind = noticeWarning
+		status = "Guidance was not accepted; the daemon connection is unavailable."
 	case m.steerCh != nil:
 		select {
 		case m.steerCh <- input:
+			accepted = true
 			status = "Sent to the running task as guidance."
 		default:
 			kind = noticeWarning
 			status = "Guidance queue is full; try again in a moment."
 		}
+	default:
+		kind = noticeWarning
+		status = "Guidance was not accepted; no active run is ready."
+	}
+	if accepted {
+		m.addMessage("user", input)
+		m.editor.Reset()
 	}
 	// Transient notice — auto-clear so it doesn't linger after the turn.
 	id := m.setStatusNotice(kind, status)

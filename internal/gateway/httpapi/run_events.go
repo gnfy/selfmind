@@ -400,7 +400,7 @@ func (c *RunCoordinator) refreshDirectContinuation(ctx context.Context, task *co
 	}
 	*run = *fresh
 	*task = *thread
-	c.updateActive(run.PersonID, task, run)
+	c.updateActive(ctx, task, run)
 }
 
 func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {

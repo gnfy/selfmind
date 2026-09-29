@@ -22,7 +22,7 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 	if len(a.args) > 1 {
 		switch a.args[1] {
 		case "status":
-			return true, a.sendGatewayMessage("/status")
+			return true, a.sendGatewayMessage(strings.TrimSpace("/status " + strings.Join(a.args[2:], " ")))
 		case "usage":
 			return true, a.sendGatewayMessage("/report daily --since 24h")
 		case "report":

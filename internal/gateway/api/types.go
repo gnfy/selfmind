@@ -372,7 +372,7 @@ type ApprovalRespondResponse struct {
 	Approval *control.ApprovalRequest `json:"approval"`
 }
 
-// RunSteerRequest injects mid-turn user guidance into the caller's active run
+// RunSteerRequest injects mid-turn user guidance into one exact active run
 // (POST /v1/runs/steer). It exists for thin clients: their process-local
 // steering channel can never reach a run executing inside the daemon, so this
 // is the only path by which mid-run input reaches the agent loop. Identity
@@ -384,6 +384,7 @@ type RunSteerRequest struct {
 	PlatformUserID string `json:"platform_user_id"`
 	DisplayName    string `json:"display_name"`
 	Channel        string `json:"channel"`
+	RunID          string `json:"run_id,omitempty"`
 	Text           string `json:"text"`
 }
 
@@ -475,6 +476,9 @@ type DigestResponse struct {
 	// ActiveRun is the person's currently executing run, if any — the signal
 	// for a client to re-attach to its live events.
 	ActiveRun *DigestActiveRun `json:"active_run,omitempty"`
+	// ActiveRuns is a bounded overview when several Runs execute for the same
+	// person. The singular field remains for older clients only when unique.
+	ActiveRuns []DigestActiveRun `json:"active_runs,omitempty"`
 	// ApprovalMode is the person's effective approval mode (their persisted
 	// /mode preference, or "on-request" when unset). It is point-in-time person
 	// state — NOT a "while you were away" item — so it never affects Empty();
@@ -509,7 +513,7 @@ func (d *DigestResponse) Empty() bool {
 		(len(d.FinishedTasks) == 0 && len(d.DisruptedTasks) == 0 &&
 			len(d.UnresolvedTasks) == 0 &&
 			len(d.PendingApprovals) == 0 && len(d.PendingClarifies) == 0 &&
-			len(d.UnconfirmedPushes) == 0 && d.ActiveRun == nil)
+			len(d.UnconfirmedPushes) == 0 && d.ActiveRun == nil && len(d.ActiveRuns) == 0)
 }
 
 type DigestTask struct {

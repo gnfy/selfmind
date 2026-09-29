@@ -92,6 +92,8 @@ func TestApplyStateSeedsCanBindWorkspaceSkill(t *testing.T) {
 }
 
 func TestApplyStateSeedsCreatesAgentCreatedSkillFixture(t *testing.T) {
+	// The seed catalogue assertion must not scan Skills in checkout ancestors.
+	t.Chdir(t.TempDir())
 	ctx := context.Background()
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {

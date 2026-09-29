@@ -21,6 +21,8 @@ const DefaultTenantID = "default"
 
 const sqliteBusyPrimaryCode = 5
 
+var ErrRunCapacity = errors.New("person run capacity is full")
+
 type sqliteErrorCoder interface {
 	Code() int
 }
@@ -2338,6 +2340,17 @@ func (s *Store) StartRunForOwner(ctx context.Context, owner RunOwner, channel, i
 type StartRunOptions struct {
 	WorkKey        string
 	ExecutionRoots []executionenv.RootBinding
+	// MaxActiveRuns is the per-person top-level admission ceiling. A positive
+	// value is checked inside the Run insertion transaction; zero preserves
+	// callers that do not participate in gateway admission.
+	MaxActiveRuns int
+	// ExclusiveChannel gives a thin CLI session one foreground Run even when
+	// its person has spare capacity. IM channels deliberately leave this false.
+	ExclusiveChannel bool
+	// QueueID and QueueClaimToken bind a claimed queue row to the new Run in
+	// the same transaction. A stale claim creates no Run.
+	QueueID         string
+	QueueClaimToken string
 	// ResumesRunID claims the named prior run as this run's continuation parent
 	// in the SAME transaction that creates the child. The claim validates
 	// tenant/person/task agreement and the parent's resumable, unclaimed state
@@ -2365,13 +2378,16 @@ func (s *Store) startRun(ctx context.Context, owner RunOwner, channel, inputSumm
 	if strings.TrimSpace(owner.TenantID) == "" || strings.TrimSpace(owner.PersonID) == "" {
 		return nil, fmt.Errorf("run owner requires a tenant and a person")
 	}
+	if (strings.TrimSpace(options.QueueID) == "") != (strings.TrimSpace(options.QueueClaimToken) == "") {
+		return nil, fmt.Errorf("queued run requires both queue id and claim token")
+	}
 	// A parent-claiming creation races other connections by design (the whole
 	// point of the unique parent index). Under WAL, the loser's deferred
 	// transaction reads on a pre-commit snapshot and its write upgrade fails
 	// immediately with SQLITE_BUSY instead of waiting. Retry on a fresh
 	// snapshot: the re-run validation then sees the committed child and
 	// returns ErrResumeTargetClaimed deterministically.
-	if strings.TrimSpace(options.ResumesRunID) != "" {
+	if strings.TrimSpace(options.ResumesRunID) != "" || strings.TrimSpace(options.QueueID) != "" || options.MaxActiveRuns > 0 || options.ExclusiveChannel {
 		var run *Run
 		var err error
 		for attempt := 0; attempt < 3; attempt++ {
@@ -2439,6 +2455,28 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if options.MaxActiveRuns > 0 {
+		var active int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND person_id = ? AND status = 'running'`,
+			run.TenantID, run.PersonID).Scan(&active); err != nil {
+			return nil, fmt.Errorf("check run capacity: %w", err)
+		}
+		if active >= options.MaxActiveRuns {
+			return nil, ErrRunCapacity
+		}
+	}
+	if options.ExclusiveChannel {
+		var sameChannel int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND person_id = ? AND channel = ? AND status = 'running'`,
+			run.TenantID, run.PersonID, run.Channel).Scan(&sameChannel); err != nil {
+			return nil, fmt.Errorf("check run channel lane: %w", err)
+		}
+		if sameChannel > 0 {
+			return nil, ErrRunCapacity
+		}
+	}
 	if run.ResumesRunID != "" {
 		if err := validateResumeClaimTx(ctx, tx, run); err != nil {
 			return nil, err
@@ -2452,6 +2490,20 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 			return nil, ErrResumeTargetClaimed
 		}
 		return nil, err
+	}
+	if options.QueueID != "" {
+		result, bindErr := tx.ExecContext(ctx,
+			`UPDATE task_queue SET run_id = ?
+			 WHERE tenant_id = ? AND person_id = ? AND channel = ? AND id = ?
+			   AND status = ? AND claim_token = ? AND COALESCE(run_id, '') = ''`,
+			run.ID, run.TenantID, run.PersonID, run.Channel, options.QueueID,
+			QueueStatusStarted, options.QueueClaimToken)
+		if bindErr != nil {
+			return nil, fmt.Errorf("bind queued run: %w", bindErr)
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return nil, ErrQueueClaimLost
+		}
 	}
 	if run.ResumesRunID != "" {
 		// The claim settles the parent's open wait records in the same

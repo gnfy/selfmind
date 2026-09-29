@@ -122,9 +122,11 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
    transaction and the child claims that exact origin; terminal or already
    claimed origins are expired instead of falling back to another question.
 3. **Natural-language run resolution is Main-owned and person-scoped.** While a
-   Run is active, user-originated CLI or IM language is persisted as steer and
-   acknowledged with current status before the same Main receives it at a safe
-   checkpoint. Main may apply related guidance to current work, queue an
+   Run is active, user-originated language from its CLI session or IM is
+   persisted as steer and acknowledged with current status before the same Main
+   receives it at a safe checkpoint. Language from another CLI session queues
+   independently unless it carries an exact reply edge. Main may apply related
+   guidance to current work, queue an
    independent request, or queue an exact historical continuation without
    changing the active execution domain. While idle, ordinary language first
    starts one normal audited Main Run. Main can search complete retained
@@ -183,9 +185,10 @@ gate in `docs/STATUS.md`. Durable active steer, one idle Main turn, progressive
 work-history tools, OBSERVE projection, validated continuation commits, and
 explicit delivery override are the current default:
 
-- user-originated natural language durably steers an active Run on both CLI and
-  IM; the same Main decides whether to update current work or queue independent
-  work at a safe checkpoint;
+- user-originated natural language in the active CLI session or IM durably
+  steers the active Run; a different CLI session queues its own input unless
+  it names the Run through an exact reply edge; the same Main decides whether
+  steered input updates current work or queues independent work;
 - idle natural language first creates an ordinary audited Main Run with a
   bounded work-spine tail and structured hints, then uses person-scoped
   `work_search` and `work_inspect` when more history is needed;
@@ -264,7 +267,9 @@ what waits. While the asking terminal is open, only it answers with plain text
 `/approve` or a question with the named form `N: answer`, and its plain message
 stays its own input. With the asking terminal closed, or for an IM question,
 any endpoint answers with plain text as before. A message typed while another
-session's run is active is steered into that run with a receipt naming it.
+session's run is active queues for this session, unless it has an exact reply
+edge to the active Run. The current one-Run-per-person limit means the queued
+instruction starts after the active execution ends.
 Watching another session's run is explicit: `/attach`, or resuming that
 session with `selfmind --resume <session>`. A parked approval answered from a
 terminal continues in the source run's session.

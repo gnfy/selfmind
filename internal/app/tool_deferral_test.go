@@ -19,6 +19,8 @@ import (
 // measured floor, not the target. Claiming the target here would turn an
 // unfinished job into a green test.
 func TestReviewedDeferralShrinksTheModelToolSurface(t *testing.T) {
+	// Keep personal Skills from checkout ancestors out of the tool-surface fixture.
+	t.Chdir(t.TempDir())
 	base := t.TempDir()
 	cfg := &config.Config{Evolution: config.EvolutionConfig{SkillsDir: base}}
 	store, err := control.OpenStore(t.TempDir())

@@ -415,6 +415,9 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}
 		return api.MessageResponse{Identity: identity, Content: msg, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
 	}
+	if response, handled := d.ambiguousActiveInput(ctx, identity, req); handled {
+		return response, statusForMessageResponse(response)
+	}
 	if d.IsDraining() {
 		if d.isModelChangeDrain() {
 			intent := d.classifyIntent(ctx, req.Content, req.Channel)
@@ -429,7 +432,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 				return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", rootsErr.Error())}, http.StatusBadRequest
 			}
-			if running := coord.currentActive(identity.PersonID); running != nil && (d.shouldSteerActiveNaturalInput(ctx, identity, req, running) || requestTargetsActiveRun(req, intent, running)) {
+			if running := coord.activeForIncoming(identity.PersonID, req); running != nil && (d.shouldSteerActiveNaturalInput(ctx, identity, req, running) || requestTargetsActiveRun(req, intent, running)) {
 				if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
 					return resp, http.StatusOK
 				}
@@ -463,7 +466,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
 		}
-		running := coord.currentActive(identity.PersonID)
+		running := coord.activeForIncoming(identity.PersonID, req)
 		if running == nil {
 			return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
 		}
@@ -489,7 +492,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// the right place to decide whether the input refines current work or should
 	// become independent queued work. Explicit controls/edges and daemon-origin
 	// turns remain on their deterministic paths.
-	if running := d.coordinator().currentActive(identity.PersonID); running != nil &&
+	if running := d.coordinator().activeForIncoming(identity.PersonID, req); running != nil &&
 		d.shouldSteerActiveNaturalInput(ctx, identity, req, running) {
 		coord := d.coordinator()
 		workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
@@ -536,7 +539,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 		return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
 	}
-	if running := coord.currentActive(identity.PersonID); running != nil {
+	if running := coord.activeForIncoming(identity.PersonID, req); running != nil {
 		// A continuation targets the ACTIVE task, so it is not new work and must
 		// never be queued. Historically this returned a bare "busy" reply, which
 		// left the cross-endpoint takeover story broken: a continuation arriving
@@ -570,6 +573,9 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 				Turn:     messageTurn("busy", "running", "running", running.TaskID, running.RunID, running.Summary),
 			}, http.StatusOK
 		}
+		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
+	}
+	if !coord.hasCapacity(identity.PersonID) {
 		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
 	}
 
@@ -623,7 +629,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		Steer:          steerCh,
 	}
 	if ok := coord.beginActive(identity.PersonID, active); !ok {
-		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK
+		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
 	}
 	// Durably transfer guidance that lost the final-model-call race while the
 	// per-person slot is still held, then free the slot and drain. This ordering
@@ -632,10 +638,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// updates with TaskID/RunID after StartRun.
 	defer func() {
 		coord.deferUnconsumedSteering(identity, active)
-		coord.endActive(identity.PersonID)
+		coord.endActiveRun(identity.PersonID, active)
 		coord.drainQueue(identity)
 	}()
-	runCtx = kernel.WithSteeringInputs(runCtx, steerCh)
+	runCtx = kernel.WithSteeringInputs(withActiveRun(runCtx, active), steerCh)
 
 	resp, status := coord.runMessage(runCtx, identity, req, intent)
 	// Detached finish: if the endpoint that dispatched this sync turn vanished
@@ -663,6 +669,13 @@ func (d *Server) shouldSteerActiveNaturalInput(ctx context.Context, identity *co
 	}
 	if replyRunID := strings.TrimSpace(req.ReplyToRunID); replyRunID != "" {
 		return replyRunID == running.RunID
+	}
+	// Each CLI window has its own channel and default work focus. A fresh
+	// instruction in window B must not become guidance to window A merely
+	// because A is the person's current executor. With the present one-run
+	// admission limit it queues for B; exact reply edges can still target A.
+	if req.Platform == "cli" && strings.TrimSpace(req.Channel) != running.Channel {
+		return false
 	}
 	switch strings.TrimSpace(req.ContinuityAction) {
 	case string(ContinuityResume), "new":

@@ -10,6 +10,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -252,6 +253,11 @@ const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESC
 
 const defaultQueueClaimLease = 2 * time.Minute
 
+// ErrQueueClaimLost means a queue attempt no longer owns the row it tried to
+// launch. Run creation rolls back with this error; callers must not retry an
+// effect or requeue the row without checking the exact claim token.
+var ErrQueueClaimLost = errors.New("queue claim is stale or already bound")
+
 // ClaimQueued atomically gives one worker ownership of a due queued row. The
 // token is required for binding and renewal, so a stale worker cannot extend a
 // later attempt after recovery has reassigned the stable queue row.
@@ -266,7 +272,8 @@ func (s *Store) ClaimQueued(ctx context.Context, tenantID, id string, leaseFor t
 	now := time.Now()
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE task_queue SET status = ?, claim_token = ?, lease_until = ?, attempt_generation = attempt_generation + 1
-		 WHERE tenant_id = ? AND id = ? AND status = ? AND COALESCE(not_before, 0) <= ?`,
+		 WHERE tenant_id = ? AND id = ? AND status = ? AND COALESCE(run_id, '') = ''
+		   AND COALESCE(not_before, 0) <= ?`,
 		QueueStatusStarted, token, now.Add(leaseFor).Unix(), normalizeTenant(tenantID), id,
 		QueueStatusQueued, now.Unix())
 	if err != nil {
@@ -292,6 +299,43 @@ func (s *Store) RenewQueuedClaim(ctx context.Context, tenantID, id, token string
 		`UPDATE task_queue SET lease_until = ?
 		 WHERE tenant_id = ? AND id = ? AND status = ? AND claim_token = ?`,
 		time.Now().Add(leaseFor).Unix(), normalizeTenant(tenantID), id, QueueStatusStarted, token)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// RequeueUnboundClaim returns only this claimant's still-unbound row to the
+// queue. A newer claim or a Run already bound to this row is never undone.
+func (s *Store) RequeueUnboundClaim(ctx context.Context, tenantID, id, token string) (bool, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(token) == "" {
+		return false, fmt.Errorf("queue id and claim token are required")
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE task_queue SET status = ?, claim_token = '', lease_until = 0
+		 WHERE tenant_id = ? AND id = ? AND status = ? AND claim_token = ?
+		   AND COALESCE(run_id, '') = ''`,
+		QueueStatusQueued, normalizeTenant(tenantID), id, QueueStatusStarted, token)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// FinishQueuedClaim settles only the attempt that still owns the queue row.
+// A turn that ends before Run creation can also have a durable, delivered
+// result (for example a request for disambiguation), so no Run binding is
+// required here. A stale worker cannot settle a newer attempt.
+func (s *Store) FinishQueuedClaim(ctx context.Context, tenantID, id, token, status string) (bool, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(token) == "" {
+		return false, fmt.Errorf("queue id and claim token are required")
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE task_queue SET status = ?
+		 WHERE tenant_id = ? AND id = ? AND status = ? AND claim_token = ?`,
+		status, normalizeTenant(tenantID), id, QueueStatusStarted, token)
 	if err != nil {
 		return false, err
 	}
@@ -331,22 +375,65 @@ func (s *Store) ListQueued(ctx context.Context, tenantID, personID, status strin
 // row is currently due. It never mutates state; the caller marks the row
 // started only once it has committed to launching it.
 func (s *Store) NextQueued(ctx context.Context, tenantID, personID string) (*QueuedTask, error) {
+	return s.NextQueuedWhere(ctx, tenantID, personID, nil)
+}
+
+// ListDueQueuedContinuations is the small preflight set for a queue selector
+// whose predicate cannot query the same single-connection Store. Ordinary
+// queue rows continue to stream through NextQueuedWhere without materializing
+// all pending work.
+func (s *Store) ListDueQueuedContinuations(ctx context.Context, tenantID, personID string) ([]QueuedTask, error) {
 	if strings.TrimSpace(personID) == "" {
 		return nil, fmt.Errorf("person id is required")
 	}
-	row := s.db.QueryRowContext(ctx,
-		`SELECT `+queueSelectColumns+`
-		 FROM task_queue WHERE tenant_id = ? AND person_id = ? AND status = ? AND COALESCE(not_before, 0) <= ?
-		 ORDER BY priority DESC, created_at ASC, rowid ASC LIMIT 1`,
+	rows, err := s.db.QueryContext(ctx, `SELECT `+queueSelectColumns+`
+		FROM task_queue WHERE tenant_id = ? AND person_id = ? AND status = ?
+		  AND COALESCE(run_id, '') = '' AND COALESCE(reply_to_run_id, '') != ''
+		  AND COALESCE(not_before, 0) <= ?`,
 		normalizeTenant(tenantID), personID, QueueStatusQueued, time.Now().Unix())
-	q, err := scanQueuedTask(row)
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			return nil, nil
-		}
 		return nil, err
 	}
-	return &q, nil
+	defer rows.Close()
+	var out []QueuedTask
+	for rows.Next() {
+		q, err := scanQueuedTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, rows.Err()
+}
+
+// NextQueuedWhere scans due rows in scheduler order without materializing an
+// unbounded queue. The predicate must be pure and must not query this Store:
+// SQLite may be configured with one connection. Callers can skip a resource-
+// blocked head row while preserving source order in the predicate.
+func (s *Store) NextQueuedWhere(ctx context.Context, tenantID, personID string, eligible func(QueuedTask) bool) (*QueuedTask, error) {
+	if strings.TrimSpace(personID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+queueSelectColumns+`
+		 FROM task_queue WHERE tenant_id = ? AND person_id = ? AND status = ?
+		   AND COALESCE(run_id, '') = '' AND COALESCE(not_before, 0) <= ?
+		 ORDER BY priority DESC, created_at ASC, rowid ASC`,
+		normalizeTenant(tenantID), personID, QueueStatusQueued, time.Now().Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		q, err := scanQueuedTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		if eligible == nil || eligible(q) {
+			return &q, nil
+		}
+	}
+	return nil, rows.Err()
 }
 
 // GetQueued fetches one queue row by id (any status). Diagnostic/test helper.
@@ -406,10 +493,9 @@ func (s *Store) UpdateSystemQueuedContent(ctx context.Context, tenantID, id, con
 	return n == 1, nil
 }
 
-// RequeueSystemQueued reopens one idempotent system row after its prior launch
-// ended without materializing the promised durable state. It never touches
-// ordinary user messages, and the caller supplies a small hard retry budget so
-// reconciliation cannot become an infinite execution loop.
+// RequeueSystemQueued reopens an unbound system row after a failed launch. A
+// bound Run may already have effects and must use exact-Run recovery instead
+// of replaying the entire queue message.
 func (s *Store) RequeueSystemQueued(ctx context.Context, tenantID, id string, maxRestarts int) (bool, error) {
 	if strings.TrimSpace(id) == "" {
 		return false, fmt.Errorf("queue id is required")
@@ -421,6 +507,7 @@ func (s *Store) RequeueSystemQueued(ctx context.Context, tenantID, id string, ma
 		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1,
 			claim_token = '', lease_until = 0
 		 WHERE tenant_id = ? AND id = ? AND idempotency_key != ''
+		   AND COALESCE(run_id, '') = ''
 		   AND (status = ? OR (status = ? AND COALESCE(lease_until, 0) <= ?))
 		   AND restarts < ?`,
 		QueueStatusQueued, normalizeTenant(tenantID), id,
@@ -470,64 +557,9 @@ func (s *Store) BindQueuedRunClaimed(ctx context.Context, tenantID, id, runID, t
 	return nil
 }
 
-// RequeueDoneSystemQueuedIfUnmaterialized reopens a queue-level done row only
-// when its bound run has no durable terminal event. This closes the crash
-// window without ever replaying a successfully completed side effect.
-func (s *Store) RequeueDoneSystemQueuedIfUnmaterialized(ctx context.Context, tenantID, id string, maxRestarts int) (bool, error) {
-	if strings.TrimSpace(id) == "" {
-		return false, fmt.Errorf("queue id is required")
-	}
-	if maxRestarts < 1 {
-		maxRestarts = 1
-	}
-	tenant := normalizeTenant(tenantID)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var runID string
-	var restarts int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(run_id, ''), restarts FROM task_queue
-		 WHERE tenant_id = ? AND id = ? AND idempotency_key != '' AND status = ?`,
-		tenant, id, QueueStatusDone).Scan(&runID, &restarts); err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			return false, nil
-		}
-		return false, err
-	}
-	if runID == "" || restarts >= maxRestarts {
-		return false, nil
-	}
-	var terminalCount int
-	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(1) FROM task_events WHERE run_id = ? AND type = 'run.finished'`, runID).Scan(&terminalCount); err != nil {
-		return false, err
-	}
-	if terminalCount > 0 {
-		return false, nil
-	}
-	result, err := tx.ExecContext(ctx,
-		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1,
-			claim_token = '', lease_until = 0
-		 WHERE tenant_id = ? AND id = ? AND status = ? AND run_id = ? AND restarts = ?`,
-		QueueStatusQueued, tenant, id, QueueStatusDone, runID, restarts)
-	if err != nil {
-		return false, err
-	}
-	if n, _ := result.RowsAffected(); n != 1 {
-		return false, nil
-	}
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 // RunHasSuccessfulTerminalEvent reports whether a run completed successfully.
-// Interrupted, cancelled, and failed events remain recoverable evidence and
-// must not suppress bounded queue compensation.
+// Interrupted, cancelled, and failed events remain recoverable evidence; they
+// cannot authorize replay of a queue item already bound to that run.
 func (s *Store) RunHasSuccessfulTerminalEvent(ctx context.Context, runID string) (bool, error) {
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
@@ -633,11 +665,13 @@ func (s *Store) ListAllQueued(ctx context.Context, status string) ([]QueuedTask,
 // after a day of deploy restarts).
 const maxQueueRestarts = 1
 
-// RequeueStartedQueued flips 'started' rows back to 'queued' (boot recovery:
-// the daemon died between marking a row started and its run finalizing) and
-// returns the requeued count. Rows that already used their restart budget are
-// marked failed instead — never silently, the count of dropped rows is
-// returned too. Safe at boot: gateway.lock guarantees single ownership.
+// RequeueStartedQueued retries an unbound claim after a boot crash. A bound
+// Run may already have performed an effect, so it is not replayed as a fresh
+// queue item; exact-Run recovery owns that uncertainty. A completed watcher
+// finalization with an unconfirmed delivery is settled here too: its result
+// is delivered from durable output, without rerunning its tools. Rows not
+// safe to replay are marked failed with their Run binding intact. Safe at
+// boot: gateway.lock guarantees single ownership.
 func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -646,24 +680,16 @@ func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int
 	defer func() { _ = tx.Rollback() }()
 
 	// Finalization commits the terminal event before the queue defer marks its
-	// row done. A crash in that narrow window must settle the row, not replay it.
+	// row done. Older daemons could also leave a bound row in queued state on
+	// shutdown; neither state permits a fresh claim after the Run finished.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE task_queue SET status = ?
-		 WHERE status = ? AND COALESCE(run_id, '') != ''
+		 WHERE status IN (?, ?) AND COALESCE(run_id, '') != ''
 		   AND EXISTS (
 		       SELECT 1 FROM task_events e
 		       WHERE e.run_id = task_queue.run_id AND e.type = 'run.finished'
-		   )
-		   AND (
-		       idempotency_key NOT LIKE 'external-watch:%:finalization'
-		       OR EXISTS (
-		           SELECT 1 FROM effect_receipts r
-		           WHERE r.tenant_id = task_queue.tenant_id
-		             AND r.effect_key = task_queue.idempotency_key
-		             AND r.delivery_enqueued = 1
-		       )
 		   )`,
-		QueueStatusDone, QueueStatusStarted); err != nil {
+		QueueStatusDone, QueueStatusStarted, QueueStatusQueued); err != nil {
 		return 0, 0, err
 	}
 
@@ -671,16 +697,16 @@ func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int
 		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1,
 			claim_token = '', lease_until = 0
 		 WHERE status = ? AND restarts < ?
-		   AND idempotency_key NOT LIKE 'run-recovery:%'`,
+		   AND idempotency_key NOT LIKE 'run-recovery:%'
+		   AND COALESCE(run_id, '') = ''`,
 		QueueStatusQueued, QueueStatusStarted, maxQueueRestarts)
 	if err != nil {
 		return 0, 0, err
 	}
 	nRequeued, _ := res.RowsAffected()
 	res, err = tx.ExecContext(ctx,
-		`UPDATE task_queue SET status = ? WHERE status = ?`,
-		QueueStatusFailed,
-		QueueStatusStarted)
+		`UPDATE task_queue SET status = ? WHERE status = ? OR (status = ? AND COALESCE(run_id, '') != '')`,
+		QueueStatusFailed, QueueStatusStarted, QueueStatusQueued)
 	if err != nil {
 		return int(nRequeued), 0, err
 	}

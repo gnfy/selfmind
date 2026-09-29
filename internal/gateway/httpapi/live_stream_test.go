@@ -16,12 +16,12 @@ import (
 
 func TestRunEventBrokerIsPersonScopedAndSequencesEvents(t *testing.T) {
 	hub := newRunEventBroker(nil)
-	a, stopA := hub.subscribe("person-a", "", "")
+	a, stopA := hub.subscribe("person-a", "session-a", "")
 	defer stopA()
 	b, stopB := hub.subscribe("person-b", "", "")
 	defer stopB()
 
-	hub.publish(api.RunEvent{PersonID: "person-a", RunID: "run-1", Type: "assistant.delta", Durability: api.EventEphemeral, CreatedAt: time.Now()})
+	hub.publish(api.RunEvent{PersonID: "person-a", RunID: "run-1", Channel: "session-a", Type: "assistant.delta", Durability: api.EventEphemeral, CreatedAt: time.Now()})
 	select {
 	case event := <-a.ch:
 		if event.Type != "assistant.delta" || event.LiveSeq != 1 {
@@ -41,7 +41,7 @@ func TestRunEventBrokerIsPersonScopedAndSequencesEvents(t *testing.T) {
 	if event.LiveSeq != 2 {
 		t.Fatalf("terminal live sequence=%d, want 2", event.LiveSeq)
 	}
-	hub.publish(api.RunEvent{PersonID: "person-a", RunID: "run-1", Type: "assistant.delta", Durability: api.EventEphemeral, CreatedAt: time.Now()})
+	hub.publish(api.RunEvent{PersonID: "person-a", RunID: "run-1", Channel: "session-a", Type: "assistant.delta", Durability: api.EventEphemeral, CreatedAt: time.Now()})
 	if event = <-a.ch; event.LiveSeq != 1 {
 		t.Fatalf("completed run sequence was not released: %+v", event)
 	}
@@ -58,17 +58,17 @@ func TestEventsStreamReplaysAfterCursorAndScopesPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "tool.started"})
+	first, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Channel: "cli", Type: "tool.started"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "tool.completed"})
+	second, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Channel: "cli", Type: "tool.completed"})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	req := httptest.NewRequest(http.MethodGet, "/v1/events/stream?platform=cli&platform_user_id=alice&once=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v1/events/stream?platform=cli&platform_user_id=alice&session=cli&once=true", nil)
 	req.Header.Set("Last-Event-ID", fmt.Sprintf("%d", first.Cursor))
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
@@ -134,6 +134,68 @@ func TestLiveEventsReachOnlyTheRunsSession(t *testing.T) {
 	}
 }
 
+func TestForeignSessionReceivesOnlyProjectedRunFacts(t *testing.T) {
+	hub := newRunEventBroker(nil)
+	own, stopOwn := hub.subscribe("person", "session-a", "")
+	defer stopOwn()
+	other, stopOther := hub.subscribe("person", "session-b", "")
+	defer stopOther()
+	attached, stopAttached := hub.subscribe("person", "session-b", "run-a")
+	defer stopAttached()
+
+	hub.publish(api.RunEvent{
+		PersonID: "person", RunID: "run-a", Channel: "session-a", Type: "run.started",
+		Payload: []byte(`{"input":"review the release and keep this private tail","task_title":"Private opening request","approval_intent":{"secret":"not-for-other-session"},"origin":"cli"}`),
+	})
+	if got := string((<-own.ch).Payload); !strings.Contains(got, "not-for-other-session") {
+		t.Fatalf("origin lost its full run event: %s", got)
+	}
+	if got := string((<-attached.ch).Payload); !strings.Contains(got, "not-for-other-session") {
+		t.Fatalf("attached observer lost its full run event: %s", got)
+	}
+	if got := string((<-other.ch).Payload); strings.Contains(got, "not-for-other-session") || strings.Contains(got, "private tail") || strings.Contains(got, "Private opening request") {
+		t.Fatalf("foreign session received opening user text: %s", got)
+	}
+
+	hub.publish(api.RunEvent{
+		PersonID: "person", RunID: "run-a", Channel: "session-a", Type: "approval.requested",
+		Payload: []byte(`{"approval_id":"approval-a","tool":"terminal","target":"secret-token deployment","args":{"token":"secret-token"},"reason":"private reason"}`),
+	})
+	if got := string((<-other.ch).Payload); strings.Contains(got, "secret-token") || strings.Contains(got, "private reason") || !strings.Contains(got, "approval-a") {
+		t.Fatalf("foreign approval view was not a control summary: %s", got)
+	}
+	<-own.ch
+	<-attached.ch
+
+	// Early human waits may not yet have a run id. Their channel still scopes
+	// the full prompt to the requesting session.
+	hub.publish(api.RunEvent{
+		PersonID: "person", Channel: "session-a", Type: "clarify.requested",
+		Payload: []byte(`{"clarify_id":"clarify-a","question":"Which private target?","choices":["secret choice"]}`),
+	})
+	if got := string((<-other.ch).Payload); strings.Contains(got, "secret choice") || strings.Contains(got, "private target") || !strings.Contains(got, "clarify-a") || !strings.Contains(got, "A question is waiting") {
+		t.Fatalf("foreign clarification view leaked choices or lost its id: %s", got)
+	}
+	<-own.ch
+	<-attached.ch
+
+	hub.publish(api.RunEvent{PersonID: "person", RunID: "run-a", Type: "tool.started", Payload: []byte(`{"secret":"missing-audience"}`)})
+	select {
+	case event := <-other.ch:
+		t.Fatalf("run detail without a channel reached another session: %+v", event)
+	default:
+	}
+	if got := string((<-attached.ch).Payload); !strings.Contains(got, "missing-audience") {
+		t.Fatalf("exact observer missed its run detail: %s", got)
+	}
+	hub.publish(api.RunEvent{PersonID: "person", TaskID: "task-a", Type: "tool.started", Payload: []byte(`{"secret":"missing-run-audience"}`)})
+	select {
+	case event := <-other.ch:
+		t.Fatalf("task detail without a channel reached another session: %+v", event)
+	default:
+	}
+}
+
 // Replay after a reconnect shows a session no more than the live stream did.
 func TestEventReplayKeepsTheSessionAudience(t *testing.T) {
 	ctx := context.Background()
@@ -147,7 +209,7 @@ func TestEventReplayKeepsTheSessionAudience(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, event := range []control.Event{
-		{TaskID: task.ID, Channel: "session-a", Type: "run.started"},
+		{TaskID: task.ID, Channel: "session-a", Type: "run.started", Payload: []byte(`{"input":"private release command","task_title":"Private opening request"}`)},
 		{TaskID: task.ID, Channel: "session-a", Type: "tool.started", Payload: []byte(`{"tool":"read_parser"}`)},
 		{TaskID: task.ID, Channel: "session-b", Type: "tool.started", Payload: []byte(`{"tool":"read_changelog"}`)},
 	} {
@@ -162,7 +224,7 @@ func TestEventReplayKeepsTheSessionAudience(t *testing.T) {
 		return rec.Body.String()
 	}
 	body := replay("&session=session-b")
-	if !strings.Contains(body, "event: run.started") || !strings.Contains(body, "read_changelog") || strings.Contains(body, "read_parser") {
+	if !strings.Contains(body, "event: run.started") || !strings.Contains(body, "read_changelog") || strings.Contains(body, "read_parser") || strings.Contains(body, "private release command") || strings.Contains(body, "Private opening request") {
 		t.Fatalf("session-b replay did not keep the audience:\n%s", body)
 	}
 	if body := replay(""); strings.Contains(body, "read_parser") || strings.Contains(body, "read_changelog") || !strings.Contains(body, "event: run.started") {
@@ -171,10 +233,9 @@ func TestEventReplayKeepsTheSessionAudience(t *testing.T) {
 }
 
 // Two terminals of one person, end to end through the gateway. Terminal A
-// starts a task; terminal B types while it runs. B is told its message went to
-// A's task, and B's stream carries only the person-wide facts of A's run —
-// never its text; A's stream carries its run in full. Whatever B's input
-// becomes, its detail reaches B alone.
+// starts a task; terminal B types while it runs. B's distinct instruction is
+// queued for B, rather than becoming guidance to A. B's stream carries only
+// person-wide facts of A's run; each terminal receives its own detail.
 func TestTwoTerminalsSeeOnlyTheirOwnSessionsDetail(t *testing.T) {
 	provider := newSlowLLMProvider("the answer for A")
 	daemon, _, _ := newDetachedRunServer(t, provider)
@@ -197,8 +258,23 @@ func TestTwoTerminalsSeeOnlyTheirOwnSessionsDetail(t *testing.T) {
 		t.Fatal("A's run never reached the provider")
 	}
 	receipt, _ := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "session-b", Content: "also check the logs"})
-	if receipt.Turn == nil || receipt.Turn.Status != "accepted" || !strings.Contains(receipt.Content, "running in another session") {
+	if receipt.Turn == nil || receipt.Turn.Status != "queued" || receipt.Turn.QueueID == "" {
 		t.Fatalf("B's receipt = %+v", receipt)
+	}
+	queued, err := daemon.Control.GetQueued(ctx, identity.TenantID, receipt.Turn.QueueID)
+	if err != nil || queued == nil || queued.Channel != "session-b" || queued.Content != "also check the logs" {
+		t.Fatalf("B's independent queued input = %+v err=%v", queued, err)
+	}
+	active := daemon.coordinator().currentActive(identity.PersonID)
+	if active == nil || active.RunID == "" {
+		t.Fatalf("A has no exact active run: %+v", active)
+	}
+	exact, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "session-b",
+		ReplyToRunID: active.RunID, Content: "please add a footnote to A",
+	})
+	if !exact.Accepted || exact.Turn == nil || exact.Turn.Status != "accepted" || exact.Turn.RunID != active.RunID {
+		t.Fatalf("B's exact reply did not reach A: %+v", exact)
 	}
 	provider.releaseNow()
 	waitUntil(t, 10*time.Second, func() bool { return daemon.coordinator().currentActive(identity.PersonID) == nil }, "runs did not finish")

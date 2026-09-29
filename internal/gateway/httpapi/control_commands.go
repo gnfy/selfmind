@@ -72,6 +72,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/stop":
 		active := d.coordinator().stopActive(identity.PersonID)
 		if active == nil {
+			if d.coordinator().activeCount(identity.PersonID) > 1 {
+				return true, "Several runs are active. Use /status to choose an exact run, then /stop <run_id>.", nil, nil
+			}
 			return true, d.dismissCurrentAttention(ctx, identity), nil, nil
 		}
 		if active.RunID != "" {
@@ -131,6 +134,13 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// restore and continue the original request. Reaching this branch means
 		// the invocation did not satisfy that typed contract.
 		return true, "Usage: /choose <choice_id> <number>", nil, nil
+	case strings.HasPrefix(lower, "/status "):
+		parts := strings.Fields(trimmed)
+		if len(parts) != 2 {
+			return true, "Usage: /status [run_id]", nil, nil
+		}
+		reply, err := d.statusRunReply(ctx, identity, parts[1])
+		return true, reply, nil, err
 	case lower == "/status":
 		reply, err := d.statusReply(ctx, identity)
 		return true, reply, nil, err
@@ -747,8 +757,9 @@ func (d *Server) dismissAttentionByReference(ctx context.Context, identity *cont
 	if run == nil || run.PersonID != identity.PersonID {
 		return "That run is not yours or no longer exists."
 	}
-	if active := d.coordinator().currentActive(identity.PersonID); active != nil && active.RunID == run.ID {
-		return fmt.Sprintf("Run %s is executing now; use /stop with no number to cancel it.", shortRunID(run.ID))
+	if active := d.coordinator().stopActiveRun(identity.PersonID, run.ID); active != nil {
+		_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, run.ID)
+		return fmt.Sprintf("Stopping run %s.", shortRunID(run.ID))
 	}
 	dismissed, err := control.NewWorkTimeline(d.Control).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID)
 	if err != nil {
@@ -808,6 +819,19 @@ func (d *Server) reportDismissedAttentionRun(ctx context.Context, identity *cont
 // handoff and plan come from that Run, never from whichever Run in the Thread
 // happens to be newest.
 func (d *Server) statusReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if active := d.coordinator().activeRunsForPerson(identity.PersonID); len(active) > 1 {
+		var card strings.Builder
+		fmt.Fprintf(&card, "%d runs active:\n", len(active))
+		for _, run := range active {
+			title := run.Summary
+			if task, err := d.Control.GetTask(ctx, identity.TenantID, run.TaskID); err == nil && task != nil && task.PersonID == identity.PersonID && strings.TrimSpace(task.Title) != "" {
+				title = task.Title
+			}
+			fmt.Fprintf(&card, "- %s  %s  %s\n", shortRunID(run.RunID), truncate(toOneLine(title), 60), humanDuration(time.Since(run.StartedAt)))
+		}
+		card.WriteString("Use /status <run_id> for details or /stop <run_id> to cancel one run.")
+		return card.String(), nil
+	}
 	active := d.coordinator().currentActive(identity.PersonID)
 	var task *control.Task
 	exactRunID := ""
@@ -928,4 +952,34 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		card = strings.Replace(card, "Waiting for your answer", fmt.Sprintf("Waiting for your answer (%s elapsed)", waitAge), 1)
 	}
 	return card, nil
+}
+
+func (d *Server) statusRunReply(ctx context.Context, identity *control.IdentityContext, ref string) (string, error) {
+	var selected *activeRun
+	for _, active := range d.coordinator().activeRunsForPerson(identity.PersonID) {
+		if active.RunID != ref && shortRunID(active.RunID) != ref {
+			continue
+		}
+		if selected != nil {
+			return "Run ID is ambiguous; use the full ID.", nil
+		}
+		selected = active
+	}
+	if selected == nil || selected.RunID == "" {
+		return "That run is not active or not yours.", nil
+	}
+	task, err := d.Control.GetTask(ctx, identity.TenantID, selected.TaskID)
+	if err != nil {
+		return "", err
+	}
+	if task == nil || task.PersonID != identity.PersonID {
+		return "That run is not active or not yours.", nil
+	}
+	current := *task
+	current.Status = "running"
+	current.CurrentSummary = ""
+	current.NextSteps = nil
+	handoff, _ := d.Control.RunHandoff(ctx, identity.TenantID, identity.PersonID, selected.RunID)
+	plan := d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, selected.RunID)
+	return formatTaskStatus(&current, handoff, selected, plan) + "\n\n" + d.activeProgress(ctx, identity, selected), nil
 }

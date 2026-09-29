@@ -305,7 +305,7 @@ func (c *RunCoordinator) workContinuityHints(ctx context.Context, identity *cont
 		if err != nil || run == nil || run.PersonID != identity.PersonID {
 			continue
 		}
-		card, ok := c.srv.continuityCandidateForRun(ctx, identity, *run, c.currentActive(identity.PersonID), 0, []string{"attention_hint"})
+		card, ok := c.srv.continuityCandidateForRun(ctx, identity, *run, c.activeForRun(identity.PersonID, run.ID), 0, []string{"attention_hint"})
 		if !ok {
 			continue
 		}

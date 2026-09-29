@@ -28,12 +28,26 @@ func TestRunIdleTimeoutParsesEnv(t *testing.T) {
 }
 
 func TestWorkspaceSerialKey(t *testing.T) {
-	if got := workspaceSerialKey(context.Background()); got != "" {
-		t.Fatalf("no workspace → key %q, want empty (parallel)", got)
+	if got := workspaceSerialKey(context.Background()); got != "unscoped" {
+		t.Fatalf("write-capable unknown scope → key %q, want conservative lock", got)
 	}
 	ctx := kernel.WithWorkspaceContext(context.Background(), kernel.WorkspaceContext{ID: "ws-42", Root: "/tmp/x"})
 	if got := workspaceSerialKey(ctx); got != "ws-42" {
 		t.Fatalf("workspace key = %q, want ws-42", got)
+	}
+	personCtx := kernel.WithToolInvocationScope(context.Background(), kernel.ToolInvocationScope{ControlTenantID: "default", PersonID: "person-a"})
+	if got := workspaceSerialKey(personCtx); got != "person:default:person-a" {
+		t.Fatalf("unknown view person lock = %q", got)
+	}
+	readHint := kernel.DefaultTaskStrategy()
+	readHint.ToolMode = kernel.ToolModeLocalRead
+	if got := workspaceSerialKey(kernel.WithTaskStrategy(personCtx, readHint)); got != "person:default:person-a" {
+		t.Fatalf("read hint widened an open tool surface: key=%q", got)
+	}
+	noActions := kernel.DefaultTaskStrategy()
+	noActions.ToolMode = kernel.ToolModeNone
+	if got := workspaceSerialKey(kernel.WithTaskStrategy(personCtx, noActions)); got != "" {
+		t.Fatalf("enforced no-action turn key = %q, want shared read", got)
 	}
 }
 

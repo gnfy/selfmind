@@ -203,9 +203,13 @@ func (s *Store) observePendingTurnChoiceOnce(ctx context.Context, tenantID, pers
 		return nil, ErrTurnChoiceOption
 	}
 	var runPerson, runTask, runStatus string
-	if err := tx.QueryRowContext(ctx, `SELECT person_id, thread_id, status FROM runs WHERE tenant_id = ? AND id = ? AND execution_class = 'work'`,
-		tenantID, option.RunID).Scan(&runPerson, &runTask, &runStatus); err != nil || runPerson != personID || runTask != option.TaskID || runStatus != "running" {
+	err = tx.QueryRowContext(ctx, `SELECT person_id, thread_id, status FROM runs WHERE tenant_id = ? AND id = ? AND execution_class = 'work'`,
+		tenantID, option.RunID).Scan(&runPerson, &runTask, &runStatus)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (runPerson != personID || runTask != option.TaskID || runStatus != "running")) {
 		return nil, ErrTurnChoiceNotFound
+	}
+	if err != nil {
+		return nil, err
 	}
 	updated, err := tx.ExecContext(ctx, `UPDATE pending_turn_choices
 		SET status = ?, chosen_key = ?, claimed_at = ?, request_json = '{}', resolution_kind = 'observe', response_text = ?
@@ -292,7 +296,7 @@ func (s *Store) routePendingTurnChoiceOnce(ctx context.Context, route TurnChoice
 		err = tx.QueryRowContext(ctx, `SELECT person_id, thread_id, status, COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]')
 			FROM runs WHERE tenant_id = ? AND id = ? AND execution_class = 'work'`, route.TenantID, option.RunID).
 			Scan(&runPerson, &runTask, &runStatus, &runWorkspace, &rootsJSON)
-		if errors.Is(err, sql.ErrNoRows) || runPerson != route.PersonID || runTask != option.TaskID {
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && (runPerson != route.PersonID || runTask != option.TaskID)) {
 			return nil, ErrTurnChoiceNotFound
 		}
 		if err != nil {

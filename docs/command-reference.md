@@ -422,6 +422,7 @@ before normal agent dispatch.
 /apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
+/effects [resolve <claim_id> <watch_id>]
 /diag [learning|memory|context|models|delivery|inbound|execution|tools]
 /report daily [--since 24h]
 /events
@@ -512,6 +513,13 @@ before normal agent dispatch.
   The default and `all` views are numbered: use `/watchers 1` to inspect the
   first watcher or `/watchers cancel 1` to stop monitoring it. Cancelling a
   watcher does not cancel the external operation.
+- `/effects` lists unresolved external effects belonging to you. When an
+  unclassified remote command has no adapter that can settle its result,
+  inspect its exact Run and a successful finalized watcher for that Run,
+  then use `/effects resolve <claim_id> <watch_id>` to confirm they refer to
+  the same operation. The runtime checks ownership, Run identity, watcher
+  provenance and terminal evidence before releasing every target of that
+  effect. A model's claim of success cannot release it.
 - `/remember <preference>` saves an explicitly stated personal preference to
   long-term memory (person memory is preference-only); it applies across every
   endpoint. `/forget <text|ref>` forgets one — by its text, or by the ref

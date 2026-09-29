@@ -258,6 +258,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/watchers" || strings.HasPrefix(lower, "/watchers "):
 		reply, err := d.watchersCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
 		return true, reply, nil, err
+	case lower == "/effects" || strings.HasPrefix(lower, "/effects "):
+		reply, err := d.effectsCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
+		return true, reply, nil, err
 	case lower == "/diag learning":
 		reply, err := d.learningDiagReply(ctx, identity)
 		return true, reply, nil, err

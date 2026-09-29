@@ -202,6 +202,12 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   the target remains visibly occupied rather than being released by time.
   Restarting or finishing a Run does not release an uncertain claim; a durable
   observation must do so. Target sets are acquired and observed atomically.
+  For an unknown target, `/effects resolve <claim_id> <watch_id>` is a
+  person-controlled fallback: one transaction checks the exact person's
+  claim against a successful finalized watcher from the same Run, a valid
+  frozen preflight receipt, and a watcher registered no earlier than the
+  claim. The person's explicit association supplies the judgment that the
+  observation covers this effect; model text alone cannot release it.
   Parallel Runs also require an enforced process sandbox for terminal calls;
   explicit host escape is rejected before approval or claim creation. A
   proven observation can still inspect an occupied target. A parallel Run

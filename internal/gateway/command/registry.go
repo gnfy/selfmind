@@ -65,6 +65,7 @@ var entries = []Entry{
 	{Name: "/apply", Usage: "/apply <run_id>", Summary: "Deliver a clean committed execution view as a separate Git branch.", SyncControl: true, Scope: Gateway},
 	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
 	{Name: "/watchers", Usage: "/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]", Summary: "List, inspect, or cancel durable external watchers.", SyncControl: true, Scope: Gateway},
+	{Name: "/effects", Usage: "/effects [resolve <claim_id> <watch_id>]", Summary: "Inspect unresolved external effects or link one to a finalized watcher.", SyncControl: true, Scope: Gateway},
 	{Name: "/diag", Usage: "/diag [learning|memory|context|models|delivery|inbound|execution|tools]", Summary: "Show runtime and subsystem diagnostics, including tool-schema health.", SyncControl: true, Scope: Gateway},
 	{Name: "/report", Usage: "/report daily [--since 24h]", Summary: "Show a model-free execution quality and cost report.", SyncControl: true, Scope: Gateway},
 	{Name: "/events", Usage: "/events", Summary: "List recent events for the current run.", SyncControl: true, Scope: Gateway},

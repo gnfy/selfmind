@@ -346,6 +346,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
+/effects [resolve <claim_id> <watch_id>]
 /diag [learning|memory|context|models|delivery|inbound|execution|tools]
 /report daily [--since 24h]
 /events
@@ -381,6 +382,11 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用
   `/watchers 1` 查看第一条 watcher，使用 `/watchers cancel 1` 停止监控。
   取消 watcher 不会取消外部操作。
+- `/effects` 列出本人尚未确认的外部效果。没有可信适配器能自动判定远端结果时，
+  先查看该精确 Run 和它已成功定稿的 watcher，再用
+  `/effects resolve <claim_id> <watch_id>` 确认二者对应同一操作。运行时核对
+  本人归属、Run、watcher 来源与终态证据后，才释放该效果占用的全部目标；模型
+  自述成功不能解锁。
 - `/new [title]` 保留现有的 task 标签行为；`/new --run <request>` 是确定性的
   新工作入口，不经过连续性模型判断。
 - `/status` 在同时有多个活动 Run 时列出总览；`/status <run_id>` 查看一个

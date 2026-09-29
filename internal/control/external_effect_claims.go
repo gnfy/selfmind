@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -82,6 +83,74 @@ func (s *Store) ListUnresolvedExternalEffects(ctx context.Context, tenantID, per
 		claims = append(claims, claim)
 	}
 	return claims, rows.Err()
+}
+
+// ObserveExternalEffectWithWatch is the conservative fallback for an unknown
+// external target. The person explicitly relates an exact effect to a
+// successful, finalized daemon observation created by the same Run after the
+// effect was claimed. Both identities and the release commit in one
+// transaction; model prose and a merely finished Run are never evidence.
+func (s *Store) ObserveExternalEffectWithWatch(ctx context.Context, tenantID, personID, claimID, watchID string) (ExternalEffectClaim, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(personID) == "" ||
+		strings.TrimSpace(claimID) == "" || strings.TrimSpace(watchID) == "" {
+		return ExternalEffectClaim{}, fmt.Errorf("external effect claim and watcher identities are required")
+	}
+	tenantID = normalizeTenant(tenantID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ExternalEffectClaim{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var claim ExternalEffectClaim
+	var claimedAt int64
+	err = tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, run_id, effect_id, target_key, state, observation_ref, created_at
+		FROM external_effect_claims WHERE tenant_id = ? AND person_id = ? AND id = ?`,
+		tenantID, personID, claimID).Scan(&claim.ID, &claim.TenantID, &claim.PersonID, &claim.RunID,
+		&claim.EffectID, &claim.TargetKey, &claim.State, &claim.ObservationRef, &claimedAt)
+	if err != nil {
+		return ExternalEffectClaim{}, fmt.Errorf("external effect claim not found for this person: %w", err)
+	}
+	var watchRun, watchStatus, receiptJSON, command string
+	var watchFinalized int
+	var watchCreated int64
+	var revision int
+	err = tx.QueryRowContext(ctx, `SELECT run_id, status, finalized, created_at, verdict_revision,
+		COALESCE(preflight_receipt_json, '{}'), command FROM external_watches
+		WHERE tenant_id = ? AND person_id = ? AND id = ?`, tenantID, personID, watchID).
+		Scan(&watchRun, &watchStatus, &watchFinalized, &watchCreated, &revision, &receiptJSON, &command)
+	if err != nil {
+		return ExternalEffectClaim{}, fmt.Errorf("watcher not found for this person: %w", err)
+	}
+	var receipt ExternalWatchPreflightReceipt
+	if err := json.Unmarshal([]byte(receiptJSON), &receipt); err != nil {
+		return ExternalEffectClaim{}, fmt.Errorf("watcher has no valid preflight receipt: %w", err)
+	}
+	if watchRun != claim.RunID || watchCreated < claimedAt || watchStatus != ExternalWatchSucceeded ||
+		watchFinalized == 0 || receipt.Version < ExternalWatchContinuationReceiptVersion ||
+		receipt.CommandHash != fmt.Sprintf("%x", sha256.Sum256([]byte(command))) {
+		return ExternalEffectClaim{}, fmt.Errorf("watcher is not a finalized trusted observation of this exact run after the effect")
+	}
+	observationRef := fmt.Sprintf("watch:%s:r%d", watchID, revision)
+	var total, different int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN state = 'observed' AND observation_ref <> ? THEN 1 ELSE 0 END), 0)
+		FROM external_effect_claims WHERE tenant_id = ? AND person_id = ? AND run_id = ? AND effect_id = ?`,
+		observationRef, tenantID, personID, claim.RunID, claim.EffectID).Scan(&total, &different)
+	if err != nil {
+		return ExternalEffectClaim{}, err
+	}
+	if total == 0 || different != 0 {
+		return ExternalEffectClaim{}, fmt.Errorf("external effect cannot be released with a different observation")
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE external_effect_claims SET state = 'observed', observation_ref = ?, updated_at = ?
+		WHERE tenant_id = ? AND person_id = ? AND run_id = ? AND effect_id = ? AND state <> 'observed'`,
+		observationRef, time.Now().Unix(), tenantID, personID, claim.RunID, claim.EffectID); err != nil {
+		return ExternalEffectClaim{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ExternalEffectClaim{}, err
+	}
+	claim.State, claim.ObservationRef = ExternalClaimObserved, observationRef
+	return claim, nil
 }
 
 // ClaimExternalEffects atomically reserves every target or none. A reservation

@@ -2,9 +2,85 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"sync"
 	"testing"
 )
+
+func TestExternalEffectRequiresExactFinalizedWatcherAndHumanLink(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner, runA, runB, _ := externalEffectRuns(t, store)
+	decision, err := store.ClaimExternalEffects(ctx, ExternalEffectClaimRequest{
+		TenantID: owner.TenantID, PersonID: owner.PersonID, RunID: runA.ID,
+		EffectID: "effect-deploy", TargetKeys: []string{UnknownExternalTarget},
+	})
+	if err != nil || !decision.Granted || len(decision.Claims) != 1 {
+		t.Fatalf("claim: %+v %v", decision, err)
+	}
+	claim := decision.Claims[0]
+	cwd := t.TempDir()
+	watchFor := func(run *Run) *ExternalWatch {
+		t.Helper()
+		command := "printf SUCCEEDED"
+		watch, err := store.CreateExternalWatch(ctx, ExternalWatch{
+			TenantID: owner.TenantID, PersonID: owner.PersonID, TaskID: run.TaskID, RunID: run.ID,
+			Channel: "cli", CWD: cwd, Command: command, SuccessPattern: "^SUCCEEDED$",
+			PreflightReceipt: ExternalWatchPreflightReceipt{
+				Version:     ExternalWatchContinuationReceiptVersion,
+				CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))),
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return watch
+	}
+	other := watchFor(runB)
+	if ok, err := store.FinishExternalWatch(ctx, owner.TenantID, other.ID, ExternalWatchSucceeded, "SUCCEEDED", ""); err != nil || !ok {
+		t.Fatalf("other watch finish: %v %v", ok, err)
+	}
+	if ok, err := store.MarkExternalWatchFinalized(ctx, owner.TenantID, other.ID); err != nil || !ok {
+		t.Fatalf("other watch finalize: %v %v", ok, err)
+	}
+	if _, err := store.ObserveExternalEffectWithWatch(ctx, owner.TenantID, owner.PersonID, claim.ID, other.ID); err == nil {
+		t.Fatal("another Run's watcher released the effect")
+	}
+	stale := watchFor(runA)
+	if _, err := store.db.ExecContext(ctx, `UPDATE external_watches SET created_at = created_at - 10 WHERE id = ?`, stale.ID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := store.FinishExternalWatch(ctx, owner.TenantID, stale.ID, ExternalWatchSucceeded, "SUCCEEDED", ""); err != nil || !ok {
+		t.Fatalf("stale watch finish: %v %v", ok, err)
+	}
+	if ok, err := store.MarkExternalWatchFinalized(ctx, owner.TenantID, stale.ID); err != nil || !ok {
+		t.Fatalf("stale watch finalize: %v %v", ok, err)
+	}
+	if _, err := store.ObserveExternalEffectWithWatch(ctx, owner.TenantID, owner.PersonID, claim.ID, stale.ID); err == nil {
+		t.Fatal("watcher registered before the effect released it")
+	}
+	watch := watchFor(runA)
+	if ok, err := store.FinishExternalWatch(ctx, owner.TenantID, watch.ID, ExternalWatchSucceeded, "SUCCEEDED", ""); err != nil || !ok {
+		t.Fatalf("watch finish: %v %v", ok, err)
+	}
+	if _, err := store.ObserveExternalEffectWithWatch(ctx, owner.TenantID, owner.PersonID, claim.ID, watch.ID); err == nil {
+		t.Fatal("unfinalized watch released the effect")
+	}
+	if ok, err := store.MarkExternalWatchFinalized(ctx, owner.TenantID, watch.ID); err != nil || !ok {
+		t.Fatalf("watch finalize: %v %v", ok, err)
+	}
+	if _, err := store.ObserveExternalEffectWithWatch(ctx, owner.TenantID, "stranger", claim.ID, watch.ID); err == nil {
+		t.Fatal("another person released the effect")
+	}
+	observed, err := store.ObserveExternalEffectWithWatch(ctx, owner.TenantID, owner.PersonID, claim.ID, watch.ID)
+	if err != nil || observed.State != ExternalClaimObserved || observed.ObservationRef != "watch:"+watch.ID+":r1" {
+		t.Fatalf("exact trusted observation: %+v %v", observed, err)
+	}
+	if _, err := store.ObserveExternalEffectWithWatch(ctx, owner.TenantID, owner.PersonID, claim.ID, watch.ID); err != nil {
+		t.Fatalf("same observation was not idempotent: %v", err)
+	}
+}
 
 func externalEffectRuns(t *testing.T, store *Store) (*IdentityContext, *Run, *Run, *Run) {
 	t.Helper()

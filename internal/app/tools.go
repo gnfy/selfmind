@@ -7,6 +7,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/promptassets"
@@ -15,7 +16,7 @@ import (
 
 // InitTools wires up the dispatcher, built-in tools, extended tools, the Skill
 // loader, durable Skill management, and the session search function.
-func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (*tools.Dispatcher, error) {
+func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store, gates ...*llm.RequestGate) (*tools.Dispatcher, error) {
 	registry := tools.NewRegistry()
 	disp := tools.NewDispatcherWithRegistry(registry)
 	if tenantID == "" {
@@ -102,7 +103,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	_, _ = tools.ReloadSkillToolsForTenant(tenantID, registry, tools.WithSkillStorage(nil, storage))
 
-	delegationModel := delegationModelSource(cfg, mem, tenantID, ag)
+	delegationModel := delegationModelSource(cfg, mem, tenantID, ag, gates...)
 	disp.InjectDelegateFn(MakeDelegateFn(disp, cfg.Delegation, prompts, delegationModel))
 	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(disp, cfg.Delegation, prompts, delegationModel))
 

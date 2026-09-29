@@ -61,7 +61,7 @@ func delegationLimits(cfg config.DelegationConfig) (maxDepth, maxConcurrent, max
 // sub-agent is part of the parent's foreground run, so it uses the route the
 // parent run is using; delegation.provider or delegation.model instead names
 // an override, resolved through the provider runtime like a role override.
-func delegationModelSource(cfg *config.Config, mem *memory.MemoryManager, tenantID string, parent *kernel.Agent) func() (llm.Provider, error) {
+func delegationModelSource(cfg *config.Config, mem *memory.MemoryManager, tenantID string, parent *kernel.Agent, gates ...*llm.RequestGate) func() (llm.Provider, error) {
 	d := cfg.Delegation
 	if strings.TrimSpace(d.Provider) == "" && strings.TrimSpace(d.Model) == "" && strings.TrimSpace(d.APIKey) == "" {
 		return func() (llm.Provider, error) {
@@ -75,9 +75,11 @@ func delegationModelSource(cfg *config.Config, mem *memory.MemoryManager, tenant
 	var provider llm.Provider
 	return func() (llm.Provider, error) {
 		once.Do(func() {
-			provider = buildProviderForSelectionWithRuntime(cfg, modelruntime.Selection{Provider: d.Provider, Model: d.Model, APIKey: d.APIKey})
+			selection := modelruntime.Selection{Provider: d.Provider, Model: d.Model, APIKey: d.APIKey}
+			provider = buildProviderForSelectionWithRuntime(cfg, selection)
 			if provider != nil {
 				applyDynamicKeyGetter(provider, mem, tenantID, firstNonEmpty(d.Provider, defaultProviderName(cfg)))
+				provider = gateResolvedProvider(firstRequestGate(gates), cfg, selection, provider)
 			}
 		})
 		if provider == nil {

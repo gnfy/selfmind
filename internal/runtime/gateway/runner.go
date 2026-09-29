@@ -27,6 +27,7 @@ import (
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/gateway/weixin"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
@@ -264,12 +265,13 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		log.Warn("gateway: withdrew over-broad approval grants", "revoked", revoked, "remaining", len(kept))
 	}
 
-	agent, err := app.InitAgent(mem, cfg, defaultTenantID, prompts, controlStore)
+	requestGate := llm.NewRequestGate(2)
+	agent, err := app.InitAgent(mem, cfg, defaultTenantID, prompts, controlStore, requestGate)
 	if err != nil {
 		return fmt.Errorf("app.InitAgent failed: %w", err)
 	}
 
-	disp, err := app.InitTools(mem, cfg, agent, defaultTenantID, prompts, controlStore)
+	disp, err := app.InitTools(mem, cfg, agent, defaultTenantID, prompts, controlStore, requestGate)
 	if err != nil {
 		return fmt.Errorf("app.InitTools failed: %w", err)
 	}
@@ -282,7 +284,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Optional multi-worker execution (SELFMIND_WORKERS>1) for the daemon, where
 	// concurrent CLI/IM/cron requests can actually exercise it. Default 1 = the
 	// single-agent serialized path, unchanged.
-	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, defaultTenantID, prompts, controlStore); werr != nil {
+	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, defaultTenantID, prompts, controlStore, requestGate); werr != nil {
 		log.Warn("worker pool partially enabled", "workers", workers, "error", werr)
 	} else if workers > 1 {
 		log.Info("agent worker pool enabled", "workers", workers)
@@ -306,7 +308,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			}
 		}()
 	}
-	semanticExpander := app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts)
+	semanticExpander := app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts, requestGate)
 	semanticReadiness := modelStatus.RouteReadiness(modelchange.RouteSemanticRecall)
 	if pending := modelStatus.Pending; pending != nil && pending.Status == modelchange.StatusStarting {
 		for _, probe := range pending.Probes {
@@ -397,14 +399,14 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// Smart-mode approval triage (H2): build the cheap-model judge from the
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.
-		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID),
+		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID, requestGate),
 		// Operational rollback keeps durable recovery evidence readable while
 		// preventing the daemon from creating automatic exact-parent children.
 		DisableAutomaticRunRecovery: !cfg.Gateway.AutomaticRunRecovery,
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
-		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, prompts, controlStore),
-		SkillCurator:    app.NewConfiguredSkillCurator(mem, cfg, defaultTenantID, controlStore, prompts),
+		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, prompts, controlStore, requestGate),
+		SkillCurator:    app.NewConfiguredSkillCurator(mem, cfg, defaultTenantID, controlStore, prompts, requestGate),
 		SelfEvolution: control.EvolutionPolicy{
 			Enabled: cfg.Evolution.Enabled, Mode: cfg.Evolution.Mode,
 			ShadowAfterObservations:  cfg.Evolution.ShadowAfterObservations,
@@ -415,7 +417,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// Background memory self-organization (docs/memory-governance.zh-CN.md
 		// §4): nil unless memory.governance.enabled AND its model role is
 		// explicitly configured; default mode is shadow (report only).
-		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID, prompts, controlStore),
+		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID, prompts, controlStore, requestGate),
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
@@ -661,8 +663,8 @@ func applyGatewayRuntimeEnv(cfg *config.Config) {
 
 // memoryConsolidatorOrNil keeps a nil *app.MemoryConsolidator from becoming a
 // non-nil httpapi.MemoryConsolidator interface value.
-func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, store *control.Store) httpapi.MemoryConsolidator {
-	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID, prompts, store); c != nil {
+func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, store *control.Store, gates ...*llm.RequestGate) httpapi.MemoryConsolidator {
+	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID, prompts, store, gates...); c != nil {
 		return c
 	}
 	return nil

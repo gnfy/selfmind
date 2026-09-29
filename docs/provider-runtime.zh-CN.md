@@ -637,7 +637,7 @@ providers:
   **致命**错误，直接失败。新增 provider 错误要可分类——暴露状态码或可识别短语。
 - 429 的 `Retry-After` 会被遵守（`RetryAfterFromError`）：响应头经 `foldRetryAfter`
   折叠进错误信息，并解析 codex/OpenAI 的 "try again in N" 正文措辞；上限 600s。
-- daemon 内由进程持有的请求门控协调不同 worker、子代理和已配置后台角色所用的
+- daemon 内由进程持有的请求门控协调不同 worker、子代理、已配置后台角色及模型诊断所用的
   物理 provider 线路。线路按 provider、规范化 endpoint 和凭据身份识别，不按模型或
   逻辑角色拆开；每条线路最多同时两个请求。结构化 429 会触发共享、可取消的冷却，
   包括流启动后才返回的错误；流结束或上下文取消才释放请求名额。这只是请求准入，

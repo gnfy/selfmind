@@ -624,9 +624,10 @@ absorbs these without touching the wire contract:
   into the error via `foldRetryAfter` at the adapter 4xx/5xx return sites, and
   the codex/OpenAI "try again in N" body phrasing is parsed. Capped at 600s.
 - In the daemon, a process-owned request gate also coordinates the resolved
-  physical provider route across workers, delegated agents, and configured
-  background roles. A route is provider + normalized endpoint + credential
-  identity, independent of model or logical role. Each route admits at most two
+  physical provider route across workers, delegated agents, configured
+  background roles, and daemon model probes. A route is provider + normalized
+  endpoint + credential identity, independent of model or logical role. Each
+  route admits at most two
   concurrent requests; a structured 429 starts a shared, cancellable cooldown
   (including errors emitted after a stream starts). The permit lasts until the
   stream closes or its context is canceled. This is request admission, not a

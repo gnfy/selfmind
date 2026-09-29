@@ -102,7 +102,8 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Model transitions are reconciled only after this process owns
 	// gateway.lock. launchd/systemd may briefly start competing processes; they
 	// must not each increment attempts or mutate the same candidate transaction.
-	modelChanges := modelchange.NewService(cfg, app.NewModelChangeValidator().Validate)
+	requestGate := llm.NewRequestGate(2)
+	modelChanges := modelchange.NewService(cfg, app.NewModelChangeValidator(requestGate).Validate)
 	modelStatus, modelRolledBack, err := modelChanges.ReconcileStartup(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile model configuration: %w", err)
@@ -265,7 +266,6 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		log.Warn("gateway: withdrew over-broad approval grants", "revoked", revoked, "remaining", len(kept))
 	}
 
-	requestGate := llm.NewRequestGate(2)
 	agent, err := app.InitAgent(mem, cfg, defaultTenantID, prompts, controlStore, requestGate)
 	if err != nil {
 		return fmt.Errorf("app.InitAgent failed: %w", err)
@@ -330,7 +330,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			return strings.Trim(strings.TrimSpace(role.Provider)+"/"+strings.TrimSpace(role.Model), "/")
 		}(),
 		Probe: func(probeCtx context.Context) modelchange.ProbeResult {
-			results := app.ValidateModelChange(probeCtx, cfg, []modelchange.Route{modelchange.RouteSemanticRecall})
+			results := app.ValidateModelChangeWithGate(probeCtx, cfg, []modelchange.Route{modelchange.RouteSemanticRecall}, requestGate)
 			for _, result := range results {
 				if result.Route == modelchange.RouteSemanticRecall {
 					return result
@@ -371,7 +371,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			if err != nil {
 				return api.ModelProbeResponse{Role: role, Error: tools.RedactSensitive(err.Error())}
 			}
-			probe := app.ProbeResolvedModelForRole(ctx, runtime, role)
+			probe := app.ProbeResolvedModelForRole(ctx, runtime, role, requestGate)
 			response := api.ModelProbeResponse{
 				OK: probe.Err == nil, Role: role, Provider: runtime.Provider,
 				Model: runtime.Model, LatencyMS: probe.Latency.Milliseconds(),

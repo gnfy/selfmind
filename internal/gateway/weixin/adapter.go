@@ -241,6 +241,9 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 	if strings.TrimSpace(text) == "" {
 		text = summarizeAttachments(attachments)
 	}
+	if msgID == "" {
+		return fmt.Errorf("weixin work message has no stable platform message id; sync cursor retained")
+	}
 	displayName := firstNonEmpty(stringFromMap(msg, "sender_nick"), stringFromMap(msg, "display_name"), safeID(sender))
 	tenantID := firstNonEmpty(a.cfg.DefaultTenantID, control.DefaultTenantID)
 	if a.ownerBindingAllowed(sender, chatID, isGroup) && a.store != nil {
@@ -248,37 +251,35 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 			return err
 		}
 	}
-	if msgID != "" {
-		if a.store == nil {
-			return fmt.Errorf("weixin inbound receipt store is unavailable")
-		}
-		identity, err := a.store.ResolveOrCreateAccount(ctx, tenantID, "weixin", sender, displayName)
-		if err != nil {
-			return err
-		}
-		payload, err := json.Marshal(raw)
-		if err != nil {
-			return err
-		}
-		state, err := a.store.BeginInbound(ctx, "weixin", msgID, payload, control.InboundOwner{
-			TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: text,
-		})
-		if err != nil {
-			return err
-		}
-		if state == control.InboundAccepted {
-			return nil
-		}
-		if state != control.InboundPending {
-			return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
-		}
-		claimed, err := a.store.ClaimInbound(ctx, "weixin", msgID)
-		if err != nil {
-			return err
-		}
-		if !claimed {
-			return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
-		}
+	if a.store == nil {
+		return fmt.Errorf("weixin inbound receipt store is unavailable")
+	}
+	identity, err := a.store.ResolveOrCreateAccount(ctx, tenantID, "weixin", sender, displayName)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return err
+	}
+	state, err := a.store.BeginInbound(ctx, "weixin", msgID, payload, control.InboundOwner{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: text,
+	})
+	if err != nil {
+		return err
+	}
+	if state == control.InboundAccepted {
+		return nil
+	}
+	if state != control.InboundPending {
+		return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
+	}
+	claimed, err := a.store.ClaimInbound(ctx, "weixin", msgID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
 	}
 	_ = client.SendTyping(ctx, chatID, true)
 	defer client.SendTyping(context.Background(), chatID, false)
@@ -297,15 +298,13 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		Attachments:    attachments,
 	}
 	resp, status := a.handler(ctx, req)
-	if msgID != "" {
-		if status >= http.StatusInternalServerError {
-			failure := fmt.Errorf("gateway returned HTTP %d", status)
-			_ = a.store.NoteInboundFailure(ctx, "weixin", msgID, failure)
-			return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
-		}
-		if err := a.store.AcceptInbound(ctx, "weixin", msgID); err != nil {
-			return fmt.Errorf("weixin message %s acceptance not saved: %w: %w", msgID, errInboundUncertain, err)
-		}
+	if status >= http.StatusInternalServerError {
+		failure := fmt.Errorf("gateway returned HTTP %d", status)
+		_ = a.store.NoteInboundFailure(ctx, "weixin", msgID, failure)
+		return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
+	}
+	if err := a.store.AcceptInbound(ctx, "weixin", msgID); err != nil {
+		return fmt.Errorf("weixin message %s acceptance not saved: %w: %w", msgID, errInboundUncertain, err)
 	}
 	if status >= http.StatusBadRequest || strings.TrimSpace(resp.Error) != "" {
 		errText := firstNonEmpty(resp.Error, fmt.Sprintf("weixin request failed: HTTP %d", status))

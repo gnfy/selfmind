@@ -194,3 +194,23 @@ func TestIMWebhookReplaysOnlyBeforeDispatch(t *testing.T) {
 		t.Fatalf("uncertain input was blindly replayed: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestIMWebhookRequiresStableIDForWork(t *testing.T) {
+	store := controltest.NewStore(t)
+	t.Cleanup(func() { _ = store.Close() })
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	for _, tc := range []struct {
+		body string
+		want int
+	}{
+		{`{"content":"do work"}`, 422},
+		{`{"content":""}`, 200},
+	} {
+		req := httptest.NewRequest("POST", "/v1/im/webhook", strings.NewReader(tc.body))
+		rec := httptest.NewRecorder()
+		daemon.handleIMWebhook(rec, req)
+		if rec.Code != tc.want {
+			t.Fatalf("idless input %s returned %d, want %d", tc.body, rec.Code, tc.want)
+		}
+	}
+}

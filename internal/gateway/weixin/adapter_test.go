@@ -397,3 +397,30 @@ func TestWeixinDoesNotReplayUncertainInbound(t *testing.T) {
 		t.Fatalf("replayed uncertain input: handler calls=%d err=%v", calls, err)
 	}
 }
+
+func TestWeixinWorkWithoutMessageIDDoesNotDispatch(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ret":0,"errcode":0}`))
+	}))
+	defer server.Close()
+	var calls int
+	adapter := NewAdapter(RuntimeConfig{AccountID: "self", Token: "token", BaseURL: server.URL,
+		DMPolicy: "open", GroupPolicy: "disabled", HomeDir: t.TempDir()}, store,
+		func(context.Context, api.MessageRequest) (api.MessageResponse, int) {
+			calls++
+			return api.MessageResponse{}, http.StatusOK
+		})
+	err = adapter.processMessage(context.Background(), map[string]interface{}{"msg": map[string]interface{}{
+		"from_user_id": "peer", "to_user_id": "self", "item_list": []interface{}{
+			map[string]interface{}{"type": itemText, "text_item": map[string]interface{}{"text": "do work"}},
+		},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "stable platform message id") || calls != 0 {
+		t.Fatalf("idless message dispatched: calls=%d err=%v", calls, err)
+	}
+}

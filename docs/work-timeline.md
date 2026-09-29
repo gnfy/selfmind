@@ -102,6 +102,9 @@ inspection because an effect may already have happened. Weixin commits its sync
 cursor only after each message in the batch is accepted or durably held as
 uncertain. `/diag inbound` lists only the current person's unresolved receipts;
 it never retries them. Historical first-seen rows remain terminal on upgrade.
+Work-bearing IM messages without a stable platform ID are rejected before
+dispatch; otherwise an identical redelivery cannot be distinguished from a
+second legitimate request.
 
 Every accepted root user turn creates a fresh `interaction + unlisted` Thread
 and a Run. The Run remains searchable even when the Thread is absent from the

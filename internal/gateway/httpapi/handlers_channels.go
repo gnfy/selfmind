@@ -122,6 +122,14 @@ func (d *Server) handleIMWebhook(w http.ResponseWriter, r *http.Request) {
 	// already dispatching may have caused effects and must not be called twice.
 	msgID := imMessageID(platform, payload)
 	req := messageRequestFromIM(platform, payload)
+	if msgID == "" {
+		if strings.TrimSpace(req.Content) == "" && len(req.Attachments) == 0 {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+			return
+		}
+		http.Error(w, "a stable platform message id is required for IM work", http.StatusUnprocessableEntity)
+		return
+	}
 	if boolFromMap(payload, "async") || (os.Getenv("SELF_IM_ASYNC") == "1" && !isControlCommand(req.Content)) {
 		req.Async = true
 	}

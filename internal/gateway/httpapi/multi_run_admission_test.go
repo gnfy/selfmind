@@ -376,6 +376,103 @@ func TestConcurrentIndependentSessionsExecuteWithoutCrossRunSelection(t *testing
 	waitUntil(t, 5*time.Second, func() bool { return daemon.coordinator().activeCount(identity.PersonID) == 0 }, "both runs did not finish")
 }
 
+func TestTwoCLISessionsAndOneIMWorkRunStayDistinct(t *testing.T) {
+	provider := &countedSlowProvider{slowLLMProvider: newSlowLLMProvider("done"), startedCalls: make(chan struct{}, 4)}
+	defer provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider.slowLLMProvider)
+	agents := make([]*kernel.Agent, 3)
+	for i := range agents {
+		agents[i] = kernel.NewAgent(memory.NewMemoryManager(nil), stubToolBackend{}, provider, "test", 1, 1, nil)
+	}
+	daemon.Gateway = router.NewGateway(agents[0], nil)
+	daemon.Gateway.EnableWorkerPool(agents[1:])
+	daemon.coordinator().activeLimit = 3
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wx-local", "Local on IM"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceIDs := make(map[string]string)
+	for _, name := range []string{"A", "B", "C"} {
+		root := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		workspace, err := store.EnsureWorkspace(ctx, control.Workspace{
+			TenantID: identity.TenantID, OwnerPersonID: identity.PersonID, Name: name, LocalPath: root,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		workspaceIDs[name] = workspace.ID
+	}
+	if err := store.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, workspaceIDs["C"]); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"A", "B"} {
+		response, code := daemon.ProcessMessage(ctx, api.MessageRequest{
+			Platform: "cli", PlatformUserID: "local", Channel: "session-" + name,
+			Content: "work " + name, WorkspaceID: workspaceIDs[name], Async: true,
+		})
+		if code != 200 || !response.Accepted {
+			t.Fatalf("CLI %s admission: code=%d response=%+v", name, code, response)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-provider.startedCalls:
+		case <-time.After(5 * time.Second):
+			t.Fatal("both CLI sessions did not enter the model")
+		}
+	}
+	before := daemon.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(before) != 2 || before[0].RunID == before[1].RunID {
+		t.Fatalf("CLI work was not independent: %+v", before)
+	}
+	coordination := &coordinationProvider{slowLLMProvider: provider.slowLLMProvider, answer: `{"choice":"3"}`}
+	daemon.MainRoutingProvider = coordination
+	response, code := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "weixin", PlatformUserID: "wx-local", Channel: "one-chat",
+		Content: "Start independent work C", Async: true,
+	})
+	if code != 200 || !response.Accepted || response.Turn == nil || response.Turn.QueueID == "" {
+		t.Fatalf("IM work C was not durably routed: code=%d response=%+v", code, response)
+	}
+	select {
+	case <-provider.startedCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("independent IM work did not overlap both CLI runs")
+	}
+	active := daemon.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(active) != 3 || active[2].RunID == before[0].RunID || active[2].RunID == before[1].RunID {
+		t.Fatalf("three work runs were not distinct: %+v", active)
+	}
+	status, statusCode := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "weixin", PlatformUserID: "wx-local", Channel: "one-chat", Content: "/status",
+	})
+	if statusCode != 200 || !strings.Contains(status.Content, "3 runs active") {
+		t.Fatalf("IM did not see all three works: code=%d response=%+v", statusCode, status)
+	}
+	coordination.answer = `{"choice":"1","action":"route"}`
+	update, updateCode := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "weixin", PlatformUserID: "wx-local", Channel: "one-chat",
+		Content: "Add this requirement to work A", Async: true,
+	})
+	if updateCode != 200 || !update.Accepted || update.Turn == nil || update.Turn.RunID != before[0].RunID {
+		t.Fatalf("IM update did not target the original CLI run: code=%d response=%+v", updateCode, update)
+	}
+	if len(daemon.coordinator().activeForRun(identity.PersonID, before[0].RunID).Steer) != 1 ||
+		len(daemon.coordinator().activeForRun(identity.PersonID, before[1].RunID).Steer) != 0 ||
+		len(daemon.coordinator().activeForRun(identity.PersonID, active[2].RunID).Steer) != 0 {
+		t.Fatal("IM update crossed a run boundary")
+	}
+	provider.releaseNow()
+	waitUntil(t, 5*time.Second, func() bool { return daemon.coordinator().activeCount(identity.PersonID) == 0 }, "three runs did not finalize")
+}
+
 func TestQueueDrainFillsAvailableConcurrentSlots(t *testing.T) {
 	provider := &countedSlowProvider{slowLLMProvider: newSlowLLMProvider("done"), startedCalls: make(chan struct{}, 4)}
 	defer provider.releaseNow()

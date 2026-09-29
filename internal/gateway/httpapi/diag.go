@@ -124,8 +124,9 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 	} else {
 		sb.WriteString("Workspace: none\n")
 	}
-	active := d.coordinator().currentActive(identity.PersonID)
-	if active != nil && active.RunID != "" {
+	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(activeRuns) == 1 && activeRuns[0].RunID != "" {
+		active := activeRuns[0]
 		if lease, err := d.Control.GetExecutionLeaseByRun(ctx, identity.TenantID, active.RunID); err == nil && lease != nil {
 			fmt.Fprintf(&sb, "Environment lease: %s (%s snapshot)\n", shortOpaqueID(lease.ID), lease.EnvironmentProfile)
 			fmt.Fprintf(&sb, "Credential references: %d hidden\n", len(lease.CredentialRefs))
@@ -146,6 +147,8 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 			}
 			fmt.Fprintf(&sb, "Execution profile: %s\n", profile)
 		}
+	} else if len(activeRuns) > 1 {
+		fmt.Fprintf(&sb, "Environment leases: %d active runs; use /status <run_id> for exact work.\n", len(activeRuns))
 	} else {
 		sb.WriteString("Environment lease: none (no active run)\n")
 	}

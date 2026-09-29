@@ -8,8 +8,11 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"selfmind/internal/kernel"
 )
 
 // A plan may be logged, stored, or one day sent to another execution node.
@@ -212,30 +215,140 @@ func TestExecSandboxPolicyPerRequest(t *testing.T) {
 	}
 }
 
-// A run-scoped key resolves exactly its own scope, which is what a process
-// serving several executions requires.
+// A run-scoped key resolves exactly its own scope. The person-key fallback
+// cannot pick whichever Run happened to register last while two are active.
 func TestExecutionScopeResolvesByRunKey(t *testing.T) {
 	person := "person-scope-key"
+	firstRoot := t.TempDir()
+	secondRoot := t.TempDir()
 	first := SetExecutionScope(person, ExecutionScope{
-		TenantID: person, RunID: "run-A", WorkspaceRoot: t.TempDir(), TaskID: "task-A",
+		TenantID: person, RunID: "run-A", WorkspaceRoot: firstRoot, TaskID: "task-A",
 	})
 	t.Cleanup(first)
-	// A later run for the same person overwrites the person-keyed entry...
 	second := SetExecutionScope(person, ExecutionScope{
-		TenantID: person, RunID: "run-B", WorkspaceRoot: t.TempDir(), TaskID: "task-B",
+		TenantID: person, RunID: "run-B", WorkspaceRoot: secondRoot, TaskID: "task-B",
 	})
 	t.Cleanup(second)
 
-	// ...but a caller that knows its run still resolves its own scope.
 	ctx := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun("run-A"))
 	scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person, "_context": ctx})
 	if !ok || scope.TaskID != "task-A" {
 		t.Fatalf("run-scoped lookup must return run A's scope, got %+v", scope)
 	}
-	// Without a run key the person-keyed entry (the newest) is used, as before.
-	scope, ok = currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person})
-	if !ok || scope.TaskID != "task-B" {
-		t.Fatalf("person lookup must return the newest scope, got %+v", scope)
+	ctxB := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun("run-B"))
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person, "_context": ctxB}); !ok || scope.TaskID != "task-B" {
+		t.Fatalf("run-scoped lookup must return run B's scope, got %+v", scope)
+	}
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person}); ok {
+		t.Fatalf("ambiguous person lookup borrowed another run's scope: %+v", scope)
+	}
+	if diag := ExecutionScopeDiagnostics(person); diag.Installed {
+		t.Fatalf("ambiguous person diagnostics picked one run: %+v", diag)
+	}
+	called := false
+	exec := WorkspaceScopeMiddleware()(func(map[string]interface{}) (string, error) {
+		called = true
+		return "ok", nil
+	})
+	if _, err := exec(map[string]interface{}{"_tenant_id": person, "_tool_name": "read_file", "path": "a.txt"}); err == nil || called {
+		t.Fatalf("unbound call executed against ambiguous scope: err=%v called=%v", err, called)
+	}
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{
+		"_tenant_id": person, "_context": ctx,
+		"_invocation_scope": kernel.ToolInvocationScope{ExecutionScopeKey: ExecutionScopeKeyForRun("run-B")},
+	}); ok {
+		t.Fatalf("conflicting trusted run keys selected a scope: %+v", scope)
+	}
+	// Ending A first must not remove B's registration or leave a stale A scope.
+	first()
+	first()
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person}); !ok || scope.TaskID != "task-B" {
+		t.Fatalf("single remaining run did not regain fallback: %+v", scope)
+	}
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person, "_context": ctx}); ok {
+		t.Fatalf("ended run retained a scope: %+v", scope)
+	}
+	called = false
+	if _, err := exec(map[string]interface{}{"_tenant_id": person, "_context": ctx, "_tool_name": "execute_code", "code": "print(1)"}); err == nil || called {
+		t.Fatalf("process tool borrowed a different run after cleanup: err=%v called=%v", err, called)
+	}
+}
+
+func TestRunFilesystemCallRequiresAWorkspaceRoot(t *testing.T) {
+	person := "person-no-root"
+	cleanup := SetExecutionScope(person, ExecutionScope{RunID: "run-no-root"})
+	defer cleanup()
+	called := false
+	exec := WorkspaceScopeMiddleware()(func(map[string]interface{}) (string, error) {
+		called = true
+		return "ok", nil
+	})
+	ctx := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun("run-no-root"))
+	if _, err := exec(map[string]interface{}{"_tenant_id": person, "_context": ctx, "_tool_name": "execute_code", "code": "print(1)"}); err == nil || called {
+		t.Fatalf("run process call without a root executed: err=%v called=%v", err, called)
+	}
+}
+
+func TestReplacingRunScopeCannotBeRemovedByOlderCleanup(t *testing.T) {
+	person := "person-reinstalled-scope"
+	first := SetExecutionScope(person, ExecutionScope{RunID: "run-reinstalled", TaskID: "old"})
+	defer first()
+	second := SetExecutionScope(person, ExecutionScope{RunID: "run-reinstalled", TaskID: "new"})
+	defer second()
+	args := map[string]interface{}{
+		"_tenant_id": person,
+		"_context":   WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun("run-reinstalled")),
+	}
+	if scope, ok := currentExecutionScopeAny(args); !ok || scope.TaskID != "new" {
+		t.Fatalf("new registration was not authoritative: %+v", scope)
+	}
+	first()
+	if scope, ok := currentExecutionScopeAny(args); !ok || scope.TaskID != "new" {
+		t.Fatalf("older cleanup removed the new registration: %+v", scope)
+	}
+	second()
+	if scope, ok := currentExecutionScopeAny(args); ok {
+		t.Fatalf("completed run retained its execution scope: %+v", scope)
+	}
+}
+
+func TestExecutionScopesRegisterAndCleanConcurrently(t *testing.T) {
+	person := "person-concurrent-scopes"
+	type registration struct {
+		runID   string
+		cleanup func()
+	}
+	start := make(chan struct{})
+	registered := make(chan registration, 2)
+	for _, runID := range []string{"run-concurrent-A", "run-concurrent-B"} {
+		go func(runID string) {
+			<-start
+			registered <- registration{runID: runID, cleanup: SetExecutionScope(person, ExecutionScope{
+				RunID: runID, TaskID: runID,
+			})}
+		}(runID)
+	}
+	close(start)
+	first, second := <-registered, <-registered
+	defer first.cleanup()
+	defer second.cleanup()
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person}); ok {
+		t.Fatalf("concurrent runs left an authoritative person alias: %+v", scope)
+	}
+	for _, reg := range []registration{first, second} {
+		ctx := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun(reg.runID))
+		if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person, "_context": ctx}); !ok || scope.RunID != reg.runID {
+			t.Fatalf("exact scope for %s: %+v", reg.runID, scope)
+		}
+	}
+	var wg sync.WaitGroup
+	for _, reg := range []registration{first, second} {
+		wg.Add(1)
+		go func(cleanup func()) { defer wg.Done(); cleanup() }(reg.cleanup)
+	}
+	wg.Wait()
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": person}); ok {
+		t.Fatalf("cleanup left a person scope behind: %+v", scope)
 	}
 }
 

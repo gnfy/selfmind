@@ -25,7 +25,11 @@ before changing `internal/tools`, execution middleware, or kernel tool dispatch.
   never falls back to the person-level scope, which may belong to another
   execution, and a confined filesystem or process call whose run scope is gone
   is refused rather than run against the daemon's directory. Calls without a
-  run, such as local helpers, still resolve by person.
+  run, such as local helpers, resolve by person only when there is no ambiguity
+  between distinct active Runs; otherwise dispatch fails closed. Registering
+  a second Run cannot overwrite the first Run's scope, and either cleanup
+  removes only its own registration. If a trusted context and invocation name
+  different Run keys, neither key is accepted.
 - `vision_analyze`'s local-path branch is a filesystem read and obeys the
   scope like `read_file` (`WorkspaceScopeMiddleware`); its http(s) branch
   stays with the tool's SSRF check. Any new tool that reads a caller-supplied

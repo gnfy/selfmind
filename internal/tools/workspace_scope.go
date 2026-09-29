@@ -142,13 +142,37 @@ type ExecutionCapabilityStore interface {
 	GrantExecutionCapability(ctx context.Context, tenantID, personID, workspaceID, capability, resourceFingerprint, grantedBy string, expiresAt time.Time) error
 }
 
-// executionScopes is keyed by scope key. Historically the only key was the
-// person id (passed as "tenantID" because the agent's storage tenant IS the
-// person), which silently assumed one active execution per person. A run-scoped
-// key is also registered so a caller that knows its run resolves exactly its own
-// scope — the shape a separate execution node needs, where one process serves
-// many runs.
-var executionScopes sync.Map // scope key -> ExecutionScope
+// A person key is a compatibility fallback only while at most one distinct
+// Run is installed. Nested legacy/unscoped registrations may overlay it, but
+// two different live Runs make it ambiguous. Each registration has its own
+// token so an older Run's cleanup cannot remove a newer Run's scope. Exact Run
+// keys remain the authority for calls made while several Runs share a person.
+var executionScopes = struct {
+	sync.RWMutex
+	next  uint64
+	byKey map[string]map[uint64]ExecutionScope
+}{byKey: make(map[string]map[uint64]ExecutionScope)}
+
+func lookupExecutionScope(key string) (ExecutionScope, bool, bool) {
+	executionScopes.RLock()
+	defer executionScopes.RUnlock()
+	entries := executionScopes.byKey[strings.TrimSpace(key)]
+	var newest uint64
+	var selected ExecutionScope
+	var runID string
+	for id, scope := range entries {
+		if scope.RunID != "" {
+			if runID != "" && runID != scope.RunID {
+				return ExecutionScope{}, false, true
+			}
+			runID = scope.RunID
+		}
+		if id > newest {
+			newest, selected = id, scope
+		}
+	}
+	return selected, newest != 0, false
+}
 
 type scopeKeyContextKey struct{}
 
@@ -185,11 +209,7 @@ type ExecutionScopeDiagnostic struct {
 // /diag. It never exposes commands, credential refs, environment names, or
 // approval payloads.
 func ExecutionScopeDiagnostics(personID string) ExecutionScopeDiagnostic {
-	value, ok := executionScopes.Load(strings.TrimSpace(personID))
-	if !ok {
-		return ExecutionScopeDiagnostic{}
-	}
-	scope, ok := value.(ExecutionScope)
+	scope, ok, _ := lookupExecutionScope(personID)
 	if !ok {
 		return ExecutionScopeDiagnostic{}
 	}
@@ -204,8 +224,8 @@ func ExecutionScopeDiagnostics(personID string) ExecutionScopeDiagnostic {
 }
 
 // SetExecutionScope installs scope under the person key and, when the scope
-// carries a run id, under a run-scoped key as well. The returned cleanup removes
-// both.
+// carries a run id, under a run-scoped key as well. A person lookup is invalid
+// with more than one distinct live Run. Cleanup removes only this registration.
 func SetExecutionScope(personKey string, scope ExecutionScope) func() {
 	personKey = strings.TrimSpace(personKey)
 	runKey := ExecutionScopeKeyForRun(scope.RunID)
@@ -215,19 +235,34 @@ func SetExecutionScope(personKey string, scope ExecutionScope) func() {
 	if personKey == "" && runKey == "" {
 		return func() {}
 	}
-	if personKey != "" {
-		executionScopes.Store(personKey, scope)
+	executionScopes.Lock()
+	executionScopes.next++
+	id := executionScopes.next
+	for _, key := range [...]string{personKey, runKey} {
+		if key == "" {
+			continue
+		}
+		if executionScopes.byKey[key] == nil {
+			executionScopes.byKey[key] = make(map[uint64]ExecutionScope)
+		}
+		executionScopes.byKey[key][id] = scope
 	}
-	if runKey != "" {
-		executionScopes.Store(runKey, scope)
-	}
+	executionScopes.Unlock()
+	var once sync.Once
 	return func() {
-		if personKey != "" {
-			executionScopes.Delete(personKey)
-		}
-		if runKey != "" {
-			executionScopes.Delete(runKey)
-		}
+		once.Do(func() {
+			executionScopes.Lock()
+			defer executionScopes.Unlock()
+			for _, key := range [...]string{personKey, runKey} {
+				if key == "" {
+					continue
+				}
+				delete(executionScopes.byKey[key], id)
+				if len(executionScopes.byKey[key]) == 0 {
+					delete(executionScopes.byKey, key)
+				}
+			}
+		})
 	}
 }
 
@@ -261,15 +296,18 @@ func currentExecutionScopeAny(args map[string]interface{}) (ExecutionScope, bool
 	// Prefer the run-scoped key: it identifies exactly one execution even when
 	// the process serves several. A delegated sub-agent's context drops the
 	// parent's key, but its trusted invocation scope names the same run.
+	contextKey := executionScopeKeyFromContext(contextFromArgs(args))
+	invocationKey := invocationExecutionScopeKey(args)
+	if contextKey != "" && invocationKey != "" && contextKey != invocationKey {
+		return ExecutionScope{}, false
+	}
 	runKeyNamed := false
-	for _, key := range [...]string{executionScopeKeyFromContext(contextFromArgs(args)), invocationExecutionScopeKey(args)} {
+	for _, key := range [...]string{contextKey, invocationKey} {
 		if key == "" {
 			continue
 		}
-		if value, ok := executionScopes.Load(key); ok {
-			if scope, ok := value.(ExecutionScope); ok {
-				return scope, true
-			}
+		if scope, ok, _ := lookupExecutionScope(key); ok {
+			return scope, true
 		}
 		runKeyNamed = runKeyNamed || strings.HasPrefix(key, runExecutionScopeKeyPrefix)
 	}
@@ -282,11 +320,7 @@ func currentExecutionScopeAny(args map[string]interface{}) (ExecutionScope, bool
 	if tenantID == "" {
 		return ExecutionScope{}, false
 	}
-	value, ok := executionScopes.Load(tenantID)
-	if !ok {
-		return ExecutionScope{}, false
-	}
-	scope, ok := value.(ExecutionScope)
+	scope, ok, _ := lookupExecutionScope(tenantID)
 	return scope, ok
 }
 
@@ -295,13 +329,23 @@ func currentExecutionScopeAny(args map[string]interface{}) (ExecutionScope, bool
 func WorkspaceScopeMiddleware() Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
-			scope, ok := currentExecutionScope(args)
-			if !ok {
-				if _, installed := currentExecutionScopeAny(args); !installed && runScopedToolCall(args) {
-					// The call belongs to a run whose scope is gone: running it
-					// unscoped would resolve paths against the daemon, not the
-					// run's workspace.
+			scope, installed := currentExecutionScopeAny(args)
+			if !installed {
+				if tenantID, _ := args["_tenant_id"].(string); tenantID != "" {
+					if _, _, ambiguous := lookupExecutionScope(tenantID); ambiguous {
+						return "", fmt.Errorf("tool call was not executed: several runs are active; an exact run scope is required")
+					}
+				}
+				if runScopedToolCall(args) {
+					// Filesystem and process calls naming a Run must resolve
+					// its own scope; another Run's person alias is not safe.
 					return "", fmt.Errorf("tool call was not executed: this run's workspace scope is not available")
+				}
+				return next(args)
+			}
+			if strings.TrimSpace(scope.WorkspaceRoot) == "" {
+				if runScopedToolCall(args) {
+					return "", fmt.Errorf("tool call was not executed: this run has no workspace root")
 				}
 				return next(args)
 			}
@@ -349,21 +393,25 @@ func WorkspaceScopeMiddleware() Middleware {
 	}
 }
 
-// runScopedToolCall reports whether a call to one of the tools the middleware
-// confines (keep in step with its switch) names a run, through its context or
-// its trusted invocation scope.
-func runScopedToolCall(args map[string]interface{}) bool {
-	switch toolName, _ := args["_tool_name"].(string); toolName {
-	case "terminal", "verify", "watch_external", "read_file", "write_file", "search_files", "ls_r", "vision_analyze", "patch":
-	default:
-		return false
-	}
+func runScopeKeyNamed(args map[string]interface{}) bool {
 	for _, key := range [...]string{executionScopeKeyFromContext(contextFromArgs(args)), invocationExecutionScopeKey(args)} {
 		if strings.HasPrefix(key, runExecutionScopeKeyPrefix) {
 			return true
 		}
 	}
 	return false
+}
+
+// runScopedToolCall reports whether a tool requiring a workspace root belongs
+// to an exact Run. Process tools that resolve cwd in their handlers belong here
+// alongside the path tools handled by this middleware.
+func runScopedToolCall(args map[string]interface{}) bool {
+	switch toolName, _ := args["_tool_name"].(string); toolName {
+	case "terminal", "verify", "execute_command", "execute_code", "shell", "watch_external", "read_file", "write_file", "search_files", "ls_r", "vision_analyze", "patch":
+	default:
+		return false
+	}
+	return runScopeKeyNamed(args)
 }
 
 // isLocalImageRef mirrors vision_analyze's own local-vs-remote split: anything

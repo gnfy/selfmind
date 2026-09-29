@@ -50,3 +50,24 @@ func TestExecutionDiagIsRedactedAndShowsWorkspace(t *testing.T) {
 		}
 	}
 }
+
+func TestExecutionDiagDoesNotCallMultipleRunsIdle(t *testing.T) {
+	store := controltest.NewStore(t)
+	identity := &control.IdentityContext{TenantID: "tenant-multi-diag", PersonID: "person-multi-diag", Platform: "cli"}
+	server := &Server{Control: store}
+	coord := server.coordinator()
+	coord.activeLimit = 2
+	for _, runID := range []string{"run-one", "run-two"} {
+		handle := &activeRun{PersonID: identity.PersonID, RunID: runID, Channel: runID}
+		if !coord.beginActive(identity.PersonID, handle) {
+			t.Fatal("could not register active run")
+		}
+		defer coord.endActiveRun(identity.PersonID, handle)
+	}
+	handled, reply, _, err := server.tryHandleControlCommand(context.Background(), identity, api.MessageRequest{
+		Channel: "cli:person-multi-diag", Content: "/diag execution",
+	})
+	if err != nil || !handled || !strings.Contains(reply, "2 active runs") || strings.Contains(reply, "no active run") {
+		t.Fatalf("multi-run execution diagnostics: handled=%v err=%v reply=%q", handled, err, reply)
+	}
+}

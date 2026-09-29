@@ -32,12 +32,13 @@ func (s *Store) MarkInboundSeen(ctx context.Context, platform, messageID string)
 		`INSERT OR IGNORE INTO inbound_dedup(platform, message_id, created_at) VALUES(?,?,?)`,
 		platform, messageID, now)
 	if err != nil {
-		// Fail open: a dedup-store hiccup must not silently drop inbound work.
-		return true, err
+		// The caller must ask the platform to retry instead of executing without
+		// a durable idempotency guard. Do not represent failure as first-seen.
+		return false, err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return true, err
+		return false, err
 	}
 	return n > 0, nil
 }

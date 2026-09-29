@@ -120,12 +120,15 @@ func (d *Server) handleIMWebhook(w http.ResponseWriter, r *http.Request) {
 	// response, so a duplicate must be acknowledged 200 WITHOUT running the
 	// agent again. Keyed by the platform's own message/event id, persisted in
 	// control.db so it survives a restart; payloads with no recognizable id
-	// pass through (nothing safe to dedup on), and a dedup-store error fails
-	// open rather than dropping real work.
+	// pass through (nothing safe to dedup on). A dedup-store error must return
+	// a retryable response: processing without a durable identity could repeat
+	// an action when the platform redelivers this webhook.
 	if msgID := imMessageID(platform, payload); msgID != "" && d.Control != nil {
 		first, err := d.Control.MarkInboundSeen(r.Context(), platform, msgID)
 		if err != nil {
 			log.Warn("im webhook dedup check failed", "platform", platform, "error", err)
+			http.Error(w, "inbound storage unavailable; retry delivery", http.StatusServiceUnavailable)
+			return
 		} else if !first {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
 			return

@@ -122,3 +122,18 @@ func TestIMWebhookDuplicateAcknowledgedWithoutProcessing(t *testing.T) {
 		t.Fatalf("expected duplicate acknowledgment, got %v", resp)
 	}
 }
+
+func TestIMWebhookRetriesWhenDedupStorageIsUnavailable(t *testing.T) {
+	store := controltest.NewStore(t)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	body := `{"header":{"event_id":"ev-unrecorded"},"event":{"message":{"message_id":"om-x","chat_id":"c1","content":"{\"text\":\"start work\"}"}}}`
+	req := httptest.NewRequest("POST", "/v1/im/feishu", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	daemon.handleIMWebhook(rec, req)
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "retry delivery") {
+		t.Fatalf("unrecorded webhook was acknowledged: code=%d body=%q", rec.Code, rec.Body.String())
+	}
+}

@@ -567,9 +567,17 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// their review. Only a call the runtime can already prove harmless
 			// stops paying for a judgement about whether it was asked for.
 			contained := containment.AutoApprove() && !denyForcesHuman
+			// Parallel Runs may retain a configured network route and selected
+			// credentials. A shell using either can mutate a shared target that
+			// local workspace isolation cannot protect. Only a proven observation
+			// can skip the one-shot human decision; neither full-auto nor the
+			// model judge can authorize an unclassified remote effect.
+			parallelRemote := hasScope && scope.ParallelWork && isExecTool(toolName) &&
+				!containment.ObservationOnly &&
+				(containment.Network == containmentNetworkShared || containment.Credentials == containmentCredentialsSelected)
 			semanticReview := mode == ApprovalSmart && intentSnapshot.ModelAuthorization &&
 				!contained && (isWriteTool(toolName) || isExecTool(toolName) || dangerous)
-			if !semanticReview && !denyForcesHuman && !externalUnknown && !approvalNeeded(mode, toolName, dangerous, contained) {
+			if !semanticReview && !denyForcesHuman && !externalUnknown && !parallelRemote && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
 					recordScopeTriage(scope, toolName, "", TriageOutcomeContained, TriageAssessment{}, 0, nil)
 					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason, "assessment", containment.Summary())
@@ -606,6 +614,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			case externalUnknown:
 				// External unknown effects are deliberately once-only. Historical
 				// broad grants and live run grants cannot release them.
+			case parallelRemote:
+				// A previous command class cannot grant a new shared-network or
+				// credential-bearing effect from this concurrent Run.
 			case isRunGranted(declaredEffectKey):
 				// A person approved this byte-identical command as part of a bounded
 				// phase. The hard floor and current deny already ran above; identity,
@@ -656,7 +667,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					return next(args)
 				}
 			}
-			if !semanticReview && !denyForcesHuman && !externalUnknown && hasScope && scope.Grants != nil {
+			if !semanticReview && !denyForcesHuman && !externalUnknown && !parallelRemote && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
 					if key == "" || !scope.StandingGrants.Allowed {
@@ -735,11 +746,14 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					hostWithoutClass = true
 				}
 			}
-			if semanticReview || externalUnknown || denyForcesHuman || hostWithoutClass ||
+			if semanticReview || externalUnknown || parallelRemote || denyForcesHuman || hostWithoutClass ||
 				(containment.Credentials == containmentCredentialsSelected && !containment.ObservationOnly) {
 				decisionPolicy = ApprovalDecisionPolicyOnceOnly
 			}
-			if mode == ApprovalSmart && hasScope && !denyForcesHuman && !externalUnknown {
+			if parallelRemote {
+				reason = "parallel execution with shared network or credentials requires one-time confirmation"
+			}
+			if mode == ApprovalSmart && hasScope && !denyForcesHuman && !externalUnknown && !parallelRemote {
 				switch {
 				case scope.Judge == nil:
 					// No judge wired: smart mode cannot triage at all. Count it so
@@ -909,6 +923,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				return next(args)
 			}
 
+			if parallelRemote {
+				return "", fmt.Errorf("parallel remote execution requires an available human approval channel")
+			}
 			clarifyFn := clarifyHandlerFromArgs(args)
 			if clarifyFn != nil {
 				question := fmt.Sprintf("Dangerous operation detected.\nTool: %s\nArgs: %v\nReason: %s\nConfirm execution?", toolName, MarshalArgs(args), reason)

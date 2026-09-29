@@ -204,7 +204,13 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   observation must do so. Target sets are acquired and observed atomically.
   Parallel Runs also require an enforced process sandbox for terminal calls;
   explicit host escape is rejected before approval or claim creation. A
-  proven observation can still inspect an occupied target.
+  proven observation can still inspect an occupied target. A parallel Run
+  keeps its frozen network policy, including inside a managed Git view. An
+  untrusted view must first obtain the normal network capability, and each
+  non-observation shell call with shared network or selected credentials
+  requires one-time human approval even in full-auto or smart mode. It then
+  enters the durable effect-claim lane; neither a stored command grant nor a
+  model judge can authorize it alone.
   Production target adapters and real restart/transport acceptance are still
   open, so the production per-person active-Run ceiling remains one.
 - Delegation depth is enforced structurally. `buildDelegateSubBackend` builds
@@ -912,7 +918,8 @@ the cross-package do-not-retry contract kernel matches.
   `waiting_user` with reason `environment_unavailable`. Automatic wake-up when
   a compatible remote environment is later installed remains follow-up work.
 - Egress classification currently covers exec tools; full-auto retains its
-  documented bypass for ordinary egress.
+  documented bypass for ordinary single-Run egress. Parallel remote shell
+  effects require one-time human approval before the external claim.
 - Workspace skills are excluded for untrusted active workspaces, skill roots
   come from `ExecutionScope` rather than daemon cwd, and credential-shaped
   environment passthrough declarations fail closed. User-installed trusted

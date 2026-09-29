@@ -491,12 +491,12 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	scope.SandboxPolicy = tools.CurrentExecSandboxPolicy()
 	if scope.ParallelWork {
 		// A host shell can reach an external target through an otherwise
-		// innocuous command, and no target adapter can prove what that shell
-		// will do. Parallel Runs therefore require enforced isolation before
-		// a local command may bypass the external-effect claim lane.
+		// innocuous command. Parallel Runs require enforced isolation before
+		// a local command can bypass the external-effect claim lane. Retain
+		// the configured network policy: when isolated network is explicitly
+		// enabled, approval and durable effect claims still guard the call.
 		scope.SandboxPolicy.Enabled = true
 		scope.SandboxPolicy.Required = true
-		scope.SandboxPolicy.AllowNetwork = false
 	}
 	for _, binding := range scope.RootBindings {
 		if binding.Source == executionenv.RootSourceExecutionView {
@@ -505,7 +505,6 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 			// checkout. Keep this Run confined even if the person changes mode.
 			scope.SandboxPolicy.Enabled = true
 			scope.SandboxPolicy.Required = true
-			scope.SandboxPolicy.AllowNetwork = false
 			break
 		}
 	}

@@ -38,11 +38,11 @@ func ExecutionCapabilityMiddleware() Middleware {
 			if !hasScope || strings.TrimSpace(scope.WorkspaceID) == "" {
 				return next(args)
 			}
-			if isolatedExecutionView(scope) {
-				// Until a trusted adapter can claim the external target, an
-				// isolated Git checkout is a file-only view. A remembered
-				// workspace network or credential grant cannot silently turn it
-				// into a second deploy writer.
+			if isolatedExecutionView(scope) && !scope.ParallelWork {
+				// A legacy view without the parallel effect-claim contract remains
+				// file-only. Parallel views continue through the normal capability
+				// path; approval and the durable external-effect lane constrain
+				// their remote operations before dispatch.
 				if commandClearlyNeedsNetwork(toolName, args) {
 					return "", fmt.Errorf("networked execution is unavailable in this isolated view until its external target can be claimed")
 				}
@@ -62,8 +62,9 @@ func ExecutionCapabilityMiddleware() Middleware {
 			// This is the same correction resolveCredentialCapability already
 			// carries for the credential axis, applied to the axis that still
 			// had the blanket form.
+			_, _, networkAllowed := execSandboxPolicyForArgs(args)
 			networkShared := scope.TrustLevel == executionenv.TrustTrusted &&
-				ExecSandboxAllowsNetwork() && commandPlausiblyNeedsEgress(toolName, args)
+				networkAllowed && commandPlausiblyNeedsEgress(toolName, args)
 			if !networkShared && scope.runGrants != nil {
 				networkShared = scope.runGrants.has(executionCapabilityRunGrantKey(executionenv.CapabilityNetworkShared, fingerprint))
 			}

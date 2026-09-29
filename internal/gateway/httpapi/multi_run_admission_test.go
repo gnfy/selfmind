@@ -140,10 +140,13 @@ func TestMainCoordinationRoutesOnlyValidatedChoice(t *testing.T) {
 		wantRun      int
 		wantQueue    bool
 		wantChoice   bool
+		wantObserve  bool
 	}{
 		{name: "supplement second run", answer: `{"choice":"2"}`, wantRun: 1},
+		{name: "observe second run", answer: `{"choice":"2","action":"observe"}`, wantRun: 1, wantObserve: true},
 		{name: "independent work", answer: `{"choice":"3"}`, wantQueue: true},
 		{name: "ambiguous", answer: `{"choice":"ask"}`, wantChoice: true},
+		{name: "cannot observe new work", answer: `{"choice":"3","action":"observe"}`, wantChoice: true},
 		{name: "invented target", answer: `{"choice":"run_foreign"}`, wantChoice: true},
 		{name: "malformed", answer: `{"choice":"1"} afterthought`, wantChoice: true},
 		{name: "provider unavailable", wantChoice: true},
@@ -192,15 +195,22 @@ func TestMainCoordinationRoutesOnlyValidatedChoice(t *testing.T) {
 			}
 			coordRun, err := store.GetRun(ctx, owner.TenantID, provider.runID)
 			wantStatus := "done"
-			if tc.name == "invented target" || tc.name == "malformed" || tc.name == "provider unavailable" {
+			if tc.name == "invented target" || tc.name == "malformed" || tc.name == "provider unavailable" || tc.name == "cannot observe new work" {
 				wantStatus = "failed"
 			}
 			if err != nil || coordRun == nil || coordRun.ExecutionClass != "coordination" || coordRun.Status != wantStatus {
 				t.Fatalf("coordination Run was not durably closed: %+v, %v", coordRun, err)
 			}
 			if tc.wantRun >= 0 && !tc.wantQueue && !tc.wantChoice {
-				if !response.Accepted || response.Turn == nil || response.Turn.RunID != active[tc.wantRun].RunID || len(active[tc.wantRun].Steer) != 1 {
-					t.Fatalf("Main choice was not committed to exact Run: %+v", response)
+				wantSteer := 1
+				if tc.wantObserve {
+					wantSteer = 0
+				}
+				if !response.Accepted || response.Turn == nil || response.Turn.RunID != active[tc.wantRun].RunID || len(active[tc.wantRun].Steer) != wantSteer {
+					t.Fatalf("Main choice did not preserve observation/routing semantics: %+v", response)
+				}
+				if tc.wantObserve && (!strings.Contains(response.Content, "database B") || response.Turn.Status != "done") {
+					t.Fatalf("observation did not render exact status: %+v", response)
 				}
 			} else if tc.wantQueue {
 				if !response.Accepted || response.Turn == nil || response.Turn.QueueID == "" || len(active[0].Steer)+len(active[1].Steer) != 0 {
@@ -213,6 +223,59 @@ func TestMainCoordinationRoutesOnlyValidatedChoice(t *testing.T) {
 				t.Fatalf("fallback lost the original input: %+v, %v", pending, err)
 			}
 		})
+	}
+}
+
+func TestMainCoordinationCanQueueExactHistoricalResume(t *testing.T) {
+	ctx := context.Background()
+	daemon, store, _ := newDetachedRunServer(t, newSlowLLMProvider("unused"))
+	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, owner.TenantID, owner.PersonID, "weixin", "wx-local", "Local on IM"); err != nil {
+		t.Fatal(err)
+	}
+	oldTask, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: "Old release", Channel: "cli-old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRun, err := store.StartRun(ctx, oldTask, "cli-old", "finish old release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, owner.TenantID, oldRun.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	coord := daemon.coordinator()
+	coord.activeLimit = 2
+	for _, title := range []string{"current A", "current B"} {
+		task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: title, Channel: title})
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := store.StartRun(ctx, task, title, title)
+		if err != nil {
+			t.Fatal(err)
+		}
+		handle := &activeRun{TenantID: owner.TenantID, PersonID: owner.PersonID, TaskID: task.ID, RunID: run.ID,
+			Channel: title, Summary: title, Steer: make(chan kernel.SteeringInput, 1)}
+		if !coord.beginActive(owner.PersonID, handle) {
+			t.Fatal("cannot register active run")
+		}
+		defer coord.endActiveRun(owner.PersonID, handle)
+	}
+	provider := &coordinationProvider{slowLLMProvider: newSlowLLMProvider("unused"), answer: `{"choice":"3","action":"route"}`}
+	daemon.MainRoutingProvider = provider
+	response, code := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "weixin", PlatformUserID: "wx-local",
+		Channel: "one-chat", Content: "continue the old release and finish its verification", Async: true})
+	if code != 200 || !response.Accepted || response.Turn == nil || response.Turn.QueueID == "" ||
+		!strings.Contains(provider.seen.SystemPrompt, oldRun.ID) {
+		t.Fatalf("historical Main choice: code=%d response=%+v prompt=%q", code, response, provider.seen.SystemPrompt)
+	}
+	queued, err := store.GetQueued(ctx, owner.TenantID, response.Turn.QueueID)
+	if err != nil || queued == nil || queued.ReplyToRunID != oldRun.ID || queued.TaskID != oldTask.ID {
+		t.Fatalf("historical input lost exact parent: %+v, %v", queued, err)
 	}
 }
 

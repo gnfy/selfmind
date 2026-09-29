@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 20
+const CurrentControlSchemaVersion = 21
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -554,6 +554,16 @@ DROP TABLE IF EXISTS task_references;`)
 			// Historical rows are work. A short Main coordination Run has its own
 			// admission slot and cannot consume a work Run's capacity.
 			return ensureMigrationColumn(ctx, db, "runs", "execution_class", "TEXT NOT NULL DEFAULT 'work'")
+		},
+	},
+	{
+		Version: 21,
+		Name:    "turn-choice-observation-receipt",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			if err := ensureMigrationColumn(ctx, db, "pending_turn_choices", "resolution_kind", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			return ensureMigrationColumn(ctx, db, "pending_turn_choices", "response_text", "TEXT NOT NULL DEFAULT ''")
 		},
 	},
 }

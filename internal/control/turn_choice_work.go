@@ -77,6 +77,7 @@ type TurnChoiceWorkResult struct {
 	Option   *TurnChoiceOption
 	Queued   *QueuedTask
 	Steering *SteeringMessage
+	Observed string
 }
 
 // RoutedTurnChoice returns the durable receipt for a repeated exact answer.
@@ -102,10 +103,23 @@ func (s *Store) RoutedTurnChoice(ctx context.Context, tenantID, personID, choice
 		return nil, err
 	}
 	option := selectedTurnChoiceOption(choice, optionKey)
-	if option == nil || (option.Action != "new" && option.Action != "steer") {
+	if option == nil || (option.Action != "new" && option.Action != "steer" && option.Action != "resume") {
 		return nil, ErrTurnChoiceNotFound
 	}
 	result := &TurnChoiceWorkResult{Choice: choice, Option: option}
+	var resolutionKind string
+	if err := s.db.QueryRowContext(ctx, `SELECT resolution_kind, response_text FROM pending_turn_choices
+		WHERE tenant_id = ? AND person_id = ? AND id = ?`, tenantID, personID, choiceID).
+		Scan(&resolutionKind, &result.Observed); err != nil {
+		return nil, err
+	}
+	if resolutionKind == "observe" {
+		if result.Observed == "" {
+			return nil, ErrTurnChoiceNotFound
+		}
+		return result, nil
+	}
+	result.Observed = ""
 	queued, err := s.GetQueuedByIdempotencyKey(ctx, tenantID, "choice:"+choiceID)
 	if err != nil {
 		return nil, err
@@ -137,6 +151,77 @@ func (s *Store) RoutedTurnChoice(ctx context.Context, tenantID, personID, choice
 	}
 	result.Steering = &m
 	return result, nil
+}
+
+// ObservePendingTurnChoice commits a read-only answer snapshot to the same
+// choice record that owns the original IM request. A lost delivery receipt can
+// replay this exact answer without querying a later, different Run state or
+// accidentally turning an observation into steering.
+func (s *Store) ObservePendingTurnChoice(ctx context.Context, tenantID, personID, choiceID, optionKey, requestJSON, responseText string) (*TurnChoiceWorkResult, error) {
+	if s == nil || s.db == nil || strings.TrimSpace(responseText) == "" || len(responseText) > 16000 {
+		return nil, fmt.Errorf("bounded observation response is required")
+	}
+	tenantID, personID = normalizeTenant(tenantID), strings.TrimSpace(personID)
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		result, err := s.observePendingTurnChoiceOnce(ctx, tenantID, personID, choiceID, optionKey, requestJSON, responseText)
+		if err == nil || !isSQLiteBusy(err) {
+			return result, err
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(25*(attempt+1)) * time.Millisecond):
+		}
+	}
+	return nil, last
+}
+
+func (s *Store) observePendingTurnChoiceOnce(ctx context.Context, tenantID, personID, choiceID, optionKey, requestJSON, responseText string) (*TurnChoiceWorkResult, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	now := time.Now()
+	choice, err := scanPendingTurnChoice(tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, account_id, channel, resolution_id,
+		request_json, options_json, status, chosen_key, created_at, expires_at, claimed_at
+		FROM pending_turn_choices WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = ? AND expires_at > ?`,
+		tenantID, personID, choiceID, TurnChoicePending, now.Unix()))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrTurnChoiceNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if choice.RequestJSON != requestJSON {
+		return nil, ErrTurnChoiceNotFound
+	}
+	option := selectedTurnChoiceOption(choice, optionKey)
+	if option == nil || option.Action != "steer" {
+		return nil, ErrTurnChoiceOption
+	}
+	var runPerson, runTask, runStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT person_id, thread_id, status FROM runs WHERE tenant_id = ? AND id = ? AND execution_class = 'work'`,
+		tenantID, option.RunID).Scan(&runPerson, &runTask, &runStatus); err != nil || runPerson != personID || runTask != option.TaskID || runStatus != "running" {
+		return nil, ErrTurnChoiceNotFound
+	}
+	updated, err := tx.ExecContext(ctx, `UPDATE pending_turn_choices
+		SET status = ?, chosen_key = ?, claimed_at = ?, request_json = '{}', resolution_kind = 'observe', response_text = ?
+		WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = ? AND expires_at > ?`,
+		TurnChoiceClaimed, optionKey, now.Unix(), responseText, tenantID, personID, choiceID, TurnChoicePending, now.Unix())
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := updated.RowsAffected(); n != 1 {
+		return nil, ErrTurnChoiceNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	choice.Status, choice.ChosenKey, choice.RequestJSON = TurnChoiceClaimed, optionKey, "{}"
+	return &TurnChoiceWorkResult{Choice: choice, Option: option, Observed: responseText}, nil
 }
 
 // RoutePendingTurnChoice commits a choice answer and its durable destination
@@ -198,14 +283,14 @@ func (s *Store) routePendingTurnChoiceOnce(ctx context.Context, route TurnChoice
 	if q.TenantID != route.TenantID || q.PersonID != route.PersonID || strings.TrimSpace(q.Content) == "" {
 		return nil, fmt.Errorf("choice work owner or content is invalid")
 	}
-	if option.Action != "new" && option.Action != "steer" {
+	if option.Action != "new" && option.Action != "steer" && option.Action != "resume" {
 		return nil, ErrTurnChoiceOption
 	}
-	if option.Action == "steer" {
+	if option.Action == "steer" || option.Action == "resume" {
 		var runPerson, runTask, runStatus, runWorkspace string
 		var rootsJSON string
 		err = tx.QueryRowContext(ctx, `SELECT person_id, thread_id, status, COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]')
-			FROM runs WHERE tenant_id = ? AND id = ?`, route.TenantID, option.RunID).
+			FROM runs WHERE tenant_id = ? AND id = ? AND execution_class = 'work'`, route.TenantID, option.RunID).
 			Scan(&runPerson, &runTask, &runStatus, &runWorkspace, &rootsJSON)
 		if errors.Is(err, sql.ErrNoRows) || runPerson != route.PersonID || runTask != option.TaskID {
 			return nil, ErrTurnChoiceNotFound
@@ -213,7 +298,10 @@ func (s *Store) routePendingTurnChoiceOnce(ctx context.Context, route TurnChoice
 		if err != nil {
 			return nil, err
 		}
-		if runStatus == "running" {
+		if option.Action == "resume" && !continuityRunResumableForQueue(runStatus) {
+			return nil, ErrTurnChoiceNotFound
+		}
+		if option.Action == "steer" && runStatus == "running" {
 			m, err := insertChoiceSteeringTx(ctx, tx, route.Steering, q.Content, route, choice.ID, option, now)
 			if err != nil {
 				return nil, err
@@ -224,7 +312,7 @@ func (s *Store) routePendingTurnChoiceOnce(ctx context.Context, route TurnChoice
 			if err := json.Unmarshal([]byte(rootsJSON), &q.ExecutionRoots); err != nil {
 				return nil, err
 			}
-			if continuityRunResumableForQueue(runStatus) {
+			if option.Action == "resume" || continuityRunResumableForQueue(runStatus) {
 				q.ReplyToRunID = option.RunID
 			}
 		}

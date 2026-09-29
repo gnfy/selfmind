@@ -50,6 +50,27 @@ func (d *Server) ambiguousActiveInput(ctx context.Context, identity *control.Ide
 		options = append(options, control.TurnChoiceOption{Key: key, Label: label, Action: "steer", TaskID: run.TaskID, RunID: run.RunID})
 		fmt.Fprintf(&message, "%s. %s\n", key, label)
 	}
+	// Historical candidates are bounded, unresolved work only. They are
+	// options, never authority: the store rechecks the exact parent when the
+	// original input is committed to a queue.
+	if historical, historyErr := d.Control.ListUnresolvedRunsForPerson(ctx, identity.TenantID, identity.PersonID, "", 20); historyErr == nil {
+		for _, run := range historical {
+			if len(options) >= 6 {
+				break
+			}
+			if d.coordinator().activeForRun(identity.PersonID, run.ID) != nil {
+				continue
+			}
+			card, ok := d.continuityCandidateForRun(ctx, identity, run, nil, 0, nil)
+			if !ok {
+				continue
+			}
+			key := fmt.Sprintf("%d", len(options)+1)
+			label := "Resume " + shortRunID(run.ID) + " · " + truncate(toOneLine(card.Title), 54)
+			options = append(options, control.TurnChoiceOption{Key: key, Label: label, Action: "resume", TaskID: run.TaskID, RunID: run.ID})
+			fmt.Fprintf(&message, "%s. %s\n", key, label)
+		}
+	}
 	newKey := fmt.Sprintf("%d", len(options)+1)
 	options = append(options, control.TurnChoiceOption{Key: newKey, Label: "This is new work", Action: "new"})
 	fmt.Fprintf(&message, "%s. This is new work\n", newKey)
@@ -59,14 +80,54 @@ func (d *Server) ambiguousActiveInput(ctx context.Context, identity *control.Ide
 	}
 	if pending, peekErr := d.Control.PeekPendingTurnChoice(ctx, identity.TenantID, identity.PersonID,
 		choice.ID, time.Now(), turnChoiceBareWindow); peekErr == nil {
-		if selectedKey := d.mainCoordinationSelection(ctx, identity, req, pending); selectedKey != "" {
-			return d.routeMultiRunChoice(ctx, identity, req, pending, selectedKey), true
+		if decision := d.mainCoordinationSelection(ctx, identity, req, pending); decision.Key != "" {
+			if decision.Action == "observe" {
+				return d.observeMultiRunChoice(ctx, identity, pending, decision.Key), true
+			}
+			return d.routeMultiRunChoice(ctx, identity, req, pending, decision.Key), true
 		}
 	}
 	fmt.Fprintf(&message, "Reply with a number, or use /choose %s <number> from another endpoint.", choice.ID)
 	content := message.String()
 	return api.MessageResponse{Identity: identity, Content: content, Choice: choice,
 		Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, true
+}
+
+func (d *Server) observeMultiRunChoice(ctx context.Context, identity *control.IdentityContext, choice *control.PendingTurnChoice, optionKey string) api.MessageResponse {
+	var selected *control.TurnChoiceOption
+	for i := range choice.Options {
+		if choice.Options[i].Key == optionKey && choice.Options[i].Action == "steer" {
+			selected = &choice.Options[i]
+			break
+		}
+	}
+	if selected == nil {
+		return api.MessageResponse{Identity: identity, Error: "observation target is invalid", Turn: messageTurn("failed", "", "idle", "", "", "observation target is invalid")}
+	}
+	if active := d.coordinator().activeForRun(identity.PersonID, selected.RunID); active == nil || active.TaskID != selected.TaskID {
+		content := "That run is no longer active. Send the request again to check current work."
+		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}
+	}
+	status, err := d.statusRunReply(ctx, identity, selected.RunID)
+	if err != nil {
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}
+	}
+	// The view is a bounded snapshot. Commit it with the choice so a retried
+	// IM delivery cannot ask about a later state or turn this into steering.
+	status = truncate(status, 6000)
+	result, err := d.Control.ObservePendingTurnChoice(ctx, identity.TenantID, identity.PersonID,
+		choice.ID, optionKey, choice.RequestJSON, status)
+	if errors.Is(err, control.ErrTurnChoiceNotFound) {
+		if prior, readErr := d.Control.RoutedTurnChoice(ctx, identity.TenantID, identity.PersonID, choice.ID, optionKey); readErr == nil {
+			return d.multiRunChoiceReceipt(identity, prior, false)
+		}
+		content := "That choice expired or the run changed. Send the request again to check current work."
+		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}
+	}
+	if err != nil {
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}
+	}
+	return d.multiRunChoiceReceipt(identity, result, false)
 }
 
 func (d *Server) routeMultiRunChoice(ctx context.Context, identity *control.IdentityContext, answer api.MessageRequest, choice *control.PendingTurnChoice, optionKey string) api.MessageResponse {
@@ -81,7 +142,7 @@ func (d *Server) routeMultiRunChoice(ctx context.Context, identity *control.Iden
 			break
 		}
 	}
-	if selected == nil || (selected.Action != "new" && selected.Action != "steer") {
+	if selected == nil || (selected.Action != "new" && selected.Action != "steer" && selected.Action != "resume") {
 		content := "That option is not available. Choose one of the numbers shown with the question."
 		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}
 	}
@@ -139,6 +200,10 @@ func (d *Server) routeMultiRunChoice(ctx context.Context, identity *control.Iden
 func (d *Server) multiRunChoiceReceipt(identity *control.IdentityContext, routed *control.TurnChoiceWorkResult, sentToLiveRun bool) api.MessageResponse {
 	if routed == nil || routed.Option == nil {
 		return api.MessageResponse{Identity: identity, Error: "choice has no durable destination", Turn: messageTurn("failed", "", "idle", "", "", "choice has no durable destination")}
+	}
+	if routed.Observed != "" {
+		return api.MessageResponse{Identity: identity, Content: routed.Observed, Accepted: true,
+			Turn: messageTurn("done", "done", "idle", routed.Option.TaskID, routed.Option.RunID, routed.Observed)}
 	}
 	if routed.Queued != nil {
 		content := "Saved your request as queued work (" + routed.Queued.ID + ")."

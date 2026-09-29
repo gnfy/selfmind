@@ -66,6 +66,116 @@ func TestRouteTurnChoiceRollsBackClaimWhenDestinationWriteFails(t *testing.T) {
 	}
 }
 
+func TestObserveTurnChoiceStoresReadOnlyReceiptAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: "default", PersonID: "person", Title: "A", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "work A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	choice, route := newRoutedChoice(t, store, "steer", task, run)
+	const snapshot = "Run A is running; step 2 of 3."
+	observed, err := store.ObservePendingTurnChoice(ctx, "default", "person", choice.ID, "1", choice.RequestJSON, snapshot)
+	if err != nil || observed.Observed != snapshot || observed.Steering != nil || observed.Queued != nil {
+		t.Fatalf("observation receipt: %+v, %v", observed, err)
+	}
+	if _, err := store.RoutePendingTurnChoice(ctx, route); !errors.Is(err, ErrTurnChoiceNotFound) {
+		t.Fatalf("observation was converted to steering: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	receipt, err := restarted.RoutedTurnChoice(ctx, "default", "person", choice.ID, "1")
+	if err != nil || receipt.Observed != snapshot || receipt.Steering != nil || receipt.Queued != nil {
+		t.Fatalf("restart observation receipt: %+v, %v", receipt, err)
+	}
+	if _, err := restarted.RoutedTurnChoice(ctx, "default", "stranger", choice.ID, "1"); !errors.Is(err, ErrTurnChoiceNotFound) {
+		t.Fatalf("foreign receipt disclosed: %v", err)
+	}
+	var count int
+	if err := restarted.db.QueryRowContext(ctx, `SELECT (SELECT COUNT(*) FROM steering_mailbox WHERE id = ?) +
+		(SELECT COUNT(*) FROM task_queue WHERE idempotency_key = ?)`, "steer_choice_"+choice.ID, "choice:"+choice.ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("observation had a work effect: count=%d err=%v", count, err)
+	}
+}
+
+func TestObserveTurnChoiceRejectsFinishedRunWithoutClaimingInput(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: "default", PersonID: "person", Title: "A", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "work A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	choice, _ := newRoutedChoice(t, store, "steer", task, run)
+	if err := store.FinishRun(ctx, "default", run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ObservePendingTurnChoice(ctx, "default", "person", choice.ID, "1", choice.RequestJSON, "stale snapshot"); !errors.Is(err, ErrTurnChoiceNotFound) {
+		t.Fatalf("finished run was observed: %v", err)
+	}
+	if pending, err := store.PeekPendingTurnChoice(ctx, "default", "person", choice.ID, time.Now(), time.Hour); err != nil || pending.RequestJSON != choice.RequestJSON {
+		t.Fatalf("failed observation lost original input: %+v, %v", pending, err)
+	}
+}
+
+func TestResumeTurnChoiceQueuesExactHistoricalRunAndRechecksState(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: "default", PersonID: "person", Title: "Old work", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "continue old work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, "default", run.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	choice, route := newRoutedChoice(t, store, "resume", task, run)
+	routed, err := store.RoutePendingTurnChoice(ctx, route)
+	if err != nil || routed.Queued == nil || routed.Queued.ReplyToRunID != run.ID || routed.Queued.TaskID != task.ID || routed.Steering != nil {
+		t.Fatalf("historical resume destination: %+v, %v", routed, err)
+	}
+	copy, err := store.RoutedTurnChoice(ctx, "default", "person", choice.ID, "1")
+	if err != nil || copy.Queued == nil || copy.Queued.ID != routed.Queued.ID {
+		t.Fatalf("historical resume receipt: %+v, %v", copy, err)
+	}
+	// An option issued before a target settles must not silently turn into a
+	// fresh turn on its Thread when the person selected "resume".
+	other, err := store.StartRun(ctx, task, "cli", "second old work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, staleRoute := newRoutedChoice(t, store, "resume", task, other)
+	if err := store.FinishRun(ctx, "default", other.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RoutePendingTurnChoice(ctx, staleRoute); !errors.Is(err, ErrTurnChoiceNotFound) {
+		t.Fatalf("finished historical target accepted: %v", err)
+	}
+	if pending, err := store.PeekPendingTurnChoice(ctx, "default", "person", stale.ID, time.Now(), time.Hour); err != nil || pending.RequestJSON != stale.RequestJSON {
+		t.Fatalf("stale resume erased original input: %+v, %v", pending, err)
+	}
+}
+
 func TestRouteTurnChoiceTracksTargetStateAtomically(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

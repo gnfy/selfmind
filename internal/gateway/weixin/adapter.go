@@ -2,6 +2,7 @@ package weixin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,6 +23,8 @@ import (
 
 type MessageHandler func(context.Context, api.MessageRequest) (api.MessageResponse, int)
 
+var errInboundUncertain = errors.New("inbound processing outcome uncertain")
+
 type Adapter struct {
 	cfg     RuntimeConfig
 	client  *Client
@@ -30,8 +33,6 @@ type Adapter struct {
 
 	clientMu                  sync.RWMutex
 	credentialRefreshInterval time.Duration
-	mu                        sync.Mutex
-	seen                      map[string]time.Time
 	cancel                    context.CancelFunc
 	done                      chan struct{}
 }
@@ -42,7 +43,6 @@ func NewAdapter(cfg RuntimeConfig, store *control.Store, handler MessageHandler)
 		client:                    NewClient(cfg),
 		store:                     store,
 		handler:                   handler,
-		seen:                      map[string]time.Time{},
 		done:                      make(chan struct{}),
 		credentialRefreshInterval: 15 * time.Second,
 	}
@@ -63,6 +63,9 @@ func (a *Adapter) Start(ctx context.Context) error {
 	}
 	if a.handler == nil {
 		return fmt.Errorf("weixin message handler is required")
+	}
+	if a.store == nil {
+		return fmt.Errorf("weixin inbound receipt store is required")
 	}
 	if a.cfg.OwnerPersonID != "" && len(a.cfg.AllowFrom) == 0 {
 		log.Warn("weixin owner auto-binding is disabled until gateway.weixin.allow_from explicitly identifies the owner account")
@@ -173,16 +176,29 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 		}
 		backoff = time.Second
 		sessionExpiredLogged = false
-		if next := firstNonEmpty(stringFromMap(resp, "get_updates_buf"), stringFromMap(resp, "sync_buf")); next != "" {
-			syncBuf = next
-			a.saveSyncBuf(syncBuf)
-		}
-		for _, msg := range extractMessages(resp) {
+		messages := extractMessages(resp)
+		batchAccepted := true
+		for _, msg := range messages {
 			if err := a.processMessage(ctx, msg); err != nil {
-				log.Warn("weixin message processing failed", "error", tools.RedactSensitive(err.Error()))
+				if errors.Is(err, errInboundUncertain) {
+					log.Error("weixin inbound effect uncertain; receipt retained for inspection", "error", tools.RedactSensitive(err.Error()))
+					continue
+				}
+				log.Warn("weixin message processing failed; sync cursor retained", "error", tools.RedactSensitive(err.Error()))
+				batchAccepted = false
+				break
 			}
 		}
-		if len(extractMessages(resp)) == 0 {
+		if batchAccepted {
+			if next := firstNonEmpty(stringFromMap(resp, "get_updates_buf"), stringFromMap(resp, "sync_buf")); next != "" {
+				if err := a.saveSyncBuf(next); err != nil {
+					log.Warn("weixin sync cursor could not be saved; batch will be replayed", "error", err)
+				} else {
+					syncBuf = next
+				}
+			}
+		}
+		if !batchAccepted || len(messages) == 0 {
 			select {
 			case <-ctx.Done():
 				return
@@ -198,9 +214,6 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		return nil
 	}
 	msgID := messageID(msg)
-	if msgID != "" && a.isDuplicate(ctx, msgID) {
-		return nil
-	}
 	sender := senderID(msg, a.cfg.AccountID)
 	chatID := chatID(msg, sender, a.cfg.AccountID)
 	if sender == "" || chatID == "" {
@@ -235,6 +248,38 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 			return err
 		}
 	}
+	if msgID != "" {
+		if a.store == nil {
+			return fmt.Errorf("weixin inbound receipt store is unavailable")
+		}
+		identity, err := a.store.ResolveOrCreateAccount(ctx, tenantID, "weixin", sender, displayName)
+		if err != nil {
+			return err
+		}
+		payload, err := json.Marshal(raw)
+		if err != nil {
+			return err
+		}
+		state, err := a.store.BeginInbound(ctx, "weixin", msgID, payload, control.InboundOwner{
+			TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: text,
+		})
+		if err != nil {
+			return err
+		}
+		if state == control.InboundAccepted {
+			return nil
+		}
+		if state != control.InboundPending {
+			return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
+		}
+		claimed, err := a.store.ClaimInbound(ctx, "weixin", msgID)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
+		}
+	}
 	_ = client.SendTyping(ctx, chatID, true)
 	defer client.SendTyping(context.Background(), chatID, false)
 
@@ -252,6 +297,16 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		Attachments:    attachments,
 	}
 	resp, status := a.handler(ctx, req)
+	if msgID != "" {
+		if status >= http.StatusInternalServerError {
+			failure := fmt.Errorf("gateway returned HTTP %d", status)
+			_ = a.store.NoteInboundFailure(ctx, "weixin", msgID, failure)
+			return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
+		}
+		if err := a.store.AcceptInbound(ctx, "weixin", msgID); err != nil {
+			return fmt.Errorf("weixin message %s acceptance not saved: %w: %w", msgID, errInboundUncertain, err)
+		}
+	}
 	if status >= http.StatusBadRequest || strings.TrimSpace(resp.Error) != "" {
 		errText := firstNonEmpty(resp.Error, fmt.Sprintf("weixin request failed: HTTP %d", status))
 		_ = client.Send(context.Background(), chatID, "SelfMind error: "+errText)
@@ -381,35 +436,6 @@ func (a *Adapter) allowed(sender, chat string, isGroup bool) bool {
 	}
 }
 
-func (a *Adapter) isDuplicate(ctx context.Context, id string) bool {
-	a.mu.Lock()
-	now := time.Now()
-	for key, at := range a.seen {
-		if now.Sub(at) > 24*time.Hour {
-			delete(a.seen, key)
-		}
-	}
-	_, dup := a.seen[id]
-	if !dup {
-		a.seen[id] = now
-	}
-	a.mu.Unlock()
-	if dup {
-		return true
-	}
-	// The in-memory map dies with the process while the iLink sync buffer
-	// replays recent messages on reconnect, so a restart used to re-run the
-	// agent on already-processed messages. The durable first-seen check in
-	// control.db is what closes that window; a store error fails open so a
-	// dedup hiccup never drops a real message.
-	if a.store != nil {
-		if first, err := a.store.MarkInboundSeen(ctx, "weixin", id); err == nil && !first {
-			return true
-		}
-	}
-	return false
-}
-
 func (a *Adapter) syncBufPath() string {
 	return SyncBufFilePath(a.cfg.HomeDir, a.cfg.AccountID)
 }
@@ -422,15 +448,35 @@ func (a *Adapter) loadSyncBuf() string {
 	return strings.TrimSpace(string(data))
 }
 
-func (a *Adapter) saveSyncBuf(value string) {
+func (a *Adapter) saveSyncBuf(value string) error {
 	if strings.TrimSpace(value) == "" {
-		return
+		return nil
 	}
 	path := a.syncBufPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(path, []byte(value), 0600)
+	file, err := os.CreateTemp(filepath.Dir(path), ".syncbuf-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.WriteString(value); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
 }
 
 func extractMessages(resp map[string]interface{}) []map[string]interface{} {

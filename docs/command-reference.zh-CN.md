@@ -344,7 +344,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /status [run_id]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/diag [learning|memory|context|models|delivery|execution|tools]
+/diag [learning|memory|context|models|delivery|inbound|execution|tools]
 /report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
@@ -419,6 +419,9 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 - `/diag tools` 显示注册期工具 schema 目录。被修复或隔离的外部工具只显示
   工具名、问题类别和 schema 哈希，不显示原始 schema 或参数值。隔离工具不会
   发送给模型，也不能执行。
+- `/diag inbound` 只列出当前用户已保存、但尚未确认接收的 IM 输入。
+  `dispatching` 状态可能已经产生效果，因此该命令不会自动重试；再次发送前
+  需要先核对相关工作。
 - `/diag context` 首行展示包含原生工具 schema 的最近一次 provider 请求估算；
   单独的 assembled prompt 小计会明确标注“不含原生工具 schema”。支持请求指纹
   的 provider 会展示 prefix 覆盖；不支持或 wrapper 转发断开时会给出明确状态。

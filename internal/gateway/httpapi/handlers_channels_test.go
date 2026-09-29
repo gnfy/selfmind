@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"selfmind/internal/control"
 	"selfmind/internal/control/controltest"
 )
 
@@ -101,12 +102,21 @@ func TestIMWebhookDuplicateAcknowledgedWithoutProcessing(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 
-	// Mark the id as already seen (the first delivery processed it).
-	if _, err := store.MarkInboundSeen(context.Background(), "feishu", "ev-dup-1"); err != nil {
+	body := `{"header":{"event_id":"ev-dup-1"},"event":{"message":{"message_id":"om-x","chat_id":"c1","content":"{\"text\":\"hi\"}"}}}`
+	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "feishu", "local", "")
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	body := `{"header":{"event_id":"ev-dup-1"},"event":{"message":{"message_id":"om-x","chat_id":"c1","content":"{\"text\":\"hi\"}"}}}`
+	if _, err := store.BeginInbound(context.Background(), "feishu", "ev-dup-1", []byte(body),
+		control.InboundOwner{TenantID: identity.TenantID, PersonID: identity.PersonID}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimInbound(context.Background(), "feishu", "ev-dup-1"); err != nil || !claimed {
+		t.Fatalf("claim = %t, %v", claimed, err)
+	}
+	if err := store.AcceptInbound(context.Background(), "feishu", "ev-dup-1"); err != nil {
+		t.Fatal(err)
+	}
 	req := httptest.NewRequest("POST", "/v1/im/feishu", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	daemon.handleIMWebhook(rec, req)
@@ -135,5 +145,52 @@ func TestIMWebhookRetriesWhenDedupStorageIsUnavailable(t *testing.T) {
 	daemon.handleIMWebhook(rec, req)
 	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "retry delivery") {
 		t.Fatalf("unrecorded webhook was acknowledged: code=%d body=%q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestIMWebhookReplaysOnlyBeforeDispatch(t *testing.T) {
+	store := controltest.NewStore(t)
+	t.Cleanup(func() { _ = store.Close() })
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	body := []byte(`{"message_id":"in-1","content":""}`)
+	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "webhook", "local", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := control.InboundOwner{TenantID: identity.TenantID, PersonID: identity.PersonID}
+	state, err := store.BeginInbound(context.Background(), "webhook", "in-1", body, owner)
+	if err != nil || state != control.InboundPending {
+		t.Fatalf("durable pre-dispatch receipt = %q, %v", state, err)
+	}
+	request := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/v1/im/webhook", strings.NewReader(string(body)))
+		rec := httptest.NewRecorder()
+		daemon.handleIMWebhook(rec, req)
+		return rec
+	}
+	first := request()
+	if first.Code != 400 {
+		t.Fatalf("pending input was not handled: %d %s", first.Code, first.Body.String())
+	}
+	state, _, err = store.InboundReceipt(context.Background(), "webhook", "in-1")
+	if err != nil || state != control.InboundAccepted {
+		t.Fatalf("handled input state = %q, %v", state, err)
+	}
+	if replay := request(); replay.Code != 200 || !strings.Contains(replay.Body.String(), "duplicate") {
+		t.Fatalf("handled input replay = %d %s", replay.Code, replay.Body.String())
+	}
+
+	uncertain := []byte(`{"message_id":"in-2","content":"do work"}`)
+	if _, err := store.BeginInbound(context.Background(), "webhook", "in-2", uncertain, owner); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimInbound(context.Background(), "webhook", "in-2"); err != nil || !claimed {
+		t.Fatalf("claimed = %t, %v", claimed, err)
+	}
+	req := httptest.NewRequest("POST", "/v1/im/webhook", strings.NewReader(string(uncertain)))
+	rec := httptest.NewRecorder()
+	daemon.handleIMWebhook(rec, req)
+	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "uncertain") {
+		t.Fatalf("uncertain input was blindly replayed: %d %s", rec.Code, rec.Body.String())
 	}
 }

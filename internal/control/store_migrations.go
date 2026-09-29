@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 21
+const CurrentControlSchemaVersion = 22
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -564,6 +564,30 @@ DROP TABLE IF EXISTS task_references;`)
 				return err
 			}
 			return ensureMigrationColumn(ctx, db, "pending_turn_choices", "response_text", "TEXT NOT NULL DEFAULT ''")
+		},
+	},
+	{
+		Version: 22,
+		Name:    "inbound-processing-receipt",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Historical first-seen rows have no replayable payload. They remain
+			// terminal; only newly accepted messages enter the processing states.
+			for _, column := range []struct{ name, definition string }{
+				{"state", "TEXT NOT NULL DEFAULT 'accepted'"},
+				{"payload", "BLOB NOT NULL DEFAULT ''"},
+				{"updated_at", "INTEGER NOT NULL DEFAULT 0"},
+				{"last_error", "TEXT NOT NULL DEFAULT ''"},
+				{"tenant_id", "TEXT NOT NULL DEFAULT ''"},
+				{"person_id", "TEXT NOT NULL DEFAULT ''"},
+				{"preview", "TEXT NOT NULL DEFAULT ''"},
+			} {
+				if err := ensureMigrationColumn(ctx, db, "inbound_dedup", column.name, column.definition); err != nil {
+					return err
+				}
+			}
+			_, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_inbound_processing_owner
+				ON inbound_dedup(tenant_id, person_id, state, updated_at) WHERE state <> 'accepted'`)
+			return err
 		},
 	},
 }

@@ -420,7 +420,7 @@ before normal agent dispatch.
 /status [run_id]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/diag [learning|memory|context|models|delivery|execution|tools]
+/diag [learning|memory|context|models|delivery|inbound|execution|tools]
 /report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
@@ -512,6 +512,10 @@ before normal agent dispatch.
   and quarantined external tools are listed by name, issue class, and schema
   hash; raw schemas and values are never printed. Quarantined tools are not
   sent to models and cannot execute.
+- `/diag inbound` lists only the current person's IM inputs that were saved
+  but not confirmed as accepted. A `dispatching` receipt may already have
+  caused effects, so this command never retries it; inspect the related work
+  before sending the request again.
 - `/diag context` starts with the latest provider request estimate, including
   native tool schemas, and labels the separately assembled prompt subtotal as
   excluding native schemas. Fingerprint-capable providers show prefix coverage;

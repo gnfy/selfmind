@@ -187,6 +187,9 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	// Queued count.
 	queued, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	fmt.Fprintf(&sb, "Queued: %d\n", queued)
+	if inbound, err := d.Control.ListUncertainInboundForPerson(ctx, identity.TenantID, identity.PersonID, 20); err == nil && len(inbound) > 0 {
+		fmt.Fprintf(&sb, "Inbound awaiting review: %d (use /diag inbound)\n", len(inbound))
+	}
 	writeProviderNetworkDiag(&sb, llm.CurrentProviderNetworkStatus())
 	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
 		fmt.Fprintf(&sb, "Work: open %d, terminal %d, archived %d, inbox runs %d\n",

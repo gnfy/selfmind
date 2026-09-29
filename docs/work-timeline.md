@@ -94,6 +94,15 @@ There is no dual-write or long-lived legacy table.
 
 ## Ingress, grouping, and promotion
 
+IM adapters save a platform message ID, original input, and person ownership
+before gateway dispatch. A receipt moves from `pending` to `dispatching` before
+the handler can cause effects and to `accepted` only after the handler returns.
+After a crash, `pending` may be retried; `dispatching` is deliberately held for
+inspection because an effect may already have happened. Weixin commits its sync
+cursor only after each message in the batch is accepted or durably held as
+uncertain. `/diag inbound` lists only the current person's unresolved receipts;
+it never retries them. Historical first-seen rows remain terminal on upgrade.
+
 Every accepted root user turn creates a fresh `interaction + unlisted` Thread
 and a Run. The Run remains searchable even when the Thread is absent from the
 ordinary work list. A continuation child inherits its exact parent Thread.

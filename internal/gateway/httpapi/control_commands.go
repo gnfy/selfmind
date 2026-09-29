@@ -258,6 +258,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/diag tools":
 		reply, err := d.toolsDiagReply(ctx, identity)
 		return true, reply, nil, err
+	case lower == "/diag inbound":
+		reply, err := d.inboundDiagReply(ctx, identity)
+		return true, reply, nil, err
 	case lower == "/diag delivery recover stale-results":
 		reply, err := d.recoverStaleDeliveryResultsReply(ctx, identity, req)
 		return true, reply, nil, err

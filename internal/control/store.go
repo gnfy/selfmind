@@ -648,6 +648,13 @@ CREATE TABLE IF NOT EXISTS inbound_dedup (
 	platform TEXT NOT NULL,
 	message_id TEXT NOT NULL,
 	created_at INTEGER NOT NULL,
+	state TEXT NOT NULL DEFAULT 'accepted',
+	payload BLOB NOT NULL DEFAULT '',
+	updated_at INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT NOT NULL DEFAULT '',
+	tenant_id TEXT NOT NULL DEFAULT '',
+	person_id TEXT NOT NULL DEFAULT '',
+	preview TEXT NOT NULL DEFAULT '',
 	PRIMARY KEY (platform, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_inbound_dedup_created ON inbound_dedup(created_at);

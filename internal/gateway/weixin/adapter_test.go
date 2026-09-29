@@ -3,8 +3,10 @@ package weixin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +48,16 @@ func TestAdapterWaitsForCredentialRefresh(t *testing.T) {
 	}
 	if client.cfg.BaseURL != "https://fresh.example" {
 		t.Fatalf("base URL = %q", client.cfg.BaseURL)
+	}
+}
+
+func TestAdapterCannotStartWithoutDurableInboundStore(t *testing.T) {
+	adapter := NewAdapter(RuntimeConfig{Enabled: true, AccountID: "self", Token: "token"}, nil,
+		func(context.Context, api.MessageRequest) (api.MessageResponse, int) {
+			return api.MessageResponse{}, http.StatusOK
+		})
+	if err := adapter.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "receipt store") {
+		t.Fatalf("start without durable receipt store = %v", err)
 	}
 }
 
@@ -231,6 +243,11 @@ func TestAdapterSendsWorkingNoticeForAcceptedAsyncRun(t *testing.T) {
 		}
 	}))
 	defer server.Close()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
 
 	adapter := NewAdapter(RuntimeConfig{
 		Enabled:          true,
@@ -242,14 +259,14 @@ func TestAdapterSendsWorkingNoticeForAcceptedAsyncRun(t *testing.T) {
 		GroupPolicy:      "disabled",
 		HomeDir:          t.TempDir(),
 		SendChunkRetries: 1,
-	}, nil, func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
+	}, store, func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
 		if !req.Async {
 			t.Fatalf("weixin task messages should be async: %+v", req)
 		}
 		return api.MessageResponse{Accepted: true}, http.StatusOK
 	})
 
-	err := adapter.processMessage(ctx, map[string]interface{}{
+	err = adapter.processMessage(ctx, map[string]interface{}{
 		"msg": map[string]interface{}{
 			"msg_id":       "m-accepted",
 			"from_user_id": "wx-user",
@@ -295,22 +312,88 @@ func TestDuplicateDetectionSurvivesRestart(t *testing.T) {
 	}
 	defer store.Close()
 
-	first := NewAdapter(RuntimeConfig{DMPolicy: "open", GroupPolicy: "disabled"}, store, nil)
-	if first.isDuplicate(ctx, "wx-msg-1") {
-		t.Fatal("first sighting must not be a duplicate")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ret":0,"errcode":0}`))
+	}))
+	defer server.Close()
+	var calls int
+	newAdapter := func() *Adapter {
+		return NewAdapter(RuntimeConfig{AccountID: "self", Token: "token", BaseURL: server.URL,
+			DMPolicy: "open", GroupPolicy: "disabled", HomeDir: t.TempDir()}, store,
+			func(context.Context, api.MessageRequest) (api.MessageResponse, int) {
+				calls++
+				return api.MessageResponse{}, http.StatusOK
+			})
 	}
-	if !first.isDuplicate(ctx, "wx-msg-1") {
-		t.Fatal("in-memory repeat must be a duplicate")
+	message := func(id string) map[string]interface{} {
+		return map[string]interface{}{"msg": map[string]interface{}{
+			"msg_id": id, "from_user_id": "peer", "to_user_id": "self",
+			"item_list": []interface{}{map[string]interface{}{"type": itemText,
+				"text_item": map[string]interface{}{"text": "do work"}}},
+		}}
 	}
+	first := newAdapter()
+	if err := first.processMessage(ctx, message("wx-msg-1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.processMessage(ctx, message("wx-msg-1")); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh adapter simulates a daemon restart and replay of the old cursor.
+	second := newAdapter()
+	if err := second.processMessage(ctx, message("wx-msg-1")); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("accepted input dispatched %d times, want once", calls)
+	}
+	if err := second.processMessage(ctx, message("wx-msg-2")); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("new input dispatched %d times total, want two", calls)
+	}
+}
 
-	// A fresh adapter simulates a daemon restart: the in-memory map is empty
-	// but the sync buffer replays recent messages — the durable store is what
-	// must remember them.
-	second := NewAdapter(RuntimeConfig{DMPolicy: "open", GroupPolicy: "disabled"}, store, nil)
-	if !second.isDuplicate(ctx, "wx-msg-1") {
-		t.Fatal("duplicate detection must survive a restart via the durable store")
+func TestWeixinDoesNotReplayUncertainInbound(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
-	if second.isDuplicate(ctx, "wx-msg-2") {
-		t.Fatal("an unseen id must not be a duplicate")
+	defer store.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ret":0,"errcode":0}`))
+	}))
+	defer server.Close()
+	raw := map[string]interface{}{"msg": map[string]interface{}{
+		"msg_id": "uncertain-1", "from_user_id": "peer", "to_user_id": "self",
+		"item_list": []interface{}{map[string]interface{}{"type": itemText,
+			"text_item": map[string]interface{}{"text": "do work"}}},
+	}}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "peer", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BeginInbound(ctx, "weixin", "uncertain-1", payload,
+		control.InboundOwner{TenantID: identity.TenantID, PersonID: identity.PersonID}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimInbound(ctx, "weixin", "uncertain-1"); err != nil || !claimed {
+		t.Fatalf("claim = %t, %v", claimed, err)
+	}
+	var calls int
+	adapter := NewAdapter(RuntimeConfig{AccountID: "self", Token: "token", BaseURL: server.URL,
+		DMPolicy: "open", GroupPolicy: "disabled", HomeDir: t.TempDir()}, store,
+		func(context.Context, api.MessageRequest) (api.MessageResponse, int) {
+			calls++
+			return api.MessageResponse{}, http.StatusOK
+		})
+	if err := adapter.processMessage(ctx, raw); !errors.Is(err, errInboundUncertain) || calls != 0 {
+		t.Fatalf("replayed uncertain input: handler calls=%d err=%v", calls, err)
 	}
 }

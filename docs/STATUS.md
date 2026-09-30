@@ -15,7 +15,7 @@ Dated delivery and validation records live in
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 88 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 90 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.

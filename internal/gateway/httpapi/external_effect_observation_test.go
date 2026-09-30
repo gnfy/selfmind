@@ -83,7 +83,20 @@ func TestFinalizedOwnerBoundWatchReleasesOnlyUnchangedExactEffect(t *testing.T) 
 				t.Fatal(err)
 			}
 			output := `{"status":"succeeded"}`
-			if ok, err := store.FinishExternalWatch(ctx, owner.TenantID, watch.ID, control.ExternalWatchSucceeded, output, ""); err != nil || !ok {
+			if state == "unchanged" {
+				// Exercise the real durable watcher check before releasing the
+				// exact target. Keep its finalization queued without starting a
+				// model-backed continuation in this deterministic test.
+				if !daemon.coordinator().beginActive(owner.PersonID, &activeRun{TaskID: "busy"}) {
+					t.Fatal("failed to hold the finalization queue")
+				}
+				defer daemon.coordinator().endActive(owner.PersonID)
+				daemon.runExternalWatchPass(ctx)
+				stored, err := store.GetExternalWatch(ctx, owner.TenantID, watch.ID)
+				if err != nil || stored == nil || stored.Status != control.ExternalWatchSucceeded || stored.LastOutput != output {
+					t.Fatalf("durable watcher result = %+v, %v", stored, err)
+				}
+			} else if ok, err := store.FinishExternalWatch(ctx, owner.TenantID, watch.ID, control.ExternalWatchSucceeded, output, ""); err != nil || !ok {
 				t.Fatalf("watch finish = %v %v", ok, err)
 			}
 			if state == "changed" {
@@ -117,7 +130,9 @@ func TestFinalizedOwnerBoundWatchReleasesOnlyUnchangedExactEffect(t *testing.T) 
 			if state != "changed" && !tools.ValidateEffectObservationScript(root, observePath, digest) {
 				t.Fatal("unchanged script failed validation")
 			}
-			daemon.finalizeExternalWatch(ctx, *stored, stored.Status, output, "")
+			if state != "unchanged" {
+				daemon.finalizeExternalWatch(ctx, *stored, stored.Status, output, "")
+			}
 			claims, err := store.ListUnresolvedExternalEffects(ctx, owner.TenantID, owner.PersonID, 10)
 			if err != nil {
 				t.Fatal(err)

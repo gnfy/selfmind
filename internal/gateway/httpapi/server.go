@@ -1098,25 +1098,6 @@ func clarifyOptions(clarify control.ClarifyRequest) []string {
 	return options
 }
 
-// appendApprovalModeEvent records a task-visible audit trail when a /mode change
-// auto-settles a pending approval, so the timeline shows WHY a stuck approval
-// suddenly resolved. Best-effort: a lost event never affects correctness.
-func (d *Server) appendApprovalModeEvent(ctx context.Context, ap control.ApprovalRequest, eventType, mode string) {
-	if ap.TaskID == "" {
-		return
-	}
-	_, _ = d.Control.AppendEvent(ctx, control.Event{
-		TaskID:     ap.TaskID,
-		RunID:      ap.RunID,
-		Type:       eventType,
-		Visibility: "task",
-		Payload: mustJSON(map[string]string{
-			"approval_id": ap.ID,
-			"reason":      "approval mode changed to " + mode,
-		}),
-	})
-}
-
 // pluralize renders "1 thing" / "n things" for a compact count phrase.
 func pluralize(n int, noun string) string {
 	if n == 1 {

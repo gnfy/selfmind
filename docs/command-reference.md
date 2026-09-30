@@ -483,7 +483,8 @@ before normal agent dispatch.
 - `/approvals grants` and `/approvals revoke <n>` remain available for viewing
   and removing historical remembered grants.
 - `/mode` accepts `on-request`, `read-only`, `auto-edit`, `full-auto`, or
-  `smart`.
+  `smart`. It applies to newly admitted Runs. Existing Runs keep their admitted
+  mode and pending approvals still need `/approve` or `/reject`.
 - `/status` lists all active Runs when more than one is executing;
   `/status <run_id>` shows one active Run without selecting by recency.
 - `/notify` chooses the bound IM destination for CLI-origin progress and final

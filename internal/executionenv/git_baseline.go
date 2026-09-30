@@ -101,6 +101,7 @@ func InspectCleanGitBaseline(ctx context.Context, root string) (GitBaseline, err
 }
 
 func cleanGitProbeEnv(in []string) []string {
+	in = BuildProcessEnv(in, DefaultProcessEnvPolicy())
 	out := make([]string, 0, len(in)+3)
 	for _, variable := range in {
 		key, _, _ := strings.Cut(variable, "=")

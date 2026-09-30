@@ -7,11 +7,20 @@ import (
 	"testing"
 )
 
+type countingApprovalJudge struct{ called int }
+
+func (j *countingApprovalJudge) Judge(context.Context, string) (string, error) {
+	j.called++
+	return "APPROVE", nil
+}
+
+func (j *countingApprovalJudge) calls() int { return j.called }
+
 func TestParallelRemoteExecRequiresOneShotHumanApprovalInEveryMode(t *testing.T) {
 	withExecSandboxPolicy(t, true, true, true)
 	for _, mode := range []ApprovalMode{ApprovalFullAuto, ApprovalSmart} {
 		t.Run(string(mode), func(t *testing.T) {
-			judge := &liveModeJudge{reply: "APPROVE"}
+			judge := &countingApprovalJudge{}
 			asks, ran := 0, 0
 			person := "parallel-remote-" + string(mode)
 			cleanup := SetExecutionScope(person, ExecutionScope{

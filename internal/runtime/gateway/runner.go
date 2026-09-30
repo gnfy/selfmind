@@ -508,7 +508,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	var weixinAdapter *weixin.Adapter
 	if cfg.Gateway.Weixin.Enabled {
 		wxCfg := weixin.RuntimeConfigFrom(cfg.Gateway.Weixin, dataDir, defaultTenantID)
-		weixinAdapter = weixin.NewAdapter(wxCfg, controlStore, gatewayAPI.ProcessMessage)
+		weixinAdapter = weixin.NewAdapter(wxCfg, gatewayAPI.ProcessDurableInbound)
 	}
 	gatewayAPI.Delivery = newDeliveryService(controlStore, cfg, weixinAdapter)
 	if gatewayAPI.Delivery != nil {

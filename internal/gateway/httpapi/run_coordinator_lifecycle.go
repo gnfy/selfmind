@@ -623,25 +623,14 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
 	scope.Clarify = c.gatewayClarify(ctx, identity, task, run, scope.Channel)
 	scope.ApprovalMode = c.resolveApprovalMode(identity, req.ApprovalMode)
-	// Live mode: re-resolve at EACH ask with the same precedence as run start
-	// (explicit request mode wins, else the person's CURRENT persisted /mode).
-	// This is what makes `/mode smart` sent from IM mid-run govern the
-	// in-flight run's later approval decisions instead of a frozen snapshot.
-	reqMode := req.ApprovalMode
-	scope.ModeGetter = func() tools.ApprovalMode {
-		return c.resolveApprovalMode(identity, reqMode)
-	}
 	// The person's own words for this turn, so smart-mode triage can judge
 	// AUTHORIZATION and not only risk: "delete the build directory" makes a
 	// destructive-looking command an instruction, while the same command with no
 	// such request is the model acting alone. Bounded and redacted here because
 	// the judge prompt treats it as untrusted data (docs/tool-safety.md).
-	// Live, for the same reason ModeGetter above is live: a person who adds a
-	// requirement mid-run has changed what the run is for, and every approval
-	// after that point must be judged against what they now want. A frozen
-	// snapshot left the judge deciding from the opening message while the main
-	// model was already acting on the addition. Re-resolved per ask, like the
-	// mode; a bounded read on a path that runs at most once per approval.
+	// Added requirements can change what an action is authorized to do even
+	// though this Run's approval mode remains fixed. Re-resolve the bounded
+	// intent evidence at each ask while keeping the mode snapshot unchanged.
 	baseIntent := c.intentSnapshotWithOffer(ctx, identity, task, run, workspace, req, scope.Channel)
 	runID := scope.RunID
 	scope.IntentSnapshot = func() tools.RunIntentSnapshot {

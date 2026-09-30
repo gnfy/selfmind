@@ -441,7 +441,8 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   高敏感请求只显示“仅本次 / 拒绝”；新提示不再创建 task/person 级授权。
 - `/approvals grants` 与 `/approvals revoke <n>` 仍可查看和撤销历史记忆授权。
 - `/mode` 支持 `on-request`、`read-only`、`auto-edit`、`full-auto`
-  和 `smart`。
+  和 `smart`。设置只作用于新准入的 Run；已有 Run 保持准入时的模式，待处理审批
+  仍需用 `/approve` 或 `/reject` 回答。
 - `/notify` 选择 CLI 脱离后接收进度和最终结果的已绑定 IM 渠道。
 - `/diag tools` 显示注册期工具 schema 目录。被修复或隔离的外部工具只显示
   工具名、问题类别和 schema 哈希，不显示原始 schema 或参数值。隔离工具不会

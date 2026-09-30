@@ -72,6 +72,9 @@ Every tool-owned child process, including terminal, verification, code
 execution, and stdio MCP servers, constructs `cmd.Env` through
 `BuildProcessEnv`. Direct `os.Environ()` inheritance at an execution callsite
 is forbidden.
+Daemon-owned Git admission and managed-view commands use the same core filter
+before applying their Git-specific environment restrictions; they do not pass
+SelfMind control variables into those children.
 
 The current compatibility phase preserves the operator's normal toolchain and
 Agent CLI login environment while removing SelfMind control-plane identity,

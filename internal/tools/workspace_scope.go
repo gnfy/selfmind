@@ -66,17 +66,9 @@ type ExecutionScope struct {
 	// without a blocking interactive prompt (which only the local TUI has).
 	Clarify ClarifyHandler
 	// ApprovalMode is the codex-style approval policy for this turn (read-only /
-	// auto-edit / full-auto / smart / on-request). Empty means on-request.
-	// When ModeGetter is set it is only the run-start snapshot/fallback.
+	// auto-edit / full-auto / smart / on-request). It is frozen when the Run
+	// starts; empty means on-request.
 	ApprovalMode ApprovalMode
-	// ModeGetter, when set, is consulted at EACH approval decision instead of
-	// the static ApprovalMode snapshot, so a /mode change from any endpoint
-	// (e.g. IM `/mode smart` while a CLI run is executing) takes effect on the
-	// in-flight run's NEXT ask. The gateway installs a closure that re-resolves
-	// with run-start precedence: an explicit per-request mode still wins, else
-	// the person's CURRENT persisted /mode preference, else on-request. Nil (or
-	// an empty result) falls back to ApprovalMode.
-	ModeGetter func() ApprovalMode
 	// Grants backs class-level approval memory: the approval middleware consults
 	// it to skip a human ask for an already-approved class and records durable
 	// task/person grants. Run-scoped grants use the in-memory set below.

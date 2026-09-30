@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/delivery"
@@ -21,15 +20,12 @@ import (
 	"selfmind/internal/tools"
 )
 
-type MessageHandler func(context.Context, api.MessageRequest) (api.MessageResponse, int)
-
-var errInboundUncertain = errors.New("inbound processing outcome uncertain")
+type InboundHandler func(context.Context, api.DurableInbound) (api.MessageResponse, int, error)
 
 type Adapter struct {
 	cfg     RuntimeConfig
 	client  *Client
-	store   *control.Store
-	handler MessageHandler
+	handler InboundHandler
 
 	clientMu                  sync.RWMutex
 	credentialRefreshInterval time.Duration
@@ -37,11 +33,10 @@ type Adapter struct {
 	done                      chan struct{}
 }
 
-func NewAdapter(cfg RuntimeConfig, store *control.Store, handler MessageHandler) *Adapter {
+func NewAdapter(cfg RuntimeConfig, handler InboundHandler) *Adapter {
 	return &Adapter{
 		cfg:                       cfg,
 		client:                    NewClient(cfg),
-		store:                     store,
 		handler:                   handler,
 		done:                      make(chan struct{}),
 		credentialRefreshInterval: 15 * time.Second,
@@ -63,9 +58,6 @@ func (a *Adapter) Start(ctx context.Context) error {
 	}
 	if a.handler == nil {
 		return fmt.Errorf("weixin message handler is required")
-	}
-	if a.store == nil {
-		return fmt.Errorf("weixin inbound receipt store is required")
 	}
 	if a.cfg.OwnerPersonID != "" && len(a.cfg.AllowFrom) == 0 {
 		log.Warn("weixin owner auto-binding is disabled until gateway.weixin.allow_from explicitly identifies the owner account")
@@ -180,7 +172,7 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 		batchAccepted := true
 		for _, msg := range messages {
 			if err := a.processMessage(ctx, msg); err != nil {
-				if errors.Is(err, errInboundUncertain) {
+				if errors.Is(err, api.ErrInboundUncertain) {
 					log.Error("weixin inbound effect uncertain; receipt retained for inspection", "error", tools.RedactSensitive(err.Error()))
 					continue
 				}
@@ -245,47 +237,15 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		return fmt.Errorf("weixin work message has no stable platform message id; sync cursor retained")
 	}
 	displayName := firstNonEmpty(stringFromMap(msg, "sender_nick"), stringFromMap(msg, "display_name"), safeID(sender))
-	tenantID := firstNonEmpty(a.cfg.DefaultTenantID, control.DefaultTenantID)
-	if a.ownerBindingAllowed(sender, chatID, isGroup) && a.store != nil {
-		if _, err := a.store.BindAccount(ctx, tenantID, a.cfg.OwnerPersonID, "weixin", sender, displayName); err != nil {
-			return err
-		}
-	}
-	if a.store == nil {
-		return fmt.Errorf("weixin inbound receipt store is unavailable")
-	}
-	identity, err := a.store.ResolveOrCreateAccount(ctx, tenantID, "weixin", sender, displayName)
-	if err != nil {
-		return err
-	}
 	payload, err := json.Marshal(raw)
 	if err != nil {
 		return err
-	}
-	state, err := a.store.BeginInbound(ctx, "weixin", msgID, payload, control.InboundOwner{
-		TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: text,
-	})
-	if err != nil {
-		return err
-	}
-	if state == control.InboundAccepted {
-		return nil
-	}
-	if state != control.InboundPending {
-		return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
-	}
-	claimed, err := a.store.ClaimInbound(ctx, "weixin", msgID)
-	if err != nil {
-		return err
-	}
-	if !claimed {
-		return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
 	}
 	_ = client.SendTyping(ctx, chatID, true)
 	defer client.SendTyping(context.Background(), chatID, false)
 
 	req := api.MessageRequest{
-		TenantID:       tenantID,
+		TenantID:       a.cfg.DefaultTenantID,
 		Platform:       "weixin",
 		PlatformUserID: sender,
 		DisplayName:    displayName,
@@ -297,14 +257,15 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		Async:          !isControlCommand(text),
 		Attachments:    attachments,
 	}
-	resp, status := a.handler(ctx, req)
-	if status >= http.StatusInternalServerError {
-		failure := fmt.Errorf("gateway returned HTTP %d", status)
-		_ = a.store.NoteInboundFailure(ctx, "weixin", msgID, failure)
-		return fmt.Errorf("weixin message %s: %w", msgID, errInboundUncertain)
+	ownerPersonID := ""
+	if a.ownerBindingAllowed(sender, chatID, isGroup) {
+		ownerPersonID = a.cfg.OwnerPersonID
 	}
-	if err := a.store.AcceptInbound(ctx, "weixin", msgID); err != nil {
-		return fmt.Errorf("weixin message %s acceptance not saved: %w: %w", msgID, errInboundUncertain, err)
+	resp, status, err := a.handler(ctx, api.DurableInbound{
+		Request: req, MessageID: msgID, RawPayload: payload, OwnerPersonID: ownerPersonID,
+	})
+	if err != nil {
+		return err
 	}
 	if status >= http.StatusBadRequest || strings.TrimSpace(resp.Error) != "" {
 		errText := firstNonEmpty(resp.Error, fmt.Sprintf("weixin request failed: HTTP %d", status))

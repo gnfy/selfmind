@@ -15,6 +15,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/kernel/task/cron"
 )
 
 func TestConcurrentIMInputNeedsExactChoiceBeforeSteering(t *testing.T) {
@@ -471,6 +472,106 @@ func TestTwoCLISessionsAndOneIMWorkRunStayDistinct(t *testing.T) {
 	}
 	provider.releaseNow()
 	waitUntil(t, 5*time.Second, func() bool { return daemon.coordinator().activeCount(identity.PersonID) == 0 }, "three runs did not finalize")
+}
+
+func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
+	provider := &countedSlowProvider{slowLLMProvider: newSlowLLMProvider("done"), startedCalls: make(chan struct{}, 4)}
+	defer provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider.slowLLMProvider)
+	agents := make([]*kernel.Agent, 3)
+	for i := range agents {
+		agents[i] = kernel.NewAgent(memory.NewMemoryManager(nil), stubToolBackend{}, provider, "test", 1, 1, nil)
+	}
+	daemon.Gateway = router.NewGateway(agents[0], nil)
+	daemon.Gateway.EnableWorkerPool(agents[1:])
+	daemon.coordinator().activeLimit = 3
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wx-local", "IM"); err != nil {
+		t.Fatal(err)
+	}
+	workspaceIDs := map[string]string{}
+	for _, name := range []string{"cli", "im", "cron"} {
+		root := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		workspace, err := store.EnsureWorkspace(ctx, control.Workspace{TenantID: identity.TenantID,
+			OwnerPersonID: identity.PersonID, Name: name, LocalPath: root})
+		if err != nil {
+			t.Fatal(err)
+		}
+		workspaceIDs[name] = workspace.ID
+	}
+	if err := store.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, workspaceIDs["cron"]); err != nil {
+		t.Fatal(err)
+	}
+	im, code := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "weixin", PlatformUserID: "wx-local",
+		Channel: "one-chat", WorkspaceID: workspaceIDs["im"], Content: "Independent IM work", Async: true})
+	if code != 200 || !im.Accepted {
+		t.Fatalf("IM admission: %d %+v", code, im)
+	}
+	select {
+	case <-provider.startedCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("IM did not enter model")
+	}
+	cli, code := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "local",
+		Channel: "cli-window", WorkspaceID: workspaceIDs["cli"], Content: "CLI work", Async: true})
+	if code != 200 || !cli.Accepted {
+		t.Fatalf("CLI admission: %d %+v", code, cli)
+	}
+	select {
+	case <-provider.startedCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("CLI did not overlap IM")
+	}
+	cronDone := make(chan error, 1)
+	go func() {
+		cronDone <- NewCronExecutor(daemon, nil).RunCronJob(ctx, cron.CronJob{
+			TenantID: identity.TenantID, Platform: "weixin", DeliverTo: "wx-local", Channel: "cron-notice",
+			Prompt: "Independent scheduled work"})
+	}()
+	select {
+	case <-provider.startedCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cron did not overlap foreground work")
+	}
+	active := daemon.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(active) != 3 {
+		t.Fatalf("mixed sources did not occupy three Run slots: %+v", active)
+	}
+	ids := map[string]bool{}
+	for _, run := range active {
+		ids[run.RunID] = true
+	}
+	if len(ids) != 3 {
+		t.Fatalf("mixed sources shared a Run: %+v", active)
+	}
+	wantWorkspace := map[string]string{"cli-window": workspaceIDs["cli"], "one-chat": workspaceIDs["im"],
+		"cron-notice": workspaceIDs["cron"]}
+	for _, item := range active {
+		run, err := store.GetRun(ctx, identity.TenantID, item.RunID)
+		if err != nil || run == nil {
+			t.Fatalf("active Run missing: %+v %v", item, err)
+		}
+		if run.WorkspaceID != wantWorkspace[run.Channel] {
+			t.Fatalf("Run %s channel %s used workspace %s, want %s", run.ID, run.Channel, run.WorkspaceID, wantWorkspace[run.Channel])
+		}
+	}
+	provider.releaseNow()
+	select {
+	case err := <-cronDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cron did not complete")
+	}
+	waitUntil(t, 5*time.Second, func() bool { return daemon.coordinator().activeCount(identity.PersonID) == 0 }, "mixed runs did not finalize")
 }
 
 func TestQueueDrainFillsAvailableConcurrentSlots(t *testing.T) {

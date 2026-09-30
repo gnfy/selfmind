@@ -74,32 +74,33 @@ def wait_for_health(request, process):
     raise RuntimeError("isolated daemon did not become healthy")
 
 
-def tool_intervals(database, run_ids):
+def tool_intervals(database, lineages):
     intervals = {}
-    for run_id in run_ids:
-        started = {}
+    for root_id, run_ids in lineages.items():
         completed = []
-        for kind, raw, at in database.execute(
-            "SELECT type, payload_json, created_at FROM task_events "
-            "WHERE run_id = ? AND type IN ('tool.started', 'tool.completed') "
-            "ORDER BY cursor", (run_id,)
-        ):
-            try:
-                payload = json.loads(raw or "{}")
-            except ValueError:
-                continue
-            if payload.get("tool") not in ("terminal", "exec_command"):
-                continue
-            call_id = payload.get("tool_call_id")
-            if not call_id:
-                continue
-            if kind == "tool.started":
-                started[call_id] = at
-            elif call_id in started and not payload.get("error"):
-                completed.append((started.pop(call_id), at))
+        for run_id in run_ids:
+            started = {}
+            for kind, raw, at in database.execute(
+                "SELECT type, payload_json, created_at FROM task_events "
+                "WHERE run_id = ? AND type IN ('tool.started', 'tool.completed') "
+                "ORDER BY cursor", (run_id,)
+            ):
+                try:
+                    payload = json.loads(raw or "{}")
+                except ValueError:
+                    continue
+                if payload.get("tool") not in ("terminal", "exec_command"):
+                    continue
+                call_id = payload.get("tool_call_id")
+                if not call_id:
+                    continue
+                if kind == "tool.started":
+                    started[call_id] = at
+                elif call_id in started and not payload.get("error"):
+                    completed.append((started.pop(call_id), at))
         if not completed:
-            raise RuntimeError("a Run never completed its terminal sleep")
-        intervals[run_id] = max(completed, key=lambda item: item[1] - item[0])
+            raise RuntimeError("a work lineage never completed its terminal sleep: " + root_id)
+        intervals[root_id] = max(completed, key=lambda item: item[1] - item[0])
     return intervals
 
 
@@ -291,7 +292,7 @@ def main():
                     raise RuntimeError("the third independent work Run never ran alongside both CLI Runs")
                 database = sqlite3.connect(data_dir / "control.db")
                 by_channel = dict(database.execute(
-                    "SELECT channel, id FROM runs WHERE execution_class = 'work'"
+                    "SELECT channel, id FROM runs WHERE execution_class = 'work' AND resumes_run_id = ''"
                 ).fetchall())
                 run_ids = [by_channel.get("cli-" + name, "") for name in cli_names]
                 if args.third_im:
@@ -315,19 +316,43 @@ def main():
                 target = (supplement.get("turn") or {}).get("run_id", "")
                 if code != 200 or not supplement.get("accepted") or target != run_ids[1]:
                     raise RuntimeError("IM supplement did not route to the Birch Run")
-                until = time.monotonic() + 100
+                until = time.monotonic() + 300
+                next_report = time.monotonic() + 30
                 while time.monotonic() < until:
-                    if request("/v1/gateway/status")[1].get("active_run_count", 0) == 0:
+                    rows = database.execute(
+                        "SELECT id, status, COALESCE(resumes_run_id, '') FROM runs WHERE execution_class = 'work'"
+                    ).fetchall()
+                    by_id = {run_id: (status, parent) for run_id, status, parent in rows}
+                    def root_of(run_id):
+                        seen = set()
+                        while run_id in by_id and by_id[run_id][1] and run_id not in seen:
+                            seen.add(run_id)
+                            run_id = by_id[run_id][1]
+                        return run_id if run_id in by_id and not by_id[run_id][1] else ""
+                    lineages = {root: [] for root in run_ids}
+                    for run_id in by_id:
+                        root = root_of(run_id)
+                        if root in lineages:
+                            lineages[root].append(run_id)
+                    parents = {parent for _, _, parent in rows if parent}
+                    leaves = {root: [(run_id, by_id[run_id][0]) for run_id in children if run_id not in parents]
+                              for root, children in lineages.items()}
+                    pending_queue = database.execute(
+                        "SELECT class, status FROM task_queue WHERE status IN ('queued','started')"
+                    ).fetchall()
+                    active = request("/v1/gateway/status")[1].get("active_run_count", 0)
+                    if (all(len(items) == 1 and items[0][1] == "done" for items in leaves.values())
+                            and not pending_queue and active == 0):
                         break
+                    if time.monotonic() >= next_report:
+                        print(json.dumps({"progress": True, "leaves": leaves,
+                                          "pending_queue": pending_queue, "active": active}), flush=True)
+                        next_report += 30
                     time.sleep(0.2)
                 else:
-                    raise RuntimeError("a Run remained active after the soak deadline")
-                terminal_statuses = dict(database.execute(
-                    "SELECT id, status FROM runs WHERE execution_class = 'work'"
-                ).fetchall())
-                if any(terminal_statuses.get(run_id) != "done" for run_id in run_ids):
-                    raise RuntimeError("not every work Run reached done: " + repr(terminal_statuses))
-                intervals = tool_intervals(database, run_ids)
+                    raise RuntimeError("work lineages did not settle: " + repr({
+                        "leaves": leaves, "pending_queue": pending_queue, "active": active}))
+                intervals = tool_intervals(database, lineages)
                 overlap = min(end for _, end in intervals.values()) - max(start for start, _ in intervals.values())
                 if overlap < 5:
                     raise RuntimeError(f"terminal work did not overlap sufficiently: {overlap}s")

@@ -186,11 +186,11 @@ func TestBoundQueueCrashRecoversExactRunBeforeAnyPlanOrTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed, dropped, err := store.RequeueStartedQueued(ctx); err != nil || replayed != 0 || dropped != 1 {
-		t.Fatalf("boot queue recovery = %d/%d, %v; want exact Run retained", replayed, dropped, err)
-	}
 	if recovered, err := store.MarkInterruptedRuns(ctx, 0); err != nil || recovered != 1 {
 		t.Fatalf("stuck Run recovery = %d, %v", recovered, err)
+	}
+	if replayed, dropped, err := store.RequeueStartedQueued(ctx); err != nil || replayed != 0 || dropped != 1 {
+		t.Fatalf("boot queue recovery = %d/%d, %v; want exact Run retained", replayed, dropped, err)
 	}
 	items, err := store.ListPendingRecoveryNotifications(ctx, 10)
 	if err != nil || len(items) != 1 || items[0].RunID != run.ID {

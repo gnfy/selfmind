@@ -468,6 +468,9 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	if err := gatewayAPI.ConfigureWorkRunCapacity(cfg.Gateway.MaxActiveWorkRuns, workerCount); err != nil {
 		return err
 	}
+	if err := gatewayAPI.RecoverQueuedAtBoot(ctx); err != nil {
+		return fmt.Errorf("recover queued work before starting daemon workers: %w", err)
+	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
 	maintenanceDebounce, maintenanceMaxWait, maintenanceBatchMax := cfg.Tasks.MaintenanceBatchPolicy()
 	gatewayAPI.TaskGovernance = httpapi.TaskGovernanceOptions{
@@ -604,7 +607,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Otherwise queued requests could begin on a route whose listener later
 	// fails the health gate and requires recovery.
 	if modelStartupHealthy {
-		gatewayAPI.DrainQueuedAtBoot(ctx)
+		gatewayAPI.DrainReadyQueued(ctx)
 	} else {
 		log.Warn("gateway: model readiness is incomplete; queued work remains parked", "hint", "run `selfmind model`")
 	}

@@ -742,8 +742,20 @@ func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int
 		return 0, 0, err
 	}
 	nRequeued, _ := res.RowsAffected()
+	// A notification/recovery worker may already have launched a new, bound
+	// queue row before this boot drain reaches the replay sweep. That live Run
+	// owns the claim; marking its row failed would contradict a still-running
+	// execution and prevent its terminal acknowledgement from settling the row.
+	// Boot recovery first marks orphaned Runs interrupted, so only a genuinely
+	// live Run is protected here.
 	res, err = tx.ExecContext(ctx,
-		`UPDATE task_queue SET status = ? WHERE status = ? OR (status = ? AND COALESCE(run_id, '') != '')`,
+		`UPDATE task_queue SET status = ?
+		 WHERE (status = ? OR (status = ? AND COALESCE(run_id, '') != ''))
+		   AND NOT EXISTS (
+		       SELECT 1 FROM runs r
+		       WHERE r.tenant_id = task_queue.tenant_id AND r.id = task_queue.run_id
+		         AND r.status = 'running'
+		   )`,
 		QueueStatusFailed, QueueStatusStarted, QueueStatusQueued)
 	if err != nil {
 		return int(nRequeued), 0, err

@@ -57,8 +57,18 @@ startup rejects mismatched capacity. The daemon's existing periodic worker
 also wakes due `not_before` queue rows without a new message or restart.
 An isolated daemon with two fresh CLI sessions and one bound IM chat reached
 two active Runs, routed the IM supplement to its exact target, and finished
-both Runs. First-use account creation now resolves a concurrent winner rather
-than failing one of the sessions.
+both Runs. A reproducible live soak also reached three active Runs with
+overlapping terminal work on Bailian Qwen, and repeated the two-Run route on
+Google Gemini; an unrelated IM identity saw none of the work. First-use
+account creation now resolves a concurrent winner rather than failing one of
+the sessions. The full CLI-A/CLI-B/IM-C scenario also completed three
+overlapping Runs with exact IM supplement routing on both providers. The
+reproducible soak is `scripts/soak-parallel-runs.py`.
+Crash-after-effect recovery now preserves the two exact child Runs and leaves
+both local effects single-executed: queue replay runs before background
+workers, and an executing Run's bound row is not quarantined by a later scan.
+Live restart checks passed on Qwen and Gemini, though one earlier Qwen run
+exceeded the 180-second soak deadline, so recovery latency remains a gate.
 Provider capacity/429 waits still hold an Agent worker, so the production
 parallel-work rollout gate remains open.
 

@@ -64,6 +64,45 @@ func TestClaimedQueueRunCreationBindsAtomically(t *testing.T) {
 	}
 }
 
+func TestBootQueueReplayDoesNotFailARecoveryRunAlreadyExecuting(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Title: "recovery", Channel: "session-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := store.EnqueueQueued(ctx, QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Platform: "cli", PlatformUserID: "local", Channel: "session-a", Content: "recover", Class: QueueClassRecovery,
+		IdempotencyKey: "run-recovery:original:continue"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, claimed, err := store.ClaimQueued(ctx, identity.TenantID, queued.ID, time.Minute)
+	if err != nil || !claimed {
+		t.Fatalf("claim recovery: claimed=%v err=%v", claimed, err)
+	}
+	run, err := store.StartRunWithOptions(ctx, task, "session-a", "recover", StartRunOptions{
+		QueueID: queued.ID, QueueClaimToken: token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requeued, dropped, err := store.RequeueStartedQueued(ctx); err != nil || requeued != 0 || dropped != 0 {
+		t.Fatalf("boot sweep touched live recovery: requeued=%d dropped=%d err=%v", requeued, dropped, err)
+	}
+	row, err := store.GetQueued(ctx, identity.TenantID, queued.ID)
+	if err != nil || row == nil || row.Status != QueueStatusStarted || row.RunID != run.ID {
+		t.Fatalf("live recovery lost queue ownership: row=%+v err=%v", row, err)
+	}
+	if changed, err := store.FinishQueuedClaim(ctx, identity.TenantID, queued.ID, token, QueueStatusDone); err != nil || !changed {
+		t.Fatalf("live recovery could not settle queue: changed=%v err=%v", changed, err)
+	}
+}
+
 func TestCleanGitAdmissionBaselineSurvivesQueueAndRunReload(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -223,6 +262,12 @@ func TestLegacyQueuedBoundRunCannotBeClaimedOrReplayed(t *testing.T) {
 	}
 	if _, claimed, err := store.ClaimQueued(ctx, identity.TenantID, row.ID, time.Minute); err != nil || claimed {
 		t.Fatalf("bound row claimed again = %v, %v", claimed, err)
+	}
+	if requeued, dropped, err := store.RequeueStartedQueued(ctx); err != nil || requeued != 0 || dropped != 0 {
+		t.Fatalf("live bound row was quarantined: requeued=%d dropped=%d err=%v", requeued, dropped, err)
+	}
+	if interrupted, err := store.MarkInterruptedRuns(ctx, 0); err != nil || interrupted != 1 {
+		t.Fatalf("boot did not mark orphaned Run interrupted: %d, %v", interrupted, err)
 	}
 	if requeued, dropped, err := store.RequeueStartedQueued(ctx); err != nil || requeued != 0 || dropped != 1 {
 		t.Fatalf("boot recovery = %d/%d, %v; want quarantine", requeued, dropped, err)

@@ -172,6 +172,11 @@ engines and must be verified for the tools/process registry.
 - Soak (real): `SELFMIND_WORKERS=4`, CLI long run + concurrent WeChat task +
   cron job all progress; provider-stall on one worker doesn't block others
   (ties into W1c resilience).
+- Same-person live soak: `python3 scripts/soak-parallel-runs.py --config
+  ~/.selfmind/config.yaml --capacity 3 --third-im` uses isolated control data
+  and tests two CLI Runs plus one IM Run, exact IM supplement routing, and
+  overlapping terminal execution. `--restart --capacity 2` checks exact
+  continuation and no duplicate local effects after a forced daemon crash.
 
 ## 7. Non-goals
 

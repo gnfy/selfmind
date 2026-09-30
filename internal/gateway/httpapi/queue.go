@@ -140,13 +140,12 @@ func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control
 	}
 }
 
-// DrainQueuedAtBoot resumes queued work after a gateway restart. The
-// gateway.lock flock guarantees this is the only daemon on control.db, so any
-// unbound 'started' row was mid-launch when the previous daemon died and can
-// be retried. A row already bound to a Run may have effects, so control-store
-// recovery leaves it for exact-Run recovery rather than blindly replaying it.
-// Then kick one drain per person with pending work.
-func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
+// RecoverQueuedAtBoot repairs durable queue and mailbox state before any
+// background worker can schedule a continuation. The gateway.lock flock
+// guarantees that started rows from the previous daemon have no live owner.
+// A bound row with possible effects keeps its exact Run identity instead of
+// replaying the original queue message.
+func (d *Server) RecoverQueuedAtBoot(ctx context.Context) error {
 	// Steering mailbox recovery (P0-A) runs FIRST so guidance orphaned by the
 	// previous daemon lands in the queue before this drain launches anything:
 	// live rows inside the replay window defer into task-pinned queued work,
@@ -166,16 +165,35 @@ func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
 		}
 	}
 	if d == nil || d.Control == nil {
-		return
+		return nil
 	}
 	// A decision can be committed immediately before the old daemon dies. Repair
 	// that decision->continuation edge before listing the queue so the recovered
 	// work participates in the same one-run-per-person boot drain.
 	d.recoverApprovalContinuations(ctx, false)
-	requeued, dropped, _ := d.Control.RequeueStartedQueued(ctx)
+	requeued, dropped, err := d.Control.RequeueStartedQueued(ctx)
+	if err != nil {
+		return err
+	}
 	if dropped > 0 {
 		log.Warn("gateway: stopped started queue rows that cannot be safely replayed", "stopped", dropped, "requeued", requeued)
 	}
+	return nil
+}
+
+// DrainQueuedAtBoot is also used after a model-readiness transition. Recovery
+// is idempotent, and the control store skips claims owned by a live Run.
+func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
+	if err := d.RecoverQueuedAtBoot(ctx); err != nil {
+		log.Warn("gateway: queue boot recovery failed", "error", err)
+		return
+	}
+	d.drainQueuedWhenReady(ctx)
+}
+
+// DrainReadyQueued starts work only after the daemon has passed the model
+// health gate. Boot recovery has already run before the background workers.
+func (d *Server) DrainReadyQueued(ctx context.Context) {
 	d.drainQueuedWhenReady(ctx)
 }
 

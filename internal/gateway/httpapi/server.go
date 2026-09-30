@@ -244,6 +244,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/workspaces/trust", d.handleWorkspaceTrust)
 	mux.HandleFunc("/v1/workspaces/capabilities", d.handleWorkspaceCapabilities)
 	mux.HandleFunc("/v1/workspaces/observation-profiles", d.handleWorkspaceObservationProfiles)
+	mux.HandleFunc("/v1/workspaces/effect-profiles", d.handleWorkspaceEffectProfiles)
 	mux.HandleFunc("/v1/workspaces", d.handleWorkspaces)
 	mux.HandleFunc("/v1/gateway/status", d.handleGatewayStatus)
 	mux.HandleFunc("/v1/gateway/tool-catalog/probe", d.handleGatewayToolCatalogProbe)

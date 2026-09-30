@@ -331,6 +331,10 @@ func validExternalTargetKey(target string) bool {
 	return true
 }
 
+// ValidExternalTargetKey lets an operator-owned command profile validate the
+// same target grammar used by the durable claim ledger before it is saved.
+func ValidExternalTargetKey(target string) bool { return validExternalTargetKey(target) }
+
 func externalTargetsConflict(a, b string) bool {
 	return a == UnknownExternalTarget || b == UnknownExternalTarget || a == b
 }

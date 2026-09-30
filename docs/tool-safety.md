@@ -217,8 +217,19 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   requires one-time human approval even in full-auto or smart mode. It then
   enters the durable effect-claim lane; neither a stored command grant nor a
   model judge can authorize it alone.
-  Production target adapters and real restart/transport acceptance are still
-  open, so the production per-person active-Run ceiling remains one.
+  Typed provider target adapters and real restart/transport acceptance are
+  still open, so the production per-person active-Run ceiling remains one.
+
+An authenticated local owner can register one exact script invocation with
+`selfmind ws effect`. The revocable grant binds a trusted workspace, script
+path and content hash, complete literal argv, network and credential modes,
+and every asserted external target. At dispatch the runtime rechecks the
+profile and standing-grant cutoff; the executable script must be invoked
+directly rather than through a selectable interpreter. One matching profile narrows only the
+target claim. Missing, stale, ambiguous, or changed profiles fall back to the
+person-wide unknown target. The profile is an operator assertion about that
+script's effects, not a model-supplied target, tool approval, or completion
+proof. Claims remain held until a trusted observation settles them.
 
 Managed Git views are writable by the Run, including their local `.git`
 directory. Before daemon-side Git inspection or branch delivery, the view's

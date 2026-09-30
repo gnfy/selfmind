@@ -115,7 +115,7 @@ func TestExternalEffectMiddlewareClassifiesUnknownAndIsolatedCommands(t *testing
 	registry.Register(&externalClaimTestTool{newClaimTestTool("external_read", "deploy:production", true)})
 	keys, complete := externalEffectTargets(map[string]interface{}{
 		toolExecutionPolicyArg: unknown, "_tool_name": "external_read", "_registry": registry,
-	})
+	}, nil)
 	if len(keys) != 1 || keys[0] != control.UnknownExternalTarget || complete {
 		t.Fatalf("external tool claimed a narrow resource through its own metadata: %v, %v", keys, complete)
 	}

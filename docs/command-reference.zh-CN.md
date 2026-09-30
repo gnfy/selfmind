@@ -67,7 +67,7 @@ selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind resume [n|run_id]
 selfmind search [query]
-selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|revoke] ...
+selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|effect|revoke] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -115,6 +115,7 @@ selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
+selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
 selfmind ws revoke <capability> [workspace_id]
 ```
 
@@ -128,6 +129,11 @@ selfmind ws revoke <capability> [workspace_id]
   解析后的脚本路径、内容哈希、参数形状、网络和凭证选择；脚本被修改或替换后授权
   自动失效。只有确认所有参数都只读时才使用 `--all-args`，否则在 `--` 后给出允许的
   参数前缀。
+- `effect` 由本地用户对某一条精确脚本调用声明完整的外部目标集合。并行模式下，
+  匹配的调用占用这些目标，而不是全人未知目标。脚本内容、工作区、全部参数、网络
+  和凭证模式都必须相同；脚本必须直接执行（例如 `./scripts/deploy.sh`），不能换
+  解释器。它不代替执行审批，也不在调用返回时解除占用，仍需可信
+  观察。变更、含糊或未登记的调用回退到未知目标通道。
 - 同时存在多个审批时，`approve` 和 `reject` 可接审批 token。
 - `stop` 取消活跃 run；没有活跃 run 时只 dismiss 精确 pinned 的 Run，且在该 Run
   仍有待处理审批、澄清或活动 watcher 时拒绝。`new` 创建新的可见任务。

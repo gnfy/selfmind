@@ -660,6 +660,20 @@ type WorkspaceObservationProfileRequest struct {
 	AllowCredentials bool     `json:"allow_credentials,omitempty"`
 }
 
+// WorkspaceEffectProfileRequest is a local-owner assertion about the complete
+// remote target set of one exact, hash-bound script invocation.
+type WorkspaceEffectProfileRequest struct {
+	TenantID         string   `json:"tenant_id"`
+	Platform         string   `json:"platform"`
+	PlatformUserID   string   `json:"platform_user_id"`
+	WorkspaceID      string   `json:"workspace_id,omitempty"`
+	ScriptPath       string   `json:"script_path"`
+	Argv             []string `json:"argv,omitempty"`
+	TargetKeys       []string `json:"target_keys"`
+	AllowNetwork     bool     `json:"allow_network,omitempty"`
+	AllowCredentials bool     `json:"allow_credentials,omitempty"`
+}
+
 type BindAccountRequest struct {
 	TenantID       string `json:"tenant_id"`
 	PersonID       string `json:"person_id"`

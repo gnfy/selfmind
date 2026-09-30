@@ -82,7 +82,7 @@ selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind resume [n|run_id]
 selfmind search [query]
-selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|revoke] ...
+selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|effect|revoke] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -139,6 +139,7 @@ selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
+selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
 selfmind ws revoke <capability> [workspace_id]
 ```
 
@@ -157,6 +158,15 @@ selfmind ws revoke <capability> [workspace_id]
   shape, network choice, and credential choice. Editing or replacing the script
   invalidates it automatically. Use `--all-args` only when every argument shape
   is read-only; otherwise put the allowed argument prefix after `--`.
+- `effect` records the local owner's complete target assertion for one exact
+  script invocation. In opt-in parallel mode, matching calls claim those
+  targets instead of the person-wide unknown target. The script bytes,
+  workspace, every argument, network mode, and credential mode must still
+  match. Invoke the executable script directly (for example,
+  `./scripts/deploy.sh`), so a different interpreter cannot change its behavior.
+  This does not approve execution or release a target after dispatch;
+  normal approval and watcher-backed effect resolution still apply. Changed,
+  ambiguous, or unregistered commands return to the unknown-target lane.
 - `approve` and `reject` accept a pending approval token when more than one
   request is waiting.
 - `stop` cancels the active run; with no active run it dismisses only the exact

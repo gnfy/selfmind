@@ -39,7 +39,7 @@ func ExternalEffectClaimMiddleware(store *control.Store) ResultMiddleware {
 				return uninvokedExternalEffect(fmt.Errorf("external effect call has no durable identity"))
 			}
 			effectID := kernel.ToolEffectID(scope.RunID, callID)
-			targets, completeOnReturn := externalEffectTargets(args)
+			targets, completeOnReturn := externalEffectTargets(args, store)
 			claim, err := store.ClaimExternalEffects(contextFromArgs(args), control.ExternalEffectClaimRequest{
 				TenantID: scope.TenantID, PersonID: scope.PersonID, RunID: scope.RunID,
 				EffectID: effectID, TargetKeys: targets,
@@ -136,10 +136,13 @@ func externalEffectPossible(args map[string]interface{}) bool {
 	return false
 }
 
-func externalEffectTargets(args map[string]interface{}) ([]string, bool) {
+func externalEffectTargets(args map[string]interface{}, store *control.Store) ([]string, bool) {
 	policy, known := args[toolExecutionPolicyArg].(toolExecutionPolicy)
 	if !known || policy.Origin != ToolSchemaOriginBuiltin {
 		return []string{control.UnknownExternalTarget}, false
+	}
+	if targets, ok := registeredEffectScriptTargets(args, store); ok {
+		return targets, false
 	}
 	registry, ok := args["_registry"].(*Registry)
 	if !ok || registry == nil {

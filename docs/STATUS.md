@@ -79,6 +79,12 @@ transport, readiness probe, durable wait, and exact queued child; it checks
 that scheduling text never enters the retried model ledger. A real-provider
 crash-after-effect retest kept two local effects single-executed. Sustained
 provider throttling and mixed-source fault coverage remain rollout gates.
+An authenticated local owner can now register a hash-bound exact script/argv
+target assertion with `selfmind ws effect`. Matching parallel calls claim only
+those reviewed external targets; drift, ambiguity, or absence returns to the
+person-wide unknown lane. Execution still requires normal approval and target
+release still requires observation. Live independent-target and watcher
+acceptance remain rollout gates.
 
 ## Capability Map
 
@@ -160,9 +166,10 @@ limitation. It does not mean the area should be redesigned from scratch.
   schema errors fail startup instead of being silently repaired at request time.
 - Remote MCP supports configured headers, bearer tokens, and basic auth, but an
   interactive OAuth login and credential-management flow is not yet exposed.
-- Full multi-run foreground/background concurrency and remote Runner execution
-  remain design seams only. Do not infer that they are shipped from queue or
-  execution-envelope plumbing.
+- Same-person multi-Run foreground execution is available only behind the
+  explicit 2/3-Run test setting and matching worker count. Remote-effect target
+  proof, safe view cleanup, and mixed-source acceptance still block a default
+  rollout. Remote Runner execution remains a design seam.
 - Self-evolution may publish repeated, verified procedures using trusted
   built-in tools to writable, unpinned workspace-scoped agent-created Skills.
   Repair thresholds depend on the daemon-derived failure class; one generic

@@ -461,13 +461,13 @@ before normal agent dispatch.
   A new message typed in another session stays with that session; an exact
   reply or explicit attach can target the other Run.
 - `/views` lists recent managed Git execution views, and `/views <run_id>`
-  shows committed, uncommitted, and untracked work in one exact owned Run.
+  shows committed, uncommitted, untracked, and ignored work in one exact owned Run.
   `/apply <run_id>` delivers a clean committed view as a separate
   `selfmind/<view_id>` branch in its original repository. The source branch
   may have advanced and its worktree may contain another Run's changes; the
   original repository identity and admitted baseline object must still be
   intact. Delivery never changes the checked-out branch or discards view
-  files. Uncommitted or untracked work in the view stays there for review.
+  files. Uncommitted, untracked, or ignored work in the view stays there for review.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.

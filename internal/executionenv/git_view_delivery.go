@@ -20,6 +20,7 @@ type GitViewDelivery struct {
 	CommittedFiles  int
 	Uncommitted     int
 	Untracked       int
+	Ignored         int
 	DeliveredBranch string
 }
 
@@ -40,8 +41,13 @@ func InspectGitViewDelivery(ctx context.Context, viewsDir, viewID string, baseli
 	if err != nil {
 		return GitViewDelivery{}, err
 	}
+	ignored, err := gitViewCommandRaw(ctx, view.Path, "ls-files", "--others", "--ignored", "--exclude-standard", "-z")
+	if err != nil {
+		return GitViewDelivery{}, err
+	}
 	result := GitViewDelivery{ViewID: viewID, Path: view.Path, SourceRoot: baseline.Root,
-		BaselineCommit: baseline.Commit, HeadCommit: head, CommittedFiles: strings.Count(changed, "\x00")}
+		BaselineCommit: baseline.Commit, HeadCommit: head, CommittedFiles: strings.Count(changed, "\x00"),
+		Ignored: strings.Count(ignored, "\x00")}
 	fields := strings.Split(status, "\x00")
 	for index := 0; index < len(fields); index++ {
 		field := fields[index]

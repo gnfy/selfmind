@@ -98,6 +98,13 @@ func EnsureGitView(ctx context.Context, viewsDir, viewID string, baseline GitBas
 	if _, err := gitViewCommand(ctx, view.Path, "checkout", "--detach", "-f", baseline.Commit); err != nil {
 		return GitView{}, err
 	}
+	// The source may later advance and prune objects no longer reachable from
+	// its own refs. Copy the view's reachable baseline graph into its private
+	// object store now; keep the alternates record for identity checks and old
+	// view compatibility. A failed copy leaves the partial view for inspection.
+	if _, err := gitViewCommandRawTimeout(ctx, view.Path, 5*time.Minute, "repack", "-a"); err != nil {
+		return GitView{}, err
+	}
 	return inspectExistingGitView(ctx, view)
 }
 
@@ -252,7 +259,11 @@ func gitViewCommand(ctx context.Context, root string, args ...string) (string, e
 }
 
 func gitViewCommandRaw(ctx context.Context, root string, args ...string) (string, error) {
-	gitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	return gitViewCommandRawTimeout(ctx, root, 15*time.Second, args...)
+}
+
+func gitViewCommandRawTimeout(ctx context.Context, root string, timeout time.Duration, args ...string) (string, error) {
+	gitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(gitCtx, "git", append([]string{"-C", root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}, args...)...)
 	cmd.Env = cleanGitProbeEnv(os.Environ())

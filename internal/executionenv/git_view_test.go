@@ -40,6 +40,31 @@ func TestEnsureGitViewIsIdempotentAndDoesNotWriteOriginal(t *testing.T) {
 	}
 }
 
+func TestNewGitViewKeepsReachableBaselineWithoutSourceAlternates(t *testing.T) {
+	ctx := context.Background()
+	root := cleanGitFixture(t)
+	baseline, err := InspectCleanGitBaseline(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := EnsureGitView(ctx, filepath.Join(t.TempDir(), "views"), "independent", baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alternates := filepath.Join(view.Path, ".git", "objects", "info", "alternates")
+	hidden := alternates + ".test-hidden"
+	if err := os.Rename(alternates, hidden); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Rename(hidden, alternates) })
+	if _, err := gitViewCommand(ctx, view.Path, "cat-file", "-e", baseline.Commit+"^{commit}"); err != nil {
+		t.Fatalf("view still depended on source objects: %v", err)
+	}
+	if _, err := gitViewCommand(ctx, view.Path, "fsck", "--no-reflogs", "--connectivity-only"); err != nil {
+		t.Fatalf("view baseline graph was incomplete: %v", err)
+	}
+}
+
 func TestEnsureGitViewDoesNotRunCheckoutHookOrFilter(t *testing.T) {
 	root := cleanGitFixture(t)
 	baseline, err := InspectCleanGitBaseline(context.Background(), root)

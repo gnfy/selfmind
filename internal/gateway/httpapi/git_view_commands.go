@@ -46,9 +46,9 @@ func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityCo
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Execution view for run %s\nPath: %s\nSource: %s\nCommitted files: %d\nUncommitted changes: %d\nUntracked files: %d\nDelivered branch: %s\nUse /apply %s to deliver a clean committed view as a separate branch.",
+		return fmt.Sprintf("Execution view for run %s\nPath: %s\nSource: %s\nCommitted files: %d\nUncommitted changes: %d\nUntracked files: %d\nIgnored files: %d\nDelivered branch: %s\nUse /apply %s to deliver a clean committed view as a separate branch. The view, including ignored files, is retained for review.",
 			run.ID, info.Path, info.SourceRoot, info.CommittedFiles, info.Uncommitted,
-			info.Untracked, fallback(info.DeliveredBranch, "none"), run.ID), nil
+			info.Untracked, info.Ignored, fallback(info.DeliveredBranch, "none"), run.ID), nil
 	}
 	recent, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 100)
 	if err != nil {

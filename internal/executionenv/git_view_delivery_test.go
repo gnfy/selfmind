@@ -46,6 +46,42 @@ func TestGitViewDeliveryCreatesBranchWithoutChangingSourceCheckout(t *testing.T)
 	}
 }
 
+func TestGitViewDeliveryKeepsIgnoredFilesVisibleForRetention(t *testing.T) {
+	ctx := context.Background()
+	root := cleanGitFixture(t)
+	baseline, err := InspectCleanGitBaseline(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	views := filepath.Join(t.TempDir(), "views")
+	view, err := EnsureGitView(ctx, views, "ignored-demo", baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(view.Path, ".gitignore"), []byte("cache/\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baselineGit(t, view.Path, "add", ".gitignore")
+	baselineGit(t, view.Path, "commit", "-qm", "ignore cache")
+	if err := os.Mkdir(filepath.Join(view.Path, "cache"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ignored := filepath.Join(view.Path, "cache", "state.txt")
+	if err := os.WriteFile(ignored, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preview, err := InspectGitViewDelivery(ctx, views, view.ID, baseline)
+	if err != nil || preview.Ignored != 1 || preview.Untracked != 0 {
+		t.Fatalf("ignored content was hidden: %+v %v", preview, err)
+	}
+	if _, err := DeliverGitViewBranch(ctx, views, view.ID, baseline); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(ignored); err != nil || string(data) != "keep me" {
+		t.Fatalf("delivery removed ignored content: %q %v", data, err)
+	}
+}
+
 func TestGitViewDeliveryRejectsUncommittedButKeepsAdvancedSourceCheckout(t *testing.T) {
 	ctx := context.Background()
 	root := cleanGitFixture(t)

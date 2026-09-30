@@ -428,7 +428,7 @@ before normal agent dispatch.
 /model
 /id
 /status [run_id]
-/views [run_id] | /views archive|restore <run_id>
+/views [run_id] | /views archive|restore|prune <run_id>
 /apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
@@ -472,7 +472,13 @@ before normal agent dispatch.
   into daemon retention. It refuses views referenced by unfinished work or a
   queued request, and refuses any undelivered or ignored files. `/views restore
   <run_id>` moves the same bytes and Git metadata back. Archiving preserves
-  storage; it does not delete files or reclaim disk space.
+  storage; it does not delete files or reclaim disk space. `/views prune
+  <run_id>` explicitly reclaims an archived checkout only when the Run is done,
+  no unfinished work refers to it, its content is clean and delivered, and no
+  extra local Git work exists. It first protects the delivered commit with a
+  source-repository ref, then removes the checkout and its local Git metadata.
+  The checkout cannot be restored after pruning; a failed safety check leaves
+  the archive intact.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.

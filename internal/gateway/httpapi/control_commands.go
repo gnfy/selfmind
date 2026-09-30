@@ -164,8 +164,12 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			reply, err := d.archiveGitViewReply(ctx, identity, parts[2], strings.EqualFold(parts[1], "restore"))
 			return true, reply, nil, err
 		}
-		if len(parts) > 2 || len(parts) == 2 && (strings.EqualFold(parts[1], "archive") || strings.EqualFold(parts[1], "restore")) {
-			return true, "Usage: /views [run_id] | /views archive|restore <run_id>", nil, nil
+		if len(parts) == 3 && strings.EqualFold(parts[1], "prune") {
+			reply, err := d.pruneGitViewReply(ctx, identity, parts[2])
+			return true, reply, nil, err
+		}
+		if len(parts) > 2 || len(parts) == 2 && (strings.EqualFold(parts[1], "archive") || strings.EqualFold(parts[1], "restore") || strings.EqualFold(parts[1], "prune")) {
+			return true, "Usage: /views [run_id] | /views archive|restore|prune <run_id>", nil, nil
 		}
 		runID := ""
 		if len(parts) == 2 {

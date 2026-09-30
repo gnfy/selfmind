@@ -61,7 +61,7 @@ var entries = []Entry{
 	{Name: "/model", Usage: "/model", Summary: "Open or describe Main, Background, and optional role model settings.", SyncControl: true, Scope: Gateway},
 	{Name: "/id", Usage: "/id", Summary: "Show your resolved account identity.", SyncControl: true, Scope: Gateway},
 	{Name: "/status", Usage: "/status [run_id]", Summary: "Show all active runs or one run's details.", SyncControl: true, Scope: Gateway},
-	{Name: "/views", Usage: "/views [run_id] | /views archive|restore <run_id>", Summary: "Inspect or safely retain managed execution views for your runs.", SyncControl: true, Scope: Gateway},
+	{Name: "/views", Usage: "/views [run_id] | /views archive|restore|prune <run_id>", Summary: "Inspect, retain, or explicitly prune managed execution views for your runs.", SyncControl: true, Scope: Gateway},
 	{Name: "/apply", Usage: "/apply <run_id>", Summary: "Deliver a clean committed execution view as a separate Git branch.", SyncControl: true, Scope: Gateway},
 	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
 	{Name: "/watchers", Usage: "/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]", Summary: "List, inspect, or cancel durable external watchers.", SyncControl: true, Scope: Gateway},

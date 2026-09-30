@@ -351,7 +351,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /model
 /id
 /status [run_id]
-/views [run_id] | /views archive|restore <run_id>
+/views [run_id] | /views archive|restore|prune <run_id>
 /apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
@@ -389,7 +389,10 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   Run 完成后，`/views archive <run_id>` 可把已交付且干净的视图整体移到 daemon
   保留区；仍有未完成 Run 或队列项引用、尚未交付或含被忽略文件时会拒绝。
   `/views restore <run_id>` 将原有文件和 Git 元数据移回。归档保留全部数据，
-  不删除文件，也不回收磁盘空间。
+  不删除文件，也不回收磁盘空间。`/views prune <run_id>` 仅在 Run 已完成、没有
+  待办引用、视图干净且已交付，并确认没有额外本地 Git 工作后，才显式清理归档。
+  清理前会在源仓库建立保留提交的引用，随后删除检出及其本地 Git 元数据。
+  清理后不能恢复原检出；安全检查失败时保留归档。
 - `/watchers` 在 CLI 与 IM 中使用同一个按 person 隔离的视图，展示 checker、
   operation、verification、finalization 和 notification 状态；原始命令、环境指纹
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用

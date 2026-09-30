@@ -124,4 +124,25 @@ func TestExecutionViewCommandsAreExactOwnerScopedAndNonDestructive(t *testing.T)
 	if _, err := command(owner, "/apply "+run.ID); err != nil {
 		t.Fatalf("delivered view changed after restoration: %v", err)
 	}
+	if _, err := command(owner, "/views archive "+run.ID); err != nil {
+		t.Fatalf("second retirement failed: %v", err)
+	}
+	if _, err := command(stranger, "/views prune "+run.ID); err == nil {
+		t.Fatal("stranger pruned another person's view")
+	}
+	if reply, err := command(owner, "/views prune "+run.ID); err != nil || !strings.Contains(reply, "cannot be restored") {
+		t.Fatalf("explicit prune failed: %q %v", reply, err)
+	}
+	if _, err := os.Lstat(filepath.Join(store.ExecutionViewsDir(), ".retired", view.ID)); !os.IsNotExist(err) {
+		t.Fatalf("pruned checkout remained on disk: %v", err)
+	}
+	if detail, err := command(owner, "/views "+run.ID); err != nil || !strings.Contains(detail, "refs/selfmind/retained/run-demo") {
+		t.Fatalf("pruned view's retained ref is invisible: %q %v", detail, err)
+	}
+	if _, err := command(owner, "/views restore "+run.ID); err == nil {
+		t.Fatal("pruned checkout was restored")
+	}
+	if _, err := command(owner, "/views prune "+run.ID); err != nil {
+		t.Fatalf("prune replay failed: %v", err)
+	}
 }

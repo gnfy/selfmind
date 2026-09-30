@@ -255,6 +255,11 @@ new ref and leaves the source checkout untouched, even when another Run has
 advanced its HEAD or left unrelated work there. Source repository and baseline
 object identity, view cleanliness, and the branch compare-and-swap remain the
 delivery authority.
+An explicit prune may reclaim a retired view only after checking the exact
+owner Run, unfinished references, working and ignored files, extra Git refs,
+and unreachable local objects. The delivered HEAD is protected by a separate
+source ref before a durable prune record authorizes checkout deletion. A
+failed proof preserves the archive; no age-based automatic deletion runs.
 - Delegation depth is enforced structurally. `buildDelegateSubBackend` builds
   the child dispatcher as a `Subset` of the parent's registry and removes
   `delegate_task` at the configured depth limit. A subset has fewer tools but

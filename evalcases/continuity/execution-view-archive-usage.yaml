@@ -10,7 +10,7 @@ ci:
   platforms: [linux, darwin]
 
 turns:
-  - input: "/views archive"
+  - input: "/views prune"
 
 expect:
   status: completed
@@ -18,7 +18,7 @@ expect:
   max_tool_errors: 0
   max_duration_seconds: 30
   contains:
-    - "Usage: /views [run_id] | /views archive|restore <run_id>"
+    - "Usage: /views [run_id] | /views archive|restore|prune <run_id>"
 
 checks:
   no_mojibake: true

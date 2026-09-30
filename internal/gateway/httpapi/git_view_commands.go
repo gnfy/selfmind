@@ -58,6 +58,10 @@ func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityCo
 		retired := false
 		if _, inspectErr := executionenv.InspectGitView(ctx, viewsDir, filepath.Base(root.Path), *root.GitBaseline); inspectErr != nil {
 			if _, retiredErr := executionenv.InspectRetiredGitView(ctx, viewsDir, filepath.Base(root.Path), *root.GitBaseline); retiredErr != nil {
+				if pruned, pruneErr := executionenv.InspectPrunedGitView(ctx, viewsDir, filepath.Base(root.Path), *root.GitBaseline); pruneErr == nil {
+					return fmt.Sprintf("Execution view for run %s was pruned after delivery. Committed work remains at %s in %s; the checkout cannot be restored.",
+						run.ID, pruned.RetainedRef, pruned.SourceRoot), nil
+				}
 				return "", fmt.Errorf("execution view is unavailable or changed; its files were preserved")
 			}
 			viewsDir = filepath.Join(viewsDir, ".retired")
@@ -67,7 +71,7 @@ func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityCo
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Execution view for run %s\nPath: %s\nSource: %s\nCommitted files: %d\nUncommitted changes: %d\nUntracked files: %d\nIgnored files: %d\nDelivered branch: %s\nRetired: %t\nUse /apply %s to deliver a clean committed view as a separate branch (restore it first if retired). Use /views archive or restore with this Run ID to manage retained views; no files are deleted.",
+		return fmt.Sprintf("Execution view for run %s\nPath: %s\nSource: %s\nCommitted files: %d\nUncommitted changes: %d\nUntracked files: %d\nIgnored files: %d\nDelivered branch: %s\nRetired: %t\nUse /apply %s to deliver a clean committed view as a separate branch (restore it first if retired). /views archive and restore preserve all files. /views prune permanently removes only a proven-safe archived checkout while retaining its commit in the source repository.",
 			run.ID, info.Path, info.SourceRoot, info.CommittedFiles, info.Uncommitted,
 			info.Untracked, info.Ignored, fallback(info.DeliveredBranch, "none"), retired, run.ID), nil
 	}
@@ -96,6 +100,29 @@ func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityCo
 		return "No execution views for recent runs.", nil
 	}
 	return "Execution views:\n" + strings.Join(lines, "\n") + "\nOpen: /views <run_id>", nil
+}
+
+func (d *Server) pruneGitViewReply(ctx context.Context, identity *control.IdentityContext, runID string) (string, error) {
+	run, root, err := d.ownedGitViewRoot(ctx, identity, runID)
+	if err != nil {
+		return "", err
+	}
+	if run.Status != "done" {
+		return "", fmt.Errorf("only a completed Run's archived view can be pruned")
+	}
+	busy, err := d.Control.ExecutionViewReferencedByPendingWork(ctx, identity.TenantID, identity.PersonID, root.Path)
+	if err != nil {
+		return "", err
+	}
+	if busy {
+		return "", fmt.Errorf("another unfinished Run or queued item still refers to this view")
+	}
+	pruned, err := executionenv.PruneRetiredGitView(ctx, d.Control.ExecutionViewsDir(), filepath.Base(root.Path), *root.GitBaseline)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Pruned archived execution view for run %s. Committed work remains protected at %s in %s. The checkout and its local Git metadata cannot be restored.",
+		run.ID, pruned.RetainedRef, pruned.SourceRoot), nil
 }
 
 func (d *Server) archiveGitViewReply(ctx context.Context, identity *control.IdentityContext, runID string, restore bool) (string, error) {

@@ -3,6 +3,7 @@ package executionenv
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -69,8 +70,8 @@ func InspectGitViewDelivery(ctx context.Context, viewsDir, viewID string, baseli
 // branch in the original repository. It never touches the checked-out branch,
 // index, or worktree. A branch creation is atomic through update-ref's absent
 // old-value check; a repeated request for the same commit is idempotent.
-// Source or view drift fails before the branch is created. Uncommitted and
-// untracked files remain in the view for separate review instead of being
+// Source repository identity or view drift fails before the branch is created.
+// Uncommitted and untracked files remain in the view for separate review instead of being
 // silently dropped from an apparently complete delivery.
 func DeliverGitViewBranch(ctx context.Context, viewsDir, viewID string, baseline GitBaseline) (GitViewDelivery, error) {
 	result, err := InspectGitViewDelivery(ctx, viewsDir, viewID, baseline)
@@ -83,9 +84,8 @@ func DeliverGitViewBranch(ctx context.Context, viewsDir, viewID string, baseline
 	if result.HeadCommit == baseline.Commit {
 		return result, fmt.Errorf("%w: view has no committed changes to deliver", ErrGitViewUnavailable)
 	}
-	current, err := InspectCleanGitBaseline(ctx, baseline.Root)
-	if err != nil || current != baseline {
-		return result, fmt.Errorf("%w: source checkout changed or is dirty", ErrGitViewUnavailable)
+	if err := inspectGitDeliverySource(ctx, baseline); err != nil {
+		return result, err
 	}
 	branch := "refs/heads/selfmind/" + viewID
 	if result.DeliveredBranch != "" {
@@ -101,9 +101,8 @@ func DeliverGitViewBranch(ctx context.Context, viewsDir, viewID string, baseline
 	if _, err := gitViewCommand(ctx, baseline.Root, "cat-file", "-e", result.HeadCommit+"^{commit}"); err != nil {
 		return result, err
 	}
-	current, err = InspectCleanGitBaseline(ctx, baseline.Root)
-	if err != nil || current != baseline {
-		return result, fmt.Errorf("%w: source checkout changed during delivery", ErrGitViewUnavailable)
+	if err := inspectGitDeliverySource(ctx, baseline); err != nil {
+		return result, err
 	}
 	viewNow, err := InspectGitViewDelivery(ctx, viewsDir, viewID, baseline)
 	if err != nil || viewNow.HeadCommit != result.HeadCommit || viewNow.Uncommitted != 0 || viewNow.Untracked != 0 {
@@ -118,4 +117,39 @@ func DeliverGitViewBranch(ctx context.Context, viewsDir, viewID string, baseline
 	}
 	result.DeliveredBranch = filepath.ToSlash(strings.TrimPrefix(branch, "refs/heads/"))
 	return result, nil
+}
+
+// The source checkout may have advanced or contain another Run's uncommitted
+// work. Delivery only imports objects and creates a separate ref, so requiring
+// the old HEAD would make the second of two parallel writers undeliverable.
+// Keep the repository/object identity and executable-config checks instead.
+func inspectGitDeliverySource(ctx context.Context, baseline GitBaseline) error {
+	root, err := filepath.EvalSymlinks(baseline.Root)
+	if err != nil || filepath.Clean(root) != filepath.Clean(baseline.Root) {
+		return fmt.Errorf("%w: source repository root changed", ErrGitViewUnavailable)
+	}
+	meta, err := os.Lstat(filepath.Join(root, ".git"))
+	if err != nil || !meta.IsDir() {
+		return fmt.Errorf("%w: source Git metadata changed", ErrGitViewUnavailable)
+	}
+	top, err := gitViewCommand(ctx, root, "rev-parse", "--show-toplevel")
+	if err != nil || filepath.Clean(top) != root {
+		return fmt.Errorf("%w: source repository topology changed", ErrGitViewUnavailable)
+	}
+	common, err := gitViewCommand(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	resolvedCommon, err := filepath.EvalSymlinks(common)
+	if err != nil || filepath.Clean(resolvedCommon) != filepath.Clean(baseline.CommonDir) {
+		return fmt.Errorf("%w: source object directory changed", ErrGitViewUnavailable)
+	}
+	if _, err := gitViewCommand(ctx, root, "cat-file", "-e", baseline.Commit+"^{commit}"); err != nil {
+		return fmt.Errorf("%w: source baseline is unavailable", ErrGitViewUnavailable)
+	}
+	configKeys, err := gitViewCommand(ctx, root, "config", "--list", "--name-only")
+	if err != nil || hasExecutableGitFilter(configKeys) {
+		return fmt.Errorf("%w: source Git configuration changed to an executable filter", ErrGitViewUnavailable)
+	}
+	return nil
 }

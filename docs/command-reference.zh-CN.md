@@ -374,9 +374,9 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   或显式附着才会指向别的 Run。
 - `/views` 列出最近的受管 Git 执行视图；`/views <run_id>` 查看精确归属的 Run
   中已提交、未提交和未跟踪的工作。`/apply <run_id>` 只把干净且已提交的视图送成
-  原仓库里独立的 `selfmind/<view_id>` 分支。源 checkout 必须仍干净且保持准入时
-  的基准；命令不改变当前分支或丢弃视图文件。源仓库已变或视图尚未收尾时先人工
-  检查，不能部分覆盖。
+  原仓库里独立的 `selfmind/<view_id>` 分支。源分支可以前进，工作树也可以保留
+  另一个 Run 的修改；原仓库身份和准入时的基准对象必须仍然有效。命令不改变当前
+  分支或丢弃视图文件。视图里的未提交、未跟踪工作仍留在原处供检查。
 - `/watchers` 在 CLI 与 IM 中使用同一个按 person 隔离的视图，展示 checker、
   operation、verification、finalization 和 notification 状态；原始命令、环境指纹
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用

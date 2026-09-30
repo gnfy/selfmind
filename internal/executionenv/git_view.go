@@ -137,6 +137,9 @@ func inspectExistingGitView(ctx context.Context, view GitView) (GitView, error) 
 	if err != nil || !meta.IsDir() {
 		return GitView{}, fmt.Errorf("%w: existing view has no independent Git metadata", ErrGitViewUnavailable)
 	}
+	if err := validateGitViewConfig(ctx, view.Path); err != nil {
+		return GitView{}, err
+	}
 	gitDir, err := gitViewCommand(ctx, view.Path, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		return GitView{}, err
@@ -167,6 +170,67 @@ func inspectExistingGitView(ctx context.Context, view GitView) (GitView, error) 
 		}
 	}
 	return view, nil
+}
+
+// A model can write the managed checkout, including its .git/config. Every
+// later daemon-side Git probe and /apply import must refuse command-bearing
+// repository configuration before invoking Git in that checkout. The view is
+// initialized with only these passive keys; unexpected additions preserve it
+// for inspection instead of being interpreted by a host-side Git process.
+func validateGitViewConfig(ctx context.Context, viewPath string) error {
+	gitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(gitCtx, "git", "config", "--file", filepath.Join(viewPath, ".git", "config"),
+		"--null", "--list", "--no-includes")
+	cmd.Env = cleanGitProbeEnv(os.Environ())
+	output, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("%w: view Git configuration is unreadable", ErrGitViewUnavailable)
+	}
+	seen := make(map[string]bool)
+	for _, entry := range strings.Split(string(output), "\x00") {
+		if entry == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(entry, "\n")
+		key = strings.ToLower(key)
+		if !ok || seen[key] {
+			return fmt.Errorf("%w: view Git configuration is ambiguous", ErrGitViewUnavailable)
+		}
+		seen[key] = true
+		switch key {
+		case "core.repositoryformatversion":
+			if value != "0" {
+				return fmt.Errorf("%w: view Git format changed", ErrGitViewUnavailable)
+			}
+		case "core.filemode", "core.ignorecase", "core.precomposeunicode", "core.symlinks":
+			if value != "true" && value != "false" {
+				return fmt.Errorf("%w: view Git configuration changed", ErrGitViewUnavailable)
+			}
+		case "core.bare":
+			if value != "false" {
+				return fmt.Errorf("%w: view became a bare repository", ErrGitViewUnavailable)
+			}
+		case "core.logallrefupdates":
+			if value != "true" {
+				return fmt.Errorf("%w: view Git reference policy changed", ErrGitViewUnavailable)
+			}
+		case "core.hookspath":
+			if value != os.DevNull {
+				return fmt.Errorf("%w: view Git hooks changed", ErrGitViewUnavailable)
+			}
+		case "user.name", "user.email":
+			if len(value) > 256 || strings.ContainsAny(value, "\r\n\x00") {
+				return fmt.Errorf("%w: view Git identity changed unexpectedly", ErrGitViewUnavailable)
+			}
+		default:
+			return fmt.Errorf("%w: view Git configuration contains unsupported key %q", ErrGitViewUnavailable, key)
+		}
+	}
+	if !seen["core.repositoryformatversion"] || !seen["core.bare"] || !seen["core.hookspath"] {
+		return fmt.Errorf("%w: view Git configuration is incomplete", ErrGitViewUnavailable)
+	}
+	return nil
 }
 
 func safeGitViewID(id string) bool {

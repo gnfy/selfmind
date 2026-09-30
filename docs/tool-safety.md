@@ -219,6 +219,16 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   model judge can authorize it alone.
   Production target adapters and real restart/transport acceptance are still
   open, so the production per-person active-Run ceiling remains one.
+
+Managed Git views are writable by the Run, including their local `.git`
+directory. Before daemon-side Git inspection or branch delivery, the view's
+local configuration must still contain only the passive keys installed at
+creation; an added command-bearing or unknown key makes the view unavailable
+without deleting its files. Branch delivery imports committed work under a
+new ref and leaves the source checkout untouched, even when another Run has
+advanced its HEAD or left unrelated work there. Source repository and baseline
+object identity, view cleanliness, and the branch compare-and-swap remain the
+delivery authority.
 - Delegation depth is enforced structurally. `buildDelegateSubBackend` builds
   the child dispatcher as a `Subset` of the parent's registry and removes
   `delegate_task` at the configured depth limit. A subset has fewer tools but

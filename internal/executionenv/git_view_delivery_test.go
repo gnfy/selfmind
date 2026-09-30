@@ -46,7 +46,7 @@ func TestGitViewDeliveryCreatesBranchWithoutChangingSourceCheckout(t *testing.T)
 	}
 }
 
-func TestGitViewDeliveryRejectsUncommittedAndChangedSource(t *testing.T) {
+func TestGitViewDeliveryRejectsUncommittedButKeepsAdvancedSourceCheckout(t *testing.T) {
 	ctx := context.Background()
 	root := cleanGitFixture(t)
 	baseline, err := InspectCleanGitBaseline(ctx, root)
@@ -78,10 +78,77 @@ func TestGitViewDeliveryRejectsUncommittedAndChangedSource(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "file.txt"), []byte("external change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DeliverGitViewBranch(ctx, views, view.ID, baseline); err == nil {
-		t.Fatal("dirty source checkout accepted a stale view")
+	baselineGit(t, root, "add", "file.txt")
+	baselineGit(t, root, "commit", "-qm", "another run changed the source")
+	advanced := baselineGit(t, root, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(root, "new-draft.txt"), []byte("other work in progress\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := DeliverGitViewBranch(ctx, views, view.ID, baseline)
+	if err != nil || delivered.DeliveredBranch != "selfmind/run-two" {
+		t.Fatalf("second Run's branch could not be delivered after first Run advanced: %+v %v", delivered, err)
+	}
+	if got := baselineGit(t, root, "rev-parse", "HEAD"); got != advanced {
+		t.Fatalf("delivery moved the source HEAD: %s", got)
+	}
+	if draft, err := os.ReadFile(filepath.Join(root, "new-draft.txt")); err != nil || string(draft) != "other work in progress\n" {
+		t.Fatalf("delivery changed source's uncommitted work: %q %v", draft, err)
 	}
 	if _, err := os.Stat(filepath.Join(view.Path, ".git")); err != nil {
 		t.Fatalf("failed delivery removed the view: %v", err)
+	}
+}
+
+func TestGitViewDeliveryRejectsChangedSourceIdentity(t *testing.T) {
+	ctx := context.Background()
+	root := cleanGitFixture(t)
+	baseline, err := InspectCleanGitBaseline(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	views := filepath.Join(t.TempDir(), "views")
+	view, err := EnsureGitView(ctx, views, "run-changed-source", baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(view.Path, "file.txt"), []byte("from view\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baselineGit(t, view.Path, "add", "file.txt")
+	baselineGit(t, view.Path, "commit", "-qm", "change")
+	if err := os.Rename(filepath.Join(root, ".git"), filepath.Join(root, ".git-moved")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DeliverGitViewBranch(ctx, views, view.ID, baseline); err == nil {
+		t.Fatal("delivery accepted a source repository with changed Git identity")
+	}
+	if _, err := os.Stat(filepath.Join(view.Path, ".git")); err != nil {
+		t.Fatalf("identity conflict removed undelivered view: %v", err)
+	}
+}
+
+func TestGitViewDeliveryRefusesUnreviewedViewGitConfig(t *testing.T) {
+	ctx := context.Background()
+	root := cleanGitFixture(t)
+	baseline, err := InspectCleanGitBaseline(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	views := filepath.Join(t.TempDir(), "views")
+	view, err := EnsureGitView(ctx, views, "run-config", baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(view.Path, "file.txt"), []byte("from view\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	baselineGit(t, view.Path, "add", "file.txt")
+	baselineGit(t, view.Path, "commit", "-qm", "change")
+	baselineGit(t, view.Path, "config", "--local", "uploadpack.packObjectsHook", "unreviewed-command")
+	if _, err := DeliverGitViewBranch(ctx, views, view.ID, baseline); err == nil {
+		t.Fatal("daemon imported objects from a view with executable Git configuration")
+	}
+	if _, err := os.Stat(filepath.Join(view.Path, ".git")); err != nil {
+		t.Fatalf("rejected view was destroyed: %v", err)
 	}
 }

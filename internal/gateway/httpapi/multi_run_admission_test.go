@@ -494,7 +494,7 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspaceIDs := map[string]string{}
-	for _, name := range []string{"cli", "im", "cron"} {
+	for _, name := range []string{"cli", "im", "cron", "watch"} {
 		root := filepath.Join(t.TempDir(), name)
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			t.Fatal(err)
@@ -507,6 +507,26 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 		workspaceIDs[name] = workspace.ID
 	}
 	if err := store.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, workspaceIDs["cron"]); err != nil {
+		t.Fatal(err)
+	}
+	watchTask, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID,
+		PersonID: identity.PersonID, WorkspaceID: workspaceIDs["watch"], Title: "watch closure", Channel: "watch-channel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	watchRun, err := store.StartRunWithOptions(ctx, watchTask, "watch-channel", "wait for a result", control.StartRunOptions{MaxActiveRuns: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, watchRun.ID, "waiting_external"); err != nil {
+		t.Fatal(err)
+	}
+	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{TenantID: identity.TenantID,
+		PersonID: identity.PersonID, WorkspaceID: workspaceIDs["watch"], TaskID: watchTask.ID,
+		RunID: watchRun.ID, Channel: "watch-channel", CWD: t.TempDir(), Command: "printf READY",
+		SuccessPattern: "READY", IntervalSeconds: 5, CommandTimeoutSeconds: 10,
+		TimeoutAt: time.Now().Add(time.Minute)})
+	if err != nil {
 		t.Fatal(err)
 	}
 	im, code := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "weixin", PlatformUserID: "wx-local",
@@ -562,6 +582,21 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 			t.Fatalf("Run %s channel %s used workspace %s, want %s", run.ID, run.Channel, run.WorkspaceID, wantWorkspace[run.Channel])
 		}
 	}
+	// The watcher can finish while CLI, IM, and cron occupy all three work
+	// slots. Its exact-parent continuation must wait without stealing or
+	// replacing any of their Run identities.
+	daemon.runExternalWatchPass(ctx)
+	storedWatch, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+	if err != nil || storedWatch == nil || storedWatch.Status != control.ExternalWatchSucceeded {
+		t.Fatalf("watcher while slots are full = %+v, %v", storedWatch, err)
+	}
+	queued, err := store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, externalWatchFinalizationKey(*storedWatch))
+	if err != nil || queued == nil || queued.Status != control.QueueStatusQueued || queued.ReplyToRunID != watchRun.ID {
+		t.Fatalf("exact watcher finalization while slots are full = %+v, %v", queued, err)
+	}
+	if daemon.coordinator().activeCount(identity.PersonID) != 3 {
+		t.Fatal("watcher finalization displaced an active source")
+	}
 	provider.releaseNow()
 	select {
 	case err := <-cronDone:
@@ -572,6 +607,23 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 		t.Fatal("cron did not complete")
 	}
 	waitUntil(t, 5*time.Second, func() bool { return daemon.coordinator().activeCount(identity.PersonID) == 0 }, "mixed runs did not finalize")
+	// The test server has no periodic daemon worker. Run its due-queue pass
+	// explicitly after a slot opens, as the real daemon does on its next tick.
+	daemon.drainQueuedWhenReady(ctx)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		current, err := store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, externalWatchFinalizationKey(*storedWatch))
+		if err == nil && current != nil && current.Status == control.QueueStatusDone && current.RunID != "" {
+			child, childErr := store.GetRun(ctx, identity.TenantID, current.RunID)
+			if childErr != nil || child == nil || child.ResumesRunID != watchRun.ID || child.WorkspaceID != workspaceIDs["watch"] {
+				t.Fatalf("watcher child lost exact parent or workspace: %+v, %v", child, childErr)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	current, queueErr := store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, externalWatchFinalizationKey(*storedWatch))
+	t.Fatalf("watcher finalization did not resume its exact parent: queue=%+v err=%v active=%d", current, queueErr, daemon.coordinator().activeCount(identity.PersonID))
 }
 
 func TestQueueDrainFillsAvailableConcurrentSlots(t *testing.T) {

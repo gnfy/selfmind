@@ -2,8 +2,13 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +16,96 @@ import (
 	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel"
 )
+
+func TestReviewedEffectScriptsDispatchIndependentRemoteTargets(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	calls := map[string]int{}
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := strings.TrimPrefix(r.URL.Path, "/effect/")
+		if r.Method != http.MethodPost || (target != "east" && target != "west") {
+			http.Error(w, "unexpected target", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		calls[target]++
+		mu.Unlock()
+		_, _ = w.Write([]byte("dispatched"))
+	}))
+	defer remote.Close()
+	root := t.TempDir()
+	script := filepath.Join(root, "deploy.sh")
+	if err := os.WriteFile(script, []byte(fmt.Sprintf("#!/bin/sh\ncurl --noproxy '*' -fsS --max-time 5 -X POST '%s/effect/'\"$1\" || exit\ntest \"$1\" != east\n", remote.URL)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range []string{"east", "west"} {
+		rule, err := BuildEffectScriptRule(EffectScriptProfile{WorkspaceID: "ws-1", ScriptPath: script,
+			Argv: []string{target}, TargetKeys: []string{"service:" + target}, AllowNetwork: true}, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.GrantApproval(ctx, "person", owner.TenantID, owner.PersonID, owner.PersonID, rule.Key, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	registry := NewRegistry()
+	registry.UseResultMiddleware(ExternalEffectClaimMiddleware(store))
+	registry.Register(NewExecuteCommandTool())
+	var runs []*control.Run
+	for _, name := range []string{"east", "west", "duplicate-east"} {
+		task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID,
+			PersonID: owner.PersonID, Title: name, Channel: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := store.StartRunWithOptions(ctx, task, name, name, control.StartRunOptions{MaxActiveRuns: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runs = append(runs, run)
+		cleanup := SetExecutionScope(ExecutionScopeKeyForRun(run.ID), ExecutionScope{TenantID: owner.TenantID,
+			PersonID: owner.PersonID, RunID: run.ID, WorkspaceID: "ws-1", WorkspaceRoot: root,
+			AllowedRoots: []string{root}, TrustLevel: executionenv.TrustTrusted,
+			StandingGrants: InteractiveStandingGrants(), ParallelWork: true})
+		t.Cleanup(cleanup)
+	}
+	dispatch := func(run *control.Run, target string) error {
+		_, err := registry.Dispatch("terminal", map[string]interface{}{
+			"command": "./deploy.sh " + target, "cwd": root, "_network_shared": true,
+			"_tool_call_id":     "call-" + run.ID,
+			"_invocation_scope": kernel.ToolInvocationScope{ExecutionScopeKey: ExecutionScopeKeyForRun(run.ID)},
+		})
+		return err
+	}
+	// East commits its remote effect, then the local script fails. The runtime
+	// cannot treat that failure as proof the effect did not happen.
+	if err := dispatch(runs[0], "east"); err == nil {
+		t.Fatal("east's post-effect failure was not surfaced")
+	}
+	if err := dispatch(runs[1], "west"); err != nil {
+		t.Fatalf("independent west dispatch: %v", err)
+	}
+	if err := dispatch(runs[0], "east"); err == nil {
+		t.Fatal("the failed east call was blindly retried within its run")
+	}
+	if err := dispatch(runs[2], "east"); err == nil {
+		t.Fatal("occupied east target dispatched twice")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls["east"] != 1 || calls["west"] != 1 {
+		t.Fatalf("remote calls crossed target boundaries: %+v", calls)
+	}
+}
 
 func TestExactEffectScriptProfilesSeparateTargetsAndFailClosedOnDrift(t *testing.T) {
 	ctx := context.Background()

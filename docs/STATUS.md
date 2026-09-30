@@ -83,8 +83,11 @@ An authenticated local owner can now register a hash-bound exact script/argv
 target assertion with `selfmind ws effect`. Matching parallel calls claim only
 those reviewed external targets; drift, ambiguity, or absence returns to the
 person-wide unknown lane. Execution still requires normal approval and target
-release still requires observation. Live independent-target and watcher
-acceptance remain rollout gates.
+release still requires observation. A controlled HTTP target test confirms that
+a remote effect followed by a local command failure is not retried, while an
+independent target can dispatch; a real durable watcher check releases only its
+unchanged, owner-bound claim. Live independent-target and watcher acceptance
+remain rollout gates.
 
 ## Capability Map
 

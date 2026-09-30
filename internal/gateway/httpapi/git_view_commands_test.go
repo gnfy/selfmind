@@ -56,6 +56,9 @@ func TestExecutionViewCommandsAreExactOwnerScopedAndNonDestructive(t *testing.T)
 	if _, err := command(owner, "/apply "+run.ID); err == nil {
 		t.Fatal("running view was delivered while it could still change")
 	}
+	if _, err := command(owner, "/views archive "+run.ID); err == nil {
+		t.Fatal("running view was retired while it could still change")
+	}
 	if err := store.FinishRun(ctx, owner.TenantID, run.ID, "done"); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +72,9 @@ func TestExecutionViewCommandsAreExactOwnerScopedAndNonDestructive(t *testing.T)
 	if _, err := command(stranger, "/apply "+run.ID); err == nil {
 		t.Fatal("stranger delivered another person's view")
 	}
+	if _, err := command(stranger, "/views archive "+run.ID); err == nil {
+		t.Fatal("stranger retired another person's view")
+	}
 	if list, err := command(owner, "/views"); err != nil || !strings.Contains(list, run.ID) {
 		t.Fatalf("owner could not find view: %q %v", list, err)
 	}
@@ -80,5 +86,42 @@ func TestExecutionViewCommandsAreExactOwnerScopedAndNonDestructive(t *testing.T)
 	}
 	if got, err := os.ReadFile(filepath.Join(root, "file.txt")); err != nil || string(got) != "base\n" {
 		t.Fatalf("original checkout changed: %q %v", got, err)
+	}
+	queued, err := store.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: owner.TenantID, PersonID: owner.PersonID, Platform: "cli", Channel: "other-session",
+		Content: "inspect retained work", ExecutionRoots: run.ExecutionRoots,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := command(owner, "/views archive "+run.ID); err == nil {
+		t.Fatal("view was retired while durable queued work still referred to it")
+	}
+	if err := store.MarkQueued(ctx, owner.TenantID, queued.ID, control.QueueStatusCancelled); err != nil {
+		t.Fatal(err)
+	}
+	if reply, err := command(owner, "/views archive "+run.ID); err != nil || !strings.Contains(reply, "All files and Git metadata remain") {
+		t.Fatalf("retirement failed: %q %v", reply, err)
+	}
+	if _, err := os.Lstat(view.Path); !os.IsNotExist(err) {
+		t.Fatalf("retired view still occupies run root: %v", err)
+	}
+	if detail, err := command(owner, "/views "+run.ID); err != nil || !strings.Contains(detail, "Retired: true") {
+		t.Fatalf("owner could not inspect retired view: %q %v", detail, err)
+	}
+	if _, err := command(owner, "/apply "+run.ID); err == nil {
+		t.Fatal("retired view was delivered without restoring it")
+	}
+	if reply, err := command(owner, "/views restore "+run.ID); err != nil || !strings.Contains(reply, "Restored execution view") {
+		t.Fatalf("restoration failed: %q %v", reply, err)
+	}
+	if _, err := command(owner, "/views restore "+run.ID); err != nil {
+		t.Fatalf("repeated restoration failed: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(view.Path, "file.txt")); err != nil || string(data) != "delivered\n" {
+		t.Fatalf("restored view lost work: %q %v", data, err)
+	}
+	if _, err := command(owner, "/apply "+run.ID); err != nil {
+		t.Fatalf("delivered view changed after restoration: %v", err)
 	}
 }

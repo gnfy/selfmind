@@ -428,7 +428,7 @@ before normal agent dispatch.
 /model
 /id
 /status [run_id]
-/views [run_id]
+/views [run_id] | /views archive|restore <run_id>
 /apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
@@ -468,6 +468,11 @@ before normal agent dispatch.
   original repository identity and admitted baseline object must still be
   intact. Delivery never changes the checked-out branch or discards view
   files. Uncommitted, untracked, or ignored work in the view stays there for review.
+  After a Run is done, `/views archive <run_id>` moves a delivered, clean view
+  into daemon retention. It refuses views referenced by unfinished work or a
+  queued request, and refuses any undelivered or ignored files. `/views restore
+  <run_id>` moves the same bytes and Git metadata back. Archiving preserves
+  storage; it does not delete files or reclaim disk space.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.

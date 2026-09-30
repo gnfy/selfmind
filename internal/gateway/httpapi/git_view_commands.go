@@ -10,7 +10,7 @@ import (
 	"selfmind/internal/executionenv"
 )
 
-func (d *Server) ownedGitView(ctx context.Context, identity *control.IdentityContext, runID string) (*control.Run, executionenv.RootBinding, error) {
+func (d *Server) ownedGitViewRoot(ctx context.Context, identity *control.IdentityContext, runID string) (*control.Run, executionenv.RootBinding, error) {
 	if d == nil || d.Control == nil || identity == nil || strings.TrimSpace(runID) == "" {
 		return nil, executionenv.RootBinding{}, fmt.Errorf("exact run id is required")
 	}
@@ -28,6 +28,18 @@ func (d *Server) ownedGitView(ctx context.Context, identity *control.IdentityCon
 	if root.Source != executionenv.RootSourceExecutionView || root.GitBaseline == nil {
 		return nil, executionenv.RootBinding{}, fmt.Errorf("this run has no independent execution view")
 	}
+	viewsDir, err := filepath.EvalSymlinks(d.Control.ExecutionViewsDir())
+	if err != nil || filepath.Join(viewsDir, filepath.Base(root.Path)) != filepath.Clean(root.Path) {
+		return nil, executionenv.RootBinding{}, fmt.Errorf("execution view path is unavailable or changed")
+	}
+	return run, root, nil
+}
+
+func (d *Server) ownedGitView(ctx context.Context, identity *control.IdentityContext, runID string) (*control.Run, executionenv.RootBinding, error) {
+	run, root, err := d.ownedGitViewRoot(ctx, identity, runID)
+	if err != nil {
+		return nil, executionenv.RootBinding{}, err
+	}
 	viewID := filepath.Base(root.Path)
 	view, err := executionenv.InspectGitView(ctx, d.Control.ExecutionViewsDir(), viewID, *root.GitBaseline)
 	if err != nil || filepath.Clean(root.Path) != view.Path {
@@ -38,17 +50,26 @@ func (d *Server) ownedGitView(ctx context.Context, identity *control.IdentityCon
 
 func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityContext, runID string) (string, error) {
 	if strings.TrimSpace(runID) != "" {
-		run, root, err := d.ownedGitView(ctx, identity, runID)
+		run, root, err := d.ownedGitViewRoot(ctx, identity, runID)
 		if err != nil {
 			return "", err
 		}
-		info, err := executionenv.InspectGitViewDelivery(ctx, d.Control.ExecutionViewsDir(), filepath.Base(root.Path), *root.GitBaseline)
+		viewsDir := d.Control.ExecutionViewsDir()
+		retired := false
+		if _, inspectErr := executionenv.InspectGitView(ctx, viewsDir, filepath.Base(root.Path), *root.GitBaseline); inspectErr != nil {
+			if _, retiredErr := executionenv.InspectRetiredGitView(ctx, viewsDir, filepath.Base(root.Path), *root.GitBaseline); retiredErr != nil {
+				return "", fmt.Errorf("execution view is unavailable or changed; its files were preserved")
+			}
+			viewsDir = filepath.Join(viewsDir, ".retired")
+			retired = true
+		}
+		info, err := executionenv.InspectGitViewDelivery(ctx, viewsDir, filepath.Base(root.Path), *root.GitBaseline)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Execution view for run %s\nPath: %s\nSource: %s\nCommitted files: %d\nUncommitted changes: %d\nUntracked files: %d\nIgnored files: %d\nDelivered branch: %s\nUse /apply %s to deliver a clean committed view as a separate branch. The view, including ignored files, is retained for review.",
+		return fmt.Sprintf("Execution view for run %s\nPath: %s\nSource: %s\nCommitted files: %d\nUncommitted changes: %d\nUntracked files: %d\nIgnored files: %d\nDelivered branch: %s\nRetired: %t\nUse /apply %s to deliver a clean committed view as a separate branch (restore it first if retired). Use /views archive or restore with this Run ID to manage retained views; no files are deleted.",
 			run.ID, info.Path, info.SourceRoot, info.CommittedFiles, info.Uncommitted,
-			info.Untracked, info.Ignored, fallback(info.DeliveredBranch, "none"), run.ID), nil
+			info.Untracked, info.Ignored, fallback(info.DeliveredBranch, "none"), retired, run.ID), nil
 	}
 	recent, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 100)
 	if err != nil {
@@ -75,6 +96,37 @@ func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityCo
 		return "No execution views for recent runs.", nil
 	}
 	return "Execution views:\n" + strings.Join(lines, "\n") + "\nOpen: /views <run_id>", nil
+}
+
+func (d *Server) archiveGitViewReply(ctx context.Context, identity *control.IdentityContext, runID string, restore bool) (string, error) {
+	run, root, err := d.ownedGitViewRoot(ctx, identity, runID)
+	if err != nil {
+		return "", err
+	}
+	if run.Status != "done" {
+		return "", fmt.Errorf("only a completed Run's view can be retired or restored")
+	}
+	busy, err := d.Control.ExecutionViewReferencedByPendingWork(ctx, identity.TenantID, identity.PersonID, root.Path)
+	if err != nil {
+		return "", err
+	}
+	if busy {
+		return "", fmt.Errorf("another unfinished Run or queued item still refers to this view")
+	}
+	viewID := filepath.Base(root.Path)
+	if restore {
+		view, err := executionenv.RestoreGitView(ctx, d.Control.ExecutionViewsDir(), viewID, *root.GitBaseline)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Restored execution view for run %s at %s. No work was discarded.", run.ID, view.Path), nil
+	}
+	view, err := executionenv.RetireGitView(ctx, d.Control.ExecutionViewsDir(), viewID, *root.GitBaseline)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Retired execution view for run %s at %s. All files and Git metadata remain available; use /views restore %s to move it back.",
+		run.ID, view.Path, run.ID), nil
 }
 
 func (d *Server) applyGitViewReply(ctx context.Context, identity *control.IdentityContext, runID string) (string, error) {

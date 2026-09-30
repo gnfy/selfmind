@@ -31,12 +31,13 @@ func TestWorkspaceEffectCommandSendsExactTargetAssertion(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	a := &App{ctx: context.Background(), stdout: &stdout, stderr: &stderr, gatewayEnsured: true}
 	if code := a.registerWorkspaceEffectProfile([]string{"scripts/deploy.sh", "--target", "cluster:east",
-		"--network", "--workspace", "ws-1", "--", "--region", "east"}); code != 0 {
+		"--network", "--observe-command", "./scripts/state.sh east", "--workspace", "ws-1", "--", "--region", "east"}); code != 0 {
 		t.Fatalf("command failed: code=%d stderr=%q", code, stderr.String())
 	}
 	if captured.WorkspaceID != "ws-1" || captured.ScriptPath != "scripts/deploy.sh" ||
 		len(captured.TargetKeys) != 1 || captured.TargetKeys[0] != "cluster:east" ||
 		len(captured.Argv) != 2 || captured.Argv[0] != "--region" || captured.Argv[1] != "east" ||
+		captured.ObservationCommand != "./scripts/state.sh east" ||
 		!captured.AllowNetwork || !strings.Contains(stdout.String(), "normal execution approval") {
 		t.Fatalf("profile request/receipt lost scope: %+v output=%q", captured, stdout.String())
 	}

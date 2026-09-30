@@ -139,7 +139,7 @@ selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
-selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
+selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
 selfmind ws revoke <capability> [workspace_id]
 ```
 
@@ -531,6 +531,12 @@ before normal agent dispatch.
   the same operation. The runtime checks ownership, Run identity, watcher
   provenance and terminal evidence before releasing every target of that
   effect. A model's claim of success cannot release it.
+  An effect profile can bind one exact observation script command to the same
+  target set. Register that script as read-only with `ws observe` too. A
+  `status_json.v1` watcher created by the same Run after dispatch can then
+  release its exact claim automatically after a durable successful verdict,
+  provided both grants and the script hash remain valid. All other effects
+  retain the explicit `/effects resolve` path.
 - `/remember <preference>` saves an explicitly stated personal preference to
   long-term memory (person memory is preference-only); it applies across every
   endpoint. `/forget <text|ref>` forgets one — by its text, or by the ref

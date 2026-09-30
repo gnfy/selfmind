@@ -115,7 +115,7 @@ selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
-selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
+selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
 selfmind ws revoke <capability> [workspace_id]
 ```
 
@@ -133,7 +133,10 @@ selfmind ws revoke <capability> [workspace_id]
   匹配的调用占用这些目标，而不是全人未知目标。脚本内容、工作区、全部参数、网络
   和凭证模式都必须相同；脚本必须直接执行（例如 `./scripts/deploy.sh`），不能换
   解释器。它不代替执行审批，也不在调用返回时解除占用，仍需可信
-  观察。变更、含糊或未登记的调用回退到未知目标通道。
+  观察。可用 `--observe-command` 绑定观察同一目标集合的精确脚本命令，同时用
+  `ws observe` 将该脚本登记为只读。由同一 Run 在效果派发后创建的
+  `status_json.v1` watcher 成功且留下持久事件时，运行时可在两个授权与脚本哈希
+  仍有效的前提下自动解除精确占用。变更、含糊或未登记的调用回退到未知目标通道。
 - 同时存在多个审批时，`approve` 和 `reject` 可接审批 token。
 - `stop` 取消活跃 run；没有活跃 run 时只 dismiss 精确 pinned 的 Run，且在该 Run
   仍有待处理审批、澄清或活动 watcher 时拒绝。`new` 创建新的可见任务。
@@ -393,6 +396,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   `/effects resolve <claim_id> <watch_id>` 确认二者对应同一操作。运行时核对
   本人归属、Run、watcher 来源与终态证据后，才释放该效果占用的全部目标；模型
   自述成功不能解锁。
+  未绑定精确观察脚本的效果继续使用这条人工确认路径。
 - `/new [title]` 保留现有的 task 标签行为；`/new --run <request>` 是确定性的
   新工作入口，不经过连续性模型判断。
 - `/status` 在同时有多个活动 Run 时列出总览；`/status <run_id>` 查看一个

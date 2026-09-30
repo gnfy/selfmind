@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -83,6 +85,181 @@ func (s *Store) ListUnresolvedExternalEffects(ctx context.Context, tenantID, per
 		claims = append(claims, claim)
 	}
 	return claims, rows.Err()
+}
+
+// FindUnresolvedExternalEffectForTargets binds an owner-reviewed observation
+// to an effect that has already crossed dispatch. It returns no identity when
+// zero or multiple exact groups match; a watcher cannot infer causal ownership
+// from a target name alone.
+func (s *Store) FindUnresolvedExternalEffectForTargets(ctx context.Context, tenantID, personID, runID string, targets []string) (string, error) {
+	if s == nil || s.db == nil || personID == "" || runID == "" || len(targets) == 0 {
+		return "", nil
+	}
+	want := append([]string(nil), targets...)
+	slices.Sort(want)
+	rows, err := s.db.QueryContext(ctx, `SELECT effect_id, target_key, state FROM external_effect_claims
+		WHERE tenant_id = ? AND person_id = ? AND run_id = ? ORDER BY effect_id, target_key`,
+		normalizeTenant(tenantID), personID, runID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	type group struct {
+		targets      []string
+		allUncertain bool
+	}
+	groups := map[string]*group{}
+	for rows.Next() {
+		var effectID, target, state string
+		if err := rows.Scan(&effectID, &target, &state); err != nil {
+			return "", err
+		}
+		g := groups[effectID]
+		if g == nil {
+			g = &group{allUncertain: true}
+			groups[effectID] = g
+		}
+		g.targets = append(g.targets, target)
+		g.allUncertain = g.allUncertain && state == ExternalClaimUncertain
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	matched := ""
+	for id, g := range groups {
+		if !g.allUncertain || !slices.Equal(g.targets, want) {
+			continue
+		}
+		if matched != "" {
+			return "", nil
+		}
+		matched = id
+	}
+	return matched, nil
+}
+
+// ObserveEffectClaimsForWatch releases only the exact effect group frozen at
+// watcher registration. The finalized event and typed successful observation
+// must already be durable. A revoked owner assertion or different target set
+// leaves the claim occupied for explicit review.
+func (s *Store) ObserveEffectClaimsForWatch(ctx context.Context, tenantID, watchID string) (bool, error) {
+	if s == nil || s.db == nil || watchID == "" {
+		return false, nil
+	}
+	tenantID = normalizeTenant(tenantID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var personID, workspaceID, runID, status, adapter, command, output, receiptJSON string
+	var revision int
+	err = tx.QueryRowContext(ctx, `SELECT person_id, COALESCE(workspace_id,''), run_id, status,
+		COALESCE(observation_adapter,''), command, COALESCE(last_output,''), verdict_revision,
+		COALESCE(preflight_receipt_json,'{}') FROM external_watches WHERE tenant_id=? AND id=?`, tenantID, watchID).
+		Scan(&personID, &workspaceID, &runID, &status, &adapter, &command, &output, &revision, &receiptJSON)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var receipt ExternalWatchPreflightReceipt
+	if json.Unmarshal([]byte(receiptJSON), &receipt) != nil || receipt.EffectID == "" ||
+		receipt.EffectRuleKey == "" || receipt.ObservationRuleKey == "" || len(receipt.EffectTargetKeys) == 0 ||
+		receipt.EffectScriptRoot == "" || receipt.EffectScriptPath == "" || receipt.EffectScriptDigest == "" ||
+		status != ExternalWatchSucceeded || adapter != "status_json.v1" ||
+		receipt.Version < ExternalWatchContinuationReceiptVersion ||
+		receipt.CommandHash != fmt.Sprintf("%x", sha256.Sum256([]byte(command))) {
+		return false, nil
+	}
+	const rulePrefix = "rule:effect_script:v1:"
+	if !strings.HasPrefix(receipt.EffectRuleKey, rulePrefix) {
+		return false, nil
+	}
+	rawRule, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(receipt.EffectRuleKey, rulePrefix))
+	if err != nil || len(rawRule) > 8192 {
+		return false, nil
+	}
+	var rule struct {
+		WorkspaceID         string   `json:"w"`
+		Targets             []string `json:"t"`
+		ObservationRelative string   `json:"or"`
+		ObservationDigest   string   `json:"od"`
+	}
+	if json.Unmarshal(rawRule, &rule) != nil || rule.WorkspaceID != workspaceID ||
+		!slices.Equal(rule.Targets, receipt.EffectTargetKeys) || rule.ObservationDigest != receipt.EffectScriptDigest ||
+		rule.ObservationRelative == "" {
+		return false, nil
+	}
+	rel, err := filepath.Rel(filepath.Clean(receipt.EffectScriptRoot), filepath.Clean(receipt.EffectScriptPath))
+	if err != nil || filepath.ToSlash(rel) != rule.ObservationRelative {
+		return false, nil
+	}
+	var observed struct {
+		Status string `json:"status"`
+	}
+	if json.Unmarshal([]byte(strings.TrimSpace(output)), &observed) != nil || observed.Status != "succeeded" {
+		return false, nil
+	}
+	var event int
+	eventKey := fmt.Sprintf("external-watch:%s:r%d:completed", watchID, revision)
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM task_events e JOIN runs r ON r.id=e.run_id
+		WHERE r.tenant_id=? AND r.person_id=? AND e.run_id=? AND e.idempotency_key=? LIMIT 1`,
+		tenantID, personID, runID, eventKey).Scan(&event); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !strings.HasPrefix(receipt.ObservationRuleKey, "rule:observation_script:") {
+		return false, nil
+	}
+	var grants int
+	err = tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT pattern_key) FROM approval_grants WHERE tenant_id=? AND person_id=?
+		AND pattern_key IN (?,?) AND revoked_at=0 AND (expires_at=0 OR expires_at>?)
+		AND ((scope_kind='person' AND scope_id=?) OR (scope_kind='workspace' AND scope_id=?))`,
+		tenantID, personID, receipt.EffectRuleKey, receipt.ObservationRuleKey, time.Now().Unix(), personID, workspaceID).Scan(&grants)
+	if err != nil {
+		return false, err
+	}
+	if grants != 2 {
+		return false, nil
+	}
+	var trust string
+	err = tx.QueryRowContext(ctx, `SELECT trust_level FROM workspaces WHERE tenant_id=? AND owner_person_id=? AND id=?`,
+		tenantID, personID, workspaceID).Scan(&trust)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if trust != "trusted" {
+		return false, nil
+	}
+	claims, err := loadExternalEffectClaimsTx(ctx, tx, tenantID, runID, receipt.EffectID)
+	if err != nil {
+		return false, err
+	}
+	if len(claims) != len(receipt.EffectTargetKeys) {
+		return false, nil
+	}
+	for i, claim := range claims {
+		if claim.PersonID != personID || claim.TargetKey != receipt.EffectTargetKeys[i] || claim.State != ExternalClaimUncertain {
+			return false, nil
+		}
+	}
+	ref := fmt.Sprintf("watch:%s:r%d:owner-bound", watchID, revision)
+	if _, err := tx.ExecContext(ctx, `UPDATE external_effect_claims SET state='observed', observation_ref=?, updated_at=?
+		WHERE tenant_id=? AND person_id=? AND run_id=? AND effect_id=? AND state='uncertain'`,
+		ref, time.Now().Unix(), tenantID, personID, runID, receipt.EffectID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // ObserveExternalEffectWithWatch is the conservative fallback for an unknown

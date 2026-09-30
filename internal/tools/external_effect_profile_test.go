@@ -158,3 +158,62 @@ func TestRegisteredEffectScriptsClaimIndependentTargetsAcrossRuns(t *testing.T) 
 		t.Fatal("same target was dispatched while east effect remained uncertain")
 	}
 }
+
+func TestEffectObservationBindingRequiresExactOwnerReviewedCommand(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	root := t.TempDir()
+	effect := filepath.Join(root, "deploy.sh")
+	observe := filepath.Join(root, "state.sh")
+	for _, path := range []string{effect, observe} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '{\"status\":\"succeeded\"}'\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rule, err := BuildEffectScriptRule(EffectScriptProfile{WorkspaceID: "ws-1", ScriptPath: effect,
+		Argv: []string{"east"}, TargetKeys: []string{"cluster:east"}, AllowNetwork: true,
+		ObservationCommand: "./state.sh east"}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.GrantApproval(ctx, "person", "default", "person-1", "person-1", rule.Key, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	readRule, err := BuildObservationScriptRule(ObservationScriptProfile{WorkspaceID: "ws-1",
+		ScriptPath: observe, ArgvPrefix: []string{"east"}, AllowNetwork: true}, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.GrantApproval(ctx, "person", "default", "person-1", "person-1", readRule.Key, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := SetExecutionScope("person-1", ExecutionScope{TenantID: "default", PersonID: "person-1",
+		WorkspaceID: "ws-1", WorkspaceRoot: root, AllowedRoots: []string{root},
+		TrustLevel: executionenv.TrustTrusted, StandingGrants: InteractiveStandingGrants()})
+	defer cleanup()
+	args := map[string]interface{}{"_tenant_id": "person-1", "cwd": root, "command": "./state.sh east", "_network_shared": true}
+	bound, ok := RegisteredEffectObservation(args, store)
+	if !ok || len(bound.TargetKeys) != 1 || bound.TargetKeys[0] != "cluster:east" || bound.ScriptDigest == "" {
+		t.Fatalf("exact observation binding = %+v, %t", bound, ok)
+	}
+	for _, command := range []string{"./state.sh west", "./state.sh east; echo extra", "sh state.sh east"} {
+		args["command"] = command
+		if _, ok := RegisteredEffectObservation(args, store); ok {
+			t.Fatalf("unreviewed command %q bound", command)
+		}
+	}
+	args["command"] = "./state.sh east"
+	if err := os.WriteFile(observe, []byte("#!/bin/sh\nprintf changed\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if ValidateEffectObservationScript(bound.ScriptRoot, bound.ScriptPath, bound.ScriptDigest) {
+		t.Fatal("changed script kept original proof")
+	}
+	if _, ok := RegisteredEffectObservation(args, store); ok {
+		t.Fatal("changed observation bound")
+	}
+}

@@ -101,7 +101,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 2ccce7b8a6052b79
+    source_hash: a8f3f971809e60b7
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide

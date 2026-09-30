@@ -231,6 +231,18 @@ person-wide unknown target. The profile is an operator assertion about that
 script's effects, not a model-supplied target, tool approval, or completion
 proof. Claims remain held until a trusted observation settles them.
 
+An effect profile may additionally name one exact observation script command
+with `--observe-command`. The owner also registers that unchanged script with
+`ws observe`, which is the separate read-only authority. When a
+`status_json.v1` watcher from the same Run binds the one already-dispatched
+claim with exactly the asserted targets, the durable successful watcher event
+can settle that claim automatically. Registration freezes the script digest;
+each poll and finalization recheck it, and the release transaction rechecks
+the owner's still-active effect grant, exact effect identity and target set.
+A changed or revoked script, ambiguous claim, failed check, or ordinary
+regex watcher keeps the claim occupied for explicit review. This is an owner
+assertion about the script's meaning, not model-provided proof of the target.
+
 Managed Git views are writable by the Run, including their local `.git`
 directory. Before daemon-side Git inspection or branch delivery, the view's
 local configuration must still contain only the passive keys installed at

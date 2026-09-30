@@ -107,6 +107,11 @@ func (d *Server) runExternalWatchPass(ctx context.Context) {
 }
 
 func (d *Server) executeExternalWatch(ctx context.Context, watch control.ExternalWatch) {
+	if receipt := watch.PreflightReceipt; receipt.EffectRuleKey != "" &&
+		!tools.ValidateEffectObservationScript(receipt.EffectScriptRoot, receipt.EffectScriptPath, receipt.EffectScriptDigest) {
+		d.completeExternalWatchEnvironmentChanged(ctx, watch, []string{"effect observation script changed"})
+		return
+	}
 	deadlinePassed := !watch.TimeoutAt.After(time.Now())
 	if deadlinePassed {
 		// A terminal state recorded on the last checkpoint wins over the
@@ -721,6 +726,15 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 	if err := d.enqueueExternalWatchFinalization(ctx, watch, origin, summary); err != nil {
 		log.Warn("external watch finalization enqueue failed", "watch_id", watch.ID, "error", err)
 		return
+	}
+	if status == control.ExternalWatchSucceeded && watch.PreflightReceipt.EffectRuleKey != "" {
+		receipt := watch.PreflightReceipt
+		if tools.ValidateEffectObservationScript(receipt.EffectScriptRoot, receipt.EffectScriptPath, receipt.EffectScriptDigest) {
+			if _, err := d.Control.ObserveEffectClaimsForWatch(ctx, watch.TenantID, watch.ID); err != nil {
+				log.Warn("owner-bound effect observation failed", "watch_id", watch.ID, "error", err)
+				return
+			}
+		}
 	}
 	if marked, err := d.Control.MarkExternalWatchFinalized(ctx, watch.TenantID, watch.ID); err != nil {
 		log.Warn("external watch finalized mark failed", "watch_id", watch.ID, "error", err)

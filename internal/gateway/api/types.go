@@ -672,6 +672,9 @@ type WorkspaceEffectProfileRequest struct {
 	TargetKeys       []string `json:"target_keys"`
 	AllowNetwork     bool     `json:"allow_network,omitempty"`
 	AllowCredentials bool     `json:"allow_credentials,omitempty"`
+	// Optional exact read-only command which observes the same target set.
+	// The owner must also approve it as an observation script.
+	ObservationCommand string `json:"observation_command,omitempty"`
 }
 
 type BindAccountRequest struct {

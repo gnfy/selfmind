@@ -628,6 +628,7 @@ func (d *Server) handleWorkspaceEffectProfiles(w http.ResponseWriter, r *http.Re
 	rule, err := tools.BuildEffectScriptRule(tools.EffectScriptProfile{
 		WorkspaceID: workspace.ID, ScriptPath: req.ScriptPath, Argv: req.Argv,
 		TargetKeys: req.TargetKeys, AllowNetwork: req.AllowNetwork, AllowCredentials: req.AllowCredentials,
+		ObservationCommand: req.ObservationCommand,
 	}, workspace.LocalPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)

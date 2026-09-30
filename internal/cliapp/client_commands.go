@@ -417,7 +417,7 @@ func (a *App) registerWorkspaceObservationProfile(args []string) int {
 
 func (a *App) registerWorkspaceEffectProfile(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(a.stderr, "usage: selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]")
+		fmt.Fprintln(a.stderr, "usage: selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]")
 		return 2
 	}
 	req := api.WorkspaceEffectProfileRequest{
@@ -425,7 +425,7 @@ func (a *App) registerWorkspaceEffectProfile(args []string) int {
 	}
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
-		case "--target", "--workspace":
+		case "--target", "--workspace", "--observe-command":
 			if i+1 >= len(args) {
 				fmt.Fprintf(a.stderr, "%s requires a value\n", args[i])
 				return 2
@@ -434,8 +434,10 @@ func (a *App) registerWorkspaceEffectProfile(args []string) int {
 			i++
 			if option == "--target" {
 				req.TargetKeys = append(req.TargetKeys, args[i])
-			} else {
+			} else if option == "--workspace" {
 				req.WorkspaceID = args[i]
+			} else {
+				req.ObservationCommand = args[i]
 			}
 		case "--network":
 			req.AllowNetwork = true

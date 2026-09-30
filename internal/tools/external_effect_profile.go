@@ -21,22 +21,39 @@ const effectScriptRulePrefix = "rule:effect_script:v1:"
 // target set of one exact, unchanged script invocation. It does not approve
 // execution or settle the effect; ordinary approval and observation still run.
 type EffectScriptProfile struct {
-	WorkspaceID      string
-	ScriptPath       string
-	Argv             []string
-	TargetKeys       []string
-	AllowNetwork     bool
-	AllowCredentials bool
+	WorkspaceID        string
+	ScriptPath         string
+	Argv               []string
+	TargetKeys         []string
+	AllowNetwork       bool
+	AllowCredentials   bool
+	ObservationCommand string
 }
 
 type effectScriptRule struct {
-	WorkspaceID string   `json:"w"`
-	Relative    string   `json:"r"`
-	Digest      string   `json:"d"`
-	ArgsHash    string   `json:"a"`
-	Targets     []string `json:"t"`
-	Network     bool     `json:"n"`
-	Credentials bool     `json:"c"`
+	WorkspaceID         string   `json:"w"`
+	Relative            string   `json:"r"`
+	Digest              string   `json:"d"`
+	ArgsHash            string   `json:"a"`
+	Targets             []string `json:"t"`
+	Network             bool     `json:"n"`
+	Credentials         bool     `json:"c"`
+	ObservationRelative string   `json:"or,omitempty"`
+	ObservationDigest   string   `json:"od,omitempty"`
+	ObservationArgsHash string   `json:"oa,omitempty"`
+}
+
+// EffectObservationBinding is a local-owner assertion that an unchanged,
+// separately approved read-only script observes the exact effect targets.
+// The watcher must use status_json.v1; a prose or regex match cannot settle a
+// remote effect automatically.
+type EffectObservationBinding struct {
+	RuleKey            string
+	ObservationRuleKey string
+	ScriptRoot         string
+	ScriptPath         string
+	ScriptDigest       string
+	TargetKeys         []string
 }
 
 func BuildEffectScriptRule(profile EffectScriptProfile, workspaceRoot string) (ApprovalRuleCandidate, error) {
@@ -73,6 +90,27 @@ func BuildEffectScriptRule(profile EffectScriptProfile, workspaceRoot string) (A
 	rule := effectScriptRule{WorkspaceID: profile.WorkspaceID, Relative: rel, Digest: digest,
 		ArgsHash: effectArgsHash(profile.Argv), Targets: targets,
 		Network: profile.AllowNetwork, Credentials: profile.AllowCredentials}
+	if profile.ObservationCommand != "" {
+		argv, ok := directStaticEffectScriptCommand(profile.ObservationCommand)
+		if !ok || len(argv) == 0 || argv[0] == "" || !strings.Contains(argv[0], "/") {
+			return ApprovalRuleCandidate{}, fmt.Errorf("effect observation must be one exact direct script command")
+		}
+		path, _, scriptOK := directObservationScriptInvocation(argv)
+		if !scriptOK || path != argv[0] {
+			return ApprovalRuleCandidate{}, fmt.Errorf("effect observation must invoke the script directly")
+		}
+		_, resolved, observationRel, observationDigest, err := observationScriptMaterial(workspaceRoot, path)
+		if err != nil {
+			return ApprovalRuleCandidate{}, err
+		}
+		info, err := os.Stat(resolved)
+		if err != nil || info.Mode()&0o111 == 0 {
+			return ApprovalRuleCandidate{}, fmt.Errorf("effect observation script must be executable")
+		}
+		rule.ObservationRelative = observationRel
+		rule.ObservationDigest = observationDigest
+		rule.ObservationArgsHash = effectArgsHash(argv[1:])
+	}
 	encoded, err := json.Marshal(rule)
 	if err != nil {
 		return ApprovalRuleCandidate{}, err
@@ -168,6 +206,106 @@ func registeredEffectScriptTargets(args map[string]interface{}, store *control.S
 		matched = rule.Targets
 	}
 	return matched, matched != nil
+}
+
+// RegisteredEffectObservation validates an exact watcher command against the
+// owner's effect profile. The ordinary observation-only approval is checked
+// separately by watch_external before its preflight; this binding adds target
+// identity, not read-only authority.
+func RegisteredEffectObservation(args map[string]interface{}, store *control.Store) (EffectObservationBinding, bool) {
+	if store == nil {
+		return EffectObservationBinding{}, false
+	}
+	scope, ok := currentExecutionScopeAny(args)
+	if !ok || scope.TrustLevel != executionenv.TrustTrusted || !scope.StandingGrants.Allowed ||
+		scope.WorkspaceID == "" || scope.WorkspaceRoot == "" {
+		return EffectObservationBinding{}, false
+	}
+	argv, ok := directStaticEffectScriptCommand(strings.TrimSpace(stringArg(args, "command")))
+	if !ok || len(argv) == 0 {
+		return EffectObservationBinding{}, false
+	}
+	path, scriptArgs, ok := directObservationScriptInvocation(argv)
+	if !ok || path != argv[0] {
+		return EffectObservationBinding{}, false
+	}
+	cwd := strings.TrimSpace(stringArg(args, "cwd"))
+	if cwd == "" || cwd == "." {
+		cwd = scope.WorkspaceRoot
+	} else if !filepath.IsAbs(cwd) {
+		cwd = filepath.Join(scope.WorkspaceRoot, cwd)
+	}
+	absScript := filepath.Join(cwd, path)
+	if filepath.IsAbs(path) {
+		absScript = path
+	}
+	physicalRoot, resolved, rel, digest, err := observationScriptMaterial(scope.WorkspaceRoot, absScript)
+	if err != nil || resolved == "" || !scopeAllowsPath(scope, filepath.Clean(absScript)) {
+		return EffectObservationBinding{}, false
+	}
+	grants, err := store.ListApprovalGrants(contextFromArgs(args), scope.TenantID, scope.PersonID, false)
+	if err != nil {
+		return EffectObservationBinding{}, false
+	}
+	credentials, _ := args[credentialReadArgKey].(bool)
+	observationRuleKey := ""
+	for _, key := range observationScriptRuntimeKeys(scope.WorkspaceID, rel, digest, scriptArgs, networkSharedArg(args), credentials) {
+		approved, err := store.IsApprovalGranted(contextFromArgs(args), scope.TenantID, scope.PersonID,
+			scope.WorkspaceID, key, scope.StandingGrants.NotAfter)
+		if err == nil && approved {
+			observationRuleKey = key
+			break
+		}
+	}
+	if observationRuleKey == "" {
+		return EffectObservationBinding{}, false
+	}
+	var binding EffectObservationBinding
+	for _, grant := range grants {
+		if !strings.HasPrefix(grant.PatternKey, effectScriptRulePrefix) {
+			continue
+		}
+		raw, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(grant.PatternKey, effectScriptRulePrefix))
+		if err != nil || len(raw) > 8192 {
+			continue
+		}
+		var rule effectScriptRule
+		if json.Unmarshal(raw, &rule) != nil || rule.WorkspaceID != scope.WorkspaceID ||
+			rule.ObservationRelative != rel || rule.ObservationDigest != digest ||
+			rule.ObservationArgsHash != effectArgsHash(scriptArgs) ||
+			rule.Network != networkSharedArg(args) || rule.Credentials != credentials ||
+			len(rule.Targets) == 0 {
+			continue
+		}
+		valid := true
+		for i, target := range rule.Targets {
+			if !control.ValidExternalTargetKey(target) || target == control.UnknownExternalTarget || i > 0 && rule.Targets[i-1] >= target {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		approved, err := store.IsApprovalGranted(contextFromArgs(args), scope.TenantID, scope.PersonID,
+			scope.WorkspaceID, grant.PatternKey, scope.StandingGrants.NotAfter)
+		if err != nil || !approved {
+			continue
+		}
+		if binding.RuleKey != "" {
+			return EffectObservationBinding{}, false
+		}
+		binding = EffectObservationBinding{RuleKey: grant.PatternKey, ObservationRuleKey: observationRuleKey,
+			ScriptRoot: physicalRoot, ScriptPath: resolved,
+			ScriptDigest: digest, TargetKeys: append([]string(nil), rule.Targets...)}
+	}
+	return binding, binding.RuleKey != ""
+}
+
+func ValidateEffectObservationScript(root, path, digest string) bool {
+	_, resolved, _, current, err := observationScriptMaterial(root, path)
+	physical, pathErr := filepath.EvalSymlinks(path)
+	return err == nil && pathErr == nil && resolved == filepath.Clean(physical) && current == digest
 }
 
 // The effect contract accepts only one literal script invocation. Shell

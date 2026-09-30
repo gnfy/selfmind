@@ -3,9 +3,12 @@ package control
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestExternalEffectRequiresExactFinalizedWatcherAndHumanLink(t *testing.T) {
@@ -79,6 +82,85 @@ func TestExternalEffectRequiresExactFinalizedWatcherAndHumanLink(t *testing.T) {
 	}
 	if _, err := store.ObserveExternalEffectWithWatch(ctx, owner.TenantID, owner.PersonID, claim.ID, watch.ID); err != nil {
 		t.Fatalf("same observation was not idempotent: %v", err)
+	}
+}
+
+func TestOwnerBoundWatchSettlesOnlyItsExactObservedEffect(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner, runA, runB, _ := externalEffectRuns(t, store)
+	claim := func(run *Run, effect, target string) {
+		t.Helper()
+		decision, err := store.ClaimExternalEffects(ctx, ExternalEffectClaimRequest{TenantID: owner.TenantID,
+			PersonID: owner.PersonID, RunID: run.ID, EffectID: effect, TargetKeys: []string{target}})
+		if err != nil || !decision.Granted {
+			t.Fatalf("claim %s: %+v %v", effect, decision, err)
+		}
+		if err := store.MarkExternalEffectPossible(ctx, owner.TenantID, run.ID, effect); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claim(runA, "deploy-east", "cluster:east")
+	claim(runB, "deploy-west", "cluster:west")
+	if got, err := store.FindUnresolvedExternalEffectForTargets(ctx, owner.TenantID, owner.PersonID, runA.ID, []string{"cluster:west"}); err != nil || got != "" {
+		t.Fatalf("cross-run lookup = %q, %v", got, err)
+	}
+	if got, err := store.FindUnresolvedExternalEffectForTargets(ctx, owner.TenantID, owner.PersonID, runA.ID, []string{"cluster:east"}); err != nil || got != "deploy-east" {
+		t.Fatalf("exact lookup = %q, %v", got, err)
+	}
+	root := t.TempDir()
+	workspace, err := store.EnsureWorkspace(ctx, Workspace{TenantID: owner.TenantID,
+		OwnerPersonID: owner.PersonID, Name: "test", LocalPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SetWorkspaceTrust(ctx, owner.TenantID, owner.PersonID, workspace.ID, "trusted", "local_cli"); err != nil {
+		t.Fatal(err)
+	}
+	command := "./observe.sh east"
+	ruleJSON, _ := json.Marshal(map[string]any{"w": workspace.ID, "t": []string{"cluster:east"}, "or": "observe.sh", "od": "digest"})
+	ruleKey := "rule:effect_script:v1:" + base64.RawURLEncoding.EncodeToString(ruleJSON)
+	readRuleKey := "rule:observation_script:" + workspace.ID + ":script"
+	if err := store.GrantApproval(ctx, "person", owner.TenantID, owner.PersonID, owner.PersonID, ruleKey, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.GrantApproval(ctx, "person", owner.TenantID, owner.PersonID, owner.PersonID, readRuleKey, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	watch, err := store.CreateExternalWatch(ctx, ExternalWatch{TenantID: owner.TenantID, PersonID: owner.PersonID,
+		WorkspaceID: workspace.ID, TaskID: runA.TaskID, RunID: runA.ID, Channel: "cli", CWD: root,
+		Command: command, ObservationAdapter: "status_json.v1", SpecVersion: 3,
+		PreflightReceipt: ExternalWatchPreflightReceipt{Version: ExternalWatchContinuationReceiptVersion,
+			CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))), EffectID: "deploy-east",
+			EffectRuleKey: ruleKey, ObservationRuleKey: readRuleKey, EffectTargetKeys: []string{"cluster:east"},
+			EffectScriptRoot: root, EffectScriptPath: root + "/observe.sh", EffectScriptDigest: "digest"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := store.ObserveEffectClaimsForWatch(ctx, owner.TenantID, watch.ID); err != nil || done {
+		t.Fatalf("pending watch released effect: %v %v", done, err)
+	}
+	if ok, err := store.FinishExternalWatch(ctx, owner.TenantID, watch.ID, ExternalWatchSucceeded, `{"status":"succeeded"}`, ""); err != nil || !ok {
+		t.Fatalf("finish: %v %v", ok, err)
+	}
+	if done, err := store.ObserveEffectClaimsForWatch(ctx, owner.TenantID, watch.ID); err != nil || done {
+		t.Fatalf("watch without durable completion event released effect: %v %v", done, err)
+	}
+	_, err = store.AppendEvent(ctx, Event{TaskID: runA.TaskID, RunID: runA.ID,
+		Type: "external_watch.completed", Visibility: "task", Channel: "cli",
+		IdempotencyKey: fmt.Sprintf("external-watch:%s:r1:completed", watch.ID)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if done, err := store.ObserveEffectClaimsForWatch(ctx, owner.TenantID, watch.ID); err != nil || !done {
+		t.Fatalf("trusted success did not release exact effect: %v %v", done, err)
+	}
+	if done, err := store.ObserveEffectClaimsForWatch(ctx, owner.TenantID, watch.ID); err != nil || done {
+		t.Fatalf("replay released twice: %v %v", done, err)
+	}
+	remaining, err := store.ListUnresolvedExternalEffects(ctx, owner.TenantID, owner.PersonID, 10)
+	if err != nil || len(remaining) != 1 || remaining[0].RunID != runB.ID {
+		t.Fatalf("other run's effect changed: %+v %v", remaining, err)
 	}
 }
 

@@ -494,6 +494,7 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	workspaceIDs := map[string]string{}
+	workspaceRoots := map[string]string{}
 	for _, name := range []string{"cli", "im", "cron", "watch"} {
 		root := filepath.Join(t.TempDir(), name)
 		if err := os.MkdirAll(root, 0o755); err != nil {
@@ -505,6 +506,7 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 			t.Fatal(err)
 		}
 		workspaceIDs[name] = workspace.ID
+		workspaceRoots[name] = root
 	}
 	if err := store.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, workspaceIDs["cron"]); err != nil {
 		t.Fatal(err)
@@ -514,7 +516,10 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	watchRun, err := store.StartRunWithOptions(ctx, watchTask, "watch-channel", "wait for a result", control.StartRunOptions{MaxActiveRuns: 3})
+	watchRun, err := store.StartRunWithOptions(ctx, watchTask, "watch-channel", "wait for a result", control.StartRunOptions{
+		MaxActiveRuns: 3, ExecutionRoots: []executionenv.RootBinding{{Path: workspaceRoots["watch"],
+			Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite,
+			Source: executionenv.RootSourceCLIAddDir}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +528,7 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 	}
 	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{TenantID: identity.TenantID,
 		PersonID: identity.PersonID, WorkspaceID: workspaceIDs["watch"], TaskID: watchTask.ID,
-		RunID: watchRun.ID, Channel: "watch-channel", CWD: t.TempDir(), Command: "printf READY",
+		RunID: watchRun.ID, Channel: "watch-channel", CWD: workspaceRoots["watch"], Command: "printf READY",
 		SuccessPattern: "READY", IntervalSeconds: 5, CommandTimeoutSeconds: 10,
 		TimeoutAt: time.Now().Add(time.Minute)})
 	if err != nil {
@@ -615,8 +620,10 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 		current, err := store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, externalWatchFinalizationKey(*storedWatch))
 		if err == nil && current != nil && current.Status == control.QueueStatusDone && current.RunID != "" {
 			child, childErr := store.GetRun(ctx, identity.TenantID, current.RunID)
-			if childErr != nil || child == nil || child.ResumesRunID != watchRun.ID || child.WorkspaceID != workspaceIDs["watch"] {
-				t.Fatalf("watcher child lost exact parent or workspace: %+v, %v", child, childErr)
+			physicalRoot, rootErr := filepath.EvalSymlinks(workspaceRoots["watch"])
+			if childErr != nil || child == nil || child.ResumesRunID != watchRun.ID || child.WorkspaceID != workspaceIDs["watch"] ||
+				rootErr != nil || len(child.ExecutionRoots) != 1 || child.ExecutionRoots[0].Path != physicalRoot {
+				t.Fatalf("watcher child lost exact parent or workspace: %+v, childErr=%v rootErr=%v wantRoot=%s", child, childErr, rootErr, physicalRoot)
 			}
 			return
 		}

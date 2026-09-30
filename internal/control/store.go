@@ -2550,7 +2550,7 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		}
 	}
 	if run.ResumesRunID != "" {
-		if err := validateResumeClaimTx(ctx, tx, run); err != nil {
+		if err := validateResumeClaimTx(ctx, tx, run, options.QueueID); err != nil {
 			return nil, err
 		}
 	}

@@ -95,6 +95,16 @@ func (s *Store) ResolveQueuedContinuation(ctx context.Context, q QueuedTask) (re
 			if pending {
 				return q, true, nil
 			}
+			var providerQueueID string
+			err = s.db.QueryRowContext(ctx, `SELECT id FROM task_queue WHERE tenant_id=? AND person_id=?
+				AND reply_to_run_id=? AND idempotency_key=? AND status IN ('queued','started')`,
+				tenantID, q.PersonID, current, "provider-wait:"+current).Scan(&providerQueueID)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return q, false, err
+			}
+			if providerQueueID != "" && providerQueueID != q.ID {
+				return q, true, nil
+			}
 			q.ReplyToRunID = current
 			return q, false, nil
 		case "interrupted", "waiting_user", "verification_partial", "blocked":

@@ -88,6 +88,39 @@ func TestRequestGateSharesRateLimitCooldownAndCancelsWaiter(t *testing.T) {
 	}
 }
 
+func TestRequestGateDefersCheckpointedRunWithoutCallingProvider(t *testing.T) {
+	gate := NewRequestGate(1)
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	provider := gateTestProvider{chat: func(context.Context) (*ChatResponse, error) {
+		entered <- struct{}{}
+		<-release
+		return &ChatResponse{}, nil
+	}}
+	wrapped := gate.Wrap(provider, "same-physical-route")
+	done := make(chan struct{})
+	go func() { _, _ = wrapped.Chat(context.Background(), ChatRequest{}); close(done) }()
+	<-entered
+	ctx := WithProviderWaitDeferral(WithModelContext(context.Background(), ModelContext{RunID: "run-a"}))
+	started := time.Now()
+	_, err := wrapped.Chat(ctx, ChatRequest{})
+	var wait *ProviderWait
+	if !errors.As(err, &wait) || wait.Reason != "capacity" || time.Since(started) > 100*time.Millisecond {
+		t.Fatalf("capacity deferral = %v after %s", err, time.Since(started))
+	}
+	close(release)
+	<-done
+	if _, err := wrapped.Chat(ctx, ChatRequest{}); err != nil {
+		t.Fatalf("permit did not reopen: %v", err)
+	}
+	if got := DeferRateLimit(ctx, &ProviderError{Class: ProviderErrorRateLimit, StatusCode: 429}, time.Second); got == nil || got.Reason != "rate_limit" {
+		t.Fatalf("429 was not deferred: %v", got)
+	}
+	if got := DeferRateLimit(ctx, &ProviderError{Class: ProviderErrorAuth, StatusCode: 401}, time.Second); got != nil {
+		t.Fatalf("auth error was deferred: %v", got)
+	}
+}
+
 func TestRequestGateStreamHoldsPermitUntilCloseAndObservesLate429(t *testing.T) {
 	gate := NewRequestGate(1)
 	stream := make(chan StreamEvent)

@@ -96,6 +96,7 @@ type dailyProviderWaitUsage struct {
 	Count      int
 	DurationMS int64
 	Canceled   int
+	Deferred   int
 }
 
 func parseDailyReportWindow(input string) (time.Duration, error) {
@@ -202,9 +203,25 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 				continue
 			}
 			var payload struct {
-				Outcome api.RunOutcome `json:"outcome"`
+				Outcome      api.RunOutcome `json:"outcome"`
+				ProviderWait struct {
+					Reason string `json:"reason"`
+				} `json:"provider_wait"`
 			}
 			_ = json.Unmarshal(event.Payload, &payload)
+			if payload.Outcome.CompletionReason == "provider_wait" {
+				reason := strings.TrimSpace(payload.ProviderWait.Reason)
+				if reason == "" {
+					reason = "unknown"
+				}
+				wait := stats.ProviderWaits[reason]
+				wait.Count++
+				wait.Deferred++
+				stats.ProviderWaits[reason] = wait
+				if event.RunID != "" {
+					stats.ProviderWaitingRuns[event.RunID] = true
+				}
+			}
 			status := strings.TrimSpace(payload.Outcome.Status)
 			if status == "" {
 				status = strings.TrimPrefix(event.Type, "run.")
@@ -762,7 +779,11 @@ func formatDailyProviderWaitUsage(waits map[string]dailyProviderWaitUsage) strin
 	parts := make([]string, 0, len(keys))
 	for _, reason := range keys {
 		wait := waits[reason]
-		parts = append(parts, fmt.Sprintf("%s %d (%dms, %d canceled)", reason, wait.Count, wait.DurationMS, wait.Canceled))
+		part := fmt.Sprintf("%s %d (%dms, %d canceled", reason, wait.Count, wait.DurationMS, wait.Canceled)
+		if wait.Deferred > 0 {
+			part += fmt.Sprintf(", %d parked", wait.Deferred)
+		}
+		parts = append(parts, part+")")
 	}
 	return strings.Join(parts, ", ")
 }

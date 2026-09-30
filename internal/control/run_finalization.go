@@ -32,6 +32,12 @@ type RunFinalization struct {
 	AnalyzerVersion    int
 	MaintenancePayload string
 	Event              Event
+	// Continuation is an exact, delayed child owned by this finalization. It is
+	// inserted in the same transaction as the parent wait status and event, so
+	// a crash can neither lose the wakeup nor run it before the parent parks.
+	Continuation      *QueuedTask
+	ExpectedRunStatus string
+	RequireCheckpoint bool
 	// EffectKey identifies one logical side effect across retry runs. Ordinary
 	// turns leave it empty; durable watcher finalization uses its stable
 	// watch+verdict-revision key.
@@ -103,6 +109,14 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if input.Identity.PersonID != "" && input.Identity.PersonID != personID {
 		return nil, fmt.Errorf("finalization identity does not own task")
 	}
+	if input.RequireCheckpoint {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM loop_checkpoints
+			WHERE tenant_id=? AND person_id=? AND run_id=? AND outcome <> 'complete_turn'`,
+			tenant, personID, input.RunID).Scan(&count); err != nil || count != 1 {
+			return nil, fmt.Errorf("provider wait requires a durable model checkpoint: count=%d: %w", count, err)
+		}
+	}
 	duplicateEffect := false
 	if input.EffectKey != "" {
 		result, err := tx.ExecContext(ctx,
@@ -118,15 +132,60 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		}
 	}
 
-	result, err := tx.ExecContext(ctx,
-		`UPDATE runs SET status = ?, finished_at = ?, heartbeat_at = ?
-		 WHERE tenant_id = ? AND id = ? AND thread_id = ?`,
-		input.RunStatus, now.Unix(), now.Unix(), tenant, input.RunID, input.TaskID)
+	updateRun := `UPDATE runs SET status = ?, finished_at = ?, heartbeat_at = ?
+		 WHERE tenant_id = ? AND id = ? AND thread_id = ?`
+	updateArgs := []any{input.RunStatus, now.Unix(), now.Unix(), tenant, input.RunID, input.TaskID}
+	if input.ExpectedRunStatus != "" {
+		updateRun += ` AND status = ?`
+		updateArgs = append(updateArgs, input.ExpectedRunStatus)
+	}
+	result, err := tx.ExecContext(ctx, updateRun, updateArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("finish run: %w", err)
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
 		return nil, fmt.Errorf("finish run affected %d rows", n)
+	}
+	if q := input.Continuation; q != nil {
+		if input.RunStatus != "waiting_external" || q.TenantID != tenant || q.PersonID != personID ||
+			q.TaskID != input.TaskID || q.ReplyToRunID != input.RunID ||
+			q.IdempotencyKey != "provider-wait:"+input.RunID || strings.TrimSpace(q.Content) == "" {
+			return nil, fmt.Errorf("exact provider continuation has invalid ownership or wait state")
+		}
+		var workspaceID, rootsJSON, channel string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(workspace_id,''), COALESCE(execution_roots_json,'[]'), channel
+			FROM runs WHERE tenant_id=? AND person_id=? AND thread_id=? AND id=?`,
+			tenant, personID, input.TaskID, input.RunID).Scan(&workspaceID, &rootsJSON, &channel); err != nil {
+			return nil, fmt.Errorf("load exact provider continuation scope: %w", err)
+		}
+		q.WorkspaceID, q.Channel = workspaceID, channel
+		var accounts int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE tenant_id=? AND person_id=?
+			AND platform=? AND platform_user_id=? AND status='active'`, tenant, personID,
+			q.Platform, q.PlatformUserID).Scan(&accounts); err != nil || accounts != 1 {
+			return nil, fmt.Errorf("provider continuation route must belong to run owner: matches=%d: %w", accounts, err)
+		}
+		if q.ID == "" {
+			q.ID = "queue_" + uuid.NewString()
+		}
+		deadline := q.NotBefore.Unix()
+		if q.NotBefore.IsZero() {
+			return nil, fmt.Errorf("provider continuation requires a wake deadline")
+		}
+		if q.NotBefore.Nanosecond() != 0 {
+			deadline++
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO task_queue
+			(id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode,
+			 workspace_id, execution_roots_json, thread_id, reply_to_run_id, idempotency_key,
+			 class, priority, not_before, status, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			q.ID, tenant, personID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
+			q.WorkspaceID, rootsJSON, q.TaskID, q.ReplyToRunID, q.IdempotencyKey,
+			QueueClassFinalization, QueuePriorityFinalization, deadline, QueueStatusQueued, now.Unix())
+		if err != nil {
+			return nil, fmt.Errorf("enqueue provider continuation: %w", err)
+		}
 	}
 	if err := finalizeRunSkillLifecycleTx(ctx, tx, input, personID, now, !duplicateEffect); err != nil {
 		return nil, fmt.Errorf("finalize skill lifecycle: %w", err)

@@ -32,7 +32,7 @@ var ErrResumeTargetNotResumable = errors.New("parent run is not in a resumable s
 // forward resumes_run_id edge and the legacy read-only resumed_by_run_id).
 // The unique partial index idx_task_runs_parent_once remains the cross-process
 // backstop for the race this check cannot see.
-func validateResumeClaimTx(ctx context.Context, tx *sql.Tx, child *Run) error {
+func validateResumeClaimTx(ctx context.Context, tx *sql.Tx, child *Run, queueID ...string) error {
 	var taskID, personID, status, legacyClaim, executionClass string
 	err := tx.QueryRowContext(ctx,
 		`SELECT thread_id, person_id, status, COALESCE(resumed_by_run_id, ''), execution_class
@@ -75,6 +75,18 @@ func validateResumeClaimTx(ctx context.Context, tx *sql.Tx, child *Run) error {
 			return err
 		}
 		if resourceWaits > 0 {
+			return ErrResumeTargetNotResumable
+		}
+		var providerQueueID string
+		err := tx.QueryRowContext(ctx, `SELECT id FROM task_queue
+			WHERE tenant_id=? AND person_id=? AND reply_to_run_id=?
+			AND idempotency_key=? AND status IN ('queued','started')`,
+			child.TenantID, child.PersonID, child.ResumesRunID,
+			"provider-wait:"+child.ResumesRunID).Scan(&providerQueueID)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if providerQueueID != "" && (len(queueID) == 0 || queueID[0] != providerQueueID) {
 			return ErrResumeTargetNotResumable
 		}
 	default:
@@ -323,11 +335,11 @@ func (s *Store) ListRunArtifacts(ctx context.Context, tenantID, personID, taskID
 	return out, rows.Err()
 }
 
-// resumeChainMaxHops bounds an upward walk of the resume edge. A chain is a
-// handful of hops in practice (measured: about 5% of runs carry an edge at
-// all), and the unique index forbids a fork, so the bound exists only to keep a
-// corrupted cycle from spinning.
-const resumeChainMaxHops = 16
+// resumeChainMaxHops bounds an upward walk of the resume edge. Most chains are
+// short; a route occupied by long provider calls can now create up to 32
+// capacity-wait children before becoming an actionable blocker. The unique
+// index forbids forks; this cap also stops corrupt cycles.
+const resumeChainMaxHops = 64
 
 // ResumeChainRoot returns the oldest run that runID transitively resumes, or
 // runID itself when it resumes nothing.

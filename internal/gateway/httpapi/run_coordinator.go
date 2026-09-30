@@ -17,6 +17,7 @@ import (
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/runpool"
 	"selfmind/internal/tools"
@@ -759,6 +760,17 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 
 	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
+		var providerWait *llm.ProviderWait
+		if errors.As(err, &providerWait) && ctx.Err() == nil {
+			if outcome, parkErr := c.parkProviderWait(ctx, identity, task, run, req, providerWait); parkErr == nil {
+				content := outcome.Summary + " SelfMind will continue this exact work automatically."
+				return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content,
+					Turn:    messageTurn("waiting_external", "in_progress", "idle", task.ID, run.ID, outcome.Summary),
+					Context: d.messageContextBudget(llmUsageZero())}, http.StatusOK
+			} else {
+				err = fmt.Errorf("provider wait could not be parked safely: %w", parkErr)
+			}
+		}
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
 		content, errorText := interruptedRunResponse(task.Title, outcome)
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(llmUsageZero())}, http.StatusOK
@@ -766,6 +778,17 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 
 	content, usage, eventSummary, hasFinalContent, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
+		var providerWait *llm.ProviderWait
+		if errors.As(err, &providerWait) && ctx.Err() == nil {
+			if outcome, parkErr := c.parkProviderWait(ctx, identity, task, run, req, providerWait); parkErr == nil {
+				content := outcome.Summary + " SelfMind will continue this exact work automatically."
+				return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage,
+					Turn:    messageTurn("waiting_external", "in_progress", "idle", task.ID, run.ID, outcome.Summary),
+					Context: d.messageContextBudget(usage)}, http.StatusOK
+			} else {
+				err = fmt.Errorf("provider wait could not be parked safely: %w", parkErr)
+			}
+		}
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
 		content, errorText := interruptedRunResponse(task.Title, outcome)
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}, http.StatusOK
@@ -1241,13 +1264,22 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		}
 		active := c.activeRunsForPerson(personID)
 		blockedChannels := map[string]bool{}
+		blockedParents := map[string]map[string]bool{}
 		next, err = c.srv.Control.NextQueuedWhere(ctx, identity.TenantID, personID, func(q control.QueuedTask) bool {
 			source := queuedSourceKey(q)
-			if blockedChannels[source] {
+			// A user reply to a parked Run waits for its exact system child.
+			// Let that finalization pass the reply in the same source, or strict
+			// source FIFO would deadlock the prerequisite behind its dependent.
+			prerequisite := q.Class == control.QueueClassFinalization && q.IdempotencyKey != "" && blockedParents[source][q.ReplyToRunID]
+			if blockedChannels[source] && !prerequisite {
 				return false
 			}
 			if blockedContinuation[q.ID] || (limit > 1 && !queuedResourcesReady(q, active)) {
 				blockedChannels[source] = true
+				if blockedContinuation[q.ID] && q.ReplyToRunID != "" {
+					if blockedParents[source] == nil { blockedParents[source] = map[string]bool{} }
+					blockedParents[source][q.ReplyToRunID] = true
+				}
 				return false
 			}
 			return true

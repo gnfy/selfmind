@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,8 +11,10 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/tools"
 )
@@ -72,12 +75,14 @@ type SeedTask struct {
 	ParkedRuns []SeedParkedRun `yaml:"parked_runs,omitempty" json:"parked_runs,omitempty"`
 }
 
-// SeedParkedRun is one pre-existing run parked in a resumable status.
+// SeedParkedRun is one pre-existing run parked on human input, recovery, or a
+// durable provider wait. Waiting_external uses WaitReason and an exact queue.
 type SeedParkedRun struct {
 	Input string `yaml:"input" json:"input"`
 	// Status must be one of the resumable statuses (interrupted, waiting_user,
 	// verification_partial, blocked); empty defaults to waiting_user.
-	Status string `yaml:"status,omitempty" json:"status,omitempty"`
+	Status     string `yaml:"status,omitempty" json:"status,omitempty"`
+	WaitReason string `yaml:"wait_reason,omitempty" json:"wait_reason,omitempty"`
 }
 
 // StatePredicate is a single assertion over the world state after a scenario
@@ -314,9 +319,35 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 				status = "waiting_user"
 			}
 			switch status {
-			case "interrupted", "waiting_user", "verification_partial", "blocked":
+			case "interrupted", "waiting_user", "verification_partial", "blocked", "waiting_external":
 			default:
 				return "", fmt.Errorf("seed parked run %d: status %q is not resumable", i, status)
+			}
+			if status == "waiting_external" {
+				if parked.WaitReason != "capacity" && parked.WaitReason != "rate_limit" {
+					return "", fmt.Errorf("seed parked run %d: provider wait reason must be capacity or rate_limit", i)
+				}
+				snapshot, _ := json.Marshal([]llm.Message{{Role: "user", Content: parked.Input}})
+				if err := store.SaveLoopCheckpoint(ctx, control.LoopCheckpointRecord{
+					TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+					ContractVersion: control.RunRecoveryContractVersion, Outcome: "continue_model", Detail: "provider_request", Snapshot: snapshot,
+				}); err != nil {
+					return "", fmt.Errorf("seed provider checkpoint: %w", err)
+				}
+				summary := "Waiting for the model provider (" + parked.WaitReason + ")."
+				outcome := api.RunOutcome{Status: "waiting_external", CompletionReason: "provider_wait", Summary: summary}
+				payload, _ := json.Marshal(map[string]interface{}{"outcome": outcome, "provider_wait": map[string]string{"reason": parked.WaitReason}})
+				queue := &control.QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Platform: identity.Platform,
+					PlatformUserID: identity.PlatformUserID, Channel: channel, Content: "continue exact provider wait", TaskID: task.ID,
+					WorkspaceID: workspaceID, ExecutionRoots: seedOptions.ExecutionRoots, ReplyToRunID: run.ID,
+					IdempotencyKey: "provider-wait:" + run.ID, NotBefore: time.Now().Add(time.Hour)}
+				if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{Identity: *identity, RunID: run.ID,
+					RunStatus: "waiting_external", TaskID: task.ID, TaskStatus: "in_progress", Summary: summary,
+					Channel: channel, Event: control.Event{Type: "run.finished", Payload: payload},
+					Continuation: queue, ExpectedRunStatus: "running", RequireCheckpoint: true}); err != nil {
+					return "", fmt.Errorf("seed provider wait %d: %w", i, err)
+				}
+				continue
 			}
 			if status == "interrupted" {
 				// A seeded interruption stands for work that was underway when it

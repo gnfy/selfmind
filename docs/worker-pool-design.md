@@ -177,6 +177,12 @@ engines and must be verified for the tools/process registry.
   and tests two CLI Runs plus one IM Run, exact IM supplement routing, and
   overlapping terminal execution. `--restart --capacity 2` checks exact
   continuation and no duplicate local effects after a forced daemon crash.
+- Checkpointed foreground model calls now yield a worker on route-capacity or
+  429 waits. The exact Run, model-call ledger, and delayed queue child commit
+  before the Agent is released; a failed checkpoint retains the cancellable
+  in-place wait. Go/race tests cover ownership, rollback, and the freed worker.
+  A real-provider cooldown and daemon-restart soak remains required before
+  raising the default person capacity.
 
 ## 7. Non-goals
 

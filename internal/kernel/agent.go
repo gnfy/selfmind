@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -443,6 +444,10 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 			return resp, nil
 		}
 		lastErr = err
+		var providerWait *llm.ProviderWait
+		if errors.As(err, &providerWait) {
+			return nil, providerWait
+		}
 
 		// Context cancel/deadline: stop immediately, do not retry.
 		if ctx.Err() != nil {
@@ -453,6 +458,9 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 			return nil, err
 		}
 		llm.RefreshProviderNetworkRouteAfterError(err)
+		if wait := llm.DeferRateLimit(ctx, err, llm.Backoff(attempt, a.retryBase, a.retryCap, rand.Float64)); wait != nil {
+			return nil, wait
+		}
 		if attempt == max {
 			break
 		}
@@ -498,6 +506,10 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 			return ch, nil
 		}
 		lastErr = err
+		var providerWait *llm.ProviderWait
+		if errors.As(err, &providerWait) {
+			return nil, providerWait
+		}
 
 		if ctx.Err() != nil {
 			return nil, err
@@ -506,6 +518,9 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 			return nil, err
 		}
 		llm.RefreshProviderNetworkRouteAfterError(err)
+		if wait := llm.DeferRateLimit(ctx, err, llm.Backoff(attempt, a.retryBase, a.retryCap, rand.Float64)); wait != nil {
+			return nil, wait
+		}
 		if attempt == max {
 			break
 		}
@@ -1504,12 +1519,30 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		if err != nil {
 			return "", totalUsage, err
 		}
-		streamCtx, streamCancel := context.WithCancel(ctx)
+		// The provider gate may yield instead of occupying this Agent during a
+		// capacity/429 wait only after the exact pre-call ledger is durable.
+		// A failed checkpoint leaves the ordinary cancellable wait in place.
+		modelCtx := ctx
+		if successfulFinishStatus == "" {
+			if sink := loopCheckpointSinkFromContext(ctx); sink != nil {
+				checkpoint := LoopCheckpoint{Iteration: i, Outcome: StepContinueModel, Detail: "provider_request", Messages: cloneLoopMessages(messages)}
+				if saveErr := sink.SaveLoopCheckpoint(context.WithoutCancel(ctx), checkpoint); saveErr == nil {
+					modelCtx = llm.WithProviderWaitDeferral(ctx)
+				} else {
+					EmitAgentEvent(eventCh, AgentEvent{Type: "checkpoint.failed", Payload: map[string]interface{}{"iteration": i, "outcome": string(StepContinueModel), "error": saveErr.Error()}})
+				}
+			}
+		}
+		streamCtx, streamCancel := context.WithCancel(modelCtx)
 		streamCallStarted := time.Now()
 		streamCh, err := a.streamChatWithRetry(streamCtx, messages, iterationStrategy)
 		if err != nil {
 			streamCancel()
 			emitProviderCallUsage(i, "stream", "failed", streamCallStarted, llm.UsageStats{}, "", err)
+			var providerWait *llm.ProviderWait
+			if errors.As(err, &providerWait) {
+				return "", totalUsage, providerWait
+			}
 			if ctx.Err() != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
 			}
@@ -1531,9 +1564,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				return "", totalUsage, prepareErr
 			}
 			fallbackCallStarted := time.Now()
-			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, fallbackMessages, iterationStrategy)
+			fallbackResp, fallbackErr := a.chatResponseWithRetry(modelCtx, fallbackMessages, iterationStrategy)
 			if fallbackErr != nil {
 				emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{}, "", fallbackErr)
+				if errors.As(fallbackErr, &providerWait) {
+					return "", totalUsage, providerWait
+				}
 				return "", totalUsage, fmt.Errorf("llm chat: %w; non-stream fallback failed: %v", err, fallbackErr)
 			}
 			emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage, fallbackResp.FinishReason, nil)
@@ -1612,6 +1648,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				if ctx.Err() != nil {
 					return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
 				}
+				if fullResp.Len() == 0 && len(nativeCalls) == 0 {
+					if wait := llm.DeferRateLimit(modelCtx, streamErr, llm.Backoff(1, a.retryBase, a.retryCap, rand.Float64)); wait != nil {
+						return "", totalUsage, wait
+					}
+				}
 				if streamErr != nil {
 					llm.RefreshProviderNetworkRouteAfterError(streamErr)
 					recoveryMessages := messages
@@ -1649,9 +1690,17 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						return "", totalUsage, prepareErr
 					}
 					fallbackCallStarted := time.Now()
-					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, recoveryMessages, iterationStrategy)
+					fallbackCtx := ctx
+					if fullResp.Len() == 0 && len(nativeCalls) == 0 {
+						fallbackCtx = modelCtx
+					}
+					fallbackResp, fallbackErr := a.chatResponseWithRetry(fallbackCtx, recoveryMessages, iterationStrategy)
 					if fallbackErr != nil {
 						emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{}, "", fallbackErr)
+						var providerWait *llm.ProviderWait
+						if errors.As(fallbackErr, &providerWait) {
+							return "", totalUsage, providerWait
+						}
 						return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
 					}
 					emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage, fallbackResp.FinishReason, nil)

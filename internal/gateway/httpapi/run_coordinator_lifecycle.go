@@ -13,12 +13,15 @@ import (
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/runpool"
 	"selfmind/internal/tools"
 	"strings"
 	"time"
 )
+
+var errProviderWaitLimit = errors.New("provider wait continuation limit reached")
 
 // finalizeErroredRun is the single terminal path for provider, transport, and
 // cancellation failures after a run has started. It writes the same structured
@@ -47,6 +50,12 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		outcome.Summary = "The run stopped after execution made no progress within the watchdog window."
 		outcome.NextSteps = []string{"Reply \"continue\" to resume from the durable run history."}
 		outcome.Risks = []string{"An execution step stopped responding and was cancelled by the watchdog."}
+	} else if errors.Is(runErr, errProviderWaitLimit) {
+		outcome.Status = "blocked"
+		outcome.CompletionReason = "provider_wait_limit"
+		outcome.Summary = "The model provider repeatedly delayed this work; automatic continuation stopped at its safety limit."
+		outcome.NextSteps = []string{"Inspect the provider connection and resume this exact Run when it is available."}
+		outcome.Risks = nil
 	} else if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 		// A caller cancellation or caller deadline is terminal: request/eval turn
 		// budgets deliberately bound the daemon-owned run. Provider-internal
@@ -119,6 +128,102 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		}
 	}
 	return outcome
+}
+
+// parkProviderWait commits the exact parent wait and its delayed continuation
+// together. The Agent has already persisted the pre-request message ledger;
+// no model response or tool effect is replayed by the queue itself.
+func (c *RunCoordinator) parkProviderWait(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, req api.MessageRequest, wait *llm.ProviderWait) (api.RunOutcome, error) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil || wait == nil {
+		return api.RunOutcome{}, fmt.Errorf("provider wait has no durable run owner")
+	}
+	if wait.NotBefore.IsZero() || wait.NotBefore.After(time.Now().Add(11*time.Minute)) {
+		return api.RunOutcome{}, fmt.Errorf("provider wait deadline is invalid")
+	}
+	// A sequence of fresh 429s must be bounded. Capacity waits are different:
+	// two legitimate long model calls may occupy a route for minutes, so give
+	// them a slower bounded retry schedule instead of blocking after six seconds.
+	chain, err := c.srv.Control.ResumeChainRunIDs(ctx, identity.TenantID, run.ID)
+	if err != nil {
+		return api.RunOutcome{}, err
+	}
+	capacityWaits, rateWaits := 0, 0
+	for _, ancestor := range chain {
+		queued, lookupErr := c.srv.Control.GetQueuedByIdempotencyKey(ctx, identity.TenantID, "provider-wait:"+ancestor)
+		if lookupErr != nil {
+			return api.RunOutcome{}, lookupErr
+		}
+		if queued != nil {
+			events, eventErr := c.srv.Control.ListRunEvents(ctx, identity.TenantID, identity.PersonID, task.ID, ancestor, 5)
+			if eventErr != nil {
+				return api.RunOutcome{}, eventErr
+			}
+			for _, event := range events {
+				if event.Type != "run.finished" {
+					continue
+				}
+				var payload struct {
+					ProviderWait struct {
+						Reason string `json:"reason"`
+					} `json:"provider_wait"`
+				}
+				if json.Unmarshal(event.Payload, &payload) != nil {
+					break
+				}
+				switch payload.ProviderWait.Reason {
+				case "capacity":
+					capacityWaits++
+				case "rate_limit":
+					rateWaits++
+				}
+				break
+			}
+		}
+	}
+	if wait.Reason == "rate_limit" && rateWaits >= 6 {
+		return api.RunOutcome{}, fmt.Errorf("%w after %d rate limits", errProviderWaitLimit, rateWaits)
+	}
+	if wait.Reason == "capacity" {
+		if capacityWaits >= 32 {
+			return api.RunOutcome{}, fmt.Errorf("%w after %d capacity retries", errProviderWaitLimit, capacityWaits)
+		}
+		seconds := min(1<<min(capacityWaits, 4), 15)
+		if deadline := time.Now().Add(time.Duration(seconds) * time.Second); wait.NotBefore.Before(deadline) {
+			wait.NotBefore = deadline
+		}
+	}
+	finCtx := context.WithoutCancel(ctx)
+	route := c.srv.routeIdentityForPerson(finCtx, identity.TenantID, identity.PersonID, req.Channel, req.Platform, identity)
+	if route == nil || route.PersonID != identity.PersonID || route.PlatformUserID == "" {
+		return api.RunOutcome{}, fmt.Errorf("provider wait origin cannot be routed")
+	}
+	outcome := api.RunOutcome{
+		Status: "waiting_external", CompletionReason: "provider_wait", Resumable: false,
+		Summary:   "Waiting for the model provider (" + wait.Reason + ") until " + wait.NotBefore.Local().Format(time.RFC3339) + ".",
+		NextSteps: []string{"SelfMind will resume this exact work after the provider wait."},
+	}
+	queued := control.QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Platform: route.Platform, PlatformUserID: route.PlatformUserID, Channel: req.Channel,
+		Content:      "Continue this exact work from its durable model-call checkpoint after the provider became available. Preserve the plan and tool evidence; do not repeat completed effects.",
+		ApprovalMode: req.ApprovalMode, WorkspaceID: run.WorkspaceID,
+		ExecutionRoots: executionenv.CloneRootBindings(run.ExecutionRoots),
+		TaskID:         task.ID, ReplyToRunID: run.ID, IdempotencyKey: "provider-wait:" + run.ID,
+		Class: control.QueueClassFinalization, NotBefore: wait.NotBefore,
+	}
+	_, err = c.srv.Control.MaterializeRunFinalization(finCtx, control.RunFinalization{
+		Identity: *identity, RunID: run.ID, RunStatus: "waiting_external", TaskID: task.ID,
+		TaskStatus: "in_progress", Summary: outcome.Summary, NextSteps: outcome.NextSteps,
+		Channel: req.Channel, Handoff: control.Handoff{TaskID: task.ID, Summary: outcome.Summary, NextSteps: outcome.NextSteps},
+		Event: control.Event{Type: "run.finished", Visibility: "task", Channel: req.Channel,
+			Payload: mustJSON(map[string]interface{}{"outcome": outcome, "provider_wait": map[string]interface{}{"reason": wait.Reason, "not_before": wait.NotBefore}})},
+		Continuation: &queued, ExpectedRunStatus: "running", RequireCheckpoint: true,
+	})
+	if err != nil {
+		return api.RunOutcome{}, err
+	}
+	run.Status = "waiting_external"
+	return outcome, nil
 }
 
 func firstString(items []string) string {

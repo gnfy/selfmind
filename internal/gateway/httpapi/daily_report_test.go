@@ -100,6 +100,16 @@ func TestCollectDailyQualityStats(t *testing.T) {
 	}
 }
 
+func TestDailyReportCountsDurablyParkedProviderWaitWithoutInventingElapsedTime(t *testing.T) {
+	events := []control.Event{{RunID: "run_a", Type: "run.finished", Payload: []byte(`{"outcome":{"status":"waiting_external","completion_reason":"provider_wait"},"provider_wait":{"reason":"rate_limit","not_before":"2026-09-30T01:00:00Z"}}`)}}
+	stats := collectDailyQualityStats(events)
+	wait := stats.ProviderWaits["rate_limit"]
+	if wait.Count != 1 || wait.Deferred != 1 || wait.DurationMS != 0 || !stats.ProviderWaitingRuns["run_a"] ||
+		!strings.Contains(formatDailyProviderWaitUsage(stats.ProviderWaits), "1 parked") {
+		t.Fatalf("parked provider wait attribution = %+v runs=%+v", wait, stats.ProviderWaitingRuns)
+	}
+}
+
 func TestApprovalUsageDoesNotDoubleCountMainOrInventHistoricalInput(t *testing.T) {
 	events := []control.Event{
 		{Type: "provider.call.usage", Payload: []byte(`{"input_tokens":100,"output_tokens":10}`)},

@@ -141,6 +141,19 @@ func (p *gatedProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 
 func (p *gatedProvider) acquire(ctx context.Context) error {
 	started := time.Now()
+	if providerWaitDeferrable(ctx) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if wait := p.route.tryAcquire(); wait != nil {
+			return wait
+		}
+		if err := ctx.Err(); err != nil {
+			p.route.release()
+			return err
+		}
+		return nil
+	}
 	reason, err := p.route.acquire(ctx)
 	if reason != "" {
 		p.gate.mu.Lock()
@@ -151,6 +164,31 @@ func (p *gatedProvider) acquire(ctx context.Context) error {
 		}
 	}
 	return err
+}
+
+// tryAcquire never reserves a worker while another request or a 429 cooldown
+// owns this physical route. A short capacity deadline is polled by the durable
+// queue; a cooldown uses the actual route deadline.
+func (r *requestRoute) tryAcquire() *ProviderWait {
+	r.mu.Lock()
+	until := r.cooldownUntil
+	r.mu.Unlock()
+	if time.Now().Before(until) {
+		return &ProviderWait{Reason: "rate_limit", NotBefore: until}
+	}
+	select {
+	case r.sem <- struct{}{}:
+		r.mu.Lock()
+		until = r.cooldownUntil
+		r.mu.Unlock()
+		if time.Now().Before(until) {
+			r.release()
+			return &ProviderWait{Reason: "rate_limit", NotBefore: until}
+		}
+		return nil
+	default:
+		return &ProviderWait{Reason: "capacity", NotBefore: time.Now().Add(time.Second)}
+	}
 }
 
 func (r *requestRoute) acquire(ctx context.Context) (string, error) {

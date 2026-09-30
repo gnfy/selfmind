@@ -218,29 +218,39 @@ def main():
                     deadline = time.monotonic() + 180
                     next_report = time.monotonic() + 30
                     while time.monotonic() < deadline:
-                        children = database.execute(
-                            "SELECT status, resumes_run_id FROM runs WHERE resumes_run_id != ''"
+                        runs = database.execute(
+                            "SELECT id, status, resumes_run_id FROM runs WHERE execution_class = 'work'"
                         ).fetchall()
+                        by_id = {run_id: (status, parent) for run_id, status, parent in runs}
+                        children = [(run_id, status, parent) for run_id, status, parent in runs if parent]
                         queue = database.execute(
-                            "SELECT status, reply_to_run_id FROM task_queue WHERE class = 'recovery'"
+                            "SELECT class, status, reply_to_run_id FROM task_queue "
+                            "WHERE class IN ('recovery', 'finalization')"
                         ).fetchall()
                         active = request("/v1/gateway/status")[1].get("active_run_count", 0)
-                        if (len(children) == 2 and {parent for _, parent in children} == parents
-                                and all(status == "done" for status, _ in children)
-                                and len(queue) == 2 and {parent for _, parent in queue} == parents
-                                and all(status == "done" for status, _ in queue)
+                        leaves = {run_id for run_id, _, _ in runs} - {parent for _, _, parent in children}
+                        def root_of(run_id):
+                            seen = set()
+                            while run_id in by_id and by_id[run_id][1] and run_id not in seen:
+                                seen.add(run_id)
+                                run_id = by_id[run_id][1]
+                            return run_id if run_id in by_id and not by_id[run_id][1] else ""
+                        recovery = [(status, parent) for kind, status, parent in queue if kind == "recovery"]
+                        if (len(children) >= 2 and len(leaves) == 2
+                                and {root_of(run_id) for run_id in leaves} == parents
+                                and all(by_id[run_id][0] == "done" for run_id in leaves)
+                                and len(recovery) == 2 and {parent for _, parent in recovery} == parents
+                                and all(status == "done" for _, status, _ in queue)
                                 and active == 0):
                             break
                         if time.monotonic() >= next_report:
-                            print(json.dumps({"recovery_progress": True, "children": [status for status, _ in children],
-                                              "queue": [status for status, _ in queue], "active": active}), flush=True)
+                            print(json.dumps({"recovery_progress": True,
+                                              "children": [status for _, status, _ in children],
+                                              "queue": [status for _, status, _ in queue],
+                                              "active": active}), flush=True)
                             next_report += 30
                         time.sleep(0.5)
                     else:
-                        runs = database.execute(
-                            "SELECT status, CASE WHEN resumes_run_id = '' THEN 'original' ELSE 'child' END "
-                            "FROM runs WHERE execution_class = 'work'"
-                        ).fetchall()
                         raise RuntimeError("recovery did not settle: " + repr({
                             "runs": runs, "queue": queue, "active": active,
                             "markers": [(workspace / "marker.txt").read_text() for workspace in workspaces],
@@ -254,7 +264,8 @@ def main():
                     if old_statuses != ["interrupted", "interrupted"]:
                         raise RuntimeError("original Runs lost their interrupted history")
                     print(json.dumps({"result": "PASS", "crash_after_effect": True,
-                                      "original_runs": 2, "recovered_runs": 2,
+                                      "original_runs": 2, "recovered_runs": len(children),
+                                      "provider_waits": len([1 for kind, _, _ in queue if kind == "finalization"]),
                                       "duplicate_effects": 0, "recovery_queue": "done"}))
                     database.close()
                     return

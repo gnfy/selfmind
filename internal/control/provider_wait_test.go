@@ -18,7 +18,18 @@ func TestProviderWaitFinalizationAtomicallyParksExactRunAndQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	run, err := store.StartRun(ctx, task, "session-a", "do the work")
+	source, err := store.EnqueueQueued(ctx, QueuedTask{TenantID: owner.TenantID, PersonID: owner.PersonID,
+		Platform: "cli", PlatformUserID: "local", Channel: "session-a", Content: "do the work",
+		TaskID: task.ID, Class: QueueClassRecovery, IdempotencyKey: "recovery:source"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, claimed, err := store.ClaimQueued(ctx, owner.TenantID, source.ID, time.Minute)
+	if err != nil || !claimed {
+		t.Fatalf("claim source = %t %v", claimed, err)
+	}
+	run, err := store.StartRunWithOptions(ctx, task, "session-a", "do the work", StartRunOptions{
+		QueueID: source.ID, QueueClaimToken: token})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +39,8 @@ func TestProviderWaitFinalizationAtomicallyParksExactRunAndQueue(t *testing.T) {
 		IdempotencyKey: "provider-wait:" + run.ID, NotBefore: wake}
 	final := RunFinalization{Identity: *owner, RunID: run.ID, RunStatus: "waiting_external", TaskID: task.ID,
 		TaskStatus: "in_progress", Channel: "session-a", Event: Event{Type: "run.finished"},
-		Continuation: queue, ExpectedRunStatus: "running", RequireCheckpoint: true}
+		Continuation: queue, ExpectedRunStatus: "running", RequireCheckpoint: true,
+		ConsumedQueueID: source.ID, ConsumedQueueClaimToken: token}
 	if _, err := store.MaterializeRunFinalization(ctx, final); err == nil {
 		t.Fatal("wait parked without a durable pre-call checkpoint")
 	}
@@ -44,12 +56,23 @@ func TestProviderWaitFinalizationAtomicallyParksExactRunAndQueue(t *testing.T) {
 		Outcome: "continue_model", Detail: "provider_request", Snapshot: []byte(`[{"role":"user","content":"do the work"}]`)}); err != nil {
 		t.Fatal(err)
 	}
+	stale := final
+	stale.ConsumedQueueClaimToken = "stale"
+	if _, err := store.MaterializeRunFinalization(ctx, stale); err == nil {
+		t.Fatal("stale source queue claim parked the run")
+	}
+	if current, err := store.GetRun(ctx, owner.TenantID, run.ID); err != nil || current.Status != "running" {
+		t.Fatalf("stale claim partially parked run: %+v %v", current, err)
+	}
 	if _, err := store.MaterializeRunFinalization(ctx, final); err != nil {
 		t.Fatal(err)
 	}
 	current, err = store.GetRun(ctx, owner.TenantID, run.ID)
 	if err != nil || current.Status != "waiting_external" {
 		t.Fatalf("parked run = %+v %v", current, err)
+	}
+	if consumed, err := store.GetQueued(ctx, owner.TenantID, source.ID); err != nil || consumed.Status != QueueStatusDone {
+		t.Fatalf("source queue was not atomically settled: %+v %v", consumed, err)
 	}
 	queued, err := store.GetQueuedByIdempotencyKey(ctx, owner.TenantID, queue.IdempotencyKey)
 	if err != nil || queued == nil || queued.ReplyToRunID != run.ID || queued.NotBefore.Before(wake) {

@@ -38,6 +38,10 @@ type RunFinalization struct {
 	Continuation      *QueuedTask
 	ExpectedRunStatus string
 	RequireCheckpoint bool
+	// A parked continuation may itself be a claimed queue child. Settle that
+	// exact source row in the same transaction that creates its next hop.
+	ConsumedQueueID         string
+	ConsumedQueueClaimToken string
 	// EffectKey identifies one logical side effect across retry runs. Ordinary
 	// turns leave it empty; durable watcher finalization uses its stable
 	// watch+verdict-revision key.
@@ -185,6 +189,22 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 			QueueClassFinalization, QueuePriorityFinalization, deadline, QueueStatusQueued, now.Unix())
 		if err != nil {
 			return nil, fmt.Errorf("enqueue provider continuation: %w", err)
+		}
+		if input.ConsumedQueueID != "" || input.ConsumedQueueClaimToken != "" {
+			if input.ConsumedQueueID == "" || input.ConsumedQueueClaimToken == "" {
+				return nil, fmt.Errorf("provider wait source queue requires its id and claim token")
+			}
+			result, err = tx.ExecContext(ctx, `UPDATE task_queue SET status=?
+				WHERE tenant_id=? AND person_id=? AND thread_id=? AND id=? AND run_id=?
+				AND status=? AND claim_token=?`,
+				QueueStatusDone, tenant, personID, input.TaskID, input.ConsumedQueueID, input.RunID,
+				QueueStatusStarted, input.ConsumedQueueClaimToken)
+			if err != nil {
+				return nil, fmt.Errorf("settle provider wait source queue: %w", err)
+			}
+			if n, _ := result.RowsAffected(); n != 1 {
+				return nil, fmt.Errorf("provider wait source queue claim changed")
+			}
 		}
 	}
 	if err := finalizeRunSkillLifecycleTx(ctx, tx, input, personID, now, !duplicateEffect); err != nil {

@@ -458,7 +458,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if rootsErr := c.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 		return api.MessageResponse{Identity: identity, Task: task, Error: rootsErr.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", rootsErr.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusBadRequest
 	}
-	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
+	if runOrigin(ctx, req) != runOriginProviderWait {
+		_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
+	}
 
 	// A deliberate continuation claims its resolved parent in the SAME
 	// transaction that creates the child run (P1: creation and ownership are
@@ -467,7 +469,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// before run creation.
 	parent := parentRes.exact()
 	claimParentID := ""
-	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery || runOrigin(ctx, req) == runOriginWatch || runOrigin(ctx, req) == runOriginResource) {
+	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery || runOrigin(ctx, req) == runOriginWatch || runOrigin(ctx, req) == runOriginResource || runOrigin(ctx, req) == runOriginProviderWait) {
 		claimParentID = parent.ID
 	}
 	c.maybeAssignIsolatedGitView(ctx, identity, task, &req, parent != nil)
@@ -599,6 +601,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		analysisWorkspaceID = workspace.ID
 	}
 	replay := runMaintenanceReplay{WorkspaceID: analysisWorkspaceID, UserInput: req.Content, Attach: attach}
+	if runOrigin(ctx, req) == runOriginProviderWait {
+		replay.UserInput = ""
+	}
 	if unavailableRoot, statErr := executionRootUnavailable(ctx, req.ExecutionRoots); statErr != nil {
 		summary := fmt.Sprintf("The workspace environment is unavailable: %s", unavailableRoot)
 		outcome := api.RunOutcome{
@@ -741,6 +746,17 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	ctx = kernel.WithTaskRuntimeContext(ctx, runtimeContext)
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, parent, intent)
+	if strings.HasPrefix(req.EffectKey, "provider-wait:") {
+		if parent == nil || req.EffectKey != "provider-wait:"+parent.ID || !kernel.HasLoopResumeMessages(ctx) {
+			err := fmt.Errorf("%w for its exact parent; work was not replayed", errProviderWaitCheckpoint)
+			outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
+			content, errorText := interruptedRunResponse(task.Title, outcome)
+			return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content,
+				Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary),
+				Context: d.messageContextBudget(llmUsageZero())}, http.StatusOK
+		}
+		ctx = kernel.WithExactLoopReplay(ctx)
+	}
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.ExecutionRoots, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, parent, intent, attach.claimsPriorRuns(), agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
@@ -967,11 +983,12 @@ func (c *RunCoordinator) inheritResumeTargetPlan(ctx context.Context, identity *
 // person typed at any endpoint has no origin: it is their own foreground work,
 // wherever they typed it.
 const (
-	runOriginWatch    = "watch"
-	runOriginCron     = "cron"
-	runOriginApproval = "approval"
-	runOriginRecovery = "recovery"
-	runOriginResource = "resource"
+	runOriginWatch        = "watch"
+	runOriginCron         = "cron"
+	runOriginApproval     = "approval"
+	runOriginRecovery     = "recovery"
+	runOriginResource     = "resource"
+	runOriginProviderWait = "provider_wait"
 )
 
 // runOrigin names the initiator of a daemon-started run, or "" for a person's
@@ -1277,7 +1294,9 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 			if blockedContinuation[q.ID] || (limit > 1 && !queuedResourcesReady(q, active)) {
 				blockedChannels[source] = true
 				if blockedContinuation[q.ID] && q.ReplyToRunID != "" {
-					if blockedParents[source] == nil { blockedParents[source] = map[string]bool{} }
+					if blockedParents[source] == nil {
+						blockedParents[source] = map[string]bool{}
+					}
 					blockedParents[source][q.ReplyToRunID] = true
 				}
 				return false
@@ -1369,6 +1388,8 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		req.RecoveryMode = recoveryModeFromQueueKey(next.IdempotencyKey)
 	} else if strings.HasPrefix(next.IdempotencyKey, "external-resource:") {
 		req.Origin = runOriginResource
+	} else if strings.HasPrefix(next.IdempotencyKey, "provider-wait:") {
+		req.Origin = runOriginProviderWait
 	} else if strings.TrimSpace(next.ApprovalID) != "" {
 		req.Origin = runOriginApproval
 	}

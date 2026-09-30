@@ -48,6 +48,12 @@ func TestRunOriginClassifiesDaemonStartedRuns(t *testing.T) {
 			want: runOriginResource,
 		},
 		{
+			name: "provider wait wakeup is daemon started",
+			ctx:  context.Background(),
+			req:  api.MessageRequest{Origin: runOriginProviderWait, ReplyToRunID: "run_1"},
+			want: runOriginProviderWait,
+		},
+		{
 			name: "turn source is the synchronous-path fallback",
 			ctx:  kernel.WithTurnSource(context.Background(), "cron"),
 			req:  api.MessageRequest{},

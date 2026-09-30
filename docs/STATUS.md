@@ -15,7 +15,7 @@ Dated delivery and validation records live in
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 87 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 88 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -74,7 +74,11 @@ waits now atomically park the exact Run with a delayed queue child and release
 its Agent. A missing checkpoint retains the cancellable in-place wait; six
 repeated 429s or 32 capacity retries block automatic continuation. Go race and message-path tests
 cover the worker release, 429 recovery, exact ownership, and atomic failure.
-Live provider-wait/restart and mixed-source fault coverage remain rollout gates.
+An isolated-daemon 429/restart test now covers the actual custom-provider
+transport, readiness probe, durable wait, and exact queued child; it checks
+that scheduling text never enters the retried model ledger. A real-provider
+crash-after-effect retest kept two local effects single-executed. Sustained
+provider throttling and mixed-source fault coverage remain rollout gates.
 
 ## Capability Map
 

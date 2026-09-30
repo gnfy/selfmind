@@ -1098,7 +1098,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				resumed = append(resumed, message)
 			}
 		}
-		resumed = append(resumed, llm.Message{Role: "user", Content: initialPrompt})
+		if !exactLoopReplayFromContext(ctx) {
+			resumed = append(resumed, llm.Message{Role: "user", Content: initialPrompt})
+		}
 		messages = a.contextEngine.TruncateMessagesCtx(ctx, resumed)
 		// Deferred-tool activation is scoped to this run's context, so a resumed
 		// run starts with an empty set and would refuse every capability it had

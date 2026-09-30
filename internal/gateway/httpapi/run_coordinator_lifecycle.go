@@ -22,6 +22,7 @@ import (
 )
 
 var errProviderWaitLimit = errors.New("provider wait continuation limit reached")
+var errProviderWaitCheckpoint = errors.New("provider wait checkpoint is unavailable")
 
 // finalizeErroredRun is the single terminal path for provider, transport, and
 // cancellation failures after a run has started. It writes the same structured
@@ -56,6 +57,11 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		outcome.Summary = "The model provider repeatedly delayed this work; automatic continuation stopped at its safety limit."
 		outcome.NextSteps = []string{"Inspect the provider connection and resume this exact Run when it is available."}
 		outcome.Risks = nil
+	} else if errors.Is(runErr, errProviderWaitCheckpoint) {
+		outcome.Status = "blocked"
+		outcome.CompletionReason = "provider_wait_checkpoint_missing"
+		outcome.Summary = "The exact model-call checkpoint is unavailable, so automatic continuation stopped before replaying work."
+		outcome.NextSteps = []string{"Inspect this Run's saved effects and checkpoint before manually resuming."}
 	} else if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 		// A caller cancellation or caller deadline is terminal: request/eval turn
 		// budgets deliberately bound the daemon-owned run. Provider-internal
@@ -218,6 +224,7 @@ func (c *RunCoordinator) parkProviderWait(ctx context.Context, identity *control
 		Event: control.Event{Type: "run.finished", Visibility: "task", Channel: req.Channel,
 			Payload: mustJSON(map[string]interface{}{"outcome": outcome, "provider_wait": map[string]interface{}{"reason": wait.Reason, "not_before": wait.NotBefore}})},
 		Continuation: &queued, ExpectedRunStatus: "running", RequireCheckpoint: true,
+		ConsumedQueueID: req.QueueID, ConsumedQueueClaimToken: req.QueueClaimToken,
 	})
 	if err != nil {
 		return api.RunOutcome{}, err

@@ -309,6 +309,12 @@ automation uses stable ids and structured reply metadata.
 
 ## Context and recall
 
+Recovery handoffs obtain the original goal only from the exact `resumes_run_id`
+lineage within the same person and execution scope, and include bounded user
+steering additions. A missing, cyclic, overly deep, or incompatible edge leaves
+the original goal unknown; grouping labels never connect independent work.
+Technical daemon continuation input is not substituted for the person's goal.
+
 The durable context path remains:
 
 ```text

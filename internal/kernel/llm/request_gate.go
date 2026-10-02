@@ -12,10 +12,11 @@ import (
 // the runtime resolver; model names and logical roles are not quota identities.
 // It is deliberately instance-owned rather than process-global.
 type RequestGate struct {
-	mu            sync.Mutex
-	routes        map[string]*requestRoute
-	maxConcurrent int
-	observeWait   RequestWaitObserver
+	mu               sync.Mutex
+	routes           map[string]*requestRoute
+	maxConcurrent    int
+	observeWait      RequestWaitObserver
+	observeAdmission RequestAdmissionObserver
 }
 
 // RequestWaitObserver receives a completed admission wait, including canceled
@@ -28,6 +29,7 @@ type requestRoute struct {
 	mu            sync.Mutex
 	cooldownUntil time.Time
 	rateFailures  int
+	activeRoles   map[string]int
 }
 
 func NewRequestGate(maxConcurrent int, observers ...RequestWaitObserver) *RequestGate {
@@ -82,7 +84,7 @@ func (p *gatedProvider) ChatCompletion(ctx context.Context, messages []Message) 
 	if err := p.acquire(ctx); err != nil {
 		return "", err
 	}
-	defer p.route.release()
+	defer p.release(ctx)
 	content, err := p.inner.ChatCompletion(ctx, messages)
 	p.route.observe(err)
 	return content, err
@@ -92,7 +94,7 @@ func (p *gatedProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 	if err := p.acquire(ctx); err != nil {
 		return nil, err
 	}
-	defer p.route.release()
+	defer p.release(ctx)
 	response, err := p.inner.Chat(ctx, req)
 	p.route.observe(err)
 	return response, err
@@ -105,13 +107,13 @@ func (p *gatedProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 	stream, err := p.inner.StreamChat(ctx, req)
 	if err != nil || stream == nil {
 		p.route.observe(err)
-		p.route.release()
+		p.release(ctx)
 		return stream, err
 	}
 	out := make(chan StreamEvent)
 	go func() {
 		defer close(out)
-		defer p.route.release()
+		defer p.release(ctx)
 		failed := false
 		for {
 			select {
@@ -146,12 +148,14 @@ func (p *gatedProvider) acquire(ctx context.Context) error {
 			return err
 		}
 		if wait := p.route.tryAcquire(); wait != nil {
+			p.observeAdmission(ctx, "deferred", wait.Reason, time.Since(started), wait.NotBefore)
 			return wait
 		}
 		if err := ctx.Err(); err != nil {
 			p.route.release()
 			return err
 		}
+		p.admitted(ctx)
 		return nil
 	}
 	reason, err := p.route.acquire(ctx)
@@ -162,6 +166,11 @@ func (p *gatedProvider) acquire(ctx context.Context) error {
 		if observe != nil {
 			observe(ctx, p.routeID, reason, time.Since(started))
 		}
+	}
+	if err == nil {
+		p.admitted(ctx)
+	} else {
+		p.observeAdmission(ctx, "canceled", reason, time.Since(started), time.Time{})
 	}
 	return err
 }

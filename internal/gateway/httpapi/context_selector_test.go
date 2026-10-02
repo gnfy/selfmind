@@ -8,10 +8,50 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/control/controltest"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
+
+func TestCurrentRuntimeFactsComeFromTheExecutingDaemonAndRun(t *testing.T) {
+	ctx := context.Background()
+	store := controltest.NewStore(t)
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "facts-user", "User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "current facts", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := store.StartRun(ctx, task, "cli", "inspect the current state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Control: store, RuntimeStatusFunc: func() api.GatewayRuntimeInfo {
+		return api.GatewayRuntimeInfo{BuildFingerprint: "executing-build", Commit: "daemon-commit"}
+	}}
+	if err := server.ConfigureWorkRunCapacity(2, 2); err != nil {
+		t.Fatal(err)
+	}
+	c := server.coordinator()
+	selected := c.selectedTaskRuntimeContextWithMode(ctx, task, root, nil, "cli", "cli", "inspect current state", attachContextNone, nil)
+	if o := selected.RuntimeObservation; o == nil || o.BuildFingerprint != "executing-build" || o.MaxActiveWorkRuns != 2 || o.ResumesRunID != "" || !o.ObservedAt.Equal(root.StartedAt) {
+		t.Fatalf("runtime facts were replaced by history or display labels: %+v", o)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, root.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.StartRunWithOptions(ctx, task, "cli", "continue", control.StartRunOptions{ResumesRunID: root.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selected = c.selectedTaskRuntimeContextWithMode(ctx, task, child, nil, "cli", "cli", "continue", attachContextFull, root)
+	if selected.RuntimeObservation.ResumesRunID != root.ID {
+		t.Fatalf("actual continuation was not represented: %+v", selected.RuntimeObservation)
+	}
+}
 
 func TestWorkContinuityHintsSurfaceWaitingRunForShortReply(t *testing.T) {
 	ctx := context.Background()

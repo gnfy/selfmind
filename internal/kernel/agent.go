@@ -923,6 +923,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats, finishReason string, callErr error) {
 		route := llm.DescribeProviderRoute(a.activeLLM())
+		var wait *llm.ProviderWait
+		deferred := errors.As(callErr, &wait)
+		var providerDispatched *bool
+		if deferred {
+			status = "deferred"
+			providerDispatched = &wait.Dispatched
+		}
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type: "provider.call.usage",
 			Payload: map[string]interface{}{
@@ -932,6 +939,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"iteration":                   iteration,
 				"transport":                   transport,
 				"status":                      status,
+				"provider_dispatched":         providerDispatched,
 				"duration_ms":                 time.Since(started).Milliseconds(),
 				"input_tokens":                usage.InputTokens,
 				"output_tokens":               usage.OutputTokens,
@@ -1247,7 +1255,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	toolUseCounts := map[string]int{}
 	closureNoticeIssued := false
 	toolBudgetRepairIssued := false
+	toolAvailabilityRepairIssued := false
 	toolBudgetExhausted := false
+	toolAdmissionRefused := false
 	planSeen := false
 	var unresolvedPlanSteps []string
 	planRepairAttempts := 0
@@ -1723,43 +1733,45 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		outputFiltered := stopped == llm.StopFiltered
 		outputCut := outputLimited || outputFiltered
 		calls := nativeCalls
+		var refused []refusedToolCall
 		var droppedForBudget, droppedForLifecycle, deferredAcrossWorkUnitBoundary, deferredAcrossWatchHandoff int
 		if outputCut {
 			if len(calls) == 0 {
 				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix)
 			}
 		} else {
-			calls, droppedForBudget = filterToolCallsByStrategyAndBudget(nativeCalls, iterationStrategy, actionToolsUsed)
-			calls, droppedForLifecycle = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
-			droppedForBudget += droppedForLifecycle
-			if len(calls) == 0 {
-				var legacyDropped int
-				calls, legacyDropped = filterToolCallsByStrategyAndBudget(legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix), iterationStrategy, actionToolsUsed)
-				var legacyLifecycleDropped int
-				calls, legacyLifecycleDropped = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
-				droppedForBudget += legacyDropped
-				droppedForBudget += legacyLifecycleDropped
-				droppedForLifecycle += legacyLifecycleDropped
+			requested := nativeCalls
+			if len(requested) == 0 {
+				requested = legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix)
 			}
-			if len(calls) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
+			calls, refused, droppedForBudget, droppedForLifecycle = admitToolCalls(requested, iterationStrategy, actionToolsUsed, toolUseCounts)
+			if len(calls) == 0 && len(refused) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
 				droppedForBudget = 1
 			}
 			calls, deferredAcrossWorkUnitBoundary = isolateWorkUnitBoundaryCall(calls)
 			calls, deferredAcrossWatchHandoff = isolateExternalWatchHandoffCalls(calls)
 		}
 		assistantContent := resp
-		if len(calls) > 0 || droppedForBudget > 0 || legacyMarkupPresent {
+		if len(calls) > 0 || len(refused) > 0 || droppedForBudget > 0 || legacyMarkupPresent {
 			assistantContent = toolBudgetSafeAssistantContent(resp)
 		}
 
+		assistantMessageIndex := len(messages)
 		messages = append(messages, llm.Message{
 			Role: "assistant", Content: assistantContent,
-			ReasoningContent: reasoningResp.String(), ToolCalls: calls,
+			ReasoningContent: reasoningResp.String(), ToolCalls: requestedCallsWithRefusals(calls, refused),
 		})
 		history.Steps = append(history.Steps, assistantContent)
 
 		// Sync turn to external memory providers after each assistant response
 		a.syncTurn(ctx, tenantID, messages)
+		for idx, rejected := range refused {
+			toolAdmissionRefused = true
+			call := rejected.call
+			result := a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, rejected.err)
+			messages = append(messages, result.msg)
+			history.Steps = append(history.Steps, result.step)
+		}
 
 		if outputCut {
 			for idx, call := range calls {
@@ -1927,13 +1939,28 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			recordStep(i, StepContinueModel, "budget_exhausted_finalize")
 			continue
 		}
+		if len(refused) > 0 && droppedForBudget == 0 {
+			if !toolAvailabilityRepairIssued {
+				toolAvailabilityRepairIssued = true
+				if i+1 >= maxIterations {
+					maxIterations = i + 2
+				}
+				messages = append(messages, llm.Message{Role: "user", Content: "The requested tools are unavailable in the current strategy or turn phase. None of the refused calls was executed. Use the exposed tools to record an honest outcome, or write the answer with the missing work clearly identified. Do not repeat the unavailable action."})
+				recordStep(i, StepContinueModel, "tool_availability_finalize")
+				continue
+			}
+			resp = toolBudgetSafeAssistantContent(resp)
+			if strings.TrimSpace(resp) == "" {
+				resp = "A necessary tool action was unavailable and was not executed. The remaining work is unresolved; inspect this run's refusal evidence before continuing."
+			}
+			messages[assistantMessageIndex].Content = resp
+		}
 		if droppedForBudget > 0 {
 			resp = toolBudgetSafeAssistantContent(resp)
 			if strings.TrimSpace(resp) == "" {
 				resp = "I reached the tool budget before I could complete the remaining tool step. Based on the evidence already collected, I should stop here and state the next action instead of calling more tools."
 			}
-			history.Steps[len(history.Steps)-1] = resp
-			messages[len(messages)-1].Content = resp
+			messages[assistantMessageIndex].Content = resp
 		}
 
 		if outputLimited {
@@ -2023,9 +2050,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		history.Outcome = resp
 
 		completion := resolveTurnCompletion(completionSignals{
-			FinishStatus:        successfulFinishStatus,
-			ToolBudgetExhausted: toolBudgetExhausted,
-			PlanUnresolved:      planUnresolved,
+			FinishStatus:         successfulFinishStatus,
+			ToolBudgetExhausted:  toolBudgetExhausted,
+			ToolAdmissionRefused: toolAdmissionRefused,
+			PlanUnresolved:       planUnresolved,
 		})
 
 		// Append this turn to the spine under the same key used to load it
@@ -2220,6 +2248,10 @@ func lastAssistantContent(messages []llm.Message) string {
 // no reply to classify, and a stream that closed before its terminal event is
 // named separately because what it delivered was a prefix.
 func providerCallStopReason(finishReason string, err error) string {
+	var wait *llm.ProviderWait
+	if errors.As(err, &wait) {
+		return "deferred_" + wait.Reason
+	}
 	switch {
 	case llm.IsStreamUnterminated(err):
 		return "unterminated"

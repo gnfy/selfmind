@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "settings/feature.txt \"settings/feature.txt\" cat settings/feature.txt read settings/feature.txt check settings/feature.txt"
+}

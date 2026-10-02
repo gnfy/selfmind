@@ -362,7 +362,10 @@ func WorkspaceScopeMiddleware() Middleware {
 			toolName, _ := args["_tool_name"].(string)
 			if (isolatedExecutionView(scope) || scope.ParallelWork) && isExecTool(toolName) {
 				if requested, err := requestedSandboxMode(args); err == nil && requested == SandboxHost {
-					return "", fmt.Errorf("host execution is unavailable for parallel work")
+					return "", newStableToolRecoveryError(fmt.Errorf("host execution is unavailable for parallel work"),
+						"parallel_host_execution_unavailable", "policy", "Host execution is unavailable for parallel work; this call was not dispatched.",
+						"Keep the enforced isolated scope. Use an exposed read-only inspection tool or correct the unsupported isolated preparation; do not retry with host execution.",
+						"admission", "after_policy_change", "not_dispatched", false)
 				}
 			}
 			switch toolName {

@@ -28,18 +28,19 @@ type TaskRuntimeContext struct {
 	// transcript under this channel, so the first task-keyed continuation can
 	// still load it instead of appearing amnesiac. Empty when there is no
 	// distinct prior run.
-	PriorChannel      string
-	WorkspaceID       string
-	Workspace         string
-	NextSteps         []string
-	Handoff           *TaskHandoffContext
-	Events            []TaskEventContext
-	Plan              []PlanItem
-	InheritedEvidence []InheritedEvidenceItem
-	PriorToolReceipts []PriorToolReceipt
-	ExternalWatches   []ExternalWatchContext
-	UserRequirements  []string
-	Artifacts         []TaskArtifactContext
+	PriorChannel       string
+	WorkspaceID        string
+	Workspace          string
+	NextSteps          []string
+	Handoff            *TaskHandoffContext
+	Events             []TaskEventContext
+	Plan               []PlanItem
+	InheritedEvidence  []InheritedEvidenceItem
+	PriorToolReceipts  []PriorToolReceipt
+	ExternalWatches    []ExternalWatchContext
+	UserRequirements   []string
+	RuntimeObservation *RuntimeObservation
+	Artifacts          []TaskArtifactContext
 	// DeliveryWarnings are bounded advisory notes for terminal results that a
 	// previous endpoint may not have received. They help another endpoint
 	// restate the outcome without replaying or duplicating the outbound message.
@@ -410,6 +411,7 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 	writeKV(&b, "channel", r.Channel)
 	writeKV(&b, "workspace_id", r.WorkspaceID)
 	writeKV(&b, "workspace_root", r.Workspace)
+	b.WriteString(r.RuntimeObservation.Prompt())
 	if len(r.UserRequirements) > 0 {
 		var requirements strings.Builder
 		requirements.WriteString("\n## User updates to the continued work\n")

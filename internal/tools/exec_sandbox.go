@@ -385,8 +385,7 @@ func sandboxedCommandWithMaterialPolicy(
 		// than quietly widening; otherwise it degrades to an approval-gated
 		// host run with the reason visible.
 		if requested == SandboxIsolated || required {
-			return nil, SandboxDecision{}, SandboxPlan{}, fmt.Errorf("isolated execution is unavailable (%s cannot enforce this plan)",
-				SandboxBackendName(SandboxIsolated))
+			return nil, SandboxDecision{}, SandboxPlan{}, sandboxPreparationError(SandboxBackendName(SandboxIsolated), err)
 		}
 		return plain(SandboxDecision{
 			Mode:          SandboxHost,

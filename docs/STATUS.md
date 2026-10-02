@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-09-30
+**Snapshot:** 2026-10-02
 
 Dated delivery and validation records live in
 [`status-history.md`](status-history.md); this file keeps current state only.
@@ -15,7 +15,7 @@ Dated delivery and validation records live in
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 90 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 93 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -55,6 +55,12 @@ Parallel-work validation can now opt into `gateway.max_active_work_runs: 2` or
 `3` with at least that many `SELFMIND_WORKERS`; the default remains one and
 startup rejects mismatched capacity. The daemon's existing periodic worker
 also wakes due `not_before` queue rows without a new message or restart.
+Recent runtime-audit repairs preserve paired admission refusals at the action
+reserve, separate local provider deferrals from remote failures, carry the
+original goal in recovery handoffs, and keep ordinary source inspection from
+acquiring unrelated mount-backed tool state. Frozen runtime observations and
+dated history distinguish current evidence from old answers. New recorded cases
+passed on Qwen and Gemini; the history-only counterexample performs no action.
 An isolated daemon with two fresh CLI sessions and one bound IM chat reached
 two active Runs, routed the IM supplement to its exact target, and finished
 both Runs. A reproducible live soak also reached three active Runs with

@@ -22,6 +22,17 @@ func TestParseDailyReportWindow(t *testing.T) {
 	}
 }
 
+func TestDailyReportExcludesLocalAdmissionFromProviderCalls(t *testing.T) {
+	stats := collectDailyQualityStats([]control.Event{
+		{RunID: "local", Type: "provider.call.usage", Payload: json.RawMessage(`{"status":"deferred","provider_dispatched":false,"provider":"example","model":"model-a","duration_ms":7}`)},
+		{RunID: "limited", Type: "provider.call.usage", Payload: json.RawMessage(`{"status":"deferred","provider_dispatched":true,"provider":"example","model":"model-a","duration_ms":120}`)},
+		{RunID: "historical", Type: "provider.call.usage", Payload: json.RawMessage(`{"status":"failed","provider":"example","model":"model-a","duration_ms":50}`)},
+	})
+	if stats.ProviderCalls != 2 || stats.ProviderLatencyMS != 170 {
+		t.Fatalf("local admission was counted as a remote failure: %+v", stats)
+	}
+}
+
 func TestDailyQualityReportMarksUnavailableEvidenceInsteadOfZeros(t *testing.T) {
 	dir := t.TempDir()
 	store := controltest.NewStoreInDir(t, dir)

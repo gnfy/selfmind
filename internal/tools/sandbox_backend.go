@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -91,6 +92,9 @@ func (seatbeltBackend) Available() bool {
 }
 
 func (seatbeltBackend) Command(ctx context.Context, argv []string, plan SandboxPlan, material ProcessMaterial) (*exec.Cmd, error) {
+	if len(plan.OverlayMounts) > 0 || len(plan.SynthesizedDirs) > 0 {
+		return nil, fmt.Errorf("%w: mount-backed state requires overlay mounts or synthesized directories", errSandboxUnavailable)
+	}
 	policy := sandbox.Policy{
 		Network:    plan.NetworkMode == "shared",
 		ScratchTmp: material.ScratchTmp(),

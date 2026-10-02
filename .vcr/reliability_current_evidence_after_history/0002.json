@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "runtime-state.txt current-workspace operation-log task-resumption current-value"
+}

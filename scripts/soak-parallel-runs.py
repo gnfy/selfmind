@@ -355,6 +355,16 @@ def main():
                 intervals = tool_intervals(database, lineages)
                 overlap = min(end for _, end in intervals.values()) - max(start for start, _ in intervals.values())
                 if overlap < 5:
+                    evidence = []
+                    for run_id, kind, raw, at in database.execute(
+                        "SELECT run_id, type, payload_json, created_at FROM task_events "
+                        "WHERE type IN ('model.provider_admission','provider.call.usage') ORDER BY cursor"
+                    ):
+                        payload = json.loads(raw or "{}")
+                        evidence.append({"run_id": run_id, "kind": kind, "at": at,
+                                         "admission": payload.get("admission"), "role": payload.get("role"),
+                                         "status": payload.get("status"), "duration_ms": payload.get("duration_ms")})
+                    print(json.dumps({"terminal_intervals": intervals, "admission_evidence": evidence[:80]}), flush=True)
                     raise RuntimeError(f"terminal work did not overlap sufficiently: {overlap}s")
                 print(json.dumps({"result": "PASS", "capacity": args.capacity,
                                   "peak_active": peak, "done_runs": len(run_ids),

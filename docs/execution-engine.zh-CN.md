@@ -902,6 +902,12 @@ host 总占比（含 login/gui/host_write 类） | 单独统计 | 28%（83 / 293
 
 ## 16. 与既有不变量的一致性
 
+程序集识别区分被执行的程序与数据参数：普通 `find` 遍历、`go test ./...` 或读取
+脚本文件不因为路径或文件后缀而加载主机凭据库存；解释器脚本、实际执行的脚本路径和
+`find -exec/-execdir/-ok/-okdir` 仍保留不透明执行的环境要求。确实需要挂载状态而
+后端无法兑现时，隔离请求以类型化 preparation/not_dispatched 失败，并保留不支持的
+要求及未产生效果的事实；不能丢弃挂载要求或改为并行 host 执行来伪造成功。
+
 | 不变量（`AGENTS.md` / `docs/tool-safety.md`） | 结论 |
 |---|---|
 每个工具子进程都经 `BuildProcessEnv` 构造环境 | ✅ 保留为 snapshot 构造时的唯一过滤器，不绕过 |

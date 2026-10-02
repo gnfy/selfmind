@@ -634,7 +634,14 @@ absorbs these without touching the wire contract:
   known Run are recorded as internal `model.provider_wait` events with route,
   reason, duration, and cancellation. The daily report aggregates these by
   reason and counts affected Runs. This is request admission, not a
-  complete Run scheduler: a Run waiting on a provider still occupies a worker.
+  complete Run scheduler. A checkpointed foreground Run can park durably at
+  admission and release its worker; its exact continuation remains queued.
+  Internal `model.provider_admission` events record acquire, release, defer,
+  and cancellation with capacity and occupying role counts, without other
+  people's Run IDs. `provider.call.usage` labels a wait `deferred` and records
+  `provider_dispatched`: local capacity/cooldown deferrals are excluded from
+  remote-call counts, while actual 429 attempts still count. Historical usage
+  events keep their original interpretation.
 - The SSE idle watchdog (`responses_adapter.go` `streamIdleTimeout` +
   `streamResponse`) aborts a stream that stalls without new data, emitting a
   retryable stream-idle error so the loop reconnects. It is config-driven

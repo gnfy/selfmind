@@ -44,13 +44,14 @@ func (c turnCompletion) outcomeLabel() string {
 
 // completionSignals is the loop state that decides how a turn is reported.
 type completionSignals struct {
-	FinishStatus        string // structured finish_run status, "" if none
-	ToolBudgetExhausted bool
-	PlanUnresolved      bool
-	OutputLimited       bool // model stopped for output length AND no room to continue
-	OutputInterrupted   bool // the provider halted the reply AND no room to continue
-	OutputFiltered      bool // the provider filtered the reply before it finished
-	IterationCapped     bool // hit the hard safety iteration ceiling
+	FinishStatus         string // structured finish_run status, "" if none
+	ToolBudgetExhausted  bool
+	ToolAdmissionRefused bool
+	PlanUnresolved       bool
+	OutputLimited        bool // model stopped for output length AND no room to continue
+	OutputInterrupted    bool // the provider halted the reply AND no room to continue
+	OutputFiltered       bool // the provider filtered the reply before it finished
+	IterationCapped      bool // hit the hard safety iteration ceiling
 }
 
 // resolveTurnCompletion maps loop state to the reported completion. Precedence
@@ -69,6 +70,8 @@ func resolveTurnCompletion(s completionSignals) turnCompletion {
 		return turnCompletion{Status: "incomplete", Reason: "provider_filtered", Resumable: true}
 	case s.ToolBudgetExhausted && strings.TrimSpace(s.FinishStatus) == "":
 		return turnCompletion{Status: "incomplete", Reason: "tool_budget_exhausted", Resumable: true}
+	case s.ToolAdmissionRefused && strings.TrimSpace(s.FinishStatus) == "":
+		return turnCompletion{Status: "incomplete", Reason: "tool_admission_refused", Resumable: true}
 	case s.PlanUnresolved:
 		return turnCompletion{Status: "incomplete", Reason: "plan_unresolved", Resumable: true}
 	case s.IterationCapped:

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/buildinfo"
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/textutil"
@@ -80,6 +81,14 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 	}
 	if run != nil {
 		selected.RunID = run.ID
+		fingerprint := buildinfo.Current().Fingerprint
+		if c.srv.RuntimeStatusFunc != nil {
+			if running := c.srv.RuntimeStatusFunc(); running.BuildFingerprint != "" {
+				fingerprint = running.BuildFingerprint
+			}
+		}
+		selected.RuntimeObservation = &kernel.RuntimeObservation{ObservedAt: run.StartedAt,
+			BuildFingerprint: fingerprint, MaxActiveWorkRuns: c.activeCapacity(), ResumesRunID: run.ResumesRunID}
 		if selected.Channel == "" {
 			selected.Channel = run.Channel
 		}

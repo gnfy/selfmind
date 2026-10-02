@@ -14,6 +14,8 @@ import (
 type ProviderWait struct {
 	Reason    string
 	NotBefore time.Time
+	// Dispatched distinguishes a real 429 from local admission deferral.
+	Dispatched bool
 }
 
 func (w *ProviderWait) Error() string {
@@ -51,5 +53,5 @@ func DeferRateLimit(ctx context.Context, err error, backoff time.Duration) *Prov
 	if backoff > maxRetryAfter {
 		backoff = maxRetryAfter
 	}
-	return &ProviderWait{Reason: "rate_limit", NotBefore: time.Now().Add(backoff)}
+	return &ProviderWait{Reason: "rate_limit", NotBefore: time.Now().Add(backoff), Dispatched: true}
 }

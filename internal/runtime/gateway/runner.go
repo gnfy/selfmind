@@ -69,6 +69,21 @@ func installProviderWaitObserver(gate *llm.RequestGate, store *control.Store) {
 			log.Warn("gateway: provider wait attribution failed", "run_id", owner.RunID, "error", err)
 		}
 	})
+	gate.SetAdmissionObserver(func(callCtx context.Context, routeID string, admission llm.RequestAdmission) {
+		owner := llm.ModelContextFrom(callCtx)
+		if owner.RunID == "" {
+			return
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"route_id": routeID, "role": owner.Role, "admission": admission,
+		})
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(callCtx), 2*time.Second)
+		defer cancel()
+		if _, err := store.AppendEvent(writeCtx, control.Event{RunID: owner.RunID,
+			Type: "model.provider_admission", Visibility: "internal", Payload: payload}); err != nil {
+			log.Warn("gateway: provider admission attribution failed", "run_id", owner.RunID, "error", err)
+		}
+	})
 }
 
 func Run(ctx context.Context, opts Options) (runErr error) {

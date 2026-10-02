@@ -270,17 +270,24 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			}
 		case "provider.call.usage":
 			var p struct {
-				Provider        string `json:"provider"`
-				Model           string `json:"model"`
-				Role            string `json:"role"`
-				InputTokens     int64  `json:"input_tokens"`
-				OutputTokens    int64  `json:"output_tokens"`
-				ReasoningTokens int64  `json:"reasoning_output_tokens"`
-				CacheReadTokens int64  `json:"cache_read_input_tokens"`
-				CacheMissTokens int64  `json:"cache_miss_input_tokens"`
-				DurationMS      int64  `json:"duration_ms"`
+				Status             string `json:"status"`
+				ProviderDispatched *bool  `json:"provider_dispatched"`
+				Provider           string `json:"provider"`
+				Model              string `json:"model"`
+				Role               string `json:"role"`
+				InputTokens        int64  `json:"input_tokens"`
+				OutputTokens       int64  `json:"output_tokens"`
+				ReasoningTokens    int64  `json:"reasoning_output_tokens"`
+				CacheReadTokens    int64  `json:"cache_read_input_tokens"`
+				CacheMissTokens    int64  `json:"cache_miss_input_tokens"`
+				DurationMS         int64  `json:"duration_ms"`
 			}
 			if json.Unmarshal(event.Payload, &p) == nil {
+				// Historical events retain their original counting. A typed local
+				// deferral made no provider request; real 429 attempts still count.
+				if p.Status == "deferred" && p.ProviderDispatched != nil && !*p.ProviderDispatched {
+					continue
+				}
 				route := "unattributed"
 				if p.Provider != "" && p.Model != "" {
 					route = truncate(toOneLine(p.Provider+"/"+p.Model), 120)

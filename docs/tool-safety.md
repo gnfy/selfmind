@@ -727,6 +727,11 @@ When a role has `verify` and a sufficiently large action envelope, two calls
 inside the existing hard ceiling are reserved for verification. A bounded
 notice asks Main to finish the current scope and reconcile its plan first.
 This does not widen tool availability, execution authority, or approval grants.
+Calls excluded by a strategy, completion reserve, or lifecycle attempt cap
+retain their call IDs and receive paired typed `not_dispatched` refusals.
+They consume no dispatch claim or action budget. A refusal cannot become an
+empty-response completion: one bounded correction allows honest closure, and
+unresolved admission without a recorded outcome remains resumable.
 
 `verify` records deliberate checks; ordinary `terminal` calls remain command
 evidence. Missing structured verification must not be described as proof that

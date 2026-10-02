@@ -104,7 +104,6 @@ func filterToolCallsByStrategy(calls []llm.ToolCall, strategy TaskStrategy) []ll
 }
 
 func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrategy, actionToolsUsed int) ([]llm.ToolCall, int) {
-	calls = filterToolCallsByStrategy(calls, strategy)
 	if len(calls) == 0 {
 		return calls, 0
 	}
@@ -116,6 +115,10 @@ func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrat
 	out := make([]llm.ToolCall, 0, len(calls))
 	dropped := 0
 	for _, call := range calls {
+		if !strategy.AllowsTool(call.Function) {
+			dropped++
+			continue
+		}
 		if isLifecycleToolName(call.Function) {
 			out = append(out, call)
 			continue

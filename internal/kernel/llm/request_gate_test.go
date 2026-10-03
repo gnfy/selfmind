@@ -105,7 +105,7 @@ func TestRequestGateDefersCheckpointedRunWithoutCallingProvider(t *testing.T) {
 	started := time.Now()
 	_, err := wrapped.Chat(ctx, ChatRequest{})
 	var wait *ProviderWait
-	if !errors.As(err, &wait) || wait.Reason != "capacity" || time.Since(started) > 100*time.Millisecond {
+	if !errors.As(err, &wait) || wait.Reason != "capacity" || time.Since(started) < providerCapacityGrace || time.Since(started) > time.Second {
 		t.Fatalf("capacity deferral = %v after %s", err, time.Since(started))
 	}
 	close(release)

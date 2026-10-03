@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-10-02
+**Snapshot:** 2026-10-03
 
 Dated delivery and validation records live in
 [`status-history.md`](status-history.md); this file keeps current state only.
@@ -15,7 +15,7 @@ Dated delivery and validation records live in
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 93 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 95 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
@@ -55,6 +55,23 @@ Parallel-work validation can now opt into `gateway.max_active_work_runs: 2` or
 `3` with at least that many `SELFMIND_WORKERS`; the default remains one and
 startup rejects mismatched capacity. The daemon's existing periodic worker
 also wakes due `not_before` queue rows without a new message or restart.
+Resource admission now returns typed observation-required feedback for an
+own unresolved effect without an observer. Losing an automatic observation
+producer atomically blocks the parked Run and retains its Plan, claim and
+recoverable notice. Admission, wakeup and diagnostics share the resource-wait
+projection. Work-chain reports use committed parent edges, including manual
+selection and out-of-window ancestors. Brief provider contention stays in the
+current Run for at most 250ms; role and permit ownership change atomically.
+Ordinary command evidence is counted separately from structured verification,
+and a post-finish tool refusal is attributed to phase availability.
+Current-batch live checks are mixed: one Qwen two-Run soak overlapped terminal
+work, but later Qwen and Gemini attempts completed both lineages without the
+required overlap after a capacity deferral. Sustained throughput remains open.
+The two new ordinary-evidence cases have passing Gemini recordings; a Qwen
+attempt read the correct output but misquoted it in its answer. This is retained
+as failed model-grounding evidence, not a passed cross-model claim. The soak
+now copies configuration into its isolated runtime, including adjacent model
+readiness state, so temporary provider overrides cannot change operator state.
 Recent runtime-audit repairs preserve paired admission refusals at the action
 reserve, separate local provider deferrals from remote failures, carry the
 original goal in recovery handoffs, and keep ordinary source inspection from

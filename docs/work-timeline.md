@@ -402,3 +402,14 @@ promotion, approval continuation, CLI-to-IM observation, unrelated new work,
 recall degradation, and daemon-restart exact resume. Full `selfmind selfcheck`
 is required before release; sustained CLI/IM daily-driver evidence remains a
 release gate rather than a schema requirement.
+
+Daily diagnostics group logical work by the committed `Run.ResumesRunID`
+relation, including manual in-turn selection and ancestors outside the report
+window. Window Run counts and event-level terminal counts remain separate;
+latest chain state comes from durable Runs. Bounded traversal reports an
+evidence gap rather than silently dropping an unavailable parent. Cost per
+observed chain covers only the selected window and includes partial chains.
+Wait finalization preserves the structured cause (provider, occupied external
+resource, or human input), independently of the agent turn's transport EOF.
+Ordinary command counts and failures are execution evidence; they do not
+become criterion-bound verification merely because a command returned zero.

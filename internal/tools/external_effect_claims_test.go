@@ -83,6 +83,20 @@ func TestExternalEffectMiddlewareUsesTrustedTargetAndRetainsAsyncClaim(t *testin
 	if _, err := dispatch(runs[0], prod.Name(), "call-a"); err != nil || prod.calls != 1 {
 		t.Fatalf("first known target did not execute once: calls=%d err=%v", prod.calls, err)
 	}
+	// The same Run cannot wait for itself to provide the missing observation.
+	// Return paired, non-dispatched feedback so Main can inspect or hand off.
+	if _, err := dispatch(runs[0], prod.Name(), "call-self"); err == nil || prod.calls != 1 {
+		t.Fatalf("own uncertain effect was replayed: calls=%d err=%v", prod.calls, err)
+	} else {
+		var pause interface{ ToolRunPauseStatus() string }
+		var facts interface {
+			ToolErrorCode() string
+			ToolEffectState() string
+		}
+		if errors.As(err, &pause) || !errors.As(err, &facts) || facts.ToolErrorCode() != "external_effect_unresolved" || facts.ToolEffectState() != "not_dispatched" {
+			t.Fatalf("own effect incorrectly promised an automatic wakeup: %v", err)
+		}
+	}
 	if _, err := dispatch(runs[1], prod.Name(), "call-b"); err == nil || !strings.Contains(err.Error(), "occupied") || prod.calls != 1 {
 		t.Fatalf("conflicting target executed or lacked explanation: calls=%d err=%v", prod.calls, err)
 	} else {

@@ -132,16 +132,18 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 
 	result.LatestMutationAt = verification.RelevantMutationAt(verification.Check{}, mutations)
 	result.State, result.Summary = verification.StateWithMutations(mutations, result.Checks)
-	if result.State == "not_run" {
-		commands := 0
-		for _, item := range evidence {
-			if item.Kind == "command" && item.Command != nil && item.StartedAt >= result.LatestMutationAt {
-				commands++
+	for _, item := range evidence {
+		if item.Kind == "command" && item.Command != nil && item.StartedAt >= result.LatestMutationAt {
+			result.OrdinaryCommands++
+			if item.Status != "succeeded" || item.Command.ExitCode != 0 {
+				result.OrdinaryCommandFailures++
 			}
 		}
-		if commands > 0 {
-			result.Summary = fmt.Sprintf("%d ordinary command(s) ran after the latest change, but no structured verification evidence was recorded. Use verify for the relevant check; command output alone does not establish verification.", commands)
-		}
+	}
+	if result.OrdinaryCommands > 0 && result.State == "not_run" {
+		result.Summary = fmt.Sprintf("%d ordinary command(s) ran after the latest change, but no structured verification evidence was recorded. Use verify for the relevant check; command output alone does not establish verification.", result.OrdinaryCommands)
+	} else if result.OrdinaryCommands > 0 && result.State == "not_applicable" {
+		result.Summary = fmt.Sprintf("%d ordinary command(s) were observed (%d failed); no file changes or criterion-bound verification checks were recorded. Execution evidence is available, but it does not establish a verification verdict.", result.OrdinaryCommands, result.OrdinaryCommandFailures)
 	}
 	return result, files
 }
@@ -186,6 +188,9 @@ func verificationClaimMismatches(outcome api.RunOutcome) []string {
 	}
 	if state == "passed" {
 		return nil
+	}
+	if outcome.Verification != nil && outcome.Verification.OrdinaryCommands > 0 {
+		return []string{fmt.Sprintf("%d ordinary command(s) were executed, but the claimed verification has no passing structured evidence (state: %s). Bind the relevant check with verify before claiming it passed.", outcome.Verification.OrdinaryCommands, state)}
 	}
 	return []string{fmt.Sprintf("The response claims successful verification, but runtime evidence is %s.", state)}
 }

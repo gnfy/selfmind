@@ -146,3 +146,40 @@ Background reasoning from resolved model metadata; cross-model live evidence is 
 Natural in-place Skill selection still needs live quality observation: a release
 lookup completed with unnecessary calls and invalid Skill references. Explicit
 resume separately covers restoration of an already bound Skill.
+
+## Resource-wait and evidence correction (2026-10-03)
+
+An unresolved effect in the same Run no longer creates an automatic wait with
+no observation producer. Typed admission feedback requires observation before
+retry; other live owners and exactly bound watchers retain normal waiting.
+The existing daemon sweep atomically changes stranded waits to blocked results,
+preserving uncertain claims and plans. Committed correction events recover a
+notification after a crash between commit and delivery. Run-parent projections
+include manual resumes and ancestors outside the report window; unavailable
+projections are explicit rather than substituted from event counts.
+
+Provider capacity contention has a cancellable 250ms grace before durable
+deferral; 429 cooldowns still defer immediately. Permit ownership and role counts
+change atomically. Ordinary commands are distinct from criterion-bound checks,
+and post-finish tool refusals describe phase availability rather than budget.
+There is no schema change, automatic claim release, default capacity increase,
+or Main model/reasoning change.
+
+Validation: fast and full selfcheck passed all 95 cases, focused Go race tests
+passed, and result-write fault injection preserved the parked state and claim.
+Commit replay kept one correction and a recoverable notification. A read-only
+production projection matched 29 Runs, 18 chains and 11 committed resume edges.
+Two new ordinary-evidence cases recorded successfully on Gemini. A Qwen attempt
+read the right output but quoted another value; its log is failed grounding
+evidence, not a passing recording. One Qwen two-Run soak overlapped terminal work
+by 15 seconds, but later Qwen and Gemini soaks completed both lineages without
+the required overlap after capacity deferral. Sustained throughput and actual IM
+delivery remain open gates; the latter is deferred at the user's request.
+
+The live soak previously shared the operator configuration directory despite
+isolating its data directory. A temporary provider override therefore changed
+adjacent model readiness state. The configuration itself was unchanged; a normal
+idle restart revalidated the configured Qwen route. The script now copies the
+configuration into its temporary runtime with mode 0600, and a file-boundary
+test covers adjacent-state isolation. A subsequent isolated startup left the
+operator's verified state timestamp and configuration unchanged.

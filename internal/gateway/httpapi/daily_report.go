@@ -519,6 +519,16 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	}
 	stats := collectDailyQualityStats(events)
 	var evidenceGaps []string
+	chains, chainsErr := d.Control.WorkChainsSince(ctx, identity.TenantID, identity.PersonID, since, 10000)
+	if chainsErr != nil {
+		evidenceGaps = append(evidenceGaps, "durable work chains")
+	} else {
+		stats.LogicalChains, stats.LogicalChainStatuses, stats.ResumeEdges, stats.ResumeOrigins = chains.Chains, chains.LatestStatuses, chains.ResumeEdges, chains.ResumeOrigins
+	}
+	resources, resourcesErr := d.Control.ListExternalResourceWaits(ctx, identity.TenantID, identity.PersonID, 100)
+	if resourcesErr != nil {
+		evidenceGaps = append(evidenceGaps, "external resource waits")
+	}
 	waits, waitsErr := d.Control.ExternalWaitBacklogForPerson(ctx, identity.TenantID, identity.PersonID)
 	if waitsErr != nil {
 		evidenceGaps = append(evidenceGaps, "external wait backlog")
@@ -580,14 +590,25 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		since.Local().Format(time.RFC3339), generatedAt.Local().Format(time.RFC3339),
 		generatedAt.Local().Format(time.RFC3339), len(events), coverage)
 	fmt.Fprintf(&sb, "Runs at turn completion: %s\n", formatCountMap(stats.RunStatuses))
-	fmt.Fprintf(&sb, "Logical work chains: %d, latest outcomes %s; resume edges %d (%s)\n",
-		stats.LogicalChains, formatCountMap(stats.LogicalChainStatuses), stats.ResumeEdges, formatCountMap(stats.ResumeOrigins))
+	if chainsErr == nil {
+		fmt.Fprintf(&sb, "Logical work chains: %d, latest outcomes %s; resume edges %d (%s)\n",
+			stats.LogicalChains, formatCountMap(stats.LogicalChainStatuses), stats.ResumeEdges, formatCountMap(stats.ResumeOrigins))
+		fmt.Fprintf(&sb, "Work-chain source: committed Run parents; %d Run(s) observed in this window; bounded coverage truncated=%t\n", chains.Runs, chains.Truncated)
+		if chains.Chains > 0 {
+			fmt.Fprintf(&sb, "Model cost per observed work chain (window only, includes partial chains): %.1f responses, %.1fs provider time, %.0f output tokens\n", float64(stats.ProviderCalls)/float64(chains.Chains), float64(stats.ProviderLatencyMS)/1000/float64(chains.Chains), float64(stats.OutputTokens)/float64(chains.Chains))
+		}
+	} else {
+		sb.WriteString("Logical work chains: unavailable; committed Run parents could not be projected.\n")
+	}
 	fmt.Fprintf(&sb, "Completion reasons: %s\n", formatCountMap(stats.CompletionReasons))
 	fmt.Fprintf(&sb, "External outcomes: %s\n", formatCountMap(stats.ExternalStatuses))
 	fmt.Fprintf(&sb, "Automatic recovery: scheduled %s; %d child run(s), outcomes %s; guardrails %s\n",
 		formatCountMap(stats.RecoveryScheduled), stats.RecoveryRuns,
 		formatCountMap(stats.RecoveryStatuses), formatCountMap(stats.RecoveryGuardrails))
 	fmt.Fprintf(&sb, "Durable waits: groups %s\n", formatCountMap(stats.WaitGroupOutcomes))
+	if resourcesErr == nil {
+		sb.WriteString(formatResourceWaitBacklog(resources, generatedAt))
+	}
 	if waitsErr == nil {
 		oldest := "none"
 		if !waits.OldestGroupAt.IsZero() {

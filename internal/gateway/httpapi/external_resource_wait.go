@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/platform/log"
 )
 
@@ -21,14 +23,72 @@ func (d *Server) runExternalResourceWaitPass(ctx context.Context) {
 		log.Warn("undispatched external effect recovery failed", "error", err)
 		return
 	}
-	waits, err := d.Control.ListReadyExternalResourceWaits(ctx, 100)
+	waits, err := d.Control.ListActiveExternalResourceWaits(ctx, 100)
 	if err != nil {
 		log.Warn("external resource wait scan failed", "error", err)
 		return
 	}
 	for _, wait := range waits {
-		if err := d.enqueueExternalResourceWake(ctx, wait); err != nil {
+		if wait.RunStatus == "waiting_external" && wait.Status == "pending" && wait.NeedsObservation {
+			if err := d.blockUnobservableResourceWait(ctx, wait); err != nil {
+				log.Warn("resource observation correction failed", "run_id", wait.RunID, "error", err)
+			}
+			continue
+		}
+		if !wait.Ready || wait.RunStatus != "waiting_external" {
+			continue
+		}
+		if err := d.enqueueExternalResourceWake(ctx, wait.ExternalResourceWait); err != nil {
 			log.Warn("external resource wakeup failed", "run_id", wait.RunID, "error", err)
+		}
+	}
+	d.notifyResourceObservationRequired(ctx)
+}
+
+func (d *Server) blockUnobservableResourceWait(ctx context.Context, wait control.ExternalResourceWaitProjection) error {
+	run, err := d.Control.GetRun(ctx, wait.TenantID, wait.RunID)
+	if err != nil {
+		return err
+	}
+	if run == nil {
+		return fmt.Errorf("resource wait run missing")
+	}
+	outcome, _ := d.coordinator().latestStructuredRunOutcome(ctx, run.TaskID, run.ID)
+	outcome.Status, outcome.CompletionReason, outcome.Resumable = "blocked", "external_effect_unresolved", true
+	outcome.Summary = "This work needs an observation of an unresolved external effect. No live run or bound watcher can release the occupied target automatically. The blocked call was not dispatched."
+	outcome.NextSteps = []string{"Use /effects to inspect the held claim, then /resume " + run.ID + " to continue with read-only observation. Do not repeat the uncertain effect."}
+	_, err = d.Control.MaterializeRunFinalization(ctx, control.RunFinalization{
+		Identity: control.IdentityContext{TenantID: wait.TenantID, PersonID: wait.PersonID},
+		RunID:    run.ID, TaskID: run.TaskID, RunStatus: "blocked", ExpectedRunStatus: "waiting_external", ResourceWait: &wait.ExternalResourceWait,
+		Channel: run.Channel, Summary: outcome.Summary, NextSteps: outcome.NextSteps,
+		Handoff: control.Handoff{Summary: outcome.Summary, DoneItems: outcome.Done, NextSteps: outcome.NextSteps, ChangedFiles: outcome.Files, Risks: outcome.Risks},
+		Event: control.Event{Type: "run.finished", Channel: run.Channel, Visibility: "task", IdempotencyKey: "resource-observation:" + run.ID + ":" + wait.EffectID,
+			Payload: mustJSON(map[string]interface{}{"outcome": outcome, "resource_observation_required": true})},
+	})
+	return err
+}
+
+func (d *Server) notifyResourceObservationRequired(ctx context.Context) {
+	items, err := d.Control.ListResourceObservationNotices(ctx)
+	if err != nil {
+		log.Warn("resource observation notices unavailable", "error", err)
+		return
+	}
+	for _, item := range items {
+		origin := d.routeIdentityForPerson(ctx, item.TenantID, item.PersonID, item.Channel, "cli", nil)
+		outcome, ok := d.coordinator().latestStructuredRunOutcome(ctx, item.TaskID, item.RunID)
+		if !ok {
+			outcome = api.RunOutcome{Status: "blocked", Summary: "An external effect needs observation. Use /effects, then /resume " + item.RunID + " for read-only inspection."}
+		}
+		if !d.coordinator().routePendingNotification(ctx, origin, item.Channel, delivery.Message{
+			TenantID: item.TenantID, PersonID: item.PersonID, TaskID: item.TaskID, RunID: item.RunID,
+			Kind: delivery.KindRecovery, Content: structuredResultFallback(outcome), LogicalKey: "resource-observation:" + item.EventID,
+		}, false) {
+			continue
+		}
+		if _, err := d.Control.AppendEvent(ctx, control.Event{TaskID: item.TaskID, RunID: item.RunID, Type: "run.resource_observation_notified", Visibility: "task", Channel: item.Channel,
+			Payload: mustJSON(map[string]string{"source_event_id": item.EventID}), IdempotencyKey: "resource-observation-notified:" + item.EventID}); err != nil {
+			log.Warn("resource observation notice marker failed", "error", err)
 		}
 	}
 }

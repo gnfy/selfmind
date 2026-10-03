@@ -26,7 +26,7 @@ func admitToolCalls(requested []llm.ToolCall, strategy TaskStrategy, used int, c
 		if !strategy.AllowsTool(call.Function) {
 			atBudgetBoundary := used >= strategy.MaxActionTools ||
 				(strategy.CompletionReserve > 0 && used >= strategy.ActionToolBudgetLimit-strategy.CompletionReserve)
-			if !atBudgetBoundary {
+			if !atBudgetBoundary || (strategy.AllowedTools != nil && len(strategy.AllowedTools) == 0) {
 				code = "tool_not_available"
 				budget--
 			}

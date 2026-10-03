@@ -46,10 +46,12 @@ type ExternalEffectClaimRequest struct {
 }
 
 type ExternalEffectClaimDecision struct {
-	Claims       []ExternalEffectClaim
-	Granted      bool
-	AlreadyKnown bool
-	BlockedByRun string
+	Claims           []ExternalEffectClaim
+	Granted          bool
+	AlreadyKnown     bool
+	BlockedByRun     string
+	NeedsObservation bool
+	BlockingClaims   []ExternalEffectClaim
 }
 
 type ExternalResourceWait struct {
@@ -400,35 +402,16 @@ func (s *Store) claimExternalEffectsOnce(ctx context.Context, request ExternalEf
 		}
 		return ExternalEffectClaimDecision{Claims: existing, AlreadyKnown: true}, nil
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT run_id, target_key FROM external_effect_claims
-		WHERE tenant_id = ? AND person_id = ? AND state <> 'observed'`,
-		request.TenantID, request.PersonID)
+	blockers, needsObservation, err := externalResourceBlockers(ctx, tx, request.TenantID, request.PersonID, request.RunID, targets)
 	if err != nil {
 		return ExternalEffectClaimDecision{}, err
 	}
-	var blockedBy string
-	for rows.Next() {
-		var heldRun, heldTarget string
-		if err := rows.Scan(&heldRun, &heldTarget); err != nil {
-			_ = rows.Close()
-			return ExternalEffectClaimDecision{}, err
+	blockedBy := ""
+	if len(blockers) > 0 {
+		blockedBy = blockers[0].RunID
+		if needsObservation {
+			return ExternalEffectClaimDecision{BlockedByRun: blockedBy, NeedsObservation: true, BlockingClaims: blockers}, nil
 		}
-		for _, target := range targets {
-			if externalTargetsConflict(target, heldTarget) {
-				blockedBy = heldRun
-				break
-			}
-		}
-		if blockedBy != "" {
-			break
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return ExternalEffectClaimDecision{}, err
-	}
-	if err := rows.Close(); err != nil {
-		return ExternalEffectClaimDecision{}, err
 	}
 	if blockedBy != "" {
 		encoded, err := json.Marshal(targets)
@@ -446,7 +429,7 @@ func (s *Store) claimExternalEffectsOnce(ctx context.Context, request ExternalEf
 		if err := tx.Commit(); err != nil {
 			return ExternalEffectClaimDecision{}, err
 		}
-		return ExternalEffectClaimDecision{BlockedByRun: blockedBy}, nil
+		return ExternalEffectClaimDecision{BlockedByRun: blockedBy, BlockingClaims: blockers}, nil
 	}
 	now := time.Now().Unix()
 	claims := make([]ExternalEffectClaim, 0, len(targets))
@@ -521,75 +504,14 @@ func externalTargetsConflict(a, b string) bool {
 // checks again before dispatch, so a competing Run can never gain authority
 // merely because a wakeup was queued.
 func (s *Store) ListReadyExternalResourceWaits(ctx context.Context, limit int) ([]ExternalResourceWait, error) {
-	if s == nil || s.db == nil {
-		return nil, fmt.Errorf("external resource store is unavailable")
-	}
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT w.tenant_id, w.person_id, w.run_id, w.effect_id, w.targets_json, w.status
-		FROM external_resource_waits w JOIN runs r ON r.tenant_id = w.tenant_id AND r.id = w.run_id
-		WHERE w.status IN ('pending', 'queued') AND r.status = 'waiting_external' AND r.person_id = w.person_id
-		AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.tenant_id = w.tenant_id AND child.resumes_run_id = w.run_id)
-		ORDER BY w.created_at, w.run_id LIMIT ?`, limit)
+	waits, err := s.ListActiveExternalResourceWaits(ctx, limit)
 	if err != nil {
 		return nil, err
 	}
-	var pending []ExternalResourceWait
-	for rows.Next() {
-		var wait ExternalResourceWait
-		var encoded string
-		if err := rows.Scan(&wait.TenantID, &wait.PersonID, &wait.RunID, &wait.EffectID, &encoded, &wait.Status); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		if err := json.Unmarshal([]byte(encoded), &wait.TargetKeys); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		pending = append(pending, wait)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
 	var ready []ExternalResourceWait
-	for _, wait := range pending {
-		if wait.Status == "queued" {
-			ready = append(ready, wait)
-			continue
-		}
-		claims, err := s.db.QueryContext(ctx, `SELECT target_key FROM external_effect_claims
-			WHERE tenant_id = ? AND person_id = ? AND state <> 'observed'`, wait.TenantID, wait.PersonID)
-		if err != nil {
-			return nil, err
-		}
-		conflict := false
-		for claims.Next() {
-			var held string
-			if err := claims.Scan(&held); err != nil {
-				_ = claims.Close()
-				return nil, err
-			}
-			for _, target := range wait.TargetKeys {
-				if externalTargetsConflict(target, held) {
-					conflict = true
-					break
-				}
-			}
-		}
-		if err := claims.Err(); err != nil {
-			_ = claims.Close()
-			return nil, err
-		}
-		if err := claims.Close(); err != nil {
-			return nil, err
-		}
-		if !conflict {
-			ready = append(ready, wait)
+	for _, wait := range waits {
+		if wait.Ready && wait.RunStatus == "waiting_external" {
+			ready = append(ready, wait.ExternalResourceWait)
 		}
 	}
 	return ready, nil
@@ -613,7 +535,7 @@ func (s *Store) MarkExternalResourceWaitQueued(ctx context.Context, wait Externa
 func (s *Store) IsRunExternalResourceWaitPending(ctx context.Context, tenantID, runID string) (bool, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_resource_waits
-		WHERE tenant_id = ? AND run_id = ? AND status = 'pending'`, normalizeTenant(tenantID), runID).Scan(&count)
+		WHERE tenant_id = ? AND run_id = ? AND status = 'pending' AND EXISTS (SELECT 1 FROM runs r WHERE r.tenant_id=external_resource_waits.tenant_id AND r.id=external_resource_waits.run_id AND r.status='waiting_external')`, normalizeTenant(tenantID), runID).Scan(&count)
 	return count > 0, err
 }
 

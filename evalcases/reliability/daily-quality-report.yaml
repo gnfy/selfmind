@@ -25,6 +25,8 @@ expect:
     - "Provider admission waits:"
     - "Automatic recovery:"
     - "Durable waits:"
+    - "Work-chain source: committed Run parents"
+    - "External resource waits now:"
     - "Approval backlog now:"
     - "Approval continuations:"
     - "Recall:"

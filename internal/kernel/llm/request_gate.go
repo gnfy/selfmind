@@ -30,6 +30,7 @@ type requestRoute struct {
 	cooldownUntil time.Time
 	rateFailures  int
 	activeRoles   map[string]int
+	changed       chan struct{}
 }
 
 func NewRequestGate(maxConcurrent int, observers ...RequestWaitObserver) *RequestGate {
@@ -64,7 +65,7 @@ func (g *RequestGate) Wrap(provider Provider, routeID string) Provider {
 	g.mu.Lock()
 	route := g.routes[routeID]
 	if route == nil {
-		route = &requestRoute{sem: make(chan struct{}, g.maxConcurrent)}
+		route = &requestRoute{sem: make(chan struct{}, g.maxConcurrent), changed: make(chan struct{}), activeRoles: make(map[string]int)}
 		g.routes[routeID] = route
 	}
 	g.mu.Unlock()
@@ -141,24 +142,17 @@ func (p *gatedProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 	return out, nil
 }
 
+// Brief contention stays in the current Run. Longer waits still use the
+// durable checkpoint path; rate-limit cooldowns never consume this grace.
+const providerCapacityGrace = 250 * time.Millisecond
+
 func (p *gatedProvider) acquire(ctx context.Context) error {
 	started := time.Now()
-	if providerWaitDeferrable(ctx) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if wait := p.route.tryAcquire(); wait != nil {
-			p.observeAdmission(ctx, "deferred", wait.Reason, time.Since(started), wait.NotBefore)
-			return wait
-		}
-		if err := ctx.Err(); err != nil {
-			p.route.release()
-			return err
-		}
-		p.admitted(ctx)
-		return nil
+	reason, err := p.route.acquire(ctx, admissionRole(ctx), providerWaitDeferrable(ctx))
+	if wait, ok := err.(*ProviderWait); ok {
+		p.observeAdmission(ctx, "deferred", wait.Reason, time.Since(started), wait.NotBefore)
+		return wait
 	}
-	reason, err := p.route.acquire(ctx)
 	if reason != "" {
 		p.gate.mu.Lock()
 		observe := p.gate.observeWait
@@ -167,81 +161,75 @@ func (p *gatedProvider) acquire(ctx context.Context) error {
 			observe(ctx, p.routeID, reason, time.Since(started))
 		}
 	}
+	if err == nil && ctx.Err() != nil {
+		p.release(ctx)
+		err = ctx.Err()
+	}
 	if err == nil {
-		p.admitted(ctx)
+		p.observeAdmission(ctx, "acquired", reason, time.Since(started), time.Time{})
 	} else {
 		p.observeAdmission(ctx, "canceled", reason, time.Since(started), time.Time{})
 	}
 	return err
 }
 
-// tryAcquire never reserves a worker while another request or a 429 cooldown
-// owns this physical route. A short capacity deadline is polled by the durable
-// queue; a cooldown uses the actual route deadline.
-func (r *requestRoute) tryAcquire() *ProviderWait {
-	r.mu.Lock()
-	until := r.cooldownUntil
-	r.mu.Unlock()
-	if time.Now().Before(until) {
-		return &ProviderWait{Reason: "rate_limit", NotBefore: until}
-	}
-	select {
-	case r.sem <- struct{}{}:
-		r.mu.Lock()
-		until = r.cooldownUntil
-		r.mu.Unlock()
-		if time.Now().Before(until) {
-			r.release()
-			return &ProviderWait{Reason: "rate_limit", NotBefore: until}
-		}
-		return nil
-	default:
-		return &ProviderWait{Reason: "capacity", NotBefore: time.Now().Add(time.Second)}
-	}
-}
-
-func (r *requestRoute) acquire(ctx context.Context) (string, error) {
+// Permit ownership and role attribution change under the same mutex. Waiters
+// wake on release or cooldown changes, then recheck both before admission.
+func (r *requestRoute) acquire(ctx context.Context, role string, deferrable bool) (string, error) {
 	reason := ""
+	deadline := time.Now().Add(providerCapacityGrace)
 	for {
+		if err := ctx.Err(); err != nil {
+			return reason, err
+		}
 		r.mu.Lock()
-		wait := time.Until(r.cooldownUntil)
-		r.mu.Unlock()
-		if wait <= 0 {
+		until := r.cooldownUntil
+		changed := r.changed
+		cooling := time.Now().Before(until)
+		if !cooling {
 			select {
 			case r.sem <- struct{}{}:
-			default:
-				reason = "capacity"
-				select {
-				case r.sem <- struct{}{}:
-				case <-ctx.Done():
-					return reason, ctx.Err()
-				}
-			}
-			r.mu.Lock()
-			cooling := time.Until(r.cooldownUntil) > 0
-			r.mu.Unlock()
-			if !cooling {
-				if err := ctx.Err(); err != nil {
-					r.release()
-					return reason, err
-				}
+				r.activeRoles[role]++
+				r.mu.Unlock()
 				return reason, nil
+			default:
 			}
-			r.release()
-			continue
 		}
-		reason = "rate_limit"
-		timer := time.NewTimer(wait)
+		r.mu.Unlock()
+		var timer *time.Timer
+		var timeout <-chan time.Time
+		if cooling {
+			reason = "rate_limit"
+			if deferrable {
+				return reason, &ProviderWait{Reason: reason, NotBefore: until}
+			}
+			timer = time.NewTimer(time.Until(until))
+		} else {
+			reason = "capacity"
+			if deferrable {
+				if time.Now().After(deadline) {
+					return reason, &ProviderWait{Reason: reason, NotBefore: time.Now().Add(time.Second)}
+				}
+				timer = time.NewTimer(time.Until(deadline))
+			}
+		}
+		if timer != nil {
+			timeout = timer.C
+		}
 		select {
-		case <-timer.C:
 		case <-ctx.Done():
-			timer.Stop()
+			if timer != nil {
+				timer.Stop()
+			}
 			return reason, ctx.Err()
+		case <-changed:
+			if timer != nil {
+				timer.Stop()
+			}
+		case <-timeout:
 		}
 	}
 }
-
-func (r *requestRoute) release() { <-r.sem }
 
 func (r *requestRoute) observe(err error) {
 	if err == nil {
@@ -267,5 +255,7 @@ func (r *requestRoute) observe(err error) {
 	until := time.Now().Add(delay)
 	if until.After(r.cooldownUntil) {
 		r.cooldownUntil = until
+		close(r.changed)
+		r.changed = make(chan struct{})
 	}
 }

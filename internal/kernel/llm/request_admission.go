@@ -36,16 +36,6 @@ func admissionRole(ctx context.Context) string {
 	return role
 }
 
-func (p *gatedProvider) admitted(ctx context.Context) {
-	p.route.mu.Lock()
-	if p.route.activeRoles == nil {
-		p.route.activeRoles = make(map[string]int)
-	}
-	p.route.activeRoles[admissionRole(ctx)]++
-	p.route.mu.Unlock()
-	p.observeAdmission(ctx, "acquired", "", 0, time.Time{})
-}
-
 func (p *gatedProvider) release(ctx context.Context) {
 	p.route.mu.Lock()
 	role := admissionRole(ctx)
@@ -54,7 +44,9 @@ func (p *gatedProvider) release(ctx context.Context) {
 	} else {
 		p.route.activeRoles[role]--
 	}
-	p.route.release()
+	<-p.route.sem
+	close(p.route.changed)
+	p.route.changed = make(chan struct{})
 	p.route.mu.Unlock()
 	p.observeAdmission(ctx, "released", "", 0, time.Time{})
 }

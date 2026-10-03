@@ -378,6 +378,12 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 	}
 
+	if waits, err := d.Control.ListExternalResourceWaits(ctx, identity.TenantID, identity.PersonID, 100); err == nil {
+		sb.WriteString(formatResourceWaitBacklog(waits, time.Now()))
+	} else {
+		sb.WriteString("External resource waits now: unavailable\n")
+	}
+
 	// Last run error across the person's recent runs.
 	if runs, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 10); err == nil {
 		for _, r := range runs {

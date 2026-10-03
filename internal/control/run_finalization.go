@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +39,10 @@ type RunFinalization struct {
 	Continuation      *QueuedTask
 	ExpectedRunStatus string
 	RequireCheckpoint bool
+	// ResourceWait closes a parked resource wait with no remaining observation
+	// producer. It changes the Run, wait marker and result in this transaction;
+	// uncertain claims remain occupied and a claimed parent cannot be rewritten.
+	ResourceWait *ExternalResourceWait
 	// A parked continuation may itself be a claimed queue child. Settle that
 	// exact source row in the same transaction that creates its next hop.
 	ConsumedQueueID         string
@@ -142,6 +147,36 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if input.ExpectedRunStatus != "" {
 		updateRun += ` AND status = ?`
 		updateArgs = append(updateArgs, input.ExpectedRunStatus)
+	}
+	if wait := input.ResourceWait; wait != nil {
+		if input.RunStatus != "blocked" || input.ExpectedRunStatus != "waiting_external" || wait.RunID != input.RunID || wait.TenantID != tenant || wait.PersonID != personID {
+			return nil, fmt.Errorf("resource wait correction requires the exact parked owner")
+		}
+		var encodedTargets string
+		if err := tx.QueryRowContext(ctx, `SELECT targets_json FROM external_resource_waits WHERE tenant_id=? AND person_id=? AND run_id=? AND effect_id=? AND status='pending'`, tenant, personID, input.RunID, wait.EffectID).Scan(&encodedTargets); err != nil {
+			return nil, err
+		}
+		var recordedTargets []string
+		if json.Unmarshal([]byte(encodedTargets), &recordedTargets) != nil || !slices.Equal(recordedTargets, wait.TargetKeys) {
+			return nil, fmt.Errorf("resource wait target set changed")
+		}
+		blockers, needsObservation, err := externalResourceBlockers(ctx, tx, tenant, personID, input.RunID, wait.TargetKeys)
+		if err != nil {
+			return nil, err
+		}
+		if len(blockers) == 0 || !needsObservation {
+			return nil, fmt.Errorf("resource wait observation source changed")
+		}
+		updateRun += ` AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.tenant_id=? AND child.resumes_run_id=?)`
+		updateArgs = append(updateArgs, tenant, input.RunID)
+		result, err := tx.ExecContext(ctx, `UPDATE external_resource_waits SET updated_at=?
+			WHERE tenant_id=? AND person_id=? AND run_id=? AND effect_id=? AND status='pending'`, now.Unix(), tenant, personID, input.RunID, wait.EffectID)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return nil, fmt.Errorf("resource wait changed before correction")
+		}
 	}
 	result, err := tx.ExecContext(ctx, updateRun, updateArgs...)
 	if err != nil {
@@ -274,6 +309,11 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 			return nil, fmt.Errorf("save handoff: %w", err)
 		}
 	}
+	if input.ResourceWait != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE task_handoffs SET summary=?,next_steps_json=?,risks_json=? WHERE id=? AND run_id=?`, input.Handoff.Summary, string(handoffNextJSON), string(risksJSON), "handoff_run_"+input.RunID, input.RunID); err != nil {
+			return nil, err
+		}
+	}
 	if duplicateEffect {
 		var payload map[string]interface{}
 		if json.Unmarshal(input.Event.Payload, &payload) != nil || payload == nil {
@@ -295,7 +335,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		).Scan(&existing); err != nil {
 			return nil, fmt.Errorf("check run outcome event: %w", err)
 		}
-		if existing == 0 {
+		if existing == 0 || input.ResourceWait != nil {
 			event := Event{
 				ID:             "event_" + uuid.NewString(),
 				TenantID:       tenant,
@@ -308,6 +348,9 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 				Payload:        payload,
 				IdempotencyKey: "run:" + input.RunID + ":outcome",
 				CreatedAt:      now,
+			}
+			if input.ResourceWait != nil {
+				event.IdempotencyKey = input.Event.IdempotencyKey + ":outcome"
 			}
 			if err := tx.QueryRowContext(ctx,
 				`UPDATE event_sequence SET next_cursor = next_cursor + 1 WHERE id = 1 RETURNING next_cursor`,

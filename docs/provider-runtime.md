@@ -636,6 +636,11 @@ absorbs these without touching the wire contract:
   reason and counts affected Runs. This is request admission, not a
   complete Run scheduler. A checkpointed foreground Run can park durably at
   admission and release its worker; its exact continuation remains queued.
+  Capacity contention first gets at most 250ms of cancellable grace in the
+  current Run, avoiding checkpoint/recall churn when a permit is just closing.
+  A 429 cooldown is deferred immediately; long capacity waits retain the same
+  durable retry limits. Permit ownership and role counts change atomically,
+  so acquisition/release races cannot invent an unattributed occupant.
   Internal `model.provider_admission` events record acquire, release, defer,
   and cancellation with capacity and occupying role counts, without other
   people's Run IDs. `provider.call.usage` labels a wait `deferred` and records

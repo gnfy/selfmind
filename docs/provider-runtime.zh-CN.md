@@ -644,7 +644,10 @@ providers:
   已知 Run 的容量或冷却等待会以内部 `model.provider_wait` 事件记录线路、原因、时长及
   是否取消；日报按原因汇总并统计受影响的 Run 数。这不是完整的 Run 调度：等待
   provider 的完整 Run 调度。已保存 checkpoint 的前台 Run 可在准入时持久等待并释放
-  worker，精确续接仍在队列中。内部 `model.provider_admission` 事件记录取得、释放、
+  worker，精确续接仍在队列中。容量争用先在当前 Run 内最多等待 250ms，且可取消，
+  避免名额刚释放时就反复保存检查点并重新召回上下文。429 冷却立即延后；较长的容量
+  等待继续使用既有持久续接和重试上限。名额归属与角色计数在同一锁内变更，避免取得/
+  释放竞态制造没有归属的占用者。内部 `model.provider_admission` 事件记录取得、释放、
   延后和取消，并带容量及占用角色的计数，不包含其他人的 Run ID。
   `provider.call.usage` 把等待标为 `deferred`，并记录 `provider_dispatched`：本地容量或
   冷却导致的未派发不计入远程调用数，实际发出后收到 429 的尝试仍计入；历史事件保持

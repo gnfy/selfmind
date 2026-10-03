@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -104,6 +105,15 @@ def tool_intervals(database, lineages):
     return intervals
 
 
+def isolate_configuration(source_config, runtime_root):
+    # Readiness and model transactions live beside config.yaml, separately
+    # from control.db. Keep both inside the throwaway runtime.
+    isolated_config = runtime_root / "config.yaml"
+    shutil.copyfile(source_config, isolated_config)
+    isolated_config.chmod(0o600)
+    return isolated_config
+
+
 def main():
     args = parse_args()
     source = Path(__file__).resolve().parent.parent
@@ -113,6 +123,7 @@ def main():
     names = ("aster", "birch", "cedar")[: args.capacity]
     with tempfile.TemporaryDirectory(prefix="selfmind-parallel-soak-", dir=Path.home()) as temporary:
         root = Path(temporary)
+        isolated_config = isolate_configuration(config_path, root)
         binary = root / "selfmind"
         subprocess.run(["go", "build", "-o", str(binary), "./cmd/selfmind"],
                        cwd=source, check=True, stdout=subprocess.DEVNULL)
@@ -148,7 +159,7 @@ def main():
         with log_path.open("w") as log:
             def launch():
                 return subprocess.Popen(
-                    [str(binary), "--config", str(config_path), "gateway", "run",
+                    [str(binary), "--config", str(isolated_config), "gateway", "run",
                      "--addr", f"127.0.0.1:{port}"],
                     cwd=source, env=env, stdout=log, stderr=subprocess.STDOUT,
                 )

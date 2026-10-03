@@ -51,6 +51,17 @@ func ExternalEffectClaimMiddleware(store *control.Store) ResultMiddleware {
 				return uninvokedExternalEffect(fmt.Errorf("external effect %s was already claimed; inspect its observed state before retrying", callID))
 			}
 			if !claim.Granted {
+				if claim.NeedsObservation {
+					ids := make([]string, 0, len(claim.BlockingClaims))
+					for _, held := range claim.BlockingClaims {
+						ids = append(ids, held.ID)
+					}
+					message := fmt.Sprintf("External effect remains unresolved in run %s (claims: %s). This call was not dispatched. No automatic observation source can release this target.", claim.BlockedByRun, strings.Join(ids, ", "))
+					return uninvokedExternalEffect(newStableToolRecoveryError(errors.New(message),
+						"external_effect_unresolved", "stale_precondition", message,
+						"Inspect with a proven read-only command or an owner-approved observation script. Do not replay the earlier effect or clear its claim. If observation cannot establish the result, report the unresolved effect and the required human action; do not promise automatic continuation.",
+						"admission", "after_observation", "not_dispatched", false, "read_only_observation", "human_handoff"))
+				}
 				return uninvokedExternalEffect(externalResourcePause{blockedByRun: claim.BlockedByRun})
 			}
 			if err := store.MarkExternalEffectPossible(contextFromArgs(args), scope.TenantID, scope.RunID, effectID); err != nil {
@@ -92,6 +103,16 @@ func (p externalResourcePause) ToolRunPause() (string, string, bool) {
 	return "external_resource_wait", "This run is waiting for an occupied external target. The attempted tool call was not dispatched; SelfMind will resume this work after the target is observed and released.", false
 }
 func (externalResourcePause) ToolRunPauseStatus() string { return "waiting_external" }
+func (externalResourcePause) ToolErrorCode() string      { return "external_resource_wait" }
+func (externalResourcePause) ToolErrorCategory() string  { return "external_wait" }
+func (p externalResourcePause) ModelSafeMessage() string { return p.Error() }
+func (externalResourcePause) ToolRecoveryHint() string {
+	return "The daemon will recheck the occupied target. A live owner or bound watcher must observe and release every conflicting claim before this exact work can continue."
+}
+func (externalResourcePause) ToolFailurePhase() string { return "admission" }
+func (externalResourcePause) ToolRetryability() string { return "after_observation" }
+func (externalResourcePause) ToolEffectState() string  { return "not_dispatched" }
+func (externalResourcePause) ToolStateChanged() bool   { return false }
 
 func uninvokedExternalEffect(err error) (kernel.ToolDispatchResult, error) {
 	invoked := false

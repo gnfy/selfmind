@@ -843,6 +843,14 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		plan = d.latestPlanForTask(ctx, task.ID)
 	}
 	card := formatTaskStatus(task, handoff, active, plan)
+	if waits, err := d.Control.ListExternalResourceWaits(ctx, identity.TenantID, identity.PersonID, 100); err == nil {
+		for _, wait := range waits {
+			if wait.RunID == exactRunID {
+				card += "\n\n" + formatResourceWaitDetail(wait)
+			}
+		}
+	}
+
 	if active != nil {
 		card += "\n\n" + d.activeProgress(ctx, identity, active)
 	}

@@ -195,14 +195,21 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   Trusted built-in adapters may prove exact target identities and whether a
   successful return settles the effect. Without that proof, the claim uses a
   person-wide unknown target and remains unresolved after the call. External
-  tool metadata cannot narrow it. A conflicting call is not executed and
-  creates a durable resource wait bound to the exact Run; the daemon wakes it
-  only after every claimed target has a recorded observation. The wakeup
-  queues a continuation and never replays the failed tool call. A second
-  effect in the same Run also conflicts with its own unresolved first effect.
-  The claim gate rechecks the target when the continuation eventually acts.
-  This wait releases the model worker; if the observation cannot be proved,
-  the target remains visibly occupied rather than being released by time.
+  tool metadata cannot narrow it. A conflicting call is never dispatched.
+  A durable resource wait is created only when another executing Run or a
+  watcher bound to the exact held effect can provide observation. The daemon
+  wakes the exact continuation after every target has a recorded observation;
+  the wakeup never replays the refused call. A second effect in the same Run
+  still conflicts with its unresolved first effect. Without an independent
+  observer, it returns typed `external_effect_unresolved` feedback to Main:
+  inspect through proven read-only commands or an owner-approved observation
+  script, or report the unresolved effect and required human action. It does
+  not promise an automatic wakeup. If a parked wait loses its observer, the
+  existing finalization transaction records a blocked, resumable outcome and
+  a recoverable notice, while preserving the uncertain claims and Plan. The
+  resource-wait projection is shared by admission, wakeup, `/status`, `/diag`,
+  and the daily report; historical blocked waits cannot starve active wakeups.
+  The claim gate rechecks all targets before any subsequent dispatch.
   Restarting or finishing a Run does not release an uncertain claim; a durable
   observation must do so. Target sets are acquired and observed atomically.
   For an unknown target, `/effects resolve <claim_id> <watch_id>` is a

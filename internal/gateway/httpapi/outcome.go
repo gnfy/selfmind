@@ -212,15 +212,21 @@ func reconcileStructuredOutcome(outcome api.RunOutcome) api.RunOutcome {
 		outcome.CompletionReason = "completed"
 		outcome.Resumable = false
 	case "waiting_external":
-		outcome.CompletionReason = "waiting_external"
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "waiting_external"
+		}
 		outcome.Resumable = false
 	case "waiting_user":
 		// Prepared work awaiting the user's explicit go-ahead. Distinct from
 		// blocked (an obstacle) so task health reads correctly.
-		outcome.CompletionReason = "waiting_user"
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "waiting_user"
+		}
 		outcome.Resumable = false
 	case "waiting_finalization":
-		outcome.CompletionReason = "waiting_finalization"
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "waiting_finalization"
+		}
 		outcome.Resumable = false
 	case "blocked":
 		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {

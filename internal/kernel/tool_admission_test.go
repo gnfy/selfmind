@@ -70,3 +70,12 @@ func TestAdmissionReservePreservesVerificationAndRefusalIdentity(t *testing.T) {
 		t.Fatalf("available action capacity was ignored: %+v %+v %d", allowed, refused, dropped)
 	}
 }
+
+func TestFinalAnswerPhaseIsUnavailableRatherThanBudgetFailure(t *testing.T) {
+	strategy := DefaultTaskStrategy()
+	strategy.AllowedTools = map[string]bool{}
+	allowed, refused, budget, _ := admitToolCalls([]llm.ToolCall{{ID: "repeat-finish", Function: "finish_run"}}, strategy, strategy.MaxActionTools, nil)
+	if len(allowed) != 0 || len(refused) != 1 || refused[0].err.ToolErrorCode() != "tool_not_available" || budget != 0 {
+		t.Fatalf("phase refusal was attributed to capacity: %+v %+v budget=%d", allowed, refused, budget)
+	}
+}

@@ -2504,7 +2504,7 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 		InputSummary:            inputSummary,
 		WorkKey:                 strings.ToUpper(strings.TrimSpace(options.WorkKey)),
 		ResumesRunID:            strings.TrimSpace(options.ResumesRunID),
-		RecoveryContractVersion: RunRecoveryContractVersion,
+		RecoveryContractVersion: CurrentRunRecoveryContractVersion,
 		Status:                  "running",
 		StartedAt:               time.Now(),
 	}

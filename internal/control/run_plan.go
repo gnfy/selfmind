@@ -15,6 +15,9 @@ import (
 
 const RunRecoveryContractVersion = 1
 
+// Existing recovery mechanics remain v1; only new Runs opt into assessed cancellations.
+const CurrentRunRecoveryContractVersion = 2
+
 // completionPreconditionError distinguishes a correctable verdict from a
 // storage failure. No completion state was committed when this is returned.
 type completionPreconditionError struct{ message string }
@@ -23,6 +26,10 @@ func (e *completionPreconditionError) Error() string              { return e.mes
 func (*completionPreconditionError) CompletionPrecondition() bool { return true }
 
 type RunPlanStepInput struct {
+	CancellationDisposition string `json:"cancellation_disposition,omitempty"`
+	CancellationReason      string `json:"cancellation_reason,omitempty"`
+	UserTakeoverQuote       string `json:"user_takeover_quote,omitempty"`
+
 	StepID                 string `json:"step_id,omitempty"`
 	Step                   string `json:"step"`
 	Status                 string `json:"status"`
@@ -63,7 +70,8 @@ type RunPlanProjection struct {
 	// with the right content" to "a PR is created with the right content" while
 	// the step was still pending, completed it snapshots later, and nothing
 	// recorded that the bar had moved.
-	CriteriaRestated []RunPlanCriteriaChange `json:"criteria_restated,omitempty"`
+	CancellationDeferred []RunPlanStep           `json:"cancellation_deferred,omitempty"`
+	CriteriaRestated     []RunPlanCriteriaChange `json:"criteria_restated,omitempty"`
 }
 
 // RunPlanCriteriaChange is one step's acceptance bar before and after.
@@ -253,6 +261,15 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 			steps[i].ReuseReason = ""
 		}
 	}
+	var retained []RunPlanStep
+	if contractVersion >= CurrentRunRecoveryContractVersion {
+		steps, retained = retainOmittedOpenSteps(steps, identityPrevious)
+	}
+	cancellationDeferred, err := assessRunPlanCancellationsTx(ctx, tx, tenant, runID, contractVersion, steps)
+	cancellationDeferred = append(cancellationDeferred, retained...)
+	if err != nil {
+		return RunPlanProjection{}, err
+	}
 	for i := range steps {
 		if !steps[i].ReusePriorVerification {
 			continue
@@ -367,7 +384,7 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		if err := promoteThreadForRunTx(ctx, tx, tenant, runID); err != nil {
 			return RunPlanProjection{}, err
 		}
-		return RunPlanProjection{Plan: *previous, Changed: false, WorkUnits: units, VerificationDeferred: verificationDeferred}, nil
+		return RunPlanProjection{Plan: *previous, Changed: false, WorkUnits: units, VerificationDeferred: verificationDeferred, CancellationDeferred: cancellationDeferred}, nil
 	}
 	version := 1
 	if previous != nil {
@@ -383,11 +400,11 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		if _, err := tx.ExecContext(ctx, `INSERT INTO run_plan_steps
 			(run_id, tenant_id, plan_version, step_id, sequence, step_text, status, success_criteria,
 			 verification_required, related_task_id, work_unit_id, work_unit_boundary, source_step_id, source_plan_version,
-			 prior_verification_reused, reuse_reason, created_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
+			 prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote, created_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
 			step.Step, step.Status, step.SuccessCriteria, boolInt(step.VerificationRequired), step.RelatedTaskID, stepWorkUnits[i],
 			boolInt(isRunPlanBoundary(steps, i)), step.SourceStepID, step.SourcePlanVersion,
-			boolInt(step.ReusePriorVerification), step.ReuseReason, now.Unix()); err != nil {
+			boolInt(step.ReusePriorVerification), step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, now.Unix()); err != nil {
 			return RunPlanProjection{}, err
 		}
 	}
@@ -402,7 +419,7 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		}
 	}
 	plan := RunPlan{RunID: runID, Version: version, Explanation: strings.TrimSpace(explanation), ContentHash: hash, Steps: steps, CreatedAt: now}
-	return RunPlanProjection{Plan: plan, Changed: true, WorkUnits: units, VerificationDeferred: verificationDeferred, CriteriaRestated: restated}, nil
+	return RunPlanProjection{Plan: plan, Changed: true, WorkUnits: units, VerificationDeferred: verificationDeferred, CriteriaRestated: restated, CancellationDeferred: cancellationDeferred}, nil
 }
 
 // normalizeFirstPlanVerification turns an impossible first snapshot into an
@@ -598,6 +615,9 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 				item.SuccessCriteria = old.SuccessCriteria
 			}
 			item.VerificationRequired = item.VerificationRequired || old.VerificationRequired
+			if item.Status == "cancelled" && old.Status == "cancelled" && item.CancellationDisposition == "" && item.CancellationReason == "" && item.UserTakeoverQuote == "" {
+				item.CancellationDisposition, item.CancellationReason, item.UserTakeoverQuote = old.CancellationDisposition, old.CancellationReason, old.UserTakeoverQuote
+			}
 		}
 		// Execution attribution is already known for an existing step. A
 		// normal progress update need not repeat the work-unit identity.
@@ -731,8 +751,8 @@ func aggregateRunPlanStatus(steps []RunPlanStep) string {
 
 func hashRunPlanSteps(steps []RunPlanStep, workUnitIDs []string) string {
 	type hashStep struct {
-		StepID, Step, Status, SuccessCriteria, RelatedTaskID, WorkUnitID, ReuseReason string
-		VerificationRequired, WorkUnit, ReusePriorVerification                        bool
+		StepID, Step, Status, SuccessCriteria, RelatedTaskID, WorkUnitID, ReuseReason, CancellationDisposition, CancellationReason, UserTakeoverQuote string
+		VerificationRequired, WorkUnit, ReusePriorVerification                                                                                        bool
 	}
 	canonical := make([]hashStep, 0, len(steps))
 	for i, step := range steps {
@@ -741,7 +761,7 @@ func hashRunPlanSteps(steps []RunPlanStep, workUnitIDs []string) string {
 			workUnitID = workUnitIDs[i]
 		}
 		canonical = append(canonical, hashStep{step.StepID, step.Step, step.Status, step.SuccessCriteria, step.RelatedTaskID, workUnitID,
-			step.ReuseReason, step.VerificationRequired, step.WorkUnit, step.ReusePriorVerification})
+			step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.VerificationRequired, step.WorkUnit, step.ReusePriorVerification})
 	}
 	data, _ := json.Marshal(canonical)
 	sum := sha256.Sum256(data)
@@ -763,7 +783,7 @@ func latestRunPlanTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (*
 	plan.CreatedAt = time.Unix(created, 0)
 	rows, err := tx.QueryContext(ctx, `SELECT step_id, sequence, step_text, status, success_criteria, verification_required,
 		related_task_id, work_unit_id, work_unit_boundary, source_step_id, source_plan_version,
-		prior_verification_reused, reuse_reason FROM run_plan_steps
+		prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote FROM run_plan_steps
 		WHERE tenant_id=? AND run_id=? AND plan_version=? ORDER BY sequence`, tenantID, runID, plan.Version)
 	if err != nil {
 		return nil, err
@@ -775,7 +795,7 @@ func latestRunPlanTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (*
 		var verificationRequired, boundary, reused int
 		if err := rows.Scan(&step.StepID, &step.Sequence, &step.Step, &step.Status, &step.SuccessCriteria, &verificationRequired,
 			&step.RelatedTaskID, &workUnitID, &boundary, &step.SourceStepID, &step.SourcePlanVersion,
-			&reused, &step.ReuseReason); err != nil {
+			&reused, &step.ReuseReason, &step.CancellationDisposition, &step.CancellationReason, &step.UserTakeoverQuote); err != nil {
 			return nil, err
 		}
 		step.VerificationRequired = verificationRequired != 0
@@ -826,7 +846,7 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 	var unresolved []string
 	if plan != nil {
 		for _, step := range plan.Steps {
-			if step.Status != "completed" && step.Status != "cancelled" {
+			if step.Status != "completed" && (step.Status != "cancelled" || (contractVersion >= CurrentRunRecoveryContractVersion && !assessedCancellation(step.RunPlanStepInput))) {
 				unresolved = append(unresolved, step.Step)
 			}
 		}
@@ -881,7 +901,7 @@ func (s *Store) RunRecoveryState(ctx context.Context, tenantID, runID string) (R
 			if step.Status == "in_progress" {
 				snapshot.CurrentPlanStepID = step.StepID
 			}
-			if step.Status != "completed" && step.Status != "cancelled" {
+			if step.Status != "completed" && (step.Status != "cancelled" || (snapshot.ContractVersion >= CurrentRunRecoveryContractVersion && !assessedCancellation(step.RunPlanStepInput))) {
 				snapshot.UnresolvedStepIDs = append(snapshot.UnresolvedStepIDs, step.StepID)
 			}
 		}

@@ -441,6 +441,9 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 		plan.WriteString("These step IDs belong to the current Run. Preserve the agreed acceptance conditions; use update_plan for a complete snapshot.\n")
 		for _, step := range r.Plan {
 			entry := fmt.Sprintf("- step_id=%s [%s] %s; success_criteria=%q verification_required=%t\n", trimLine(step.StepID, 80), trimLine(step.Status, 40), trimLine(step.Step, 240), trimLine(step.SuccessCriteria, 400), step.VerificationRequired)
+			if step.CancellationDisposition != "" {
+				entry += fmt.Sprintf("  cancellation_disposition=%s reason=%q user_takeover_quote=%q\n", trimLine(step.CancellationDisposition, 40), trimLine(step.CancellationReason, 240), trimLine(step.UserTakeoverQuote, 240))
+			}
 			if plan.Len()+len(entry) > maxChars/3 {
 				plan.WriteString("- Additional plan context omitted by budget; inspect the current Run before updating omitted steps.\n")
 				break

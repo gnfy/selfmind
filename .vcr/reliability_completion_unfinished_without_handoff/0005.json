@@ -3,12 +3,12 @@
   "method": "stream",
   "events": [
     {
-      "content": "I am reading draft"
+      "content": "I reviewed `draft.txt` ("
     },
     {
       "usage": {
-        "input_tokens": 10928,
-        "output_tokens": 4,
+        "input_tokens": 4905,
+        "output_tokens": 8,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -16,12 +16,12 @@
       }
     },
     {
-      "content": ".txt to review its contents and assess readiness for delivery."
+      "content": "content: `Draft ready`). The review step is complete, but delivery remains pending and necessary.\n\nWhat remains necessary to finish the work"
     },
     {
       "usage": {
         "input_tokens": 0,
-        "output_tokens": 12,
+        "output_tokens": 27,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -29,9 +29,25 @@
       }
     },
     {
+      "content": ":\n- Provide the recipient details for `draft.txt`.\n- Once specified, deliver the draft to that recipient to"
+    },
+    {
       "usage": {
         "input_tokens": 0,
-        "output_tokens": 18,
+        "output_tokens": 25,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " complete the second step of the plan."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 8,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -43,27 +59,13 @@
     },
     {
       "usage": {
-        "input_tokens": 1093,
+        "input_tokens": 2287,
         "output_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0
       }
-    },
-    {
-      "tool_calls": [
-        {
-          "ID": "call_1652542",
-          "Function": "read_file",
-          "Args": "{\"path\":\"draft.txt\"}",
-          "replay_metadata": {
-            "google": {
-              "thought_signature": "ErUBCrIBAWkUfRMdF5woVCwPCwdnEbAFE8R9Yx+UaYjUygmEHYjLP+9G9zw7Hj2LbLsiiBfMNBd/AahIVlppD8SGFv6XZFcewwy5RKx9uJw5bM+yuvoUSSoaDh6sJaNXixQHArFSyj3Xjk0iw4rGpjrAC+ypo7dwLXR7N+gDBf02a8orDGLLbc8sRmGCMS4xWGghMRv0/JspTKghAtYYHBksHYJAbUmHWzirJWJHmR2o9P2JhCQaGw=="
-            }
-          }
-        }
-      ]
     }
   ]
 }

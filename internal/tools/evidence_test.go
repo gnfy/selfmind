@@ -13,6 +13,36 @@ import (
 	"selfmind/internal/verification"
 )
 
+func TestCommandEvidenceRetainsDispatchFacts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		invoked bool
+		process *kernel.ToolProcessResult
+	}{
+		{"admission refusal", false, nil},
+		{"preparation failure", true, &kernel.ToolProcessResult{Started: false}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			events := make(chan string, 1)
+			ctx := kernel.WithEventChannel(context.Background(), events)
+			exec := EvidenceMiddleware()(func(map[string]interface{}) (kernel.ToolDispatchResult, error) {
+				return kernel.ToolDispatchResult{Invoked: &tc.invoked, Process: tc.process}, errors.New("not dispatched")
+			})
+			_, _ = exec(map[string]interface{}{"_context": ctx, "_tool_name": "terminal", "command": "inspect-status"})
+			e := readEvidenceEvent(t, events)
+			raw, _ := json.Marshal(e)
+			var facts map[string]interface{}
+			_ = json.Unmarshal(raw, &facts)
+			if facts["invoked"] != tc.invoked {
+				t.Fatalf("lost invocation observation: %s", raw)
+			}
+			if tc.process != nil && facts["process"] == nil {
+				t.Fatalf("lost process observation: %s", raw)
+			}
+		})
+	}
+}
+
 type evidenceVerificationProjection struct{}
 
 func (evidenceVerificationProjection) Project(context.Context, PlanState) (PlanProjectionResult, error) {

@@ -118,6 +118,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 					selected.Plan = append(selected.Plan, kernel.PlanItem{
 						StepID: step.StepID, Step: step.Step, Status: step.Status,
 						SuccessCriteria: step.SuccessCriteria, VerificationRequired: step.VerificationRequired,
+						CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
 					})
 				}
 			}

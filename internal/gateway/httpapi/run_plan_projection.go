@@ -35,6 +35,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	for _, step := range state.Plan {
 		input = append(input, control.RunPlanStepInput{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
+			CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
 			SuccessCriteria:        step.SuccessCriteria,
 			VerificationRequired:   step.VerificationRequired,
 			ReusePriorVerification: step.ReusePriorVerification,
@@ -67,6 +68,12 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 			}),
 		})
 	}
+	for _, step := range projection.CancellationDeferred {
+		if len(review) >= 8 {
+			break
+		}
+		review = append(review, fmt.Sprintf("Step %s remains pending: cancellation does not resolve necessary unfinished work. Judge against the original goal and user corrections. If genuinely unnecessary, cancel with cancellation_disposition=not_required and a reason. An explicit user takeover additionally requires user_takeover_quote from actual user input. Otherwise keep the obligation open and finish blocked or waiting as appropriate.", step.StepID))
+	}
 	for _, step := range projection.VerificationDeferred {
 		if len(review) >= 8 {
 			break
@@ -81,6 +88,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 	for _, step := range projection.Plan.Steps {
 		plan.Plan = append(plan.Plan, tools.PlanStep{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
+			CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
 			SuccessCriteria:        step.SuccessCriteria,
 			VerificationRequired:   step.VerificationRequired,
 			ReusePriorVerification: step.ReusePriorVerification,

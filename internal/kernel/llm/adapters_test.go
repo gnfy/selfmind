@@ -12,6 +12,35 @@ import (
 	"testing"
 )
 
+func TestOpenAIStreamKeepsIndexlessToolIDsSeparate(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"id":"first","function":{"name":"update_plan","arguments":"{\"plan\":[]}"},"extra_content":{"signature":"first-signature"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, `data: {"choices":[{"delta":{"tool_calls":[{"id":"second","function":{"name":"finish_run","arguments":"{\"status\":\"done\"}"},"extra_content":{"signature":"second-signature"}}]}}]}`+"\n\n")
+		fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	a := NewOpenAIAdapter("test")
+	a.BaseURL = server.URL
+	ch, err := a.StreamChat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "close the task"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []ToolCall
+	for e := range ch {
+		if e.Err != nil {
+			t.Fatal(e.Err)
+		}
+		calls = append(calls, e.ToolCalls...)
+	}
+	if len(calls) != 2 || calls[0].ID != "first" || calls[0].Function != "update_plan" || calls[1].ID != "second" || calls[1].Function != "finish_run" {
+		t.Fatalf("distinct calls were merged: %+v", calls)
+	}
+	if string(calls[0].ReplayMetadata) != `{"signature":"first-signature"}` || string(calls[1].ReplayMetadata) != `{"signature":"second-signature"}` {
+		t.Fatal("replay metadata crossed call identities")
+	}
+}
+
 func TestAnthropicAdapterAcceptsKimiDirectStringContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")

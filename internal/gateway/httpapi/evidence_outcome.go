@@ -132,18 +132,15 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 
 	result.LatestMutationAt = verification.RelevantMutationAt(verification.Check{}, mutations)
 	result.State, result.Summary = verification.StateWithMutations(mutations, result.Checks)
-	for _, item := range evidence {
-		if item.Kind == "command" && item.Command != nil && item.StartedAt >= result.LatestMutationAt {
-			result.OrdinaryCommands++
-			if item.Status != "succeeded" || item.Command.ExitCode != 0 {
-				result.OrdinaryCommandFailures++
-			}
-		}
+	if err := c.projectCommandObservations(ctx, tenantID, runID, evidence, result); err != nil {
+		result.State, result.Summary = "blocked", "Command dispatch evidence is unavailable; inspect the durable Run before completing."
+		return result, files
 	}
-	if result.OrdinaryCommands > 0 && result.State == "not_run" {
-		result.Summary = fmt.Sprintf("%d ordinary command(s) ran after the latest change, but no structured verification evidence was recorded. Use verify for the relevant check; command output alone does not establish verification.", result.OrdinaryCommands)
-	} else if result.OrdinaryCommands > 0 && result.State == "not_applicable" {
-		result.Summary = fmt.Sprintf("%d ordinary command(s) were observed (%d failed); no file changes or criterion-bound verification checks were recorded. Execution evidence is available, but it does not establish a verification verdict.", result.OrdinaryCommands, result.OrdinaryCommandFailures)
+	if result.OrdinaryCommandAttempts > 0 && (result.State == "not_run" || result.State == "not_applicable") {
+		result.Summary = fmt.Sprintf("%d ordinary command(s) were observed as started (%d failed, %d exit status unknown); %d attempt(s) were not dispatched and %d have unknown dispatch. These are execution observations, not a passing verification verdict.", result.OrdinaryCommands, result.OrdinaryCommandFailures, result.OrdinaryCommandExitUnknown, result.OrdinaryCommandNotDispatched, result.OrdinaryCommandDispatchUnknown)
+		if result.State == "not_run" {
+			result.Summary += " Use verify for the relevant check after the latest change."
+		}
 	}
 	return result, files
 }

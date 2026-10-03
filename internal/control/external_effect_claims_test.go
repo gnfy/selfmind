@@ -315,7 +315,7 @@ func TestVersionTwentyThreeUpgradeDoesNotInventHistoricalEffectClaims(t *testing
 	if _, err := store.db.ExecContext(ctx, `DROP TABLE external_resource_waits`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 23`); err != nil {
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version >= 23`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {

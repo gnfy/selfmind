@@ -440,12 +440,16 @@ type ExternalOutcome struct {
 // a model's prose claim that tests passed. State is one of not_applicable,
 // not_run, stale, passed, failed, partial, or blocked.
 type VerificationOutcome struct {
-	State                   string              `json:"state"`
-	Summary                 string              `json:"summary,omitempty"`
-	LatestMutationAt        int64               `json:"latest_mutation_at_unix_nano,omitempty"`
-	Checks                  []VerificationCheck `json:"checks,omitempty"`
-	OrdinaryCommands        int                 `json:"ordinary_commands,omitempty"`
-	OrdinaryCommandFailures int                 `json:"ordinary_command_failures,omitempty"`
+	State                          string              `json:"state"`
+	Summary                        string              `json:"summary,omitempty"`
+	LatestMutationAt               int64               `json:"latest_mutation_at_unix_nano,omitempty"`
+	Checks                         []VerificationCheck `json:"checks,omitempty"`
+	OrdinaryCommands               int                 `json:"ordinary_commands,omitempty"`
+	OrdinaryCommandFailures        int                 `json:"ordinary_command_failures,omitempty"`
+	OrdinaryCommandAttempts        int                 `json:"ordinary_command_attempts,omitempty"`
+	OrdinaryCommandNotDispatched   int                 `json:"ordinary_command_not_dispatched,omitempty"`
+	OrdinaryCommandDispatchUnknown int                 `json:"ordinary_command_dispatch_unknown,omitempty"`
+	OrdinaryCommandExitUnknown     int                 `json:"ordinary_command_exit_unknown,omitempty"`
 }
 
 type VerificationCheck = verification.Check

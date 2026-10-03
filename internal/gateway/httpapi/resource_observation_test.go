@@ -73,7 +73,7 @@ func TestReadOnlyCommandEvidenceIsNotMissingOrPassingVerification(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "evidence.recorded", Payload: mustJSON(map[string]interface{}{"evidence": kernel.RunEvidence{ToolName: "terminal", Kind: "command", Status: "succeeded", StartedAt: 10, FinishedAt: 20, Command: &kernel.CommandEvidence{Command: "custom-check", Kind: "command"}}})})
+	_, err = store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "evidence.recorded", Payload: mustJSON(map[string]interface{}{"evidence": kernel.RunEvidence{ToolName: "terminal", Kind: "command", Status: "succeeded", Process: &kernel.ToolProcessResult{Started: true, ExitCode: new(int)}, StartedAt: 10, FinishedAt: 20, Command: &kernel.CommandEvidence{Command: "custom-check", Kind: "command"}}})})
 	if err != nil {
 		t.Fatal(err)
 	}

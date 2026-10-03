@@ -117,11 +117,30 @@ func TestRewordedPlanKeepsOpenStepsByPosition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, step := range longer.Plan.Steps {
+	for i, step := range longer.Plan.Steps[:4] {
 		for _, previous := range open.Plan.Steps {
 			if step.StepID == previous.StepID {
 				t.Fatalf("a longer snapshot matched step %d %q to %q by position", i, step.Step, previous.Step)
 			}
 		}
+	}
+}
+
+func TestOmittedOpenStepsCannotDisappearDuringReplanning(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{{Step: "Read local evidence", Status: "completed"}, {Step: "Observe remote state", Status: "pending", SuccessCriteria: "current remote state read"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "omit inaccessible remote check", []RunPlanStepInput{{StepID: first.Plan.Steps[0].StepID, Status: "completed"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changed.Plan.Steps) != 2 || changed.Plan.Steps[1].StepID != first.Plan.Steps[1].StepID || changed.Plan.Steps[1].SuccessCriteria != "current remote state read" {
+		t.Fatalf("lost original obligation: %+v", changed)
+	}
+	if err = store.ValidateRunCompletion(ctx, identity.TenantID, run.ID); err == nil {
+		t.Fatal("omitting necessary work allowed completion")
 	}
 }

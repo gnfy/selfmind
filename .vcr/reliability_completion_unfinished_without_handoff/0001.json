@@ -3,342 +3,55 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " start"
-    },
-    {
-      "reasoning_content": " by"
-    },
-    {
-      "reasoning_content": " inspecting"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " workspace"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " find"
-    },
-    {
-      "reasoning_content": " draft"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "The"
-    },
-    {
-      "reasoning_content": " task"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " review"
-    },
-    {
-      "reasoning_content": " draft"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " deliver"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " recipient"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " be"
-    },
-    {
-      "reasoning_content": " specified"
-    },
-    {
-      "reasoning_content": " later"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " User"
-    },
-    {
-      "reasoning_content": " explicitly"
-    },
-    {
-      "reasoning_content": " says"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": " draft"
-    },
-    {
-      "reasoning_content": " now"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " but"
-    },
-    {
-      "reasoning_content": " no"
-    },
-    {
-      "reasoning_content": " recipient"
-    },
-    {
-      "reasoning_content": " supplied"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " they"
-    },
-    {
-      "reasoning_content": " are"
-    },
-    {
-      "reasoning_content": " NOT"
-    },
-    {
-      "reasoning_content": " taking"
-    },
-    {
-      "reasoning_content": " over"
-    },
-    {
-      "reasoning_content": " delivery"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Don"
-    },
-    {
-      "reasoning_content": "'t"
-    },
-    {
-      "reasoning_content": " guess"
-    },
-    {
-      "reasoning_content": " recipient"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " don"
-    },
-    {
-      "reasoning_content": "'t"
-    },
-    {
-      "reasoning_content": " send"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Finish"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " structured"
-    },
-    {
-      "reasoning_content": " outcome"
-    },
-    {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " tell"
-    },
-    {
-      "reasoning_content": " what"
-    },
-    {
-      "reasoning_content": " remains"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "This"
-    },
-    {
-      "reasoning_content": " is"
-    },
-    {
-      "reasoning_content": " a"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "wait"
-    },
-    {
-      "reasoning_content": "ing"
-    },
-    {
-      "reasoning_content": "_user"
-    },
-    {
-      "reasoning_content": "\""
-    },
-    {
-      "reasoning_content": " outcome"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": " draft"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " do"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " review"
-    },
-    {
-      "reasoning_content": " portion"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " workspace"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "content": "I"
-    },
-    {
-      "content": "'ll"
-    },
-    {
-      "content": " read"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " draft"
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " check"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " workspace"
-    },
-    {
-      "content": " state"
-    },
-    {
-      "content": " first"
-    },
-    {
-      "content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I am initializing the execution plan to track"
     },
     {
       "usage": {
-        "input_tokens": 9501,
-        "output_tokens": 205,
+        "input_tokens": 10532,
+        "output_tokens": 8,
         "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 9501,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 92,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
       }
+    },
+    {
+      "content": " the review and pending delivery steps."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 7,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 93,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_0Qstf8MQFydlqNYpfvcq7910",
-          "Function": "ls_r",
-          "Args": "{\"path\": \".\", \"recursive\": true, \"max_entries\": 100}"
-        },
-        {
-          "ID": "call_01_zOPYJCgQeOtPs6a4CKaZ5014",
-          "Function": "read_file",
-          "Args": "{\"path\": \"draft.txt\"}"
+          "ID": "call_1922085",
+          "Function": "update_plan",
+          "Args": "{\"plan\":[{\"step\":\"Review draft.txt and verify its contents\",\"success_criteria\":\"draft.txt is read and its contents and readiness for delivery are assessed\",\"status\":\"in_progress\"},{\"step\":\"Deliver draft.txt to recipient once specified\",\"success_criteria\":\"draft.txt is delivered to the recipient provided by the user\",\"status\":\"pending\"}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "Eq8tCqwtAWkUfRMevTcY3vzHZNYQWdzNXkwRX08Isj8jCSM+vt7j+Wh2zkms3rMEQr+EPb10hIp5rQBET0LnWSJTlHQ+ZA5L+toAw6iJ5ifX59ZsYsunefbrxKKvAcLi2gdUet9NpOWll3qXZ5JhCmkz/C1VH+FiGghVwAMWm0kmPOKWaK4xvsFIrt+4FC+a6e4SgrQ51sJbWR1b+zBn04ftQ5HmeFZCiM3G9C5geUV5oDgZ6ANNSjSnu1QWo3jSZ+HDOy+Vl/xweHuYFWUnbO+F1fplQ4LvUacy+W4SFAu8n44aKMnWQgefoUkLSfRdm3FDiZVNX6Q33fMUM/L8j3128b7sIcl1v8EMDvgjn+7lD4Iydfpq5pWDAecXoavG/v+D9GnjLKwz1WD9A3O8JLZusUu+U2vtAOdpGw0lgE8LRSaIQAg3rSvFu/BAANidjajtr9Qhf7lGtimQCVX3gXEOKfaEai56Qo8dvQsPzETrq9LYHNk6RiibNtIvUC1u+5XYVy05nP+8kPWZSMXFY7oXIqUGtyrKPNO2zU/FR85NrlT+5bHAzq5xLApmwk/wuoGNs0TWdG1aE6e/7TcYW3HtFyslhZR4XcJv48lojkPsvBxddREJ7730AgkvRWuvgzgGX9YSCjfkPQIYEHAxqb8nVfeiwoPngqJhI0Cl6naK2yB4bt3QkpN888yv9c1YI7cQGElRjzlrhk0WiBqn4/4MyS81iaTL5vBLh9PXw2Dm8iqyZdnxUOFfhwP3nXsrRBOUZGj5Qo/GFX+HL5ofbuRcpJpAWx3g216mBfqTKC5bPS/dPMOh6sX6RKbaCdmODwLQiD3uEffbaCOsN4QLo6qxqayUdgV2a4gRj1G+s9VxBzCi0yxQlGIP60hOXtZBTFMflYEvlTFGRg7n2y7XsEVIOtljUUuFbWiJSZlRVpGSmDAW7WUncAB+7JTLCy6LujJDkBZGYfH399c9hyJ5tKfpaW24YyHMP98OeGjx1NCchMhrhBrpJ5L1eWxDP4Qe0K2fIKWZslYDXdmliue8i0R1IK9T7EA5OMqWZHKXzL7OBXVYNTHEh3fAI+qGdNm2wBosO3kS3t9Z8Mv6bEMT+OENKWuEKggqpV87EHT4QKKEDDDvnWX0aifIqQpzzRy1c7A5tgW1TYvD+JtCOlXChBMO5FgIbyGTiSJYaMBrO3xXGoPEqhS/uzcMUyDeop1FFrkfhfPipVCuGxouxIvF9b3HRKkXM5DqRnSl4e8dKaqCreez0lwWRlq6IeKgJZn9HTjZTyTwbuARkUjXhQyeLdwKcjNXJCnccLfe3l1RrRNXOcbTXFjHfdL8PO2eGpWU+OUqs1NshViT7fAjxcaVuyAGhS3UYQq+xjq60b05JUyw6BAyrNs16KKQQnjr3JjACmmd3nqnPafEHsGWQWn+eSKBUg6JU7Bmzf7eK8lNEsjRynEV7fqk+fNCDGjgXnB/4szyyWyn10xzTXRRBfQERFWM3UJWh1C1p6ou4sJb4pQRohTuuq7EJMaebpPo/R8Ne6p1kT07m/0IdLGpTCDvRDRi4ImKexp/+4zBfcc+LDN1UeVR2wF9Rk3nzOwHjC6L6juco3UzAjIIqh8AyvOqdZt5ErrWiPFSAYrkNiZCBpfKxUKZkTWK/mfYsKMB5jNYChpWS/W9p1vSfjo4EzXD0xdZUfvp3a0CbaJ7Ns3J/RG7I9EELbTw8gCkALT32p/rzfvR3DAX0xi+UWSoCENtp6Ae4fd8gQpvGrSlNOkMDkmW/xk6Wl3Hc6MDJ9HJztUB6TZccPKHXhRBzbapZ71G0k4dNdGnANqPIak/qIWNxPjwXt/lfQYTucJlrGncPBFkZDbQupLV4VgeTS8zJkdBAgo9yUBMBChe1/M7iihoQR078rrg1gTBjIVbyX/SE0rqqeY5YQcSQqCpdZnVOEtb4OHjE4wV8NO3a+flRa8Oo+JerIUDqEWREVzwCJ6CFjsGllo7pCV25KzaTm7LouJgyyHWUiNdbcVvai70kWS86fbNNGBHpQTs4r87Pwq+AqxzaZkdmlCC/bLZWjIA//uxfunVLhJefstHyXQQHuK4YMOfqd38G8ioKtr9/ic8pkcsdaFOl2rE9VBHStTg2G450fT9gjEFcSnE22pJftXJXBAoZlhKIZpj7phww5BBO9l5citJfgEui3Ooygugp1yMG1bP7oz9XJRqZS29l5Bm5jIJu8M7iKpHDHpl7V48ACcP1XsBrrMedMirhvEfHNETno1BVdB77aefxlMJ4yXEHkpq0waReSTgxyunT0TvIeS+uRblDJYb8Mx7FfvtII2zF/Cqu0qB8h1sbGuN3PQXk6X2Af6iVARXS0yTwUDhBAmcf+g9mB32N9FGD+QzziKU+F61dgVie64eju4qoZ2MWUMx9XLfXrf/ciHelLreFf1WOyFDRyDWvJuBSWMuAadJ328JuWSUkfASW7MPsScvV3CvNmowI2V/DN2mJPCqMaaMCK8ldEWMdCYIv/9IAhXUP4y8hmQbWbM6XZypUM3KX3BcmwKSyrQNkhIPw5mwCClHK8CM3qn9NqRfhPUDk5bRwtfSrnpgiB2mHwkYQ9prgkwLeUhiFwyoxP98pecFIiqBmt/VaMSD7PCl+u9pBERkt20KGxfQcbB2Xso4Le02PE4mW+9zHgerIcop1vCZHypJ3hUgg1XhfrBFakwolcZb8EJpR4Y5vMg9fnhtkx2813H181CxrnsppJ/O5O4m4wb/AfQBg8DmeIwsl6ZalPkXDKm3EXDQHs86ivWlZeXAV4eZqnPc6C9L4DcsN110VuVZebg87pM8uScX/gP8i10mshCjNw2UOWH8+bleA7T184CxtJuxEkmlJ8jZba9aJH6Z+ka8OMZMkcsRRjAuJXUP5gxDZlBoqF5meJkFDYC93+Aup5JUsZSvENO/k5Ly6tBqZ8j4HFrLAV6aVdUBV0L/o4x6t3sEqcFhcbTvOXM+H4cT5+siFRoZ9HvrVhrsolUpttLIdQsnxD55wgTzPd/jXEkW8LfFLHrCHa5CXB/JUcsnJJyfJoS2H3i6Wy+fNgiWdw3Ow+SSQ48y8RiUk6EUtynbjZV88ZfHNMZK/adPASVCK/F52xARhKtBYbOM9VEGGSeRzrUFnk9ygtiZTNQGvW2Z05sfVXJ+2hVg+3Jf6/GTJPbLuRG4sZhUoIoRyGdSX4QlZiJcCvmpb7zhhLZsWcalU9RnX5A3jFvyK2B1mZszNB56xlL3jy5ZzB2URrl2OrkEms0oWPX644m1eUTWWGNPmDRa7SyrvkG8/NPTBITO54J6UGBU7SZqm4KawGBO2F0u0A6V8j6yDCk/I5gSaWojk/CUjp8ZcjoKDDUEbjkJNkf8KFar0RM+3fJNxVjBj7d5XY6CSONr987TVufUORYZRIeR3W6AaGuMVGlHFTkZWWCFSgKXNF4FhLhhE58y5MQXM3bf1YRrVSNVxAe/Ja8kfsXp43KfywJpGMhvuu9F3GUyPPI1uj42+XLcUFBKDE3nRfHU62s7EFxGPrRo34SsZ57FY0OLvV11MHDGyMYMwgYzmC/HbPpk9ZCQ6lDJwhCU0rL4lzsqoDjg4jw/SQrgNJBdE+vIqpOfT4OmuYMFT+ZspMGjz5JqVFO3tHQQQ5bCTtBg5srpneWeliaXrmVgEyOTBl78LTWs0+EUrX36Q7rzjxkOs/UceSTp2yKV7MWLpLt0yASshbx6XbeW0eJ73GgwILSAZBMk3cAFPy7hj2Qbgh/IGE8w2C6ibINoD1sx0U6VIojmFh4FyqYkPAluKuZA277wZm+oMzfkTdTjsQI192T1BcG8AI82GTmyT3fDOPHebXd5UIXQTrQ6PC6wx5z3waP2a9eE6FqYHi1OewyESRGBK6VAhkSYVXqsT7oskweodgnQI/c6SY42QHsPdRcK4eKMuyn0Rcid3rCuH3qBnpBnZbVKUZUycXYXnSM40q/jAEawnh2obpcAGA9u5fgzzoK+9voo/OYRwoMVAfTH5urJyeKl7iJAM0EcwFm4ibgowwZiczcw2Xi7gadv4z9oiSJuhMhbVsU9G+/H/7yQ50feNSZ8UnEUeEf6PoOck5PHyLmpC18hBnbj7KkWQB+AqInN0cH3d7jedhjMs7tS92xzSXAVo4UFNJmoyKNt2amTuPxFW7y5qXVUkusnkqYOW1VIiXQM6iQsA/R4rZzvrheC28KtSyVwqbDA+B85cx7UtyAxd51dYNR7qBro8qe0JOWP2Ua1zIK8NfR+qMctGGz09NLF8FoUn/K0DVTjs2o2vVFnLWJOJ/xrpO1rAw6G+fdwM420vrFy8cduNiDis+SwePGuKdE4LZQPLtsOs9bnZphyHnDoZBZej8chYQmmxFG0kqu72oRkJcYwcrmaCtwnB6f/lACe136drM1wZNG6Zq/SgUbHuBexdQOXUDbyw4RHuBje1uMTECUm+ZwXPimWA7S+owQ1kGw94ie533c3UtIh+R7RAuknjjXYJaGLReYNnEOM02Ypk13bNawYkbZ2RRANBWjtCmd/SnR2Qh2gwwJ9+qoTLkPeMeP7t7D16Z7HuRNcjvBQZPiu+kSExfOkHIqf1khS0UiX/KA3voJ4Ce5cKH5T+oHCvebDbZEn/DoACLMi46i9xFrIbXw32qFSaYI/TgxdSeKefSahfIulkbYvF17HA/TBLUsPcTWtDIwRK5CurOBSOyHpWCfuBR1+6AyAc6HZ9PlQah8G53wmMq7IrKZryPJr7CFnrLzLTpqG49CGknnabQZD+Lv367uf1tbd4gsYZb3m/7zxBeDXNfpY5s5DkzBkSAjjd7lCIFK8Uw6mUaYkE5Uy3EpzsEIy0BlLNrEp8dXV1etZyiiZ73/BVXBHBgaeMwgl4bWe+ZiXPOVh0N73ID9LLUr+9/dkMww8eaYlznlZLP/PTZ9kWrWBotXcE6aFkkc3RKNMlgtUhrgckuKJW8j7YUBFTPwpkJapK+AG6ehlokXNrmCX74Y2OamGoyVq2aOMwu7NFfChAmZ2xDMtYmVsJw2STLiWtRjONnACi9vIEbP3ZL2Iut/fdnJJMICmm/jOFv/meTeLbciUkUb1/DwVa22RS/7B9QLx9jv+2j8u5D5lSMwDmuYRD0Og32hcy6aKTXp5FPpEuSP50I8B11r6Y5QkKKzifSVIZ4Z2rd3cN5ftu0Z++OsBTSTie+oo+Olq045UUKkUVUfki9Wby8/RvszdC6oA7Frjucb0BGTZs9jKKd9mmyooPrQPNIIzjBy9hG7GgPgRathj7YCM6TBcRw2DiXDGYhU+Z4tl0bb9Y2MRvYSo2l2/fhgTokRxWkqu3LJLKNEZUXtFtkVtkgTvWosaUlTEUWbLUYxoomN3cH64FOWf93HHX3qOGDCa4nqh0BJuirCpGOFLYl638Bm8uMfk4ER8Ay5jYsT4WD5H5CTqQKvDeW+5h04O0qlyPZImyGrgq/dUl19d8o1culiznVY2HCmovNSKJTf7t8ahnPeg/L2GYm4+c1j2toDCXn2NYfIONAZe/0gLFlvqpukHcY2zZAxt25614zP0GbfGjPmyq61uxWA6G+yxrij52XWTrqjALoFO00ukymwgI9Enok3Xc/xbjOY0Uv/4k16HBgqdbcs9gZ7L1RbAycB4ns8pvO6+80J5gszeotxh/ol2uUdSaCuXXI7kI1Vg7RwQLIp1aIsiaLO0JBWo0td7z8V98DRI4dvPpTxRgdXc/nonRo2U9IzlWRVR69ZEGCBLE26+2GthKkp14RXc9yUeSFX0VZJkGM+40w14uXRZ/qgg4VDAXDSmEyM6xg+ryH8vTTAeUHTKxru1B0ztJ7dIO2g2XpJ0OyXEZFl4BICxxk4NDqknqMHqCWJyGundaELP4C+hvq9+zgI4H5V3CkJEgdPmrKlmfWdUOZ2Qqoi18gKG/F+7T9p3ghn9BSXGiDmsjv9rd5hfNZknJ9KAk2122VxYjZtTxz4e1dyenNeZb2mXvzV7hn1+tulpPPBU15OdT1SUwWCLpPtfl9mirfq9vmyL3TNvTQuF3Mrvq7/Zvv8wIIbjLFFNxWkQxZOInQCvvR7fNi7c7KUcWoqC13Pg/V4rDwaJft77fZ6qVN49S02sVRTf+8IeH4nXmdI4qHGVpqYh5yE3aDjBRJ08ySuNM+SkXeTT+DrPG9dscH5nk8uN2UqNvyfzONvGrwSsdT/JUg7gWTIG7ppZC161c6PBTf49ZahWT2GorvomAqst7w3UaISqM92h6J5LzjEvm2L6ohjpB16DqujafCPMIHVBXT3MnXWqCsTA65xS4l6Loa0+IESmGXTMlSkXE08qp83lJUR7S+xsdEG8Jjd0YvkN9xysaMnCfboxyOV/1M2o2qz+mrbQrfY1XstKuDUgOc832WdMy7TzLvRJWvD6KQbxCgWeADsJ9k90nFD2FZo5JGGUr0jaL5Z6WjFHjf4WIdAjG2t+g6N/RQfu2PFlBSWFFJAc0w197Ps1WklPF1LRRQRRUkVYdBA9CzfxG8EvhKM6Qqort68v0Yr344bVQpwfTMQhM2YCRTILcy8cUYZfp2VI0b4LIYnzI8tBdLLzmkAF6zqMLyo2TuRZmRrFpRt3E8t5yl5iM2P50VFBnMhr+TKTd9np/oZA+D9pQNRvzbZtKPFrRb58tcIbmfdZ5X2iPFXI5emlovd5R+yPq3+KX8/YEbIMHCRXcAIq5DNpPE2VJlrvytABc+zy8ySwxjNck9PCmOq7R/Mbaazvd46PYLiPQTPWgZWkFLdK+7MP+qHs5QooAD66RHToPvOSaAOR38tY87yEOuOVFRGZkdsx1vGg/2ZUIltp2+FQu/hyvoPQ/t9kKCjTmqoF4aL4pRhWC40qoo+faKuHIs16cA+ZJiUCJbUyHH3boW2+LV+20nBknVoLfawDYE0YEI9nq59eoUNrYb2qwAfHAssPAZGgWTjZI/+1VC3p6GG7t3N6Kx5y7VMslkq9kdtO3fsZHhR/20CEKYC0/NgGzAL6dKGJWwFXYEmomWg+G/co42UQR0N7GkddU3aEejLsonGUH5tdknFBXPcaa0FFXPVkUFSCqvacxlOBUUrWuN3bbj0K7QYPjjVNu/UVtylymXwt2kvvNdQTXvQGs8/rNbke+Z8P2xy3SdrDx32q3RrDozZL52hwAPWFjG9Dj7R6WWlZrmmRqSCwhoEkMpfjAvqgYzujLtKiSjo5NAIIfXoE3/KbGOeU8aGan+abQqDR3SCucwGX92BaaIEGWylFjE5YO7k4PstXeq8phFhnmVK7kL9uVtX5RbRGGE8K4jUEE6rWVoDxjuzcL4GHiOncBQ9xPdQmoHjNGiDrXLLd6IehtN6SNTLx7ynrgfsDWqg8rrBbHx7xWX4V/uVoHWduWxxHC89MsYob3CNpeJrpyzS6tHaysZTV/7iR2SQoc66GuKeyrHEkjfoxpbmHzSjwWuT5PG5r3FisKvXxSyI+iOPuL1EC5aCu/rcGsIxp4lajUYcXPlW5/PFCTDLoL7w6YQZaUvse7j3WLIco9sKVYCo3m6qtty7QAn7hDxH+nUf0pbsWgSk9NyzkktywplZjMa3H5D6LYpPkc2cz373XrX5VIytoY3Y3Xorrbbe7tQAjITzWjv/ciX8e/UoRJnRvOlB+DLFH7WGErIyEdonpjVWiYJkBl2elgdb8N/ce1k1Ry32CZw5AddrnLBr+vTUqe7eZquaa1yQWFfOBC2ZTVClKTep9ixL38l8="
+            }
+          }
         }
       ]
     }

@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 23
+const CurrentControlSchemaVersion = 24
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -629,6 +629,15 @@ DROP TABLE IF EXISTS task_references;`)
 			return err
 		},
 	},
+	{Version: 24, Name: "assessed-plan-cancellations", Apply: func(ctx context.Context, db *sql.DB) error {
+		// Empty values grant no new authority to historical plans or Runs.
+		for _, name := range []string{"cancellation_disposition", "cancellation_reason", "user_takeover_quote"} {
+			if err := ensureMigrationColumn(ctx, db, "run_plan_steps", name, "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}},
 }
 
 // migrateDurableAttachments gives parked and steered work somewhere to keep its

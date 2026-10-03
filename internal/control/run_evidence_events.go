@@ -35,3 +35,31 @@ func (s *Store) ListRunEvidenceEvents(ctx context.Context, tenantID, runID strin
 	}
 	return events, rows.Err()
 }
+
+// RunToolDispatchFacts supplies typed observations for legacy evidence rows.
+// Exact Run/call identity is required; prose and a default exit code prove no
+// dispatch. This read never rewrites historical events.
+func (s *Store) RunToolDispatchFacts(ctx context.Context, tenantID, runID string, callIDs []string) (map[string]json.RawMessage, error) {
+	encoded, err := json.Marshal(callIDs)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT json_extract(e.payload_json,'$.tool_call_id'), e.payload_json
+		FROM task_events e JOIN runs r ON r.id=e.run_id
+		WHERE r.tenant_id=? AND r.id=? AND e.type='tool.completed'
+		AND json_extract(e.payload_json,'$.tool_call_id') IN (SELECT value FROM json_each(?))
+		ORDER BY e.cursor ASC`, normalizeTenant(tenantID), runID, string(encoded))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]json.RawMessage{}
+	for rows.Next() {
+		var id, payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			return nil, err
+		}
+		out[id] = json.RawMessage(payload)
+	}
+	return out, rows.Err()
+}

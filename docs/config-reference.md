@@ -322,6 +322,7 @@ The always-on daemon. CLI, IM, cron, and HTTP all converge on it.
 gateway:
   addr: "127.0.0.1:8765"       # bind address; a public bind REQUIRES a token
   token: ""                    # shared secret; mandatory for non-loopback binds
+  max_active_work_runs: 2       # per-person top-level work Run capacity, 1–3
   automatic_run_recovery: true # false stops daemon-owned child runs; explicit /resume remains available
   presence_idle_timeout: "0"   # deprecated compatibility key; presence follows client process liveness
   pending_notify_after: "15m"  # attached CLI: escalate an unanswered approval/question after T1; detached pushes immediately
@@ -329,6 +330,13 @@ gateway:
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 ```
+
+The daemon defaults to two independent Agent workers (`SELFMIND_WORKERS`
+unset). Capacity cannot exceed the worker count; startup rejects a mismatch.
+Set `max_active_work_runs: 1` to serialize work. Set both this key and
+`SELFMIND_WORKERS=1` to use one worker. Capacity 3 requires at least three
+workers in the daemon's environment. Explicit settings survive upgrades;
+workspace and external-target conflicts still queue.
 
 `automatic_run_recovery: false` is the fail-closed operational rollback for
 daemon/provider interruption continuation. It does not discard durable plans,

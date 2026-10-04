@@ -118,29 +118,52 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 		if item.Kind != "verification" || item.Command == nil {
 			continue
 		}
-		result.Checks = append(result.Checks, api.VerificationCheck{
+		check := api.VerificationCheck{
 			ToolCallID: item.ToolCallID, Binding: item.Command.Binding,
-			Kind:       item.Command.Kind,
-			Command:    item.Command.Command,
-			CWD:        item.Command.CWD,
-			Status:     item.Status,
-			ExitCode:   item.Command.ExitCode,
-			StartedAt:  item.StartedAt,
-			FinishedAt: item.FinishedAt,
-		})
+			Kind:        item.Command.Kind,
+			Command:     item.Command.Command,
+			CWD:         item.Command.CWD,
+			Status:      item.Status,
+			ExitCode:    item.Command.ExitCode,
+			StartedAt:   item.StartedAt,
+			FinishedAt:  item.FinishedAt,
+			EffectState: item.EffectState,
+			Invoked:     item.Invoked,
+		}
+		// A refused preparation did not test the program. Preserve that fact
+		// separately from the tool wrapper's failure and historical exit code.
+		if item.Process != nil {
+			started := item.Process.Started
+			check.ProcessStarted = &started
+			if !started || item.Process.ExitCode == nil {
+				check.Status = "blocked"
+			}
+			if started && item.Process.ExitCode != nil {
+				check.ExitCode = *item.Process.ExitCode
+				if check.ExitCode != 0 {
+					check.Status = "failed"
+				}
+			}
+		}
+		if (item.Invoked != nil && !*item.Invoked) || item.EffectState == "not_dispatched" {
+			check.Status = "blocked"
+		}
+		if item.Process == nil && (item.Invoked != nil || item.EffectState != "") {
+			check.Status = "blocked"
+		}
+		result.Checks = append(result.Checks, check)
 	}
 
 	result.LatestMutationAt = verification.RelevantMutationAt(verification.Check{}, mutations)
 	result.State, result.Summary = verification.StateWithMutations(mutations, result.Checks)
-	if result.State == "not_run" {
-		commands := 0
-		for _, item := range evidence {
-			if item.Kind == "command" && item.Command != nil && item.StartedAt >= result.LatestMutationAt {
-				commands++
-			}
-		}
-		if commands > 0 {
-			result.Summary = fmt.Sprintf("%d ordinary command(s) ran after the latest change, but no structured verification evidence was recorded. Use verify for the relevant check; command output alone does not establish verification.", commands)
+	if err := c.projectCommandObservations(ctx, tenantID, runID, evidence, result); err != nil {
+		result.State, result.Summary = "blocked", "Command dispatch evidence is unavailable; inspect the durable Run before completing."
+		return result, files
+	}
+	if result.OrdinaryCommandAttempts > 0 && (result.State == "not_run" || result.State == "not_applicable") {
+		result.Summary = fmt.Sprintf("%d ordinary command(s) were observed as started (%d failed, %d exit status unknown); %d attempt(s) were not dispatched and %d have unknown dispatch. These are execution observations, not a passing verification verdict.", result.OrdinaryCommands, result.OrdinaryCommandFailures, result.OrdinaryCommandExitUnknown, result.OrdinaryCommandNotDispatched, result.OrdinaryCommandDispatchUnknown)
+		if result.State == "not_run" {
+			result.Summary += " Use verify for the relevant check after the latest change."
 		}
 	}
 	return result, files
@@ -186,6 +209,9 @@ func verificationClaimMismatches(outcome api.RunOutcome) []string {
 	}
 	if state == "passed" {
 		return nil
+	}
+	if outcome.Verification != nil && outcome.Verification.OrdinaryCommands > 0 {
+		return []string{fmt.Sprintf("%d ordinary command(s) were executed, but the claimed verification has no passing structured evidence (state: %s). Bind the relevant check with verify before claiming it passed.", outcome.Verification.OrdinaryCommands, state)}
 	}
 	return []string{fmt.Sprintf("The response claims successful verification, but runtime evidence is %s.", state)}
 }

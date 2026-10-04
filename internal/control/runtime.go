@@ -29,6 +29,7 @@ type Delivery struct {
 	// persisted with the row.
 	Kind           string     `json:"kind,omitempty"`
 	ApprovalID     string     `json:"approval_id,omitempty"`
+	ClarifyID      string     `json:"clarify_id,omitempty"`
 	Status         string     `json:"status"`
 	Attempts       int        `json:"attempts"`
 	MaxAttempts    int        `json:"max_attempts"`
@@ -93,7 +94,7 @@ func (s *Store) LatestDeliveryEndpointState(ctx context.Context, tenantID, perso
 func (s *Store) ListDeliveredApprovalRoutes(ctx context.Context, tenantID, personID, approvalID string) ([]Delivery, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND approval_id = ? AND kind = 'approval'
@@ -187,7 +188,7 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	if olderThan <= 0 {
 		cutoff = time.Now().Unix()
 	}
-	query := `SELECT id, thread_id, tenant_id, person_id FROM runs
+	query := `SELECT id, thread_id, tenant_id, person_id, execution_class FROM runs
 		 WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) <= ?`
 	args := []any{cutoff}
 	if len(exceptRunIDs) > 0 {
@@ -204,11 +205,12 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 		taskID   string
 		tenantID string
 		personID string
+		class    string
 	}
 	var runs []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.runID, &r.taskID, &r.tenantID, &r.personID); err != nil {
+		if err := rows.Scan(&r.runID, &r.taskID, &r.tenantID, &r.personID, &r.class); err != nil {
 			return 0, err
 		}
 		runs = append(runs, r)
@@ -243,6 +245,11 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	// Events are best-effort observability; append them after the state is
 	// durably committed and log (rather than swallow) any failure.
 	for _, r := range runs {
+		if r.class == "coordination" {
+			// The pending choice retains the original message. A crashed
+			// tool-free judgment has no work effect to resume or notify.
+			continue
+		}
 		outcome := map[string]interface{}{
 			"status":            "interrupted",
 			"completion_reason": "daemon_recovery",
@@ -456,11 +463,11 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 	d.UpdatedAt = now
 	result, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO outbound_messages
-		   (id, tenant_id, person_id, platform, platform_user_id, channel, thread_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
+		   (id, tenant_id, person_id, platform, platform_user_id, channel, thread_id, run_id, content, kind, approval_id, clarify_id, status, attempts, max_attempts,
 		    next_attempt_at, last_error, part_index, part_total, idempotency_key, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
-		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Kind, d.ApprovalID, d.Status, d.Attempts,
+		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Kind, d.ApprovalID, d.ClarifyID, d.Status, d.Attempts,
 		d.MaxAttempts, d.NextAttemptAt.Unix(), d.LastError, d.PartIndex, d.PartTotal, d.IdempotencyKey, d.CreatedAt.Unix(), d.UpdatedAt.Unix())
 	if err != nil {
 		return nil, err
@@ -510,10 +517,10 @@ func (s *Store) SeedAgedPendingSessionDelivery(ctx context.Context, d Delivery, 
 	d.CreatedAt, d.UpdatedAt, d.NextAttemptAt = stamped, stamped, stamped
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO outbound_messages
-		   (id, tenant_id, person_id, platform, platform_user_id, channel, thread_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
+		   (id, tenant_id, person_id, platform, platform_user_id, channel, thread_id, run_id, content, kind, approval_id, clarify_id, status, attempts, max_attempts,
 		    next_attempt_at, last_error, part_index, part_total, idempotency_key, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Kind, d.ApprovalID, d.Status,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Kind, d.ApprovalID, d.ClarifyID, d.Status,
 		d.Attempts, d.MaxAttempts, d.NextAttemptAt.Unix(), d.LastError, d.PartIndex, d.PartTotal, d.IdempotencyKey,
 		d.CreatedAt.Unix(), d.UpdatedAt.Unix()); err != nil {
 		return nil, err
@@ -536,7 +543,7 @@ func firstNonEmptyDelivery(values ...string) string {
 func (s *Store) DeliveryByIdempotencyKey(ctx context.Context, tenantID, key string) (*Delivery, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages WHERE tenant_id = ? AND idempotency_key = ?`,
 		normalizeTenant(tenantID), strings.TrimSpace(key))
@@ -574,7 +581,13 @@ func (s *Store) PruneOutboundDeliveries(ctx context.Context, olderThan time.Dura
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	count, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM native_im_reply_edges
+		WHERE NOT EXISTS (SELECT 1 FROM outbound_messages WHERE id = native_im_reply_edges.outbound_id)`)
+	return count, err
 }
 
 // staleSendingSeconds is how long a delivery may sit in 'sending' before the
@@ -590,7 +603,7 @@ func (s *Store) ListDueDeliveries(ctx context.Context, limit int) ([]Delivery, e
 	now := time.Now().Unix()
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE (status IN ('pending', 'retry') AND next_attempt_at <= ?)
@@ -713,7 +726,7 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND platform = ?
@@ -841,7 +854,7 @@ func (s *Store) ListUndeliveredOutbound(ctx context.Context, tenantID, personID 
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND status IN ('sent_unconfirmed', 'pending_session', 'failed') AND updated_at >= ?
@@ -902,7 +915,7 @@ func (s *Store) ListPendingSessionOutbound(ctx context.Context, tenantID, person
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND status = 'pending_session'
@@ -936,7 +949,7 @@ func (s *Store) ListStalePendingSessionFinalResults(ctx context.Context, tenantI
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND platform = ?
@@ -1042,7 +1055,7 @@ func (s *Store) FindPendingSessionDelivery(ctx context.Context, tenantID, person
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND platform = ?
@@ -1117,7 +1130,7 @@ func (s *Store) ListUndeliveredTaskResults(ctx context.Context, tenantID, person
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
-		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND thread_id = ?
@@ -1166,7 +1179,7 @@ func scanDelivery(rows interface {
 	var d Delivery
 	var next, created, updated, delivered int64
 	if err := rows.Scan(&d.ID, &d.TenantID, &d.PersonID, &d.Platform, &d.PlatformUserID, &d.Channel, &d.TaskID, &d.RunID,
-		&d.Content, &d.Kind, &d.ApprovalID, &d.Status, &d.Attempts, &d.MaxAttempts, &next, &d.LastError, &d.PartIndex, &d.PartTotal,
+		&d.Content, &d.Kind, &d.ApprovalID, &d.ClarifyID, &d.Status, &d.Attempts, &d.MaxAttempts, &next, &d.LastError, &d.PartIndex, &d.PartTotal,
 		&d.IdempotencyKey, &created, &updated, &delivered); err != nil {
 		return Delivery{}, err
 	}

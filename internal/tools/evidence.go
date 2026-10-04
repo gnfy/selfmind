@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strings"
 	"time"
@@ -53,6 +54,12 @@ func EvidenceMiddleware() ResultMiddleware {
 				Status:     evidenceStatus(err),
 				StartedAt:  started.UnixNano(),
 				FinishedAt: finished.UnixNano(),
+				Invoked:    result.Invoked,
+				Process:    result.Process,
+			}
+			var effect interface{ ToolEffectState() string }
+			if errors.As(err, &effect) {
+				evidence.EffectState = effect.ToolEffectState()
 			}
 			if err != nil {
 				evidence.Error = RedactSensitive(err.Error())

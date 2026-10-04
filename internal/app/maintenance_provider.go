@@ -151,7 +151,7 @@ func buildMaintenanceCandidate(mem *memory.MemoryManager, cfg *config.Config, te
 // de-duplicated before any request is sent, so an installation with a single
 // provider honestly ends up with a single-entry chain.
 func configuredMaintenanceProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string,
-	controlStore *control.Store, role llm.ModelRole) (llm.Provider, []maintenanceRouteIdentity) {
+	controlStore *control.Store, role llm.ModelRole, gates ...*llm.RequestGate) (llm.Provider, []maintenanceRouteIdentity) {
 	slots := maintenanceCandidateSlots(cfg, role)
 	providers := make([]namedMaintenanceProvider, 0, len(slots))
 	routes := make([]maintenanceRouteIdentity, 0, len(slots))
@@ -161,6 +161,7 @@ func configuredMaintenanceProvider(mem *memory.MemoryManager, cfg *config.Config
 		if !ok {
 			continue
 		}
+		candidate.provider = firstRequestGate(gates).Wrap(candidate.provider, candidate.route.ID)
 		if candidate.route.ID != "" {
 			if _, exists := seenRoutes[candidate.route.ID]; exists {
 				log.Info("maintenance provider: skipping duplicate physical route",

@@ -1,0 +1,46 @@
+id: reliability_ordinary_command_evidence
+title: "Read-only execution is visible without claiming criterion-bound verification"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [cat, wc, od, head]
+setup:
+  files:
+    report.txt: "OBSERVED_REPORT_READY\n"
+turns:
+  - input: >-
+      Read report.txt with terminal using cat report.txt and report its exact
+      contents, quoting the actual stdout without replacing its value. Only the
+      requested read is needed; do not run extra commands or create a plan.
+      Do not change files. This is inspection, not a request to
+      certify a test suite. In finish_run, describe the ordinary command you
+      actually executed; do not claim formal verification passed.
+expect:
+  status: completed
+  verification_state: not_applicable
+  max_tool_errors: 1
+  max_tool_calls: 4
+  min_tool_calls: 1
+  max_duration_seconds: 120
+  contains:
+    - "OBSERVED_REPORT_READY"
+  must_not_contain:
+    - "Verification passed"
+assert_state:
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"command"'
+    count_gte: 1
+  - on: events
+    type: run.finished
+    payload_contains: '"ordinary_commands":'
+    count_gte: 1
+  - on: file
+    path: report.txt
+    contains: OBSERVED_REPORT_READY
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_mojibake: true

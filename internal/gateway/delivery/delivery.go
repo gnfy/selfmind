@@ -33,6 +33,7 @@ type Message struct {
 	// ignore both and fall back to the text instructions in Content.
 	Kind       string `json:"kind,omitempty"`
 	ApprovalID string `json:"approval_id,omitempty"`
+	ClarifyID  string `json:"clarify_id,omitempty"`
 	PartIndex  int    `json:"part_index,omitempty"`
 	PartTotal  int    `json:"part_total,omitempty"`
 	// LogicalKey is a control-plane effect key used to replay a durable result
@@ -102,6 +103,12 @@ type SenderWithReceipt interface {
 	SendWithReceipt(ctx context.Context, msg Message) (confirmed bool, err error)
 }
 
+// SenderWithNativeReceipt is implemented only by platforms that return a
+// durable id for the sent message. Other senders retain the ordinary receipt.
+type SenderWithNativeReceipt interface {
+	SendWithNativeReceipt(ctx context.Context, msg Message) (confirmed bool, messageID string, err error)
+}
+
 type SenderFunc func(ctx context.Context, msg Message) error
 
 func (f SenderFunc) Send(ctx context.Context, msg Message) error {
@@ -150,20 +157,29 @@ func (r *Router) Send(ctx context.Context, msg Message) error {
 // through when the platform sender provides one; senders without receipt
 // support are assumed confirmed (their APIs fail loudly instead of dropping).
 func (r *Router) SendWithReceipt(ctx context.Context, msg Message) (bool, error) {
+	confirmed, _, err := r.SendWithNativeReceipt(ctx, msg)
+	return confirmed, err
+}
+
+func (r *Router) SendWithNativeReceipt(ctx context.Context, msg Message) (bool, string, error) {
 	if r == nil {
-		return false, ErrNoSender
+		return false, "", ErrNoSender
 	}
 	sender := r.byPlatform[strings.ToLower(strings.TrimSpace(msg.Platform))]
 	if sender == nil {
 		sender = r.defaultSender
 	}
 	if sender == nil {
-		return false, ErrNoSender
+		return false, "", ErrNoSender
+	}
+	if native, ok := sender.(SenderWithNativeReceipt); ok {
+		return native.SendWithNativeReceipt(ctx, msg)
 	}
 	if receipted, ok := sender.(SenderWithReceipt); ok {
-		return receipted.SendWithReceipt(ctx, msg)
+		confirmed, err := receipted.SendWithReceipt(ctx, msg)
+		return confirmed, "", err
 	}
-	return true, sender.Send(ctx, msg)
+	return true, "", sender.Send(ctx, msg)
 }
 
 var ErrNoSender = fmt.Errorf("no outbound sender configured")
@@ -309,6 +325,7 @@ func (s *Service) enqueueAndTry(ctx context.Context, msg Message) (bool, bool, e
 			Content:        part,
 			Kind:           msg.Kind,
 			ApprovalID:     msg.ApprovalID,
+			ClarifyID:      msg.ClarifyID,
 			MaxAttempts:    s.opts.RetryAttempts,
 			PartIndex:      i + 1,
 			PartTotal:      len(parts),
@@ -395,11 +412,15 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 		Content:        d.Content,
 		Kind:           d.Kind,
 		ApprovalID:     d.ApprovalID,
+		ClarifyID:      d.ClarifyID,
 		PartIndex:      d.PartIndex,
 		PartTotal:      d.PartTotal,
 	}
 	confirmed := true
-	if receipted, ok := s.sender.(SenderWithReceipt); ok {
+	var nativeID string
+	if native, ok := s.sender.(SenderWithNativeReceipt); ok {
+		confirmed, nativeID, err = native.SendWithNativeReceipt(ctx, msg)
+	} else if receipted, ok := s.sender.(SenderWithReceipt); ok {
 		confirmed, err = receipted.SendWithReceipt(ctx, msg)
 	} else {
 		err = s.sender.Send(ctx, msg)
@@ -412,6 +433,15 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 			// distinctly so the attach digest can surface possibly-missed
 			// notifications.
 			return s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
+		}
+		if nativeID != "" {
+			if recordErr := s.store.MarkDeliverySentWithNativeID(ctx, d.ID, nativeID); recordErr != nil {
+				// The platform accepted the send. A failed receipt write makes
+				// the effect uncertain; never retry the outbound effect blindly.
+				_ = s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
+				return recordErr
+			}
+			return nil
 		}
 		return s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
 	}
@@ -678,13 +708,23 @@ func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery
 	msg := deliveryMessage(d)
 	confirmed := true
 	err = nil
-	if receipted, ok := s.sender.(SenderWithReceipt); ok {
+	var nativeID string
+	if native, ok := s.sender.(SenderWithNativeReceipt); ok {
+		confirmed, nativeID, err = native.SendWithNativeReceipt(ctx, msg)
+	} else if receipted, ok := s.sender.(SenderWithReceipt); ok {
 		confirmed, err = receipted.SendWithReceipt(ctx, msg)
 	} else {
 		err = s.sender.Send(ctx, msg)
 	}
 	if err == nil && confirmed {
-		_ = s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
+		if nativeID != "" {
+			if err := s.store.MarkDeliverySentWithNativeID(ctx, d.ID, nativeID); err != nil {
+				_ = s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
+				return "", err
+			}
+		} else if err := s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{}); err != nil {
+			return "", err
+		}
 		return "sent", nil
 	}
 	if err == nil {
@@ -724,6 +764,7 @@ func deliveryMessage(d *control.Delivery) Message {
 		Content:        d.Content,
 		Kind:           d.Kind,
 		ApprovalID:     d.ApprovalID,
+		ClarifyID:      d.ClarifyID,
 		PartIndex:      d.PartIndex,
 		PartTotal:      d.PartTotal,
 	}

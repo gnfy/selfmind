@@ -40,19 +40,90 @@ var personWideRunEventTypes = map[string]bool{
 // wants decides one event's audience, identically for live delivery and for
 // replay, so a reconnect cannot show a session more than the live stream did.
 func (s *runEventSubscriber) wants(event api.RunEvent) bool {
-	if personWideRunEventTypes[event.Type] || event.Channel == "" {
-		return true
-	}
 	if s.attached != "" && event.RunID == s.attached {
 		return true
 	}
+	if personWideRunEventTypes[event.Type] {
+		return true
+	}
+	if event.Channel == "" {
+		// A missing audience on a run-scoped detail is not permission to
+		// broadcast its transcript to every client of the person.
+		return event.RunID == "" && event.TaskID == ""
+	}
 	return s.session != "" && event.Channel == s.session
+}
+
+// view keeps the full event for its originating session or an explicit
+// observer. Other sessions need lifecycle and human-wait facts, not the raw
+// input, approval arguments, or clarification choices carried by those events.
+// Live delivery and durable replay use this same projection.
+func (s *runEventSubscriber) view(event api.RunEvent) (api.RunEvent, bool) {
+	if !s.wants(event) {
+		return api.RunEvent{}, false
+	}
+	if (s.attached != "" && event.RunID != "" && event.RunID == s.attached) ||
+		(s.session != "" && event.Channel != "" && event.Channel == s.session) ||
+		!personWideRunEventTypes[event.Type] {
+		return event, true
+	}
+	var source map[string]json.RawMessage
+	if err := json.Unmarshal(event.Payload, &source); err != nil {
+		source = nil
+	}
+	summary := map[string]json.RawMessage{}
+	copyField := func(name string) {
+		if value, ok := source[name]; ok {
+			summary[name] = value
+		}
+	}
+	copyShortField := func(name string, limit int) {
+		var value string
+		if err := json.Unmarshal(source[name], &value); err != nil {
+			return
+		}
+		encoded, _ := json.Marshal(truncate(value, limit))
+		summary[name] = encoded
+	}
+	switch event.Type {
+	case "run.started":
+		// Task titles can be generated from the opening user message. Keep
+		// that channel-local text out of another terminal's status notice.
+		copyField("origin")
+	case "run.finished", "run.cancelled", "run.interrupted", "run.failed":
+		var outcome struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(source["outcome"], &outcome); err == nil && outcome.Status != "" {
+			summary["outcome"], _ = json.Marshal(map[string]string{"status": outcome.Status})
+		}
+	case "approval.requested":
+		copyField("approval_id")
+		copyShortField("tool", 80)
+		// The target may itself be a command or contain credentials. The
+		// approval id is enough for an explicit /approvals lookup.
+	case "approval.approved", "approval.rejected", "approval.expired", "approval.archived", "approval.parked":
+		copyField("approval_id")
+	case "clarify.requested":
+		copyField("clarify_id")
+		// A generated question may quote the private input of this run.
+		summary["question"], _ = json.Marshal("A question is waiting")
+	case "background.notice":
+		copyShortField("message", 160)
+		copyField("kind")
+	case "external_watch.completed":
+		copyField("watch_id")
+		copyField("status")
+	}
+	event.Payload, _ = json.Marshal(summary)
+	return event, true
 }
 
 // runEventBroker serializes the daemon-local live view. Durable appends are
 // observed after commit; assistant deltas share the same per-run live sequence
 // but never enter SQLite.
 type runEventBroker struct {
+	store  *control.Store
 	mu     sync.Mutex
 	nextID uint64
 	subs   map[string]map[uint64]*runEventSubscriber
@@ -65,8 +136,9 @@ type runEventBroker struct {
 
 func newRunEventBroker(store *control.Store) *runEventBroker {
 	b := &runEventBroker{
-		subs: make(map[string]map[uint64]*runEventSubscriber),
-		seq:  make(map[string]uint64),
+		store: store,
+		subs:  make(map[string]map[uint64]*runEventSubscriber),
+		seq:   make(map[string]uint64),
 	}
 	if store != nil {
 		store.SubscribeEventAppends(b.publishDurable)
@@ -136,7 +208,7 @@ func (b *runEventBroker) publishDurable(event control.Event) {
 	if event.PersonID == "" {
 		return
 	}
-	b.publish(durableRunEvent(event))
+	b.publish(b.withSavedAnswer(context.Background(), durableRunEvent(event)))
 }
 
 func (b *runEventBroker) publishAssistant(task *control.Task, run *control.Run, channel string, event llm.StreamEvent) {
@@ -167,11 +239,12 @@ func (b *runEventBroker) publish(event api.RunEvent) {
 	b.seq[key]++
 	event.LiveSeq = b.seq[key]
 	for _, sub := range b.subs[event.PersonID] {
-		if !sub.wants(event) {
+		view, ok := sub.view(event)
+		if !ok {
 			continue
 		}
 		select {
-		case sub.ch <- event:
+		case sub.ch <- view:
 		default:
 			sub.gap.Store(true)
 		}
@@ -301,7 +374,12 @@ func (d *Server) replayPersonEvents(ctx context.Context, w http.ResponseWriter, 
 			return false
 		}
 		for _, event := range events {
-			if replayed := durableRunEvent(event); sub.wants(replayed) {
+			if replayed, ok := sub.view(durableRunEvent(event)); ok {
+				// Hydrate only after audience projection: foreign lifecycle facts
+				// must not acquire the originating session's final answer.
+				if (sub.session != "" && replayed.Channel == sub.session) || (sub.attached != "" && replayed.RunID == sub.attached) {
+					replayed = d.events().withSavedAnswer(ctx, replayed)
+				}
 				writeRunEventSSE(w, replayed)
 			}
 			*cursor = event.Cursor

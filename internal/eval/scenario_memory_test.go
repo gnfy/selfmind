@@ -31,7 +31,7 @@ func TestApplyStateSeedsStoresCanonicalMemoryInPersonPartition(t *testing.T) {
 		Canonical: true,
 	}}}
 
-	if _, err := applyStateSeeds(ctx, nil, manager, identity, "workspace", t.TempDir(), "cli", setup); err != nil {
+	if _, err := applyStateSeeds(ctx, nil, manager, identity, "workspace", t.TempDir(), "cli", setup, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -78,7 +78,7 @@ func TestApplyStateSeedsCanBindWorkspaceSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	setup := &Setup{Task: &SeedTask{Title: "release", DefaultSkill: "release-check"}}
-	if _, err := applyStateSeeds(ctx, store, nil, identity, "workspace-id", workspaceRoot, "cli", setup); err != nil {
+	if _, err := applyStateSeeds(ctx, store, nil, identity, "workspace-id", workspaceRoot, "cli", setup, nil); err != nil {
 		t.Fatal(err)
 	}
 	tasks, err := store.SearchTasks(ctx, identity.TenantID, identity.PersonID, "release", 10)
@@ -92,6 +92,8 @@ func TestApplyStateSeedsCanBindWorkspaceSkill(t *testing.T) {
 }
 
 func TestApplyStateSeedsCreatesAgentCreatedSkillFixture(t *testing.T) {
+	// The seed catalogue assertion must not scan Skills in checkout ancestors.
+	t.Chdir(t.TempDir())
 	ctx := context.Background()
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {

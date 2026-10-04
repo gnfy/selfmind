@@ -22,7 +22,7 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 	if len(a.args) > 1 {
 		switch a.args[1] {
 		case "status":
-			return true, a.sendGatewayMessage("/status")
+			return true, a.sendGatewayMessage(strings.TrimSpace("/status " + strings.Join(a.args[2:], " ")))
 		case "usage":
 			return true, a.sendGatewayMessage("/report daily --since 24h")
 		case "report":
@@ -317,6 +317,8 @@ func (a *App) handleWorkspaceCommand(args []string) int {
 		return a.listWorkspaceCapabilities(workspaceID)
 	case "observe":
 		return a.registerWorkspaceObservationProfile(args[1:])
+	case "effect":
+		return a.registerWorkspaceEffectProfile(args[1:])
 	case "revoke":
 		if len(args) < 2 {
 			fmt.Fprintln(a.stderr, "usage: selfmind ws revoke <capability> [workspace_id]")
@@ -410,6 +412,81 @@ func (a *App) registerWorkspaceObservationProfile(args []string) int {
 		return 1
 	}
 	fmt.Fprintf(a.stdout, "Observation profile added for workspace %s: %s.\nIt becomes invalid if the script changes; review or revoke it with `/approvals grants`.\n", payload.WorkspaceID, payload.Profile.Label)
+	return 0
+}
+
+func (a *App) registerWorkspaceEffectProfile(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(a.stderr, "usage: selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]")
+		return 2
+	}
+	req := api.WorkspaceEffectProfileRequest{
+		TenantID: os.Getenv("SELF_TENANT_ID"), Platform: "cli", PlatformUserID: platformUserID(), ScriptPath: args[0],
+	}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--target", "--workspace", "--observe-command":
+			if i+1 >= len(args) {
+				fmt.Fprintf(a.stderr, "%s requires a value\n", args[i])
+				return 2
+			}
+			option := args[i]
+			i++
+			if option == "--target" {
+				req.TargetKeys = append(req.TargetKeys, args[i])
+			} else if option == "--workspace" {
+				req.WorkspaceID = args[i]
+			} else {
+				req.ObservationCommand = args[i]
+			}
+		case "--network":
+			req.AllowNetwork = true
+		case "--credentials":
+			req.AllowCredentials = true
+		case "--":
+			req.Argv = append([]string{}, args[i+1:]...)
+			i = len(args)
+		default:
+			fmt.Fprintf(a.stderr, "unknown effect option %q; put exact script arguments after --\n", args[i])
+			return 2
+		}
+	}
+	if len(req.TargetKeys) == 0 {
+		fmt.Fprintln(a.stderr, "effect profile needs at least one --target")
+		return 2
+	}
+	a.ensureLocalGateway()
+	body, _ := json.Marshal(req)
+	httpReq, err := http.NewRequestWithContext(a.ctx, http.MethodPost, a.gatewayURL()+"/v1/workspaces/effect-profiles", bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	a.attachGatewayAuth(httpReq)
+	a.attachLocalControlAuth(httpReq)
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode >= 400 {
+		data, _ := io.ReadAll(httpResp.Body)
+		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		return 1
+	}
+	var response struct {
+		WorkspaceID string `json:"workspace_id"`
+		Profile     struct {
+			Label string `json:"label"`
+		} `json:"profile"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&response); err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	fmt.Fprintf(a.stdout, "Effect target profile added for workspace %s: %s.\nOnly this exact script invocation is narrowed; normal execution approval and effect observation still apply. Review or revoke it with `/approvals grants`.\n", response.WorkspaceID, response.Profile.Label)
 	return 0
 }
 

@@ -121,7 +121,11 @@ var slashCommands = []slashCommand{
 	{
 		slashCommandMeta: metaByName("/status"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
-			return m.handleStatus()
+			if len(args) > 1 {
+				m.addMessage("assistant", "Usage: /status [run_id]")
+				return nil
+			}
+			return m.handleStatus(args...)
 		},
 	},
 	{

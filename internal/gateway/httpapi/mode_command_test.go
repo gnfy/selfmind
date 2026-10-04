@@ -87,13 +87,10 @@ func (j *recordingJudge) calls() int {
 	return j.called
 }
 
-// TestApprovalModeLiveLookupMidRun pins the live-mode contract end to end at
-// the gateway layer: the execution scope installed at run start re-resolves
-// the person's persisted /mode preference at EACH approval decision, so a
-// `/mode` change sent from another endpoint mid-run (here: flipping
-// person_settings between two dangerous ops) governs the next ask. An
-// explicit per-request mode stays pinned for that run.
-func TestApprovalModeLiveLookupMidRun(t *testing.T) {
+// TestApprovalModeIsFrozenForRun proves a person-level /mode change does not
+// expand an already admitted Run's authority. A new Run takes the new setting,
+// and an explicit request mode still wins at admission.
+func TestApprovalModeIsFrozenForRun(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
 	store := controltest.NewStore(t)
@@ -103,15 +100,13 @@ func TestApprovalModeLiveLookupMidRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	judge := &recordingJudge{reply: `{"outcome":"approve","risk_level":"low","user_authorization":"high","rationale":"The test user authorized this bounded cleanup."}`}
+	judge := &recordingJudge{reply: `{"outcome":"approve","risk_level":"low","user_authorization":"high","rationale":"The test user authorized this bounded operation."}`}
 	daemon := &Server{Control: store, DefaultTenantID: "default", ApprovalJudge: judge}
 	coord := daemon.coordinator()
-
-	// The run starts with NO explicit request mode and no persisted preference:
-	// the snapshot is on-request, exactly the live-defect setup.
-	cleanup := coord.installExecutionScope(context.Background(), identity, nil, nil, nil, api.MessageRequest{})
-	defer cleanup()
-
+	if err := store.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, "full-auto"); err != nil {
+		t.Fatal(err)
+	}
+	cleanup := coord.installExecutionScope(ctx, identity, nil, nil, nil, api.MessageRequest{})
 	ran := 0
 	exec := tools.SmartApprovalMiddleware("")(func(args map[string]interface{}) (string, error) {
 		ran++
@@ -122,49 +117,32 @@ func TestApprovalModeLiveLookupMidRun(t *testing.T) {
 		"_tool_name": "terminal",
 		"command":    "chmod 777 script.sh",
 	}
-
-	// Op 1 under a mid-run flip to full-auto: the frozen-snapshot bug would
-	// still ask (on-request); the live lookup must bypass.
-	if err := store.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, "full-auto"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := exec(dangerousOp); err != nil {
-		t.Fatalf("full-auto flip must govern the next op: %v", err)
-	}
-	if ran != 1 || judge.calls() != 0 {
-		t.Fatalf("full-auto must bypass ask and triage: ran=%d judge=%d", ran, judge.calls())
-	}
-
-	// Op 2 after flipping to smart mid-run: the H2 triage must engage (the
-	// judge auto-approves here, so nothing blocks on a human).
 	if err := store.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, "smart"); err != nil {
 		t.Fatal(err)
 	}
-	// A different dangerous class so the triage-recorded class grant from any
-	// earlier step cannot mask the judge consultation.
-	if _, err := exec(map[string]interface{}{
-		"_tenant_id": identity.PersonID,
-		"_tool_name": "terminal",
-		"command":    "rm -rf build",
-	}); err != nil {
-		t.Fatalf("smart triage APPROVE must run the op: %v", err)
+	if _, err := exec(dangerousOp); err != nil {
+		t.Fatalf("frozen full-auto run: %v", err)
 	}
-	if ran != 2 || judge.calls() != 1 {
-		t.Fatalf("smart mid-run must engage triage: ran=%d judge=%d", ran, judge.calls())
+	if ran != 1 || judge.calls() != 0 {
+		t.Fatalf("mode changed inside active Run: ran=%d judge=%d", ran, judge.calls())
 	}
 	cleanup()
 
-	// An explicit per-request mode stays pinned for the run: persisted flips
-	// no longer move it.
-	if err := store.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, "on-request"); err != nil {
-		t.Fatal(err)
+	cleanupNew := coord.installExecutionScope(ctx, identity, nil, nil, nil, api.MessageRequest{})
+	if _, err := exec(dangerousOp); err != nil {
+		t.Fatalf("new smart run: %v", err)
 	}
-	cleanupExplicit := coord.installExecutionScope(context.Background(), identity, nil, nil, nil, api.MessageRequest{ApprovalMode: "full-auto"})
+	if ran != 2 || judge.calls() != 1 {
+		t.Fatalf("new Run ignored updated preference: ran=%d judge=%d", ran, judge.calls())
+	}
+	cleanupNew()
+
+	cleanupExplicit := coord.installExecutionScope(ctx, identity, nil, nil, nil, api.MessageRequest{ApprovalMode: "full-auto"})
 	defer cleanupExplicit()
 	if _, err := exec(dangerousOp); err != nil {
-		t.Fatalf("explicit request mode must win over the persisted preference: %v", err)
+		t.Fatalf("explicit full-auto run: %v", err)
 	}
 	if ran != 3 || judge.calls() != 1 {
-		t.Fatalf("explicit full-auto must bypass ask and triage: ran=%d judge=%d", ran, judge.calls())
+		t.Fatalf("explicit mode lost precedence: ran=%d judge=%d", ran, judge.calls())
 	}
 }

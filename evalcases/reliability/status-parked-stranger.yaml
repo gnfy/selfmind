@@ -1,0 +1,33 @@
+id: reliability_status_parked_stranger
+title: "A foreign account cannot inspect a parked Run by its exact ID"
+suite: reliability
+workspace: isolated
+channel: im-chat
+model_required: false
+
+setup:
+  task:
+    title: "Private parked release"
+    parked_runs:
+      - input: "finish private release"
+        status: interrupted
+
+turns:
+  - input: "/status"
+    seeded_run_ordinal: 1
+    platform_user_id: "eval-stranger"
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "not active or not yours"
+  must_not_contain:
+    - "Private parked release"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

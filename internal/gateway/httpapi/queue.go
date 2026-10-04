@@ -50,9 +50,7 @@ func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.I
 		return api.MessageResponse{Identity: identity, Error: message, Turn: messageTurn("failed", "", "idle", "", "", message)}
 	}
 	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
-	if d.coordinator().currentActive(identity.PersonID) != nil {
-		ahead++
-	}
+	ahead += d.coordinator().activeCount(identity.PersonID)
 	attachments := d.admitQueuedAttachments(ctx, identity, req)
 	queued, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
@@ -83,7 +81,7 @@ func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.Iden
 		return api.MessageResponse{Identity: identity, Error: "queue is not available", Turn: messageTurn("failed", "", "", "", "", "queue is not available")}
 	}
 	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
-	ahead++ // include the currently running task
+	ahead += d.coordinator().activeCount(identity.PersonID)
 	queued, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
@@ -121,9 +119,7 @@ func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control
 		return api.MessageResponse{Identity: identity, Error: "queue is not available", Turn: messageTurn("failed", "", "draining", "", "", "queue is not available")}
 	}
 	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
-	if d.coordinator().currentActive(identity.PersonID) != nil {
-		ahead++
-	}
+	ahead += d.coordinator().activeCount(identity.PersonID)
 	queued, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
 		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
@@ -144,12 +140,12 @@ func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control
 	}
 }
 
-// DrainQueuedAtBoot resumes queued work after a gateway restart. The
-// gateway.lock flock guarantees this is the only daemon on control.db, so any
-// row left 'started' was mid-launch when the previous daemon died and never ran
-// — requeue those first, then kick one drain per person with pending work (the
-// drain chain handles the rest, one at a time per person).
-func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
+// RecoverQueuedAtBoot repairs durable queue and mailbox state before any
+// background worker can schedule a continuation. The gateway.lock flock
+// guarantees that started rows from the previous daemon have no live owner.
+// A bound row with possible effects keeps its exact Run identity instead of
+// replaying the original queue message.
+func (d *Server) RecoverQueuedAtBoot(ctx context.Context) error {
 	// Steering mailbox recovery (P0-A) runs FIRST so guidance orphaned by the
 	// previous daemon lands in the queue before this drain launches anything:
 	// live rows inside the replay window defer into task-pinned queued work,
@@ -169,37 +165,51 @@ func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
 		}
 	}
 	if d == nil || d.Control == nil {
-		return
+		return nil
 	}
 	// A decision can be committed immediately before the old daemon dies. Repair
 	// that decision->continuation edge before listing the queue so the recovered
 	// work participates in the same one-run-per-person boot drain.
 	d.recoverApprovalContinuations(ctx, false)
-	requeued, dropped, _ := d.Control.RequeueStartedQueued(ctx)
+	requeued, dropped, err := d.Control.RequeueStartedQueued(ctx)
+	if err != nil {
+		return err
+	}
 	if dropped > 0 {
-		log.Warn("gateway: dropped queued tasks that exhausted their restart budget", "dropped", dropped, "requeued", requeued)
+		log.Warn("gateway: stopped started queue rows that cannot be safely replayed", "stopped", dropped, "requeued", requeued)
+	}
+	return nil
+}
+
+// DrainQueuedAtBoot is also used after a model-readiness transition. Recovery
+// is idempotent, and the control store skips claims owned by a live Run.
+func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
+	if err := d.RecoverQueuedAtBoot(ctx); err != nil {
+		log.Warn("gateway: queue boot recovery failed", "error", err)
+		return
 	}
 	d.drainQueuedWhenReady(ctx)
 }
 
-// drainQueuedWhenReady is the liveness edge for an in-process transition back
-// to Model Ready (for example cancelling a preview). The coordinator repeats
-// the readiness check immediately before claiming each person's first row.
+// DrainReadyQueued starts work only after the daemon has passed the model
+// health gate. Boot recovery has already run before the background workers.
+func (d *Server) DrainReadyQueued(ctx context.Context) {
+	d.drainQueuedWhenReady(ctx)
+}
+
+// drainQueuedWhenReady also runs on the daemon's regular watch-worker tick so
+// a future not_before queue row becomes runnable without another user turn or
+// a process restart. It only selects due persons; the coordinator repeats
+// readiness, capacity, lineage, and resource checks before claiming a row.
 func (d *Server) drainQueuedWhenReady(ctx context.Context) {
 	if d == nil || d.Control == nil || !d.modelReadyForWork() {
 		return
 	}
-	rows, err := d.Control.ListAllQueued(ctx, control.QueueStatusQueued)
+	rows, err := d.Control.ListDueQueuedRoutes(ctx, 0)
 	if err != nil {
 		return
 	}
-	seen := map[string]bool{}
 	for _, q := range rows {
-		key := q.TenantID + "|" + q.PersonID
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
 		identity := d.routeIdentityForPerson(ctx, q.TenantID, q.PersonID, q.Channel, q.Platform, nil)
 		d.coordinator().drainQueue(identity)
 	}

@@ -2,12 +2,46 @@ package runpool
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestConcurrentPathClaimsResolveSymlinkAliases(t *testing.T) {
+	real := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(real, alias); err != nil {
+		t.Fatal(err)
+	}
+	p := New(2)
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = p.RunObservedPaths(context.Background(), []string{real}, nil, func() error {
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+	<-holding
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	ran := false
+	err := p.RunObservedPaths(ctx, []string{filepath.Join(alias, "future-child")}, nil, func() error {
+		ran = true
+		return nil
+	})
+	close(release)
+	<-done
+	if err != context.DeadlineExceeded || ran {
+		t.Fatalf("alias writer was admitted: ran=%v err=%v", ran, err)
+	}
+}
 
 // TestPoolBoundsConcurrency: with N workers, no more than N jobs run at once.
 func TestPoolBoundsConcurrency(t *testing.T) {

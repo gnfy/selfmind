@@ -11,8 +11,8 @@
 > 现状以 `docs/STATUS.md` 为准。其余 P0/P1 项和 P2–P5 继续暂停，`max_active_per_person`
 > 保持 1；开放并发仍须先有新的 active implementation plan。
 >
-> 2026-09-29：实施路径改由 `docs/plans/session-concurrency.zh-CN.md` 承担（paused，等待 active
-> 位置），替换本文 §12 的推进顺序。本文的终态与不变量保留；§5 的 dirty / 非 Git 快照与多仓库
+> 2026-09-29：实施路径改由 `docs/plans/session-concurrency.zh-CN.md` 承担（当日起 active），
+> 替换本文 §12 的推进顺序。本文的终态与不变量保留；§5 的 dirty / 非 Git 快照与多仓库
 > 组合视图、§6 的资源占用声明、§9 的跨仓库变更集留作后续选项。
 >
 > 下次评审：2026-10-28

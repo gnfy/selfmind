@@ -261,6 +261,11 @@ turns:
     platform_user_id: "eval-stranger"   # a different person; must see nothing
 ```
 
+For deterministic exact-Run controls, `setup.task.parked_runs` may seed a
+resumable Run and `seeded_run_ordinal: 1` appends its generated ID to that
+turn's `input`. The ordinal refers to the setup list, not a recent-work UI
+position; this permits owner and stranger probes without a hardcoded Run ID.
+
 A turn may set `wait_for_external_watches: true` in an isolated workspace/data
 case. After a real `waiting_external` handoff the harness starts the production
 watch worker and waits for its exact-parent Main continuation to finish. Detached

@@ -21,7 +21,14 @@ import (
 // and doctor, but against an in-memory candidate configuration. It returns one
 // bounded result per changed route and never exposes credentials.
 func ValidateModelChange(ctx context.Context, cfg *config.Config, routes []modelchange.Route) []modelchange.ProbeResult {
-	return validateModelChange(ctx, cfg, routes, nil)
+	return validateModelChange(ctx, cfg, routes, nil, nil)
+}
+
+// ValidateModelChangeWithGate keeps daemon probes in the same physical-route
+// request budget as live agent work. The standalone CLI validator remains an
+// independent process and retains the original function signature.
+func ValidateModelChangeWithGate(ctx context.Context, cfg *config.Config, routes []modelchange.Route, gate *llm.RequestGate) []modelchange.ProbeResult {
+	return validateModelChange(ctx, cfg, routes, nil, gate)
 }
 
 // modelValidationEvidenceTTL bounds how long a passing probe stands in for
@@ -36,6 +43,7 @@ const modelValidationEvidenceTTL = 10 * time.Minute
 type ModelChangeValidator struct {
 	ttl    time.Duration
 	now    func() time.Time
+	gate   *llm.RequestGate
 	mu     sync.Mutex
 	passed map[string]rememberedProbe
 }
@@ -45,12 +53,12 @@ type rememberedProbe struct {
 	at     time.Time
 }
 
-func NewModelChangeValidator() *ModelChangeValidator {
-	return &ModelChangeValidator{ttl: modelValidationEvidenceTTL, now: time.Now, passed: make(map[string]rememberedProbe)}
+func NewModelChangeValidator(gates ...*llm.RequestGate) *ModelChangeValidator {
+	return &ModelChangeValidator{ttl: modelValidationEvidenceTTL, now: time.Now, gate: firstRequestGate(gates), passed: make(map[string]rememberedProbe)}
 }
 
 func (v *ModelChangeValidator) Validate(ctx context.Context, cfg *config.Config, routes []modelchange.Route) []modelchange.ProbeResult {
-	return validateModelChange(ctx, cfg, routes, v)
+	return validateModelChange(ctx, cfg, routes, v, v.gate)
 }
 
 func (v *ModelChangeValidator) recall(key string) (modelchange.ProbeResult, bool) {
@@ -86,7 +94,7 @@ func probeEvidenceKey(requestKey string, runtime modelruntime.Runtime) string {
 	return requestKey + "\x00" + fmt.Sprintf("%x", sum[:8])
 }
 
-func validateModelChange(ctx context.Context, cfg *config.Config, routes []modelchange.Route, evidence *ModelChangeValidator) []modelchange.ProbeResult {
+func validateModelChange(ctx context.Context, cfg *config.Config, routes []modelchange.Route, evidence *ModelChangeValidator, gate *llm.RequestGate) []modelchange.ProbeResult {
 	routes = expandedModelValidationRoutes(cfg, routes)
 	results := make([]modelchange.ProbeResult, len(routes))
 	type probeTarget struct {
@@ -121,7 +129,7 @@ func validateModelChange(ctx context.Context, cfg *config.Config, routes []model
 			target.indices = append(target.indices, index)
 			continue
 		}
-		target := &probeTarget{runtime: runtime, role: route, indices: []int{index}, provider: provider, evidence: probeEvidenceKey(key, runtime)}
+		target := &probeTarget{runtime: runtime, role: route, indices: []int{index}, provider: gate.Wrap(provider, providerRequestRouteID(runtime)), evidence: probeEvidenceKey(key, runtime)}
 		seen[key] = target
 		ordered = append(ordered, target)
 	}

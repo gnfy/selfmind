@@ -14,6 +14,31 @@ func (pauseFailure) ToolRunPause() (string, string, bool) {
 	return "selection_refused", "Review the effects before resuming.", false
 }
 
+type externalPauseFailure struct{ pauseFailure }
+
+func (externalPauseFailure) ToolRunPauseStatus() string { return "waiting_external" }
+
+type externalPauseBackend struct{ calls int }
+
+func (b *externalPauseBackend) Dispatch(string, map[string]interface{}) (string, error) {
+	b.calls++
+	return "", externalPauseFailure{}
+}
+func (*externalPauseBackend) GetToolDefinitions() []map[string]interface{} { return nil }
+
+func TestTypedExternalWaitStopsLaterCallsWithoutHumanApproval(t *testing.T) {
+	backend := &externalPauseBackend{}
+	agent := &Agent{backend: backend}
+	results := agent.executeToolCalls(context.Background(), "test", nil, []llm.ToolCall{
+		{ID: "conflict", Function: "terminal", Args: `{"command":"deploy"}`},
+		{ID: "later", Function: "terminal", Args: `{"command":"deploy-again"}`},
+	})
+	handoff, ok := lifecycleHandoffFromToolResults(results)
+	if backend.calls != 1 || !ok || handoff.Status != "waiting_external" || handoff.NeedApprove {
+		t.Fatalf("external pause did not park the exact run: calls=%d handoff=%+v", backend.calls, handoff)
+	}
+}
+
 type pauseBackend struct{ calls int }
 
 func (b *pauseBackend) Dispatch(string, map[string]interface{}) (string, error) {

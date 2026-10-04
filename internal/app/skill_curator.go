@@ -54,11 +54,11 @@ type skillCuratorWire struct {
 	Reason          string            `json:"reason"`
 }
 
-func NewConfiguredSkillCurator(mem *memory.MemoryManager, cfg *config.Config, tenantID string, store *control.Store, prompts *promptassets.Snapshot) httpapi.SkillCuratorRunner {
+func NewConfiguredSkillCurator(mem *memory.MemoryManager, cfg *config.Config, tenantID string, store *control.Store, prompts *promptassets.Snapshot, gates ...*llm.RequestGate) httpapi.SkillCuratorRunner {
 	if cfg == nil || store == nil || !cfg.Evolution.Enabled {
 		return nil
 	}
-	provider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSkillCurator)
+	provider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSkillCurator, gates...)
 	if provider == nil {
 		return nil
 	}

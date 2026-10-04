@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,6 +33,20 @@ type RunFinalization struct {
 	AnalyzerVersion    int
 	MaintenancePayload string
 	Event              Event
+	// Continuation is an exact, delayed child owned by this finalization. It is
+	// inserted in the same transaction as the parent wait status and event, so
+	// a crash can neither lose the wakeup nor run it before the parent parks.
+	Continuation      *QueuedTask
+	ExpectedRunStatus string
+	RequireCheckpoint bool
+	// ResourceWait closes a parked resource wait with no remaining observation
+	// producer. It changes the Run, wait marker and result in this transaction;
+	// uncertain claims remain occupied and a claimed parent cannot be rewritten.
+	ResourceWait *ExternalResourceWait
+	// A parked continuation may itself be a claimed queue child. Settle that
+	// exact source row in the same transaction that creates its next hop.
+	ConsumedQueueID         string
+	ConsumedQueueClaimToken string
 	// EffectKey identifies one logical side effect across retry runs. Ordinary
 	// turns leave it empty; durable watcher finalization uses its stable
 	// watch+verdict-revision key.
@@ -103,6 +118,14 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if input.Identity.PersonID != "" && input.Identity.PersonID != personID {
 		return nil, fmt.Errorf("finalization identity does not own task")
 	}
+	if input.RequireCheckpoint {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM loop_checkpoints
+			WHERE tenant_id=? AND person_id=? AND run_id=? AND outcome <> 'complete_turn'`,
+			tenant, personID, input.RunID).Scan(&count); err != nil || count != 1 {
+			return nil, fmt.Errorf("provider wait requires a durable model checkpoint: count=%d: %w", count, err)
+		}
+	}
 	duplicateEffect := false
 	if input.EffectKey != "" {
 		result, err := tx.ExecContext(ctx,
@@ -118,15 +141,106 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		}
 	}
 
-	result, err := tx.ExecContext(ctx,
-		`UPDATE runs SET status = ?, finished_at = ?, heartbeat_at = ?
-		 WHERE tenant_id = ? AND id = ? AND thread_id = ?`,
-		input.RunStatus, now.Unix(), now.Unix(), tenant, input.RunID, input.TaskID)
+	updateRun := `UPDATE runs SET status = ?, finished_at = ?, heartbeat_at = ?
+		 WHERE tenant_id = ? AND id = ? AND thread_id = ?`
+	updateArgs := []any{input.RunStatus, now.Unix(), now.Unix(), tenant, input.RunID, input.TaskID}
+	if input.ExpectedRunStatus != "" {
+		updateRun += ` AND status = ?`
+		updateArgs = append(updateArgs, input.ExpectedRunStatus)
+	}
+	if wait := input.ResourceWait; wait != nil {
+		if input.RunStatus != "blocked" || input.ExpectedRunStatus != "waiting_external" || wait.RunID != input.RunID || wait.TenantID != tenant || wait.PersonID != personID {
+			return nil, fmt.Errorf("resource wait correction requires the exact parked owner")
+		}
+		var encodedTargets string
+		if err := tx.QueryRowContext(ctx, `SELECT targets_json FROM external_resource_waits WHERE tenant_id=? AND person_id=? AND run_id=? AND effect_id=? AND status='pending'`, tenant, personID, input.RunID, wait.EffectID).Scan(&encodedTargets); err != nil {
+			return nil, err
+		}
+		var recordedTargets []string
+		if json.Unmarshal([]byte(encodedTargets), &recordedTargets) != nil || !slices.Equal(recordedTargets, wait.TargetKeys) {
+			return nil, fmt.Errorf("resource wait target set changed")
+		}
+		blockers, needsObservation, err := externalResourceBlockers(ctx, tx, tenant, personID, input.RunID, wait.TargetKeys)
+		if err != nil {
+			return nil, err
+		}
+		if len(blockers) == 0 || !needsObservation {
+			return nil, fmt.Errorf("resource wait observation source changed")
+		}
+		updateRun += ` AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.tenant_id=? AND child.resumes_run_id=?)`
+		updateArgs = append(updateArgs, tenant, input.RunID)
+		result, err := tx.ExecContext(ctx, `UPDATE external_resource_waits SET updated_at=?
+			WHERE tenant_id=? AND person_id=? AND run_id=? AND effect_id=? AND status='pending'`, now.Unix(), tenant, personID, input.RunID, wait.EffectID)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return nil, fmt.Errorf("resource wait changed before correction")
+		}
+	}
+	result, err := tx.ExecContext(ctx, updateRun, updateArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("finish run: %w", err)
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
 		return nil, fmt.Errorf("finish run affected %d rows", n)
+	}
+	if q := input.Continuation; q != nil {
+		if input.RunStatus != "waiting_external" || q.TenantID != tenant || q.PersonID != personID ||
+			q.TaskID != input.TaskID || q.ReplyToRunID != input.RunID ||
+			q.IdempotencyKey != "provider-wait:"+input.RunID || strings.TrimSpace(q.Content) == "" {
+			return nil, fmt.Errorf("exact provider continuation has invalid ownership or wait state")
+		}
+		var workspaceID, rootsJSON, channel string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(workspace_id,''), COALESCE(execution_roots_json,'[]'), channel
+			FROM runs WHERE tenant_id=? AND person_id=? AND thread_id=? AND id=?`,
+			tenant, personID, input.TaskID, input.RunID).Scan(&workspaceID, &rootsJSON, &channel); err != nil {
+			return nil, fmt.Errorf("load exact provider continuation scope: %w", err)
+		}
+		q.WorkspaceID, q.Channel = workspaceID, channel
+		var accounts int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE tenant_id=? AND person_id=?
+			AND platform=? AND platform_user_id=? AND status='active'`, tenant, personID,
+			q.Platform, q.PlatformUserID).Scan(&accounts); err != nil || accounts != 1 {
+			return nil, fmt.Errorf("provider continuation route must belong to run owner: matches=%d: %w", accounts, err)
+		}
+		if q.ID == "" {
+			q.ID = "queue_" + uuid.NewString()
+		}
+		deadline := q.NotBefore.Unix()
+		if q.NotBefore.IsZero() {
+			return nil, fmt.Errorf("provider continuation requires a wake deadline")
+		}
+		if q.NotBefore.Nanosecond() != 0 {
+			deadline++
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO task_queue
+			(id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode,
+			 workspace_id, execution_roots_json, thread_id, reply_to_run_id, idempotency_key,
+			 class, priority, not_before, status, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			q.ID, tenant, personID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
+			q.WorkspaceID, rootsJSON, q.TaskID, q.ReplyToRunID, q.IdempotencyKey,
+			QueueClassFinalization, QueuePriorityFinalization, deadline, QueueStatusQueued, now.Unix())
+		if err != nil {
+			return nil, fmt.Errorf("enqueue provider continuation: %w", err)
+		}
+		if input.ConsumedQueueID != "" || input.ConsumedQueueClaimToken != "" {
+			if input.ConsumedQueueID == "" || input.ConsumedQueueClaimToken == "" {
+				return nil, fmt.Errorf("provider wait source queue requires its id and claim token")
+			}
+			result, err = tx.ExecContext(ctx, `UPDATE task_queue SET status=?
+				WHERE tenant_id=? AND person_id=? AND thread_id=? AND id=? AND run_id=?
+				AND status=? AND claim_token=?`,
+				QueueStatusDone, tenant, personID, input.TaskID, input.ConsumedQueueID, input.RunID,
+				QueueStatusStarted, input.ConsumedQueueClaimToken)
+			if err != nil {
+				return nil, fmt.Errorf("settle provider wait source queue: %w", err)
+			}
+			if n, _ := result.RowsAffected(); n != 1 {
+				return nil, fmt.Errorf("provider wait source queue claim changed")
+			}
+		}
 	}
 	if err := finalizeRunSkillLifecycleTx(ctx, tx, input, personID, now, !duplicateEffect); err != nil {
 		return nil, fmt.Errorf("finalize skill lifecycle: %w", err)
@@ -195,6 +309,11 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 			return nil, fmt.Errorf("save handoff: %w", err)
 		}
 	}
+	if input.ResourceWait != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE task_handoffs SET summary=?,next_steps_json=?,risks_json=? WHERE id=? AND run_id=?`, input.Handoff.Summary, string(handoffNextJSON), string(risksJSON), "handoff_run_"+input.RunID, input.RunID); err != nil {
+			return nil, err
+		}
+	}
 	if duplicateEffect {
 		var payload map[string]interface{}
 		if json.Unmarshal(input.Event.Payload, &payload) != nil || payload == nil {
@@ -216,7 +335,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		).Scan(&existing); err != nil {
 			return nil, fmt.Errorf("check run outcome event: %w", err)
 		}
-		if existing == 0 {
+		if existing == 0 || input.ResourceWait != nil {
 			event := Event{
 				ID:             "event_" + uuid.NewString(),
 				TenantID:       tenant,
@@ -229,6 +348,9 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 				Payload:        payload,
 				IdempotencyKey: "run:" + input.RunID + ":outcome",
 				CreatedAt:      now,
+			}
+			if input.ResourceWait != nil {
+				event.IdempotencyKey = input.Event.IdempotencyKey + ":outcome"
 			}
 			if err := tx.QueryRowContext(ctx,
 				`UPDATE event_sequence SET next_cursor = next_cursor + 1 WHERE id = 1 RETURNING next_cursor`,
@@ -324,9 +446,28 @@ func (s *Store) EffectOwnedByRun(ctx context.Context, tenantID, effectKey, runID
 	return owner == runID, err
 }
 
+// RunAssistantContent reads the exact final reply committed with one Run.
+// Delivery compensation uses this durable text instead of invoking the model
+// or replaying any tool effects after a crash.
+func (s *Store) RunAssistantContent(ctx context.Context, tenantID, personID, runID string) (string, error) {
+	var content sql.NullString
+	err := s.db.QueryRowContext(ctx,
+		`SELECT m.content FROM runs r
+		 LEFT JOIN channel_messages m
+		   ON m.id = 'msg_run_' || r.id || '_assistant'
+		  AND m.tenant_id = r.tenant_id AND m.person_id = r.person_id
+		  AND m.thread_id = r.thread_id AND m.role = 'assistant'
+		 WHERE r.tenant_id = ? AND r.person_id = ? AND r.id = ?`,
+		normalizeTenant(tenantID), personID, runID).Scan(&content)
+	if err != nil {
+		return "", err
+	}
+	return content.String, nil
+}
+
 // MarkEffectDeliveryEnqueued records that the logical effect's result crossed
-// the durable outbox boundary. Queue recovery may settle the source row only
-// after this bit is true.
+// the durable outbox boundary. Recovery retries delivery from the committed
+// Run output while this bit is false; it never reruns the source work.
 func (s *Store) MarkEffectDeliveryEnqueued(ctx context.Context, tenantID, effectKey string) error {
 	if strings.TrimSpace(effectKey) == "" {
 		return nil

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
@@ -74,7 +75,8 @@ type spineEntry struct {
 	// Outcome is how the turn that wrote the entry ended: a finish_run status,
 	// "completed", or "incomplete: <reason>". It describes that turn, not the
 	// Run's current state, which a later turn may have changed.
-	Outcome string `json:"outcome,omitempty"`
+	Outcome    string `json:"outcome,omitempty"`
+	ObservedAt string `json:"observed_at,omitempty"`
 	// TaskID is label provenance only (which task this turn was pre-labeled
 	// with); it never gates what the model sees.
 	TaskID string `json:"task_id,omitempty"`
@@ -87,12 +89,13 @@ type spineEntry struct {
 // at load — so the harvest is turn-scoped by construction.
 func buildSpineEntry(ctx context.Context, userInput, finalAnswer, outcome string, messages []llm.Message) spineEntry {
 	entry := spineEntry{
-		Kind:      spineEntryKind,
-		User:      textutil.TruncateBytes(textutil.CleanUTF8(stripInjectedContextBlocks(userInput)), composerSpineUserSaveBytes),
-		Assistant: textutil.TruncateBytes(textutil.CleanUTF8(finalAnswer), composerSpineAnswerSaveBytes),
-		Files:     harvestToolPaths(messages),
-		Source:    TurnSourceFromContext(ctx),
-		Outcome:   strings.TrimSpace(outcome),
+		Kind:       spineEntryKind,
+		User:       textutil.TruncateBytes(textutil.CleanUTF8(stripInjectedContextBlocks(userInput)), composerSpineUserSaveBytes),
+		Assistant:  textutil.TruncateBytes(textutil.CleanUTF8(finalAnswer), composerSpineAnswerSaveBytes),
+		Files:      harvestToolPaths(messages),
+		Source:     TurnSourceFromContext(ctx),
+		Outcome:    strings.TrimSpace(outcome),
+		ObservedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
 		entry.TaskID = strings.TrimSpace(runtime.TaskID)
@@ -115,6 +118,12 @@ func (e spineEntry) toMessages() []llm.Message {
 	}
 	var b strings.Builder
 	b.WriteString("[Prior work record; reference only; this record does not select a Run]\n")
+	if e.ObservedAt != "" {
+		fmt.Fprintf(&b, "observed_at: %s\n", e.ObservedAt)
+	} else {
+		b.WriteString("observed_at: unavailable (legacy historical record)\n")
+	}
+	b.WriteString("provenance: recorded response, not current execution or state evidence\n")
 	if e.RunID != "" {
 		fmt.Fprintf(&b, "run_id: %s\n", e.RunID)
 	}

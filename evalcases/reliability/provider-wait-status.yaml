@@ -1,0 +1,36 @@
+id: reliability_provider_wait_status
+title: "A provider cooldown is a visible exact-run wait, not a lost task"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+
+setup:
+  task:
+    title: "Independent work awaiting the provider"
+    parked_runs:
+      - input: "Finish independent work"
+        status: waiting_external
+        wait_reason: rate_limit
+
+turns:
+  - input: "/status"
+    seeded_run_ordinal: 1
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "Independent work awaiting the provider"
+    - "waiting_external"
+    - "model provider"
+  must_not_contain:
+    - "No active task"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

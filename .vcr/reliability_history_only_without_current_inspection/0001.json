@@ -1,0 +1,68 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user says: only"
+    },
+    {
+      "reasoning_content": " reply HIST"
+    },
+    {
+      "reasoning_content": "ORICAL_VALUE_OLD"
+    },
+    {
+      "reasoning_content": ". It is a"
+    },
+    {
+      "reasoning_content": " historical check record"
+    },
+    {
+      "reasoning_content": " from the previous turn"
+    },
+    {
+      "reasoning_content": ", not current state"
+    },
+    {
+      "reasoning_content": ". Do"
+    },
+    {
+      "reasoning_content": " not call tools."
+    },
+    {
+      "reasoning_content": "\n\nSo just reply"
+    },
+    {
+      "reasoning_content": " with that"
+    },
+    {
+      "reasoning_content": " string."
+    },
+    {
+      "content": "HISTOR"
+    },
+    {
+      "content": "ICAL_VALUE"
+    },
+    {
+      "content": "_OLD"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 10453,
+        "output_tokens": 49,
+        "cache_read_input_tokens": 7168,
+        "cache_miss_input_tokens": 3285,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 40,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

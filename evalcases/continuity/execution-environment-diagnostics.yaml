@@ -24,6 +24,7 @@ expect:
     - "Execution diagnostics"
     - "Sandbox backend:"
     - "Workspace trust:"
+    - "External effects unresolved:"
     - "Credential values: hidden"
   must_not_contain:
     - "API_KEY"

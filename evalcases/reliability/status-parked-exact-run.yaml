@@ -1,0 +1,31 @@
+id: reliability_status_parked_exact_run
+title: "An exact status request can inspect a parked Run without resuming it"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+
+setup:
+  task:
+    title: "Parked release alpha"
+    parked_runs:
+      - input: "finish release alpha"
+        status: waiting_user
+
+turns:
+  - input: "/status"
+    seeded_run_ordinal: 1
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "Parked release alpha"
+    - "waiting_user"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

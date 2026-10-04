@@ -16,7 +16,7 @@ import (
 // hatch for isolated commands that genuinely need shared host networking. It
 // does not grant host execution, extra filesystem access, or credential
 // access. Model-visible sandbox arguments remain unchanged.
-func ExecutionCapabilityMiddleware() Middleware {
+func ExecutionCapabilityMiddleware(prechecks ...func(map[string]interface{}) error) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			toolName := stringArg(args, "_tool_name")
@@ -38,6 +38,22 @@ func ExecutionCapabilityMiddleware() Middleware {
 			if !hasScope || strings.TrimSpace(scope.WorkspaceID) == "" {
 				return next(args)
 			}
+			for _, check := range prechecks {
+				if err := check(args); err != nil {
+					return "", err
+				}
+			}
+			if isolatedExecutionView(scope) && !scope.ParallelWork {
+				// A legacy view without the parallel effect-claim contract remains
+				// file-only. Parallel views continue through the normal capability
+				// path; approval and the durable external-effect lane constrain
+				// their remote operations before dispatch.
+				if commandClearlyNeedsNetwork(toolName, args) {
+					return "", fmt.Errorf("networked execution is unavailable in this isolated view until its external target can be claimed")
+				}
+				args["_network_shared"] = false
+				return next(args)
+			}
 
 			fingerprint := executionCapabilityFingerprint(scope.WorkspaceID, executionenv.CapabilityNetworkShared)
 			// An operator policy that ALLOWS egress is not a reason to hand it
@@ -51,8 +67,9 @@ func ExecutionCapabilityMiddleware() Middleware {
 			// This is the same correction resolveCredentialCapability already
 			// carries for the credential axis, applied to the axis that still
 			// had the blanket form.
+			_, _, networkAllowed := execSandboxPolicyForArgs(args)
 			networkShared := scope.TrustLevel == executionenv.TrustTrusted &&
-				ExecSandboxAllowsNetwork() && commandPlausiblyNeedsEgress(toolName, args)
+				networkAllowed && commandPlausiblyNeedsEgress(toolName, args)
 			if !networkShared && scope.runGrants != nil {
 				networkShared = scope.runGrants.has(executionCapabilityRunGrantKey(executionenv.CapabilityNetworkShared, fingerprint))
 			}
@@ -106,6 +123,15 @@ func ExecutionCapabilityMiddleware() Middleware {
 			return output, fmt.Errorf("network:shared was approved; retry the command once explicitly with the granted capability (the failed command was not automatically replayed): %w", err)
 		}
 	}
+}
+
+func isolatedExecutionView(scope ExecutionScope) bool {
+	for _, binding := range scope.RootBindings {
+		if binding.Source == executionenv.RootSourceExecutionView {
+			return true
+		}
+	}
+	return false
 }
 
 func approveNetworkCapability(args map[string]interface{}, scope ExecutionScope, fingerprint string) error {

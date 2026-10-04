@@ -75,8 +75,8 @@ func (s *Store) CreatePendingTurnChoice(ctx context.Context, input PendingTurnCh
 	if input.PersonID == "" || input.RequestJSON == "" {
 		return nil, fmt.Errorf("person id and request snapshot are required")
 	}
-	if len(input.Options) < 2 || len(input.Options) > 4 {
-		return nil, fmt.Errorf("turn choice requires 2 to 4 options")
+	if len(input.Options) < 2 || len(input.Options) > 8 {
+		return nil, fmt.Errorf("turn choice requires 2 to 8 options")
 	}
 	seen := make(map[string]struct{}, len(input.Options))
 	for i := range input.Options {

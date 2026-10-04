@@ -297,6 +297,8 @@ func TestDynamicSkillToolsAreHiddenButExplicitlyDispatchable(t *testing.T) {
 
 func TestCatalogSkillCandidatesKeepUnrelatedActiveSkillsDiscoverable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// The catalogue fixture is independent of Skills in checkout ancestors.
+	t.Chdir(t.TempDir())
 	for _, item := range []struct {
 		name, description string
 	}{
@@ -312,7 +314,12 @@ func TestCatalogSkillCandidatesKeepUnrelatedActiveSkillsDiscoverable(t *testing.
 		}
 	}
 
-	candidates, err := CatalogSkillCandidatesForTenant("default", "inspect release metadata")
+	// Name a fixture-local run so another test's process-wide person scope
+	// cannot turn this catalogue assertion into a scan of its workspace.
+	isolate := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun("catalog-fixture"))
+	candidates, err := CatalogSkillCandidatesForTenant("default", "inspect release metadata", map[string]interface{}{
+		"_tenant_id": "default", "_context": isolate,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

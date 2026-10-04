@@ -1,0 +1,71 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I reviewed `draft.txt` ("
+    },
+    {
+      "usage": {
+        "input_tokens": 4905,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "content: `Draft ready`). The review step is complete, but delivery remains pending and necessary.\n\nWhat remains necessary to finish the work"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 27,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": ":\n- Provide the recipient details for `draft.txt`.\n- Once specified, deliver the draft to that recipient to"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 25,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " complete the second step of the plan."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2287,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/platform/log"
@@ -116,27 +117,63 @@ func (d *Server) handleIMWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Redelivery guard: IM platforms re-POST an event on any non-2xx or slow
-	// response, so a duplicate must be acknowledged 200 WITHOUT running the
-	// agent again. Keyed by the platform's own message/event id, persisted in
-	// control.db so it survives a restart; payloads with no recognizable id
-	// pass through (nothing safe to dedup on), and a dedup-store error fails
-	// open rather than dropping real work.
-	if msgID := imMessageID(platform, payload); msgID != "" && d.Control != nil {
-		first, err := d.Control.MarkInboundSeen(r.Context(), platform, msgID)
+	// Save the signed input before calling the gateway. A first-seen marker
+	// alone loses the message if the process exits before admission; an input
+	// already dispatching may have caused effects and must not be called twice.
+	msgID := imMessageID(platform, payload)
+	req := messageRequestFromIM(platform, payload)
+	if msgID == "" {
+		if strings.TrimSpace(req.Content) == "" && len(req.Attachments) == 0 {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
+			return
+		}
+		http.Error(w, "a stable platform message id is required for IM work", http.StatusUnprocessableEntity)
+		return
+	}
+	if boolFromMap(payload, "async") || (os.Getenv("SELF_IM_ASYNC") == "1" && !isControlCommand(req.Content)) {
+		req.Async = true
+	}
+	if msgID != "" && d.Control != nil {
+		identity, err := d.Control.ResolveOrCreateAccount(r.Context(), d.tenantID(req.TenantID), req.Platform, req.PlatformUserID, req.DisplayName)
 		if err != nil {
-			log.Warn("im webhook dedup check failed", "platform", platform, "error", err)
-		} else if !first {
+			http.Error(w, "inbound identity unavailable; retry delivery", http.StatusServiceUnavailable)
+			return
+		}
+		state, err := d.Control.BeginInbound(r.Context(), platform, msgID, body, control.InboundOwner{
+			TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: req.Content,
+		})
+		if err != nil {
+			log.Warn("im webhook receipt failed", "platform", platform, "message_id", msgID, "error", err)
+			http.Error(w, "inbound storage unavailable; retry delivery", http.StatusServiceUnavailable)
+			return
+		}
+		if state == control.InboundAccepted {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
+			return
+		}
+		if state != control.InboundPending {
+			log.Error("im webhook processing outcome uncertain; inspect inbound receipt before retry", "platform", platform, "message_id", msgID)
+			http.Error(w, "inbound processing outcome uncertain; inspect receipt", http.StatusServiceUnavailable)
+			return
+		}
+		claimed, err := d.Control.ClaimInbound(r.Context(), platform, msgID)
+		if err != nil || !claimed {
+			http.Error(w, "inbound claim unavailable; retry delivery", http.StatusServiceUnavailable)
 			return
 		}
 	}
 
-	req := messageRequestFromIM(platform, payload)
-	if boolFromMap(payload, "async") || (os.Getenv("SELF_IM_ASYNC") == "1" && !isControlCommand(req.Content)) {
-		req.Async = true
-	}
 	resp, status := d.ProcessMessage(r.Context(), req)
+	if msgID != "" && d.Control != nil {
+		if status >= http.StatusInternalServerError {
+			_ = d.Control.NoteInboundFailure(r.Context(), platform, msgID, fmt.Errorf("gateway returned HTTP %d", status))
+			log.Error("im webhook processing outcome uncertain; inspect inbound receipt before retry", "platform", platform, "message_id", msgID, "status", status)
+		} else if err := d.Control.AcceptInbound(r.Context(), platform, msgID); err != nil {
+			log.Error("im webhook acceptance could not be saved; inspect inbound receipt", "platform", platform, "message_id", msgID, "error", err)
+			http.Error(w, "inbound acceptance unavailable; inspect receipt", http.StatusServiceUnavailable)
+			return
+		}
+	}
 	writeJSON(w, status, resp)
 }
 
@@ -240,6 +277,17 @@ func messageRequestFromIM(platform string, payload map[string]interface{}) api.M
 	if msg := nestedMap(payload, "message"); msg != nil {
 		req.Content = firstNonEmpty(contentText(msg["content"]), mapString(msg, "content"), mapString(msg, "text"), req.Content)
 		req.Channel = firstNonEmpty(mapString(msg, "chat_id"), mapString(msg, "group_id"), mapString(msg, "channel_id"), req.Channel)
+		if strings.EqualFold(platform, "telegram") {
+			if chat := nestedMap(msg, "chat"); chat != nil {
+				req.Channel = firstNonEmpty(mapString(chat, "id"), req.Channel)
+			}
+			if from := nestedMap(msg, "from"); from != nil {
+				req.PlatformUserID = firstNonEmpty(mapString(from, "id"), req.PlatformUserID)
+			}
+			if reply := nestedMap(msg, "reply_to_message"); reply != nil {
+				req.NativeReplyMessageID = mapString(reply, "message_id")
+			}
+		}
 	}
 	if author := nestedMap(payload, "author"); author != nil {
 		req.PlatformUserID = firstNonEmpty(mapString(author, "id"), mapString(author, "user_id"), req.PlatformUserID)

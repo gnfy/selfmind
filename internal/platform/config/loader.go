@@ -635,6 +635,9 @@ type GatewayConfig struct {
 	URL          string `mapstructure:"url" yaml:"url,omitempty"`
 	Token        string `mapstructure:"token" yaml:"token,omitempty"`
 	DrainTimeout string `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
+	// MaxActiveWorkRuns is the per-person top-level Run admission ceiling. The
+	// default remains one until the parallel-work release gates are met.
+	MaxActiveWorkRuns int `mapstructure:"max_active_work_runs" yaml:"max_active_work_runs,omitempty"`
 	// AutomaticRunRecovery controls daemon-owned exact-parent continuation after
 	// daemon/provider interruptions. False is an operational rollback: durable
 	// evidence and explicit /resume stay available.
@@ -1178,6 +1181,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intent.thresholds.direct", 0.8)
 	v.SetDefault("intent.thresholds.ask", 0.55)
 	v.SetDefault("gateway.automatic_run_recovery", true)
+	v.SetDefault("gateway.max_active_work_runs", 1)
 	v.SetDefault("gateway.pending_notify_after", "15m")
 	v.SetDefault("gateway.outbound_retention", "336h")
 	v.SetDefault("exec_sandbox.enabled", true)

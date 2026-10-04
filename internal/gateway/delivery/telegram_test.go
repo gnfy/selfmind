@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"selfmind/internal/control"
 )
 
 func TestTelegramSenderAttachesApprovalButtons(t *testing.T) {
@@ -59,5 +61,67 @@ func TestTelegramSenderPlainMessageHasNoButtons(t *testing.T) {
 	}
 	if _, ok := payload["reply_markup"]; ok {
 		t.Fatalf("unexpected reply_markup: %+v", payload)
+	}
+}
+
+func TestTelegramNativeReplyReceiptReachesDurableOutbox(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":87}}`))
+	}))
+	defer server.Close()
+	router := NewRouter(nil)
+	router.Register("telegram", &TelegramSender{Token: "tok", BaseURL: server.URL, Client: server.Client()})
+	svc := NewService(store, router, Options{})
+	if err := svc.EnqueueAndTry(ctx, Message{
+		TenantID: "default", PersonID: "owner", Platform: "telegram", PlatformUserID: "user-1",
+		Channel: "chat-1", RunID: "run-1", ClarifyID: "clarify-1", Kind: KindClarify, Content: "Which region?",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	edge, err := store.NativeIMReplyTarget(ctx, "default", "owner", "telegram", "chat-1", "87")
+	if err != nil || edge.RunID != "run-1" || edge.ClarifyID != "clarify-1" {
+		t.Fatalf("durable Telegram reply edge: %+v, %v", edge, err)
+	}
+}
+
+func TestNativeReceiptCollisionDoesNotResendAcceptedMessage(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sends := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sends++
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":87}}`))
+	}))
+	defer server.Close()
+	router := NewRouter(nil)
+	router.Register("telegram", &TelegramSender{Token: "tok", BaseURL: server.URL, Client: server.Client()})
+	svc := NewService(store, router, Options{})
+	for i, person := range []string{"owner-a", "owner-b"} {
+		err := svc.EnqueueAndTry(ctx, Message{TenantID: "default", PersonID: person, Platform: "telegram",
+			Channel: "chat-1", RunID: person, Content: "work " + person})
+		if (i == 0 && err != nil) || (i == 1 && err == nil) {
+			t.Fatalf("send %d receipt error = %v", i, err)
+		}
+	}
+	if sends != 2 {
+		t.Fatalf("initial accepted sends = %d", sends)
+	}
+	svc.flushDue(ctx)
+	if sends != 2 {
+		t.Fatalf("receipt collision caused blind resend: %d", sends)
+	}
+	rows, err := store.ListDueDeliveries(ctx, 10)
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("accepted messages remain retryable: %+v, %v", rows, err)
 	}
 }

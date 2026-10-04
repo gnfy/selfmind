@@ -83,6 +83,12 @@ func formatRecoveryHandoff(handoff *control.RecoveryHandoff) string {
 	if handoff.OriginalGoal != "" {
 		fmt.Fprintf(&sb, "Original goal: %s\n", textutil.Truncate(toOneLine(handoff.OriginalGoal), 300))
 	}
+	if len(handoff.UserRequirements) > 0 {
+		sb.WriteString("User additions and corrections:\n")
+		for _, requirement := range handoff.UserRequirements[:min(len(handoff.UserRequirements), 10)] {
+			fmt.Fprintf(&sb, "- %s\n", textutil.Truncate(toOneLine(requirement), 180))
+		}
+	}
 	if handoff.Cause != "" {
 		fmt.Fprintf(&sb, "Cause: %s\n", textutil.Truncate(toOneLine(handoff.Cause), 120))
 	}

@@ -240,7 +240,7 @@ var documentedCLIUsages = []string{
 	"selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]",
 	"selfmind resume [n|run_id]",
 	"selfmind search [query]",
-	"selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|revoke] ...",
+	"selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|effect|revoke] ...",
 	"selfmind approvals",
 	"selfmind approve [token]",
 	"selfmind reject [token]",

@@ -46,9 +46,23 @@ func (m ToolMode) MayWriteWorkspace() bool {
 	}
 }
 
-// MayWriteWorkspace reports whether the turn's strategy can write the workspace.
+// MayWriteWorkspace is the scheduler's conservative capability check. ToolMode
+// is a broad prompt hint, not a closed tool list: a local_read hint with nil
+// AllowedTools still exposes write_file and terminal. Only an enforced
+// no-action mode or an explicit lifecycle-only allowlist proves otherwise.
 func (s TaskStrategy) MayWriteWorkspace() bool {
-	return s.ToolMode.MayWriteWorkspace()
+	if s.ToolMode == ToolModeNone {
+		return false
+	}
+	if s.AllowedTools == nil {
+		return true
+	}
+	for name, allowed := range s.AllowedTools {
+		if allowed && !isLifecycleToolName(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // PlanPolicy controls whether update_plan is exposed and encouraged.

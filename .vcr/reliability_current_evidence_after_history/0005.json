@@ -1,0 +1,86 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "cat"
+    },
+    {
+      "reasoning_content": " -A"
+    },
+    {
+      "reasoning_content": " isn't supported on"
+    },
+    {
+      "reasoning_content": " macOS. Use"
+    },
+    {
+      "reasoning_content": " od or sed -"
+    },
+    {
+      "reasoning_content": "n with l"
+    },
+    {
+      "reasoning_content": ". The file is"
+    },
+    {
+      "reasoning_content": " 1"
+    },
+    {
+      "reasoning_content": "8 bytes: \""
+    },
+    {
+      "reasoning_content": "CURRENT_VALUE_NEW\""
+    },
+    {
+      "reasoning_content": " is 17"
+    },
+    {
+      "reasoning_content": " chars + newline ="
+    },
+    {
+      "reasoning_content": " 18."
+    },
+    {
+      "reasoning_content": " Let me"
+    },
+    {
+      "reasoning_content": " confirm with `od"
+    },
+    {
+      "reasoning_content": " -c`"
+    },
+    {
+      "reasoning_content": " quickly — one bounded"
+    },
+    {
+      "reasoning_content": " retry with corrected command"
+    },
+    {
+      "reasoning_content": ".\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11755,
+        "output_tokens": 139,
+        "cache_read_input_tokens": 11264,
+        "cache_miss_input_tokens": 491,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 61,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "terminal",
+          "Args": "{\"command\": \"od -c runtime-state.txt\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -184,6 +184,9 @@ type MessageRequest struct {
 	// continuation parent; an invalid, foreign, stale, or already-claimed id
 	// fails closed and is never downgraded to ordinary routing.
 	ReplyToRunID string `json:"reply_to_run_id,omitempty"`
+	// NativeReplyMessageID is set only by a verified IM adapter from the
+	// platform's reply metadata. Public /v1/message JSON cannot assert it.
+	NativeReplyMessageID string `json:"-"`
 	// ApprovalID and ClarifyID are structured return edges. Adapters may attach
 	// them when the platform proves which pending interaction the user answered;
 	// the gateway validates person ownership before using either id.
@@ -372,7 +375,7 @@ type ApprovalRespondResponse struct {
 	Approval *control.ApprovalRequest `json:"approval"`
 }
 
-// RunSteerRequest injects mid-turn user guidance into the caller's active run
+// RunSteerRequest injects mid-turn user guidance into one exact active run
 // (POST /v1/runs/steer). It exists for thin clients: their process-local
 // steering channel can never reach a run executing inside the daemon, so this
 // is the only path by which mid-run input reaches the agent loop. Identity
@@ -384,6 +387,7 @@ type RunSteerRequest struct {
 	PlatformUserID string `json:"platform_user_id"`
 	DisplayName    string `json:"display_name"`
 	Channel        string `json:"channel"`
+	RunID          string `json:"run_id,omitempty"`
 	Text           string `json:"text"`
 }
 
@@ -436,10 +440,16 @@ type ExternalOutcome struct {
 // a model's prose claim that tests passed. State is one of not_applicable,
 // not_run, stale, passed, failed, partial, or blocked.
 type VerificationOutcome struct {
-	State            string              `json:"state"`
-	Summary          string              `json:"summary,omitempty"`
-	LatestMutationAt int64               `json:"latest_mutation_at_unix_nano,omitempty"`
-	Checks           []VerificationCheck `json:"checks,omitempty"`
+	State                          string              `json:"state"`
+	Summary                        string              `json:"summary,omitempty"`
+	LatestMutationAt               int64               `json:"latest_mutation_at_unix_nano,omitempty"`
+	Checks                         []VerificationCheck `json:"checks,omitempty"`
+	OrdinaryCommands               int                 `json:"ordinary_commands,omitempty"`
+	OrdinaryCommandFailures        int                 `json:"ordinary_command_failures,omitempty"`
+	OrdinaryCommandAttempts        int                 `json:"ordinary_command_attempts,omitempty"`
+	OrdinaryCommandNotDispatched   int                 `json:"ordinary_command_not_dispatched,omitempty"`
+	OrdinaryCommandDispatchUnknown int                 `json:"ordinary_command_dispatch_unknown,omitempty"`
+	OrdinaryCommandExitUnknown     int                 `json:"ordinary_command_exit_unknown,omitempty"`
 }
 
 type VerificationCheck = verification.Check
@@ -475,6 +485,9 @@ type DigestResponse struct {
 	// ActiveRun is the person's currently executing run, if any — the signal
 	// for a client to re-attach to its live events.
 	ActiveRun *DigestActiveRun `json:"active_run,omitempty"`
+	// ActiveRuns is a bounded overview when several Runs execute for the same
+	// person. The singular field remains for older clients only when unique.
+	ActiveRuns []DigestActiveRun `json:"active_runs,omitempty"`
 	// ApprovalMode is the person's effective approval mode (their persisted
 	// /mode preference, or "on-request" when unset). It is point-in-time person
 	// state — NOT a "while you were away" item — so it never affects Empty();
@@ -509,7 +522,7 @@ func (d *DigestResponse) Empty() bool {
 		(len(d.FinishedTasks) == 0 && len(d.DisruptedTasks) == 0 &&
 			len(d.UnresolvedTasks) == 0 &&
 			len(d.PendingApprovals) == 0 && len(d.PendingClarifies) == 0 &&
-			len(d.UnconfirmedPushes) == 0 && d.ActiveRun == nil)
+			len(d.UnconfirmedPushes) == 0 && d.ActiveRun == nil && len(d.ActiveRuns) == 0)
 }
 
 type DigestTask struct {
@@ -651,6 +664,23 @@ type WorkspaceObservationProfileRequest struct {
 	AllowTrailing    bool     `json:"allow_trailing,omitempty"`
 	AllowNetwork     bool     `json:"allow_network,omitempty"`
 	AllowCredentials bool     `json:"allow_credentials,omitempty"`
+}
+
+// WorkspaceEffectProfileRequest is a local-owner assertion about the complete
+// remote target set of one exact, hash-bound script invocation.
+type WorkspaceEffectProfileRequest struct {
+	TenantID         string   `json:"tenant_id"`
+	Platform         string   `json:"platform"`
+	PlatformUserID   string   `json:"platform_user_id"`
+	WorkspaceID      string   `json:"workspace_id,omitempty"`
+	ScriptPath       string   `json:"script_path"`
+	Argv             []string `json:"argv,omitempty"`
+	TargetKeys       []string `json:"target_keys"`
+	AllowNetwork     bool     `json:"allow_network,omitempty"`
+	AllowCredentials bool     `json:"allow_credentials,omitempty"`
+	// Optional exact read-only command which observes the same target set.
+	// The owner must also approve it as an observation script.
+	ObservationCommand string `json:"observation_command,omitempty"`
 }
 
 type BindAccountRequest struct {

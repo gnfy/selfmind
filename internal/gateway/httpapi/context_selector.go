@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/buildinfo"
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/textutil"
@@ -80,6 +81,14 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 	}
 	if run != nil {
 		selected.RunID = run.ID
+		fingerprint := buildinfo.Current().Fingerprint
+		if c.srv.RuntimeStatusFunc != nil {
+			if running := c.srv.RuntimeStatusFunc(); running.BuildFingerprint != "" {
+				fingerprint = running.BuildFingerprint
+			}
+		}
+		selected.RuntimeObservation = &kernel.RuntimeObservation{ObservedAt: run.StartedAt,
+			BuildFingerprint: fingerprint, MaxActiveWorkRuns: c.activeCapacity(), ResumesRunID: run.ResumesRunID}
 		if selected.Channel == "" {
 			selected.Channel = run.Channel
 		}
@@ -109,6 +118,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 					selected.Plan = append(selected.Plan, kernel.PlanItem{
 						StepID: step.StepID, Step: step.Step, Status: step.Status,
 						SuccessCriteria: step.SuccessCriteria, VerificationRequired: step.VerificationRequired,
+						CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
 					})
 				}
 			}
@@ -142,6 +152,9 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 	if workspace != nil {
 		selected.WorkspaceID = firstNonEmptyString(selected.WorkspaceID, workspace.ID)
 		selected.Workspace = workspace.LocalPath
+		if execution, ok := kernel.WorkspaceContextFromContext(ctx); ok && execution.ID == workspace.ID && execution.Root != "" {
+			selected.Workspace = execution.Root
+		}
 	}
 	if includeFull && parent != nil {
 		if handoff, _ := c.srv.Control.RunHandoff(ctx, task.TenantID, task.PersonID, parent.ID); handoff != nil {
@@ -305,7 +318,7 @@ func (c *RunCoordinator) workContinuityHints(ctx context.Context, identity *cont
 		if err != nil || run == nil || run.PersonID != identity.PersonID {
 			continue
 		}
-		card, ok := c.srv.continuityCandidateForRun(ctx, identity, *run, c.currentActive(identity.PersonID), 0, []string{"attention_hint"})
+		card, ok := c.srv.continuityCandidateForRun(ctx, identity, *run, c.activeForRun(identity.PersonID, run.ID), 0, []string{"attention_hint"})
 		if !ok {
 			continue
 		}

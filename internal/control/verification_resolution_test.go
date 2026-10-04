@@ -286,7 +286,7 @@ func TestVerificationReplacementBindsToActiveStepAfterOriginalWorkUnitCloses(t *
 	}
 }
 
-func TestVerificationReplacementBindsAfterOriginalStepIsReplannedAway(t *testing.T) {
+func TestVerificationReplacementStaysBoundToRetainedOpenObligation(t *testing.T) {
 	ctx := context.Background()
 	s, identity, _, run := newRecoveryFixture(t)
 	initial, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "original check", []RunPlanStepInput{{
@@ -310,9 +310,8 @@ func TestVerificationReplacementBindsAfterOriginalStepIsReplannedAway(t *testing
 		t.Fatal(err)
 	}
 
-	// The snapshot drops the obsolete step and changes the plan's length, so
-	// nothing matches it by position: the new check is a new step. A same-length
-	// rewording would keep the open step's id instead.
+	// Main adds a different method but omits the required original condition.
+	// Retain that exact obligation; method correction cannot erase its evidence binding.
 	replanned, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "replace obsolete step", []RunPlanStepInput{
 		{Step: "Check replacement route", Status: "in_progress", SuccessCriteria: "route is reachable", VerificationRequired: true},
 		{Step: "Retire the obsolete route", Status: "pending"},
@@ -330,7 +329,7 @@ func TestVerificationReplacementBindsAfterOriginalStepIsReplannedAway(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replacement.StepID != replanned.Plan.Steps[0].StepID || replacement.Criterion != old.Criterion || replacement.Target != old.Target {
+	if replacement.StepID != initial.Plan.Steps[0].StepID || replacement.Criterion != old.Criterion || replacement.Target != old.Target {
 		t.Fatalf("replacement identity=%+v", replacement)
 	}
 }

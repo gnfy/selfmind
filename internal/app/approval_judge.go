@@ -59,8 +59,8 @@ func NewApprovalJudge(provider llm.Provider) tools.ApprovalJudge {
 	return &llmApprovalJudge{provider: provider, timeout: config.DefaultApprovalTriageTimeout, reasoning: judgeDefaultReasoning}
 }
 
-func NewConfiguredApprovalJudge(mem *memory.MemoryManager, cfg *config.Config, tenantID string) tools.ApprovalJudge {
-	provider, role := configuredApprovalJudgeProvider(mem, cfg, tenantID)
+func NewConfiguredApprovalJudge(mem *memory.MemoryManager, cfg *config.Config, tenantID string, gates ...*llm.RequestGate) tools.ApprovalJudge {
+	provider, role := configuredApprovalJudgeProvider(mem, cfg, tenantID, gates...)
 	if provider == nil {
 		log.Info("smart approval judge disabled: configure models.auxiliary or models.roles.fast_classifier to enable model triage without using the main model")
 		return nil
@@ -108,11 +108,11 @@ func (j *llmApprovalJudge) ApprovalJudgeTimeout() time.Duration {
 // configuredApprovalJudgeProvider keeps approval latency independent from
 // background review. Older configs that only declared background_review remain
 // functional, but the foreground coding provider is never borrowed silently.
-func configuredApprovalJudgeProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (llm.Provider, llm.ModelRole) {
-	if provider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleFastClassifier); provider != nil {
+func configuredApprovalJudgeProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string, gates ...*llm.RequestGate) (llm.Provider, llm.ModelRole) {
+	if provider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleFastClassifier, gates...); provider != nil {
 		return provider, llm.RoleFastClassifier
 	}
-	if provider := explicitRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview); provider != nil {
+	if provider := explicitRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview, gates...); provider != nil {
 		return provider, llm.RoleBackgroundReview
 	}
 	return nil, ""
@@ -124,6 +124,12 @@ func (j *llmApprovalJudge) Judge(ctx context.Context, prompt string) (string, er
 }
 
 func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (tools.ApprovalResponse, error) {
+	owner := llm.ModelContextFrom(ctx)
+	owner.Role = llm.ModelRole(j.route)
+	if owner.Role == "" {
+		owner.Role = llm.RoleFastClassifier
+	}
+	ctx = llm.WithModelContext(ctx, owner)
 	started := time.Now()
 	resp, err := j.provider.Chat(ctx, llm.ChatRequest{
 		SystemPrompt: judgeSystemPrompt,

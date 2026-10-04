@@ -95,7 +95,7 @@ func TestObservationRejectsPathQualifiedPrograms(t *testing.T) {
 func TestObservationBaselineIsNarrowerThanTheGrantFloorNeutralSet(t *testing.T) {
 	for word := range shellNeutralWords {
 		switch word {
-		case "trap", "read", "declare", "local", "readonly", "unset", "shift", "wait", "]", "]]", "[[":
+		case "trap", "read", "declare", "local", "readonly", "shift", "wait", "]", "]]", "[[":
 			if _, present := observationRuleByProgram[word]; present {
 				t.Errorf("%q carries or binds state and must not be an observation word", word)
 			}

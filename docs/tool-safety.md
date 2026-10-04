@@ -92,6 +92,20 @@ This decision is runtime-owned and generic: models do not need to remember
 shell prefixes such as `unset HTTPS_PROXY`, and the execution engine has no
 provider, project, or command-specific proxy branch.
 
+Ordinary commands inherit that runtime route. Literal removal of only standard
+proxy variables (`unset` or `env -u`) is separate from external mutation proof:
+every remaining command must still be a proven observation. PATH changes,
+credential removal, substitutions, unknown wrappers and writes remain gated.
+In smart mode, removal of a proxy configured in the Run's frozen environment
+receives the existing authorization review even for a read-only query; a broad
+observation grant cannot release that route change. The judge receives variable
+names and the current intent, never proxy addresses or credentials. Full-auto
+retains its existing authority contract. Commands are never silently rewritten.
+Typed process results expose network mode, proxy projection (`not_configured`,
+`inherited`, or an omission reason), and literal requested proxy removals to the
+model separately from raw output and the compact user preview. Requested
+removals describe the command, not proof of the route an arbitrary program used.
+
 Bubblewrap receives the constructed environment through `cmd.Env`. Never put a
 credential into bwrap arguments with `--setenv`: process arguments are visible
 through process listings and `/proc/*/cmdline`.

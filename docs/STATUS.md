@@ -23,11 +23,15 @@ CLI cancellation addresses the owned Run and awaits its observed final state.
 Run-only reply edges cannot answer another Run's human wait. View delivery
 checks active physical roots; inbound diagnostics expose receipt state only.
 
+Commands inherit the runtime proxy route by default. Literal standard-proxy
+removals retain independent read-only proof; smart-mode review sees configured
+route changes, and typed process results expose bounded network/proxy facts.
+
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 96 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 98 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.

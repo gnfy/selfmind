@@ -1,0 +1,43 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "input_tokens": 11397,
+        "output_tokens": 103,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 670,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_3681097",
+          "Function": "finish_run",
+          "Args": "{\"summary\":\"Successfully ran both marker commands, captured the recorded requested_proxy_removals, and verified that shell environment modifications do not persist across separate command invocations.\",\"done\":[\"Executed explicit proxy unset command and verified DIRECT_ROUTE_CHECK marker\",\"Captured requested_proxy_removals from execution environment metadata\",\"Executed ordinary command and verified NEXT_ROUTE_CHECK marker\"],\"files\":[],\"status\":\"done\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "ErEGCq4GAWkUfRO9jls3J0NOG9XjG5rBGlsmED++r+bh8vl5v3VmbgUnekOO7eGSy5SzDc1E1RieBerFf+Z8yqLY9PLvhu3uwGv/LbKhqFS7ZZqbYBcV5H/21Oy7+3wMB16UPXdfPMz+TzGhAnHwwNM8qVCaZCG8W+srnZYemG8b/mceIl1bhDLiMZrV2StaR0J3OVctvmQeP3PTwoMBIBVU0lo8V/SyXdHOQ47F7ra9csgosBkbN77RWXBe/9m5Gz16XOVCHyO6hy4kCdElHqHquM7NwTSED5dIlBOifr0U3Sg46k2Gi6x5NTBdq8ecuLluGYDTH6zru5Gf0myyhLoneghaJdrn1UjLExNQbsf2K87gmxjJSpthpVjAH2wQkc7o3W49lb4M7QILcaD7gmDhRcDVT32Vh1oQ6oRbG7j/l+1dyIiozGCTaTySN5j0LkoWqx1C6yITPA1+tL9twC3FCIEHhRUs5SCkRKQ4CqqiavW4y/n6/M/UwdUv0e565WXtTwCVDj95T2aXl1mgtp2J0nKZqoJN1+Ohml512IwibWhFNVv6295n19R6EPollCSc/p5diGY/qS32u3JfexDCgpuiwbMiJn/4d5KQhhG+vywJRoowslIbYFK42vDoMUTAseQzPADfZaqThhcr7BUPKkYmOB3+TSAZMt/VPVhxzcGWANkO6fyN76OurtKLN+48otsJzILb/eJFcevw44cPkYjiNfNuB5z6TEj84MbiPEkMcI1FJDxG9A2PM5a7/lWko05NMA77AbrsBV7TpTk/nQ5acBx1GJdG+Zcd8mg0sj0YYUaBXCMDkKq1hkpq+ye+QDHSuo20EEBK4+XanefJtCPUl/HXY9RSCHxFeUDEVsDE7qwW8p+BvrhVpRl9my+XQTH8GdfgxmZ7d8Ts5v6ZYLVoS+vldbwaOmza4yYMoelZH3kZnkdcsagFwoq0pJkos71XZOEl6Mi+00sxrQrGhmp/xZaj3Ku7I1uxIVkIGVvwVFuEM7TxNuxxsdlK7Rkrb2geZ2uKwZX2rTK9sMxnIJeZYCJWhvhEaIJJhYQRvkSnDiD1HfYUN73DKsqXD4UFxA=="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

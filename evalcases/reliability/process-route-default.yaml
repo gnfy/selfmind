@@ -1,0 +1,35 @@
+id: reliability_process_route_default
+title: "Ordinary commands inherit the runtime route and expose bounded environment facts"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+turns:
+  - input: >-
+      Inspect this run's execution environment with one terminal call that prints
+      ROUTE_CHECK. Use the current runtime environment. Then report one compact
+      line `ROUTE_CHECK network_mode=... proxy_mode=...` using the tool's
+      execution facts. No network
+      access, environment dump or additional diagnostic commands are needed.
+expect:
+  status: completed
+  max_tool_errors: 0
+  max_duration_seconds: 120
+  contains: [ROUTE_CHECK, proxy_mode]
+assert_state:
+  - on: events
+    type: tool.started
+    payload_contains: 'unset '
+    count_lte: 0
+  - on: events
+    type: tool.started
+    payload_contains: 'env -u'
+    count_lte: 0
+  - on: events
+    type: tool.completed
+    payload_contains: '"proxy_mode":'
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_provider_stack_dump: true

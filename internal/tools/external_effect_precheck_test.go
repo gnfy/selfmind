@@ -144,8 +144,10 @@ func TestExternalPrecheckPrecedesCredentialCapabilityAndAllowsObservations(t *te
 			t.Fatalf("blocked projection granted or asked: asks=%d calls=%d args=%+v", asks, calls, args)
 		}
 	}
-	args := map[string]interface{}{"_tenant_id": "precheck-credentials", "_tool_name": "terminal", "command": "aws sts get-caller-identity", toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}
-	if _, err := executor(args); err != nil || calls != 1 || asks != 1 {
-		t.Fatalf("proven observation was blocked: calls=%d asks=%d err=%v", calls, asks, err)
+	for i, command := range []string{"aws sts get-caller-identity", "unset HTTPS_PROXY HTTP_PROXY ALL_PROXY; gh pr view 19 --json state", "env -u https_proxy gcloud builds describe build-2"} {
+		args := map[string]interface{}{"_tenant_id": "precheck-credentials", "_tool_name": "terminal", "command": command, toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}
+		if _, err := executor(args); err != nil || calls != i+1 || asks != i+1 {
+			t.Fatalf("proven observation was blocked: calls=%d asks=%d err=%v", calls, asks, err)
+		}
 	}
 }

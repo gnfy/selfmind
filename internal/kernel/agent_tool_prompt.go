@@ -38,6 +38,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 		sb.WriteString("When a tool returns an error, treat the error as diagnostic evidence. Inspect the relevant state available to you, change the next action when evidence changes, and report a real blocker instead of repeating the same call.\n")
 		if hasAny("terminal", "execute_code", "run_command") {
 			sb.WriteString("For command failures, inspect the working directory, files, environment, authentication, runtime, and command help before choosing an override or retry.\n")
+			sb.WriteString("Use the runtime-provided process environment and network route by default. Execution facts report the network mode and proxy projection. Choose a per-command route override when the current user request or current diagnostics establish its need.\n")
 		}
 		if names["verify"] {
 			sb.WriteString("Use verify for checks that establish completion: it executes the command and records verification evidence. A command run through terminal is recorded as ordinary execution, not a verification check. Run the relevant check after the final change.\n")

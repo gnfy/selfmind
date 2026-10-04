@@ -1,0 +1,46 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am executing a terminal command to print the check string and observe the environment execution facts."
+    },
+    {
+      "usage": {
+        "input_tokens": 10527,
+        "output_tokens": 18,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 18,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2782110",
+          "Function": "terminal",
+          "Args": "{\"command\":\"echo ROUTE_CHECK\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EsAKCr0KAWkUfROECXbamHKDhf3frxQLLCGn3Zw2ui9U47nGexUjS4CCmZbXVPMVfeBsn9KgeGme462BOmkhdqhd7BUGBQ4XJeq+AJEfEY4+/C+Gh0CrJjDwk3z5LmoYNQKzMmJQ4Bm2CwgFfKqT/i0Dyv5O+6byzLuktGLF8Cw7v+4KRmSvb3apoLLamy1pkck1MJfWFgSox6fvKWDIGDSjbINs9oqRtA97mKgjHJib3Xbkyueya90CgLo0e/auaBYmljo1+6vtonvgD9lAcez4aweWDHwMfP9kQQwvOcYtiQysRP2/5blbBCVnn38XzgedGHkOlkDjnbZVI7ShvlxDUhmQ/lUBP4ezF4ykZVso/YjCRoxYXfkHJKqADgWF+nSU4Q9+tnhiuB8SDlZNBccel003Zg5LIlKzXKvtpFGlU/KsR9+7jd05L1A+oE06yIqCg+7L6ghXlTIgOUrfOOtiQ7USQV4hSRCIHt93SjX0aBGsxBFZixUsYBxMtAFWlojh5dEWT394Co3ukuS3WJBs38BXDuMHvdPvKX0QPVktcqCUTvgE7y5VDU+Tyar75BMJa62T9biCyERUsTLnbbE7AbPp3D748+2S9e/XQ6MPdvUaDVkpOluaFU6kmbRzmtijgChbqtNtqE6JM26l144PxX20cyhq+C68iHU/jLgT8FcUr2UNflsIawJ36zoQdFHr1opTg1qvOj7Y6q8IQDlWrVuzi9eoYkS1ByTYWS0sqnueNKViNnYLHJkh0oCXunh0QH3U/u22zSf/VJCc04aVcUJ9M4Rm/0J1wmswok9PUaJo/xDmV9GyfHCVIQi0qQdHEDgyd6Tq5LfRQO4COoLaYp6Ki3f+R6IRy54AY0oOCkkVXjyTC72p06Q6BlwWUUvWTtnr8vq40CE5pY27I2bgsxU5sYGfTC3axOjvfwQ9eZEvSNd2O9+oVl/eCva4maVrzmJbVmJAzX2CO4fSEMGBfqsiM8uLpva3ihNh0f+5vJBqRgSteH7qgAjEM17prcZOZrvp/Ez/FsPhtBbjoWx6C/rFhHBCZnTw3DzCCPAL/J7fj7NSPYgjgeH/twaDrcyS5niBEtuzOgQ05plszriXheQeOTyaNIagTdQW60/x58GmN5Ibu+lCB6JvceDscST1jjzwt2IM9iTqN/z4q5vhvBvd1AMoUUFSHcjRqvw8gz2WM+CWN9fptH16TO2fbyxpOZZBfkU3wCAtfet7PhhHu8+yzzo+6AD50Xoueu+SOTl4DFLM1oadq4LLejnQXY6Nv6q6FQwWX00cGkomlnBsJbS/I0tREVUsxEDi73xSfV/eGUDxyOnRlieJJ1WeRkRrhbC24hjr+teieptCWSFx8lTLUm+ZBnj06VLW647hhNqIwpDSo0+0foV/ErvqbcnGl0ijjGkMOtxM3CY0+OSVoIv61rvHwlv8HjJE9fMNuZZIM5VrFm0vpECALGkq48pPauJwWA6/OOjjhHhBzZeEmp0SsoszuS5oM5Sl1gQ+w00gojl7oz/nlq4nLOTO9oC6u0mv3wYFWgfYvbpEPlOTGoyP+PCkyCJg998/Bh/oYGqGYuvzvh9WliZT7zkWloCP0/oZGlJkqP1Wfx+FLLfqCoyhyQFsRjKhUqy5XBtWiVxSr52gAVVaWQQioiD3UEFx1ShtaHccAuwrtlri3dv4bv5SU/G46pNvCJY7j2FzhtjC/MswKbCM6AjzbUYvVTK+w2/ZpXMy3Olh8YMVIXrCKow3QYWUCiXdaAcbC7NgLR2TH7ZwowI9kGYImOzSI4jh"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel"
 	"strings"
 	"testing"
@@ -88,5 +89,63 @@ func TestExternalBlockerPrecheckAvoidsAskAndRechecksAfterApproval(t *testing.T) 
 				}
 			}
 		})
+	}
+}
+
+func TestExternalPrecheckPrecedesCredentialCapabilityAndAllowsObservations(t *testing.T) {
+	withExecSandboxPolicy(t, true, true, false)
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: "effects", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := store.StartRun(ctx, task, "cli", "old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision, err := store.ClaimExternalEffects(ctx, control.ExternalEffectClaimRequest{TenantID: owner.TenantID, PersonID: owner.PersonID, RunID: old.ID, EffectID: "unknown", TargetKeys: []string{control.UnknownExternalTarget}}); err != nil || !decision.Granted {
+		t.Fatalf("claim=%+v err=%v", decision, err)
+	}
+	if err := store.MarkExternalEffectPossible(ctx, owner.TenantID, old.ID, "unknown"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, owner.TenantID, old.ID, "blocked"); err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "current")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asks, calls := 0, 0
+	root := t.TempDir()
+	cleanup := SetExecutionScope("precheck-credentials", ExecutionScope{TenantID: owner.TenantID, PersonID: owner.PersonID, RunID: run.ID, WorkspaceID: "workspace", WorkspaceRoot: root, AllowedRoots: []string{root}, TrustLevel: executionenv.TrustUntrusted, ParallelWork: true, ApprovalMode: ApprovalSmart,
+		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
+			asks++
+			return ToolApprovalDecision{Approved: true, Scope: "run"}, nil
+		},
+	})
+	defer cleanup()
+	executor := ExecutionCapabilityMiddleware(ExternalEffectPrecheck(store))(func(map[string]interface{}) (string, error) { calls++; return "observed", nil })
+	for _, command := range []string{"aws s3 rm s3://example/object", "gcloud builds submit .", "kubectl delete deployment example", "curl -X POST https://example.test"} {
+		args := map[string]interface{}{"_tenant_id": "precheck-credentials", "_tool_name": "terminal", "command": command, toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}
+		if _, err := executor(args); err == nil || !strings.Contains(err.Error(), "unresolved") {
+			t.Fatalf("%s missed known blocker: %v", command, err)
+		}
+		if asks != 0 || calls != 0 || args["_network_shared"] == true {
+			t.Fatalf("blocked projection granted or asked: asks=%d calls=%d args=%+v", asks, calls, args)
+		}
+	}
+	args := map[string]interface{}{"_tenant_id": "precheck-credentials", "_tool_name": "terminal", "command": "aws sts get-caller-identity", toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}
+	if _, err := executor(args); err != nil || calls != 1 || asks != 1 {
+		t.Fatalf("proven observation was blocked: calls=%d asks=%d err=%v", calls, asks, err)
 	}
 }

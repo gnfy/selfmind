@@ -294,3 +294,69 @@ func TestSteeringWithoutRootsKeepsTheRunsRoots(t *testing.T) {
 		})
 	}
 }
+
+func TestExactSteeringPreservesTargetAcrossFinalStepAndRestart(t *testing.T) {
+	for _, status := range []string{"interrupted", "done"} {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			store, err := OpenStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := store.CreateTask(ctx, TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: "task A", WorkspaceID: "ws-a", Channel: "session-a"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := []executionenv.RootBinding{{Path: "/work/a", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite}}
+			run, err := store.StartRunWithOptions(ctx, task, "session-a", "A", StartRunOptions{ExecutionRoots: roots})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := store.AcceptSteering(ctx, SteeringMessage{TenantID: owner.TenantID, PersonID: owner.PersonID, RunID: run.ID, ExactTarget: true, Channel: "session-b", WorkspaceID: "ws-b", ExecutionRoots: []executionenv.RootBinding{{Path: "/work/b"}}, Content: "add the missing criterion"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.FinishRun(ctx, owner.TenantID, run.ID, status); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = OpenStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if n, _, err := store.RecoverSteeringAtBoot(ctx); err != nil || n != 1 {
+				t.Fatalf("recovery=%d err=%v", n, err)
+			}
+			q, err := store.GetQueuedByIdempotencyKey(ctx, owner.TenantID, "steering:"+m.ID)
+			if err != nil || q == nil || q.TaskID != task.ID || q.WorkspaceID != "ws-a" || steeringRootPaths(q.ExecutionRoots) != "/work/a" {
+				t.Fatalf("exact target lost: %+v err=%v", q, err)
+			}
+			wantParent := ""
+			if status == "interrupted" {
+				wantParent = run.ID
+			}
+			if q.ReplyToRunID != wantParent {
+				t.Fatalf("parent=%q want=%q", q.ReplyToRunID, wantParent)
+			}
+			if n, _, err := store.RecoverSteeringAtBoot(ctx); err != nil || n != 0 {
+				t.Fatalf("duplicate recovery=%d err=%v", n, err)
+			}
+		})
+	}
+}
+
+func TestExactSteeringCannotMintAnotherPersonsTarget(t *testing.T) {
+	ctx := context.Background()
+	store, owner, _, run := newRecoveryFixture(t)
+	if _, err := store.AcceptSteering(ctx, SteeringMessage{TenantID: owner.TenantID, PersonID: "another-person", RunID: run.ID, ExactTarget: true, Content: "continue"}); err == nil {
+		t.Fatal("foreign Run acquired exact reply provenance")
+	}
+}

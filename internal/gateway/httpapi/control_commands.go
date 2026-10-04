@@ -21,7 +21,8 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	lower := strings.ToLower(trimmed)
 	// A platform-proven reply edge outranks implicit person-wide prompts. In a
 	// multi-run chat, a short answer must not resolve a different live request.
-	if req.NativeReplyMessageID != "" && req.ClarifyID != "" {
+	exactReply := req.NativeReplyMessageID != "" || req.ReplyToRunID != "" || req.ApprovalID != "" || req.ClarifyID != ""
+	if req.ClarifyID != "" {
 		if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, req.ClarifyID, trimmed, req.Channel); handled {
 			return true, reply, nil, err
 		}
@@ -35,8 +36,10 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	if req.NativeReplyMessageID != "" {
 		approvalTarget = req.ApprovalID
 	}
-	if handled, reply, err := d.tryHandleBareApprovalReplyTo(ctx, identity, trimmed, req.Channel, approvalTarget); handled {
-		return true, reply, nil, err
+	if !exactReply || approvalTarget != "" {
+		if handled, reply, err := d.tryHandleBareApprovalReplyTo(ctx, identity, trimmed, req.Channel, approvalTarget); handled {
+			return true, reply, nil, err
+		}
 	}
 	if approvalTarget != "" && !command.LooksLikeCommand(trimmed) {
 		return true, "Reply with an offered approval choice, or use /approve <approval_id>.", nil, nil
@@ -46,8 +49,10 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	// logic, so a blocking run gets its answer instead of the reply being queued
 	// or steered. Runs after the bare y/n approval leg (which wins for y/n-looking
 	// input) and before the "/" gate (slash commands are never answers).
-	if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, req.ClarifyID, trimmed, req.Channel); handled {
-		return true, reply, nil, err
+	if !exactReply {
+		if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, "", trimmed, req.Channel); handled {
+			return true, reply, nil, err
+		}
 	}
 	// Command-shaped tokens only: a "/"-leading file path ("/mnt/c/pic.png …")
 	// is ordinary message text and must fall through to the agent-first path,

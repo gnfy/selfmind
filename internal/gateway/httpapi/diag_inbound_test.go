@@ -30,7 +30,7 @@ func TestInboundDiagnosticIsPersonScopedAndDoesNotReplay(t *testing.T) {
 	}
 	daemon := &Server{Control: store}
 	visible, err := daemon.inboundDiagReply(ctx, alice)
-	if err != nil || !strings.Contains(visible, "dispatching") || !strings.Contains(visible, "Alice secret") {
+	if err != nil || !strings.Contains(visible, "dispatching") || !strings.Contains(visible, "telegram/") || strings.Contains(visible, "Alice secret") {
 		t.Fatalf("owner diagnostic = %q, %v", visible, err)
 	}
 	hidden, err := daemon.inboundDiagReply(ctx, bob)

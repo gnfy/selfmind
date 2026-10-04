@@ -147,7 +147,7 @@ func (s *Store) RunCancelRequested(ctx context.Context, tenantID, runID string) 
 // before the harness tears down (phantom `running` rows are what polluted real
 // control.db files before eval isolation).
 func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs []string) ([]Run, error) {
-	query := `SELECT id, thread_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at
+	query := `SELECT id, thread_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at, COALESCE(execution_roots_json, '[]')
 	          FROM runs WHERE tenant_id = ? AND status = 'running'`
 	args := []any{normalizeTenant(tenantID)}
 	if len(personIDs) > 0 {
@@ -163,8 +163,12 @@ func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs 
 	for rows.Next() {
 		var r Run
 		var started int64
-		if err := rows.Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel, &r.InputSummary, &r.WorkKey, &r.Status, &started); err != nil {
+		var rootsJSON string
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel, &r.InputSummary, &r.WorkKey, &r.Status, &started, &rootsJSON); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(rootsJSON), &r.ExecutionRoots); err != nil {
+			return nil, fmt.Errorf("decode running run execution roots: %w", err)
 		}
 		r.StartedAt = time.Unix(started, 0)
 		out = append(out, r)

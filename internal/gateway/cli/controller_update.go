@@ -490,6 +490,14 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgSkillInvocationResolved:
 		return m, m.finishSkillInvocationResolution(msg)
 
+	case MsgDaemonStopResult:
+		if msg.Err != nil {
+			m.addNotice(noticeError, msg.Err.Error())
+		} else if reply := strings.TrimSpace(textutil.CleanUTF8(msg.Reply)); reply != "" {
+			m.addNotice(noticeInfo, reply)
+		}
+		return m, nil
+
 	case MsgAgentDone:
 		if !m.daemonRunActive || msg.Turn == nil || strings.TrimSpace(msg.Turn.RunID) == "" || strings.TrimSpace(msg.Turn.RunID) == m.daemonRunID {
 			m.stopModelWait()
@@ -1110,7 +1118,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// quitting does NOT cancel — offer the choice explicitly. This
 			// prompt doubles as the moment the user learns the detached-run
 			// design. A second ctrl+c means "background + quit".
-			if m.localRequestActive {
+			if m.localRequestActive || (m.daemonRunActive && m.daemonRunOwned) {
 				if m.exitPromptActive {
 					return m, m.quitNow()
 				}

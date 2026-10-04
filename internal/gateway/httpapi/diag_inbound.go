@@ -26,8 +26,10 @@ func (d *Server) inboundDiagReply(ctx context.Context, identity *control.Identit
 	}
 	out.WriteByte('\n')
 	for _, row := range rows {
-		fmt.Fprintf(&out, "- %s/%s · %s · %s\n", row.Platform, shortOpaqueID(row.MessageID), row.State,
-			truncate(toOneLine(row.Preview), 100))
+		// Receipts are shared control state. The source message and its preview
+		// remain channel-local, including when this diagnostic is opened in IM.
+		fmt.Fprintf(&out, "- %s/%s · %s · updated %s\n", row.Platform, shortOpaqueID(row.MessageID), row.State,
+			row.UpdatedAt.Format("2006-01-02 15:04:05"))
 	}
 	out.WriteString("Pending input may be retried by its source. Dispatching input may already have caused effects; inspect the related work before sending it again.")
 	return out.String(), nil

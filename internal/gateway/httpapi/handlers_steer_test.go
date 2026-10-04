@@ -181,6 +181,9 @@ func TestRunSteerEndpointKeepsTheRunsRoots(t *testing.T) {
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("steering rows = %+v err=%v", rows, err)
 	}
+	if !rows[0].ExactTarget {
+		t.Fatal("explicit steer endpoint lost exact target provenance")
+	}
 	queued, err := store.QueueSteeringAsIndependent(ctx, identity.TenantID, identity.PersonID, run.ID, rows[0].ID)
 	if err != nil || queued == nil {
 		t.Fatalf("queued=%+v err=%v", queued, err)

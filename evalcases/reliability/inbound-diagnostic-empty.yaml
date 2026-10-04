@@ -1,9 +1,19 @@
 id: reliability_inbound_diagnostic_empty
-title: "Inbound processing receipts have a model-free diagnostic"
+title: "Inbound receipt diagnostics expose control state without source text"
 suite: reliability
 workspace: isolated
 channel: cli
 model_required: false
+
+setup:
+  inbound:
+    - platform: telegram
+      message_id: private-source
+      content: "private-source-text api_key=example-secret"
+      dispatching: true
+    - platform: weixin
+      message_id: second-source
+      content: "another-channel-private-text"
 
 turns:
   - input: "/diag inbound"
@@ -15,7 +25,13 @@ expect:
   max_tool_calls: 0
   max_duration_seconds: 30
   contains:
-    - "No unresolved inbound messages"
+    - "Unresolved inbound messages: 2"
+    - "dispatching"
+    - "pending"
+  must_not_contain:
+    - "private-source-text"
+    - "example-secret"
+    - "another-channel-private-text"
 
 checks:
   no_mojibake: true

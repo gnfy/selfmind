@@ -18,7 +18,7 @@ func ExternalEffectPrecheck(store *control.Store) func(map[string]interface{}) e
 		}
 		// A pending network capability ask must not hide a known blocker.
 		// Project the requested route without granting or mutating it.
-		if commandClearlyNeedsNetwork(stringArg(args, "_tool_name"), args) {
+		if commandPlausiblyNeedsEgress(stringArg(args, "_tool_name"), args) {
 			args = maps.Clone(args)
 			args["_network_shared"] = true
 		}

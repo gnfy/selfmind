@@ -146,3 +146,45 @@ func TestExecutionViewCommandsAreExactOwnerScopedAndNonDestructive(t *testing.T)
 		t.Fatalf("prune replay failed: %v", err)
 	}
 }
+
+func TestApplyParkedParentRefusesItsRunningContinuationView(t *testing.T) {
+	daemon, store, owner, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	baseline, err := executionenv.InspectCleanGitBaseline(ctx, gitAdmissionFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := executionenv.EnsureGitView(ctx, store.ExecutionViewsDir(), "run-shared", baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(view.Path, "file.txt"), []byte("parent change\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "file.txt"}, {"commit", "-qm", "parent change"}} {
+		if output, err := exec.Command("git", append([]string{"-C", view.Path}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git: %s %v", output, err)
+		}
+	}
+	roots := []executionenv.RootBinding{{Path: view.Path, Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceExecutionView, ContextRoot: true, GitBaseline: &baseline}}
+	parent, err := store.StartRunWithOptions(ctx, task, "cli", "A", control.StartRunOptions{ExecutionRoots: roots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, owner.TenantID, parent.ID, "interrupted"); err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.StartRunWithOptions(ctx, task, "cli", "continue A", control.StartRunOptions{ExecutionRoots: roots, ResumesRunID: parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemon.applyGitViewReply(ctx, owner, parent.ID); err == nil || !strings.Contains(err.Error(), "another active run") {
+		t.Fatalf("shared view delivered while child %s writes: %v", child.ID, err)
+	}
+	if err := store.FinishRun(ctx, owner.TenantID, child.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemon.applyGitViewReply(ctx, owner, parent.ID); err != nil {
+		t.Fatalf("finished view still blocked: %v", err)
+	}
+}

@@ -18,6 +18,10 @@ unresolved external effects are checked before approvals and atomically checked
 again before dispatch; file tools share only the current lease's temp directory.
 Model probes and approval calls carry role diagnostics; outside-Run admission
 facts reach daemon logs. Backend capability refusals remain fail-closed.
+Explicit Run replies retain their target through unconsumed-input recovery;
+CLI cancellation addresses the owned Run and awaits its observed final state.
+Run-only reply edges cannot answer another Run's human wait. View delivery
+checks active physical roots; inbound diagnostics expose receipt state only.
 
 ## Release Health
 

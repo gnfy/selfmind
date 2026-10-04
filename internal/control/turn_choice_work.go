@@ -362,6 +362,7 @@ func insertChoiceSteeringTx(ctx context.Context, tx *sql.Tx, m SteeringMessage, 
 		return nil, fmt.Errorf("choice steering target is invalid")
 	}
 	m.ID = "steer_choice_" + choiceID
+	m.ExactTarget = true
 	m.ContentHash = SteeringContentHash(m.Content)
 	m.Status, m.CreatedAt, m.UpdatedAt = SteeringAccepted, now, now
 	attachmentsJSON, err := encodeAttachmentRefs(m.Attachments)

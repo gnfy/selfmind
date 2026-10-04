@@ -32,6 +32,16 @@ type Setup struct {
 	// it deliberately do not get: a delivery surface changes which notification
 	// paths a run takes, and that must stay opt-in.
 	Deliveries []SeedDelivery `yaml:"deliveries,omitempty" json:"deliveries,omitempty"`
+	Inbound    []SeedInbound  `yaml:"inbound,omitempty" json:"inbound,omitempty"`
+}
+
+// SeedInbound reproduces durable, unresolved input through the normal receipt
+// store so model-free diagnostics can prove that source content stays private.
+type SeedInbound struct {
+	Platform    string `yaml:"platform" json:"platform"`
+	MessageID   string `yaml:"message_id" json:"message_id"`
+	Content     string `yaml:"content" json:"content"`
+	Dispatching bool   `yaml:"dispatching,omitempty" json:"dispatching,omitempty"`
 }
 
 // SeedSkill creates a managed user Skill before the first turn. It exists so
@@ -214,6 +224,20 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 	// deterministic candidates reply), so events appended on the seeded Thread
 	// remain assertable.
 	var seededTaskID string
+	for _, seed := range setup.Inbound {
+		payload, err := json.Marshal(map[string]string{"content": seed.Content})
+		if err != nil {
+			return "", err
+		}
+		if _, err := store.BeginInbound(ctx, seed.Platform, seed.MessageID, payload, control.InboundOwner{TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: seed.Content}); err != nil {
+			return "", err
+		}
+		if seed.Dispatching {
+			if ok, err := store.ClaimInbound(ctx, seed.Platform, seed.MessageID); err != nil || !ok {
+				return "", fmt.Errorf("claim seeded inbound %s: claimed=%t err=%v", seed.MessageID, ok, err)
+			}
+		}
+	}
 	for _, f := range setup.Memory {
 		target := strings.TrimSpace(f.Target)
 		if target == "" {

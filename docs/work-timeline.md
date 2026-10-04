@@ -230,6 +230,12 @@ explicit /new, /resume, /choose
   rather than with the roots of the run it was steered into. Input that
   arrived without roots, such as guidance posted to one run, and rows
   accepted before schema v18 keep that run's roots.
+  A validated explicit Run reply is distinct from ordinary prose: if the
+  Run ends before consuming it, its durable exact-target provenance keeps the
+  selected work and that Run's physical roots. A resumable target retains its
+  exact parent edge; a settled target receives task-pinned follow-up without
+  reopening the settled Run. Main may still explicitly classify consumed
+  guidance as independent work. Historical ordinary rows gain no new edge.
 
 Approval, clarification, and external-watch completion carry structured ids
 through the durable queue. Watch finalization claims its exact parent before

@@ -1402,23 +1402,9 @@ func (m *uiModel) handleExitPromptKey(key string) (tea.Cmd, bool) {
 	}
 }
 
-// cancelActiveRunLocally detaches the local watcher UI state and routes the
-// actual cancellation through the registry-backed /stop control command
-// (runs are daemon-owned since G0-a; the legacy in-process agent path still
-// cancels through the local ctx).
+// cancelActiveRunLocally asks the daemon to stop the exact owned Run while
+// keeping its stream attached until terminal cancellation is observed.
 func (m *uiModel) cancelActiveRunLocally() tea.Cmd {
-	if m.cancelFn == nil {
-		return nil
-	}
-	m.cancelFn()
-	m.finalizeLiveStream("", llm.AssistantPhaseCommentary)
-	m.stopModelWait()
-	m.thinking = false
-	m.activityText = ""
-	m.toolExecuting = ""
-	m.clearActivePlan()
-	m.steerCh = nil
-	m.runStatus = "cancelled"
-	noticeID := m.setStatusNotice(noticeError, "Task cancelled by user.")
+	noticeID := m.setStatusNotice(noticeInfo, "Requesting cancellation; keep watching for the Run's final state.")
 	return tea.Batch(m.requestDaemonStop(), clearStatusNoticeAfter(noticeID, 3*time.Second))
 }

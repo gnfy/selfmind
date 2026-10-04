@@ -212,7 +212,8 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   The claim gate rechecks all targets before any subsequent dispatch.
   Before a judge or human approval, a read-only projection rejects already-known
   effects that require observation; approval cannot establish their result.
-  This also precedes a network-capability ask. The precheck reserves nothing;
+  This also precedes network and credential capability asks, projecting the
+  requested route from existing tool profiles without granting it. The precheck reserves nothing;
   the post-approval atomic claim still rejects changes during the human wait.
   Restarting or finishing a Run does not release an uncertain claim; a durable
   observation must do so. Target sets are acquired and observed atomically.

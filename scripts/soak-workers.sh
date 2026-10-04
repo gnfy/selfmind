@@ -2,14 +2,14 @@
 # Legacy worker-pool soak: fire N concurrent runs as DISTINCT persons against a
 # running gateway. For same-person, multi-session Run ownership and IM routing,
 # use soak-parallel-runs.py against an isolated daemon instead. The ordinary
-# per-person limit remains one unless gateway.max_active_work_runs is explicitly
-# raised with enough Agent workers.
+# per-person limit defaults to two; any configured capacity still requires
+# enough Agent workers.
 #
 # Usage:
 #   1) start a gateway with the pool on:   SELFMIND_WORKERS=4 selfmind gateway run
 #      (or detached:                       SELFMIND_WORKERS=4 selfmind gateway start)
 #   2) in another shell:                   N=4 ./scripts/soak-workers.sh
-#   3) for the baseline, repeat with the gateway started at SELFMIND_WORKERS=1
+#   3) for the baseline, set gateway.max_active_work_runs: 1 and start with SELFMIND_WORKERS=1
 #      and compare total wall-time.
 #
 # Env: ADDR (default 127.0.0.1:8765), N (default 4), PROMPT, TIMEOUT (default 180s).

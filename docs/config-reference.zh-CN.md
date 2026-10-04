@@ -274,6 +274,7 @@ memory 的行为配置不再选择模型角色。
 gateway:
   addr: "127.0.0.1:8765"       # 绑定地址；公网绑定必须配 token
   token: ""                    # 共享密钥；非 loopback 绑定时强制
+  max_active_work_runs: 2       # 每人顶层工作 Run 容量，范围 1–3
   automatic_run_recovery: true # false 停止 daemon 自动创建子 run；显式 /resume 仍可用
   presence_idle_timeout: "0"   # 已弃用的兼容配置；presence 只跟随客户端进程存活
   pending_notify_after: "15m"  # CLI 已附着时超过 T1 才补推；CLI 脱离后立即推送
@@ -281,6 +282,11 @@ gateway:
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 ```
+
+daemon 默认提供两个独立 Agent worker（未设置 `SELFMIND_WORKERS`）。容量不能
+超过 worker 数，不匹配时启动失败。设 `max_active_work_runs: 1` 可串行执行；若
+只需一个 worker，将该项和 `SELFMIND_WORKERS` 都设为 1。容量 3 要求 daemon
+环境至少有三个 worker。升级保留显式配置；工作区和外部目标冲突仍会排队。
 
 `automatic_run_recovery: false` 是 daemon/provider 中断自动续跑的 fail-closed
 运维回滚开关。它不会丢弃持久计划、effect 证据或 recovery handoff，也不会改变

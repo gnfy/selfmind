@@ -321,21 +321,32 @@ func TestAutomaticRunRecoveryDefaultsEnabledAndCanBeDisabled(t *testing.T) {
 	}
 }
 
-func TestMaxActiveWorkRunsDefaultsOneAndLoadsExplicitCapacity(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err := LoadConfig(Options{Path: path})
-	if err != nil || cfg.Gateway.MaxActiveWorkRuns != 1 {
-		t.Fatalf("default capacity = %d, err=%v", cfg.Gateway.MaxActiveWorkRuns, err)
-	}
-	if err := os.WriteFile(path, []byte("gateway:\n  max_active_work_runs: 2\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cfg, err = LoadConfig(Options{Path: path})
-	if err != nil || cfg.Gateway.MaxActiveWorkRuns != 2 {
-		t.Fatalf("explicit capacity = %d, err=%v", cfg.Gateway.MaxActiveWorkRuns, err)
+func TestMaxActiveWorkRunsDefaultsTwoAndPreservesExplicitCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name, content string
+		want          int
+	}{
+		{"new config", "", 2},
+		{"existing config without capacity", "{}\n", 2},
+		{"explicit serial", "gateway:\n  max_active_work_runs: 1\n", 1},
+		{"explicit two", "gateway:\n  max_active_work_runs: 2\n", 2},
+		{"explicit three", "gateway:\n  max_active_work_runs: 3\n", 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if tc.content != "" {
+				if err := os.WriteFile(path, []byte(tc.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cfg, err := LoadConfig(Options{Path: path, CreateIfMissing: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Gateway.MaxActiveWorkRuns != tc.want {
+				t.Fatalf("capacity = %d, want %d", cfg.Gateway.MaxActiveWorkRuns, tc.want)
+			}
+		})
 	}
 }
 

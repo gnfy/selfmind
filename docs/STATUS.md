@@ -63,9 +63,11 @@ not reproduce them); cross-model and sustained live coverage of continuation,
 restart, and Background reasoning; and natural in-place Skill selection quality,
 where a release lookup made unnecessary calls and invalid Skill references.
 
-Parallel-work validation can now opt into `gateway.max_active_work_runs: 2` or
-`3` with at least that many `SELFMIND_WORKERS`; the default remains one and
-startup rejects mismatched capacity. The daemon's existing periodic worker
+Parallel work defaults to `gateway.max_active_work_runs: 2` and two Agent
+workers (`SELFMIND_WORKERS` unset), following the owner's 2026-10-04 request.
+Explicit capacity 1 preserves serialized admission; capacity 3 requires at
+least three workers. Startup rejects mismatched capacity. Sustained throughput
+and real IM acceptance remain open. The daemon's existing periodic worker
 also wakes due `not_before` queue rows without a new message or restart.
 Resource admission now returns typed observation-required feedback for an
 own unresolved effect without an observer. Losing an automatic observation

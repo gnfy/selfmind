@@ -70,6 +70,12 @@ func assertResumeEdgeRenamed(t *testing.T, store *Store) {
 	if edge != "run_target" {
 		t.Fatalf("resume edge=%q want run_target", edge)
 	}
+	for _, runID := range []string{"run_target", "run_resumer"} {
+		var class string
+		if err := store.db.QueryRowContext(ctx, `SELECT execution_class FROM runs WHERE id = ?`, runID).Scan(&class); err != nil || class != "work" {
+			t.Fatalf("historical run %s class=%q err=%v, want work", runID, class, err)
+		}
+	}
 	var total int
 	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs`).Scan(&total); err != nil || total != 2 {
 		t.Fatalf("runs=%d err=%v, want both seeded rows", total, err)

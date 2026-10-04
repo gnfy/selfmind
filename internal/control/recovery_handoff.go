@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 )
 
@@ -33,6 +34,7 @@ type RecoveryHandoff struct {
 	TaskID              string                   `json:"task_id"`
 	RunID               string                   `json:"run_id"`
 	OriginalGoal        string                   `json:"original_goal,omitempty"`
+	UserRequirements    []string                 `json:"user_requirements,omitempty"`
 	Cause               string                   `json:"cause,omitempty"`
 	Reason              string                   `json:"reason"`
 	CompletedSteps      []string                 `json:"completed_steps,omitempty"`
@@ -59,10 +61,14 @@ func (s *Store) RecoveryHandoffForRun(ctx context.Context, tenantID, personID, r
 	if err != nil {
 		return nil, err
 	}
+	goal, err := s.originalRunGoal(ctx, run)
+	if err != nil {
+		return nil, err
+	}
 	handoff := &RecoveryHandoff{
 		TaskID:       run.TaskID,
 		RunID:        run.ID,
-		OriginalGoal: strings.TrimSpace(run.InputSummary),
+		OriginalGoal: goal,
 		Cause:        strings.TrimSpace(decision.Cause),
 		Reason:       strings.TrimSpace(decision.Reason),
 		ResumePath:   "/resume " + run.ID,
@@ -71,6 +77,13 @@ func (s *Store) RecoveryHandoffForRun(ctx context.Context, tenantID, personID, r
 		handoff.Reason = "automatic_recovery_unavailable"
 	}
 	handoff.UnlockCondition = recoveryUnlockCondition(handoff.Reason)
+	requirements, err := s.RunSteeringRequirements(ctx, tenantID, runID, 10)
+	if err != nil {
+		return nil, err
+	}
+	for _, requirement := range requirements {
+		handoff.UserRequirements = append(handoff.UserRequirements, requirement.Content)
+	}
 
 	plan, err := s.LatestRunPlan(ctx, tenantID, runID)
 	if err != nil {
@@ -119,6 +132,28 @@ func (s *Store) RecoveryHandoffForRun(ctx context.Context, tenantID, personID, r
 		return nil, err
 	}
 	return handoff, nil
+}
+
+// Only the exact continuation lineage can supply an original goal. Group
+// labels and matching workspaces do not connect independent work. A missing,
+// cyclic, excessively deep, or cross-scope edge leaves the goal unknown rather
+// than presenting a daemon's technical continuation input as the user's goal.
+func (s *Store) originalRunGoal(ctx context.Context, run *Run) (string, error) {
+	var goal string
+	err := s.db.QueryRowContext(ctx, `WITH RECURSIVE lineage(id, person_id, parent_id, workspace_id, roots, input_summary, depth) AS (
+		SELECT id, person_id, resumes_run_id, COALESCE(workspace_id,''), execution_roots_json, input_summary, 0
+		FROM runs WHERE tenant_id=? AND id=? AND person_id=?
+		UNION ALL
+		SELECT r.id, r.person_id, r.resumes_run_id, COALESCE(r.workspace_id,''), r.execution_roots_json, r.input_summary, l.depth+1
+		FROM runs r JOIN lineage l ON r.id=l.parent_id AND r.person_id=l.person_id
+		WHERE r.tenant_id=? AND l.depth<31 AND COALESCE(r.workspace_id,'')=l.workspace_id AND r.execution_roots_json=l.roots
+	)
+	SELECT COALESCE(input_summary,'') FROM lineage WHERE COALESCE(parent_id,'')='' LIMIT 1`,
+		normalizeTenant(run.TenantID), run.ID, run.PersonID, normalizeTenant(run.TenantID)).Scan(&goal)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return strings.TrimSpace(goal), err
 }
 
 func recoveryUnlockCondition(reason string) string {

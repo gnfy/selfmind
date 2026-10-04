@@ -550,7 +550,7 @@ func chainKeyGetter(existing, override func() string) func() string {
 	}
 }
 
-func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID string, fallbackProvider llm.Provider) *llm.PolicyGateway {
+func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID string, fallbackProvider llm.Provider, gates ...*llm.RequestGate) *llm.PolicyGateway {
 	// Role profiles let expensive/slow jobs such as review or memory extraction
 	// use different models while the main coding agent keeps its default model.
 	pName := defaultProviderName(cfg)
@@ -570,7 +570,7 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 		if !ok || roleConfigEmpty(roleCfg) {
 			continue
 		}
-		registerModelRoleProfile(gateway, cfg, mem, tenantID, pName, role, roleCfg)
+		registerModelRoleProfile(gateway, cfg, mem, tenantID, pName, role, roleCfg, firstRequestGate(gates))
 		registered[string(role)] = struct{}{}
 	}
 
@@ -591,13 +591,13 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 		if _, ok := registered[roleName]; ok {
 			continue
 		}
-		registerModelRoleProfile(gateway, cfg, mem, tenantID, pName, llm.ModelRole(roleName), roleCfg)
+		registerModelRoleProfile(gateway, cfg, mem, tenantID, pName, llm.ModelRole(roleName), roleCfg, firstRequestGate(gates))
 	}
 	return gateway
 }
 
 func registerModelRoleProfile(gateway *llm.PolicyGateway, cfg *config.Config, mem *memory.MemoryManager,
-	tenantID, primaryProvider string, role llm.ModelRole, roleCfg config.ModelRoleConfig) {
+	tenantID, primaryProvider string, role llm.ModelRole, roleCfg config.ModelRoleConfig, gate *llm.RequestGate) {
 	roleProviderName := firstNonEmpty(roleCfg.Provider, primaryProvider)
 	roleProvider := buildRoleProvider(cfg, role, roleProviderName, roleCfg)
 	if roleProvider == nil {
@@ -605,6 +605,7 @@ func registerModelRoleProfile(gateway *llm.PolicyGateway, cfg *config.Config, me
 		return
 	}
 	applyDynamicKeyGetter(roleProvider, mem, tenantID, roleProviderName)
+	roleProvider = gateResolvedProvider(gate, cfg, roleProviderSelection(role, roleProviderName, roleCfg), roleProvider)
 	gateway.RegisterRoleProfile(role, llm.ProviderProfile{
 		Name:         string(role),
 		ProviderName: roleProviderName,
@@ -667,7 +668,7 @@ func roleProviderSelection(_ llm.ModelRole, roleProviderName string, roleCfg con
 // Returns nil when the role is unconfigured, its provider cannot be built, or
 // memory.semantic_recall is disabled; the recall engine then degrades to
 // raw-term FTS.
-func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot) *memory.SemanticExpander {
+func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, gates ...*llm.RequestGate) *memory.SemanticExpander {
 	if cfg == nil || !cfg.Memory.SemanticRecall {
 		return nil
 	}
@@ -684,6 +685,7 @@ func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenan
 		tenantID = "default"
 	}
 	applyDynamicKeyGetter(provider, mem, tenantID, roleProviderName)
+	provider = gateResolvedProvider(firstRequestGate(gates), cfg, roleProviderSelection(llm.RoleSemanticRecall, roleProviderName, roleCfg), provider)
 	return memory.NewSemanticExpander(provider, true, prompts)
 }
 
@@ -691,7 +693,7 @@ func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenan
 // startup passes the same snapshot through agent, tool/delegation, and
 // background-role construction; each prompt profile selects only its owned
 // sections from that process-frozen snapshot.
-func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (*kernel.Agent, error) {
+func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store, gates ...*llm.RequestGate) (*kernel.Agent, error) {
 	provider := buildLLMProvider(cfg)
 	if provider == nil {
 		return nil, fmt.Errorf("no LLM provider available")
@@ -711,29 +713,31 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, p
 	}
 	pName := defaultProviderName(cfg)
 	applyDynamicKeyGetter(provider, mem, tenantID, pName)
+	gate := firstRequestGate(gates)
+	provider = gateResolvedProvider(gate, cfg, modelruntime.Selection{}, provider)
 
-	modelGateway := buildModelGateway(cfg, mem, tenantID, provider)
+	modelGateway := buildModelGateway(cfg, mem, tenantID, provider, gate)
 	codingProvider := modelGateway.ProviderForRole(llm.RoleCodingAgent)
-	reviewProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview)
+	reviewProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview, gate)
 	var reviewRoutes []maintenanceRouteIdentity
-	semanticRecallProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSemanticRecall)
-	summaryProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSummarizer)
+	semanticRecallProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSemanticRecall, gate)
+	summaryProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSummarizer, gate)
 	if summaryProvider == nil {
 		// Legacy configurations used memory_extract for compaction before the
 		// dedicated summarizer role existed.
-		summaryProvider = explicitRoleProvider(mem, cfg, tenantID, llm.RoleMemoryExtract)
+		summaryProvider = explicitRoleProvider(mem, cfg, tenantID, llm.RoleMemoryExtract, gate)
 	}
 	// Smart-mode approval triage is latency-sensitive foreground policy work.
 	// Prefer fast_classifier resolved through auxiliary/role config and retain
 	// background_review only as a legacy config fallback; never borrow the main
 	// coding model silently.
-	judgeProvider, _ := configuredApprovalJudgeProvider(mem, cfg, tenantID)
+	judgeProvider, _ := configuredApprovalJudgeProvider(mem, cfg, tenantID, gate)
 	if controlStore != nil {
 		// Background learning shares the same durable physical-route circuit as
 		// post-run analysis and memory consolidation, and the same two-position
 		// chain: the role's own route, then the models.auxiliary floor. In daemon
 		// mode it must not silently borrow the foreground coding model.
-		reviewProvider, reviewRoutes = configuredMaintenanceProvider(mem, cfg, tenantID, controlStore, llm.RoleBackgroundReview)
+		reviewProvider, reviewRoutes = configuredMaintenanceProvider(mem, cfg, tenantID, controlStore, llm.RoleBackgroundReview, gate)
 		if replayed, err := controlStore.RequeueBlockedJobsForHealthyProviderRoutesAcrossTenants(context.Background(), tenantID, 100, maintenanceRouteIDs(reviewRoutes), time.Now()); err != nil {
 			log.Warn("background review: failed to migrate jobs to a healthy fallback route", "error", err)
 		} else if replayed > 0 {

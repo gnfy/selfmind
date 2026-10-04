@@ -3,103 +3,53 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Now"
-    },
-    {
-      "reasoning_content": " resume"
-    },
-    {
-      "reasoning_content": " it"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " user"
-    },
-    {
-      "reasoning_content": " takes"
-    },
-    {
-      "reasoning_content": " over"
-    },
-    {
-      "reasoning_content": " distribution"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " my"
-    },
-    {
-      "reasoning_content": " remaining"
-    },
-    {
-      "reasoning_content": " work"
-    },
-    {
-      "reasoning_content": " is"
-    },
-    {
-      "reasoning_content": " review"
-    },
-    {
-      "reasoning_content": " +"
-    },
-    {
-      "reasoning_content": " report"
-    },
-    {
-      "reasoning_content": " empty"
-    },
-    {
-      "reasoning_content": " +"
-    },
-    {
-      "reasoning_content": " hand"
-    },
-    {
-      "reasoning_content": " back"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Call"
-    },
-    {
-      "reasoning_content": " work"
-    },
-    {
-      "reasoning_content": "_select"
-    },
-    {
-      "reasoning_content": " resume"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I will resume the waiting review task to update its scope and accept your takeover of the distribution."
     },
     {
       "usage": {
-        "input_tokens": 12719,
-        "output_tokens": 103,
-        "cache_read_input_tokens": 11136,
-        "cache_miss_input_tokens": 1583,
+        "input_tokens": 11310,
+        "output_tokens": 19,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 26,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 58,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 4044,
+        "cache_miss_input_tokens": 7266,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_X0WAoWAsiKKKDnn5bzDK4028",
+          "ID": "call_2335159",
           "Function": "work_select",
-          "Args": "{\"action\": \"resume\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+          "Args": "{\"run_id\":\"{{SELFMIND_VCR_RUN_2}}\",\"action\":\"resume\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
         }
       ]
     }

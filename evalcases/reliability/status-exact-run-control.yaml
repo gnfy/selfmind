@@ -1,0 +1,23 @@
+id: reliability_status_exact_run_control
+title: "An unknown exact-run status request never chooses other work"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+
+turns:
+  - input: "/status run_missing"
+
+expect:
+  status: completed
+  require_no_task: true
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "not active or not yours"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

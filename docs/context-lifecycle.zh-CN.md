@@ -279,6 +279,11 @@ final summaries.
   非交互轮次的来源标记(如 `[cron]`)。工具中间态(tool_calls / tool 结果 /
   system prompt)**绝不进 spine** —— 它们留在 run events,召回层可按需取。
   spine 必须保持叙事尺寸,不能变成工具日志。
+- 新 spine 记录带保存时间；旧记录没有时间时明确标为历史时间未知。历史回答本身不证明
+  当前状态或当前轮的执行动作。selector 在每个 Run 开始时冻结实际 daemon 构建指纹、
+  并发上限和初始续接边，经 `TaskRuntimeContext` 注入；同一 Run 不逐轮刷新时间，也不
+  为判断历史与现状额外调用模型。Main 判断用户请求还需要哪些新证据；后续真实工具和
+  控制回执才可证明发生了新操作。
 - **load 组装(ContextComposer 契约,`internal/kernel/context_composer.go`)**:
   ①最新用户消息 ②spine 尾部(最近 `composerSpineTailEntries` 条 turn,按完成
   顺序呈现为带 Run/工作区来源的历史参考记录,跨端跨任务;记录写明该轮如何结束

@@ -1,0 +1,33 @@
+id: reliability_history_only_without_current_inspection
+title: "A history-only request does not force a fresh inspection or a continuation"
+suite: reliability
+require_cassette: true
+workspace: isolated
+channel: cli
+
+setup:
+  files:
+    runtime-state.txt: "CURRENT_VALUE_NEW\n"
+
+turns:
+  - input: "只回复 HISTORICAL_VALUE_OLD。它是上一轮的历史检查记录，不是当前状态。不要调用工具。"
+  - input: "我只想回顾上一轮的历史检查记录，请明确作为历史值回答；不要检查当前文件，不要续接或执行任何任务。"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 180
+  contains:
+    - "HISTORICAL_VALUE_OLD"
+  must_not_contain:
+    - "CURRENT_VALUE_NEW"
+
+assert_state:
+  - on: run
+    field: resumes_run_id
+    eq: ""
+
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_raw_json_leak: true

@@ -25,7 +25,11 @@ before changing `internal/tools`, execution middleware, or kernel tool dispatch.
   never falls back to the person-level scope, which may belong to another
   execution, and a confined filesystem or process call whose run scope is gone
   is refused rather than run against the daemon's directory. Calls without a
-  run, such as local helpers, still resolve by person.
+  run, such as local helpers, resolve by person only when there is no ambiguity
+  between distinct active Runs; otherwise dispatch fails closed. Registering
+  a second Run cannot overwrite the first Run's scope, and either cleanup
+  removes only its own registration. If a trusted context and invocation name
+  different Run keys, neither key is accepted.
 - `vision_analyze`'s local-path branch is a filesystem read and obeys the
   scope like `read_file` (`WorkspaceScopeMiddleware`); its http(s) branch
   stays with the tool's SSRF check. Any new tool that reads a caller-supplied
@@ -68,6 +72,9 @@ Every tool-owned child process, including terminal, verification, code
 execution, and stdio MCP servers, constructs `cmd.Env` through
 `BuildProcessEnv`. Direct `os.Environ()` inheritance at an execution callsite
 is forbidden.
+Daemon-owned Git admission and managed-view commands use the same core filter
+before applying their Git-specific environment restrictions; they do not pass
+SelfMind control variables into those children.
 
 The current compatibility phase preserves the operator's normal toolchain and
 Agent CLI login environment while removing SelfMind control-plane identity,
@@ -183,13 +190,101 @@ the unchanged script cannot turn arbitrary arguments into mutation.
 - Clearly read-only calls may run in parallel. Terminal execution, writes,
   patches, process control, memory or skill mutation, delegation, and unknown
   tools run sequentially by default.
+- At a test multi-Run capacity, a tool that can affect an external system
+  reserves its targets in `control.db` after approval and before dispatch.
+  Trusted built-in adapters may prove exact target identities and whether a
+  successful return settles the effect. Without that proof, the claim uses a
+  person-wide unknown target and remains unresolved after the call. External
+  tool metadata cannot narrow it. A conflicting call is never dispatched.
+  A durable resource wait is created only when another executing Run or a
+  watcher bound to the exact held effect can provide observation. The daemon
+  wakes the exact continuation after every target has a recorded observation;
+  the wakeup never replays the refused call. A second effect in the same Run
+  still conflicts with its unresolved first effect. Without an independent
+  observer, it returns typed `external_effect_unresolved` feedback to Main:
+  inspect through proven read-only commands or an owner-approved observation
+  script, or report the unresolved effect and required human action. It does
+  not promise an automatic wakeup. If a parked wait loses its observer, the
+  existing finalization transaction records a blocked, resumable outcome and
+  a recoverable notice, while preserving the uncertain claims and Plan. The
+  resource-wait projection is shared by admission, wakeup, `/status`, `/diag`,
+  and the daily report; historical blocked waits cannot starve active wakeups.
+  The claim gate rechecks all targets before any subsequent dispatch.
+  Before a judge or human approval, a read-only projection rejects already-known
+  effects that require observation; approval cannot establish their result.
+  This also precedes network and credential capability asks, projecting the
+  requested route from existing tool profiles without granting it. The precheck reserves nothing;
+  the post-approval atomic claim still rejects changes during the human wait.
+  Restarting or finishing a Run does not release an uncertain claim; a durable
+  observation must do so. Target sets are acquired and observed atomically.
+  For an unknown target, `/effects resolve <claim_id> <watch_id>` is a
+  person-controlled fallback: one transaction checks the exact person's
+  claim against a successful finalized watcher from the same Run, a valid
+  frozen preflight receipt, and a watcher registered no earlier than the
+  claim. The person's explicit association supplies the judgment that the
+  observation covers this effect; model text alone cannot release it.
+  Parallel Runs also require an enforced process sandbox for terminal calls;
+  explicit host escape is rejected before approval or claim creation. A
+  proven observation can still inspect an occupied target. A parallel Run
+  keeps its frozen network policy, including inside a managed Git view. An
+  untrusted view must first obtain the normal network capability, and each
+  non-observation shell call with shared network or selected credentials
+  requires one-time human approval even in full-auto or smart mode. It then
+  enters the durable effect-claim lane; neither a stored command grant nor a
+  model judge can authorize it alone.
+  Typed provider target adapters and real restart/transport acceptance are
+  still open, so the production per-person active-Run ceiling remains one.
+
+An authenticated local owner can register one exact script invocation with
+`selfmind ws effect`. The revocable grant binds a trusted workspace, script
+path and content hash, complete literal argv, network and credential modes,
+and every asserted external target. At dispatch the runtime rechecks the
+profile and standing-grant cutoff; the executable script must be invoked
+directly rather than through a selectable interpreter. One matching profile narrows only the
+target claim. Missing, stale, ambiguous, or changed profiles fall back to the
+person-wide unknown target. The profile is an operator assertion about that
+script's effects, not a model-supplied target, tool approval, or completion
+proof. Claims remain held until a trusted observation settles them.
+
+An effect profile may additionally name one exact observation script command
+with `--observe-command`. The owner also registers that unchanged script with
+`ws observe`, which is the separate read-only authority. When a
+`status_json.v1` watcher from the same Run binds the one already-dispatched
+claim with exactly the asserted targets, the durable successful watcher event
+can settle that claim automatically. Registration freezes the script digest;
+each poll and finalization recheck it, and the release transaction rechecks
+the owner's still-active effect grant, exact effect identity and target set.
+A changed or revoked script, ambiguous claim, failed check, or ordinary
+regex watcher keeps the claim occupied for explicit review. This is an owner
+assertion about the script's meaning, not model-provided proof of the target.
+
+Managed Git views are writable by the Run, including their local `.git`
+directory. Before daemon-side Git inspection or branch delivery, the view's
+local configuration must still contain only the passive keys installed at
+creation; an added command-bearing or unknown key makes the view unavailable
+without deleting its files. Branch delivery imports committed work under a
+new ref and leaves the source checkout untouched, even when another Run has
+advanced its HEAD or left unrelated work there. Source repository and baseline
+object identity, view cleanliness, and the branch compare-and-swap remain the
+delivery authority.
+An explicit prune may reclaim a retired view only after checking the exact
+owner Run, unfinished references, working and ignored files, extra Git refs,
+and unreachable local objects. The delivered HEAD is protected by a separate
+source ref before a durable prune record authorizes checkout deletion. A
+failed proof preserves the archive; no age-based automatic deletion runs.
 - Delegation depth is enforced structurally. `buildDelegateSubBackend` builds
   the child dispatcher as a `Subset` of the parent's registry and removes
   `delegate_task` at the configured depth limit. A subset has fewer tools but
   the same middleware chain, clarify handler, and attribution observer, so a
   sub-agent's calls meet the parent's safety floor, approvals, workspace scope,
   and guardrails. Never expose or mutate the shared parent dispatcher. Fan-out
-  remains bounded by `max_subtasks` and `max_concurrent`.
+  remains bounded by `max_subtasks` and `max_concurrent`. A delegated batch
+  uses `max_concurrent` only when every cloned child catalogue contains
+  proven built-in read tools. Read-only clones omit nested delegation so that
+  capability cannot widen mid-batch. If any child can write, execute a shell,
+  delegate again, or invoke an unknown/external tool, the batch runs one
+  sub-agent at a time in the shared parent view. Separate isolated child
+  views are required before write-capable fan-out can be enabled.
 - A sub-agent is one step of the parent run. Its calls act as the parent run's
   person and are claimed in the parent run's tool ledger under the delegating
   call's namespace, as are the call ids its loop generates for a provider that
@@ -644,10 +739,21 @@ When a role has `verify` and a sufficiently large action envelope, two calls
 inside the existing hard ceiling are reserved for verification. A bounded
 notice asks Main to finish the current scope and reconcile its plan first.
 This does not widen tool availability, execution authority, or approval grants.
+Calls excluded by a strategy, completion reserve, or lifecycle attempt cap
+retain their call IDs and receive paired typed `not_dispatched` refusals.
+They consume no dispatch claim or action budget. A refusal cannot become an
+empty-response completion: one bounded correction allows honest closure, and
+unresolved admission without a recorded outcome remains resumable.
 
 `verify` records deliberate checks; ordinary `terminal` calls remain command
 evidence. Missing structured verification must not be described as proof that
-no command ran. On supported POSIX hosts, verification uses Bash with `-e`
+no command ran. A recorded refusal or `process.started=false` is a blocked
+check, not a failing test; missing dispatch/exit facts in typed observations
+also remain blocked. Observed nonzero exits stay failed, and historical rows
+without dispatch facts retain their historical meaning. File tools and terminal
+tools share the exact lease's temporary directory; other leases and credential
+state directories receive no implicit file-tool access.
+On supported POSIX hosts, verification uses Bash with `-e`
 and `pipefail` so an unhandled failing command or pipeline cannot be hidden by
 a successful footer. Explicit shell conditionals can handle expected failures;
 the runtime does not infer verification success from output prose.
@@ -882,7 +988,8 @@ the cross-package do-not-retry contract kernel matches.
   `waiting_user` with reason `environment_unavailable`. Automatic wake-up when
   a compatible remote environment is later installed remains follow-up work.
 - Egress classification currently covers exec tools; full-auto retains its
-  documented bypass for ordinary egress.
+  documented bypass for ordinary single-Run egress. Parallel remote shell
+  effects require one-time human approval before the external claim.
 - Workspace skills are excluded for untrusted active workspaces, skill roots
   come from `ExecutionScope` rather than daemon cwd, and credential-shaped
   environment passthrough declarations fail closed. User-installed trusted

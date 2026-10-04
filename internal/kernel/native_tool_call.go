@@ -104,7 +104,6 @@ func filterToolCallsByStrategy(calls []llm.ToolCall, strategy TaskStrategy) []ll
 }
 
 func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrategy, actionToolsUsed int) ([]llm.ToolCall, int) {
-	calls = filterToolCallsByStrategy(calls, strategy)
 	if len(calls) == 0 {
 		return calls, 0
 	}
@@ -116,6 +115,10 @@ func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrat
 	out := make([]llm.ToolCall, 0, len(calls))
 	dropped := 0
 	for _, call := range calls {
+		if !strategy.AllowsTool(call.Function) {
+			dropped++
+			continue
+		}
 		if isLifecycleToolName(call.Function) {
 			out = append(out, call)
 			continue
@@ -688,7 +691,12 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		var boundary interface{ ToolRunPause() (string, string, bool) }
 		if errors.As(err, &boundary) {
 			reason, message, needApproval := boundary.ToolRunPause()
-			pause = &toolLifecycleHandoff{Status: "waiting_user", CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
+			status := "waiting_user"
+			var typed interface{ ToolRunPauseStatus() string }
+			if errors.As(err, &typed) && typed.ToolRunPauseStatus() == "waiting_external" {
+				status = "waiting_external"
+			}
+			pause = &toolLifecycleHandoff{Status: status, CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
 		}
 		return toolExecutionResult{
 			pause:        pause,

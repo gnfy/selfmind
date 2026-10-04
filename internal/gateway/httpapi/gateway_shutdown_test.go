@@ -20,7 +20,7 @@ import (
 	"selfmind/internal/platform/config"
 )
 
-func TestGatewayShutdownInterruptsAndRequeuesInsteadOfCancelling(t *testing.T) {
+func TestGatewayShutdownPreservesBoundRunInsteadOfReplayingQueue(t *testing.T) {
 	ctx := context.Background()
 	store := controltest.NewStore(t)
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
@@ -47,6 +47,9 @@ func TestGatewayShutdownInterruptsAndRequeuesInsteadOfCancelling(t *testing.T) {
 	if err := store.MarkQueued(ctx, identity.TenantID, queued.ID, control.QueueStatusStarted); err != nil {
 		t.Fatal(err)
 	}
+	if err := store.BindQueuedRun(ctx, identity.TenantID, queued.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	// The run was mid-work when the gateway stopped: a durable plan is the
 	// evidence that keeps its interruption visible as resumable Attention.
@@ -68,8 +71,11 @@ func TestGatewayShutdownInterruptsAndRequeuesInsteadOfCancelling(t *testing.T) {
 		t.Fatalf("cancel cause = %v; want gateway shutdown", context.Cause(runCtx))
 	}
 	gotQueue, err := store.GetQueued(ctx, identity.TenantID, queued.ID)
-	if err != nil || gotQueue == nil || gotQueue.Status != control.QueueStatusQueued {
-		t.Fatalf("queue = %+v, %v; want queued", gotQueue, err)
+	if err != nil || gotQueue == nil || gotQueue.Status != control.QueueStatusStarted || gotQueue.RunID != run.ID {
+		t.Fatalf("queue = %+v, %v; want started and bound to original run", gotQueue, err)
+	}
+	if requeued, dropped, err := store.RequeueStartedQueued(ctx); err != nil || requeued != 0 || dropped != 1 {
+		t.Fatalf("boot queue recovery = %d/%d, %v; want no replay", requeued, dropped, err)
 	}
 	gotRun, err := store.GetRun(ctx, identity.TenantID, run.ID)
 	if err != nil || gotRun == nil || gotRun.Status != "interrupted" {
@@ -160,7 +166,7 @@ func TestIncompleteModelReadinessStillSteersActiveContinuation(t *testing.T) {
 	}
 	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
-		RunID: "run_active", TaskID: "task_active", Steer: steer, StartedAt: time.Now(),
+		RunID: "run_active", TaskID: "task_active", Channel: "cli", Steer: steer, StartedAt: time.Now(),
 	}) {
 		t.Fatal("active run registration failed")
 	}

@@ -48,6 +48,10 @@ type SteeringMessage struct {
 	ApprovalMode   string
 	Content        string
 	ContentHash    string
+	// ExactTarget is gateway-validated explicit reply provenance. Acceptance
+	// encodes it in the immutable mailbox ID, like choice-backed steering, so
+	// historical ordinary rows never gain an exact continuation edge.
+	ExactTarget bool
 	// Attachments ride with the guidance for the same reason they ride with a
 	// queued task: accepting the text and dropping the files tells the person
 	// their image was received when the model will never see it.
@@ -95,6 +99,17 @@ func (s *Store) AcceptSteering(ctx context.Context, m SteeringMessage) (*Steerin
 		return nil, fmt.Errorf("person id and content are required")
 	}
 	m.ID = "steer_" + uuid.NewString()
+	if m.ExactTarget {
+		run, err := s.GetRun(ctx, m.TenantID, m.RunID)
+		if err != nil {
+			return nil, err
+		}
+		if run == nil || run.PersonID != m.PersonID {
+			return nil, fmt.Errorf("exact steering target is unavailable for its owner")
+		}
+		m.TaskID = run.TaskID
+		m.ID = "steer_exact_" + uuid.NewString()
+	}
 	m.ContentHash = SteeringContentHash(m.Content)
 	m.Status = SteeringAccepted
 	now := time.Now()
@@ -289,8 +304,9 @@ func (s *Store) RunSteeringRequirements(ctx context.Context, tenantID, runID str
 
 // DeferSteering re-homes an unconsumed row into the durable task queue so the
 // guidance survives run completion or a daemon restart as ordinary next-turn
-// input. It is deliberately not pinned to the finished task: Main never saw
-// this input, so no component may pre-decide whether it was related. The
+// input. Ordinary prose is not pinned to the finished task: Main never saw
+// this input, so no component may pre-decide whether it was related. Explicit
+// reply provenance preserves the exact work selected by the person. The
 // queue's idempotency key (steering:<id>) makes
 // crash-replay of this hand-off converge on one row; the mailbox row flips to
 // deferred only after the enqueue succeeded.
@@ -300,15 +316,35 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 		return err
 	}
 	executionRoots := m.queuedExecutionRoots(run)
+	workspaceID := m.WorkspaceID
+	taskID, replyToRunID := "", ""
+	// Ordinary unconsumed steering remains Main-owned and may be unrelated
+	// new work. An explicitly targeted row is different: the gateway validated
+	// the reply edge, or RoutePendingTurnChoice validated the selected Run.
+	// Preserve its selected work
+	// and scope across a crash or a last-model-step race.
+	if exactSteeringTarget(m.ID) {
+		if run == nil || run.PersonID != m.PersonID {
+			return fmt.Errorf("exact steering target is unavailable for its owner")
+		}
+		taskID = run.TaskID
+		workspaceID = run.WorkspaceID
+		executionRoots = executionenv.CloneRootBindings(run.ExecutionRoots)
+		if continuityRunResumableForQueue(run.Status) {
+			replyToRunID = run.ID
+		}
+	}
 	if _, err := s.EnqueueQueued(ctx, QueuedTask{
 		TenantID:       m.TenantID,
 		PersonID:       m.PersonID,
+		TaskID:         taskID,
+		ReplyToRunID:   replyToRunID,
 		Channel:        m.Channel,
 		Platform:       m.Platform,
 		PlatformUserID: m.PlatformUserID,
 		Content:        m.Content,
 		ApprovalMode:   m.ApprovalMode,
-		WorkspaceID:    m.WorkspaceID,
+		WorkspaceID:    workspaceID,
 		ExecutionRoots: executionRoots,
 		// Guidance the run never consumed becomes queued work, and it keeps its
 		// files: dropping them here would lose the attachment a second time,
@@ -498,6 +534,7 @@ func scanSteering(rows interface{ Scan(dest ...any) error }) (SteeringMessage, e
 		return SteeringMessage{}, err
 	}
 	m.Attachments = attachments
+	m.ExactTarget = exactSteeringTarget(m.ID)
 	if rootsJSON.Valid {
 		if err := json.Unmarshal([]byte(rootsJSON.String), &m.ExecutionRoots); err != nil {
 			return SteeringMessage{}, fmt.Errorf("decode steering execution roots: %w", err)
@@ -507,4 +544,8 @@ func scanSteering(rows interface{ Scan(dest ...any) error }) (SteeringMessage, e
 	m.CreatedAt = time.Unix(created, 0)
 	m.UpdatedAt = time.Unix(updated, 0)
 	return m, nil
+}
+
+func exactSteeringTarget(id string) bool {
+	return strings.HasPrefix(id, "steer_exact_") || strings.HasPrefix(id, "steer_choice_choice_")
 }

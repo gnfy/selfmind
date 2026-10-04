@@ -321,6 +321,24 @@ func TestAutomaticRunRecoveryDefaultsEnabledAndCanBeDisabled(t *testing.T) {
 	}
 }
 
+func TestMaxActiveWorkRunsDefaultsOneAndLoadsExplicitCapacity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(Options{Path: path})
+	if err != nil || cfg.Gateway.MaxActiveWorkRuns != 1 {
+		t.Fatalf("default capacity = %d, err=%v", cfg.Gateway.MaxActiveWorkRuns, err)
+	}
+	if err := os.WriteFile(path, []byte("gateway:\n  max_active_work_runs: 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(Options{Path: path})
+	if err != nil || cfg.Gateway.MaxActiveWorkRuns != 2 {
+		t.Fatalf("explicit capacity = %d, err=%v", cfg.Gateway.MaxActiveWorkRuns, err)
+	}
+}
+
 func TestSaveConfigWritesNewProviderSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := &Config{

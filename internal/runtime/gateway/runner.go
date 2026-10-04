@@ -27,6 +27,7 @@ import (
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/gateway/weixin"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
@@ -45,6 +46,48 @@ type Options struct {
 	Replace      bool
 	DrainTimeout time.Duration
 	ConfigPath   string
+}
+
+func installProviderWaitObserver(gate *llm.RequestGate, store *control.Store) {
+	if gate == nil || store == nil {
+		return
+	}
+	gate.SetWaitObserver(func(waitCtx context.Context, routeID, reason string, duration time.Duration) {
+		owner := llm.ModelContextFrom(waitCtx)
+		if owner.RunID == "" {
+			log.Info("gateway: provider wait outside Run", "route_id", routeID,
+				"role", owner.Role, "purpose", owner.Purpose, "reason", reason, "duration_ms", duration.Milliseconds(), "canceled", waitCtx.Err() != nil)
+			return
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"route_id": routeID, "reason": reason,
+			"duration_ms": duration.Milliseconds(), "canceled": waitCtx.Err() != nil,
+		})
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(waitCtx), 2*time.Second)
+		defer cancel()
+		if _, err := store.AppendEvent(writeCtx, control.Event{
+			RunID: owner.RunID, Type: "model.provider_wait", Visibility: "internal", Payload: payload,
+		}); err != nil {
+			log.Warn("gateway: provider wait attribution failed", "run_id", owner.RunID, "error", err)
+		}
+	})
+	gate.SetAdmissionObserver(func(callCtx context.Context, routeID string, admission llm.RequestAdmission) {
+		owner := llm.ModelContextFrom(callCtx)
+		if owner.RunID == "" {
+			log.Info("gateway: provider admission outside Run", "route_id", routeID,
+				"role", owner.Role, "purpose", owner.Purpose, "admission", admission)
+			return
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"route_id": routeID, "role": owner.Role, "purpose": owner.Purpose, "admission": admission,
+		})
+		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(callCtx), 2*time.Second)
+		defer cancel()
+		if _, err := store.AppendEvent(writeCtx, control.Event{RunID: owner.RunID,
+			Type: "model.provider_admission", Visibility: "internal", Payload: payload}); err != nil {
+			log.Warn("gateway: provider admission attribution failed", "run_id", owner.RunID, "error", err)
+		}
+	})
 }
 
 func Run(ctx context.Context, opts Options) (runErr error) {
@@ -101,7 +144,8 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Model transitions are reconciled only after this process owns
 	// gateway.lock. launchd/systemd may briefly start competing processes; they
 	// must not each increment attempts or mutate the same candidate transaction.
-	modelChanges := modelchange.NewService(cfg, app.NewModelChangeValidator().Validate)
+	requestGate := llm.NewRequestGate(2)
+	modelChanges := modelchange.NewService(cfg, app.NewModelChangeValidator(requestGate).Validate)
 	modelStatus, modelRolledBack, err := modelChanges.ReconcileStartup(ctx)
 	if err != nil {
 		return fmt.Errorf("reconcile model configuration: %w", err)
@@ -209,6 +253,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return fmt.Errorf("control.OpenStore failed: %w", err)
 	}
 	defer controlStore.Close()
+	installProviderWaitObserver(requestGate, controlStore)
 	recordPromptSnapshotLoaded(controlStore, manager.Snapshot().InstanceID, prompts, promptStatus)
 	if hadUncleanExit {
 		previousUnclean.InstanceID = previousUnclean.StableInstanceID()
@@ -264,12 +309,12 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		log.Warn("gateway: withdrew over-broad approval grants", "revoked", revoked, "remaining", len(kept))
 	}
 
-	agent, err := app.InitAgent(mem, cfg, defaultTenantID, prompts, controlStore)
+	agent, err := app.InitAgent(mem, cfg, defaultTenantID, prompts, controlStore, requestGate)
 	if err != nil {
 		return fmt.Errorf("app.InitAgent failed: %w", err)
 	}
 
-	disp, err := app.InitTools(mem, cfg, agent, defaultTenantID, prompts, controlStore)
+	disp, err := app.InitTools(mem, cfg, agent, defaultTenantID, prompts, controlStore, requestGate)
 	if err != nil {
 		return fmt.Errorf("app.InitTools failed: %w", err)
 	}
@@ -282,9 +327,14 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Optional multi-worker execution (SELFMIND_WORKERS>1) for the daemon, where
 	// concurrent CLI/IM/cron requests can actually exercise it. Default 1 = the
 	// single-agent serialized path, unchanged.
-	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, defaultTenantID, prompts, controlStore); werr != nil {
+	workerCount := 1
+	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, defaultTenantID, prompts, controlStore, requestGate); werr != nil {
+		if cfg.Gateway.MaxActiveWorkRuns > 1 {
+			return fmt.Errorf("initialize parallel agent workers: %w", werr)
+		}
 		log.Warn("worker pool partially enabled", "workers", workers, "error", werr)
 	} else if workers > 1 {
+		workerCount = workers
 		log.Info("agent worker pool enabled", "workers", workers)
 	}
 	defer app.StopCron(gwDeps.CronScheduler)
@@ -306,7 +356,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			}
 		}()
 	}
-	semanticExpander := app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts)
+	semanticExpander := app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts, requestGate)
 	semanticReadiness := modelStatus.RouteReadiness(modelchange.RouteSemanticRecall)
 	if pending := modelStatus.Pending; pending != nil && pending.Status == modelchange.StatusStarting {
 		for _, probe := range pending.Probes {
@@ -328,7 +378,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			return strings.Trim(strings.TrimSpace(role.Provider)+"/"+strings.TrimSpace(role.Model), "/")
 		}(),
 		Probe: func(probeCtx context.Context) modelchange.ProbeResult {
-			results := app.ValidateModelChange(probeCtx, cfg, []modelchange.Route{modelchange.RouteSemanticRecall})
+			results := app.ValidateModelChangeWithGate(probeCtx, cfg, []modelchange.Route{modelchange.RouteSemanticRecall}, requestGate)
 			for _, result := range results {
 				if result.Route == modelchange.RouteSemanticRecall {
 					return result
@@ -348,6 +398,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	gatewayAPI := &httpapi.Server{
 		Control:                controlStore,
 		Gateway:                gwDeps.Gateway,
+		MainRoutingProvider:    agent.Provider(),
 		DefaultTenantID:        defaultTenantID,
 		PromptSnapshotHash:     prompts.Hash(),
 		ToolSchemaReportFunc:   disp.ToolSchemaReport,
@@ -368,7 +419,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			if err != nil {
 				return api.ModelProbeResponse{Role: role, Error: tools.RedactSensitive(err.Error())}
 			}
-			probe := app.ProbeResolvedModelForRole(ctx, runtime, role)
+			probe := app.ProbeResolvedModelForRole(ctx, runtime, role, requestGate)
 			response := api.ModelProbeResponse{
 				OK: probe.Err == nil, Role: role, Provider: runtime.Provider,
 				Model: runtime.Model, LatencyMS: probe.Latency.Milliseconds(),
@@ -396,14 +447,14 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// Smart-mode approval triage (H2): build the cheap-model judge from the
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.
-		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID),
+		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID, requestGate),
 		// Operational rollback keeps durable recovery evidence readable while
 		// preventing the daemon from creating automatic exact-parent children.
 		DisableAutomaticRunRecovery: !cfg.Gateway.AutomaticRunRecovery,
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
-		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, prompts, controlStore),
-		SkillCurator:    app.NewConfiguredSkillCurator(mem, cfg, defaultTenantID, controlStore, prompts),
+		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, prompts, controlStore, requestGate),
+		SkillCurator:    app.NewConfiguredSkillCurator(mem, cfg, defaultTenantID, controlStore, prompts, requestGate),
 		SelfEvolution: control.EvolutionPolicy{
 			Enabled: cfg.Evolution.Enabled, Mode: cfg.Evolution.Mode,
 			ShadowAfterObservations:  cfg.Evolution.ShadowAfterObservations,
@@ -414,7 +465,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// Background memory self-organization (docs/memory-governance.zh-CN.md
 		// §4): nil unless memory.governance.enabled AND its model role is
 		// explicitly configured; default mode is shadow (report only).
-		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID, prompts, controlStore),
+		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID, prompts, controlStore, requestGate),
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
@@ -432,6 +483,12 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// clipboard-pasted images): files are copied here and the partition
 		// joins the run's scope so tools can read them (httpapi/attachments.go).
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
+	}
+	if err := gatewayAPI.ConfigureWorkRunCapacity(cfg.Gateway.MaxActiveWorkRuns, workerCount); err != nil {
+		return err
+	}
+	if err := gatewayAPI.RecoverQueuedAtBoot(ctx); err != nil {
+		return fmt.Errorf("recover queued work before starting daemon workers: %w", err)
 	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
 	maintenanceDebounce, maintenanceMaxWait, maintenanceBatchMax := cfg.Tasks.MaintenanceBatchPolicy()
@@ -470,7 +527,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	var weixinAdapter *weixin.Adapter
 	if cfg.Gateway.Weixin.Enabled {
 		wxCfg := weixin.RuntimeConfigFrom(cfg.Gateway.Weixin, dataDir, defaultTenantID)
-		weixinAdapter = weixin.NewAdapter(wxCfg, controlStore, gatewayAPI.ProcessMessage)
+		weixinAdapter = weixin.NewAdapter(wxCfg, gatewayAPI.ProcessDurableInbound)
 	}
 	gatewayAPI.Delivery = newDeliveryService(controlStore, cfg, weixinAdapter)
 	if gatewayAPI.Delivery != nil {
@@ -569,7 +626,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Otherwise queued requests could begin on a route whose listener later
 	// fails the health gate and requires recovery.
 	if modelStartupHealthy {
-		gatewayAPI.DrainQueuedAtBoot(ctx)
+		gatewayAPI.DrainReadyQueued(ctx)
 	} else {
 		log.Warn("gateway: model readiness is incomplete; queued work remains parked", "hint", "run `selfmind model`")
 	}
@@ -660,8 +717,8 @@ func applyGatewayRuntimeEnv(cfg *config.Config) {
 
 // memoryConsolidatorOrNil keeps a nil *app.MemoryConsolidator from becoming a
 // non-nil httpapi.MemoryConsolidator interface value.
-func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, store *control.Store) httpapi.MemoryConsolidator {
-	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID, prompts, store); c != nil {
+func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, store *control.Store, gates ...*llm.RequestGate) httpapi.MemoryConsolidator {
+	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID, prompts, store, gates...); c != nil {
 		return c
 	}
 	return nil

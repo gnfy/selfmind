@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -34,8 +36,12 @@ type Server struct {
 	BackgroundRunContext context.Context
 	Control              *control.Store
 	Gateway              *router.Gateway
-	Delivery             *delivery.Service
-	DefaultTenantID      string
+	// MainRoutingProvider is the foreground Main transport used only for a
+	// bounded, tool-free coordination Run when IM has several live work Runs.
+	// Nil keeps the durable human choice fallback.
+	MainRoutingProvider llm.Provider
+	Delivery            *delivery.Service
+	DefaultTenantID     string
 	// PromptSnapshotHash pins durable background jobs to the static prompt
 	// revision active when their evidence was materialized.
 	PromptSnapshotHash string
@@ -238,6 +244,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/workspaces/trust", d.handleWorkspaceTrust)
 	mux.HandleFunc("/v1/workspaces/capabilities", d.handleWorkspaceCapabilities)
 	mux.HandleFunc("/v1/workspaces/observation-profiles", d.handleWorkspaceObservationProfiles)
+	mux.HandleFunc("/v1/workspaces/effect-profiles", d.handleWorkspaceEffectProfiles)
 	mux.HandleFunc("/v1/workspaces", d.handleWorkspaces)
 	mux.HandleFunc("/v1/gateway/status", d.handleGatewayStatus)
 	mux.HandleFunc("/v1/gateway/tool-catalog/probe", d.handleGatewayToolCatalogProbe)
@@ -354,6 +361,18 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	if err != nil {
 		return api.MessageResponse{Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
 	}
+	if req.NativeReplyMessageID != "" && !command.LooksLikeCommand(req.Content) {
+		edge, lookupErr := d.Control.NativeIMReplyTarget(ctx, identity.TenantID, identity.PersonID,
+			req.Platform, req.Channel, req.NativeReplyMessageID)
+		if lookupErr != nil || edge == nil || (edge.RunID == "" && edge.ApprovalID == "" && edge.ClarifyID == "") {
+			content := "That replied-to message is not linked to your work here. Use /status and an exact run or request ID."
+			if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+				return api.MessageResponse{Identity: identity, Error: lookupErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", lookupErr.Error())}, http.StatusInternalServerError
+			}
+			return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, http.StatusOK
+		}
+		req.ReplyToRunID, req.ApprovalID, req.ClarifyID = edge.RunID, edge.ApprovalID, edge.ClarifyID
+	}
 	// Any inbound message is a presence beat for its endpoint: a CLI turn
 	// marks the terminal attached, an IM message refreshes that account's
 	// recency for preferred-endpoint selection.
@@ -415,6 +434,9 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}
 		return api.MessageResponse{Identity: identity, Content: msg, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
 	}
+	if response, handled := d.ambiguousActiveInput(ctx, identity, req); handled {
+		return response, statusForMessageResponse(response)
+	}
 	if d.IsDraining() {
 		if d.isModelChangeDrain() {
 			intent := d.classifyIntent(ctx, req.Content, req.Channel)
@@ -429,7 +451,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 				return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", rootsErr.Error())}, http.StatusBadRequest
 			}
-			if running := coord.currentActive(identity.PersonID); running != nil && (d.shouldSteerActiveNaturalInput(ctx, identity, req, running) || requestTargetsActiveRun(req, intent, running)) {
+			if running := coord.activeForIncoming(identity.PersonID, req); running != nil && (d.shouldSteerActiveNaturalInput(ctx, identity, req, running) || requestTargetsActiveRun(req, intent, running)) {
 				if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
 					return resp, http.StatusOK
 				}
@@ -463,7 +485,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
 		}
-		running := coord.currentActive(identity.PersonID)
+		running := coord.activeForIncoming(identity.PersonID, req)
 		if running == nil {
 			return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
 		}
@@ -489,7 +511,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// the right place to decide whether the input refines current work or should
 	// become independent queued work. Explicit controls/edges and daemon-origin
 	// turns remain on their deterministic paths.
-	if running := d.coordinator().currentActive(identity.PersonID); running != nil &&
+	if running := d.coordinator().activeForIncoming(identity.PersonID, req); running != nil &&
 		d.shouldSteerActiveNaturalInput(ctx, identity, req, running) {
 		coord := d.coordinator()
 		workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
@@ -536,7 +558,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 		return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
 	}
-	if running := coord.currentActive(identity.PersonID); running != nil {
+	if running := coord.activeForIncoming(identity.PersonID, req); running != nil {
 		// A continuation targets the ACTIVE task, so it is not new work and must
 		// never be queued. Historically this returned a bare "busy" reply, which
 		// left the cross-endpoint takeover story broken: a continuation arriving
@@ -570,6 +592,9 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 				Turn:     messageTurn("busy", "running", "running", running.TaskID, running.RunID, running.Summary),
 			}, http.StatusOK
 		}
+		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
+	}
+	if !coord.hasCapacity(identity.PersonID) {
 		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
 	}
 
@@ -623,7 +648,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		Steer:          steerCh,
 	}
 	if ok := coord.beginActive(identity.PersonID, active); !ok {
-		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK
+		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
 	}
 	// Durably transfer guidance that lost the final-model-call race while the
 	// per-person slot is still held, then free the slot and drain. This ordering
@@ -632,10 +657,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// updates with TaskID/RunID after StartRun.
 	defer func() {
 		coord.deferUnconsumedSteering(identity, active)
-		coord.endActive(identity.PersonID)
+		coord.endActiveRun(identity.PersonID, active)
 		coord.drainQueue(identity)
 	}()
-	runCtx = kernel.WithSteeringInputs(runCtx, steerCh)
+	runCtx = kernel.WithSteeringInputs(withActiveRun(runCtx, active), steerCh)
 
 	resp, status := coord.runMessage(runCtx, identity, req, intent)
 	// Detached finish: if the endpoint that dispatched this sync turn vanished
@@ -663,6 +688,13 @@ func (d *Server) shouldSteerActiveNaturalInput(ctx context.Context, identity *co
 	}
 	if replyRunID := strings.TrimSpace(req.ReplyToRunID); replyRunID != "" {
 		return replyRunID == running.RunID
+	}
+	// Each CLI window has its own channel and default work focus. A fresh
+	// instruction in window B must not become guidance to window A merely
+	// because A is the person's current executor. With the present one-run
+	// admission limit it queues for B; exact reply edges can still target A.
+	if req.Platform == "cli" && strings.TrimSpace(req.Channel) != running.Channel {
+		return false
 	}
 	switch strings.TrimSpace(req.ContinuityAction) {
 	case string(ContinuityResume), "new":
@@ -1064,25 +1096,6 @@ func clarifyOptions(clarify control.ClarifyRequest) []string {
 		return nil
 	}
 	return options
-}
-
-// appendApprovalModeEvent records a task-visible audit trail when a /mode change
-// auto-settles a pending approval, so the timeline shows WHY a stuck approval
-// suddenly resolved. Best-effort: a lost event never affects correctness.
-func (d *Server) appendApprovalModeEvent(ctx context.Context, ap control.ApprovalRequest, eventType, mode string) {
-	if ap.TaskID == "" {
-		return
-	}
-	_, _ = d.Control.AppendEvent(ctx, control.Event{
-		TaskID:     ap.TaskID,
-		RunID:      ap.RunID,
-		Type:       eventType,
-		Visibility: "task",
-		Payload: mustJSON(map[string]string{
-			"approval_id": ap.ID,
-			"reason":      "approval mode changed to " + mode,
-		}),
-	})
 }
 
 // pluralize renders "1 thing" / "n things" for a compact count phrase.

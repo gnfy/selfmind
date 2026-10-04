@@ -94,6 +94,18 @@ There is no dual-write or long-lived legacy table.
 
 ## Ingress, grouping, and promotion
 
+IM adapters save a platform message ID, original input, and person ownership
+before gateway dispatch. A receipt moves from `pending` to `dispatching` before
+the handler can cause effects and to `accepted` only after the handler returns.
+After a crash, `pending` may be retried; `dispatching` is deliberately held for
+inspection because an effect may already have happened. Weixin commits its sync
+cursor only after each message in the batch is accepted or durably held as
+uncertain. `/diag inbound` lists only the current person's unresolved receipts;
+it never retries them. Historical first-seen rows remain terminal on upgrade.
+Work-bearing IM messages without a stable platform ID are rejected before
+dispatch; otherwise an identical redelivery cannot be distinguished from a
+second legitimate request.
+
 Every accepted root user turn creates a fresh `interaction + unlisted` Thread
 and a Run. The Run remains searchable even when the Thread is absent from the
 ordinary work list. A continuation child inherits its exact parent Thread.
@@ -218,6 +230,12 @@ explicit /new, /resume, /choose
   rather than with the roots of the run it was steered into. Input that
   arrived without roots, such as guidance posted to one run, and rows
   accepted before schema v18 keep that run's roots.
+  A validated explicit Run reply is distinct from ordinary prose: if the
+  Run ends before consuming it, its durable exact-target provenance keeps the
+  selected work and that Run's physical roots. A resumable target retains its
+  exact parent edge; a settled target receives task-pinned follow-up without
+  reopening the settled Run. Main may still explicitly classify consumed
+  guidance as independent work. Historical ordinary rows gain no new edge.
 
 Approval, clarification, and external-watch completion carry structured ids
 through the durable queue. Watch finalization claims its exact parent before
@@ -296,6 +314,12 @@ Ordinals are endpoint-local snapshots with a bounded lifetime; cross-endpoint
 automation uses stable ids and structured reply metadata.
 
 ## Context and recall
+
+Recovery handoffs obtain the original goal only from the exact `resumes_run_id`
+lineage within the same person and execution scope, and include bounded user
+steering additions. A missing, cyclic, overly deep, or incompatible edge leaves
+the original goal unknown; grouping labels never connect independent work.
+Technical daemon continuation input is not substituted for the person's goal.
 
 The durable context path remains:
 
@@ -384,3 +408,14 @@ promotion, approval continuation, CLI-to-IM observation, unrelated new work,
 recall degradation, and daemon-restart exact resume. Full `selfmind selfcheck`
 is required before release; sustained CLI/IM daily-driver evidence remains a
 release gate rather than a schema requirement.
+
+Daily diagnostics group logical work by the committed `Run.ResumesRunID`
+relation, including manual in-turn selection and ancestors outside the report
+window. Window Run counts and event-level terminal counts remain separate;
+latest chain state comes from durable Runs. Bounded traversal reports an
+evidence gap rather than silently dropping an unavailable parent. Cost per
+observed chain covers only the selected window and includes partial chains.
+Wait finalization preserves the structured cause (provider, occupied external
+resource, or human input), independently of the agent turn's transport EOF.
+Ordinary command counts and failures are execution evidence; they do not
+become criterion-bound verification merely because a command returned zero.

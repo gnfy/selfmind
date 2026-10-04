@@ -40,11 +40,12 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 		}
 	case "run.started":
 		var payload struct {
-			Input      string `json:"input"`
-			QueueID    string `json:"queue_id"`
-			WatchID    string `json:"watch_id"`
-			TaskStatus string `json:"task_status"`
-			Origin     string `json:"origin"`
+			Presentation string `json:"presentation"`
+			Input        string `json:"input"`
+			QueueID      string `json:"queue_id"`
+			WatchID      string `json:"watch_id"`
+			TaskStatus   string `json:"task_status"`
+			Origin       string `json:"origin"`
 		}
 		_ = json.Unmarshal(event.Payload, &payload)
 		started := event.CreatedAt
@@ -52,19 +53,21 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 			started = time.Now()
 		}
 		m.program.Send(MsgDaemonRunStarted{
-			RunID:      strings.TrimSpace(event.RunID),
-			QueueID:    strings.TrimSpace(payload.QueueID),
-			TaskID:     strings.TrimSpace(event.TaskID),
-			WatchID:    strings.TrimSpace(payload.WatchID),
-			TaskStatus: strings.TrimSpace(payload.TaskStatus),
-			Origin:     strings.TrimSpace(payload.Origin),
-			Input:      strings.TrimSpace(payload.Input),
-			Started:    started,
-			Event:      eventRefFromRunEvent(event),
+			Presentation: payload.Presentation,
+			RunID:        strings.TrimSpace(event.RunID),
+			QueueID:      strings.TrimSpace(payload.QueueID),
+			TaskID:       strings.TrimSpace(event.TaskID),
+			WatchID:      strings.TrimSpace(payload.WatchID),
+			TaskStatus:   strings.TrimSpace(payload.TaskStatus),
+			Origin:       strings.TrimSpace(payload.Origin),
+			Input:        strings.TrimSpace(payload.Input),
+			Started:      started,
+			Event:        eventRefFromRunEvent(event),
 		})
 	case "run.finished", "run.cancelled", "run.interrupted", "run.failed":
 		var payload struct {
-			Outcome api.RunOutcome `json:"outcome"`
+			Outcome     api.RunOutcome `json:"outcome"`
+			FinalAnswer string         `json:"final_answer"`
 		}
 		_ = json.Unmarshal(event.Payload, &payload)
 		status := strings.TrimSpace(payload.Outcome.Status)
@@ -79,10 +82,11 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 			}
 		}
 		m.program.Send(MsgDaemonRunFinished{
-			RunID:   strings.TrimSpace(event.RunID),
-			Status:  status,
-			Summary: strings.TrimSpace(payload.Outcome.Summary),
-			Event:   eventRefFromRunEvent(event),
+			FinalAnswer: payload.FinalAnswer,
+			RunID:       strings.TrimSpace(event.RunID),
+			Status:      status,
+			Summary:     strings.TrimSpace(payload.Outcome.Summary),
+			Event:       eventRefFromRunEvent(event),
 		})
 	}
 }

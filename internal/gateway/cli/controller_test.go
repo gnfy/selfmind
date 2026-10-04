@@ -1421,10 +1421,13 @@ func TestClientModeSteerForwardsToDaemon(t *testing.T) {
 	model := NewController("", "", nil, "").model
 	model.clientMode = true
 	model.thinking = true
+	model.daemonRunID = "run-a"
+	model.channel = "session-a"
 	model.steerCh = make(chan string, 1) // local channel must stay untouched
-	var got string
-	model.steerFn = func(text string) error {
+	var got, gotRunID, gotChannel string
+	model.steerFn = func(runID, channel, text string) error {
 		got = text
+		gotRunID, gotChannel = runID, channel
 		return nil
 	}
 
@@ -1432,8 +1435,8 @@ func TestClientModeSteerForwardsToDaemon(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected the transient-notice auto-clear command")
 	}
-	if got != "focus on the edge cases" {
-		t.Fatalf("steer function saw %q", got)
+	if got != "focus on the edge cases" || gotRunID != "run-a" || gotChannel != "session-a" {
+		t.Fatalf("steer function saw run=%q channel=%q text=%q", gotRunID, gotChannel, got)
 	}
 	if len(model.steerCh) != 0 {
 		t.Fatal("client mode must not push guidance into the local channel")
@@ -1454,9 +1457,12 @@ func TestClientModeSteerErrorShowsHonestNotice(t *testing.T) {
 	model := NewController("", "", nil, "").model
 	model.clientMode = true
 	model.thinking = true
-	model.steerFn = func(text string) error {
+	model.daemonRunID = "run-a"
+	model.channel = "session-a"
+	model.steerFn = func(runID, channel, text string) error {
 		return errors.New("no active run to steer")
 	}
+	model.editor.SetValue("hurry up please")
 
 	_ = model.injectMidRunGuidance("hurry up please")
 	last := model.messages[len(model.messages)-1]
@@ -1468,6 +1474,44 @@ func TestClientModeSteerErrorShowsHonestNotice(t *testing.T) {
 	}
 	if model.statusMsg == "Sent to the running task as guidance." {
 		t.Fatalf("statusMsg must not claim success: %q", model.statusMsg)
+	}
+	if model.editor.Value() != "hurry up please" {
+		t.Fatalf("rejected guidance lost the draft: %q", model.editor.Value())
+	}
+}
+
+func TestClientModeSteerWaitsForAnExactRunWithoutLosingInput(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.clientMode = true
+	model.localRequestActive = true
+	model.editor.SetValue("add the missing scenario")
+	called := false
+	model.steerFn = func(runID, channel, text string) error {
+		called = true
+		return nil
+	}
+	_ = model.injectMidRunGuidance("add the missing scenario")
+	if called || model.editor.Value() != "add the missing scenario" {
+		t.Fatalf("guidance sent without a run or draft lost: called=%v draft=%q", called, model.editor.Value())
+	}
+	if last := model.messages[len(model.messages)-1]; !last.IsError {
+		t.Fatalf("missing-run guidance did not show a refusal: %+v", last)
+	}
+}
+
+func TestClientModeSteerWithoutDaemonConnectionKeepsDraft(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.clientMode = true
+	model.daemonRunID = "run-a"
+	model.channel = "session-a"
+	model.steerCh = make(chan string, 1)
+	model.editor.SetValue("new detail")
+	_ = model.injectMidRunGuidance("new detail")
+	if len(model.steerCh) != 0 || model.editor.Value() != "new detail" {
+		t.Fatalf("client fallback lost or locally accepted draft: local=%d draft=%q", len(model.steerCh), model.editor.Value())
+	}
+	if model.statusMsg == "Sent to the running task as guidance." {
+		t.Fatalf("disconnected client claimed acceptance: %q", model.statusMsg)
 	}
 }
 

@@ -26,6 +26,7 @@ type LoopCheckpointSink interface {
 
 type loopCheckpointSinkKey struct{}
 type loopResumeMessagesKey struct{}
+type exactLoopReplayKey struct{}
 
 func WithLoopCheckpointSink(ctx context.Context, sink LoopCheckpointSink) context.Context {
 	if ctx == nil || sink == nil {
@@ -57,6 +58,21 @@ func loopResumeMessagesFromContext(ctx context.Context) []llm.Message {
 	}
 	messages, _ := ctx.Value(loopResumeMessagesKey{}).([]llm.Message)
 	return cloneLoopMessages(messages)
+}
+
+// WithExactLoopReplay marks a system continuation that retries the model call
+// at its saved boundary. Unlike a user continuation, it must not add the
+// queue's scheduling text as a new user message to the saved ledger.
+func WithExactLoopReplay(ctx context.Context) context.Context {
+	return context.WithValue(ctx, exactLoopReplayKey{}, true)
+}
+
+func exactLoopReplayFromContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	exact, _ := ctx.Value(exactLoopReplayKey{}).(bool)
+	return exact
 }
 
 // HasLoopResumeMessages reports whether the gateway installed an exact

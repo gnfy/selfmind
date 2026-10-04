@@ -197,7 +197,7 @@ func normalizePaths(paths []string) []string {
 		if absolute, err := filepath.Abs(path); err == nil {
 			path = absolute
 		}
-		path = filepath.Clean(path)
+		path = canonicalClaimPath(filepath.Clean(path))
 		if _, ok := seen[path]; ok {
 			continue
 		}
@@ -208,8 +208,48 @@ func normalizePaths(paths []string) []string {
 	return out
 }
 
+// canonicalClaimPath resolves aliases through the deepest existing ancestor.
+// A future child may not exist at admission, but its parent can still be a
+// symlink into another Run's root. Treating the spelling as identity would let
+// both writers through the overlap gate.
+func canonicalClaimPath(path string) string {
+	var tail []string
+	parent := path
+	for {
+		resolved, err := filepath.EvalSymlinks(parent)
+		if err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, tail[i])
+			}
+			return filepath.Clean(resolved)
+		}
+		next := filepath.Dir(parent)
+		if next == parent {
+			return path
+		}
+		tail = append(tail, filepath.Base(parent))
+		parent = next
+	}
+}
+
 func pathsOverlap(a, b string) bool {
 	return pathWithin(a, b) || pathWithin(b, a)
+}
+
+// PathsConflict uses the same physical-root normalization as worker
+// admission. The queue selector uses it before claiming a row so work blocked
+// on one directory does not occupy the last person slot ahead of independent
+// work. The worker pool still rechecks the actual claim at execution time.
+func PathsConflict(a, b []string) bool {
+	a, b = normalizePaths(a), normalizePaths(b)
+	for _, left := range a {
+		for _, right := range b {
+			if pathsOverlap(left, right) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func pathWithin(root, target string) bool {

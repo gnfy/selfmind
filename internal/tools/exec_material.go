@@ -244,18 +244,24 @@ func execCommandProgramSet(toolName string, args map[string]interface{}) ([]stri
 		if scriptCarryingPrograms[base] {
 			opaque = true
 		}
-	}
-	// A heredoc feeds a script body the segmentation cannot attribute to any
-	// program, so its content is invisible whatever the leading word was.
-	if strings.Contains(payload, "<<") {
-		opaque = true
-	}
-	if !opaque {
-		for _, fields := range segments {
-			for _, token := range fields {
+		// A script path is opaque only when executed. Data paths such as
+		// `go test ./...` or `cat ./notes.py` do not execute those files.
+		for _, token := range fields {
+			if strings.EqualFold(filepath.Base(token), base) {
 				if isScriptFileToken(token) {
 					opaque = true
-					break
+				}
+				break
+			}
+		}
+		// find can execute commands, but its ordinary traversal predicates
+		// only inspect paths. Keep execution forms opaque, including commands
+		// whose program comes from the files being traversed.
+		if base == "find" {
+			for _, token := range fields {
+				switch token {
+				case "-exec", "-execdir", "-ok", "-okdir":
+					opaque = true
 				}
 			}
 		}
@@ -272,7 +278,7 @@ var scriptCarryingPrograms = map[string]bool{
 	"python": true, "python3": true, "node": true, "nodejs": true,
 	"deno": true, "bun": true, "perl": true, "ruby": true, "php": true,
 	"lua": true, "rscript": true, "osascript": true,
-	"make": true, "xargs": true, "find": true,
+	"make": true, "xargs": true,
 	"npm": true, "pnpm": true, "yarn": true,
 }
 

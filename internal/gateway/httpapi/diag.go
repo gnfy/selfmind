@@ -124,8 +124,9 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 	} else {
 		sb.WriteString("Workspace: none\n")
 	}
-	active := d.coordinator().currentActive(identity.PersonID)
-	if active != nil && active.RunID != "" {
+	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(activeRuns) == 1 && activeRuns[0].RunID != "" {
+		active := activeRuns[0]
 		if lease, err := d.Control.GetExecutionLeaseByRun(ctx, identity.TenantID, active.RunID); err == nil && lease != nil {
 			fmt.Fprintf(&sb, "Environment lease: %s (%s snapshot)\n", shortOpaqueID(lease.ID), lease.EnvironmentProfile)
 			fmt.Fprintf(&sb, "Credential references: %d hidden\n", len(lease.CredentialRefs))
@@ -146,8 +147,26 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 			}
 			fmt.Fprintf(&sb, "Execution profile: %s\n", profile)
 		}
+	} else if len(activeRuns) > 1 {
+		fmt.Fprintf(&sb, "Environment leases: %d active runs; use /status <run_id> for exact work.\n", len(activeRuns))
 	} else {
 		sb.WriteString("Environment lease: none (no active run)\n")
+	}
+	if claims, err := d.Control.ListUnresolvedExternalEffects(ctx, identity.TenantID, identity.PersonID, 10); err == nil {
+		if len(claims) == 0 {
+			sb.WriteString("External effects unresolved: none\n")
+		} else {
+			fmt.Fprintf(&sb, "External effects unresolved: %d shown\n", len(claims))
+			for _, claim := range claims {
+				target := claim.TargetKey
+				if target == control.UnknownExternalTarget {
+					target = "unknown target (person-wide)"
+				}
+				fmt.Fprintf(&sb, "- %s | run %s | %s | %s\n", shortOpaqueID(claim.ID), shortOpaqueID(claim.RunID), target, claim.State)
+			}
+		}
+	} else {
+		sb.WriteString("External effects unresolved: unavailable\n")
 	}
 	sb.WriteString("Credential values: hidden\n")
 	return strings.TrimSpace(sb.String()), nil
@@ -178,6 +197,8 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 			title = "(starting)"
 		}
 		fmt.Fprintf(&sb, "Active run: %s (%s elapsed)\n", truncate(toOneLine(title), 60), time.Since(active.StartedAt).Round(time.Second))
+	} else if count := d.coordinator().activeCount(identity.PersonID); count > 1 {
+		fmt.Fprintf(&sb, "Active runs: %d (use /status for exact run IDs)\n", count)
 	} else {
 		sb.WriteString("Active run: none\n")
 	}
@@ -185,6 +206,9 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	// Queued count.
 	queued, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	fmt.Fprintf(&sb, "Queued: %d\n", queued)
+	if inbound, err := d.Control.ListUncertainInboundForPerson(ctx, identity.TenantID, identity.PersonID, 20); err == nil && len(inbound) > 0 {
+		fmt.Fprintf(&sb, "Inbound awaiting review: %d (use /diag inbound)\n", len(inbound))
+	}
 	writeProviderNetworkDiag(&sb, llm.CurrentProviderNetworkStatus())
 	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
 		fmt.Fprintf(&sb, "Work: open %d, terminal %d, archived %d, inbox runs %d\n",
@@ -352,6 +376,12 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 			fmt.Fprintf(&sb, "- %s: sent %d, unconfirmed %d, pending %d, failed %d\n",
 				item.Platform, item.Sent, item.Unconfirmed, item.PendingSession, item.Failed)
 		}
+	}
+
+	if waits, err := d.Control.ListExternalResourceWaits(ctx, identity.TenantID, identity.PersonID, 100); err == nil {
+		sb.WriteString(formatResourceWaitBacklog(waits, time.Now()))
+	} else {
+		sb.WriteString("External resource waits now: unavailable\n")
 	}
 
 	// Last run error across the person's recent runs.

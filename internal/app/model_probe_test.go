@@ -14,6 +14,15 @@ import (
 	"selfmind/internal/platform/config"
 )
 
+func TestModelProbeAdmissionCarriesRolePurposeAndExistingOwner(t *testing.T) {
+	provider := &judgeCaptureProvider{reply: `{"risk_level":"low","recommendation":"auto_approve","rationale":"read only"}`}
+	ctx := llm.WithModelContext(context.Background(), llm.ModelContext{RunID: "owner-run", Role: llm.RoleCodingAgent})
+	probeResolvedModelForRole(ctx, modelruntime.Runtime{Provider: "test", Model: "probe"}, string(llm.RoleFastClassifier), provider)
+	if provider.owner.Role != llm.RoleFastClassifier || provider.owner.RunID != "owner-run" || provider.owner.Purpose != "model_probe" {
+		t.Fatalf("probe lost admission attribution: %+v", provider.owner)
+	}
+}
+
 func TestProbeResolvedModelValidatesOpenAIToolSchema(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

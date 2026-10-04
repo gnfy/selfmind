@@ -490,8 +490,18 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgSkillInvocationResolved:
 		return m, m.finishSkillInvocationResolution(msg)
 
+	case MsgDaemonStopResult:
+		if msg.Err != nil {
+			m.addNotice(noticeError, msg.Err.Error())
+		} else if reply := strings.TrimSpace(textutil.CleanUTF8(msg.Reply)); reply != "" {
+			m.addNotice(noticeInfo, reply)
+		}
+		return m, nil
+
 	case MsgAgentDone:
-		m.stopModelWait()
+		if !m.daemonRunActive || msg.Turn == nil || strings.TrimSpace(msg.Turn.RunID) == "" || strings.TrimSpace(msg.Turn.RunID) == m.daemonRunID {
+			m.stopModelWait()
+		}
 		m.exitPromptActive = false
 		if msg.Turn != nil {
 			m.rememberQueuedRun(msg.Turn.QueueID)
@@ -549,6 +559,18 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		newerDaemonRun := m.daemonRunActive && msg.Turn != nil &&
 			strings.TrimSpace(msg.Turn.RunID) != "" &&
 			strings.TrimSpace(msg.Turn.RunID) != m.daemonRunID
+		if newerDaemonRun {
+			// A continuation can start before its parent's HTTP response arrives.
+			// That response owns no part of the child's live plan or stream.
+			m.localRequestActive = false
+			m.localRequestInput = ""
+			m.steerCh, m.cancelFn = nil, nil
+			if response := strings.TrimSpace(textutil.CleanUTF8(msg.Response)); response != "" {
+				m.addMessage("assistant", response)
+			}
+			m.runStatus = "working"
+			return m, spinnerCmd
+		}
 		// Live waiters die with the run, but a parked approval deliberately stays
 		// answerable and starts a continuation. Preserve those panels.
 		if !newerDaemonRun {
@@ -632,7 +654,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// drains; only its final answer arrives differently (run.finished
 		// instead of a synchronous reply). Treating it as passive left the
 		// spinner dark for every queued turn.
-		m.daemonRunOwned = localMatch || queuedMatch
+		m.daemonRunOwned = localMatch || queuedMatch || msg.Presentation == "foreground"
 		m.runStatus = "working"
 		m.runTokens = 0
 		m.lastRequestTokens = 0
@@ -651,7 +673,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// live state the status bar already renders ("background watcher
 		// finalizing"), so it must not also become a permanent transcript line.
 		// One watcher lifecycle leaves exactly one notice — the terminal one.
-		if watchID != "" || strings.TrimSpace(msg.Origin) != "" {
+		if msg.Presentation != "foreground" && (watchID != "" || strings.TrimSpace(msg.Origin) != "") {
 			m.markBackgroundRun(msg.RunID, watchID, msg.Origin)
 		}
 		if watchID == "" && queuedMatch && strings.TrimSpace(msg.Origin) == "" {
@@ -720,7 +742,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolExecuting = ""
 		m.clearActivePlan()
 		m.finalizeOpenToolMessages("Completion was not observed before the run ended.")
-		if m.processState().HasStreamContent() {
+		if strings.TrimSpace(msg.FinalAnswer) != "" {
+			m.finalizeLiveStream(msg.FinalAnswer, llm.AssistantPhaseFinalAnswer)
+		} else if m.processState().HasStreamContent() {
 			m.finalizeLiveStream("", llm.AssistantPhaseFinalAnswer)
 		} else {
 			m.finalizeLiveStream(msg.Summary, llm.AssistantPhaseFinalAnswer)
@@ -1094,7 +1118,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// quitting does NOT cancel — offer the choice explicitly. This
 			// prompt doubles as the moment the user learns the detached-run
 			// design. A second ctrl+c means "background + quit".
-			if m.localRequestActive {
+			if m.localRequestActive || (m.daemonRunActive && m.daemonRunOwned) {
 				if m.exitPromptActive {
 					return m, m.quitNow()
 				}

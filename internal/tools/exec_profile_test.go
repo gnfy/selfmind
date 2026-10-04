@@ -598,6 +598,12 @@ func TestExecCommandProgramSetDecidability(t *testing.T) {
 		{"make release", true},
 		{"find . -name '*.tmp' -exec rm {} ;", true},
 		{"cat notes.txt", false},
+		{"find . -path ./.git -prune -o -type f -print", false},
+		{"go test ./...", false},
+		{"grep -n pattern ./script.py", false},
+		{"cat <<'TEXT'\nexample data\nTEXT", false},
+		{"find . -exec ./deploy.sh {} \\;", true},
+		{"sh ./deploy.sh", true},
 	}
 	for _, tc := range cases {
 		_, opaque := execCommandProgramSet("terminal", map[string]interface{}{"command": tc.command})
@@ -607,5 +613,29 @@ func TestExecCommandProgramSetDecidability(t *testing.T) {
 	}
 	if _, opaque := execCommandProgramSet("execute_code", map[string]interface{}{"code": "print(1)"}); !opaque {
 		t.Fatal("execute_code runs arbitrary python and is undecidable by construction")
+	}
+}
+
+func TestOrdinaryInspectionDoesNotAcquireInventoryMounts(t *testing.T) {
+	base := fixtureBase(t)
+	home, _, _ := fakeGcloudHome(t, base)
+	if err := os.MkdirAll(filepath.Join(home, ".aws"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".aws", "config"), []byte("[default]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tenant, workspace := profileExecScope(t, home, fakeGcloudOnPath(t, base), executionenv.TrustUntrusted)
+	for _, command := range []string{"find . -type f -print", "grep pattern ./notes.py", "go test ./..."} {
+		material := execMaterialForArgs(map[string]interface{}{"_tenant_id": tenant, "_tool_name": "terminal", "command": command}, workspace)
+		if material.ProfileError != nil || len(material.OverlayMounts) != 0 || len(material.SynthesizedDirs) != 0 || len(material.ProfilesFromInventory) != 0 {
+			t.Fatalf("ordinary inspection acquired unrelated mount requirements: %q %+v", command, material)
+		}
+	}
+	// Changing the operation to execute an unknown script must change the
+	// material. The parser must not hide mount requirements to pass isolation.
+	material := execMaterialForArgs(map[string]interface{}{"_tenant_id": tenant, "_tool_name": "terminal", "command": "./deploy.sh"}, workspace)
+	if len(material.ProfilesFromInventory) == 0 || len(material.SynthesizedDirs) == 0 {
+		t.Fatal("opaque execution silently lost its required inventory state")
 	}
 }

@@ -6,20 +6,32 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-09-24
+**Snapshot:** 2026-10-04
 
 Dated delivery and validation records live in
 [`status-history.md`](status-history.md); this file keeps current state only.
+
+Interactive provider/resource continuations now preserve same-session foreground
+presentation and replay the atomically saved final answer. Formal verification
+distinguishes preparation/admission blocks from observed test failures. Known
+unresolved external effects are checked before approvals and atomically checked
+again before dispatch; file tools share only the current lease's temp directory.
+Model probes and approval calls carry role diagnostics; outside-Run admission
+facts reach daemon logs. Backend capability refusals remain fail-closed.
+Explicit Run replies retain their target through unconsumed-input recovery;
+CLI cancellation addresses the owned Run and awaits its observed final state.
+Run-only reply edges cannot answer another Run's human wait. View delivery
+checks active physical roots; inbound diagnostics expose receipt state only.
 
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 86 reviewed YAML cases; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 96 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
-- Pull requests run the fast offline corpus and core Linux/macOS checks. Main
+- Pull requests into `main` or `develop` run the fast offline corpus and core Linux/macOS checks. Main
   CI runs the complete offline corpus, focused race tests, and package smoke in
   parallel for the exact merge SHA; superseded-run cancellation applies only to
   pull requests so every main SHA keeps its CI evidence. Documentation-only
@@ -40,7 +52,7 @@ Dated delivery and validation records live in
 | Gate | State | Evidence still required |
 | --- | --- | --- |
 | Personal daily-driver | Partial | Continue real coding/operations use and close regressions from daily run reviews. |
-| Phase-1 continuity | Partial | CLI-to-IM approval has process-level presence, detached-immediate/T1 escalation, parked answerability, and daemon-restart continuation recovery. Natural language now reaches one audited Main path: active input durably steers; idle input can progressively search/inspect/select person-scoped work; a validated same-domain resume atomically claims and imports a versioned child Plan in the same turn before any effect (one Main Run, no queue), while a workspace, execution-root, or checkpoint mismatch transfers to a correctly scoped exact-parent child whose claim and inherited Plan commit together before Main starts. New child steps retain exact parent-step provenance; prior verification is bounded historical context; Main can explicitly adopt an unchanged successful check with a reason, subject to runtime provenance and scope checks. Explicit bound-endpoint delivery overrides survive restart. Repeat the full live scenarios across real IM transports, restart, correction, and stranger isolation. |
+| Phase-1 continuity | Partial | CLI-to-IM approval has process-level presence, detached-immediate/T1 escalation, parked answerability, and daemon-restart continuation recovery. Natural language now reaches one audited Main path: active input durably steers; idle input can progressively search/inspect/select person-scoped work; a validated same-domain resume atomically claims and imports a versioned child Plan in the same turn before any effect (one Main Run, no queue), while a workspace, execution-root, or checkpoint mismatch transfers to a correctly scoped exact-parent child whose claim and inherited Plan commit together before Main starts. New child steps retain exact parent-step provenance; prior verification is bounded historical context; Main can explicitly adopt an unchanged successful check with a reason, subject to runtime provenance and scope checks. Explicit bound-endpoint delivery overrides survive restart. Telegram outbound message IDs now persist as person/chat-scoped reply edges to exact Runs, approvals, and clarifications; unsupported transports retain explicit IDs. Multi-active IM prose first creates a durable choice, then a bounded tool-free Main coordination Run may route a clear supplement, new request, read-only status observation of one active Run, or exact continuation of bounded unresolved history. Observation saves a bounded response so redelivery does not become steering; historical continuation rechecks the Run and queues against its exact lineage. Uncertainty or model failure retains the human choice. IM webhook and Weixin ingress now save the input before dispatch, retain uncertain effects without blind replay, and expose person-scoped `/diag inbound` receipts; Weixin advances its cursor only after the batch is durably accounted for. Repeat the full live scenarios across real IM transports, restart, correction, and stranger isolation. |
 | npm beta distribution | Partial | Clean tagged release through GitHub Actions plus install/update/daemon-restart verification on Linux and macOS. |
 | SaaS / enterprise | Deferred | No implementation until maintainers approve a dedicated strategy decision and its evidence gates. |
 
@@ -51,15 +63,86 @@ not reproduce them); cross-model and sustained live coverage of continuation,
 restart, and Background reasoning; and natural in-place Skill selection quality,
 where a release lookup made unnecessary calls and invalid Skill references.
 
+Parallel-work validation can now opt into `gateway.max_active_work_runs: 2` or
+`3` with at least that many `SELFMIND_WORKERS`; the default remains one and
+startup rejects mismatched capacity. The daemon's existing periodic worker
+also wakes due `not_before` queue rows without a new message or restart.
+Resource admission now returns typed observation-required feedback for an
+own unresolved effect without an observer. Losing an automatic observation
+producer atomically blocks the parked Run and retains its Plan, claim and
+recoverable notice. Admission, wakeup and diagnostics share the resource-wait
+projection. Work-chain reports use committed parent edges, including manual
+selection and out-of-window ancestors. Brief provider contention stays in the
+current Run for at most 250ms; role and permit ownership change atomically.
+Ordinary command outcomes distinguish attempts, observed process starts,
+non-dispatch and unknown observations; legacy facts come only from the exact
+Run/call's typed events. New v2 Plans retain unassessed cancellations and
+omitted open steps; Main records legitimate scope judgments, and user takeover
+quotes require actual person-scoped user input. Schema v24 adds inert assessment
+fields without rewriting historical contracts. A post-finish tool refusal is
+attributed to phase availability.
+Paired unfinished-work/user-takeover cases pass on Gemini and Qwen, with
+committed Gemini replay evidence; Qwen takeover passed after a provider-timeout
+retry and took 134s, so this is semantic evidence, not a throughput claim.
+OpenAI-compatible streams keep distinct indexless call IDs separate and refuse
+ambiguous fragments rather than concatenate tool names or signed metadata.
+Current-batch live checks are mixed: one Qwen two-Run soak overlapped terminal
+work, but later Qwen and Gemini attempts completed both lineages without the
+required overlap after a capacity deferral. Sustained throughput remains open.
+The two new ordinary-evidence cases have passing Gemini recordings; a Qwen
+attempt read the correct output but misquoted it in its answer. This is retained
+as failed model-grounding evidence, not a passed cross-model claim. The soak
+now copies configuration into its isolated runtime, including adjacent model
+readiness state, so temporary provider overrides cannot change operator state.
+Recent runtime-audit repairs preserve paired admission refusals at the action
+reserve, separate local provider deferrals from remote failures, carry the
+original goal in recovery handoffs, and keep ordinary source inspection from
+acquiring unrelated mount-backed tool state. Frozen runtime observations and
+dated history distinguish current evidence from old answers. New recorded cases
+passed on Qwen and Gemini; the history-only counterexample performs no action.
+An isolated daemon with two fresh CLI sessions and one bound IM chat reached
+two active Runs, routed the IM supplement to its exact target, and finished
+both Runs. A reproducible live soak also reached three active Runs with
+overlapping terminal work on Bailian Qwen, and repeated the two-Run route on
+Google Gemini; an unrelated IM identity saw none of the work. First-use
+account creation now resolves a concurrent winner rather than failing one of
+the sessions. The full CLI-A/CLI-B/IM-C scenario also completed three
+overlapping Runs with exact IM supplement routing on both providers. The
+reproducible soak is `scripts/soak-parallel-runs.py`.
+Crash-after-effect recovery now preserves the two exact child Runs and leaves
+both local effects single-executed: queue replay runs before background
+workers, and an executing Run's bound row is not quarantined by a later scan.
+Live restart checks passed on Qwen and Gemini, though one earlier Qwen run
+exceeded the 180-second soak deadline, so recovery latency remains a gate.
+At a checkpointed foreground model-call boundary, provider capacity and 429
+waits now atomically park the exact Run with a delayed queue child and release
+its Agent. A missing checkpoint retains the cancellable in-place wait; six
+repeated 429s or 32 capacity retries block automatic continuation. Go race and message-path tests
+cover the worker release, 429 recovery, exact ownership, and atomic failure.
+An isolated-daemon 429/restart test now covers the actual custom-provider
+transport, readiness probe, durable wait, and exact queued child; it checks
+that scheduling text never enters the retried model ledger. A real-provider
+crash-after-effect retest kept two local effects single-executed. Sustained
+provider throttling and mixed-source fault coverage remain rollout gates.
+An authenticated local owner can now register a hash-bound exact script/argv
+target assertion with `selfmind ws effect`. Matching parallel calls claim only
+those reviewed external targets; drift, ambiguity, or absence returns to the
+person-wide unknown lane. Execution still requires normal approval and target
+release still requires observation. A controlled HTTP target test confirms that
+a remote effect followed by a local command failure is not retried, while an
+independent target can dispatch; a real durable watcher check releases only its
+unchanged, owner-bound claim. Live independent-target and watcher acceptance
+remain rollout gates.
+
 ## Capability Map
 
 | Area | State | Current boundary |
 | --- | --- | --- |
 | Daemon gateway | Done | CLI, IM, cron, and HTTP use one daemon-owned runtime, queue, auth manager, and control database. |
-| Identity and continuity | Done | Person identity spans bound endpoints; transcripts stay local; Threads, Runs, approvals, handoffs, and memory are durable. Each terminal is a session: a run's text, tools, plan, and usage reach only the session that started it or a client attached with `/attach`, other sessions receive its lifecycle and human waits, and while the asking terminal is open only it answers a wait with plain text. |
-| Agent loop | Done | Native tools, structured outcomes, bounded elastic budgets, cancellation, retry classification, durable versioned Run plans, strategy-aware failure recovery, evidence-derived verification, and an operator-owned prompt workspace are implemented. New Runs use recovery contract v1: server-issued plan-step ids survive reorder/update, the control projection—not the in-memory UI cache—guards successful completion, tool effects correlate with plan/version/strategy/environment and hashed result evidence, and loop checkpoints reference that durable state. The injected recovery policy permits one diagnostic correction, refuses exact repeats and exhausted mutation attempts before dispatch while allowing distinct proven read-only diagnostic probes, requires observation after an unknown effect, and releases its guard only after new evidence or state; explicit `verification_required` steps cannot finish without evidence-derived passed verification. Eligible daemon/provider interruptions enqueue one exact-parent recovery child below new foreground work; uncertain effects enter verification-only mode, whose trusted read-only surface and dispatch guard prevent replayed mutation. Specialist waits retain ownership, recovery children do not recurse, and historical Runs remain capability-inert at version zero. Interruptions that cannot continue automatically expose one person-scoped handoff across immediate CLI/IM results, notifications, `/status`, `/resume`, and HTTP with the original goal, plan state, uncertain effects, attempted strategies, unlock condition, and exact resume path; `gateway.automatic_run_recovery: false` stops both new scheduling and claim-time launch without discarding that evidence. Prompt files are startup-frozen, strictly validated, semantically hashed, revision-pinned for durable maintenance, and cannot remove locked quality/safety contracts; an invalid active workspace degrades visibly to the matching last-known-good snapshot or built-in defaults without taking CLI, IM, cron, and HTTP agent work offline. An always-on foreground delivery and evidence floor also covers tool-free direct answers. Tool guidance is derived from each role's actual capabilities; background review uses a bounded memory/session surface; delegated workers preserve scoped parent evidence without inheriting parent lifecycle or loop state; and compaction preserves verification, failed attempts, waits, identifiers, and files behind an untrusted-data fence. Legacy files migrate recoverably on edit, current revision caches self-repair, and restored historical revisions can explicitly resume paused work. Delegated sub-agents run inside the parent run: on its model unless `delegation` names a provider-runtime override, with no conversation memory, as the parent run's person, and with their calls claimed in its ledger under the delegating call's namespace; a human wait that ends a sub-agent parks the parent. A reworded plan snapshot keeps each open step's id by position when its length is unchanged, and a plan with open steps that has not moved for 12 tool actions gets one reminder at the tail of the next request. |
+| Identity and continuity | Done | Person identity spans bound endpoints; transcripts stay local; Threads, Runs, approvals, handoffs, and memory are durable. Each terminal is a session: a run's text, tools, plan, and usage reach only the session that started it or a client attached with `/attach`; other sessions receive bounded lifecycle and human-wait summaries, with the same projection on live streams and replay. A different CLI session's ordinary input queues for its own work rather than steering the active session's Run; an exact reply edge can still target that Run. While the asking terminal is open only it answers a wait with plain text. |
+| Agent loop | Done | Native tools, structured outcomes, bounded elastic budgets, cancellation, retry classification, durable versioned Run plans, strategy-aware failure recovery, evidence-derived verification, and an operator-owned prompt workspace are implemented. New Runs use recovery contract v2 (v1 recovery mechanics remain compatible): server-issued plan-step ids survive reorder/update, the control projection—not the in-memory UI cache—guards successful completion, tool effects correlate with plan/version/strategy/environment and hashed result evidence, and loop checkpoints reference that durable state. The injected recovery policy permits one diagnostic correction, refuses exact repeats and exhausted mutation attempts before dispatch while allowing distinct proven read-only diagnostic probes, requires observation after an unknown effect, and releases its guard only after new evidence or state; explicit `verification_required` steps cannot finish without evidence-derived passed verification. Eligible daemon/provider interruptions enqueue one exact-parent recovery child below new foreground work; uncertain effects enter verification-only mode, whose trusted read-only surface and dispatch guard prevent replayed mutation. Specialist waits retain ownership, recovery children do not recurse, and historical Runs remain capability-inert at version zero. Interruptions that cannot continue automatically expose one person-scoped handoff across immediate CLI/IM results, notifications, `/status`, `/resume`, and HTTP with the original goal, plan state, uncertain effects, attempted strategies, unlock condition, and exact resume path; `gateway.automatic_run_recovery: false` stops both new scheduling and claim-time launch without discarding that evidence. Prompt files are startup-frozen, strictly validated, semantically hashed, revision-pinned for durable maintenance, and cannot remove locked quality/safety contracts; an invalid active workspace degrades visibly to the matching last-known-good snapshot or built-in defaults without taking CLI, IM, cron, and HTTP agent work offline. An always-on foreground delivery and evidence floor also covers tool-free direct answers. Tool guidance is derived from each role's actual capabilities; background review uses a bounded memory/session surface; delegated workers preserve scoped parent evidence without inheriting parent lifecycle or loop state; and compaction preserves verification, failed attempts, waits, identifiers, and files behind an untrusted-data fence. Legacy files migrate recoverably on edit, current revision caches self-repair, and restored historical revisions can explicitly resume paused work. Delegated sub-agents run inside the parent run: on its model unless `delegation` names a provider-runtime override, with no conversation memory, as the parent run's person, and with their calls claimed in its ledger under the delegating call's namespace; a human wait that ends a sub-agent parks the parent. A reworded plan snapshot keeps each open step's id by position when its length is unchanged, and a plan with open steps that has not moved for 12 tool actions gets one reminder at the tail of the next request. |
 | Execution engine | Partial | Typed scopes, environment snapshots, sandbox policy, durable watcher execution, and tool profiles exist. Authenticated local CLI runs support repeatable, invocation-local `--add-dir` roots that are frozen across queue/recovery, included in scoped tools and project context, and conflict-scheduled by overlapping physical paths without changing workspace trust. `ws` is the single workspace verb across CLI, IM, and TUI: selecting binds this session only, `ws default` owns the durable value that IM and scheduled work use, and merely ensuring a directory's workspace no longer moves that default, so concurrent terminals in different projects stop overwriting one person-level pointer. An untrusted workspace is asked about once at startup and can be declined durably. Both official platforms now enforce one sandbox policy — bubblewrap on Linux, seatbelt on macOS — selected per platform and reported through the backend rather than a `GOOS` check, so `ContainmentAssessment.Enforced` and the observation catalog it gates are reachable on macOS for the first time. Strength is not equal: seatbelt has no PID/IPC/UTS namespace and cannot mount, so a plan needing mount-backed tool state (only the AWS SSO token cache in the current catalog) is refused there and degrades to approval-gated host execution, and `$SELFMIND_RUN_TMP` is not `/tmp`. Each invocation now projects immutable snapshot proxy values into its actual network view: isolated calls omit them, shared calls retain remote or reachable loopback routes, and a stale loopback listener is omitted with a non-secret `proxy_mode` in the plan and event. Real approval-volume reduction on macOS remains a daily-driver observation gate. |
-| Worker scheduling | Partial | Durable queue and worker-pool seams exist; personal edition intentionally defaults to one active run per person while multi-run ownership remains deferred. |
+| Worker scheduling | Partial | Durable queue and worker-pool seams exist. Queue claims bind to new Runs atomically, bound uncertain work does not replay, and completed watcher finalization can retry its result delivery without rerunning tools. Admission checks the per-person work Run ceiling and one-foreground-Run-per-CLI-session rule in the control transaction; one short coordination Run per person has a separate class and capacity. The gateway registry and exact controls can address several live work Runs, and a two-session/two-worker integration test proves model-call overlap at test capacity 2. Physical-path locks resolve symlink aliases, write-capable mode hints remain locked because they do not close tool capability, and unknown roots take a person-scoped worker lock; the queue skips a blocked directory without passing later work from that source, and fills other available slots. Delegated batches overlap only when every cloned child has a proven built-in read surface; any shared-view write, shell, nested delegation, or unknown tool serializes the entire batch. Multi-Run IM choice answers atomically persist their exact mailbox or queue destination and repeated answers return the original receipt. `/status <run_id>` now reads a bounded person-scoped card for parked or completed work as well as an active Run. Durable IM ingress receipts preserve source messages through pre-dispatch failure and diagnose uncertain dispatch without blind replay. A daemon-owned physical-route gate now shares a two-request ceiling and cancellable 429 cooldown across foreground, delegated, background, and daemon-probe model calls. Foreground capacity and 429 waits at a durable model checkpoint release the Agent through an atomic delayed exact-parent continuation; uncheckpointed and background calls still wait in place. Deferred counts are attributable in the daily report without inventing elapsed time. At test capacity above one, a second independent writer of the same initially clean Git repository receives a durable daemon-owned checkout with independent mutable Git metadata; a real macOS sandbox test proves local staging/commit cannot write the original checkout. Dirty or unproven roots remain serialized. At test capacity above one, control schema v23 atomically claims trusted external targets before tool dispatch; unknown targets use a person-wide lane, and effect uncertainty survives Run finish or restart until an observation resolves it. Conflicting calls park the exact Run with a durable resource wait; after trusted observation releases every target, the daemon queues an idempotent exact continuation without replaying the failed call. Same-Run unresolved effects also conflict. `/effects` lets the person link an exact claim to a successful finalized watcher from the same Run; the store validates provenance and atomically releases the target group. Parallel Runs retain their frozen network policy inside managed views; untrusted views request normal network capability, while every non-observation network or credential shell call needs one-time human approval before the effect claim even in full-auto mode. A person can inspect one exact managed Git view with `/views` and deliver its clean committed work to a separate namespaced branch with `/apply`; uncommitted work in the view, source repository identity drift, or an active view writer fails closed without changing the source checkout. Source HEAD advancement or unrelated dirty work does not block separate-branch delivery. A completed Run can move a delivered, clean managed view into reversible daemon retention with `/views archive <run_id>` and restore its exact files and Git metadata with `/views restore <run_id>`; unfinished or queued references block retirement. An admitted Run now freezes its approval mode; later person-level `/mode` changes affect new Runs and never retroactively settle pending approvals. Weixin native ingress passes its message to the Gateway for identity binding and durable receipt ownership. Explicit `/views prune <run_id>` reclaims only a proven-safe archived checkout after protecting the delivered commit in the source repository; automatic cleanup and merge are not enabled. Real remote target proof, live IM delivery, sustained provider throttling, and mixed-source real-work gates remain open; production therefore stays at one active work Run per person. |
 | Provider runtime | Done | Main is the sole foreground authority; Background may inherit Main, use a separate route, or be explicitly disabled, and supplies six stable maintenance roles with optional overrides. Guided setup and the later Model Manager use the same Background selector and state transitions for those three states. `selfmind model` and bare TUI `/model` open one capability-negotiated Model Manager for built-in overrides, custom connections, Main/Background routes, credentials, and reasoning; persisted choices remain separate from effective provider/model defaults, their source, and supported values, so `auto→high` is visible without forcing a wire parameter. Validated switches keep a bounded, presentation-only MRU of both previous and candidate models plus explicit reasoning values; `d` removes local history without changing routes or hiding live-catalogue models, and validation/restart waits animate with phase elapsed time. YAML uses `providers.<builtin-id>` plus map-shaped `providers.custom.<id>` with only OpenAI-, Anthropic-, or Responses-compatible protocols; built-in defaults stay in code, custom IDs route directly, secrets stay in the auth store, strict validation rejects ambiguous headers and fields, and explicit `config upgrade` backs up and migrates legacy `provider_profiles`. Provider, route, and staged credential changes share one generation-checked daemon transaction and rollback image. Every mutating entrypoint constructs that service with its credential store, and detached restart preflights the exact staged credential before stopping the healthy daemon or committing config. Selection validation covers every route the draft changes and apply reuses passing probes of the identical request from the last ten minutes, transient probe failures retry once, and a restart re-checks only the approval route; distinct physical endpoint validation lanes run concurrently, contracts sharing one endpoint are serialized, duplicate provider wire fingerprints share one result, and foreground validation exercises a complete native-tool loop with exact tool selection where its protocol and reasoning contract allow it or bounded automatic selection otherwise. Provider-required opaque tool-call replay metadata survives that loop without gaining authority. Model Manager exits only after the exact transaction is applied and the replacement daemon is healthy; every entrypoint clears its applying state or reopens actionable recovery, so failed or completed switches cannot leave input frozen. Foreground and per-role background readiness let verified foreground and unrelated maintenance continue when one background override is degraded; explicit `semantic_recall` never silently falls back to Auxiliary, degrades to lexical recall, retries transient failures with bounded backoff, persists recovery, and debounces transient notices while naming the resolved provider/model on sustained failure. Changes preserve compatible tuning, wait for an uncancellable safe boundary without interrupting an active run, queue new work across restart, require real post-start `/health`, automatically roll back only model-attributable failures, and expose retry/restore for infrastructure failures. The shared HTTP transport follows live macOS manual system-proxy changes without fail-open, while Linux uses standard proxy environment or TUN routing; route-aware retry errors and `/diag` expose concrete recovery. Protocol adapters, typed quirks, generic request extras, live/cache/stale discovery, manual model IDs, metadata, and auth refresh remain implemented. |
 | Provider cost visibility | Done | OpenAI-compatible and Responses cache usage is normalized; role/VCR wrappers preserve adapter request prefix/block fingerprints and report explicit unsupported states without storing prompt content; `/diag context` distinguishes total provider requests from prompt-only assembly, while `selfmind usage` and `selfmind report daily` provide paged local execution/token trends, schema share, logical-work-chain/resume projections, dispatch phase/effect certainty, and approval attribution without the old non-causal run-level post-failure count. New provider-call events carry the resolved provider/model/role, and the daily report groups calls, latency, cache, and reasoning by route while marking older unattributed events honestly. Provider pricing remains external. |
 | Context lifecycle | Partial | Person work spine, bounded composer slices, project instructions, deterministic workspace-knowledge indexing, artifacts, recall, and compaction are integrated. Tool-catalogue deferral is live for a reviewed category cohort — Skill authoring/catalog, media, rare execution shapes, and web search leave the direct surface and return through `tool_search`, measured at about a quarter of the provider-facing schema bytes — while asking the person, tool discovery, artifact read-back, retrieval, continuity, and steering are never deferred. Tool results now also carry a cumulative per-turn cap, so several artifact-backed results inside the age window age oldest-first instead of together dominating the request; unspooled bytes are never dropped. Provider preflight now includes native tool arguments and tool schemas; compaction and trimming retain Run instructions, summaries inherit Run cancellation/ownership, and task slices prioritize verification while deduplicating handoff text. Exact completed-run continuations select a small, redacted, deduplicated set of prior tool-result excerpts from the checkpoint; they do not replay its full ledger or treat excerpts as current proof. Remaining: the catalogue share is about a quarter down, not below the 20% target, and a usage-driven cohort still needs seven days of real evidence. Default context still replays only the most recent 16 work-spine entries; older history stays searchable but is not auto-replayed. |
@@ -131,9 +214,12 @@ limitation. It does not mean the area should be redesigned from scratch.
   schema errors fail startup instead of being silently repaired at request time.
 - Remote MCP supports configured headers, bearer tokens, and basic auth, but an
   interactive OAuth login and credential-management flow is not yet exposed.
-- Full multi-run foreground/background concurrency and remote Runner execution
-  remain design seams only. Do not infer that they are shipped from queue or
-  execution-envelope plumbing.
+- Same-person multi-Run foreground execution is available only behind the
+  explicit 2/3-Run test setting and matching worker count. An exact owner may
+  explicitly prune a proven-safe archived Git view after its delivered commit
+  is retained in the source; no automatic cleanup or merge runs. Real remote
+  target proof, live IM delivery, and sustained mixed-source acceptance still
+  block a default rollout. Remote Runner execution remains a design seam.
 - Self-evolution may publish repeated, verified procedures using trusted
   built-in tools to writable, unpinned workspace-scoped agent-created Skills.
   Repair thresholds depend on the daemon-derived failure class; one generic
@@ -145,15 +231,17 @@ limitation. It does not mean the area should be redesigned from scratch.
 
 ## Plan Lifecycle
 
-- Active plan: `docs/plans/run-centric-work-history.zh-CN.md`, approved by
-  the project owner for review on 2026-09-18. It moves work-history authority
-  from Task/Thread to Runs and the person-level Work Journal, keeps exact
-  execution recovery, and includes context economics in the same delivery.
-- Next plan, paused until it takes the active slot:
-  `docs/plans/session-concurrency.zh-CN.md`, approved by the project owner on
-  2026-09-29 for review on 2026-10-10. It admits runs per session (a terminal
-  or an IM chat) under a per-person cap, isolates a second writer in a clean
-  Git repository in a managed worktree, and adds cross-session handover.
+- Active plan: `docs/plans/session-concurrency.zh-CN.md`, approved and
+  activated by the project owner on 2026-09-29 for review on 2026-10-10. It
+  makes Run the concurrency unit: CLI windows keep independent focus, one IM
+  chat may handle several Runs, and physical/external resource claims guard
+  parallel effects. Managed worktrees isolate clean-Git writers. Until the
+  admission and routing batches land, a person still has one running run at a
+  time.
+- Paused plan: `docs/plans/run-centric-work-history.zh-CN.md`, paused on
+  2026-09-29 to free the active slot, for review on 2026-11-10. Its core goal is
+  met: execution belongs to Runs and Task holds no authority. The remaining
+  store re-keying, renaming, and table drops resume when the slot frees.
 - Paused plan: `docs/plans/daily-driver-closure.md`, approved for review on
   2026-09-11. The 2026-09-13 verdict retains all outstanding evidence and
   acceptance gates while paused; resumption is reassessed when the active slot

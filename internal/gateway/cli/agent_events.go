@@ -123,24 +123,37 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 	}
 }
 
-// requestDaemonStop asks the gateway to cancel the person's active run via the
-// /stop control command. Since G0-a, run lifetime is daemon-owned and the run
-// ctx is detached from the endpoint connection, so cancelling the local ctx
-// (m.cancelFn) only detaches this watcher — both the in-process gateway
-// (ProcessMessage detaches internally) and the daemon client (the aborted HTTP
-// request only detaches) need this explicit registry-backed stop. Returns nil
-// on the legacy direct-agent path, where the local ctx still owns the run.
+type MsgDaemonStopResult struct {
+	RunID string
+	Reply string
+	Err   error
+}
+
+// requestDaemonStop addresses the exact Run this session owns. A successful
+// request is not terminal cancellation; run.finished owns that transition.
 func (m *uiModel) requestDaemonStop() tea.Cmd {
 	if m.messageProcessor == nil {
 		return nil
 	}
 	processor := m.messageProcessor
-	req := m.controlMessageRequest("/stop")
+	runID := strings.TrimSpace(m.daemonRunID)
+	if runID == "" || !m.daemonRunOwned {
+		return func() tea.Msg {
+			return MsgDaemonStopResult{Err: fmt.Errorf("No owned Run is bound yet. Keep watching until its Run ID is available, then cancel again.")}
+		}
+	}
+	req := m.controlMessageRequest("/stop " + runID)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, _ = processor(ctx, req)
-		return nil
+		resp, status := processor(ctx, req)
+		if resp.Error != "" {
+			return MsgDaemonStopResult{RunID: runID, Err: fmt.Errorf("%s", resp.Error)}
+		}
+		if status >= http.StatusBadRequest {
+			return MsgDaemonStopResult{RunID: runID, Err: fmt.Errorf("Cancellation request failed (HTTP %d): %s", status, resp.Content)}
+		}
+		return MsgDaemonStopResult{RunID: runID, Reply: resp.Content}
 	}
 }
 

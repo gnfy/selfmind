@@ -395,7 +395,11 @@ substrate). Document results in this file.
   cells. One measured blank row above and below the plan keeps it visually
   separate without causing layout overlap or pushing the composer beyond the
   terminal height.
-- Terminal run states, cancellation, `/clear`, and a new user turn clear stale
+- Ctrl+C offers cancellation for this session's owned foreground Run, including
+  an automatic continuation after the local HTTP request ends. Cancellation
+  sends `/stop <run_id>` and keeps the stream and Plan until the daemon observes
+  a terminal state. Failed requests remain visible and do not claim completion.
+- Terminal run states, observed cancellation, `/clear`, and a new user turn clear stale
   active plan state. Plan height is included in transcript layout calculations
   so it cannot cover history or move the composer off screen. One reducer owns
   digest and live snapshots, keyed by exact Run, durable plan version, and event
@@ -455,6 +459,14 @@ mistaken for one request exceeding the displayed context capacity.
 
 ### H2c - Run-scoped event ordering
 
+- A Run's trigger (`origin`) and interactive presentation are separate facts.
+  Provider/resource waits, approval answers, and recovery inherit foreground
+  presentation through an exact same-session parent; cron and watcher work
+  retain background presentation. This does not transfer execution authority.
+- Terminal live events and reconnect replay hydrate the answer already saved
+  with Run finalization. The originating session receives the complete answer;
+  other sessions retain lifecycle summaries. A late parent HTTP response never
+  finalizes the child's stream or clears its active plan.
 - The active-run digest carries the daemon run id. A reconnecting TUI watches
   that exact run instead of every event associated with the person.
 - Startup digest headings distinguish event time from current state: terminal

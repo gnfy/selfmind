@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Worker-pool soak: fire N concurrent runs as DISTINCT persons against a running
-# gateway and check they run in PARALLEL (total wall-time ≈ slowest request, not
-# the sum). Distinct platform_user_id is required — the per-person guard
-# serializes runs for the same person on purpose.
+# Legacy worker-pool soak: fire N concurrent runs as DISTINCT persons against a
+# running gateway. For same-person, multi-session Run ownership and IM routing,
+# use soak-parallel-runs.py against an isolated daemon instead. The ordinary
+# per-person limit remains one unless gateway.max_active_work_runs is explicitly
+# raised with enough Agent workers.
 #
 # Usage:
 #   1) start a gateway with the pool on:   SELFMIND_WORKERS=4 selfmind gateway run

@@ -73,6 +73,26 @@ no handoff evidence. The former can conclude the agent's agreed scope; the
 latter remains unfinished. Suggested next steps alone never establish takeover.
 A missing final answer preserves an already known execution blocker.
 
+New Runs use recovery contract v2 for cancellation assessment. Main supplies
+`cancellation_disposition` and `cancellation_reason`: `not_required` for work
+that is genuinely unnecessary or superseded, `user_takeover` for an explicit
+handoff, or `unfinished` for necessary work that remains open. A takeover also
+supplies `user_takeover_quote`; the runtime checks that this quote occurs in
+actual user input or consumed steering on the exact person-scoped continuation
+lineage, excluding sibling work and daemon-originated text. Main still judges
+its meaning against the original goal and later corrections. Unassessed or
+unfinished cancellations remain pending; omitting an open step from a complete
+snapshot retains its exact identity and acceptance condition. These facts
+travel with the existing Plan through restart and continuation. Historical Run
+contracts and snapshots are not rewritten or granted new authority by upgrade.
+
+Command evidence retains invocation and process observations independently.
+Entering a tool does not prove that its process started. Outcomes count
+attempts, observed starts, observed nonzero exits, non-dispatched attempts, and
+unknown dispatch or exit status separately; missing historical facts stay
+unknown unless the exact Run/call has a typed durable completion observation.
+These counters do not establish criterion-bound verification.
+
 `verify` accepts an optional version-1 `check` binding with a stable `criterion`
 and `target`. To correct a check method, Main supplies `replaces` (the prior
 verification evidence id) and a `reason`, keeping the condition and target

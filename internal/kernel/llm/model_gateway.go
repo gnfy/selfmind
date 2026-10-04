@@ -33,6 +33,9 @@ type ModelContext struct {
 	TaskID      string
 	RunID       string
 	Role        ModelRole
+	// Purpose distinguishes a probe from production work using the same role.
+	// It is diagnostic metadata and grants no routing or execution authority.
+	Purpose string
 }
 
 type modelContextKey struct{}

@@ -168,7 +168,23 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	if err != nil && !(waitGroupKey != "" && observed.Status != "") {
 		return "", err
 	}
-	if verdict != "" && waitGroupKey == "" {
+	var effectObservation EffectObservationBinding
+	effectObservationID := ""
+	if observationAdapter == ExternalWatchAdapterStatusJSON {
+		effectObservation, _ = RegisteredEffectObservation(args, t.store)
+		if effectObservation.RuleKey != "" {
+			effectID, lookupErr := t.store.FindUnresolvedExternalEffectForTargets(contextFromArgs(args),
+				scope.TenantID, scope.PersonID, scope.RunID, effectObservation.TargetKeys)
+			if lookupErr != nil {
+				return "", lookupErr
+			}
+			if effectID == "" {
+				effectObservation = EffectObservationBinding{}
+			}
+			effectObservationID = effectID
+		}
+	}
+	if verdict != "" && waitGroupKey == "" && effectObservation.RuleKey == "" {
 		return verdict, nil
 	}
 
@@ -240,7 +256,14 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 			Version: control.ExternalWatchContinuationReceiptVersion, CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))),
 			EnvironmentGeneration: identity.Generation, Adapter: observationAdapter,
 			Target: firstNonEmptyPreflight(targetPattern, description), DeadlineUnix: timeoutAt.Unix(),
-			Capabilities: append([]string(nil), capabilities...),
+			Capabilities:       append([]string(nil), capabilities...),
+			EffectRuleKey:      effectObservation.RuleKey,
+			ObservationRuleKey: effectObservation.ObservationRuleKey,
+			EffectID:           effectObservationID,
+			EffectTargetKeys:   append([]string(nil), effectObservation.TargetKeys...),
+			EffectScriptRoot:   effectObservation.ScriptRoot,
+			EffectScriptPath:   effectObservation.ScriptPath,
+			EffectScriptDigest: effectObservation.ScriptDigest,
 		},
 		Status:                observed.Status,
 		OperationStatus:       observed.OperationStatus,

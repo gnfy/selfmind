@@ -33,11 +33,12 @@ func TestRunSteerEndpoint(t *testing.T) {
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 
-	steer := func(text string) *httptest.ResponseRecorder {
+	steer := func(runID, channel, text string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(api.RunSteerRequest{
 			Platform:       "cli",
 			PlatformUserID: "local",
-			Channel:        "cli",
+			RunID:          runID,
+			Channel:        channel,
 			Text:           text,
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/runs/steer", bytes.NewReader(body))
@@ -46,10 +47,10 @@ func TestRunSteerEndpoint(t *testing.T) {
 		return rec
 	}
 
-	if rec := steer("   "); rec.Code != http.StatusBadRequest {
+	if rec := steer("", "cli", "   "); rec.Code != http.StatusBadRequest {
 		t.Fatalf("empty text status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	if rec := steer("focus on the tests"); rec.Code != http.StatusConflict {
+	if rec := steer("no-active-run", "cli", "focus on the tests"); rec.Code != http.StatusConflict {
 		t.Fatalf("no-active-run status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
@@ -80,7 +81,19 @@ func TestRunSteerEndpoint(t *testing.T) {
 	}
 	defer daemon.coordinator().endActive(identity.PersonID)
 
-	rec := steer("please cover the unicode edge cases too")
+	if rec := steer("", "cli", "unbound guidance"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing-run status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if rec := steer(run.ID, "", "unbound guidance"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing-channel status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if rec := steer("another-run", "cli", "wrong run"); rec.Code != http.StatusConflict {
+		t.Fatalf("wrong-run status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if rec := steer(run.ID, "other-session", "cross-session guidance without source scope"); rec.Code != http.StatusConflict {
+		t.Fatalf("unsafe cross-session steer status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	rec := steer(run.ID, "cli", "please cover the unicode edge cases too")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("steer status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -120,7 +133,7 @@ func TestRunSteerEndpoint(t *testing.T) {
 	// Fill the buffer; the next steer must report back-pressure, not block or drop.
 	steerCh <- kernel.SteeringInput{Content: "queued-1"}
 	steerCh <- kernel.SteeringInput{Content: "queued-2"}
-	if rec := steer("overflow"); rec.Code != http.StatusTooManyRequests {
+	if rec := steer(run.ID, "cli", "overflow"); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("full-buffer status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
@@ -158,7 +171,7 @@ func TestRunSteerEndpointKeepsTheRunsRoots(t *testing.T) {
 	}
 	defer daemon.coordinator().endActive(identity.PersonID)
 
-	body, _ := json.Marshal(api.RunSteerRequest{Platform: "cli", PlatformUserID: "local", Channel: "cli", Text: "separately, bump the changelog"})
+	body, _ := json.Marshal(api.RunSteerRequest{Platform: "cli", PlatformUserID: "local", RunID: run.ID, Channel: "cli", Text: "separately, bump the changelog"})
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs/steer", bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
@@ -167,6 +180,9 @@ func TestRunSteerEndpointKeepsTheRunsRoots(t *testing.T) {
 	rows, err := store.ListUnconsumedSteering(ctx, identity.TenantID, run.ID, 10)
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("steering rows = %+v err=%v", rows, err)
+	}
+	if !rows[0].ExactTarget {
+		t.Fatal("explicit steer endpoint lost exact target provenance")
 	}
 	queued, err := store.QueueSteeringAsIndependent(ctx, identity.TenantID, identity.PersonID, run.ID, rows[0].ID)
 	if err != nil || queued == nil {

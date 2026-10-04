@@ -623,6 +623,30 @@ absorbs these without touching the wire contract:
 - 429 `Retry-After` is honored (`RetryAfterFromError`): the header is folded
   into the error via `foldRetryAfter` at the adapter 4xx/5xx return sites, and
   the codex/OpenAI "try again in N" body phrasing is parsed. Capped at 600s.
+- In the daemon, a process-owned request gate also coordinates the resolved
+  physical provider route across workers, delegated agents, configured
+  background roles, and daemon model probes. A route is provider + normalized
+  endpoint + credential identity, independent of model or logical role. Each
+  route admits at most two
+  concurrent requests; a structured 429 starts a shared, cancellable cooldown
+  (including errors emitted after a stream starts). The permit lasts until the
+  stream closes or its context is canceled. Capacity and cooldown waits for a
+  known Run are recorded as internal `model.provider_wait` events with route,
+  reason, duration, and cancellation. The daily report aggregates these by
+  reason and counts affected Runs. This is request admission, not a
+  complete Run scheduler. A checkpointed foreground Run can park durably at
+  admission and release its worker; its exact continuation remains queued.
+  Capacity contention first gets at most 250ms of cancellable grace in the
+  current Run, avoiding checkpoint/recall churn when a permit is just closing.
+  A 429 cooldown is deferred immediately; long capacity waits retain the same
+  durable retry limits. Permit ownership and role counts change atomically,
+  so acquisition/release races cannot invent an unattributed occupant.
+  Internal `model.provider_admission` events record acquire, release, defer,
+  and cancellation with capacity and occupying role counts, without other
+  people's Run IDs. `provider.call.usage` labels a wait `deferred` and records
+  `provider_dispatched`: local capacity/cooldown deferrals are excluded from
+  remote-call counts, while actual 429 attempts still count. Historical usage
+  events keep their original interpretation.
 - The SSE idle watchdog (`responses_adapter.go` `streamIdleTimeout` +
   `streamResponse`) aborts a stream that stalls without new data, emitting a
   retryable stream-idle error so the loop reconnects. It is config-driven

@@ -227,8 +227,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		}
 	}
 	var seededTaskID string
+	var seededParkedRunIDs []string
 	if c.Setup != nil {
-		seeded, err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, firstNonEmpty(c.Channel, "cli"), c.Setup)
+		seeded, err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, firstNonEmpty(c.Channel, "cli"), c.Setup, &seededParkedRunIDs)
 		if err != nil {
 			return nil, err
 		}
@@ -292,7 +293,11 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	for i, turn := range c.Turns {
 		turnStart := time.Now()
 		channel := firstNonEmpty(turn.Channel, c.Channel, "cli")
-		rec.StartTurn(i, turn.Input, channel)
+		input := turn.Input
+		if turn.SeededRunOrdinal > 0 {
+			input += " " + seededParkedRunIDs[turn.SeededRunOrdinal-1]
+		}
+		rec.StartTurn(i, input, channel)
 		replyToRunID := ""
 		if turn.ReplyToTurn > 0 && turn.ReplyToTurn <= i {
 			replyToRunID = turnRunIDs[turn.ReplyToTurn-1]
@@ -319,8 +324,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			PlatformUserID:        firstNonEmpty(turn.PlatformUserID, "eval-"+c.ID),
 			DisplayName:           "SelfMind Eval",
 			Channel:               channel,
-			Content:               turn.Input,
+			Content:               input,
 			ReplyToRunID:          replyToRunID,
+			NativeReplyMessageID:  turn.NativeReplyMessageID,
 			ApprovalID:            turn.ApprovalID,
 			ClarifyID:             turn.ClarifyID,
 			ClientCWD:             workspace,

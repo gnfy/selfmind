@@ -119,7 +119,7 @@ func TestAnotherSessionsHumanWaitsAreReportedNotArmed(t *testing.T) {
 	}
 }
 
-// A message typed while another session's task runs goes to that task; the
+// An exact reply edge may send another session's message to that Run; the
 // terminal says where it went instead of flashing a generic notice.
 func TestMessageSentToAnotherSessionsRunGetsAReceipt(t *testing.T) {
 	m, _ := newApprovalTestModel()

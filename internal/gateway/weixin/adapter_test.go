@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,7 +22,7 @@ func TestAdapterWaitsForCredentialRefresh(t *testing.T) {
 		Token:     "expired-token",
 		BaseURL:   "https://old.example",
 		HomeDir:   home,
-	}, nil, nil)
+	}, nil)
 	adapter.credentialRefreshInterval = time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -46,6 +47,13 @@ func TestAdapterWaitsForCredentialRefresh(t *testing.T) {
 	}
 	if client.cfg.BaseURL != "https://fresh.example" {
 		t.Fatalf("base URL = %q", client.cfg.BaseURL)
+	}
+}
+
+func TestAdapterCannotStartWithoutGatewayInboundHandler(t *testing.T) {
+	adapter := NewAdapter(RuntimeConfig{Enabled: true, AccountID: "self", Token: "token"}, nil)
+	if err := adapter.Start(context.Background()); err == nil || !strings.Contains(err.Error(), "handler") {
+		t.Fatalf("start without gateway inbound handler = %v", err)
 	}
 }
 
@@ -80,7 +88,7 @@ func TestAdapterProactiveSendUsesConcreteRecipient(t *testing.T) {
 	adapter := NewAdapter(RuntimeConfig{
 		AccountID: "wx-account", Token: "token", BaseURL: server.URL,
 		HomeDir: t.TempDir(), SendChunkRetries: 0,
-	}, nil, nil)
+	}, nil)
 	_, err := adapter.SendWithReceipt(context.Background(), delivery.Message{
 		Platform: "weixin", PlatformUserID: "real-peer@im.wechat", Channel: "weixin", Content: "reminder",
 	})
@@ -120,7 +128,7 @@ func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 	}))
 	defer server.Close()
 
-	var got api.MessageRequest
+	var got api.DurableInbound
 	adapter := NewAdapter(RuntimeConfig{
 		Enabled:          true,
 		AccountID:        "wx-account",
@@ -134,9 +142,9 @@ func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 		DefaultTenantID:  "default",
 		HomeDir:          t.TempDir(),
 		SendChunkRetries: 1,
-	}, store, func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
-		got = req
-		return api.MessageResponse{Content: "ack"}, http.StatusOK
+	}, func(ctx context.Context, inbound api.DurableInbound) (api.MessageResponse, int, error) {
+		got = inbound
+		return api.MessageResponse{Content: "ack"}, http.StatusOK, nil
 	})
 
 	err = adapter.processMessage(ctx, map[string]interface{}{
@@ -161,14 +169,17 @@ func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Platform != "weixin" || got.PlatformUserID != "wx-user" || got.Channel != "wx-user" || got.Content != "do work" || !got.Async {
+	if got.Request.Platform != "weixin" || got.Request.PlatformUserID != "wx-user" || got.Request.Channel != "wx-user" || got.Request.Content != "do work" || !got.Request.Async {
 		t.Fatalf("request = %+v", got)
 	}
-	if got.TenantID != "default" {
-		t.Fatalf("tenant = %q", got.TenantID)
+	if got.Request.TenantID != "default" {
+		t.Fatalf("tenant = %q", got.Request.TenantID)
 	}
-	if got.ReplyToRunID != "run_parent" || got.ApprovalID != "apr_parent" || got.ClarifyID != "clarify_parent" {
+	if got.Request.ReplyToRunID != "run_parent" || got.Request.ApprovalID != "apr_parent" || got.Request.ClarifyID != "clarify_parent" {
 		t.Fatalf("structured return metadata = %+v", got)
+	}
+	if got.MessageID != "m1" || got.OwnerPersonID != owner.PersonID || len(got.RawPayload) == 0 {
+		t.Fatalf("durable gateway ingress metadata = %+v", got)
 	}
 	if sentMessages != 1 {
 		t.Fatalf("sent messages = %d", sentMessages)
@@ -176,21 +187,13 @@ func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 	if token := adapter.client.tokens.Get("wx-account", "wx-user"); token != "ctx-token" {
 		t.Fatalf("context token = %q", token)
 	}
-	bound, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx-user", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if bound.PersonID != owner.PersonID {
-		payload, _ := json.MarshalIndent(bound, "", "  ")
-		t.Fatalf("bound account = %s, owner=%s", payload, owner.PersonID)
-	}
 }
 
 func TestOpenDMDoesNotAutoBindUnknownSenderToOwner(t *testing.T) {
 	adapter := NewAdapter(RuntimeConfig{
 		DMPolicy:      "open",
 		OwnerPersonID: "person-owner",
-	}, nil, nil)
+	}, nil)
 	if adapter.ownerBindingAllowed("unknown-user", "unknown-user", false) {
 		t.Fatal("an open-DM sender must not inherit the owner identity")
 	}
@@ -201,7 +204,7 @@ func TestOpenDMDoesNotAutoBindUnknownSenderToOwner(t *testing.T) {
 }
 
 func TestAdapterGroupPolicyDefaultsToDisabled(t *testing.T) {
-	adapter := NewAdapter(RuntimeConfig{DMPolicy: "open", GroupPolicy: "disabled"}, nil, nil)
+	adapter := NewAdapter(RuntimeConfig{DMPolicy: "open", GroupPolicy: "disabled"}, nil)
 	if !adapter.allowed("u1", "u1", false) {
 		t.Fatal("direct messages should be allowed by open policy")
 	}
@@ -231,7 +234,6 @@ func TestAdapterSendsWorkingNoticeForAcceptedAsyncRun(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-
 	adapter := NewAdapter(RuntimeConfig{
 		Enabled:          true,
 		AccountID:        "wx-account",
@@ -242,11 +244,11 @@ func TestAdapterSendsWorkingNoticeForAcceptedAsyncRun(t *testing.T) {
 		GroupPolicy:      "disabled",
 		HomeDir:          t.TempDir(),
 		SendChunkRetries: 1,
-	}, nil, func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
-		if !req.Async {
-			t.Fatalf("weixin task messages should be async: %+v", req)
+	}, func(ctx context.Context, inbound api.DurableInbound) (api.MessageResponse, int, error) {
+		if !inbound.Request.Async {
+			t.Fatalf("weixin task messages should be async: %+v", inbound.Request)
 		}
-		return api.MessageResponse{Accepted: true}, http.StatusOK
+		return api.MessageResponse{Accepted: true}, http.StatusOK, nil
 	})
 
 	err := adapter.processMessage(ctx, map[string]interface{}{
@@ -287,30 +289,24 @@ func weixinTextFromSendPayload(payload map[string]interface{}) string {
 	return text
 }
 
-func TestDuplicateDetectionSurvivesRestart(t *testing.T) {
-	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-
-	first := NewAdapter(RuntimeConfig{DMPolicy: "open", GroupPolicy: "disabled"}, store, nil)
-	if first.isDuplicate(ctx, "wx-msg-1") {
-		t.Fatal("first sighting must not be a duplicate")
-	}
-	if !first.isDuplicate(ctx, "wx-msg-1") {
-		t.Fatal("in-memory repeat must be a duplicate")
-	}
-
-	// A fresh adapter simulates a daemon restart: the in-memory map is empty
-	// but the sync buffer replays recent messages — the durable store is what
-	// must remember them.
-	second := NewAdapter(RuntimeConfig{DMPolicy: "open", GroupPolicy: "disabled"}, store, nil)
-	if !second.isDuplicate(ctx, "wx-msg-1") {
-		t.Fatal("duplicate detection must survive a restart via the durable store")
-	}
-	if second.isDuplicate(ctx, "wx-msg-2") {
-		t.Fatal("an unseen id must not be a duplicate")
+func TestWeixinWorkWithoutMessageIDDoesNotDispatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ret":0,"errcode":0}`))
+	}))
+	defer server.Close()
+	var calls int
+	adapter := NewAdapter(RuntimeConfig{AccountID: "self", Token: "token", BaseURL: server.URL,
+		DMPolicy: "open", GroupPolicy: "disabled", HomeDir: t.TempDir()},
+		func(context.Context, api.DurableInbound) (api.MessageResponse, int, error) {
+			calls++
+			return api.MessageResponse{}, http.StatusOK, nil
+		})
+	err := adapter.processMessage(context.Background(), map[string]interface{}{"msg": map[string]interface{}{
+		"from_user_id": "peer", "to_user_id": "self", "item_list": []interface{}{
+			map[string]interface{}{"type": itemText, "text_item": map[string]interface{}{"text": "do work"}},
+		},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "stable platform message id") || calls != 0 {
+		t.Fatalf("idless message dispatched: calls=%d err=%v", calls, err)
 	}
 }

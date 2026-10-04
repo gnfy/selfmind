@@ -3,372 +3,67 @@
   "method": "stream",
   "events": [
     {
-      "content": "I"
-    },
-    {
-      "content": " read"
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " reviewed"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "d"
-    },
-    {
-      "content": "raft"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`."
-    },
-    {
-      "content": " Its"
-    },
-    {
-      "content": " entire"
-    },
-    {
-      "content": " contents"
-    },
-    {
-      "content": " are"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "D"
-    },
-    {
-      "content": "raft"
-    },
-    {
-      "content": " ready"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " —"
-    },
-    {
-      "content": " there"
-    },
-    {
-      "content": "'s"
-    },
-    {
-      "content": " no"
-    },
-    {
-      "content": " further"
-    },
-    {
-      "content": " text"
-    },
-    {
-      "content": " to"
-    },
-    {
-      "content": " review"
-    },
-    {
-      "content": ".\n\n"
-    },
-    {
-      "content": "I"
-    },
-    {
-      "content": "'ve"
-    },
-    {
-      "content": " recorded"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " outcome"
-    },
-    {
-      "content": " as"
-    },
-    {
-      "content": " waiting"
-    },
-    {
-      "content": " on"
-    },
-    {
-      "content": " you"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " with"
-    },
-    {
-      "content": " delivery"
-    },
-    {
-      "content": " preserved"
-    },
-    {
-      "content": " as"
-    },
-    {
-      "content": " outstanding"
-    },
-    {
-      "content": " rather"
-    },
-    {
-      "content": " than"
-    },
-    {
-      "content": " completed"
-    },
-    {
-      "content": ":\n\n"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": " Done"
-    },
-    {
-      "content": ":"
-    },
-    {
-      "content": " read"
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " reviewed"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "d"
-    },
-    {
-      "content": "raft"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`.\n"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": " Open"
-    },
-    {
-      "content": ":"
-    },
-    {
-      "content": " obtain"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " recipient"
-    },
-    {
-      "content": " from"
-    },
-    {
-      "content": " you"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " then"
-    },
-    {
-      "content": " deliver"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "d"
-    },
-    {
-      "content": "raft"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`.\n"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": " Nothing"
-    },
-    {
-      "content": " was"
-    },
-    {
-      "content": " sent"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": " did"
-    },
-    {
-      "content": " not"
-    },
-    {
-      "content": " guess"
-    },
-    {
-      "content": " a"
-    },
-    {
-      "content": " recipient"
-    },
-    {
-      "content": ".\n\n"
-    },
-    {
-      "content": "Tell"
-    },
-    {
-      "content": " me"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " recipient"
-    },
-    {
-      "content": "/"
-    },
-    {
-      "content": "end"
-    },
-    {
-      "content": "point"
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": "'ll"
-    },
-    {
-      "content": " deliver"
-    },
-    {
-      "content": " it"
-    },
-    {
-      "content": "."
-    },
-    {
-      "content": " To"
-    },
-    {
-      "content": " actually"
-    },
-    {
-      "content": " send"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": "'ll"
-    },
-    {
-      "content": " also"
-    },
-    {
-      "content": " need"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " delivery"
-    },
-    {
-      "content": " capability"
-    },
-    {
-      "content": "/"
-    },
-    {
-      "content": "end"
-    },
-    {
-      "content": "point"
-    },
-    {
-      "content": " available"
-    },
-    {
-      "content": " in"
-    },
-    {
-      "content": " that"
-    },
-    {
-      "content": " turn"
-    },
-    {
-      "content": "."
+      "content": "I am recording the outcome to pause the task"
+    },
+    {
+      "usage": {
+        "input_tokens": 11428,
+        "output_tokens": 9,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " while waiting for recipient details."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 6,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 79,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
     },
     {
       "finish_reason": "stop"
     },
     {
       "usage": {
-        "input_tokens": 11889,
-        "output_tokens": 119,
-        "cache_read_input_tokens": 3584,
-        "cache_miss_input_tokens": 8305,
+        "input_tokens": 4560,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
       }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2432256",
+          "Function": "finish_run",
+          "Args": "{\"summary\":\"Reviewed draft.txt; waiting for the recipient specification before delivering.\",\"status\":\"waiting_user\",\"done\":[\"Reviewed draft.txt content\"],\"next_steps\":[\"Specify the recipient for draft.txt\",\"Deliver draft.txt to the specified recipient\"],\"files\":[\"draft.txt\"]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EqoBCqcBAWkUfRMM+Kn+9KTR7mD00qCGU1FyDuu3vRveirGWzOcbrAPDDSpKHTvNajQHY428/lc82nIILY4UH2wqLUuqEDDHpcUL56rT/vrqF3HKFVHqpFlsBf25PEsywaECr+N6lhCndH7F2Z7DRPu68Q2jww3d5IEhjTCx2k1tbAp+gcvcSm2Ah/G2Pwo8AabXsldrpdS7wiffMNdzYM3WgYmhv7rosCYpmqw="
+            }
+          }
+        }
+      ]
     }
   ]
 }

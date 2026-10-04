@@ -336,6 +336,10 @@ func TestDigestActiveRunShowsProgress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	run, err := store.StartRun(ctx, task, "cli", "migrate the database")
+	if err != nil {
+		t.Fatal(err)
+	}
 	planPayload, _ := json.Marshal(map[string]interface{}{
 		"plan": []map[string]string{
 			{"step": "Dump the schema", "status": "completed"},
@@ -343,11 +347,11 @@ func TestDigestActiveRunShowsProgress(t *testing.T) {
 			{"step": "Replay onto staging", "status": "pending"},
 		},
 	})
-	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "plan.updated", Visibility: "task", Payload: planPayload}); err != nil {
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "plan.updated", Visibility: "task", Payload: planPayload}); err != nil {
 		t.Fatal(err)
 	}
 	thinkingPayload, _ := json.Marshal(map[string]string{"message": "rewriting migration 007"})
-	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "agent.thinking", Visibility: "task", Payload: thinkingPayload}); err != nil {
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "agent.thinking", Visibility: "task", Payload: thinkingPayload}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -355,7 +359,7 @@ func TestDigestActiveRunShowsProgress(t *testing.T) {
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
 		TaskID:    task.ID,
-		RunID:     "run_progress",
+		RunID:     run.ID,
 		Channel:   "cli",
 		Summary:   "migrate the database",
 		StartedAt: time.Now().Add(-3 * time.Minute),

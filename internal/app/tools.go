@@ -7,6 +7,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/promptassets"
@@ -15,7 +16,7 @@ import (
 
 // InitTools wires up the dispatcher, built-in tools, extended tools, the Skill
 // loader, durable Skill management, and the session search function.
-func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (*tools.Dispatcher, error) {
+func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store, gates ...*llm.RequestGate) (*tools.Dispatcher, error) {
 	registry := tools.NewRegistry()
 	disp := tools.NewDispatcherWithRegistry(registry)
 	if tenantID == "" {
@@ -35,7 +36,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
 	disp.InjectMiddleware(tools.WorkspaceScopeMiddleware())
 	disp.InjectMiddleware(tools.NewToolGuardrails().Middleware)
-	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware())
+	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware(tools.ExternalEffectPrecheck(controlStore)))
 	disp.InjectResultMiddleware(tools.EvidenceMiddleware())
 	disp.InjectMiddleware(tools.SkillStorageMiddleware(storage))
 	// Static watcher proof belongs before approval: impossible registrations
@@ -102,13 +103,18 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	_, _ = tools.ReloadSkillToolsForTenant(tenantID, registry, tools.WithSkillStorage(nil, storage))
 
-	delegationModel := delegationModelSource(cfg, mem, tenantID, ag)
+	delegationModel := delegationModelSource(cfg, mem, tenantID, ag, gates...)
 	disp.InjectDelegateFn(MakeDelegateFn(disp, cfg.Delegation, prompts, delegationModel))
 	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(disp, cfg.Delegation, prompts, delegationModel))
 
 	// 2. Register approval middleware
 	root, _ := os.Getwd()
-	disp.InjectMiddleware(tools.SmartApprovalMiddleware(root))
+	disp.InjectMiddleware(tools.SmartApprovalMiddleware(root, tools.ExternalEffectPrecheck(controlStore)))
+	if controlStore != nil {
+		// External effects are claimed after authorization but before the tool
+		// body. A duplicate, conflicting, or unrecordable claim never executes.
+		disp.InjectResultMiddleware(tools.ExternalEffectClaimMiddleware(controlStore))
+	}
 
 	// 3. Register Vision LLM
 	disp.InjectVisionLLM(ag)

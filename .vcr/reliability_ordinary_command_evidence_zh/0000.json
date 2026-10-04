@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "settings/state.txt state.txt cat 读取状态 read"
+}

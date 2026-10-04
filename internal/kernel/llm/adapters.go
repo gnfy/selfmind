@@ -52,7 +52,7 @@ type OpenAIToolFunction struct {
 }
 
 type openAIToolCallDelta struct {
-	Index        int             `json:"index"`
+	Index        *int            `json:"index"`
 	ID           *string         `json:"id"`
 	Type         *string         `json:"type"`
 	ExtraContent json.RawMessage `json:"extra_content"`
@@ -302,12 +302,16 @@ func chatResponseFromOpenAI(openaiResp OpenAIResponse) *ChatResponse {
 	}
 }
 
-func accumulateOpenAIToolDeltas(acc map[int]*OpenAIToolCall, deltas []openAIToolCallDelta) {
+func accumulateOpenAIToolDeltas(acc map[int]*OpenAIToolCall, deltas []openAIToolCallDelta) error {
 	for _, delta := range deltas {
-		call := acc[delta.Index]
+		index, err := openAIToolDeltaIndex(acc, delta)
+		if err != nil {
+			return err
+		}
+		call := acc[index]
 		if call == nil {
 			call = &OpenAIToolCall{Type: "function"}
-			acc[delta.Index] = call
+			acc[index] = call
 		}
 		if delta.ID != nil {
 			call.ID = *delta.ID
@@ -328,6 +332,7 @@ func accumulateOpenAIToolDeltas(acc map[int]*OpenAIToolCall, deltas []openAITool
 			call.Function.Arguments += *delta.Function.Arguments
 		}
 	}
+	return nil
 }
 
 const maxToolCallReplayMetadataBytes = 64 << 10
@@ -593,7 +598,10 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 				ch <- StreamEvent{ReasoningContent: *chunk.Choices[0].Delta.ReasoningContent}
 			}
 			if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
-				accumulateOpenAIToolDeltas(toolDeltas, chunk.Choices[0].Delta.ToolCalls)
+				if err := accumulateOpenAIToolDeltas(toolDeltas, chunk.Choices[0].Delta.ToolCalls); err != nil {
+					ch <- StreamEvent{Err: err}
+					return true
+				}
 			}
 			if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != "" {
 				sawStop = true

@@ -1,5 +1,45 @@
 {
   "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "draft.txt finish_run handoff scope distribution"
+  "method": "stream",
+  "events": [
+    {
+      "content": "I have reviewed `draft.txt`, which contains:\n\n```\nDraft ready\n```\n\nThe review step is complete"
+    },
+    {
+      "usage": {
+        "input_tokens": 4929,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": ", and the plan preserves the delivery step. Let me know the recipient whenever you are ready, and I will proceed with delivery."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 26,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 4572,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
 }

@@ -61,7 +61,7 @@ func delegationLimits(cfg config.DelegationConfig) (maxDepth, maxConcurrent, max
 // sub-agent is part of the parent's foreground run, so it uses the route the
 // parent run is using; delegation.provider or delegation.model instead names
 // an override, resolved through the provider runtime like a role override.
-func delegationModelSource(cfg *config.Config, mem *memory.MemoryManager, tenantID string, parent *kernel.Agent) func() (llm.Provider, error) {
+func delegationModelSource(cfg *config.Config, mem *memory.MemoryManager, tenantID string, parent *kernel.Agent, gates ...*llm.RequestGate) func() (llm.Provider, error) {
 	d := cfg.Delegation
 	if strings.TrimSpace(d.Provider) == "" && strings.TrimSpace(d.Model) == "" && strings.TrimSpace(d.APIKey) == "" {
 		return func() (llm.Provider, error) {
@@ -75,9 +75,11 @@ func delegationModelSource(cfg *config.Config, mem *memory.MemoryManager, tenant
 	var provider llm.Provider
 	return func() (llm.Provider, error) {
 		once.Do(func() {
-			provider = buildProviderForSelectionWithRuntime(cfg, modelruntime.Selection{Provider: d.Provider, Model: d.Model, APIKey: d.APIKey})
+			selection := modelruntime.Selection{Provider: d.Provider, Model: d.Model, APIKey: d.APIKey}
+			provider = buildProviderForSelectionWithRuntime(cfg, selection)
 			if provider != nil {
 				applyDynamicKeyGetter(provider, mem, tenantID, firstNonEmpty(d.Provider, defaultProviderName(cfg)))
+				provider = gateResolvedProvider(firstRequestGate(gates), cfg, selection, provider)
 			}
 		})
 		if provider == nil {
@@ -250,7 +252,7 @@ func buildDelegateSubBackend(backend kernel.AgentBackend, cfg config.DelegationC
 		return want == nil || want[name]
 	})
 
-	if depth < maxDepth {
+	if depth < maxDepth && !provenReadOnlyDelegateBackend(sub) {
 		nested := tools.NewDelegateTool()
 		nested.RegisterDelegateFn(makeDelegateFnAtDepth(backend, cfg, prompts, model, depth+1))
 		nested.RegisterBatchDelegateFn(makeDelegateBatchFnAtDepth(backend, cfg, prompts, model, depth+1))
@@ -258,6 +260,34 @@ func buildDelegateSubBackend(backend kernel.AgentBackend, cfg config.DelegationC
 	}
 
 	return sub
+}
+
+// A batch may overlap only when every actual cloned tool surface is a known
+// built-in read. Toolset strings are requests, not proof: an empty set copies
+// all tools, a named external tool can have arbitrary effects, and file/terminal
+// toolsets include writes. Read-only clones deliberately omit nested
+// delegation so a child cannot widen its capability after admission.
+func provenReadOnlyDelegateBackend(backend kernel.AgentBackend) bool {
+	disp, ok := backend.(*tools.Dispatcher)
+	if !ok {
+		return false
+	}
+	allowed := map[string]bool{
+		"read_file": true, "ls_r": true, "search_files": true,
+		"batch_read": true, "get_current_time": true,
+		"web_search": true, "web_extract": true,
+		"session_search": true, "work_search": true, "work_inspect": true,
+		"tool_output_view": true,
+	}
+	for _, report := range disp.ToolSchemaReport() {
+		if report.Status == tools.ToolSchemaQuarantined {
+			continue
+		}
+		if report.Origin != tools.ToolSchemaOriginBuiltin || !allowed[report.Name] {
+			return false
+		}
+	}
+	return true
 }
 
 // parentOwnedDelegationTool prevents a worker from mutating the parent run's
@@ -290,7 +320,14 @@ func makeDelegateBatchFnAtDepth(backend kernel.AgentBackend, cfg config.Delegati
 		if err != nil {
 			return nil, err
 		}
-		host := NewMultiAgentHost(backend, provider, prompts, maxConcurrent, maxDepth, maxIter, maxRetries)
+		batchConcurrency := maxConcurrent
+		for _, spec := range specs {
+			if !provenReadOnlyDelegateBackend(buildDelegateSubBackend(backend, cfg, prompts, model, spec.Toolsets, depth)) {
+				batchConcurrency = 1
+				break
+			}
+		}
+		host := NewMultiAgentHost(backend, provider, prompts, batchConcurrency, maxDepth, maxIter, maxRetries)
 		// Sub-agents in the batch get the same bounded backend as single-goal
 		// delegation: filtered by toolsets, delegate_task stripped unless the
 		// depth budget allows a depth+1 hop.

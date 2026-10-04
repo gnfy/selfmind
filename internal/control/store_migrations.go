@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 18
+const CurrentControlSchemaVersion = 24
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -522,6 +522,122 @@ DROP TABLE IF EXISTS task_references;`)
 			return ensureMigrationColumn(ctx, db, "steering_mailbox", "execution_roots_json", "TEXT")
 		},
 	},
+	{
+		Version: 19,
+		Name:    "native-im-reply-edges",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			if err := ensureMigrationColumn(ctx, db, "outbound_messages", "clarify_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS native_im_reply_edges (
+				platform TEXT NOT NULL,
+				channel TEXT NOT NULL,
+				message_id TEXT NOT NULL,
+				outbound_id TEXT NOT NULL,
+				tenant_id TEXT NOT NULL,
+				person_id TEXT NOT NULL,
+				run_id TEXT NOT NULL DEFAULT '',
+				approval_id TEXT NOT NULL DEFAULT '',
+				clarify_id TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				PRIMARY KEY (platform, channel, message_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_native_im_reply_edges_outbound
+				ON native_im_reply_edges(outbound_id);`)
+			return err
+		},
+	},
+	{
+		Version: 20,
+		Name:    "run-execution-class",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Historical rows are work. A short Main coordination Run has its own
+			// admission slot and cannot consume a work Run's capacity.
+			return ensureMigrationColumn(ctx, db, "runs", "execution_class", "TEXT NOT NULL DEFAULT 'work'")
+		},
+	},
+	{
+		Version: 21,
+		Name:    "turn-choice-observation-receipt",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			if err := ensureMigrationColumn(ctx, db, "pending_turn_choices", "resolution_kind", "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+			return ensureMigrationColumn(ctx, db, "pending_turn_choices", "response_text", "TEXT NOT NULL DEFAULT ''")
+		},
+	},
+	{
+		Version: 22,
+		Name:    "inbound-processing-receipt",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Historical first-seen rows have no replayable payload. They remain
+			// terminal; only newly accepted messages enter the processing states.
+			for _, column := range []struct{ name, definition string }{
+				{"state", "TEXT NOT NULL DEFAULT 'accepted'"},
+				{"payload", "BLOB NOT NULL DEFAULT ''"},
+				{"updated_at", "INTEGER NOT NULL DEFAULT 0"},
+				{"last_error", "TEXT NOT NULL DEFAULT ''"},
+				{"tenant_id", "TEXT NOT NULL DEFAULT ''"},
+				{"person_id", "TEXT NOT NULL DEFAULT ''"},
+				{"preview", "TEXT NOT NULL DEFAULT ''"},
+			} {
+				if err := ensureMigrationColumn(ctx, db, "inbound_dedup", column.name, column.definition); err != nil {
+					return err
+				}
+			}
+			_, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_inbound_processing_owner
+				ON inbound_dedup(tenant_id, person_id, state, updated_at) WHERE state <> 'accepted'`)
+			return err
+		},
+	},
+	{
+		Version: 23,
+		Name:    "external-effect-claims",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Old Runs never asserted an external target, so the new table is
+			// deliberately empty after migration. Guessing claims from prose or
+			// tool names would confer false authority to historical work.
+			_, err := db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS external_effect_claims (
+				id TEXT PRIMARY KEY,
+				tenant_id TEXT NOT NULL,
+				person_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				effect_id TEXT NOT NULL,
+				target_key TEXT NOT NULL,
+				state TEXT NOT NULL CHECK(state IN ('reserved', 'uncertain', 'observed')),
+				observation_ref TEXT NOT NULL DEFAULT '',
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				UNIQUE(tenant_id, run_id, effect_id, target_key)
+			);
+			CREATE INDEX IF NOT EXISTS idx_external_effect_claims_active
+				ON external_effect_claims(tenant_id, person_id, state, target_key)
+				WHERE state <> 'observed';
+			CREATE TABLE IF NOT EXISTS external_resource_waits (
+				tenant_id TEXT NOT NULL,
+				person_id TEXT NOT NULL,
+				run_id TEXT NOT NULL,
+				effect_id TEXT NOT NULL,
+				targets_json TEXT NOT NULL,
+				status TEXT NOT NULL CHECK(status IN ('pending', 'queued')),
+				created_at INTEGER NOT NULL,
+				updated_at INTEGER NOT NULL,
+				PRIMARY KEY (tenant_id, run_id, effect_id)
+			);
+			CREATE INDEX IF NOT EXISTS idx_external_resource_waits_pending
+				ON external_resource_waits(status, created_at) WHERE status = 'pending';`)
+			return err
+		},
+	},
+	{Version: 24, Name: "assessed-plan-cancellations", Apply: func(ctx context.Context, db *sql.DB) error {
+		// Empty values grant no new authority to historical plans or Runs.
+		for _, name := range []string{"cancellation_disposition", "cancellation_reason", "user_takeover_quote"} {
+			if err := ensureMigrationColumn(ctx, db, "run_plan_steps", name, "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}},
 }
 
 // migrateDurableAttachments gives parked and steered work somewhere to keep its

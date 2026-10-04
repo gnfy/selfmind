@@ -20,6 +20,7 @@ import (
 // judgeCaptureProvider records the request the judge sends so tests can pin the
 // output budget and determinism settings.
 type judgeCaptureProvider struct {
+	owner    llm.ModelContext
 	last     llm.ChatRequest
 	reply    string
 	response *llm.ChatResponse
@@ -30,6 +31,7 @@ func (p *judgeCaptureProvider) ChatCompletion(ctx context.Context, messages []ll
 }
 
 func (p *judgeCaptureProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.owner = llm.ModelContextFrom(ctx)
 	p.last = req
 	if p.response != nil {
 		return p.response, nil
@@ -74,6 +76,9 @@ func TestApprovalJudgeBudgetCoversReasoning(t *testing.T) {
 	}
 	if !strings.Contains(provider.last.SystemPrompt, `"risk_level"`) || !strings.Contains(provider.last.SystemPrompt, `"rationale"`) {
 		t.Fatal("the structured guardian contract must be reinforced at the system level")
+	}
+	if provider.owner.Role != llm.RoleFastClassifier {
+		t.Fatalf("approval admission role = %q", provider.owner.Role)
 	}
 }
 

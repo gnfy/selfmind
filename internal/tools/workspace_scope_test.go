@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel"
 )
 
@@ -80,6 +81,56 @@ func TestWorkspaceScopeMiddlewareMutatesTerminalCWD(t *testing.T) {
 	}
 	if seen != root {
 		t.Fatalf("cwd = %q, want %q", seen, root)
+	}
+}
+
+func TestIsolatedViewRejectsUnclaimedExternalTools(t *testing.T) {
+	root := t.TempDir()
+	person := "isolated-external"
+	cleanup := SetExecutionScope(person, ExecutionScope{PersonID: person, RunID: "isolated-run", WorkspaceRoot: root,
+		AllowedRoots: []string{root}, RootBindings: []executionenv.RootBinding{{Path: root, Source: executionenv.RootSourceExecutionView}}})
+	defer cleanup()
+	calls := 0
+	execute := WorkspaceScopeMiddleware()(func(map[string]interface{}) (string, error) {
+		calls++
+		return "ok", nil
+	})
+	for _, policy := range []toolExecutionPolicy{
+		{Origin: ToolSchemaOriginExternal, ReadOnly: false},
+		{Origin: ToolSchemaOriginExternal, ReadOnly: true},
+		{Origin: ToolSchemaOriginBuiltin, OperationClasses: []OperationClass{OpClassNetwork}},
+	} {
+		if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "remote_action", toolExecutionPolicyArg: policy}); err == nil {
+			t.Fatalf("unclaimed external effect ran under policy %+v", policy)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("unclaimed tool executed %d times", calls)
+	}
+	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "terminal", "sandbox": "host",
+		toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}); err == nil || calls != 0 {
+		t.Fatalf("host escape reached executor: calls=%d err=%v", calls, err)
+	}
+	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "read_file", "path": "file.txt",
+		toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin, ReadOnly: true}}); err != nil || calls != 1 {
+		t.Fatalf("local read blocked: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestParallelWorkRejectsHostEscapeBeforeEffectClaim(t *testing.T) {
+	root := t.TempDir()
+	person := "parallel-host"
+	cleanup := SetExecutionScope(person, ExecutionScope{PersonID: person, RunID: "parallel-run",
+		WorkspaceRoot: root, AllowedRoots: []string{root}, ParallelWork: true})
+	defer cleanup()
+	called := false
+	execute := WorkspaceScopeMiddleware()(func(map[string]interface{}) (string, error) {
+		called = true
+		return "ok", nil
+	})
+	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "terminal",
+		"sandbox": "host", toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}); err == nil || called {
+		t.Fatalf("parallel Run escaped to host before the resource gate: called=%v err=%v", called, err)
 	}
 }
 

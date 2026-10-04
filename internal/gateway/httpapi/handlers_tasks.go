@@ -224,6 +224,11 @@ func (d *Server) subjectThreadID(ctx context.Context, identity *control.Identity
 	if d == nil || d.Control == nil || identity == nil {
 		return "", nil
 	}
+	if d.coordinator().activeCount(identity.PersonID) > 1 {
+		// A subject-less request is a presentation convenience, not permission
+		// to choose one of several live Threads by recency.
+		return "", nil
+	}
 	if active := d.coordinator().currentActive(identity.PersonID); active != nil && strings.TrimSpace(active.TaskID) != "" {
 		return active.TaskID, nil
 	}
@@ -295,6 +300,17 @@ func (d *Server) handleCurrentTask(w http.ResponseWriter, r *http.Request) {
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(activeRuns) > 1 {
+		statuses := make([]api.ActiveRunStatus, 0, len(activeRuns))
+		for _, active := range activeRuns {
+			if status := formatActiveRunStatus(active); status != nil {
+				statuses = append(statuses, *status)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "active_runs": statuses})
 		return
 	}
 	task, err := d.Control.CurrentTask(r.Context(), identity.TenantID, identity.PersonID)
@@ -560,6 +576,73 @@ func (d *Server) handleWorkspaceObservationProfiles(w http.ResponseWriter, r *ht
 		"profile": map[string]interface{}{
 			"kind": rule.Kind, "label": rule.Label, "argv_prefix": req.ArgvPrefix,
 			"allow_trailing": req.AllowTrailing, "allow_network": req.AllowNetwork,
+			"allow_credentials": req.AllowCredentials,
+		},
+	})
+}
+
+func (d *Server) handleWorkspaceEffectProfiles(w http.ResponseWriter, r *http.Request) {
+	if !d.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req api.WorkspaceEffectProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if !d.localCLIRequest(r, req.Platform) {
+		http.Error(w, "effect profiles can only be granted by the authenticated local CLI", http.StatusForbidden)
+		return
+	}
+	identity, err := d.Control.ResolveOrCreateAccount(
+		r.Context(), d.tenantID(req.TenantID), "cli", fallback(req.PlatformUserID, "local"), "",
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	var workspace *control.Workspace
+	if workspaceID == "" {
+		workspace, err = d.Control.CurrentWorkspace(r.Context(), identity.TenantID, identity.PersonID)
+	} else {
+		workspace, err = d.Control.GetWorkspace(r.Context(), identity.TenantID, workspaceID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if workspace == nil || workspace.OwnerPersonID != identity.PersonID {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	if workspace.TrustLevel != executionenv.TrustTrusted {
+		http.Error(w, "workspace must be trusted before declaring an effect script", http.StatusConflict)
+		return
+	}
+	rule, err := tools.BuildEffectScriptRule(tools.EffectScriptProfile{
+		WorkspaceID: workspace.ID, ScriptPath: req.ScriptPath, Argv: req.Argv,
+		TargetKeys: req.TargetKeys, AllowNetwork: req.AllowNetwork, AllowCredentials: req.AllowCredentials,
+		ObservationCommand: req.ObservationCommand,
+	}, workspace.LocalPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := d.Control.GrantApproval(r.Context(), "person", identity.TenantID, identity.PersonID, identity.PersonID, rule.Key, time.Time{}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"workspace_id": workspace.ID,
+		"profile": map[string]interface{}{
+			"kind": rule.Kind, "label": rule.Label, "argv": req.Argv,
+			"target_keys": req.TargetKeys, "allow_network": req.AllowNetwork,
 			"allow_credentials": req.AllowCredentials,
 		},
 	})

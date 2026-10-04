@@ -338,8 +338,12 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 			emitProfilePreparation(runCtx, req.ToolName, req.ToolCallID, material)
 		}
 
-		cmd, attemptDecision, attemptPlan, sandboxErr := sandboxedCommandWithMaterial(runCtx, argv, material,
-			req.Sandbox, runtime.GOOS, ExecSandboxAvailable(), req.NetworkShared)
+		var policy *ExecSandboxPolicy
+		if scope, ok := currentExecutionScopeAny(args); ok {
+			policy = scope.SandboxPolicy
+		}
+		cmd, attemptDecision, attemptPlan, sandboxErr := sandboxedCommandWithMaterialPolicy(runCtx, argv, material,
+			req.Sandbox, runtime.GOOS, ExecSandboxAvailable(), policy, req.NetworkShared)
 		if sandboxErr != nil {
 			return result, enrichToolFailure(req.ToolName, sandboxErr, "")
 		}

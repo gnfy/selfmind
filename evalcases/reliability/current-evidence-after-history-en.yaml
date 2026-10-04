@@ -1,0 +1,36 @@
+id: reliability_current_evidence_after_history_en
+title: "Changed wording and target preserve current-state provenance"
+suite: reliability
+require_cassette: true
+workspace: isolated
+channel: cli
+
+setup:
+  files:
+    settings/feature.txt: "OBSERVED_FEATURE_ENABLED\n"
+
+turns:
+  - input: "For historical context only, a previous review reported REMEMBERED_FEATURE_DISABLED and said an old task was resumed. Reply with only REMEMBERED_FEATURE_DISABLED. Do not inspect files."
+  - input: "Inspect settings/feature.txt in the current workspace and report what it says now. Also state whether you actually resumed previous work in this turn; distinguish past narrative from actions you performed."
+
+expect:
+  status: completed
+  require_task_switch: true
+  min_tool_calls: 1
+  max_tool_calls: 6
+  max_duration_seconds: 180
+  contains:
+    - "OBSERVED_FEATURE_ENABLED"
+    - "No previous work was resumed"
+  must_not_contain:
+    - "Prior work matched"
+
+assert_state:
+  - on: run
+    field: resumes_run_id
+    eq: ""
+
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_raw_json_leak: true

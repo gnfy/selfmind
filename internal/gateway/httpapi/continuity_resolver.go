@@ -111,7 +111,7 @@ func (d *Server) exactContinuityCandidate(ctx context.Context, identity *control
 	if err != nil || run == nil || run.PersonID != identity.PersonID {
 		return ContinuityCandidate{}, false
 	}
-	return d.continuityCandidateForRun(ctx, identity, *run, d.coordinator().currentActive(identity.PersonID), 0, []string{"explicit_choice"})
+	return d.continuityCandidateForRun(ctx, identity, *run, d.coordinator().activeForRun(identity.PersonID, run.ID), 0, []string{"explicit_choice"})
 }
 
 func boundedOneLineStrings(values []string, limit, maxChars int) []string {

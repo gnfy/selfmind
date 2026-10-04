@@ -1,0 +1,38 @@
+id: reliability_current_evidence_after_history
+title: "Current observations supersede historical answer text without inventing a continuation"
+suite: reliability
+require_cassette: true
+workspace: isolated
+channel: cli
+requires:
+  commands: [cat, ls, od]
+
+setup:
+  files:
+    runtime-state.txt: "CURRENT_VALUE_NEW\n"
+
+turns:
+  - input: "请记录一段历史背景：之前的检查结果是 HISTORICAL_VALUE_OLD，并提到接续过历史任务。这不是当前状态。现在只回复 HISTORICAL_VALUE_OLD，不调用工具。"
+  - input: "请重新检查当前工作区的 runtime-state.txt，报告当前值。也说明本轮是否已经实际接续历史任务，只依据本轮操作记录，不能把过去回答当作本轮动作。"
+
+expect:
+  status: completed
+  require_task_switch: true
+  min_tool_calls: 1
+  max_tool_calls: 6
+  max_duration_seconds: 180
+  contains:
+    - "CURRENT_VALUE_NEW"
+    - "没有"
+  must_not_contain:
+    - "Prior work matched"
+
+assert_state:
+  - on: run
+    field: resumes_run_id
+    eq: ""
+
+checks:
+  no_empty_response: true
+  no_mojibake: true
+  no_raw_json_leak: true

@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "DIRECT_ROUTE_CHECK NEXT_ROUTE_CHECK HTTPS_PROXY HTTP_PROXY ALL_PROXY"
+}

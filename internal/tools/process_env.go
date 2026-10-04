@@ -17,6 +17,7 @@ type CredentialRef = executionenv.CredentialRef
 type EnvironmentLease = executionenv.Lease
 
 const (
+	proxyModeNotConfigured              = "not_configured"
 	proxyModeInherited                  = "inherited"
 	proxyModeOmittedForIsolatedNetwork  = "omitted_for_isolated_network"
 	proxyModeOmittedUnreachableLoopback = "omitted_unreachable_loopback"
@@ -67,7 +68,7 @@ func BuildProcessEnv(parent []string, policy ProcessEnvPolicy) []string {
 // are preserved: probing remote infrastructure here would add latency and
 // cannot distinguish a transient failure from an intentional route policy.
 func adaptProcessEnvForNetwork(parent []string, networkShared bool, reachable func(string) bool) ([]string, processProxyDecision) {
-	decision := processProxyDecision{Mode: proxyModeInherited}
+	decision := processProxyDecision{Mode: proxyModeNotConfigured}
 	if reachable == nil {
 		reachable = loopbackProxyReachable
 	}
@@ -83,6 +84,13 @@ func adaptProcessEnvForNetwork(parent []string, networkShared bool, reachable fu
 			decision.Mode = proxyModeOmittedForIsolatedNetwork
 			decision.Suppressed++
 			continue
+		}
+		if strings.TrimSpace(value) == "" {
+			result = append(result, entry)
+			continue
+		}
+		if decision.Mode == proxyModeNotConfigured {
+			decision.Mode = proxyModeInherited
 		}
 		address, loopback := loopbackProxyAddress(value)
 		if !loopback {

@@ -70,12 +70,12 @@ func observationStmtCommands(stmt *syntax.Stmt, depth int) ([][]string, bool) {
 }
 
 func observationArgvCommands(argv []string, depth int) ([][]string, bool) {
-	if len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
+	if depth > maxObservationShellDepth || len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, false
 	}
 	program := strings.ToLower(filepath.Base(argv[0]))
 	_, shell := shellDashCWrappers[program]
-	if (shell || program == "timeout" || program == "command") && strings.Contains(argv[0], "/") {
+	if (shell || program == "timeout" || program == "command" || program == "env") && strings.Contains(argv[0], "/") {
 		// A path-qualified wrapper runs whatever file is at that path; only its
 		// bare name is known to interpret the inner command.
 		return nil, false
@@ -86,6 +86,13 @@ func observationArgvCommands(argv []string, depth int) ([][]string, bool) {
 			return nil, false
 		}
 		return parseObservationScript(script, depth+1)
+	}
+	if program == "env" {
+		inner, _, ok := proxyEnvCommand(argv[1:])
+		if !ok {
+			return nil, false
+		}
+		return observationArgvCommands(inner, depth+1)
 	}
 	if program == "timeout" || program == "command" {
 		inner, ok := observationWrappedCommand(program, argv[1:])

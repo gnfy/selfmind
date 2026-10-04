@@ -1,0 +1,97 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "Both commands completed successfully:\n\n- First command marker: `DIRECT_ROUTE_"
+    },
+    {
+      "usage": {
+        "input_tokens": 4937,
+        "output_tokens": 16,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "CHECK`\n- First command `requested_proxy_removals`: `ALL_PROXY,HTTPS_PROXY,HTTP_PROXY,all"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 29,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "_proxy,http_proxy,https_proxy`\n- Second command marker: `NEXT_ROUTE_CHECK"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 23,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "`\n\nEach terminal command executes in its own distinct subshell process. The `unset` operations performed in the first command modify"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 25,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " only that specific process's local environment, which terminates when the command finishes. Consequently, environment changes in the first shell"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " do not persist into or alter the environment of subsequent commands."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 834,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

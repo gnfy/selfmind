@@ -1,0 +1,59 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will run the explicit"
+    },
+    {
+      "usage": {
+        "input_tokens": 10586,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " proxy unset command in the terminal."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 7,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 39,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2810754",
+          "Function": "terminal",
+          "Args": "{\"command\":\"unset HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy; printf DIRECT_ROUTE_CHECK\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EpgHCpUHAWkUfRPX8BJvgZlkUQPaxYHcR813nQmAneKjM+s9vhm1eujBsZNtJ+aPFuwJrFBr9BQQqU+eKWQHAVkDOph+sWJbm4zXABolBHblxLAl1pk7zv9hL0wO6IdOaS8L8QJ6Hv4MM5P92wiBFQTHyJR6hulE4w72+aTgjwTRr5JCNze1oQbBbfpS+0YBVSZwK3cTgI1OfY8cmQOXM5g9m5NEOlh5mlLUVUsF6uls1/+q6u14oCwBlAY3loVdygfhYhA65hzFmS6y8l3piA/TkWs5GW0oX3+9f+eT3BGm/koJGDbwRqA84LG7i2u4pb9FJGSMcRuAeibVlQI7z8wnaPRcJOy+h2Wqj43/C91sRepr6QFDvxdALRi9cMvkeFdMbCUdq6UALB1M8E//mo4DV7ux7YW35ldOGv6TTUYezkP0BNcW0ACPev6zS0hl0UNf7cdLXNZt6E1WwO47LufYW1zMSEjE/kK3KSDKiZ8PwAySMwMksyGGx1Qtx6upUzRQk9mKxC7A6TYCYDXotR5uVR1vm8eYp/LN19WJ60Zo9XL4khGOiVT/19SIWb8pOcq43cYtUOSwNaqJ66WqPh7hVwDYwESH+AjBsAJmhZRKkoFM6EmaF2rbLWyb9sSzTpdtmOsobwlqzDEwlreZYRtUAZ5mLJ7kvZjfLfCyyORO7YuwzL0nq1fSLH+1PDO1Y4OoE3OLeA9lPQmv9bURSmJpZ2qWCe+dpqPk0YdBVuaYSnI70ZFwAcS0QCz3Ji6tdqDDDeV9aC8Nr23GxztuU5wh0pKRxUA0Ey7Uj7gr0IPH26Tg5AWSqAyziLZRiOTA9ncxrLtI2BtXl2247u4yPm2WC8UTylZ7Eh/ONmQiTgFC9DMnLumq9u2XVnQGWQzu9REJsESc+wGBx13AsonP9WxgKq/xjMVcf2VN6GKF1+lloTFbUYGBPocOuqdZ/8TXN4pS5SEIFw3jZDGRKdpb/4Us+d2pz+lWmfOZa1OIKrsSUnkIf74iS8l8hkDhcOl+J/CMdCBn/GYy4pibtNAfsiEFqoUpPSqUe1KThbSEKuxKOfYJktThfk0z/ayjlniDvkL3KdxWdIMbJbqBSjii6thqf9OzDBgjlyzS1O/QqX8OxbVgHyiG7qEL03T1jDLxptbFbLCzWjK3lgeAoModGaJvqB4k1gzK3m3w+skeE8/16ojV7QK+bNDfy6UXlo67e2UvrDw3DcfJEyM="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

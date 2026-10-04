@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "ROUTE_CHECK network_mode proxy_mode runtime environment"
+}

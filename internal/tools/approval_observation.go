@@ -53,6 +53,7 @@ var observationRules = []observationRule{
 	{program: "test", anyArgs: true, credentialSafe: true}, {program: "[", anyArgs: true, credentialSafe: true},
 	{program: ":", anyArgs: true, credentialSafe: true},
 	{program: "which", anyArgs: true, credentialSafe: true},
+	{program: "unset", anyArgs: true, credentialSafe: true, verify: func(args []string) bool { _, ok := proxyUnsetNames(args); return ok }},
 	// Ordinary read-only filters. They dominate the middle of a pipeline, and
 	// without them a single `| head` disqualified an otherwise provable command.
 	// Each one that CAN write names the flag that does so in reject.

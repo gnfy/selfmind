@@ -89,7 +89,11 @@ func (d *Dispatcher) ToolPreparationState(name string) string {
 }
 
 func processToolResult(result ExecutionResult) kernel.ToolDispatchResult {
-	process := &kernel.ToolProcessResult{Started: result.Started, SandboxMode: string(result.Plan.Mode), RecoveryOutcome: result.RecoveryOutcome}
+	process := &kernel.ToolProcessResult{
+		Started: result.Started, SandboxMode: string(result.Plan.Mode), RecoveryOutcome: result.RecoveryOutcome,
+		NetworkMode: result.Plan.NetworkMode, ProxyMode: result.Plan.ProxyMode,
+		RequestedProxyRemovals: result.RequestedProxyRemovals,
+	}
 	if result.ExitCodeKnown {
 		code := result.ExitCode
 		process.ExitCode = &code

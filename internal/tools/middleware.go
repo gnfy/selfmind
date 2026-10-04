@@ -529,6 +529,8 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			// contained exec call is recorded so /diag can show how much of the
 			// old ask volume was pure fatigue rather than judgement.
 			containment := assessExecContainment(toolName, args)
+			proxyReason := configuredProxyOverrideReason(toolName, args)
+			proxyOverride := proxyReason != ""
 			intentSnapshot := RunIntentSnapshot{}
 			if hasScope && scope.IntentSnapshot != nil {
 				intentSnapshot = scope.IntentSnapshot()
@@ -564,7 +566,7 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			// external effect, a write tool, and every uncontained exec all keep
 			// their review. Only a call the runtime can already prove harmless
 			// stops paying for a judgement about whether it was asked for.
-			contained := containment.AutoApprove() && !denyForcesHuman
+			contained := containment.AutoApprove() && !denyForcesHuman && !proxyOverride
 			// Parallel Runs may retain a configured network route and selected
 			// credentials. A shell using either can mutate a shared target that
 			// local workspace isolation cannot protect. Only a proven observation
@@ -584,6 +586,8 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			}
 			if denyForcesHuman {
 				reason = "the current request contains an explicit deny; a person must confirm any override"
+			} else if proxyOverride {
+				reason = proxyReason
 			} else if !dangerous && reason == "" {
 				reason = fmt.Sprintf("%s requires approval in %s mode", toolName, mode)
 			}
@@ -626,6 +630,9 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 				return next(args)
 			case semanticReview:
 				// An old capability grant cannot interpret a new human restriction.
+			case proxyOverride:
+				// An observation grant does not decide whether to discard the
+				// operator's route. Only an unchanged exact decision above can.
 			case isRunGranted(patternKey):
 				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
@@ -665,7 +672,7 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 					return next(args)
 				}
 			}
-			if !semanticReview && !denyForcesHuman && !externalUnknown && !parallelRemote && hasScope && scope.Grants != nil {
+			if !semanticReview && !denyForcesHuman && !externalUnknown && !parallelRemote && !proxyOverride && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
 					if key == "" || !scope.StandingGrants.Allowed {
@@ -744,7 +751,7 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 					hostWithoutClass = true
 				}
 			}
-			if semanticReview || externalUnknown || parallelRemote || denyForcesHuman || hostWithoutClass ||
+			if semanticReview || externalUnknown || parallelRemote || denyForcesHuman || hostWithoutClass || proxyOverride ||
 				(containment.Credentials == containmentCredentialsSelected && !containment.ObservationOnly) {
 				decisionPolicy = ApprovalDecisionPolicyOnceOnly
 			}

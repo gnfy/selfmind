@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will run the second marker command in the terminal using the default environment."
+    },
+    {
+      "usage": {
+        "input_tokens": 10701,
+        "output_tokens": 15,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 19,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 170,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2732719",
+          "Function": "terminal",
+          "Args": "{\"command\":\"printf NEXT_ROUTE_CHECK\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "Eu8DCuwDAWkUfRP9ALpZ6JeuALb1iDTvbDtK51bL31rITv7xiiUmQ/miBl3Sadp+FPXV2hBfgmDIWbXt7qlSxeY6Kmi/OvFKgWUMC9iPq+2SpBSd5K+dr8FEY3EsZZ8V0Omv/Nnb1MyAv3lTMeGlL1ZkF2eSb+x66O4kTZwlMrnyskU6/kcIgpBu4YTIN/CX9tlYMJTE/IFLrcQGQ/Q7RtNNQhg+e085i+wXWtw2J+KRprFoh+XO2hG9ayScH55JnXE0BQDXgDzO4l06EoHQeCW3K9x3zW3FhDTtU94I11cVjjEKPonF1ogZTfxZU5gyNRqehLM3FsFLys9K3zVjS5q6kIg1S7Pnq6INjpYw5QzCjZkNEeb2tss7L3UA1R/XVPKQTdKxcC3szNCQOt4g08Z3CuooTMVFmquSSxRzyDfr9z/lCaAuLacaOcWZQeCkH0CRcKJfQMtBv4KhtqU0dFt279P++axgFO9zeiyYZzQPALu/nnCDO5xtoh242R07yjP7nKSg/yY1ZX/cZRMeOwKG/Nn0Oi0bF4/yNX5PmalAE66lEHZXrJp+rEq3qYDrrpmZG5tlXhQr9ufehL56+mKH4mugs7u5YPtOVnmw0yv62KypX13146Hj4mXVCrc8y5mtTi8ot/nwuUbq7jgbl7nb"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

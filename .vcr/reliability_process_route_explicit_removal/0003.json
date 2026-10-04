@@ -1,0 +1,43 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "input_tokens": 10950,
+        "output_tokens": 125,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 253,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_3705368",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"Record execution steps and outcomes for the local process-environment exercise.\",\"plan\":[{\"success_criteria\":\"The command executes unchanged and prints DIRECT_ROUTE_CHECK with requested_proxy_removals recorded\",\"status\":\"completed\",\"step\":\"Execute the explicit proxy unset command and observe DIRECT_ROUTE_CHECK along with requested proxy removals\"},{\"status\":\"completed\",\"success_criteria\":\"The command executes and prints NEXT_ROUTE_CHECK\",\"step\":\"Execute the ordinary printf NEXT_ROUTE_CHECK command\"}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

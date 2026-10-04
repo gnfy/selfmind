@@ -141,17 +141,18 @@ type ExecutionRequest struct {
 // ExecutionResult reports what happened, including the evidence the metrics and
 // diagnostics surfaces need.
 type ExecutionResult struct {
-	Started           bool
-	ExitCodeKnown     bool
-	ExitCode          int
-	Output            string
-	Plan              SandboxPlan
-	ProfilesMatched   []string
-	FailureClass      string
-	RecoveryAttempted bool
-	RecoveryOutcome   string
-	HostEscapeReason  string
-	ScratchBytes      int64
+	Started                bool
+	ExitCodeKnown          bool
+	ExitCode               int
+	Output                 string
+	Plan                   SandboxPlan
+	ProfilesMatched        []string
+	FailureClass           string
+	RecoveryAttempted      bool
+	RecoveryOutcome        string
+	HostEscapeReason       string
+	ScratchBytes           int64
+	RequestedProxyRemovals []string
 }
 
 // Recovery outcomes.
@@ -290,6 +291,7 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 
 	argv := req.Command
 	if req.Shell {
+		result.RequestedProxyRemovals = proxyRemovalVariables(req.Payload)
 		argv = shellArgv(req.Payload)
 		if req.ToolName == "verify" && runtime.GOOS != "windows" {
 			// Verification must preserve a failed check even when the payload

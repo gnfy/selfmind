@@ -2,12 +2,30 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"selfmind/internal/kernel/llm"
 )
+
+func TestDispatchFactsExposeEnvironmentOnlyToModel(t *testing.T) {
+	var process ToolProcessResult
+	if err := json.Unmarshal([]byte(`{"started":true,"exit_code":0,"network_mode":"shared","proxy_mode":"inherited","requested_proxy_removals":["HTTPS_PROXY"]}`), &process); err != nil {
+		t.Fatal(err)
+	}
+	envelope := ToolResultEnvelope{Raw: "observed", Preview: "observed", ModelContent: "observed"}
+	applyDispatchFacts(&envelope, ToolDispatchResult{Process: &process})
+	for _, fact := range []string{"network=shared", "proxy_mode=inherited", "requested_proxy_removals=HTTPS_PROXY"} {
+		if !strings.Contains(envelope.ModelContent, fact) {
+			t.Errorf("model lost execution environment %q: %s", fact, envelope.ModelContent)
+		}
+	}
+	if envelope.Raw != "observed" || envelope.Preview != "observed" {
+		t.Fatalf("runtime metadata replaced raw output or UI preview: %+v", envelope)
+	}
+}
 
 type resultFaultLedger struct {
 	claimErr, outcomeErr error

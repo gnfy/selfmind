@@ -483,6 +483,11 @@ func scopeAllowsPath(scope ExecutionScope, target string) bool {
 	if len(roots) == 0 {
 		roots = []string{scope.WorkspaceRoot}
 	}
+	if scope.LeaseID != "" {
+		if scratch, err := executionenv.LeaseScratchPaths(scope.LeaseID); err == nil {
+			roots = append(append([]string(nil), roots...), scratch.TmpDir)
+		}
+	}
 	for _, root := range roots {
 		if root == "" {
 			continue

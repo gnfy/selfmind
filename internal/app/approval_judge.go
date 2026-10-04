@@ -124,6 +124,12 @@ func (j *llmApprovalJudge) Judge(ctx context.Context, prompt string) (string, er
 }
 
 func (j *llmApprovalJudge) JudgeResponse(ctx context.Context, prompt string) (tools.ApprovalResponse, error) {
+	owner := llm.ModelContextFrom(ctx)
+	owner.Role = llm.ModelRole(j.route)
+	if owner.Role == "" {
+		owner.Role = llm.RoleFastClassifier
+	}
+	ctx = llm.WithModelContext(ctx, owner)
 	started := time.Now()
 	resp, err := j.provider.Chat(ctx, llm.ChatRequest{
 		SystemPrompt: judgeSystemPrompt,

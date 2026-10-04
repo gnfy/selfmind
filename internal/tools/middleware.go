@@ -467,7 +467,7 @@ func EvaluateModeDecision(ctx context.Context, mode ApprovalMode, projectRoot, t
 //     floor, which returned long before this point.
 //  5. Human ask (scope.Approval / clarify). An "approve + remember" decision
 //     records a grant for the next same-class call.
-func SmartApprovalMiddleware(projectRoot string) Middleware {
+func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]interface{}) error) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			toolName, _ := args["_tool_name"].(string)
@@ -513,6 +513,16 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					return "", rejectOperation(rejectionCodeCapability, "operation rejected: unattended watcher finalization cannot perform privileged or out-of-workspace operations; finish waiting_user instead")
 				}
 				return next(args)
+			}
+
+			// Read-only admission checks run after the hard floor and execution
+			// classification, before grants, judge calls, or a human ask. They do
+			// not reserve resources or authorize dispatch; the inner middleware
+			// still claims atomically after approval.
+			for _, check := range prechecks {
+				if err := check(args); err != nil {
+					return "", err
+				}
 			}
 
 			// Layer 2: mode bypass, including sandbox containment (C1). A

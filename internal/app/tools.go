@@ -36,7 +36,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
 	disp.InjectMiddleware(tools.WorkspaceScopeMiddleware())
 	disp.InjectMiddleware(tools.NewToolGuardrails().Middleware)
-	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware())
+	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware(tools.ExternalEffectPrecheck(controlStore)))
 	disp.InjectResultMiddleware(tools.EvidenceMiddleware())
 	disp.InjectMiddleware(tools.SkillStorageMiddleware(storage))
 	// Static watcher proof belongs before approval: impossible registrations
@@ -109,7 +109,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	// 2. Register approval middleware
 	root, _ := os.Getwd()
-	disp.InjectMiddleware(tools.SmartApprovalMiddleware(root))
+	disp.InjectMiddleware(tools.SmartApprovalMiddleware(root, tools.ExternalEffectPrecheck(controlStore)))
 	if controlStore != nil {
 		// External effects are claimed after authorization but before the tool
 		// body. A duplicate, conflicting, or unrecordable claim never executes.

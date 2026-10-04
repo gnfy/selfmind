@@ -1243,14 +1243,15 @@ type MsgSkillInvocationResolved struct {
 }
 
 type MsgDaemonRunStarted struct {
-	RunID      string
-	QueueID    string
-	TaskID     string
-	WatchID    string
-	TaskStatus string
-	// Origin is set when the daemon started this run on the person's behalf
-	// (a watcher finalization, a cron fire) rather than from a turn they typed
-	// at an endpoint. Empty for the person's own work, wherever they typed it.
+	// Presentation is runtime-derived through the exact session/parent lineage.
+	Presentation string
+	RunID        string
+	QueueID      string
+	TaskID       string
+	WatchID      string
+	TaskStatus   string
+	// Origin records what triggered this Run, including an automatic foreground
+	// continuation. It does not decide whether the progress is background work.
 	Origin  string
 	Input   string
 	Started time.Time
@@ -1258,10 +1259,11 @@ type MsgDaemonRunStarted struct {
 }
 
 type MsgDaemonRunFinished struct {
-	RunID   string
-	Status  string
-	Summary string
-	Event   uiEventRef
+	FinalAnswer string
+	RunID       string
+	Status      string
+	Summary     string
+	Event       uiEventRef
 }
 
 type MsgStream struct {

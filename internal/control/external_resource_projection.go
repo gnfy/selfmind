@@ -24,6 +24,19 @@ type externalClaimReader interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }
 
+// InspectExternalEffectBlockers is advisory and read-only. ClaimExternalEffects
+// remains the atomic dispatch authority, including changes during an approval.
+func (s *Store) InspectExternalEffectBlockers(ctx context.Context, tenant, person, runID string, targets []string) ([]ExternalEffectClaim, bool, error) {
+	run, err := s.GetRun(ctx, tenant, runID)
+	if err != nil {
+		return nil, false, err
+	}
+	if run == nil || person == "" || run.PersonID != person || run.Status != "running" {
+		return nil, false, fmt.Errorf("external effect run is not active for this person")
+	}
+	return externalResourceBlockers(ctx, s.db, tenant, person, runID, targets)
+}
+
 func externalResourceBlockers(ctx context.Context, db externalClaimReader, tenantID, personID, waitingRun string, targets []string) ([]ExternalEffectClaim, bool, error) {
 	rows, err := db.QueryContext(ctx, `SELECT c.id,c.tenant_id,c.person_id,c.run_id,c.effect_id,c.target_key,c.state,c.observation_ref,
 		COALESCE(r.status,''), EXISTS (SELECT 1 FROM external_watches w

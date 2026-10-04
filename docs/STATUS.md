@@ -6,16 +6,24 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-10-03
+**Snapshot:** 2026-10-04
 
 Dated delivery and validation records live in
 [`status-history.md`](status-history.md); this file keeps current state only.
+
+Interactive provider/resource continuations now preserve same-session foreground
+presentation and replay the atomically saved final answer. Formal verification
+distinguishes preparation/admission blocks from observed test failures. Known
+unresolved external effects are checked before approvals and atomically checked
+again before dispatch; file tools share only the current lease's temp directory.
+Model probes and approval calls carry role diagnostics; outside-Run admission
+facts reach daemon logs. Backend capability refusals remain fail-closed.
 
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 95 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 96 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.

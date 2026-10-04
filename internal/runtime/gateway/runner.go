@@ -55,6 +55,8 @@ func installProviderWaitObserver(gate *llm.RequestGate, store *control.Store) {
 	gate.SetWaitObserver(func(waitCtx context.Context, routeID, reason string, duration time.Duration) {
 		owner := llm.ModelContextFrom(waitCtx)
 		if owner.RunID == "" {
+			log.Info("gateway: provider wait outside Run", "route_id", routeID,
+				"role", owner.Role, "purpose", owner.Purpose, "reason", reason, "duration_ms", duration.Milliseconds(), "canceled", waitCtx.Err() != nil)
 			return
 		}
 		payload, _ := json.Marshal(map[string]interface{}{
@@ -72,10 +74,12 @@ func installProviderWaitObserver(gate *llm.RequestGate, store *control.Store) {
 	gate.SetAdmissionObserver(func(callCtx context.Context, routeID string, admission llm.RequestAdmission) {
 		owner := llm.ModelContextFrom(callCtx)
 		if owner.RunID == "" {
+			log.Info("gateway: provider admission outside Run", "route_id", routeID,
+				"role", owner.Role, "purpose", owner.Purpose, "admission", admission)
 			return
 		}
 		payload, _ := json.Marshal(map[string]interface{}{
-			"route_id": routeID, "role": owner.Role, "admission": admission,
+			"route_id": routeID, "role": owner.Role, "purpose": owner.Purpose, "admission": admission,
 		})
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(callCtx), 2*time.Second)
 		defer cancel()

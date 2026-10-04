@@ -16,7 +16,7 @@ import (
 // hatch for isolated commands that genuinely need shared host networking. It
 // does not grant host execution, extra filesystem access, or credential
 // access. Model-visible sandbox arguments remain unchanged.
-func ExecutionCapabilityMiddleware() Middleware {
+func ExecutionCapabilityMiddleware(prechecks ...func(map[string]interface{}) error) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			toolName := stringArg(args, "_tool_name")
@@ -37,6 +37,11 @@ func ExecutionCapabilityMiddleware() Middleware {
 			scope, hasScope := currentExecutionScopeAny(args)
 			if !hasScope || strings.TrimSpace(scope.WorkspaceID) == "" {
 				return next(args)
+			}
+			for _, check := range prechecks {
+				if err := check(args); err != nil {
+					return "", err
+				}
 			}
 			if isolatedExecutionView(scope) && !scope.ParallelWork {
 				// A legacy view without the parallel effect-claim contract remains

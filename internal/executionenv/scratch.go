@@ -107,8 +107,8 @@ func RuntimeRoot() string {
 	return runtimeRoot
 }
 
-// EnsureLeaseScratch creates (idempotently) the scratch space for a lease.
-func EnsureLeaseScratch(leaseID string) (LeaseScratch, error) {
+// LeaseScratchPaths resolves one validated lease's paths without creating them.
+func LeaseScratchPaths(leaseID string) (LeaseScratch, error) {
 	root := RuntimeRoot()
 	if root == "" {
 		return LeaseScratch{}, fmt.Errorf("execution runtime root is not configured")
@@ -123,6 +123,16 @@ func EnsureLeaseScratch(leaseID string) (LeaseScratch, error) {
 	}
 	scratch.TmpDir = filepath.Join(scratch.Root, "tmp")
 	scratch.StateDir = filepath.Join(scratch.Root, "state")
+	return scratch, nil
+}
+
+// EnsureLeaseScratch materializes the same paths exposed to terminal and file
+// tools. Resolving authority alone does not create directories.
+func EnsureLeaseScratch(leaseID string) (LeaseScratch, error) {
+	scratch, err := LeaseScratchPaths(leaseID)
+	if err != nil {
+		return LeaseScratch{}, err
+	}
 	for _, dir := range []string{scratch.Root, scratch.TmpDir, scratch.StateDir} {
 		if err := os.MkdirAll(dir, scratchDirPerm); err != nil {
 			return LeaseScratch{}, fmt.Errorf("create run scratch: %w", err)

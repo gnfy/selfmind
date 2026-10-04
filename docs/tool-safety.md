@@ -210,6 +210,10 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   resource-wait projection is shared by admission, wakeup, `/status`, `/diag`,
   and the daily report; historical blocked waits cannot starve active wakeups.
   The claim gate rechecks all targets before any subsequent dispatch.
+  Before a judge or human approval, a read-only projection rejects already-known
+  effects that require observation; approval cannot establish their result.
+  This also precedes a network-capability ask. The precheck reserves nothing;
+  the post-approval atomic claim still rejects changes during the human wait.
   Restarting or finishing a Run does not release an uncertain claim; a durable
   observation must do so. Target sets are acquired and observed atomically.
   For an unknown target, `/effects resolve <claim_id> <watch_id>` is a
@@ -742,7 +746,13 @@ unresolved admission without a recorded outcome remains resumable.
 
 `verify` records deliberate checks; ordinary `terminal` calls remain command
 evidence. Missing structured verification must not be described as proof that
-no command ran. On supported POSIX hosts, verification uses Bash with `-e`
+no command ran. A recorded refusal or `process.started=false` is a blocked
+check, not a failing test; missing dispatch/exit facts in typed observations
+also remain blocked. Observed nonzero exits stay failed, and historical rows
+without dispatch facts retain their historical meaning. File tools and terminal
+tools share the exact lease's temporary directory; other leases and credential
+state directories receive no implicit file-tool access.
+On supported POSIX hosts, verification uses Bash with `-e`
 and `pipefail` so an unhandled failing command or pipeline cannot be hidden by
 a successful footer. Explicit shell conditionals can handle expected failures;
 the runtime does not infer verification success from output prose.

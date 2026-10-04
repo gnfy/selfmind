@@ -125,6 +125,13 @@ func ProbeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, rol
 }
 
 func probeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, role string, provider llm.Provider, gates ...*llm.RequestGate) ModelRoleProbe {
+	owner := llm.ModelContextFrom(ctx)
+	owner.Purpose = "model_probe"
+	owner.Role = llm.ModelRole(role)
+	if owner.Role == "" {
+		owner.Role = llm.RoleDefaultChat
+	}
+	ctx = llm.WithModelContext(ctx, owner)
 	probe := ModelRoleProbe{Provider: rt.Provider, Model: rt.Model}
 	start := time.Now()
 	if provider == nil {

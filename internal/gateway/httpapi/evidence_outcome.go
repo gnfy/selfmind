@@ -118,16 +118,40 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 		if item.Kind != "verification" || item.Command == nil {
 			continue
 		}
-		result.Checks = append(result.Checks, api.VerificationCheck{
+		check := api.VerificationCheck{
 			ToolCallID: item.ToolCallID, Binding: item.Command.Binding,
-			Kind:       item.Command.Kind,
-			Command:    item.Command.Command,
-			CWD:        item.Command.CWD,
-			Status:     item.Status,
-			ExitCode:   item.Command.ExitCode,
-			StartedAt:  item.StartedAt,
-			FinishedAt: item.FinishedAt,
-		})
+			Kind:        item.Command.Kind,
+			Command:     item.Command.Command,
+			CWD:         item.Command.CWD,
+			Status:      item.Status,
+			ExitCode:    item.Command.ExitCode,
+			StartedAt:   item.StartedAt,
+			FinishedAt:  item.FinishedAt,
+			EffectState: item.EffectState,
+			Invoked:     item.Invoked,
+		}
+		// A refused preparation did not test the program. Preserve that fact
+		// separately from the tool wrapper's failure and historical exit code.
+		if item.Process != nil {
+			started := item.Process.Started
+			check.ProcessStarted = &started
+			if !started || item.Process.ExitCode == nil {
+				check.Status = "blocked"
+			}
+			if started && item.Process.ExitCode != nil {
+				check.ExitCode = *item.Process.ExitCode
+				if check.ExitCode != 0 {
+					check.Status = "failed"
+				}
+			}
+		}
+		if (item.Invoked != nil && !*item.Invoked) || item.EffectState == "not_dispatched" {
+			check.Status = "blocked"
+		}
+		if item.Process == nil && (item.Invoked != nil || item.EffectState != "") {
+			check.Status = "blocked"
+		}
+		result.Checks = append(result.Checks, check)
 	}
 
 	result.LatestMutationAt = verification.RelevantMutationAt(verification.Check{}, mutations)

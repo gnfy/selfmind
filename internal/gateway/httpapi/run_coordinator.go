@@ -523,6 +523,8 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	c.updateActive(ctx, task, run)
 	startedPayload := map[string]interface{}{
 		"input":           truncate(req.Content, 500),
+		"presentation":    c.runPresentation(ctx, run, req),
+		"resumes_run_id":  run.ResumesRunID,
 		"approval_intent": persistedApprovalIntent{Version: 3, Snapshot: c.intentSnapshotWithOffer(ctx, identity, task, run, workspace, req, req.Channel)},
 	}
 	if queueID := strings.TrimSpace(req.QueueID); queueID != "" {

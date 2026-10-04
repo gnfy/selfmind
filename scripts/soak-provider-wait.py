@@ -201,6 +201,28 @@ models:
                         children = [row for row in rows if row[2] == parent]
                         return children if queue and queue[0] == "done" and children and children[0][1] == "done" else None
                     children = until(settled, 40, "parked Run did not finish its exact child after restart")
+
+                    started = json.loads(database.execute(
+                        "SELECT payload_json FROM task_events WHERE run_id=? AND type='run.started'",
+                        (children[0][0],)).fetchone()[0])
+                    if started.get("origin") != "provider_wait" or started.get("presentation") != "foreground":
+                        raise RuntimeError("provider continuation lost its originating foreground: " + repr(started))
+                    saved = database.execute("SELECT content FROM channel_messages WHERE id=?",
+                                             ("msg_run_" + children[0][0] + "_assistant",)).fetchone()[0]
+                    for session in ("wait-a", "wait-b"):
+                        url = (base + "/v1/events/stream?platform=cli&platform_user_id=local"
+                               + "&session=" + session + "&cursor=0&once=true")
+                        replay = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
+                        with urllib.request.urlopen(replay, timeout=10) as response:
+                            events = [json.loads(line[6:]) for line in response.read().decode().splitlines()
+                                      if line.startswith("data: ")]
+                        terminal = next(event for event in events if event.get("run_id") == children[0][0]
+                                        and event.get("type") == "run.finished")
+                        final_answer = terminal.get("payload", {}).get("final_answer")
+                        if session == "wait-a" and final_answer != saved:
+                            raise RuntimeError("reconnect lost the committed final answer")
+                        if session == "wait-b" and final_answer is not None:
+                            raise RuntimeError("another CLI received the full final answer")
                     with ModelHandler.lock:
                         prompts = [r.get("messages", []) for r in ModelHandler.work_requests]
                     if len(prompts) < 3 or any("Continue this exact work from its durable model-call checkpoint"
@@ -208,7 +230,8 @@ models:
                         raise RuntimeError("provider retry included internal scheduling text")
                     print(json.dumps({"result": "PASS", "parked_run": parent,
                                       "exact_child": children[0][0], "model_requests": len(prompts),
-                                      "restart": True, "source_queue": "done"}))
+                                      "restart": True, "source_queue": "done",
+                                      "foreground_preserved": True, "answer_replay_isolated": True}))
                     database.close()
                 finally:
                     process.terminate()

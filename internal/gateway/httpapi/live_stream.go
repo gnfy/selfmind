@@ -123,6 +123,7 @@ func (s *runEventSubscriber) view(event api.RunEvent) (api.RunEvent, bool) {
 // observed after commit; assistant deltas share the same per-run live sequence
 // but never enter SQLite.
 type runEventBroker struct {
+	store  *control.Store
 	mu     sync.Mutex
 	nextID uint64
 	subs   map[string]map[uint64]*runEventSubscriber
@@ -135,8 +136,9 @@ type runEventBroker struct {
 
 func newRunEventBroker(store *control.Store) *runEventBroker {
 	b := &runEventBroker{
-		subs: make(map[string]map[uint64]*runEventSubscriber),
-		seq:  make(map[string]uint64),
+		store: store,
+		subs:  make(map[string]map[uint64]*runEventSubscriber),
+		seq:   make(map[string]uint64),
 	}
 	if store != nil {
 		store.SubscribeEventAppends(b.publishDurable)
@@ -206,7 +208,7 @@ func (b *runEventBroker) publishDurable(event control.Event) {
 	if event.PersonID == "" {
 		return
 	}
-	b.publish(durableRunEvent(event))
+	b.publish(b.withSavedAnswer(context.Background(), durableRunEvent(event)))
 }
 
 func (b *runEventBroker) publishAssistant(task *control.Task, run *control.Run, channel string, event llm.StreamEvent) {
@@ -373,6 +375,11 @@ func (d *Server) replayPersonEvents(ctx context.Context, w http.ResponseWriter, 
 		}
 		for _, event := range events {
 			if replayed, ok := sub.view(durableRunEvent(event)); ok {
+				// Hydrate only after audience projection: foreign lifecycle facts
+				// must not acquire the originating session's final answer.
+				if (sub.session != "" && replayed.Channel == sub.session) || (sub.attached != "" && replayed.RunID == sub.attached) {
+					replayed = d.events().withSavedAnswer(ctx, replayed)
+				}
 				writeRunEventSSE(w, replayed)
 			}
 			*cursor = event.Cursor

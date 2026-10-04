@@ -12,8 +12,16 @@ import (
 
 type mediumResultBackend struct{ budgetBackend }
 
+// mediumResult is 16000 bytes of ordinary tool output. The test measures bytes,
+// not content; one unbroken run of a single letter is the tokenizer's slowest
+// input and made this the package's slowest test by far.
+var mediumResult = func() string {
+	line := "stage completed: 42 files checked, 0 warnings, see build.log\n"
+	return strings.Repeat(line, 16000/len(line)+1)[:16000]
+}()
+
 func (*mediumResultBackend) Dispatch(_ string, args map[string]interface{}) (string, error) {
-	return fmt.Sprint(args["path"]) + strings.Repeat("x", 16000), nil
+	return fmt.Sprint(args["path"]) + mediumResult, nil
 }
 
 type mediumResultProvider struct {

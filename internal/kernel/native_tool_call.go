@@ -104,7 +104,6 @@ func filterToolCallsByStrategy(calls []llm.ToolCall, strategy TaskStrategy) []ll
 }
 
 func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrategy, actionToolsUsed int) ([]llm.ToolCall, int) {
-	calls = filterToolCallsByStrategy(calls, strategy)
 	if len(calls) == 0 {
 		return calls, 0
 	}
@@ -116,6 +115,10 @@ func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrat
 	out := make([]llm.ToolCall, 0, len(calls))
 	dropped := 0
 	for _, call := range calls {
+		if !strategy.AllowsTool(call.Function) {
+			dropped++
+			continue
+		}
 		if isLifecycleToolName(call.Function) {
 			out = append(out, call)
 			continue
@@ -259,11 +262,11 @@ func isLifecycleToolName(name string) bool {
 	}
 }
 
-func legacyToolCallsToLLM(calls []ToolCall, iteration int) []llm.ToolCall {
+func legacyToolCallsToLLM(calls []ToolCall, iteration int, idPrefix string) []llm.ToolCall {
 	out := make([]llm.ToolCall, 0, len(calls))
 	for i, c := range calls {
 		out = append(out, llm.ToolCall{
-			ID:       fmt.Sprintf("legacy-toolcall-%d-%d", iteration, i),
+			ID:       idPrefix + fmt.Sprintf("legacy-toolcall-%d-%d", iteration, i),
 			Function: c.Name,
 			Args:     c.Args,
 		})
@@ -271,12 +274,12 @@ func legacyToolCallsToLLM(calls []ToolCall, iteration int) []llm.ToolCall {
 	return out
 }
 
-func normalizeToolCallIDs(calls []llm.ToolCall, iteration int) []llm.ToolCall {
+func normalizeToolCallIDs(calls []llm.ToolCall, iteration int, idPrefix string) []llm.ToolCall {
 	out := make([]llm.ToolCall, len(calls))
 	copy(out, calls)
 	for i := range out {
 		if out[i].ID == "" {
-			out[i].ID = fmt.Sprintf("toolcall-%d-%d", iteration, i)
+			out[i].ID = idPrefix + fmt.Sprintf("toolcall-%d-%d", iteration, i)
 		}
 	}
 	return out
@@ -300,10 +303,21 @@ func isolateWorkUnitBoundaryCall(calls []llm.ToolCall) ([]llm.ToolCall, int) {
 			return []llm.ToolCall{call}, len(calls) - 1
 		}
 	}
-	for _, call := range calls {
-		if strings.TrimSpace(call.Function) == "update_plan" {
-			return []llm.ToolCall{call}, len(calls) - 1
+	for i, call := range calls {
+		if strings.TrimSpace(call.Function) != "update_plan" {
+			continue
 		}
+		kept := []llm.ToolCall{call}
+		// A finish_run after the plan update closes the run; it is not work in
+		// the next unit, so it keeps its place and a run can close its plan and
+		// record its outcome in one response.
+		for _, later := range calls[i+1:] {
+			if strings.TrimSpace(later.Function) == "finish_run" {
+				kept = append(kept, later)
+				break
+			}
+		}
+		return kept, len(calls) - len(kept)
 	}
 	return calls, 0
 }
@@ -677,7 +691,12 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		var boundary interface{ ToolRunPause() (string, string, bool) }
 		if errors.As(err, &boundary) {
 			reason, message, needApproval := boundary.ToolRunPause()
-			pause = &toolLifecycleHandoff{Status: "waiting_user", CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
+			status := "waiting_user"
+			var typed interface{ ToolRunPauseStatus() string }
+			if errors.As(err, &typed) && typed.ToolRunPauseStatus() == "waiting_external" {
+				status = "waiting_external"
+			}
+			pause = &toolLifecycleHandoff{Status: status, CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
 		}
 		return toolExecutionResult{
 			pause:        pause,

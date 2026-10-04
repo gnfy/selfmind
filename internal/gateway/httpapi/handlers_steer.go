@@ -37,6 +37,10 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "text is required", http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(req.RunID) == "" || strings.TrimSpace(req.Channel) == "" {
+		http.Error(w, "run_id and channel are required", http.StatusBadRequest)
+		return
+	}
 	identity, err := d.Control.ResolveOrCreateAccount(
 		r.Context(),
 		d.tenantID(req.TenantID),
@@ -48,11 +52,14 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	active := d.coordinator().currentActive(identity.PersonID)
-	if active == nil || active.Steer == nil {
+	active := d.coordinator().activeForRun(identity.PersonID, strings.TrimSpace(req.RunID))
+	if active == nil || active.Steer == nil || strings.TrimSpace(req.Channel) != active.Channel {
 		// 409: nothing to steer — the run may have finished between the user's
-		// keystroke and this request. Clients must surface this honestly.
-		writeError(w, http.StatusConflict, fmt.Errorf("no active run to steer"))
+		// keystroke and this request. This thin-client endpoint has no source
+		// execution scope, so it is only safe for the run's own session.
+		// Cross-session exact replies use /v1/message, which freezes the
+		// sender's scope if Main turns the guidance into separate work.
+		writeError(w, http.StatusConflict, fmt.Errorf("no matching active run to steer"))
 		return
 	}
 	// Durability BEFORE acknowledgement (Loop Engineering P0-A): the mailbox
@@ -63,11 +70,13 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
 		RunID:          active.RunID,
+		ExactTarget:    true,
 		TaskID:         active.TaskID,
 		Channel:        fallback(req.Channel, active.Channel),
 		Platform:       fallback(req.Platform, active.Platform),
 		PlatformUserID: fallback(req.PlatformUserID, active.PlatformUserID),
 		WorkspaceID:    active.WorkspaceID,
+		ExecutionRoots: active.ExecutionRoots,
 		ApprovalMode:   active.ApprovalMode,
 		Content:        text,
 	})
@@ -125,11 +134,15 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
 		RunID:          active.RunID,
+		ExactTarget:    strings.TrimSpace(req.ReplyToRunID) != "" && strings.TrimSpace(req.ReplyToRunID) == active.RunID,
 		TaskID:         active.TaskID,
 		Channel:        fallback(req.Channel, active.Channel),
 		Platform:       fallback(req.Platform, active.Platform),
 		PlatformUserID: fallback(req.PlatformUserID, active.PlatformUserID),
 		WorkspaceID:    fallback(req.WorkspaceID, active.WorkspaceID),
+		// The roots this request froze, for when Main queues the input as its
+		// own work instead of applying it to this run.
+		ExecutionRoots: req.ExecutionRoots,
 		ApprovalMode:   fallback(req.ApprovalMode, active.ApprovalMode),
 		Content:        text,
 	})
@@ -150,7 +163,7 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 		appendRunSteeredEvent(ctx, d.Control, active, record)
 		return api.MessageResponse{
 			Identity: identity,
-			Content:  formatSteeredIntoRun(active),
+			Content:  formatSteeredIntoRun(active, req.Channel),
 			Accepted: true,
 			Turn:     messageTurn("accepted", "running", "running", active.TaskID, active.RunID, active.Summary),
 		}, true

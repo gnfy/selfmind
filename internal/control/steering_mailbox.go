@@ -3,7 +3,9 @@ package control
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -46,13 +48,34 @@ type SteeringMessage struct {
 	ApprovalMode   string
 	Content        string
 	ContentHash    string
+	// ExactTarget is gateway-validated explicit reply provenance. Acceptance
+	// encodes it in the immutable mailbox ID, like choice-backed steering, so
+	// historical ordinary rows never gain an exact continuation edge.
+	ExactTarget bool
 	// Attachments ride with the guidance for the same reason they ride with a
 	// queued task: accepting the text and dropping the files tells the person
 	// their image was received when the model will never see it.
 	Attachments []AttachmentRef
-	Status      string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// ExecutionRoots are the roots the input's own request froze when it was
+	// accepted. Work queued from it runs with these, not with the roots of the
+	// run it was steered into. RootsRecorded is false for rows accepted before
+	// schema v18, which keep running with that run's roots.
+	ExecutionRoots []executionenv.RootBinding
+	RootsRecorded  bool
+	Status         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// queuedExecutionRoots are the roots work queued from this input runs with.
+func (m SteeringMessage) queuedExecutionRoots(steeredInto *Run) []executionenv.RootBinding {
+	if m.RootsRecorded {
+		return executionenv.CloneRootBindings(m.ExecutionRoots)
+	}
+	if steeredInto != nil {
+		return executionenv.CloneRootBindings(steeredInto.ExecutionRoots)
+	}
+	return nil
 }
 
 // SteeringContentHash is the deterministic consumption-matching key between a
@@ -76,6 +99,17 @@ func (s *Store) AcceptSteering(ctx context.Context, m SteeringMessage) (*Steerin
 		return nil, fmt.Errorf("person id and content are required")
 	}
 	m.ID = "steer_" + uuid.NewString()
+	if m.ExactTarget {
+		run, err := s.GetRun(ctx, m.TenantID, m.RunID)
+		if err != nil {
+			return nil, err
+		}
+		if run == nil || run.PersonID != m.PersonID {
+			return nil, fmt.Errorf("exact steering target is unavailable for its owner")
+		}
+		m.TaskID = run.TaskID
+		m.ID = "steer_exact_" + uuid.NewString()
+	}
 	m.ContentHash = SteeringContentHash(m.Content)
 	m.Status = SteeringAccepted
 	now := time.Now()
@@ -85,13 +119,26 @@ func (s *Store) AcceptSteering(ctx context.Context, m SteeringMessage) (*Steerin
 	if err != nil {
 		return nil, fmt.Errorf("encode steering attachments: %w", err)
 	}
+	// A caller that sends no roots recorded none: store NULL so the input
+	// keeps the steered run's roots, as a row from before schema v18 does. An
+	// empty list read back as "this input has no roots" dropped --add-dir.
+	var rootsJSON sql.NullString
+	if len(m.ExecutionRoots) > 0 {
+		encoded, err := encodeExecutionRoots(m.ExecutionRoots)
+		if err != nil {
+			return nil, fmt.Errorf("encode steering execution roots: %w", err)
+		}
+		rootsJSON = sql.NullString{String: encoded, Valid: true}
+	}
+	m.RootsRecorded = rootsJSON.Valid
 	_, err = s.db.ExecContext(ctx, `INSERT INTO steering_mailbox
 		(id, tenant_id, person_id, run_id, thread_id, channel, platform, platform_user_id,
-		 workspace_id, approval_mode, content, content_hash, status, created_at, updated_at, attachments_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 workspace_id, approval_mode, content, content_hash, status, created_at, updated_at, attachments_json,
+		 execution_roots_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		m.ID, m.TenantID, m.PersonID, m.RunID, m.TaskID, m.Channel, m.Platform, m.PlatformUserID,
 		m.WorkspaceID, m.ApprovalMode,
-		m.Content, m.ContentHash, m.Status, now.Unix(), now.Unix(), attachmentsJSON)
+		m.Content, m.ContentHash, m.Status, now.Unix(), now.Unix(), attachmentsJSON, rootsJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +216,7 @@ func (s *Store) ListUnconsumedSteering(ctx context.Context, tenantID, runID stri
 	query := `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
 		COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
 		COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
-		content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]')
+		content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]'), execution_roots_json
 		FROM steering_mailbox WHERE status IN (?, ?)`
 	args := []interface{}{SteeringAccepted, SteeringClaimed}
 	if strings.TrimSpace(tenantID) != "" {
@@ -229,7 +276,7 @@ func (s *Store) RunSteeringRequirements(ctx context.Context, tenantID, runID str
 		SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
 			COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
 			COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
-			content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]')
+			content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]'), execution_roots_json
 		 FROM steering_mailbox
 		 WHERE tenant_id = ? AND run_id IN (SELECT id FROM lineage)
 		 AND person_id=(SELECT person_id FROM lineage WHERE depth=0)
@@ -257,27 +304,47 @@ func (s *Store) RunSteeringRequirements(ctx context.Context, tenantID, runID str
 
 // DeferSteering re-homes an unconsumed row into the durable task queue so the
 // guidance survives run completion or a daemon restart as ordinary next-turn
-// input. It is deliberately not pinned to the finished task: Main never saw
-// this input, so no component may pre-decide whether it was related. The
+// input. Ordinary prose is not pinned to the finished task: Main never saw
+// this input, so no component may pre-decide whether it was related. Explicit
+// reply provenance preserves the exact work selected by the person. The
 // queue's idempotency key (steering:<id>) makes
 // crash-replay of this hand-off converge on one row; the mailbox row flips to
 // deferred only after the enqueue succeeded.
 func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
-	var executionRoots []executionenv.RootBinding
-	if run, err := s.GetRun(ctx, m.TenantID, m.RunID); err != nil {
+	run, err := s.GetRun(ctx, m.TenantID, m.RunID)
+	if err != nil {
 		return err
-	} else if run != nil {
+	}
+	executionRoots := m.queuedExecutionRoots(run)
+	workspaceID := m.WorkspaceID
+	taskID, replyToRunID := "", ""
+	// Ordinary unconsumed steering remains Main-owned and may be unrelated
+	// new work. An explicitly targeted row is different: the gateway validated
+	// the reply edge, or RoutePendingTurnChoice validated the selected Run.
+	// Preserve its selected work
+	// and scope across a crash or a last-model-step race.
+	if exactSteeringTarget(m.ID) {
+		if run == nil || run.PersonID != m.PersonID {
+			return fmt.Errorf("exact steering target is unavailable for its owner")
+		}
+		taskID = run.TaskID
+		workspaceID = run.WorkspaceID
 		executionRoots = executionenv.CloneRootBindings(run.ExecutionRoots)
+		if continuityRunResumableForQueue(run.Status) {
+			replyToRunID = run.ID
+		}
 	}
 	if _, err := s.EnqueueQueued(ctx, QueuedTask{
 		TenantID:       m.TenantID,
 		PersonID:       m.PersonID,
+		TaskID:         taskID,
+		ReplyToRunID:   replyToRunID,
 		Channel:        m.Channel,
 		Platform:       m.Platform,
 		PlatformUserID: m.PlatformUserID,
 		Content:        m.Content,
 		ApprovalMode:   m.ApprovalMode,
-		WorkspaceID:    m.WorkspaceID,
+		WorkspaceID:    workspaceID,
 		ExecutionRoots: executionRoots,
 		// Guidance the run never consumed becomes queued work, and it keeps its
 		// files: dropping them here would lose the attachment a second time,
@@ -288,7 +355,7 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 	}); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE steering_mailbox
+	_, err = s.db.ExecContext(ctx, `UPDATE steering_mailbox
 		SET status = ?, updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN (?, ?)`,
 		SteeringDeferred, time.Now().Unix(), normalizeTenant(m.TenantID), m.ID,
 		SteeringAccepted, SteeringClaimed)
@@ -330,7 +397,7 @@ func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, run
 	row := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, COALESCE(run_id, ''), COALESCE(thread_id, ''),
 		COALESCE(channel, ''), COALESCE(platform, ''), COALESCE(platform_user_id, ''),
 		COALESCE(workspace_id, ''), COALESCE(approval_mode, ''),
-		content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]')
+		content, content_hash, status, created_at, updated_at, COALESCE(attachments_json, '[]'), execution_roots_json
 		FROM steering_mailbox WHERE tenant_id = ? AND id = ?`, tenantID, steeringID)
 	m, err := scanSteering(row)
 	if err != nil {
@@ -371,7 +438,7 @@ func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, run
 	} else if active == nil || active.PersonID != personID {
 		return nil, fmt.Errorf("active run is no longer available")
 	} else {
-		executionRoots = executionenv.CloneRootBindings(active.ExecutionRoots)
+		executionRoots = m.queuedExecutionRoots(active)
 	}
 	if strings.TrimSpace(resumesRunID) != "" {
 		parent, err := s.GetRun(ctx, tenantID, resumesRunID)
@@ -456,9 +523,10 @@ func scanSteering(rows interface{ Scan(dest ...any) error }) (SteeringMessage, e
 	var m SteeringMessage
 	var created, updated int64
 	var attachmentsJSON string
+	var rootsJSON sql.NullString
 	if err := rows.Scan(&m.ID, &m.TenantID, &m.PersonID, &m.RunID, &m.TaskID,
 		&m.Channel, &m.Platform, &m.PlatformUserID, &m.WorkspaceID, &m.ApprovalMode,
-		&m.Content, &m.ContentHash, &m.Status, &created, &updated, &attachmentsJSON); err != nil {
+		&m.Content, &m.ContentHash, &m.Status, &created, &updated, &attachmentsJSON, &rootsJSON); err != nil {
 		return SteeringMessage{}, err
 	}
 	attachments, err := decodeAttachmentRefs(attachmentsJSON)
@@ -466,7 +534,18 @@ func scanSteering(rows interface{ Scan(dest ...any) error }) (SteeringMessage, e
 		return SteeringMessage{}, err
 	}
 	m.Attachments = attachments
+	m.ExactTarget = exactSteeringTarget(m.ID)
+	if rootsJSON.Valid {
+		if err := json.Unmarshal([]byte(rootsJSON.String), &m.ExecutionRoots); err != nil {
+			return SteeringMessage{}, fmt.Errorf("decode steering execution roots: %w", err)
+		}
+		m.RootsRecorded = true
+	}
 	m.CreatedAt = time.Unix(created, 0)
 	m.UpdatedAt = time.Unix(updated, 0)
 	return m, nil
+}
+
+func exactSteeringTarget(id string) bool {
+	return strings.HasPrefix(id, "steer_exact_") || strings.HasPrefix(id, "steer_choice_choice_")
 }

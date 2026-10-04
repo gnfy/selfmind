@@ -21,16 +21,21 @@ type TelegramSender struct {
 }
 
 func (s *TelegramSender) Send(ctx context.Context, msg Message) error {
+	_, _, err := s.SendWithNativeReceipt(ctx, msg)
+	return err
+}
+
+func (s *TelegramSender) SendWithNativeReceipt(ctx context.Context, msg Message) (bool, string, error) {
 	token := strings.TrimSpace(s.Token)
 	if token == "" {
-		return ErrNoSender
+		return false, "", ErrNoSender
 	}
 	chatID := strings.TrimSpace(msg.Channel)
 	if chatID == "" {
 		chatID = strings.TrimSpace(msg.PlatformUserID)
 	}
 	if chatID == "" {
-		return fmt.Errorf("telegram channel/chat_id is required")
+		return false, "", fmt.Errorf("telegram channel/chat_id is required")
 	}
 	text := msg.Content
 	if msg.PartTotal > 1 {
@@ -59,7 +64,7 @@ func (s *TelegramSender) Send(ctx context.Context, msg Message) error {
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/bot%s/sendMessage", base, token), bytes.NewReader(body))
 	if err != nil {
-		return err
+		return false, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := s.Client
@@ -68,12 +73,27 @@ func (s *TelegramSender) Send(ctx context.Context, msg Message) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return false, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("telegram sendMessage failed: %s %s", resp.Status, strings.TrimSpace(string(data)))
+		return false, "", fmt.Errorf("telegram sendMessage failed: %s %s", resp.Status, strings.TrimSpace(string(data)))
 	}
-	return nil
+	var result struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil {
+		return false, "", fmt.Errorf("telegram sendMessage response: %w", err)
+	}
+	if !result.OK {
+		return false, "", fmt.Errorf("telegram sendMessage did not confirm delivery")
+	}
+	if result.Result.MessageID <= 0 {
+		return true, "", nil
+	}
+	return true, fmt.Sprint(result.Result.MessageID), nil
 }

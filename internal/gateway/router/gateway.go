@@ -137,14 +137,20 @@ func schedulerStateMessage(state runpool.State) string {
 // pinned (unknown surface), we conservatively serialize, since an agent turn
 // could write.
 func workspaceSerialKey(ctx context.Context) string {
-	ws, ok := kernel.WorkspaceContextFromContext(ctx)
-	if !ok || ws.ID == "" {
-		return ""
-	}
-	if strategy, ok := kernel.TaskStrategyFromContext(ctx); ok && !strategy.MayWriteWorkspace() {
+	if !mayWriteWorkspace(ctx) {
 		return "" // read-only turn: safe to run concurrently on this workspace
 	}
-	return ws.ID
+	ws, ok := kernel.WorkspaceContextFromContext(ctx)
+	if ok && ws.ID != "" && len(ws.ContextRoots()) > 0 {
+		return ws.ID
+	}
+	// A write-capable turn with no proven filesystem view cannot use the
+	// empty key: two such turns would bypass both path locking and person
+	// admission when capacity is raised. Keep unknown scope conservative.
+	if scope, ok := kernel.ToolInvocationScopeFromContext(ctx); ok && scope.PersonID != "" {
+		return "person:" + scope.ControlTenantID + ":" + scope.PersonID
+	}
+	return "unscoped"
 }
 
 func workspaceSerialPaths(ctx context.Context) []string {
@@ -152,10 +158,22 @@ func workspaceSerialPaths(ctx context.Context) []string {
 	if !ok {
 		return nil
 	}
-	if strategy, ok := kernel.TaskStrategyFromContext(ctx); ok && !strategy.MayWriteWorkspace() {
+	if !mayWriteWorkspace(ctx) {
 		return nil
 	}
 	return ws.ContextRoots()
+}
+
+func mayWriteWorkspace(ctx context.Context) bool {
+	if scope, ok := kernel.ToolInvocationScopeFromContext(ctx); ok && scope.RecoveryMode == "verify_only" {
+		// The dispatch path independently rejects any non-read-only tool for
+		// this trusted recovery mode, including fallback-format calls.
+		return false
+	}
+	if strategy, ok := kernel.TaskStrategyFromContext(ctx); ok {
+		return strategy.MayWriteWorkspace()
+	}
+	return true
 }
 
 func NewGateway(agent *kernel.Agent, llmProvider llm.Provider) *Gateway {
@@ -209,13 +227,21 @@ func (g *Gateway) runAgentStreaming(ctx context.Context, unifiedUID, channel, in
 	go func() {
 		defer close(respChan)
 		defer recoverStreamPanic(respChan)
-		resp, usage, err := g.runConversation(ctx, unifiedUID, channel, input)
+		runCtx, streamLost := kernel.WithStreamLossReport(ctx)
+		resp, usage, err := g.runConversation(runCtx, unifiedUID, channel, input)
 		if err != nil {
 			respChan <- llm.StreamEvent{Err: err}
 			return
 		}
 		if resp != "" {
-			respChan <- llm.StreamEvent{Content: resp}
+			final := llm.StreamEvent{Content: resp}
+			if streamLost() {
+				// This channel never drops, unlike the live event channel. When
+				// some answer deltas were lost there, a consumer that assembled
+				// the answer from them must take this whole copy instead.
+				final.Payload = map[string]interface{}{"stream_incomplete": true}
+			}
+			respChan <- final
 		}
 		respChan <- llm.StreamEvent{Usage: &usage}
 	}()

@@ -19,21 +19,40 @@ import (
 func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (bool, string, *api.DigestWorkspace, error) {
 	trimmed := strings.TrimSpace(req.Content)
 	lower := strings.ToLower(trimmed)
+	// A platform-proven reply edge outranks implicit person-wide prompts. In a
+	// multi-run chat, a short answer must not resolve a different live request.
+	exactReply := req.NativeReplyMessageID != "" || req.ReplyToRunID != "" || req.ApprovalID != "" || req.ClarifyID != ""
+	if req.ClarifyID != "" {
+		if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, req.ClarifyID, trimmed, req.Channel); handled {
+			return true, reply, nil, err
+		}
+	}
 	// Conversational approval: a bare "y"/"n" (or 好/可以/不行 …) answers a
 	// pending approval without the /approve ceremony, so IM feels like asking
 	// a human assistant. Only claimed when an approval is actually pending —
 	// otherwise the word falls through to the agent (and to the continuation
 	// cue handling for "ok"/"可以"). Runs before the "/" gate below.
-	if handled, reply, err := d.tryHandleBareApprovalReply(ctx, identity, trimmed, req.Channel); handled {
-		return true, reply, nil, err
+	approvalTarget := ""
+	if req.NativeReplyMessageID != "" {
+		approvalTarget = req.ApprovalID
+	}
+	if !exactReply || approvalTarget != "" {
+		if handled, reply, err := d.tryHandleBareApprovalReplyTo(ctx, identity, trimmed, req.Channel, approvalTarget); handled {
+			return true, reply, nil, err
+		}
+	}
+	if approvalTarget != "" && !command.LooksLikeCommand(trimmed) {
+		return true, "Reply with an offered approval choice, or use /approve <approval_id>.", nil, nil
 	}
 	// Pending question: a plain (non-slash) reply while a clarify_requests row is
 	// pending IS the answer (G3) — resolve it here, above the new-task/queue
 	// logic, so a blocking run gets its answer instead of the reply being queued
 	// or steered. Runs after the bare y/n approval leg (which wins for y/n-looking
 	// input) and before the "/" gate (slash commands are never answers).
-	if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, req.ClarifyID, trimmed, req.Channel); handled {
-		return true, reply, nil, err
+	if !exactReply {
+		if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, "", trimmed, req.Channel); handled {
+			return true, reply, nil, err
+		}
 	}
 	// Command-shaped tokens only: a "/"-leading file path ("/mnt/c/pic.png …")
 	// is ordinary message text and must fall through to the agent-first path,
@@ -72,6 +91,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/stop":
 		active := d.coordinator().stopActive(identity.PersonID)
 		if active == nil {
+			if d.coordinator().activeCount(identity.PersonID) > 1 {
+				return true, "Several runs are active. Use /status to choose an exact run, then /stop <run_id>.", nil, nil
+			}
 			return true, d.dismissCurrentAttention(ctx, identity), nil, nil
 		}
 		if active.RunID != "" {
@@ -131,8 +153,41 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// restore and continue the original request. Reaching this branch means
 		// the invocation did not satisfy that typed contract.
 		return true, "Usage: /choose <choice_id> <number>", nil, nil
+	case strings.HasPrefix(lower, "/status "):
+		parts := strings.Fields(trimmed)
+		if len(parts) != 2 {
+			return true, "Usage: /status [run_id]", nil, nil
+		}
+		reply, err := d.statusRunReply(ctx, identity, parts[1])
+		return true, reply, nil, err
 	case lower == "/status":
 		reply, err := d.statusReply(ctx, identity)
+		return true, reply, nil, err
+	case lower == "/views" || strings.HasPrefix(lower, "/views "):
+		parts := strings.Fields(trimmed)
+		if len(parts) == 3 && (strings.EqualFold(parts[1], "archive") || strings.EqualFold(parts[1], "restore")) {
+			reply, err := d.archiveGitViewReply(ctx, identity, parts[2], strings.EqualFold(parts[1], "restore"))
+			return true, reply, nil, err
+		}
+		if len(parts) == 3 && strings.EqualFold(parts[1], "prune") {
+			reply, err := d.pruneGitViewReply(ctx, identity, parts[2])
+			return true, reply, nil, err
+		}
+		if len(parts) > 2 || len(parts) == 2 && (strings.EqualFold(parts[1], "archive") || strings.EqualFold(parts[1], "restore") || strings.EqualFold(parts[1], "prune")) {
+			return true, "Usage: /views [run_id] | /views archive|restore|prune <run_id>", nil, nil
+		}
+		runID := ""
+		if len(parts) == 2 {
+			runID = parts[1]
+		}
+		reply, err := d.gitViewsReply(ctx, identity, runID)
+		return true, reply, nil, err
+	case lower == "/apply" || strings.HasPrefix(lower, "/apply "):
+		parts := strings.Fields(trimmed)
+		if len(parts) != 2 {
+			return true, "Usage: /apply <run_id>", nil, nil
+		}
+		reply, err := d.applyGitViewReply(ctx, identity, parts[1])
 		return true, reply, nil, err
 	case lower == "/resume":
 		// Bare /resume IS the attention list. It used to relay to /tasks, which
@@ -216,6 +271,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/watchers" || strings.HasPrefix(lower, "/watchers "):
 		reply, err := d.watchersCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
 		return true, reply, nil, err
+	case lower == "/effects" || strings.HasPrefix(lower, "/effects "):
+		reply, err := d.effectsCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
+		return true, reply, nil, err
 	case lower == "/diag learning":
 		reply, err := d.learningDiagReply(ctx, identity)
 		return true, reply, nil, err
@@ -233,6 +291,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		return true, reply, nil, err
 	case lower == "/diag tools":
 		reply, err := d.toolsDiagReply(ctx, identity)
+		return true, reply, nil, err
+	case lower == "/diag inbound":
+		reply, err := d.inboundDiagReply(ctx, identity)
 		return true, reply, nil, err
 	case lower == "/diag delivery recover stale-results":
 		reply, err := d.recoverStaleDeliveryResultsReply(ctx, identity, req)
@@ -530,103 +591,11 @@ func (d *Server) approvalModeReply(ctx context.Context, identity *control.Identi
 	if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, mode); err != nil {
 		return "", err
 	}
-	reply := "Approval mode set to " + mode + "."
-	// Re-evaluate approvals that were ALREADY pending under the new mode. Without
-	// this a run blocked on a human ask before the switch stays blocked forever
-	// (observed live: a read_file approval sat pending for minutes after /mode
-	// smart) — the live ModeGetter only governs the NEXT dangerous op. The retro
-	// pass NEVER bypasses the hard floor and fails safe (leaves pending) on any
-	// uncertainty.
-	reply += d.retroResolvePendingApprovals(ctx, identity, normalized)
+	reply := "Approval mode set to " + mode + " for new Runs. Existing Runs and pending approvals keep their admitted mode; answer a pending request with /approve or /reject."
 	if mode == string(tools.ApprovalFullAuto) {
 		reply += " Note: the hard-floor safety limits still apply (filesystem-root deletes, disk formatting, host shutdown, and similar are always blocked)."
 	}
 	return reply, nil
-}
-
-// retroResolvePendingApprovals re-checks the person's currently-pending
-// approvals under a freshly-set approval mode and settles the ones the mode can
-// decide on its own, so switching to smart/full-auto/auto-edit unblocks a run
-// that was already stuck on a human ask. It mirrors the middleware funnel via
-// tools.EvaluateModeDecision (hard floor authoritative; smart mode consults the
-// same judge), only touches this person's pending rows, and returns a compact
-// English summary suffix for the /mode reply (empty when there was nothing to
-// re-check). Auto-approve/deny flip the pending row so the blocked waiter wakes
-// on its next 1s poll (server.go ~812); no new wakeup channel is needed.
-func (d *Server) retroResolvePendingApprovals(ctx context.Context, identity *control.IdentityContext, mode tools.ApprovalMode) string {
-	// on-request / read-only still ask for everything they gate, so there is
-	// nothing to auto-settle — leave the pending rows untouched and say nothing.
-	if mode == tools.ApprovalOnRequest || mode == tools.ApprovalReadOnly {
-		return ""
-	}
-	pending, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 100)
-	if err != nil || len(pending) == 0 {
-		return ""
-	}
-	approved, denied, stillPending := 0, 0, 0
-	for _, ap := range pending {
-		p := decodeApprovalPayload(ap)
-		toolName := strings.TrimSpace(p.Tool)
-		if toolName == "" {
-			// Non-tool approval (no tool to classify): fail safe, leave pending.
-			stillPending++
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(p.DecisionPolicy), tools.ApprovalDecisionPolicyOnceOnly) {
-			stillPending++
-			continue
-		}
-		decision := tools.EvaluateModeDecision(ctx, mode, "", toolName, p.Args, p.Reason, approvalReasonIsDangerous(p.Reason), d.ApprovalJudge)
-		switch decision {
-		case tools.ModeApprove:
-			// Internal channel "mode-change", empty grant scope (a retro approval
-			// is a one-off, it records no class grant).
-			if _, err := d.respondApprovalByToken(ctx, identity, ap.ID, "approved", "mode-change", control.ApprovalDecisionInput{}); err == nil {
-				approved++
-				d.appendApprovalModeEvent(ctx, ap, "approval.auto_approved", string(mode))
-			} else {
-				stillPending++
-			}
-		case tools.ModeDeny:
-			if _, err := d.respondApprovalByToken(ctx, identity, ap.ID, "rejected", "mode-change", control.ApprovalDecisionInput{}); err == nil {
-				denied++
-				d.appendApprovalModeEvent(ctx, ap, "approval.auto_rejected", string(mode))
-			} else {
-				stillPending++
-			}
-		default:
-			stillPending++
-		}
-	}
-	if approved == 0 && denied == 0 && stillPending == 0 {
-		return ""
-	}
-	total := approved + denied + stillPending
-	var parts []string
-	if approved > 0 {
-		parts = append(parts, fmt.Sprintf("%d auto-approved", approved))
-	}
-	if denied > 0 {
-		parts = append(parts, fmt.Sprintf("%d blocked by safety triage", denied))
-	}
-	if stillPending > 0 {
-		parts = append(parts, fmt.Sprintf("%d still needs your y/n", stillPending))
-	}
-	return fmt.Sprintf(" Re-checked %s: %s.", pluralize(total, "pending approval"), strings.Join(parts, ", "))
-}
-
-// approvalReasonIsDangerous reports whether a stored approval reason reflects the
-// dangerous-op heuristic (destructive command, restricted/out-of-workspace path)
-// rather than a pure mode requirement ("… requires approval in read-only mode").
-// It is used as EvaluateModeDecision's dangerousHint so the retro pass preserves
-// the ORIGINAL danger signal even though it recomputes without the run's
-// projectRoot — it can only raise danger, never downgrade it.
-func approvalReasonIsDangerous(reason string) bool {
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return false
-	}
-	return !strings.Contains(reason, "requires approval in")
 }
 
 // dismissCurrentAttention is the /stop-without-a-run and /cancel compatibility
@@ -747,8 +716,9 @@ func (d *Server) dismissAttentionByReference(ctx context.Context, identity *cont
 	if run == nil || run.PersonID != identity.PersonID {
 		return "That run is not yours or no longer exists."
 	}
-	if active := d.coordinator().currentActive(identity.PersonID); active != nil && active.RunID == run.ID {
-		return fmt.Sprintf("Run %s is executing now; use /stop with no number to cancel it.", shortRunID(run.ID))
+	if active := d.coordinator().stopActiveRun(identity.PersonID, run.ID); active != nil {
+		_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, run.ID)
+		return fmt.Sprintf("Stopping run %s.", shortRunID(run.ID))
 	}
 	dismissed, err := control.NewWorkTimeline(d.Control).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID)
 	if err != nil {
@@ -808,6 +778,19 @@ func (d *Server) reportDismissedAttentionRun(ctx context.Context, identity *cont
 // handoff and plan come from that Run, never from whichever Run in the Thread
 // happens to be newest.
 func (d *Server) statusReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if active := d.coordinator().activeRunsForPerson(identity.PersonID); len(active) > 1 {
+		var card strings.Builder
+		fmt.Fprintf(&card, "%d runs active:\n", len(active))
+		for _, run := range active {
+			title := run.Summary
+			if task, err := d.Control.GetTask(ctx, identity.TenantID, run.TaskID); err == nil && task != nil && task.PersonID == identity.PersonID && strings.TrimSpace(task.Title) != "" {
+				title = task.Title
+			}
+			fmt.Fprintf(&card, "- %s  %s  %s\n", shortRunID(run.RunID), truncate(toOneLine(title), 60), humanDuration(time.Since(run.StartedAt)))
+		}
+		card.WriteString("Use /status <run_id> for details or /stop <run_id> to cancel one run.")
+		return card.String(), nil
+	}
 	active := d.coordinator().currentActive(identity.PersonID)
 	var task *control.Task
 	exactRunID := ""
@@ -865,6 +848,14 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		plan = d.latestPlanForTask(ctx, task.ID)
 	}
 	card := formatTaskStatus(task, handoff, active, plan)
+	if waits, err := d.Control.ListExternalResourceWaits(ctx, identity.TenantID, identity.PersonID, 100); err == nil {
+		for _, wait := range waits {
+			if wait.RunID == exactRunID {
+				card += "\n\n" + formatResourceWaitDetail(wait)
+			}
+		}
+	}
+
 	if active != nil {
 		card += "\n\n" + d.activeProgress(ctx, identity, active)
 	}
@@ -928,4 +919,70 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		card = strings.Replace(card, "Waiting for your answer", fmt.Sprintf("Waiting for your answer (%s elapsed)", waitAge), 1)
 	}
 	return card, nil
+}
+
+func (d *Server) statusRunReply(ctx context.Context, identity *control.IdentityContext, ref string) (string, error) {
+	var selected *activeRun
+	for _, active := range d.coordinator().activeRunsForPerson(identity.PersonID) {
+		if active.RunID != ref && shortRunID(active.RunID) != ref {
+			continue
+		}
+		if selected != nil {
+			return "Run ID is ambiguous; use the full ID.", nil
+		}
+		selected = active
+	}
+	if selected == nil || selected.RunID == "" {
+		// A stable Run ID remains useful after execution parks or finishes.
+		// Return a bounded Run-owned status card rather than whichever newer
+		// Run now happens to be current on the same Thread.
+		run, err := d.Control.GetRun(ctx, identity.TenantID, ref)
+		if err != nil {
+			return "", err
+		}
+		if run == nil && len(ref) >= len("run_")+8 && strings.HasPrefix(ref, "run_") {
+			recent, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 100)
+			if err != nil {
+				return "", err
+			}
+			matched := ""
+			for _, item := range recent {
+				if !strings.HasPrefix(item.RunID, ref) {
+					continue
+				}
+				if matched != "" {
+					return "Run ID is ambiguous; use the full ID.", nil
+				}
+				matched = item.RunID
+			}
+			if matched != "" {
+				run, err = d.Control.GetRun(ctx, identity.TenantID, matched)
+				if err != nil {
+					return "", err
+				}
+			}
+		}
+		if run == nil || run.PersonID != identity.PersonID || run.ExecutionClass == "coordination" {
+			return "That run is not active or not yours.", nil
+		}
+		candidate, ok := d.continuityCandidateForRun(ctx, identity, *run, nil, 0, nil)
+		if !ok {
+			return "That run is not active or not yours.", nil
+		}
+		return continuityProgressContent(candidate), nil
+	}
+	task, err := d.Control.GetTask(ctx, identity.TenantID, selected.TaskID)
+	if err != nil {
+		return "", err
+	}
+	if task == nil || task.PersonID != identity.PersonID {
+		return "That run is not active or not yours.", nil
+	}
+	current := *task
+	current.Status = "running"
+	current.CurrentSummary = ""
+	current.NextSteps = nil
+	handoff, _ := d.Control.RunHandoff(ctx, identity.TenantID, identity.PersonID, selected.RunID)
+	plan := d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, task.ID, selected.RunID)
+	return formatTaskStatus(&current, handoff, selected, plan) + "\n\n" + d.activeProgress(ctx, identity, selected), nil
 }

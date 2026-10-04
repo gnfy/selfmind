@@ -43,6 +43,8 @@ type dailyQualityStats struct {
 	ApprovalUsageByRole     map[string]int
 	ProviderCalls           int
 	ProviderRoutes          map[string]dailyRouteUsage
+	ProviderWaits           map[string]dailyProviderWaitUsage
+	ProviderWaitingRuns     map[string]bool
 	InputTokens             int64
 	OutputTokens            int64
 	CacheReadTokens         int64
@@ -90,6 +92,13 @@ type dailyRouteUsage struct {
 	ReasoningTokens int64
 }
 
+type dailyProviderWaitUsage struct {
+	Count      int
+	DurationMS int64
+	Canceled   int
+	Deferred   int
+}
+
 func parseDailyReportWindow(input string) (time.Duration, error) {
 	window := defaultDailyReportWindow
 	fields := strings.Fields(input)
@@ -129,6 +138,8 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		MemoryDisposition:      make(map[string]int),
 		ToolFailureClasses:     make(map[string]int),
 		ProviderRoutes:         make(map[string]dailyRouteUsage),
+		ProviderWaits:          make(map[string]dailyProviderWaitUsage),
+		ProviderWaitingRuns:    make(map[string]bool),
 		ToolRedirectReasons:    make(map[string]int),
 		ToolFailurePhases:      make(map[string]int),
 		ToolEffectStates:       make(map[string]int),
@@ -165,14 +176,52 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 	startedTools := make(map[string]bool)
 	for eventIndex, event := range events {
 		switch event.Type {
+		case "model.provider_wait":
+			var p struct {
+				Reason     string `json:"reason"`
+				DurationMS int64  `json:"duration_ms"`
+				Canceled   bool   `json:"canceled"`
+			}
+			if json.Unmarshal(event.Payload, &p) == nil {
+				reason := strings.TrimSpace(p.Reason)
+				if reason == "" {
+					reason = "unknown"
+				}
+				wait := stats.ProviderWaits[reason]
+				wait.Count++
+				wait.DurationMS += max(p.DurationMS, 0)
+				if p.Canceled {
+					wait.Canceled++
+				}
+				stats.ProviderWaits[reason] = wait
+				if event.RunID != "" {
+					stats.ProviderWaitingRuns[event.RunID] = true
+				}
+			}
 		case "run.finished", "run.interrupted", "run.failed", "run.cancelled":
 			if event.RunID != "" && terminalRuns[event.RunID] {
 				continue
 			}
 			var payload struct {
-				Outcome api.RunOutcome `json:"outcome"`
+				Outcome      api.RunOutcome `json:"outcome"`
+				ProviderWait struct {
+					Reason string `json:"reason"`
+				} `json:"provider_wait"`
 			}
 			_ = json.Unmarshal(event.Payload, &payload)
+			if payload.Outcome.CompletionReason == "provider_wait" {
+				reason := strings.TrimSpace(payload.ProviderWait.Reason)
+				if reason == "" {
+					reason = "unknown"
+				}
+				wait := stats.ProviderWaits[reason]
+				wait.Count++
+				wait.Deferred++
+				stats.ProviderWaits[reason] = wait
+				if event.RunID != "" {
+					stats.ProviderWaitingRuns[event.RunID] = true
+				}
+			}
 			status := strings.TrimSpace(payload.Outcome.Status)
 			if status == "" {
 				status = strings.TrimPrefix(event.Type, "run.")
@@ -221,17 +270,24 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 			}
 		case "provider.call.usage":
 			var p struct {
-				Provider        string `json:"provider"`
-				Model           string `json:"model"`
-				Role            string `json:"role"`
-				InputTokens     int64  `json:"input_tokens"`
-				OutputTokens    int64  `json:"output_tokens"`
-				ReasoningTokens int64  `json:"reasoning_output_tokens"`
-				CacheReadTokens int64  `json:"cache_read_input_tokens"`
-				CacheMissTokens int64  `json:"cache_miss_input_tokens"`
-				DurationMS      int64  `json:"duration_ms"`
+				Status             string `json:"status"`
+				ProviderDispatched *bool  `json:"provider_dispatched"`
+				Provider           string `json:"provider"`
+				Model              string `json:"model"`
+				Role               string `json:"role"`
+				InputTokens        int64  `json:"input_tokens"`
+				OutputTokens       int64  `json:"output_tokens"`
+				ReasoningTokens    int64  `json:"reasoning_output_tokens"`
+				CacheReadTokens    int64  `json:"cache_read_input_tokens"`
+				CacheMissTokens    int64  `json:"cache_miss_input_tokens"`
+				DurationMS         int64  `json:"duration_ms"`
 			}
 			if json.Unmarshal(event.Payload, &p) == nil {
+				// Historical events retain their original counting. A typed local
+				// deferral made no provider request; real 429 attempts still count.
+				if p.Status == "deferred" && p.ProviderDispatched != nil && !*p.ProviderDispatched {
+					continue
+				}
 				route := "unattributed"
 				if p.Provider != "" && p.Model != "" {
 					route = truncate(toOneLine(p.Provider+"/"+p.Model), 120)
@@ -463,6 +519,16 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	}
 	stats := collectDailyQualityStats(events)
 	var evidenceGaps []string
+	chains, chainsErr := d.Control.WorkChainsSince(ctx, identity.TenantID, identity.PersonID, since, 10000)
+	if chainsErr != nil {
+		evidenceGaps = append(evidenceGaps, "durable work chains")
+	} else {
+		stats.LogicalChains, stats.LogicalChainStatuses, stats.ResumeEdges, stats.ResumeOrigins = chains.Chains, chains.LatestStatuses, chains.ResumeEdges, chains.ResumeOrigins
+	}
+	resources, resourcesErr := d.Control.ListExternalResourceWaits(ctx, identity.TenantID, identity.PersonID, 100)
+	if resourcesErr != nil {
+		evidenceGaps = append(evidenceGaps, "external resource waits")
+	}
 	waits, waitsErr := d.Control.ExternalWaitBacklogForPerson(ctx, identity.TenantID, identity.PersonID)
 	if waitsErr != nil {
 		evidenceGaps = append(evidenceGaps, "external wait backlog")
@@ -524,14 +590,25 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		since.Local().Format(time.RFC3339), generatedAt.Local().Format(time.RFC3339),
 		generatedAt.Local().Format(time.RFC3339), len(events), coverage)
 	fmt.Fprintf(&sb, "Runs at turn completion: %s\n", formatCountMap(stats.RunStatuses))
-	fmt.Fprintf(&sb, "Logical work chains: %d, latest outcomes %s; resume edges %d (%s)\n",
-		stats.LogicalChains, formatCountMap(stats.LogicalChainStatuses), stats.ResumeEdges, formatCountMap(stats.ResumeOrigins))
+	if chainsErr == nil {
+		fmt.Fprintf(&sb, "Logical work chains: %d, latest outcomes %s; resume edges %d (%s)\n",
+			stats.LogicalChains, formatCountMap(stats.LogicalChainStatuses), stats.ResumeEdges, formatCountMap(stats.ResumeOrigins))
+		fmt.Fprintf(&sb, "Work-chain source: committed Run parents; %d Run(s) observed in this window; bounded coverage truncated=%t\n", chains.Runs, chains.Truncated)
+		if chains.Chains > 0 {
+			fmt.Fprintf(&sb, "Model cost per observed work chain (window only, includes partial chains): %.1f responses, %.1fs provider time, %.0f output tokens\n", float64(stats.ProviderCalls)/float64(chains.Chains), float64(stats.ProviderLatencyMS)/1000/float64(chains.Chains), float64(stats.OutputTokens)/float64(chains.Chains))
+		}
+	} else {
+		sb.WriteString("Logical work chains: unavailable; committed Run parents could not be projected.\n")
+	}
 	fmt.Fprintf(&sb, "Completion reasons: %s\n", formatCountMap(stats.CompletionReasons))
 	fmt.Fprintf(&sb, "External outcomes: %s\n", formatCountMap(stats.ExternalStatuses))
 	fmt.Fprintf(&sb, "Automatic recovery: scheduled %s; %d child run(s), outcomes %s; guardrails %s\n",
 		formatCountMap(stats.RecoveryScheduled), stats.RecoveryRuns,
 		formatCountMap(stats.RecoveryStatuses), formatCountMap(stats.RecoveryGuardrails))
 	fmt.Fprintf(&sb, "Durable waits: groups %s\n", formatCountMap(stats.WaitGroupOutcomes))
+	if resourcesErr == nil {
+		sb.WriteString(formatResourceWaitBacklog(resources, generatedAt))
+	}
 	if waitsErr == nil {
 		oldest := "none"
 		if !waits.OldestGroupAt.IsZero() {
@@ -543,6 +620,8 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
 	fmt.Fprintf(&sb, "Model routes: %s\n", formatDailyRouteUsage(stats.ProviderRoutes))
+	fmt.Fprintf(&sb, "Provider admission waits: %s; %d affected Run(s)\n",
+		formatDailyProviderWaitUsage(stats.ProviderWaits), len(stats.ProviderWaitingRuns))
 	fmt.Fprintf(&sb, "Approval model (separate from Main and maintenance): %d responses, input %d, cache read %d, uncached %d, output %d; usage unavailable for %d responses; roles %s\n", stats.ApprovalModelCalls, stats.ApprovalInputTokens, stats.ApprovalCacheReadTokens, stats.ApprovalCacheMissTokens, stats.ApprovalOutputTokens, stats.ApprovalUsageMissing, formatCountMap(stats.ApprovalUsageByRole))
 	if stats.ContextSamples > 0 {
 		avgRequest := stats.ContextEstimatedTokens / int64(stats.ContextSamples)
@@ -593,6 +672,8 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	} else {
 		fmt.Fprintf(&sb, "Delivery: %s\n", formatCountMap(deliveryCounts))
 	}
+	fmt.Fprintf(&sb, "Session isolation since daemon start: %d other-session detail event(s) reached a terminal and were dropped (want 0)\n",
+		d.events().clientDropCount(identity.PersonID))
 	fmt.Fprintf(&sb, "Recall: %d candidates (%s), %d selected (%s), %d output-overlap signals (%s; not causal proof); skipped: %s\n",
 		stats.RecallCandidates, formatCountMap(stats.RecallCandidateSources),
 		stats.RecallSelected, formatCountMap(stats.RecallSelectedSources),
@@ -710,6 +791,27 @@ func formatCountMap(counts map[string]int) string {
 	parts := make([]string, 0, len(keys))
 	for _, key := range keys {
 		parts = append(parts, key+" "+strconv.Itoa(counts[key]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatDailyProviderWaitUsage(waits map[string]dailyProviderWaitUsage) string {
+	if len(waits) == 0 {
+		return "none"
+	}
+	keys := make([]string, 0, len(waits))
+	for reason := range waits {
+		keys = append(keys, reason)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, reason := range keys {
+		wait := waits[reason]
+		part := fmt.Sprintf("%s %d (%dms, %d canceled", reason, wait.Count, wait.DurationMS, wait.Canceled)
+		if wait.Deferred > 0 {
+			part += fmt.Sprintf(", %d parked", wait.Deferred)
+		}
+		parts = append(parts, part+")")
 	}
 	return strings.Join(parts, ", ")
 }

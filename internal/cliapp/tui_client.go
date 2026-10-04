@@ -122,10 +122,10 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 		_, _, err := a.performModelRecovery(cfg, action, changeID)
 		return err
 	})
-	ctrl.SetEventWatcher(func(ctx context.Context, observer httpapi.StreamObserver, onEvent func(api.RunEvent)) {
-		client.WatchEvents(ctx, tenantID, observer, onEvent)
+	ctrl.SetEventWatcher(func(ctx context.Context, session string, observer httpapi.StreamObserver, onEvent func(api.RunEvent)) {
+		client.WatchEvents(ctx, tenantID, session, observer, onEvent)
 	})
-	if err := a.pinResumeTask(client.ProcessMessage); err != nil {
+	if err := a.pinResumeTask(client.ProcessMessage, ctrl.SessionChannel()); err != nil {
 		fmt.Fprintf(a.stderr, "SelfMind resume error: %v\n", err)
 		return 1, true
 	}
@@ -165,7 +165,7 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// A live process keeps claiming attachment. An unanswered approval still
 	// escalates to IM after pending_notify_after, so keyboard silence never
 	// masquerades as a closed terminal.
-	stopPresence := client.StartPresencePing(a.ctx)
+	stopPresence := client.StartPresencePing(a.ctx, ctrl.TakeForeignSessionEvents)
 	defer stopPresence()
 
 	ctrl.Start()

@@ -142,6 +142,8 @@ type approvalPayload struct {
 	TriageRationale     string `json:"triage_rationale,omitempty"`
 	TriageRisk          string `json:"triage_risk,omitempty"`
 	TriageAuthorization string `json:"triage_authorization,omitempty"`
+	// Delegated means a sub-agent of the run made the call, not the main agent.
+	Delegated bool `json:"delegated,omitempty"`
 }
 
 func decodeApprovalPayload(approval control.ApprovalRequest) approvalPayload {
@@ -176,6 +178,9 @@ func approvalArgsPreview(args map[string]interface{}, maxChars int) string {
 func approvalSummaryLine(approval control.ApprovalRequest, taskTitle string) string {
 	p := decodeApprovalPayload(approval)
 	label := fallback(p.Tool, approval.ActionType)
+	if p.Delegated {
+		label += ", sub-agent"
+	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[%s]", label)
 	if preview := approvalArgsPreview(p.Args, 80); preview != "" {
@@ -289,7 +294,10 @@ func formatBusyRun(active *activeRun) string {
 // formatSteeredIntoRun is the conversational acknowledgement that a
 // continuation was injected into the running task (cross-endpoint steering). No
 // task/run hashes — ids stay in the control plane.
-func formatSteeredIntoRun(active *activeRun) string {
+// formatSteeredIntoRun is the receipt for a message steered into the active
+// run. When that run belongs to another session the receipt says so: the
+// message's effect, and the task's progress, then appear in that session.
+func formatSteeredIntoRun(active *activeRun, fromChannel string) string {
 	if active == nil {
 		return "Added your guidance to the running task."
 	}
@@ -300,6 +308,9 @@ func formatSteeredIntoRun(active *activeRun) string {
 	elapsed := time.Since(active.StartedAt).Round(time.Second)
 	if active.StartedAt.IsZero() || elapsed < 0 {
 		elapsed = 0
+	}
+	if from, owner := strings.TrimSpace(fromChannel), strings.TrimSpace(active.Channel); from != "" && owner != "" && from != owner {
+		return fmt.Sprintf("Sent your message to %s, which is running in another session.\n- status: running\n- elapsed: %s\n\nIt will use it at the next safe step or queue it as separate work; that task's progress stays in its own session.", textutil.Truncate(toOneLine(title), 60), elapsed)
 	}
 	return fmt.Sprintf("Added your guidance to %s.\n- status: running\n- elapsed: %s\n\nIt will pick this up at the next safe step.", textutil.Truncate(toOneLine(title), 60), elapsed)
 }

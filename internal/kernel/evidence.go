@@ -6,16 +6,19 @@ import "selfmind/internal/verification"
 // runtime. It deliberately contains observed facts only; model claims remain in
 // RunOutcome and are compared with this evidence during finalization.
 type RunEvidence struct {
-	ToolCallID string            `json:"tool_call_id,omitempty"`
-	ToolName   string            `json:"tool_name"`
-	Kind       string            `json:"kind"`
-	Status     string            `json:"status"`
-	StartedAt  int64             `json:"started_at_unix_nano"`
-	FinishedAt int64             `json:"finished_at_unix_nano"`
-	Files      []FileEffect      `json:"files,omitempty"`
-	Command    *CommandEvidence  `json:"command,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
+	ToolCallID  string             `json:"tool_call_id,omitempty"`
+	ToolName    string             `json:"tool_name"`
+	Kind        string             `json:"kind"`
+	Status      string             `json:"status"`
+	StartedAt   int64              `json:"started_at_unix_nano"`
+	FinishedAt  int64              `json:"finished_at_unix_nano"`
+	Files       []FileEffect       `json:"files,omitempty"`
+	Command     *CommandEvidence   `json:"command,omitempty"`
+	Error       string             `json:"error,omitempty"`
+	Metadata    map[string]string  `json:"metadata,omitempty"`
+	Invoked     *bool              `json:"invoked,omitempty"`
+	Process     *ToolProcessResult `json:"process,omitempty"`
+	EffectState string             `json:"effect_state,omitempty"`
 }
 
 type FileEffect struct {

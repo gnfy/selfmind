@@ -44,21 +44,14 @@ func DefaultProcessEnvPolicy() ProcessEnvPolicy {
 // while preventing nested commands from inheriting SelfMind's own gateway
 // identity/token. Stripped values are registered for output redaction.
 func BuildProcessEnv(parent []string, policy ProcessEnvPolicy) []string {
-	out := make([]string, 0, len(parent))
-	for _, entry := range parent {
-		name, value, ok := strings.Cut(entry, "=")
-		if !ok || strings.TrimSpace(name) == "" {
-			continue
-		}
-		if policy.StripControlPlane && isSelfMindControlEnv(name) {
+	return executionenv.BuildProcessEnv(parent, executionenv.ProcessEnvPolicy{
+		StripControlPlane: policy.StripControlPlane,
+		OnOmitControl: func(name, value string) {
 			if isCredentialShapedName(name) {
 				RegisterSensitiveValue(value)
 			}
-			continue
-		}
-		out = append(out, entry)
-	}
-	return out
+		},
+	})
 }
 
 // adaptProcessEnvForNetwork derives the proxy portion of one child environment
@@ -164,8 +157,7 @@ func loopbackProxyReachable(address string) bool {
 }
 
 func isSelfMindControlEnv(name string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(name))
-	return strings.HasPrefix(upper, "SELF_") || strings.HasPrefix(upper, "SELFMIND_")
+	return executionenv.IsControlPlaneEnv(name)
 }
 
 // InstallEnvironmentSnapshot samples the operator environment, filters it

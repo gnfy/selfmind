@@ -1,0 +1,71 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "`settings/state.txt` 的当前内容为：\n\n"
+    },
+    {
+      "usage": {
+        "input_tokens": 3955,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "```\nCURRENT_SETTINGS_ENABLED\n```\n\n本次操作仅在 `terminal` 中实际执行了普通命令 `cat settings/"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 27,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "state.txt` 用于读取内容，文件保持未做任何更改。该操作仅为普通读取命令，未运行测试"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 26,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "套件，不代表正式验证已通过。"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1105,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

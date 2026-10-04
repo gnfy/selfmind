@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
-	"selfmind/internal/kernel/memory"
 	"selfmind/internal/promptassets"
 	"selfmind/internal/tools"
 )
@@ -30,16 +29,16 @@ type Result struct {
 }
 
 // MultiAgentHost manages a pool of subagents for parallel task execution.
-// Each subagent runs in its own goroutine with its own tenant ID for memory isolation.
+// Each subagent runs in its own goroutine and, like single-goal delegation,
+// keeps no conversation memory and acts as the parent run's person.
 type MultiAgentHost struct {
-	backend       kernel.AgentBackend   // Parent backend for subagent tool access
-	provider      llm.Provider          // LLM provider for subagents
-	mem           *memory.MemoryManager // Shared memory manager; subagents get isolated tenantIDs
+	backend       kernel.AgentBackend // Parent backend for subagent tool access
+	provider      llm.Provider        // LLM provider for subagents
 	prompts       *promptassets.Snapshot
-	maxConcurrent int    // Max parallel subagents (semaphore)
-	maxDepth      int    // Max delegation depth (prevent runaway recursion)
-	maxIterations int    // Max iterations per subagent
-	soul          string // System prompt for subagents
+	maxConcurrent int // Max parallel subagents (semaphore)
+	maxDepth      int // Max delegation depth (prevent runaway recursion)
+	maxIterations int // Max iterations per subagent
+	maxRetries    int // Provider retries per subagent call
 	stopCh        chan struct{}
 	mu            sync.Mutex
 	running       map[string]context.CancelFunc // taskID -> cancel func
@@ -62,9 +61,8 @@ func (h *MultiAgentHost) SetSubBackendBuilder(fn func(toolsets []string) kernel.
 func NewMultiAgentHost(
 	backend kernel.AgentBackend,
 	provider llm.Provider,
-	mem *memory.MemoryManager,
 	prompts *promptassets.Snapshot,
-	maxConcurrent, maxDepth, maxIterations int,
+	maxConcurrent, maxDepth, maxIterations, maxRetries int,
 ) *MultiAgentHost {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 5
@@ -75,15 +73,17 @@ func NewMultiAgentHost(
 	if maxIterations <= 0 {
 		maxIterations = 50
 	}
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
 	return &MultiAgentHost{
 		backend:       backend,
 		provider:      provider,
-		mem:           mem,
 		prompts:       prompts,
 		maxConcurrent: maxConcurrent,
 		maxDepth:      maxDepth,
 		maxIterations: maxIterations,
-		soul:          delegateSubAgentSoul,
+		maxRetries:    maxRetries,
 		stopCh:        make(chan struct{}),
 		running:       make(map[string]context.CancelFunc),
 	}
@@ -118,6 +118,13 @@ func (h *MultiAgentHost) RunBatch(ctx context.Context, tasks []Task) []Result {
 		}
 
 		taskCtx, cancel := context.WithCancel(ctx)
+		// Each goal is its own sub-execution: siblings restart their call IDs
+		// too, so each needs its own name.
+		namespace := taskID
+		if parent := kernel.DelegationNamespace(ctx); parent != "" {
+			namespace = fmt.Sprintf("%s-%d", parent, i)
+		}
+		taskCtx = kernel.WithDelegationNamespace(taskCtx, namespace)
 		h.mu.Lock()
 		h.running[taskID] = cancel
 		h.mu.Unlock()
@@ -156,9 +163,6 @@ func (h *MultiAgentHost) RunBatch(ctx context.Context, tasks []Task) []Result {
 
 // runSubAgent creates a subagent, runs it, and returns the result.
 func (h *MultiAgentHost) runSubAgent(ctx context.Context, task Task, taskID string) (string, llm.UsageStats, error) {
-	// Each subagent gets its own isolated tenant ID
-	subTenantID := fmt.Sprintf("subagent-%s", taskID)
-
 	// Build subagent backend with toolset restrictions. A delegation-supplied
 	// builder (depth-bounded, delegate_task stripped past budget) takes
 	// precedence over the default toolset filter.
@@ -169,23 +173,7 @@ func (h *MultiAgentHost) runSubAgent(ctx context.Context, task Task, taskID stri
 		subBackend = h.buildSubBackend(task.Toolsets)
 	}
 
-	// Build the full prompt
-	fullPrompt := delegatedTaskPrompt(task.Goal, task.Context, task.Toolsets)
-
-	// Create subagent
-	subAgent := kernel.NewAgent(
-		h.mem,
-		subBackend,
-		h.provider,
-		h.soul,
-		h.maxIterations,
-		3,   // maxRetries
-		nil, // no reflector for subagents
-	)
-	subAgent.SetPromptProfile(kernel.PromptProfileDelegation)
-	subAgent.SetPromptSnapshot(h.prompts)
-
-	resp, usage, err := subAgent.RunConversation(ctx, subTenantID, "delegation", fullPrompt)
+	resp, usage, err := runDelegatedGoal(ctx, subBackend, h.provider, h.prompts, h.maxIterations, h.maxRetries, delegatedTaskPrompt(task.Goal, task.Context, task.Toolsets))
 	if err != nil {
 		return resp, usage, fmt.Errorf("subagent %s: %w", taskID, err)
 	}
@@ -203,7 +191,6 @@ func (h *MultiAgentHost) buildSubBackend(toolsets []string) kernel.AgentBackend 
 		return h.backend
 	}
 
-	subRegistry := tools.NewRegistry()
 	allToolNames := disp.ListTools()
 
 	requestedTools := make(map[string]bool)
@@ -234,22 +221,13 @@ func (h *MultiAgentHost) buildSubBackend(toolsets []string) kernel.AgentBackend 
 		}
 	}
 
-	for _, name := range allToolNames {
+	// The subset keeps the parent's policy chain, as in single-goal delegation.
+	return disp.Subset(func(name string) bool {
 		if name == "delegate_task" || parentOwnedDelegationTool(name) {
-			continue
+			return false
 		}
-		if requestedTools[name] {
-			if t, ok := disp.GetTool(name); ok {
-				subRegistry.Register(t)
-			}
-		} else if len(toolsets) == 0 {
-			if t, ok := disp.GetTool(name); ok {
-				subRegistry.Register(t)
-			}
-		}
-	}
-
-	return tools.NewDispatcherWithRegistry(subRegistry)
+		return requestedTools[name] || len(toolsets) == 0
+	})
 }
 
 // normalizeToolset normalizes common toolset aliases.

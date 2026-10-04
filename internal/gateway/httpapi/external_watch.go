@@ -13,6 +13,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
@@ -32,9 +33,8 @@ const (
 	// ancient history.
 	externalWatchRecoveryLookback = 14 * 24 * time.Hour
 	// A successful watcher verdict may need an agent run to backfill release
-	// records and close the task. Reconciliation may reopen that durable system
-	// row only a few times; after that the task becomes visibly blocked instead
-	// of looping forever.
+	// records and close the task. Reconciliation may reopen an unbound system
+	// row only a few times; a bound Run is recovered by exact identity.
 	externalWatchFinalizationRetries = 3
 )
 
@@ -84,6 +84,8 @@ func (d *Server) runExternalWatchPass(ctx context.Context) {
 		d.compensateUnfinalizedExternalWatches(ctx, time.Now().Add(-externalWatchRecoveryLookback), 1)
 		d.reconcileExternalWatchFinalizations(ctx)
 		d.runExternalWatchNotificationPass(ctx)
+		d.runExternalResourceWaitPass(ctx)
+		d.drainQueuedWhenReady(ctx)
 	}()
 	watches, err := d.Control.ListDueExternalWatches(ctx, externalWatchPassLimit)
 	if err != nil {
@@ -105,6 +107,11 @@ func (d *Server) runExternalWatchPass(ctx context.Context) {
 }
 
 func (d *Server) executeExternalWatch(ctx context.Context, watch control.ExternalWatch) {
+	if receipt := watch.PreflightReceipt; receipt.EffectRuleKey != "" &&
+		!tools.ValidateEffectObservationScript(receipt.EffectScriptRoot, receipt.EffectScriptPath, receipt.EffectScriptDigest) {
+		d.completeExternalWatchEnvironmentChanged(ctx, watch, []string{"effect observation script changed"})
+		return
+	}
 	deadlinePassed := !watch.TimeoutAt.After(time.Now())
 	if deadlinePassed {
 		// A terminal state recorded on the last checkpoint wins over the
@@ -720,6 +727,15 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 		log.Warn("external watch finalization enqueue failed", "watch_id", watch.ID, "error", err)
 		return
 	}
+	if status == control.ExternalWatchSucceeded && watch.PreflightReceipt.EffectRuleKey != "" {
+		receipt := watch.PreflightReceipt
+		if tools.ValidateEffectObservationScript(receipt.EffectScriptRoot, receipt.EffectScriptPath, receipt.EffectScriptDigest) {
+			if _, err := d.Control.ObserveEffectClaimsForWatch(ctx, watch.TenantID, watch.ID); err != nil {
+				log.Warn("owner-bound effect observation failed", "watch_id", watch.ID, "error", err)
+				return
+			}
+		}
+	}
 	if marked, err := d.Control.MarkExternalWatchFinalized(ctx, watch.TenantID, watch.ID); err != nil {
 		log.Warn("external watch finalized mark failed", "watch_id", watch.ID, "error", err)
 		return
@@ -964,7 +980,7 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 			}
 			continue
 		}
-		if active := d.coordinator().currentActive(watch.PersonID); active != nil && active.TaskID == watch.TaskID {
+		if d.coordinator().hasActiveTask(watch.PersonID, watch.TaskID) {
 			continue
 		}
 		if task.ActiveRunID != "" {
@@ -1052,9 +1068,19 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 				if boundRun != nil && strings.EqualFold(boundRun.Status, "running") {
 					continue
 				}
+				// A stopped bound Run may already have written records or made an
+				// external change. The watcher verdict is durable; resume the
+				// exact Run after observing its effects, never launch this queue
+				// message again from the top.
+				d.blockExternalWatchFinalization(ctx, watch, queued)
+				continue
 			}
 			fallthrough
 		case control.QueueStatusFailed:
+			if queued.RunID != "" {
+				d.blockExternalWatchFinalization(ctx, watch, queued)
+				continue
+			}
 			requeued, err := d.Control.RequeueSystemQueued(ctx, watch.TenantID, queued.ID, externalWatchFinalizationRetries)
 			if err != nil {
 				log.Warn("external watch finalization requeue failed", "watch_id", watch.ID, "error", err)
@@ -1075,24 +1101,59 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 				continue
 			}
 			if materialized {
+				d.compensateExternalWatchFinalizationDelivery(ctx, queued)
 				continue
 			}
-			requeued, err := d.Control.RequeueDoneSystemQueuedIfUnmaterialized(ctx, watch.TenantID, queued.ID, externalWatchFinalizationRetries)
-			if err != nil {
-				log.Warn("external watch incomplete finalization requeue failed", "watch_id", watch.ID, "run_id", queued.RunID, "error", err)
-				continue
-			}
-			if requeued {
-				refreshSummary()
-				d.coordinator().drainQueue(origin)
-				continue
-			}
-			if queued.Restarts >= externalWatchFinalizationRetries {
-				d.blockExternalWatchFinalization(ctx, watch, queued)
-			}
+			// A done row without a successful terminal event is incomplete, but
+			// its bound Run may already have produced effects. Preserve that Run
+			// for exact recovery rather than replaying the queue message.
+			d.blockExternalWatchFinalization(ctx, watch, queued)
 		case control.QueueStatusCancelled:
 			d.blockExternalWatchFinalization(ctx, watch, queued)
 		}
+	}
+}
+
+// compensateExternalWatchFinalizationDelivery retries only the result outbox
+// transition. The completed Run and its tool effects are never replayed. The
+// delivery logical key deduplicates a crash after enqueue but before the
+// effect receipt was marked.
+func (d *Server) compensateExternalWatchFinalizationDelivery(ctx context.Context, queued *control.QueuedTask) {
+	if d == nil || d.Control == nil || d.Delivery == nil || queued == nil || queued.RunID == "" || queued.IdempotencyKey == "" {
+		return
+	}
+	enqueued, err := d.Control.EffectDeliveryEnqueued(ctx, queued.TenantID, queued.IdempotencyKey)
+	if err != nil || enqueued {
+		if err != nil {
+			log.Warn("external watch finalization delivery receipt lookup failed", "queue_id", queued.ID, "error", err)
+		}
+		return
+	}
+	run, err := d.Control.GetRun(ctx, queued.TenantID, queued.RunID)
+	if err != nil || run == nil || run.PersonID != queued.PersonID || run.TaskID != queued.TaskID {
+		log.Warn("external watch finalization delivery run lookup failed", "queue_id", queued.ID, "run_id", queued.RunID, "error", err)
+		return
+	}
+	owned, err := d.Control.EffectOwnedByRun(ctx, queued.TenantID, queued.IdempotencyKey, run.ID)
+	if err != nil || !owned {
+		log.Warn("external watch finalization delivery effect ownership missing", "queue_id", queued.ID, "run_id", queued.RunID, "error", err)
+		return
+	}
+	task, err := d.Control.GetTask(ctx, queued.TenantID, queued.TaskID)
+	if err != nil || task == nil || task.PersonID != queued.PersonID {
+		log.Warn("external watch finalization delivery task lookup failed", "queue_id", queued.ID, "task_id", queued.TaskID, "error", err)
+		return
+	}
+	content, err := d.Control.RunAssistantContent(ctx, queued.TenantID, queued.PersonID, queued.RunID)
+	if err != nil {
+		log.Warn("external watch finalization output lookup failed", "queue_id", queued.ID, "run_id", queued.RunID, "error", err)
+		return
+	}
+	identity := d.routeIdentityForPerson(ctx, queued.TenantID, queued.PersonID, queued.Channel, queued.Platform, nil)
+	req := api.MessageRequest{Platform: queued.Platform, Channel: queued.Channel, EffectKey: queued.IdempotencyKey}
+	resp := api.MessageResponse{Task: task, Run: run, Content: content}
+	if !d.coordinator().deliverAsyncResult(ctx, identity, req, resp) {
+		log.Warn("external watch finalization result remains pending delivery", "queue_id", queued.ID, "run_id", queued.RunID)
 	}
 }
 
@@ -1159,6 +1220,10 @@ func (d *Server) runCancelledByUser(ctx context.Context, watch control.ExternalW
 func (d *Server) blockExternalWatchFinalization(ctx context.Context, watch control.ExternalWatch, queued *control.QueuedTask) {
 	reason := fmt.Sprintf("The external watch reached %s, but its finalization run did not complete after %d recovery attempts.", watch.Status, queued.Restarts)
 	next := []string{"Review the recorded watcher evidence and resume this task to finish its release record."}
+	if queued.RunID != "" {
+		reason = fmt.Sprintf("The external watch reached %s, but finalization Run %s has no confirmed completion. Its effects must be checked before an exact continuation.", watch.Status, queued.RunID)
+		next = []string{"Inspect the finalization Run and its recorded effects before resuming the remaining work."}
+	}
 	if queued.Status == control.QueueStatusCancelled {
 		reason = fmt.Sprintf("The external watch reached %s, but its finalization run was cancelled.", watch.Status)
 	}

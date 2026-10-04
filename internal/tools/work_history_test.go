@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -97,6 +98,78 @@ func TestWorkInspectReturnsBoundedRunStateWithoutRawEventContent(t *testing.T) {
 	})
 	if err != nil || !strings.Contains(current, "already selected") || strings.Contains(current, "did not attach") {
 		t.Fatalf("current Run inspection gave historical-selection guidance: result=%s err=%v", current, err)
+	}
+}
+
+// Inspection proposes a resume only when work_select accepts it. The notice
+// proposed one for every past run: qwen inspected a finished plan before
+// continuing it from another endpoint, followed the notice, and was refused.
+func TestWorkInspectProposesOnlyAResumeThatSelectionAccepts(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	person, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
+	inspect, selection := NewWorkInspectTool(store), NewWorkSelectTool(store)
+	for _, tc := range []struct {
+		name     string
+		statuses []string // the runs of one piece of work, oldest first
+		resume   int      // the run a resume should target; -1 for none
+	}{
+		{"finished", []string{"done"}, -1},
+		{"failed", []string{"failed"}, -1},
+		{"interrupted", []string{"interrupted"}, 0},
+		{"waiting", []string{"waiting_user"}, 0},
+		{"superseded", []string{"done", "interrupted"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			work, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "config plan " + tc.name, Channel: "cli"})
+			var runs []*control.Run
+			for _, status := range tc.statuses {
+				run, _ := store.StartRun(ctx, work, "cli", "plan the config refactor")
+				_ = store.FinishRun(ctx, person.TenantID, run.ID, status)
+				runs = append(runs, run)
+			}
+			currentTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "继续", Channel: "weixin"})
+			current, _ := store.StartRun(ctx, currentTask, "weixin", "继续")
+			scope := kernel.ToolInvocationScope{ControlTenantID: person.TenantID, PersonID: person.PersonID, TaskID: currentTask.ID, RunID: current.ID}
+
+			result, err := inspect.Execute(map[string]interface{}{"run_id": runs[0].ID, "_invocation_scope": scope})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out struct {
+				Notice string `json:"selection_notice"`
+			}
+			if err := json.Unmarshal([]byte(result), &out); err != nil {
+				t.Fatal(err)
+			}
+			proposes := strings.Contains(out.Notice, "action resume")
+			target := runs[0]
+			if tc.resume >= 0 {
+				target = runs[tc.resume]
+			}
+			switch {
+			case tc.resume < 0 && proposes:
+				t.Fatalf("notice proposes resuming a %s run: %s", tc.statuses[0], out.Notice)
+			case tc.resume >= 0 && !proposes:
+				t.Fatalf("notice does not propose the resume: %s", out.Notice)
+			case tc.resume > 0 && !strings.Contains(out.Notice, target.ID):
+				t.Fatalf("notice does not name the resumable run %s: %s", target.ID, out.Notice)
+			}
+
+			_, err = selection.Execute(map[string]interface{}{"action": "resume", "run_id": target.ID, "_invocation_scope": scope})
+			var refusal interface{ ToolErrorCode() string }
+			refused := errors.As(err, &refusal) && refusal.ToolErrorCode() == "work_run_not_resumable"
+			if tc.resume >= 0 && err != nil {
+				t.Fatalf("selection refused the resume the notice proposed: %v", err)
+			}
+			if tc.resume < 0 && !refused {
+				t.Fatalf("resume of a %s run: err=%v, want the refusal the notice avoided", tc.statuses[0], err)
+			}
+		})
 	}
 }
 

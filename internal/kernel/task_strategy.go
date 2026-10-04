@@ -46,9 +46,23 @@ func (m ToolMode) MayWriteWorkspace() bool {
 	}
 }
 
-// MayWriteWorkspace reports whether the turn's strategy can write the workspace.
+// MayWriteWorkspace is the scheduler's conservative capability check. ToolMode
+// is a broad prompt hint, not a closed tool list: a local_read hint with nil
+// AllowedTools still exposes write_file and terminal. Only an enforced
+// no-action mode or an explicit lifecycle-only allowlist proves otherwise.
 func (s TaskStrategy) MayWriteWorkspace() bool {
-	return s.ToolMode.MayWriteWorkspace()
+	if s.ToolMode == ToolModeNone {
+		return false
+	}
+	if s.AllowedTools == nil {
+		return true
+	}
+	for name, allowed := range s.AllowedTools {
+		if allowed && !isLifecycleToolName(name) {
+			return true
+		}
+	}
+	return false
 }
 
 // PlanPolicy controls whether update_plan is exposed and encouraged.
@@ -68,6 +82,23 @@ const (
 // from becoming a retrospective checklist. This is in-run evidence, never a
 // classification of the user's input.
 const planGuidanceEscalationThreshold = 2
+
+// planStaleReminderThreshold is how many tool actions a Run may perform after
+// its last plan update, with steps still open, before the next model call is
+// reminded that the visible plan may be out of date. Plan updates stay the
+// model's; one run went 58 tool calls without one and showed its first step
+// in progress for seven minutes.
+const planStaleReminderThreshold = 12
+
+// shouldRemindStalePlan decides whether the visible plan is stale enough to
+// remind the model: steps are still open and enough actions happened since
+// the plan was last updated, or since the last reminder.
+func shouldRemindStalePlan(strategy TaskStrategy, openSteps, actionsSinceUpdate, actionsAtReminder int) bool {
+	if openSteps == 0 || !strategy.normalized().AllowsTool("update_plan") {
+		return false
+	}
+	return actionsSinceUpdate-actionsAtReminder >= planStaleReminderThreshold
+}
 
 // countsTowardPlanEvidence reports whether one completed tool call is evidence
 // that this Run is doing genuinely multi-step work. Lifecycle bookkeeping is

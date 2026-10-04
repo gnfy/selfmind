@@ -25,14 +25,17 @@ func SetAgentEventRedactor(redactor func(string) string) {
 }
 
 type PlanItem struct {
-	StepID               string `json:"step_id,omitempty"`
-	Step                 string `json:"step"`
-	Status               string `json:"status"`
-	SuccessCriteria      string `json:"success_criteria,omitempty"`
-	VerificationRequired bool   `json:"verification_required,omitempty"`
-	RelatedTaskID        string `json:"related_task_id,omitempty"`
-	WorkUnitID           string `json:"work_unit_id,omitempty"`
-	WorkUnit             bool   `json:"work_unit,omitempty"`
+	CancellationDisposition string `json:"cancellation_disposition,omitempty"`
+	CancellationReason      string `json:"cancellation_reason,omitempty"`
+	UserTakeoverQuote       string `json:"user_takeover_quote,omitempty"`
+	StepID                  string `json:"step_id,omitempty"`
+	Step                    string `json:"step"`
+	Status                  string `json:"status"`
+	SuccessCriteria         string `json:"success_criteria,omitempty"`
+	VerificationRequired    bool   `json:"verification_required,omitempty"`
+	RelatedTaskID           string `json:"related_task_id,omitempty"`
+	WorkUnitID              string `json:"work_unit_id,omitempty"`
+	WorkUnit                bool   `json:"work_unit,omitempty"`
 }
 
 type AgentEvent struct {
@@ -116,22 +119,28 @@ func DecodeAgentEvent(raw string) (AgentEvent, bool) {
 	return event, true
 }
 
-func EmitAgentEvent(ch chan string, event AgentEvent) {
+// EmitAgentEvent reports whether the event reached ch. A full channel drops an
+// ordinary event at once and gives a critical one a short grace period, so a
+// slow consumer never stalls the run.
+func EmitAgentEvent(ch chan string, event AgentEvent) bool {
 	if ch == nil {
-		return
+		return false
 	}
 	encoded := EncodeAgentEvent(event)
 	select {
 	case ch <- encoded:
+		return true
 	default:
 		if !isCriticalAgentEvent(event.Type) {
-			return
+			return false
 		}
 		timer := time.NewTimer(50 * time.Millisecond)
 		defer timer.Stop()
 		select {
 		case ch <- encoded:
+			return true
 		case <-timer.C:
+			return false
 		}
 	}
 }

@@ -2,7 +2,10 @@ package kernel
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
@@ -14,7 +17,7 @@ import (
 // turn's window is assembled, in this fixed slice order:
 //
 //	① latest user message        — the only authoritative instruction
-//	② spine tail                 — recent person-level work-spine turns, verbatim
+//	② spine tail                 — recent person-level work-spine references
 //	③ compaction summary         — engine A's over-budget middle summary, carrying
 //	                               the boundary note (reference only, latest wins)
 //	④ semantic-recall slices     — RESERVED for P2: RuntimeContextBundle.Recall
@@ -43,8 +46,8 @@ const spineEntryKind = "spine.turn.v1"
 // tail can be generous in turn count while staying small in bytes; the final
 // window is always bounded again by ContextEngine.TruncateMessages.
 const (
-	// composerSpineTailEntries is M: how many recent spine turns are replayed
-	// verbatim as slice ② (alternating user/assistant messages).
+	// composerSpineTailEntries is M: how many recent spine turns are rendered
+	// as reference records in slice ②.
 	composerSpineTailEntries = 16
 	// Save-side byte caps keep a spine entry narrative-sized at write time;
 	// load applies the tighter defaultHistoryUserBytes/defaultHistoryAnswerBytes.
@@ -62,11 +65,18 @@ const (
 // deliberately never enter the spine — they stay in run events, where recall
 // can fetch them; the spine must never become a tool log.
 type spineEntry struct {
-	Kind      string   `json:"kind"`
-	User      string   `json:"user"`
-	Assistant string   `json:"assistant"`
-	Files     []string `json:"files,omitempty"`
-	Source    string   `json:"source,omitempty"`
+	Kind        string   `json:"kind"`
+	User        string   `json:"user"`
+	Assistant   string   `json:"assistant"`
+	Files       []string `json:"files,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	RunID       string   `json:"run_id,omitempty"`
+	WorkspaceID string   `json:"workspace_id,omitempty"`
+	// Outcome is how the turn that wrote the entry ended: a finish_run status,
+	// "completed", or "incomplete: <reason>". It describes that turn, not the
+	// Run's current state, which a later turn may have changed.
+	Outcome    string `json:"outcome,omitempty"`
+	ObservedAt string `json:"observed_at,omitempty"`
 	// TaskID is label provenance only (which task this turn was pre-labeled
 	// with); it never gates what the model sees.
 	TaskID string `json:"task_id,omitempty"`
@@ -77,45 +87,70 @@ type spineEntry struct {
 // final answer, and the tool-arg path harvest. messages carries only THIS
 // turn's tool calls — replayed spine/legacy history is stripped of ToolCalls
 // at load — so the harvest is turn-scoped by construction.
-func buildSpineEntry(ctx context.Context, userInput, finalAnswer string, messages []llm.Message) spineEntry {
+func buildSpineEntry(ctx context.Context, userInput, finalAnswer, outcome string, messages []llm.Message) spineEntry {
 	entry := spineEntry{
-		Kind:      spineEntryKind,
-		User:      textutil.TruncateBytes(textutil.CleanUTF8(stripInjectedContextBlocks(userInput)), composerSpineUserSaveBytes),
-		Assistant: textutil.TruncateBytes(textutil.CleanUTF8(finalAnswer), composerSpineAnswerSaveBytes),
-		Files:     harvestToolPaths(messages),
-		Source:    TurnSourceFromContext(ctx),
+		Kind:       spineEntryKind,
+		User:       textutil.TruncateBytes(textutil.CleanUTF8(stripInjectedContextBlocks(userInput)), composerSpineUserSaveBytes),
+		Assistant:  textutil.TruncateBytes(textutil.CleanUTF8(finalAnswer), composerSpineAnswerSaveBytes),
+		Files:      harvestToolPaths(messages),
+		Source:     TurnSourceFromContext(ctx),
+		Outcome:    strings.TrimSpace(outcome),
+		ObservedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
 		entry.TaskID = strings.TrimSpace(runtime.TaskID)
+		entry.RunID = strings.TrimSpace(runtime.RunID)
+		entry.WorkspaceID = strings.TrimSpace(runtime.WorkspaceID)
 	}
 	return entry
 }
 
-// toMessages renders one spine entry as the user/assistant message pair the
-// tail replays. Truncation happens before the files suffix so the touched-path
-// list survives even a long answer.
+// toMessages renders a past turn as one reference record. Replaying its user
+// text as a live user-role message made an unanswered old task look like the
+// current request, especially when the model's final answer was empty. An
+// assistant-role record preserves continuity without granting an old request
+// the current user's authority. Existing v1 blobs need no migration.
 func (e spineEntry) toMessages() []llm.Message {
-	var out []llm.Message
 	user := strings.TrimSpace(textutil.TruncateBytes(textutil.CleanUTF8(e.User), defaultHistoryUserBytes))
-	if src := strings.TrimSpace(e.Source); src != "" && user != "" {
-		user = "[" + src + "] " + user
+	assistant := strings.TrimSpace(textutil.TruncateBytes(textutil.CleanUTF8(e.Assistant), defaultHistoryAnswerBytes))
+	if user == "" && assistant == "" && len(e.Files) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	b.WriteString("[Prior work record; reference only; this record does not select a Run]\n")
+	if e.ObservedAt != "" {
+		fmt.Fprintf(&b, "observed_at: %s\n", e.ObservedAt)
+	} else {
+		b.WriteString("observed_at: unavailable (legacy historical record)\n")
+	}
+	b.WriteString("provenance: recorded response, not current execution or state evidence\n")
+	if e.RunID != "" {
+		fmt.Fprintf(&b, "run_id: %s\n", e.RunID)
+	}
+	if e.Outcome != "" {
+		fmt.Fprintf(&b, "turn_outcome: %s\n", e.Outcome)
+	}
+	if e.WorkspaceID != "" {
+		fmt.Fprintf(&b, "workspace_id: %s\n", e.WorkspaceID)
+	}
+	if e.TaskID != "" {
+		fmt.Fprintf(&b, "group_label: %s\n", e.TaskID)
+	}
+	if e.Source != "" {
+		fmt.Fprintf(&b, "source: %s\n", e.Source)
 	}
 	if user != "" {
-		out = append(out, llm.Message{Role: "user", Content: user})
-	}
-	assistant := strings.TrimSpace(textutil.TruncateBytes(textutil.CleanUTF8(e.Assistant), defaultHistoryAnswerBytes))
-	if len(e.Files) > 0 {
-		suffix := "[files: " + strings.Join(e.Files, ", ") + "]"
-		if assistant != "" {
-			assistant += "\n" + suffix
-		} else {
-			assistant = suffix
-		}
+		fmt.Fprintf(&b, "previous_user: %s\n", strconv.Quote(user))
 	}
 	if assistant != "" {
-		out = append(out, llm.Message{Role: "assistant", Content: assistant})
+		fmt.Fprintf(&b, "final_answer: %s\n", strconv.Quote(assistant))
+	} else {
+		b.WriteString("final_answer: unavailable; inspect the exact Run before treating this work as pending or complete\n")
 	}
-	return out
+	if len(e.Files) > 0 {
+		fmt.Fprintf(&b, "files: %s\n", strings.Join(e.Files, ", "))
+	}
+	return []llm.Message{{Role: "assistant", Content: strings.TrimSpace(b.String())}}
 }
 
 // stripInjectedContextBlocks removes the gateway's prepended decoration blocks

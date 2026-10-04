@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"selfmind/internal/kernel"
 )
 
 // MockTool 模拟一个真实工具
@@ -670,4 +672,73 @@ func TestMarshalArgs(t *testing.T) {
 
 func Register(t *BaseTool) {
 	globalRegistry.Register(t)
+}
+
+// A subset narrows the tool set, never the policy: its calls run through the
+// parent's middleware chain and observers, and registering into it leaves the
+// parent unchanged.
+func TestSubsetDispatchesThroughTheParentPolicyChain(t *testing.T) {
+	parent := NewDispatcher()
+	parent.Register("kept", func(string) (string, error) { return "kept ran", nil })
+	parent.Register("dropped", func(string) (string, error) { return "dropped ran", nil })
+	var order, attributed []string
+	parent.InjectMiddleware(func(next ToolExecutor) ToolExecutor {
+		return func(args map[string]interface{}) (string, error) {
+			order = append(order, "policy")
+			return next(args)
+		}
+	})
+	parent.InjectResultMiddleware(func(next ResultExecutor) ResultExecutor {
+		return func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
+			order = append(order, "result")
+			return next(args)
+		}
+	})
+	parent.InjectClarifyHandler(func(string, []string) string { return "answer" })
+	parent.registry.InjectSkillAttributionObserver(func(name string, _ map[string]interface{}) {
+		attributed = append(attributed, name)
+	})
+
+	sub := parent.Subset(func(name string) bool { return name == "kept" })
+	if out, err := sub.Dispatch("kept", map[string]interface{}{}); err != nil || out != "kept ran" {
+		t.Fatalf("kept tool: out=%q err=%v", out, err)
+	}
+	if strings.Join(order, ",") != "policy,result" || strings.Join(attributed, ",") != "kept" || sub.registry.ClarifyHandler() == nil {
+		t.Fatalf("the subset left the parent's chain behind: order=%v attributed=%v", order, attributed)
+	}
+	if _, err := sub.Dispatch("dropped", map[string]interface{}{}); err == nil {
+		t.Fatal("a tool outside the subset was dispatched")
+	}
+	sub.Register("extra", func(string) (string, error) { return "", nil })
+	if _, ok := parent.GetTool("extra"); ok {
+		t.Fatal("registering into the subset changed the parent")
+	}
+}
+
+// A lifecycle call with a missing or unknown argument is refused before it
+// runs; the refusal says what the schema expects there, so the model can fix
+// the call in one step. qwen once spent a retry on each of these.
+func TestArgumentRefusalsSayWhatIsExpected(t *testing.T) {
+	registry := NewRegistry()
+	registry.Register(NewFinishRunTool())
+	registry.Register(NewUpdatePlanTool())
+	for _, tc := range []struct {
+		tool string
+		args map[string]interface{}
+		want []string
+	}{
+		{"finish_run", map[string]interface{}{"summary": "Released."},
+			[]string{"missing required parameter: status", "expected a string, one of done", "waiting_user"}},
+		{"finish_run", map[string]interface{}{"status": "done", "summary": "Released.", "result": "ok"},
+			[]string{"unknown parameter: result", "accepts only done, files, need_approve, next_steps, risks, status, summary, tests"}},
+		{"update_plan", map[string]interface{}{"plan": []interface{}{map[string]interface{}{"step": "publish"}}},
+			[]string{"missing required parameter: plan[0].status", "expected a string, one of pending, in_progress, completed"}},
+	} {
+		_, err := registry.DispatchResult(tc.tool, tc.args)
+		for _, want := range tc.want {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s %v: error %v, want it to contain %q", tc.tool, tc.args, err, want)
+			}
+		}
+	}
 }

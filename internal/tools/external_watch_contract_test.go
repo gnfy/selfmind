@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -32,5 +33,40 @@ func TestExternalWatchDescribesTheInputItActuallyAccepts(t *testing.T) {
 	// The supported way to check something the proof layer cannot admit.
 	if !strings.Contains(described, "observation script") {
 		t.Errorf("the alternative for more involved checks is missing:\n%s", described)
+	}
+}
+
+// A watcher refused for its specification says what is wrong. The refusal said
+// only that the specification was invalid, so qwen had to guess at the one
+// correction the hint allows.
+func TestInvalidWatcherSpecSaysWhatIsWrong(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  map[string]interface{}
+		want string
+	}{
+		{"group size", map[string]interface{}{"wait_group": "receipt-handoff", "wait_group_size": float64(1)}, "wait_group_size must be between 2 and 8"},
+		{"group mode", map[string]interface{}{"wait_group": "receipt-handoff", "wait_group_size": float64(2), "wait_group_mode": "both"}, "wait_group_mode must be all or any"},
+		{"pattern", map[string]interface{}{"success_pattern": "^READY("}, "invalid success_pattern"},
+		{"target", map[string]interface{}{"target_pattern": "READY"}, "requires both terminal_success_pattern and terminal_failure_pattern"},
+	} {
+		args := map[string]interface{}{"command": "cat prerequisite.txt", "success_pattern": "^READY$"}
+		for key, value := range tc.set {
+			args[key] = value
+		}
+		err := validateExternalWatchStatic(args)
+		var refusal interface {
+			ToolErrorCode() string
+			ModelSafeMessage() string
+		}
+		if !errors.As(err, &refusal) || refusal.ToolErrorCode() != "watch_spec_invalid" {
+			t.Fatalf("%s: err=%v, want a watch_spec_invalid refusal", tc.name, err)
+		}
+		if !strings.Contains(refusal.ModelSafeMessage(), tc.want) {
+			t.Errorf("%s: model sees %q, want it to say %q", tc.name, refusal.ModelSafeMessage(), tc.want)
+		}
+	}
+	if err := validateExternalWatchStatic(map[string]interface{}{"command": "cat prerequisite.txt", "success_pattern": "^READY$"}); err != nil {
+		t.Fatalf("a valid specification was refused: %v", err)
 	}
 }

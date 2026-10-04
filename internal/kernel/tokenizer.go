@@ -2,16 +2,37 @@ package kernel
 
 import (
 	"encoding/json"
+	"hash/maphash"
+	"sync"
 
 	"github.com/tiktoken-go/tokenizer"
 
 	"selfmind/internal/kernel/llm"
 )
 
+// Long texts are counted once. One request recounts the same history several
+// times (compaction check, request budget, diagnostics), and encoding is
+// superlinear in a long run without spaces: 32 KB of base64 or minified code
+// took 290 ms per count. The cache keys each text by a hash and its length, so
+// it holds no text, and starts over after tokenCountCacheEntries texts.
+const (
+	tokenCountCacheMinBytes = 512
+	tokenCountCacheEntries  = 4096
+)
+
+type tokenCountKey struct {
+	hash   uint64
+	length int
+}
+
 // TokenEstimator wraps tiktoken-go for precise token counting.
 // Falls back to heuristic estimation when the codec is unavailable.
 type TokenEstimator struct {
 	enc tokenizer.Codec
+
+	mu      sync.Mutex
+	seed    maphash.Seed
+	counted map[tokenCountKey]int
 }
 
 // NewTokenEstimator creates an estimator using the cl100k_base encoding
@@ -29,7 +50,27 @@ func (te *TokenEstimator) Count(text string) int {
 	if te.enc == nil {
 		return estimateTokens(text)
 	}
+	if len(text) < tokenCountCacheMinBytes {
+		_, ids, _ := te.enc.Encode(text)
+		return len(ids)
+	}
+	te.mu.Lock()
+	if te.counted == nil {
+		te.seed, te.counted = maphash.MakeSeed(), make(map[tokenCountKey]int)
+	}
+	key := tokenCountKey{hash: maphash.String(te.seed, text), length: len(text)}
+	n, ok := te.counted[key]
+	te.mu.Unlock()
+	if ok {
+		return n
+	}
 	_, ids, _ := te.enc.Encode(text)
+	te.mu.Lock()
+	if len(te.counted) >= tokenCountCacheEntries {
+		te.counted = make(map[tokenCountKey]int)
+	}
+	te.counted[key] = len(ids)
+	te.mu.Unlock()
 	return len(ids)
 }
 

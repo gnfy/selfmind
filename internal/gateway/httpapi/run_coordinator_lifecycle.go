@@ -12,12 +12,17 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/runpool"
 	"selfmind/internal/tools"
 	"strings"
 	"time"
 )
+
+var errProviderWaitLimit = errors.New("provider wait continuation limit reached")
+var errProviderWaitCheckpoint = errors.New("provider wait checkpoint is unavailable")
 
 // finalizeErroredRun is the single terminal path for provider, transport, and
 // cancellation failures after a run has started. It writes the same structured
@@ -46,6 +51,17 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		outcome.Summary = "The run stopped after execution made no progress within the watchdog window."
 		outcome.NextSteps = []string{"Reply \"continue\" to resume from the durable run history."}
 		outcome.Risks = []string{"An execution step stopped responding and was cancelled by the watchdog."}
+	} else if errors.Is(runErr, errProviderWaitLimit) {
+		outcome.Status = "blocked"
+		outcome.CompletionReason = "provider_wait_limit"
+		outcome.Summary = "The model provider repeatedly delayed this work; automatic continuation stopped at its safety limit."
+		outcome.NextSteps = []string{"Inspect the provider connection and resume this exact Run when it is available."}
+		outcome.Risks = nil
+	} else if errors.Is(runErr, errProviderWaitCheckpoint) {
+		outcome.Status = "blocked"
+		outcome.CompletionReason = "provider_wait_checkpoint_missing"
+		outcome.Summary = "The exact model-call checkpoint is unavailable, so automatic continuation stopped before replaying work."
+		outcome.NextSteps = []string{"Inspect this Run's saved effects and checkpoint before manually resuming."}
 	} else if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 		// A caller cancellation or caller deadline is terminal: request/eval turn
 		// budgets deliberately bound the daemon-owned run. Provider-internal
@@ -118,6 +134,103 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		}
 	}
 	return outcome
+}
+
+// parkProviderWait commits the exact parent wait and its delayed continuation
+// together. The Agent has already persisted the pre-request message ledger;
+// no model response or tool effect is replayed by the queue itself.
+func (c *RunCoordinator) parkProviderWait(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, req api.MessageRequest, wait *llm.ProviderWait) (api.RunOutcome, error) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil || wait == nil {
+		return api.RunOutcome{}, fmt.Errorf("provider wait has no durable run owner")
+	}
+	if wait.NotBefore.IsZero() || wait.NotBefore.After(time.Now().Add(11*time.Minute)) {
+		return api.RunOutcome{}, fmt.Errorf("provider wait deadline is invalid")
+	}
+	// A sequence of fresh 429s must be bounded. Capacity waits are different:
+	// two legitimate long model calls may occupy a route for minutes, so give
+	// them a slower bounded retry schedule instead of blocking after six seconds.
+	chain, err := c.srv.Control.ResumeChainRunIDs(ctx, identity.TenantID, run.ID)
+	if err != nil {
+		return api.RunOutcome{}, err
+	}
+	capacityWaits, rateWaits := 0, 0
+	for _, ancestor := range chain {
+		queued, lookupErr := c.srv.Control.GetQueuedByIdempotencyKey(ctx, identity.TenantID, "provider-wait:"+ancestor)
+		if lookupErr != nil {
+			return api.RunOutcome{}, lookupErr
+		}
+		if queued != nil {
+			events, eventErr := c.srv.Control.ListRunEvents(ctx, identity.TenantID, identity.PersonID, task.ID, ancestor, 5)
+			if eventErr != nil {
+				return api.RunOutcome{}, eventErr
+			}
+			for _, event := range events {
+				if event.Type != "run.finished" {
+					continue
+				}
+				var payload struct {
+					ProviderWait struct {
+						Reason string `json:"reason"`
+					} `json:"provider_wait"`
+				}
+				if json.Unmarshal(event.Payload, &payload) != nil {
+					break
+				}
+				switch payload.ProviderWait.Reason {
+				case "capacity":
+					capacityWaits++
+				case "rate_limit":
+					rateWaits++
+				}
+				break
+			}
+		}
+	}
+	if wait.Reason == "rate_limit" && rateWaits >= 6 {
+		return api.RunOutcome{}, fmt.Errorf("%w after %d rate limits", errProviderWaitLimit, rateWaits)
+	}
+	if wait.Reason == "capacity" {
+		if capacityWaits >= 32 {
+			return api.RunOutcome{}, fmt.Errorf("%w after %d capacity retries", errProviderWaitLimit, capacityWaits)
+		}
+		seconds := min(1<<min(capacityWaits, 4), 15)
+		if deadline := time.Now().Add(time.Duration(seconds) * time.Second); wait.NotBefore.Before(deadline) {
+			wait.NotBefore = deadline
+		}
+	}
+	finCtx := context.WithoutCancel(ctx)
+	route := c.srv.routeIdentityForPerson(finCtx, identity.TenantID, identity.PersonID, req.Channel, req.Platform, identity)
+	if route == nil || route.PersonID != identity.PersonID || route.PlatformUserID == "" {
+		return api.RunOutcome{}, fmt.Errorf("provider wait origin cannot be routed")
+	}
+	outcome := api.RunOutcome{
+		Status: "waiting_external", CompletionReason: "provider_wait", Resumable: false,
+		Summary:   "Waiting for the model provider (" + wait.Reason + ") until " + wait.NotBefore.Local().Format(time.RFC3339) + ".",
+		NextSteps: []string{"SelfMind will resume this exact work after the provider wait."},
+	}
+	queued := control.QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Platform: route.Platform, PlatformUserID: route.PlatformUserID, Channel: req.Channel,
+		Content:      "Continue this exact work from its durable model-call checkpoint after the provider became available. Preserve the plan and tool evidence; do not repeat completed effects.",
+		ApprovalMode: req.ApprovalMode, WorkspaceID: run.WorkspaceID,
+		ExecutionRoots: executionenv.CloneRootBindings(run.ExecutionRoots),
+		TaskID:         task.ID, ReplyToRunID: run.ID, IdempotencyKey: "provider-wait:" + run.ID,
+		Class: control.QueueClassFinalization, NotBefore: wait.NotBefore,
+	}
+	_, err = c.srv.Control.MaterializeRunFinalization(finCtx, control.RunFinalization{
+		Identity: *identity, RunID: run.ID, RunStatus: "waiting_external", TaskID: task.ID,
+		TaskStatus: "in_progress", Summary: outcome.Summary, NextSteps: outcome.NextSteps,
+		Channel: req.Channel, Handoff: control.Handoff{TaskID: task.ID, Summary: outcome.Summary, NextSteps: outcome.NextSteps},
+		Event: control.Event{Type: "run.finished", Visibility: "task", Channel: req.Channel,
+			Payload: mustJSON(map[string]interface{}{"outcome": outcome, "provider_wait": map[string]interface{}{"reason": wait.Reason, "not_before": wait.NotBefore}})},
+		Continuation: &queued, ExpectedRunStatus: "running", RequireCheckpoint: true,
+		ConsumedQueueID: req.QueueID, ConsumedQueueClaimToken: req.QueueClaimToken,
+	})
+	if err != nil {
+		return api.RunOutcome{}, err
+	}
+	run.Status = "waiting_external"
+	return outcome, nil
 }
 
 func firstString(items []string) string {
@@ -415,6 +528,7 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 		TenantID:         identity.TenantID,
 		PersonID:         identity.PersonID,
 		ExecutionProfile: req.ExecutionProfile,
+		ParallelWork:     c.activeCapacity() > 1,
 		// Which remembered classes this run may consume. A person's own turn,
 		// and the daemon-started continuations of it (an answered approval, a
 		// finished watcher, a recovered run), carry their decisions. A schedule
@@ -487,28 +601,36 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	// snapshotting it here makes the request self-describing and is what a
 	// separate execution node would receive.
 	scope.SandboxPolicy = tools.CurrentExecSandboxPolicy()
+	if scope.ParallelWork {
+		// A host shell can reach an external target through an otherwise
+		// innocuous command. Parallel Runs require enforced isolation before
+		// a local command can bypass the external-effect claim lane. Retain
+		// the configured network policy: when isolated network is explicitly
+		// enabled, approval and durable effect claims still guard the call.
+		scope.SandboxPolicy.Enabled = true
+		scope.SandboxPolicy.Required = true
+	}
+	for _, binding := range scope.RootBindings {
+		if binding.Source == executionenv.RootSourceExecutionView {
+			// A terminal escape to host execution would make an isolated view
+			// meaningless: an absolute path could still modify the original
+			// checkout. Keep this Run confined even if the person changes mode.
+			scope.SandboxPolicy.Enabled = true
+			scope.SandboxPolicy.Required = true
+			break
+		}
+	}
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
 	scope.Clarify = c.gatewayClarify(ctx, identity, task, run, scope.Channel)
 	scope.ApprovalMode = c.resolveApprovalMode(identity, req.ApprovalMode)
-	// Live mode: re-resolve at EACH ask with the same precedence as run start
-	// (explicit request mode wins, else the person's CURRENT persisted /mode).
-	// This is what makes `/mode smart` sent from IM mid-run govern the
-	// in-flight run's later approval decisions instead of a frozen snapshot.
-	reqMode := req.ApprovalMode
-	scope.ModeGetter = func() tools.ApprovalMode {
-		return c.resolveApprovalMode(identity, reqMode)
-	}
 	// The person's own words for this turn, so smart-mode triage can judge
 	// AUTHORIZATION and not only risk: "delete the build directory" makes a
 	// destructive-looking command an instruction, while the same command with no
 	// such request is the model acting alone. Bounded and redacted here because
 	// the judge prompt treats it as untrusted data (docs/tool-safety.md).
-	// Live, for the same reason ModeGetter above is live: a person who adds a
-	// requirement mid-run has changed what the run is for, and every approval
-	// after that point must be judged against what they now want. A frozen
-	// snapshot left the judge deciding from the opening message while the main
-	// model was already acting on the addition. Re-resolved per ask, like the
-	// mode; a bounded read on a path that runs at most once per approval.
+	// Added requirements can change what an action is authorized to do even
+	// though this Run's approval mode remains fixed. Re-resolve the bounded
+	// intent evidence at each ask while keeping the mode snapshot unchanged.
 	baseIntent := c.intentSnapshotWithOffer(ctx, identity, task, run, workspace, req, scope.Channel)
 	runID := scope.RunID
 	scope.IntentSnapshot = func() tools.RunIntentSnapshot {
@@ -1009,6 +1131,9 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		defer cancel()
 		decisions := buildApprovalDecisions(req)
 		persistentArgs := tools.ApprovalPersistentArgs(req.ToolName, req.Args)
+		// A delegated sub-agent asks through the parent run; the person should
+		// know the call is not the main agent's own.
+		delegated := kernel.DelegationNamespace(ctx) != ""
 		approval, err := store.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
 			TenantID:                 identity.TenantID,
 			PersonID:                 identity.PersonID,
@@ -1042,6 +1167,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				// The authoritative answer set for this ask (batch B1). Every
 				// surface renders THIS list instead of inventing one.
 				"decisions": decisions,
+				"delegated": delegated,
 			}),
 		})
 		if err != nil {
@@ -1084,6 +1210,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				"triage_rationale": req.TriageRationale,
 				"triage_risk":      req.TriageRisk,
 				"decisions":        decisions,
+				"delegated":        delegated,
 			}),
 		}, "approval_id", approval.ID)
 		resumeWatchdog := runpool.BeginPersonWait(ctx, runpool.PhaseWaitingApproval)
@@ -1246,12 +1373,13 @@ func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *c
 		return
 	}
 	base := delivery.Message{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
-		TaskID:   taskID,
-		RunID:    runID,
-		Content:  clarifyNotificationText(*clarify),
-		Kind:     delivery.KindClarify,
+		TenantID:  identity.TenantID,
+		PersonID:  identity.PersonID,
+		TaskID:    taskID,
+		RunID:     runID,
+		Content:   clarifyNotificationText(*clarify),
+		Kind:      delivery.KindClarify,
+		ClarifyID: clarify.ID,
 	}
 	if c.routePendingNotification(ctx, identity, channel, base, liveSurfaceInformed) && c.srv.Control != nil {
 		_ = c.srv.Control.MarkClarifyNotified(ctx, identity.TenantID, clarify.ID)
@@ -1346,12 +1474,13 @@ func (c *RunCoordinator) escrowClarifyNotification(ctx context.Context, clarify 
 	}
 	identity := &control.IdentityContext{TenantID: clarify.TenantID, PersonID: clarify.PersonID}
 	base := delivery.Message{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
-		TaskID:   clarify.TaskID,
-		RunID:    clarify.RunID,
-		Content:  clarifyNotificationText(*clarify),
-		Kind:     delivery.KindClarify,
+		TenantID:  identity.TenantID,
+		PersonID:  identity.PersonID,
+		TaskID:    clarify.TaskID,
+		RunID:     clarify.RunID,
+		Content:   clarifyNotificationText(*clarify),
+		Kind:      delivery.KindClarify,
+		ClarifyID: clarify.ID,
 	}
 	if c.deliverToPreferredIM(ctx, identity, base) {
 		_ = c.srv.Control.MarkClarifyNotified(ctx, identity.TenantID, clarify.ID)
@@ -1456,8 +1585,15 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 		sb.WriteString("This task has a read-only batching recipe backed by a verified candidate-versus-baseline comparison. When several independent local file reads/searches/listings are needed, prefer batch_read with that candidate_id. On any partial failure, follow fallback_required and use ordinary tools. Never batch writes, shell commands, credentials, or network actions.\n")
 	}
 	if workspace != nil && workspace.LocalPath != "" {
+		physicalRoot := workspace.LocalPath
+		for _, binding := range executionRoots {
+			if binding.Role == executionenv.RootRolePrimary {
+				physicalRoot = binding.Path
+				break
+			}
+		}
 		fmt.Fprintf(&sb, "workspace_id: %s\n", workspace.ID)
-		fmt.Fprintf(&sb, "workspace_root: %s\n", workspace.LocalPath)
+		fmt.Fprintf(&sb, "workspace_root: %s\n", physicalRoot)
 		sb.WriteString("workspace_root is authoritative for this turn. Ignore remembered or historical workspace paths unless the user explicitly names one.\n")
 		sb.WriteString("Use workspace_root as the default cwd for local file tools.\n")
 		sb.WriteString("When the user says current project, this repo, this codebase, or names a project without an explicit path, inspect workspace_root first.\n")

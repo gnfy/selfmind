@@ -41,13 +41,13 @@ Read the relevant domain document before editing that domain:
 
 ## Repository Developer Skills
 
-Development-only Agent Skills live under `.agents/skills`. Codex, Gemini, Qwen,
-and other Agent Skills-compatible coding agents discover them there. A thin
-`.claude/skills` entrypoint may redirect Claude Code to the same canonical body;
-compatibility entries must not duplicate the workflow. Agents that scan neither
-directory must use this table as the fallback and read the matching `SKILL.md`
-completely before acting. A `.selfmind-developer-only` marker means the SelfMind
-daemon must not expose that directory as a product runtime Skill.
+Development-only Agent Skills live under `.agents/skills`, where Agent
+Skills-compatible coding agents discover them. A thin `.claude/skills`
+entrypoint may redirect Claude Code to the same canonical body without
+duplicating the workflow. Agents that scan neither directory must use this
+table and read the matching `SKILL.md` completely before acting. A
+`.selfmind-developer-only` marker keeps that directory out of the product
+runtime Skills.
 
 | Skill | Use |
 | --- | --- |
@@ -163,6 +163,9 @@ daemon must not expose that directory as a product runtime Skill.
   than replayed transcript progress. Approvals and clarifications stay visible.
   CLI streams user-originated progress; IM sends bounded milestones and a final
   result, never token deltas.
+- A run's detail events reach only its session and clients attached to it;
+  other sessions get lifecycle and human waits. Only the asking session arms a
+  panel.
 - Never discard the error from writing an event that parks work on a human
   (approval, clarification, recovery, handoff). A push suppressed because a
   client is attached assumes that client was told; when the write failed, that
@@ -180,10 +183,11 @@ daemon must not expose that directory as a product runtime Skill.
   resumable outcomes; dismissal never rewrites Run history. Explicit task ids,
   `/resume` and structured reply edges remain deterministic. Ordinary natural
   language, including brief acceptances and continuations, is Main-owned inside
-  an accountable Run; no word list may select its execution parent. When work
-  is active it is durably steered for Main to apply
-  or queue, and when idle it starts an ordinary turn with bounded work-history
-  tools. Daemon-originated text never steers work. Do not add a run-external LLM
+  an accountable Run; no word list may select its execution parent. Steer only
+  a deliberately selected active Run: another CLI session's ordinary input
+  queues for its own work unless it carries an exact reply edge. When idle it
+  starts an ordinary turn with bounded work-history tools. Daemon-originated
+  text never steers work. Do not add a run-external LLM
   continuity classifier or let model output select permissions, workspaces,
   Thread labels, context rows, or execution scope directly. `fast_classifier` is
   not a continuity authority.
@@ -260,8 +264,9 @@ daemon must not expose that directory as a product runtime Skill.
 - Only clearly read-only batches may run concurrently. Writes, terminals,
   process control, mutation, delegation, and unknown tools are sequential unless
   a reviewed policy says otherwise.
-- Delegation is depth-bounded. Sub-agents receive cloned dispatchers and never
-  mutate the parent's backend.
+- Delegation is depth-bounded. Sub-agents receive cloned dispatchers that keep
+  the parent's middleware chain and run scope, and never mutate the parent's
+  backend.
 - Tool results have raw capture, model-bounded content, and compact user preview
   surfaces. Large output is artifact-backed and recoverable; normal UI never
   dumps raw protocol JSON.
@@ -279,13 +284,11 @@ daemon must not expose that directory as a product runtime Skill.
   target.
 - Tool failures are evidence. Inspect cwd, files, environment, authentication,
   runtime, and package-manager state before changing the next command.
-- Skills are instruction assets, not auto-executed scripts. Their scripts still
-  pass through normal tools and safety. Catalog replacement preserves
-  provenance; automatic curation governs writable, unpinned agent-created
-  assets only and never grants execution authority. Network, delete, external,
-  and delegated effects and user-global widening still require management.
-  Ordinary success is observation, never shadow evidence. Publication and
-  repair thresholds live in `docs/skills-architecture.md`.
+- Skills are instruction assets, not auto-executed scripts; their scripts still
+  pass through normal tools and safety. Curation never grants execution
+  authority, and network, delete, external, and delegated effects and
+  user-global widening still require management. Provenance, curation scope,
+  and publication and repair thresholds live in `docs/skills-architecture.md`.
 
 ## UI and Commands
 
@@ -321,9 +324,8 @@ daemon must not expose that directory as a product runtime Skill.
 - At most one plan is active. Active or paused plans declare an approver and a
   review date; an expired plan needs a verdict. Historical plans are archived
   or decisions, never silently left active.
-- English is canonical for public user/developer pairs; Chinese translations
-  carry the canonical source hash in the manifest. A changed canonical file
-  makes `selfmind docs check` fail until the translation is reviewed.
+- English is canonical for public user/developer pairs. A changed canonical
+  file makes `selfmind docs check` fail until its translation is reviewed.
 - Private documents are declared under `excluded_documents` with a reason.
   Public documents and generated indexes must never link to an excluded file.
 - `selfmind selfcheck` always runs the documentation contract. Do not bypass or

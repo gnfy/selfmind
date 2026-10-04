@@ -65,6 +65,22 @@ func (d *Server) latestPlanForRun(ctx context.Context, tenantID, personID, taskI
 	return nil
 }
 
+func (d *Server) latestPlanPayloadForRun(ctx context.Context, identity *control.IdentityContext, taskID, runID string) string {
+	if d == nil || d.Control == nil || identity == nil || taskID == "" || runID == "" {
+		return ""
+	}
+	events, err := d.Control.ListRunEvents(ctx, identity.TenantID, identity.PersonID, taskID, runID, 50)
+	if err != nil {
+		return ""
+	}
+	for _, event := range events {
+		if event.Type == "plan.updated" {
+			return string(event.Payload)
+		}
+	}
+	return ""
+}
+
 // latestPlanPayloadForTask returns the newest plan.updated payload verbatim, so
 // a re-attaching client can restore its pinned plan through the same renderer
 // live events feed rather than a second, drifting representation.
@@ -196,15 +212,21 @@ func reconcileStructuredOutcome(outcome api.RunOutcome) api.RunOutcome {
 		outcome.CompletionReason = "completed"
 		outcome.Resumable = false
 	case "waiting_external":
-		outcome.CompletionReason = "waiting_external"
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "waiting_external"
+		}
 		outcome.Resumable = false
 	case "waiting_user":
 		// Prepared work awaiting the user's explicit go-ahead. Distinct from
 		// blocked (an obstacle) so task health reads correctly.
-		outcome.CompletionReason = "waiting_user"
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "waiting_user"
+		}
 		outcome.Resumable = false
 	case "waiting_finalization":
-		outcome.CompletionReason = "waiting_finalization"
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "waiting_finalization"
+		}
 		outcome.Resumable = false
 	case "blocked":
 		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {

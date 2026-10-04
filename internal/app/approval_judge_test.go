@@ -20,6 +20,7 @@ import (
 // judgeCaptureProvider records the request the judge sends so tests can pin the
 // output budget and determinism settings.
 type judgeCaptureProvider struct {
+	owner    llm.ModelContext
 	last     llm.ChatRequest
 	reply    string
 	response *llm.ChatResponse
@@ -30,6 +31,7 @@ func (p *judgeCaptureProvider) ChatCompletion(ctx context.Context, messages []ll
 }
 
 func (p *judgeCaptureProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.owner = llm.ModelContextFrom(ctx)
 	p.last = req
 	if p.response != nil {
 		return p.response, nil
@@ -74,6 +76,9 @@ func TestApprovalJudgeBudgetCoversReasoning(t *testing.T) {
 	}
 	if !strings.Contains(provider.last.SystemPrompt, `"risk_level"`) || !strings.Contains(provider.last.SystemPrompt, `"rationale"`) {
 		t.Fatal("the structured guardian contract must be reinforced at the system level")
+	}
+	if provider.owner.Role != llm.RoleFastClassifier {
+		t.Fatalf("approval admission role = %q", provider.owner.Role)
 	}
 }
 
@@ -205,14 +210,19 @@ func TestApprovalJudgeNilProviderStaysNil(t *testing.T) {
 }
 
 func TestApprovalJudgeRejectsIncompleteDecision(t *testing.T) {
-	for _, reason := range []string{"length", "max_tokens"} {
+	// The judge reads the same stop classification as the answer path: a
+	// verdict cut short, halted, or filtered is not a verdict however it parses.
+	for reason, class := range map[string]string{
+		"length": "output_limit", "max_tokens": "output_limit", "incomplete": "output_limit",
+		"aborted": "output_limit", "content_filter": "output_filtered",
+	} {
 		t.Run(reason, func(t *testing.T) {
 			provider := &judgeCaptureProvider{response: &llm.ChatResponse{
 				Content:      `{"outcome":"approve","risk_level":"low","user_authorization":"high","rationale":"Allowed"}`,
 				FinishReason: reason, Usage: llm.UsageStats{OutputTokens: 1024, ReasoningOutputTokens: 1000},
 			}}
 			_, err := NewApprovalJudge(provider).Judge(context.Background(), "review")
-			if err == nil || !strings.Contains(err.Error(), "output_limit") {
+			if err == nil || !strings.Contains(err.Error(), class) {
 				t.Fatalf("incomplete decision must not authorize execution: %v", err)
 			}
 		})

@@ -8,45 +8,6 @@ import (
 	"selfmind/internal/kernel/llm"
 )
 
-// AggregateFinalResponse consumes a gateway response and returns one final
-// message. Message-based channels should use this instead of forwarding stream
-// chunks to users.
-func AggregateFinalResponse(resp *HandleResponse) (string, llm.UsageStats, error) {
-	if resp == nil {
-		return "", llm.UsageStats{}, nil
-	}
-	if !resp.IsStreaming {
-		return resp.Content, resp.Usage, nil
-	}
-	var content strings.Builder
-	var usage llm.UsageStats
-	sawStream := false
-	var summary EventSummary
-	for event := range resp.Stream {
-		if event.Err != nil && event.EventType == "" {
-			return content.String(), usage, event.Err
-		}
-		if event.EventType != "" {
-			summary.Observe(event)
-			if event.EventType == "stream" {
-				sawStream = true
-				content.WriteString(event.Content)
-			}
-			if event.Usage != nil {
-				usage = *event.Usage
-			}
-			continue
-		}
-		if event.Content != "" && !sawStream {
-			content.WriteString(event.Content)
-		}
-		if event.Usage != nil {
-			usage = *event.Usage
-		}
-	}
-	return summary.WithContent(content.String()), usage, nil
-}
-
 type EventSummary struct {
 	phases       []string
 	toolsStarted []string
@@ -177,6 +138,10 @@ func humanCompletionReason(reason string) string {
 		return "tool budget exhausted"
 	case "output_limit":
 		return "model output limit reached"
+	case "provider_interrupted":
+		return "model provider interrupted the reply"
+	case "provider_filtered":
+		return "model provider filtered the reply"
 	case "max_iterations":
 		return "iteration limit reached"
 	default:

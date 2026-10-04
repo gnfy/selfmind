@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -86,10 +87,26 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 		if params := toolDefinitionParameters(def); params != nil {
 			if props, ok := params["properties"].(map[string]interface{}); ok {
 				sb.WriteString("Parameters:\n")
-				for name, raw := range props {
-					if field, ok := raw.(map[string]interface{}); ok {
-						sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", name, field["type"], field["description"]))
+				names := make([]string, 0, len(props))
+				for name := range props {
+					names = append(names, name)
+				}
+				// Sorted, so one catalog renders one prompt and a cached prefix
+				// survives the next request.
+				sort.Strings(names)
+				for _, name := range names {
+					field, ok := props[name].(map[string]interface{})
+					if !ok {
+						continue
 					}
+					line := "- " + name
+					if kind, _ := field["type"].(string); kind != "" {
+						line += " (" + kind + ")"
+					}
+					if description, _ := field["description"].(string); strings.TrimSpace(description) != "" {
+						line += ": " + strings.TrimSpace(description)
+					}
+					sb.WriteString(line + "\n")
 				}
 			}
 		}
@@ -99,7 +116,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 }
 
 func planToolGuidance(strategy TaskStrategy) string {
-	const boundary = "Call update_plan by itself; do not batch it with reads or other tools because it changes the work-unit boundary. "
+	const boundary = "Call update_plan by itself; do not batch it with reads or other tools because it changes the work-unit boundary. Only finish_run may follow the final snapshot in the same response. "
 	const planStepDiscipline = "Every call replaces the prior plan, so send the complete snapshot. Update it at meaningful progress or scope changes, not around every tool call. Report the actual state of each step and resolve every step before a done outcome. Existing step IDs preserve execution attribution; work-unit IDs need not be repeated.\n"
 	// planTriggers replaces an abstract test the model had to interpret with
 	// the concrete situations that call for a plan.
@@ -127,4 +144,14 @@ func planGuidanceEscalationNudge(strategy TaskStrategy, planEvidenceTools int) s
 	return fmt.Sprintf("SelfMind observed %d substantive tool action(s) in this run and no visible plan, so this work is multi-step in practice. ", planEvidenceTools) +
 		planToolGuidance(strategy.WithPlanRequired()) +
 		"Do not perform extra tool work for the plan itself: describe the work already done and what genuinely remains, then continue. If only one step remains, send a one-step snapshot and finish normally.\n"
+}
+
+// planStaleReminder tells the model that its visible plan has not moved for a
+// while. It changes nothing: the model decides whether the plan is still true.
+func planStaleReminder(actionsSinceUpdate int, openSteps []string) string {
+	first := ""
+	if len(openSteps) > 0 {
+		first = strings.TrimSpace(openSteps[0])
+	}
+	return fmt.Sprintf("SelfMind: the visible plan was last updated %d tool action(s) ago and still has %d open step(s), starting with %q. If the work has moved on, send a complete update_plan snapshot with the real progress in the same response as your next action; if the plan is still accurate, just continue. Do not do extra tool work for the plan.\n", actionsSinceUpdate, len(openSteps), first)
 }

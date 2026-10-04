@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -328,6 +329,12 @@ func (a *Agent) Provider() llm.Provider {
 	return a.llm
 }
 
+// ActiveProvider is the transport the current run uses: its per-run choice
+// when one is set, else the default coding provider.
+func (a *Agent) ActiveProvider() llm.Provider {
+	return a.activeLLM()
+}
+
 // ProviderToolCatalogPreview renders the daemon's actual foreground tool
 // surface through the active provider adapter. Gateway status and doctor use
 // this read-only snapshot; request preflight uses the same llm contract.
@@ -437,6 +444,10 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 			return resp, nil
 		}
 		lastErr = err
+		var providerWait *llm.ProviderWait
+		if errors.As(err, &providerWait) {
+			return nil, providerWait
+		}
 
 		// Context cancel/deadline: stop immediately, do not retry.
 		if ctx.Err() != nil {
@@ -447,6 +458,9 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 			return nil, err
 		}
 		llm.RefreshProviderNetworkRouteAfterError(err)
+		if wait := llm.DeferRateLimit(ctx, err, llm.Backoff(attempt, a.retryBase, a.retryCap, rand.Float64)); wait != nil {
+			return nil, wait
+		}
 		if attempt == max {
 			break
 		}
@@ -492,6 +506,10 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 			return ch, nil
 		}
 		lastErr = err
+		var providerWait *llm.ProviderWait
+		if errors.As(err, &providerWait) {
+			return nil, providerWait
+		}
 
 		if ctx.Err() != nil {
 			return nil, err
@@ -500,6 +518,9 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 			return nil, err
 		}
 		llm.RefreshProviderNetworkRouteAfterError(err)
+		if wait := llm.DeferRateLimit(ctx, err, llm.Backoff(attempt, a.retryBase, a.retryCap, rand.Float64)); wait != nil {
+			return nil, wait
+		}
 		if attempt == max {
 			break
 		}
@@ -900,8 +921,15 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			},
 		})
 	}
-	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats) {
+	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats, finishReason string, callErr error) {
 		route := llm.DescribeProviderRoute(a.activeLLM())
+		var wait *llm.ProviderWait
+		deferred := errors.As(callErr, &wait)
+		var providerDispatched *bool
+		if deferred {
+			status = "deferred"
+			providerDispatched = &wait.Dispatched
+		}
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type: "provider.call.usage",
 			Payload: map[string]interface{}{
@@ -911,6 +939,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"iteration":                   iteration,
 				"transport":                   transport,
 				"status":                      status,
+				"provider_dispatched":         providerDispatched,
 				"duration_ms":                 time.Since(started).Milliseconds(),
 				"input_tokens":                usage.InputTokens,
 				"output_tokens":               usage.OutputTokens,
@@ -922,6 +951,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"cache_creation_reported":     usage.CacheCreationReported,
 				"uncached_input_tokens":       uncachedInputTokens(usage),
 				"billed_input_tokens":         uncachedInputTokens(usage),
+				"finish_reason":               boundedFinishReason(finishReason),
+				"stop_reason":                 providerCallStopReason(finishReason, callErr),
 			},
 		})
 	}
@@ -1075,7 +1106,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				resumed = append(resumed, message)
 			}
 		}
-		resumed = append(resumed, llm.Message{Role: "user", Content: initialPrompt})
+		if !exactLoopReplayFromContext(ctx) {
+			resumed = append(resumed, llm.Message{Role: "user", Content: initialPrompt})
+		}
 		messages = a.contextEngine.TruncateMessagesCtx(ctx, resumed)
 		// Deferred-tool activation is scoped to this run's context, so a resumed
 		// run starts with an empty set and would refuse every capability it had
@@ -1185,6 +1218,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 
 	var continuedAnswer strings.Builder
+	// answerCarry holds answer prose written since the last action tool, in
+	// responses whose only calls recorded the plan or outcome. The final answer
+	// keeps it: a model often writes its answer in the same response as
+	// finish_run and then closes with one line. A final answer the plan gate
+	// sends back is not carried; the model answers again after reconciling.
+	var answerCarry strings.Builder
+	callIDPrefix := delegatedCallIDPrefix(ctx)
+	// streamLost records that some answer text never reached the event
+	// consumer; turn.completed carries it so the gap stays visible.
+	streamLost := false
 
 	maxIterations := a.maxIterations
 	if strategy.MaxIterations > 0 && (maxIterations <= 0 || strategy.MaxIterations < maxIterations) {
@@ -1212,7 +1255,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	toolUseCounts := map[string]int{}
 	closureNoticeIssued := false
 	toolBudgetRepairIssued := false
+	toolAvailabilityRepairIssued := false
 	toolBudgetExhausted := false
+	toolAdmissionRefused := false
 	planSeen := false
 	var unresolvedPlanSteps []string
 	planRepairAttempts := 0
@@ -1222,6 +1267,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	// multi-step work escalates the plan guidance below.
 	planEvidenceTools := 0
 	planGuidanceEscalated := false
+	// Tool actions since the last successful plan update, and the count at the
+	// last stale-plan reminder, so each reminder waits for new actions.
+	actionsSincePlanUpdate, actionsAtPlanReminder := 0, 0
 	successfulFinishStatus := ""
 	var finishRepair finishCorrection
 	tryExtendToolBudget := func(iteration int) bool {
@@ -1373,6 +1421,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"plan_policy":          string(iterationStrategy.PlanPolicy),
 			}})
 		}
+		// Stale plan reminder, at the same seam and appended at the tail so the
+		// cached request prefix survives. It only says the plan has not moved
+		// for a while; the model decides whether the plan is still true.
+		if successfulFinishStatus == "" && !toolBudgetExhausted && planSeen &&
+			shouldRemindStalePlan(iterationStrategy, len(unresolvedPlanSteps), actionsSincePlanUpdate, actionsAtPlanReminder) {
+			actionsAtPlanReminder = actionsSincePlanUpdate
+			messages = append(messages, llm.Message{Role: "user", Content: planStaleReminder(actionsSincePlanUpdate, unresolvedPlanSteps)})
+			EmitAgentEvent(eventCh, AgentEvent{Type: "strategy.plan_stale_reminder", Payload: map[string]interface{}{
+				"iteration": i, "actions_since_plan_update": actionsSincePlanUpdate,
+				"open_steps": len(unresolvedPlanSteps), "threshold": planStaleReminderThreshold,
+			}})
+		}
 		var fullResp strings.Builder
 		var reasoningResp strings.Builder
 		var nativeCalls []llm.ToolCall
@@ -1388,7 +1448,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if strings.TrimSpace(content) == "" || eventCh == nil {
 				return
 			}
-			EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content, Phase: phase})
+			if !EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content, Phase: phase}) {
+				streamLost = true
+				reportStreamLoss(ctx)
+			}
 		}
 		flushPendingStream := func() {
 			if suppressLegacyToolStream {
@@ -1468,12 +1531,30 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		if err != nil {
 			return "", totalUsage, err
 		}
-		streamCtx, streamCancel := context.WithCancel(ctx)
+		// The provider gate may yield instead of occupying this Agent during a
+		// capacity/429 wait only after the exact pre-call ledger is durable.
+		// A failed checkpoint leaves the ordinary cancellable wait in place.
+		modelCtx := ctx
+		if successfulFinishStatus == "" {
+			if sink := loopCheckpointSinkFromContext(ctx); sink != nil {
+				checkpoint := LoopCheckpoint{Iteration: i, Outcome: StepContinueModel, Detail: "provider_request", Messages: cloneLoopMessages(messages)}
+				if saveErr := sink.SaveLoopCheckpoint(context.WithoutCancel(ctx), checkpoint); saveErr == nil {
+					modelCtx = llm.WithProviderWaitDeferral(ctx)
+				} else {
+					EmitAgentEvent(eventCh, AgentEvent{Type: "checkpoint.failed", Payload: map[string]interface{}{"iteration": i, "outcome": string(StepContinueModel), "error": saveErr.Error()}})
+				}
+			}
+		}
+		streamCtx, streamCancel := context.WithCancel(modelCtx)
 		streamCallStarted := time.Now()
 		streamCh, err := a.streamChatWithRetry(streamCtx, messages, iterationStrategy)
 		if err != nil {
 			streamCancel()
-			emitProviderCallUsage(i, "stream", "failed", streamCallStarted, llm.UsageStats{})
+			emitProviderCallUsage(i, "stream", "failed", streamCallStarted, llm.UsageStats{}, "", err)
+			var providerWait *llm.ProviderWait
+			if errors.As(err, &providerWait) {
+				return "", totalUsage, providerWait
+			}
 			if ctx.Err() != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
 			}
@@ -1495,12 +1576,15 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				return "", totalUsage, prepareErr
 			}
 			fallbackCallStarted := time.Now()
-			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, fallbackMessages, iterationStrategy)
+			fallbackResp, fallbackErr := a.chatResponseWithRetry(modelCtx, fallbackMessages, iterationStrategy)
 			if fallbackErr != nil {
-				emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{})
+				emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{}, "", fallbackErr)
+				if errors.As(fallbackErr, &providerWait) {
+					return "", totalUsage, providerWait
+				}
 				return "", totalUsage, fmt.Errorf("llm chat: %w; non-stream fallback failed: %v", err, fallbackErr)
 			}
-			emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage)
+			emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage, fallbackResp.FinishReason, nil)
 			appendRecoveredChatResponse(fallbackResp)
 		} else {
 			streamStarted := time.Now()
@@ -1570,11 +1654,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if streamErr != nil {
 				streamStatus = "failed"
 			}
-			emitProviderCallUsage(i, "stream", streamStatus, streamCallStarted, streamCallUsage)
+			emitProviderCallUsage(i, "stream", streamStatus, streamCallStarted, streamCallUsage, finishReason, streamErr)
 
 			if streamErr != nil {
 				if ctx.Err() != nil {
 					return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
+				}
+				if fullResp.Len() == 0 && len(nativeCalls) == 0 {
+					if wait := llm.DeferRateLimit(modelCtx, streamErr, llm.Backoff(1, a.retryBase, a.retryCap, rand.Float64)); wait != nil {
+						return "", totalUsage, wait
+					}
 				}
 				if streamErr != nil {
 					llm.RefreshProviderNetworkRouteAfterError(streamErr)
@@ -1613,12 +1702,20 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						return "", totalUsage, prepareErr
 					}
 					fallbackCallStarted := time.Now()
-					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, recoveryMessages, iterationStrategy)
+					fallbackCtx := ctx
+					if fullResp.Len() == 0 && len(nativeCalls) == 0 {
+						fallbackCtx = modelCtx
+					}
+					fallbackResp, fallbackErr := a.chatResponseWithRetry(fallbackCtx, recoveryMessages, iterationStrategy)
 					if fallbackErr != nil {
-						emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{})
+						emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{}, "", fallbackErr)
+						var providerWait *llm.ProviderWait
+						if errors.As(fallbackErr, &providerWait) {
+							return "", totalUsage, providerWait
+						}
 						return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
 					}
-					emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage)
+					emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage, fallbackResp.FinishReason, nil)
 					appendRecoveredChatResponse(fallbackResp)
 					streamErr = nil
 				}
@@ -1627,55 +1724,63 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		flushPendingStream()
 		resp := textutil.CleanUTF8(fullResp.String())
 		legacyMarkupPresent := legacyToolMarkerIndex(resp) >= 0
-		nativeCalls = normalizeToolCallIDs(nativeCalls, i)
-		outputLimited := responseStoppedForOutputLimit(finishReason)
+		nativeCalls = normalizeToolCallIDs(nativeCalls, i, callIDPrefix)
+		stopped := llm.ClassifyStopReason(finishReason)
+		outputLimited := stopped.Continuable()
+		// A filtered reply is cut short like one that ran out of output, but
+		// asking the model to continue would only ask it to route around the
+		// provider's decision, so it ends the turn unfinished instead.
+		outputFiltered := stopped == llm.StopFiltered
+		outputCut := outputLimited || outputFiltered
 		calls := nativeCalls
+		var refused []refusedToolCall
 		var droppedForBudget, droppedForLifecycle, deferredAcrossWorkUnitBoundary, deferredAcrossWatchHandoff int
-		if outputLimited {
+		if outputCut {
 			if len(calls) == 0 {
-				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i)
+				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix)
 			}
 		} else {
-			calls, droppedForBudget = filterToolCallsByStrategyAndBudget(nativeCalls, iterationStrategy, actionToolsUsed)
-			calls, droppedForLifecycle = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
-			droppedForBudget += droppedForLifecycle
-			if len(calls) == 0 {
-				var legacyDropped int
-				calls, legacyDropped = filterToolCallsByStrategyAndBudget(legacyToolCallsToLLM(ExtractToolCalls(resp), i), iterationStrategy, actionToolsUsed)
-				var legacyLifecycleDropped int
-				calls, legacyLifecycleDropped = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
-				droppedForBudget += legacyDropped
-				droppedForBudget += legacyLifecycleDropped
-				droppedForLifecycle += legacyLifecycleDropped
+			requested := nativeCalls
+			if len(requested) == 0 {
+				requested = legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix)
 			}
-			if len(calls) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
+			calls, refused, droppedForBudget, droppedForLifecycle = admitToolCalls(requested, iterationStrategy, actionToolsUsed, toolUseCounts)
+			if len(calls) == 0 && len(refused) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
 				droppedForBudget = 1
 			}
 			calls, deferredAcrossWorkUnitBoundary = isolateWorkUnitBoundaryCall(calls)
 			calls, deferredAcrossWatchHandoff = isolateExternalWatchHandoffCalls(calls)
 		}
 		assistantContent := resp
-		if len(calls) > 0 || droppedForBudget > 0 || legacyMarkupPresent {
+		if len(calls) > 0 || len(refused) > 0 || droppedForBudget > 0 || legacyMarkupPresent {
 			assistantContent = toolBudgetSafeAssistantContent(resp)
 		}
 
+		assistantMessageIndex := len(messages)
 		messages = append(messages, llm.Message{
 			Role: "assistant", Content: assistantContent,
-			ReasoningContent: reasoningResp.String(), ToolCalls: calls,
+			ReasoningContent: reasoningResp.String(), ToolCalls: requestedCallsWithRefusals(calls, refused),
 		})
 		history.Steps = append(history.Steps, assistantContent)
 
 		// Sync turn to external memory providers after each assistant response
 		a.syncTurn(ctx, tenantID, messages)
+		for idx, rejected := range refused {
+			toolAdmissionRefused = true
+			call := rejected.call
+			result := a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, rejected.err)
+			messages = append(messages, result.msg)
+			history.Steps = append(history.Steps, result.step)
+		}
 
-		if outputLimited {
+		if outputCut {
 			for idx, call := range calls {
-				result := a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, incompleteToolResponseError{})
+				result := a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, incompleteToolResponseError{stopped: stopped})
 				messages = append(messages, result.msg)
 				history.Steps = append(history.Steps, result.step)
 			}
 		}
-		if len(calls) > 0 && !outputLimited {
+		if len(calls) > 0 && !outputCut {
 			if !nativeToolActivityAnnounced {
 				emitAgentActivity(eventCh, toolCallActivity(calls), "tool_selection", i)
 			}
@@ -1696,6 +1801,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				if unresolved, ok := unresolvedPlanStepsFromToolCall(calls[idx]); ok {
 					planSeen = true
 					unresolvedPlanSteps = unresolved
+					actionsSincePlanUpdate, actionsAtPlanReminder = 0, 0
 				}
 				if status, ok := finishRunStatusFromToolCall(calls[idx]); ok {
 					successfulFinishStatus = status
@@ -1737,6 +1843,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			for _, res := range results {
 				history.Steps = append(history.Steps, res.step)
 				messages = append(messages, res.msg)
+				if planSeen && !isLifecycleToolName(res.toolName) {
+					actionsSincePlanUpdate++
+				}
 				if res.success && !isLifecycleToolName(res.toolName) {
 					if _, seen := successfulActionEvidence[res.signature]; !seen {
 						successfulActionEvidence[res.signature] = struct{}{}
@@ -1758,9 +1867,17 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					"live_bytes":   liveToolResultBytes(messages), "iteration": i,
 				}})
 			}
+			if onlyBookkeepingCalls(calls) && !legacyMarkupPresent {
+				carryAnswerProse(&answerCarry, resp)
+			} else {
+				answerCarry.Reset()
+			}
 			handoff, handoffReady := lifecycleHandoffFromToolResults(results)
 			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
 			if handoffReady {
+				if handoff.Status == "waiting_user" {
+					reportTurnPause(ctx, TurnPause{Reason: handoff.CompletionReason, Message: strings.TrimSpace(handoff.Message), NeedApproval: handoff.NeedApprove})
+				}
 				payload := map[string]interface{}{
 					"status":            handoff.Status,
 					"summary":           handoff.Summary,
@@ -1777,11 +1894,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				messages = append(messages, llm.Message{Role: "assistant", Content: answer})
 				history.Steps = append(history.Steps, answer)
 				history.Outcome = answer
-				a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, answer, messages)
+				a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, answer, handoff.Status, messages)
 				a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 				completion := resolveTurnCompletion(completionSignals{FinishStatus: handoff.Status})
 				recordStep(i, StepCompleteTurn, handoff.Status)
-				emitTurnCompleted(eventCh, answer, completion)
+				emitTurnCompleted(eventCh, answer, completion, streamLost)
 				return answer, totalUsage, nil
 			}
 			if deferredAcrossWorkUnitBoundary > 0 {
@@ -1822,39 +1939,72 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			recordStep(i, StepContinueModel, "budget_exhausted_finalize")
 			continue
 		}
+		if len(refused) > 0 && droppedForBudget == 0 {
+			if !toolAvailabilityRepairIssued {
+				toolAvailabilityRepairIssued = true
+				if i+1 >= maxIterations {
+					maxIterations = i + 2
+				}
+				messages = append(messages, llm.Message{Role: "user", Content: "The requested tools are unavailable in the current strategy or turn phase. None of the refused calls was executed. Use the exposed tools to record an honest outcome, or write the answer with the missing work clearly identified. Do not repeat the unavailable action."})
+				recordStep(i, StepContinueModel, "tool_availability_finalize")
+				continue
+			}
+			resp = toolBudgetSafeAssistantContent(resp)
+			if strings.TrimSpace(resp) == "" {
+				resp = "A necessary tool action was unavailable and was not executed. The remaining work is unresolved; inspect this run's refusal evidence before continuing."
+			}
+			messages[assistantMessageIndex].Content = resp
+		}
 		if droppedForBudget > 0 {
 			resp = toolBudgetSafeAssistantContent(resp)
 			if strings.TrimSpace(resp) == "" {
 				resp = "I reached the tool budget before I could complete the remaining tool step. Based on the evidence already collected, I should stop here and state the next action instead of calling more tools."
 			}
-			history.Steps[len(history.Steps)-1] = resp
-			messages[len(messages)-1].Content = resp
+			messages[assistantMessageIndex].Content = resp
 		}
 
 		if outputLimited {
+			interrupted := stopped == llm.StopInterrupted
 			continuationHint := "Continue from the exact point where your previous answer stopped. Do not repeat earlier content. Finish the remaining answer completely."
 			if len(calls) > 0 || legacyMarkupPresent {
 				resp = "The model reached its output limit before the tool request was complete. No tools from that response were executed."
+				if interrupted {
+					resp = "The model provider interrupted the reply before the tool request was complete. No tools from that response were executed."
+				}
 				continuationHint = "Your previous response was cut off. None of its tool calls were executed. Re-issue only the still-needed calls with complete arguments; do not continue partial arguments."
 			} else if resp != "" {
 				continuedAnswer.WriteString(resp)
 			}
 			if i+1 < maxIterations {
-				emitAgentActivity(eventCh, "Continuing because the model reached its output limit", "continuation", i)
+				activity, detail := "Continuing because the model reached its output limit", "output_limit_continue"
+				if interrupted {
+					activity, detail = "Continuing because the model provider interrupted the reply", "provider_interrupted_continue"
+				}
+				emitAgentActivity(eventCh, activity, "continuation", i)
 				messages = append(messages, llm.Message{
 					Role:    "user",
 					Content: continuationHint,
 				})
-				recordStep(i, StepContinueModel, "output_limit_continue")
+				recordStep(i, StepContinueModel, detail)
 				continue
 			}
 			history.Outcome = continuedAnswer.String()
 			if len(calls) > 0 || legacyMarkupPresent {
 				history.Outcome = strings.TrimSpace(history.Outcome + "\n" + resp)
 			}
-			completion := resolveTurnCompletion(completionSignals{OutputLimited: true})
+			completion := resolveTurnCompletion(completionSignals{OutputLimited: !interrupted, OutputInterrupted: interrupted})
 			recordStep(i, StepCompleteTurn, completion.Reason)
-			emitTurnCompleted(eventCh, history.Outcome, completion, "finish_reason", finishReason)
+			emitTurnCompleted(eventCh, history.Outcome, completion, streamLost, "finish_reason", finishReason)
+			return history.Outcome, totalUsage, nil
+		}
+		if outputFiltered {
+			if len(calls) > 0 || legacyMarkupPresent {
+				resp = "The model provider filtered the reply before its tool request was complete. No tools from that response were executed."
+			}
+			history.Outcome = strings.TrimSpace(continuedAnswer.String() + resp)
+			completion := resolveTurnCompletion(completionSignals{OutputFiltered: true})
+			recordStep(i, StepCompleteTurn, completion.Reason)
+			emitTurnCompleted(eventCh, history.Outcome, completion, streamLost, "finish_reason", finishReason)
 			return history.Outcome, totalUsage, nil
 		}
 		if continuedAnswer.Len() > 0 {
@@ -1870,7 +2020,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if i+1 >= maxIterations {
 				maxIterations = i + 2
 			}
-			emitAgentActivity(eventCh, "The visible plan still has unresolved steps; reconciling final progress", "plan_reconciliation", i)
+			emitAgentActivity(eventCh, "The visible plan still has unresolved steps; reconciling final progress", PlanReconciliationPhase, i)
 			messages = append(messages, llm.Message{
 				Role: "user",
 				// This used to read "mark finished steps completed and steps
@@ -1890,22 +2040,31 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		// No tool calls — task complete
+		if carried := strings.TrimSpace(answerCarry.String()); carried != "" {
+			if closing := strings.TrimSpace(resp); closing != "" {
+				resp = carried + "\n\n" + closing
+			} else {
+				resp = carried
+			}
+		}
 		history.Outcome = resp
 
+		completion := resolveTurnCompletion(completionSignals{
+			FinishStatus:         successfulFinishStatus,
+			ToolBudgetExhausted:  toolBudgetExhausted,
+			ToolAdmissionRefused: toolAdmissionRefused,
+			PlanUnresolved:       planUnresolved,
+		})
+
 		// Append this turn to the spine under the same key used to load it
-		// (slim entry: user text + final answer + touched paths), and refresh
-		// the task-coherent FTS index.
-		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, messages)
+		// (slim entry: user text + final answer + touched paths + how the turn
+		// ended), and refresh the task-coherent FTS index.
+		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, completion.outcomeLabel(), messages)
 
 		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 
-		completion := resolveTurnCompletion(completionSignals{
-			FinishStatus:        successfulFinishStatus,
-			ToolBudgetExhausted: toolBudgetExhausted,
-			PlanUnresolved:      planUnresolved,
-		})
 		recordStep(i, StepCompleteTurn, completion.Reason)
-		emitTurnCompleted(eventCh, resp, completion)
+		emitTurnCompleted(eventCh, resp, completion, streamLost)
 		return resp, totalUsage, nil
 	}
 
@@ -1921,10 +2080,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		outcome = "SelfMind reached the safety iteration limit before finishing. The collected evidence and next steps are in this task's events; reply \"continue\" to resume."
 	}
 	history.Outcome = outcome
-	a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, outcome, messages)
 	completion := resolveTurnCompletion(completionSignals{IterationCapped: true})
+	a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, outcome, completion.outcomeLabel(), messages)
 	recordStep(maxIterations, StepCompleteTurn, completion.Reason)
-	emitTurnCompleted(eventCh, outcome, completion)
+	emitTurnCompleted(eventCh, outcome, completion, streamLost)
 	return outcome, totalUsage, nil
 }
 
@@ -2017,6 +2176,34 @@ func uncachedInputTokens(usage llm.UsageStats) int {
 	return max(usage.InputTokens-usage.CacheReadInputTokens, 0)
 }
 
+// PlanReconciliationPhase marks the activity event emitted when the plan gate
+// sends a final answer back. That answer is not the run's answer.
+const PlanReconciliationPhase = "plan_reconciliation"
+
+// onlyBookkeepingCalls reports a response whose calls only recorded the run's
+// plan or outcome, so its prose may be the answer rather than narration.
+func onlyBookkeepingCalls(calls []llm.ToolCall) bool {
+	for _, call := range calls {
+		if !IsRunBookkeepingTool(call.Function) {
+			return false
+		}
+	}
+	return len(calls) > 0
+}
+
+// carryAnswerProse appends one response's prose to the carried answer as its
+// own paragraph.
+func carryAnswerProse(carry *strings.Builder, prose string) {
+	prose = strings.TrimSpace(prose)
+	if prose == "" {
+		return
+	}
+	if carry.Len() > 0 {
+		carry.WriteString("\n\n")
+	}
+	carry.WriteString(prose)
+}
+
 // toolNamesForTrace renders a compact tool-name list for the agent.step trace.
 func toolNamesForTrace(calls []llm.ToolCall) string {
 	names := make([]string, 0, len(calls))
@@ -2031,11 +2218,14 @@ func toolNamesForTrace(calls []llm.ToolCall) string {
 // emitTurnCompleted is the single turn.completed emission point. Extra
 // key/value pairs are appended to the payload (used for finish_reason on the
 // output-limit path).
-func emitTurnCompleted(eventCh chan string, content string, c turnCompletion, extra ...string) {
+func emitTurnCompleted(eventCh chan string, content string, c turnCompletion, streamLost bool, extra ...string) {
 	payload := map[string]interface{}{
 		"status":            c.Status,
 		"completion_reason": c.Reason,
 		"resumable":         c.Resumable,
+	}
+	if streamLost {
+		payload["stream_incomplete"] = true
 	}
 	for i := 0; i+1 < len(extra); i += 2 {
 		payload[extra[i]] = extra[i+1]
@@ -2054,14 +2244,31 @@ func lastAssistantContent(messages []llm.Message) string {
 	return ""
 }
 
-func responseStoppedForOutputLimit(reason string) bool {
-	reason = strings.ToLower(strings.TrimSpace(reason))
-	switch reason {
-	case "max_tokens", "length", "max_output_tokens", "output_limit":
-		return true
-	default:
-		return strings.Contains(reason, "max_token") || strings.Contains(reason, "length")
+// providerCallStopReason records how a provider call ended. A failed call has
+// no reply to classify, and a stream that closed before its terminal event is
+// named separately because what it delivered was a prefix.
+func providerCallStopReason(finishReason string, err error) string {
+	var wait *llm.ProviderWait
+	if errors.As(err, &wait) {
+		return "deferred_" + wait.Reason
 	}
+	switch {
+	case llm.IsStreamUnterminated(err):
+		return "unterminated"
+	case err != nil:
+		return "error"
+	}
+	return string(llm.ClassifyStopReason(finishReason))
+}
+
+// boundedFinishReason keeps the provider's raw value for diagnosis without
+// letting an unexpected payload grow the event.
+func boundedFinishReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if len(reason) > 64 {
+		return textutil.TruncateBytes(reason, 64)
+	}
+	return reason
 }
 
 func splitUTF8PrefixKeepTail(s string, keepBytes int) (string, string) {
@@ -2489,12 +2696,12 @@ func (a *Agent) autoRecallWithBudget(ctx context.Context, tenantID, query string
 // tool intermediates and the system prompt stay in run events, not the spine.
 // Internal-subsystem keys keep the legacy full-blob shape (their history is
 // run-local scaffolding, not the person's work record).
-func (a *Agent) saveHistory(ctx context.Context, tenantID, histKey, channel, userInput, finalAnswer string, messages []llm.Message) {
+func (a *Agent) saveHistory(ctx context.Context, tenantID, histKey, channel, userInput, finalAnswer, outcome string, messages []llm.Message) {
 	if a.memory == nil {
 		return
 	}
 	if histKey == SpineTrajectoryKey {
-		entry := buildSpineEntry(ctx, userInput, finalAnswer, messages)
+		entry := buildSpineEntry(ctx, userInput, finalAnswer, outcome, messages)
 		if strings.TrimSpace(entry.User) != "" || strings.TrimSpace(entry.Assistant) != "" {
 			if data, err := json.Marshal(entry); err == nil {
 				a.memory.SaveTrajectory(ctx, tenantID, histKey, data)

@@ -216,10 +216,11 @@ var ErrAttentionPendingControl = errors.New("attention cannot be dismissed while
 const nonWorkToolNamesSQL = `('update_plan', 'finish_run', 'queue_user_input', 'work_select', 'work_search',
 	'work_inspect', 'session_search', 'memory', 'clarify', 'set_delivery_target')`
 
-// runWorkEvidenceSQL is the one definition of "this Run did work", written over
-// the runs alias r: a multi-step plan, a dispatched non-read-only effect from a
-// work tool, a control object, a deliberate continuation edge, or a handoff
-// that carries next steps or changed files. Finalization promotion, the
+// runWorkEvidenceSQL is the one definition of durable work ownership, written
+// over the runs alias r: an accepted queue claim, a multi-step plan, a
+// dispatched non-read-only effect from a work tool, a control object, a
+// deliberate continuation edge, or a handoff that carries next steps or
+// changed files. Finalization promotion, the
 // interrupted Attention gate, and interaction projection must agree on it.
 //
 // The plan clause requires MORE THAN ONE step: `update_plan` is meant for
@@ -232,6 +233,8 @@ const nonWorkToolNamesSQL = `('update_plan', 'finish_run', 'queue_user_input', '
 // dispatcher proved read-only (effect_class 'observation') is a look, not work,
 // whatever its exit status: `git status` alone does not make a Q&A resumable.
 const runWorkEvidenceSQL = `(COALESCE(r.resumes_run_id, '') != ''
+	OR EXISTS (SELECT 1 FROM task_queue q WHERE q.tenant_id = r.tenant_id AND q.person_id = r.person_id
+	     AND q.run_id = r.id AND q.status IN ('started', 'done', 'failed'))
 	OR EXISTS (SELECT 1 FROM run_plan_steps s WHERE s.tenant_id = r.tenant_id AND s.run_id = r.id
 	     GROUP BY s.plan_version HAVING COUNT(*) > 1)
 	OR EXISTS (SELECT 1 FROM tool_ledger l WHERE l.tenant_id = r.tenant_id AND l.run_id = r.id
@@ -250,7 +253,7 @@ const runWorkEvidenceSQL = `(COALESCE(r.resumes_run_id, '') != ''
 // edges, the latest Run of its Thread (a newer Run supersedes older parked
 // state), and for an interrupted Run backed by work evidence. Attention, the
 // settled work list, and dismissal must agree on it.
-const resumableRunConditionSQL = `r.status IN ` + resumableRunStatusSQL + `
+const resumableRunConditionSQL = `r.execution_class = 'work' AND r.status IN ` + resumableRunStatusSQL + `
 	AND COALESCE(r.attention_dismissed_at, 0) = 0
 	AND COALESCE(r.resumed_by_run_id, '') = ''
 	AND COALESCE((SELECT json_extract(outcome.payload_json, '$.outcome.completion_reason')
@@ -363,7 +366,7 @@ const (
 const attentionRankedSQL = `WITH signals AS (
 	SELECT r.thread_id, r.id AS run_id, 'active' AS activity, 1 AS priority, r.started_at AS activity_at
 	  FROM runs r
-	 WHERE r.tenant_id = ? AND r.person_id = ? AND r.status = 'running'
+	 WHERE r.tenant_id = ? AND r.person_id = ? AND r.status = 'running' AND r.execution_class = 'work'
 	UNION ALL
 	SELECT r.thread_id, r.id, 'needs_attention', 2, COALESCE(a.updated_at, a.created_at)
 	  FROM approval_requests a JOIN runs r ON r.id = a.run_id AND r.thread_id = a.thread_id

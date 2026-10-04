@@ -385,7 +385,7 @@ func TestUnifiedEventStreamReconnectsFromDurableCursor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	got := make(chan api.RunEvent, 2)
-	go c.streamEvents(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "tester"}, nil, func(event api.RunEvent) {
+	go c.streamEvents(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "tester"}, "", nil, func(event api.RunEvent) {
 		got <- event
 		if event.Cursor == 12 {
 			cancel()
@@ -555,7 +555,7 @@ func TestRespondApproval(t *testing.T) {
 // the endpoint, and the mapping of daemon refusals onto the typed errors the
 // TUI renders (409 → ErrNoActiveRun, 429 → ErrSteerBusy).
 func TestSteerRun(t *testing.T) {
-	var gotText string
+	var gotReq api.RunSteerRequest
 	status := http.StatusOK
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/runs/steer" || r.Method != http.MethodPost {
@@ -564,7 +564,7 @@ func TestSteerRun(t *testing.T) {
 		}
 		var req api.RunSteerRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		gotText = req.Text
+		gotReq = req
 		if status != http.StatusOK {
 			w.WriteHeader(status)
 			return
@@ -574,23 +574,23 @@ func TestSteerRun(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "")
-	if err := c.SteerRun("focus on the failing test"); err != nil {
+	if err := c.SteerRun("run-123", "session-a", "focus on the failing test"); err != nil {
 		t.Fatalf("SteerRun: %v", err)
 	}
-	if gotText != "focus on the failing test" {
-		t.Fatalf("server saw text = %q", gotText)
+	if gotReq.Text != "focus on the failing test" || gotReq.RunID != "run-123" || gotReq.Channel != "session-a" {
+		t.Fatalf("server saw request = %+v", gotReq)
 	}
 
 	status = http.StatusConflict
-	if err := c.SteerRun("late guidance"); !errors.Is(err, ErrNoActiveRun) {
+	if err := c.SteerRun("run-123", "session-a", "late guidance"); !errors.Is(err, ErrNoActiveRun) {
 		t.Fatalf("409 should map to ErrNoActiveRun, got %v", err)
 	}
 	status = http.StatusTooManyRequests
-	if err := c.SteerRun("rapid guidance"); !errors.Is(err, ErrSteerBusy) {
+	if err := c.SteerRun("run-123", "session-a", "rapid guidance"); !errors.Is(err, ErrSteerBusy) {
 		t.Fatalf("429 should map to ErrSteerBusy, got %v", err)
 	}
 	status = http.StatusInternalServerError
-	err := c.SteerRun("broken daemon")
+	err := c.SteerRun("run-123", "session-a", "broken daemon")
 	if err == nil || errors.Is(err, ErrNoActiveRun) || errors.Is(err, ErrSteerBusy) {
 		t.Fatalf("500 should be a generic error, got %v", err)
 	}
@@ -789,4 +789,12 @@ func writeJSONResp(w http.ResponseWriter, v any) {
 func writeTestRunEvent(w http.ResponseWriter, event api.RunEvent) {
 	data, _ := json.Marshal(event)
 	_, _ = w.Write([]byte("event: " + event.Type + "\ndata: " + string(data) + "\n\n"))
+}
+
+// A sub-agent's tool call keeps its mark on the way to the terminal.
+func TestToolStartKeepsTheSubAgentMark(t *testing.T) {
+	event, ok := eventToStream(control.Event{Type: "tool.started", Payload: []byte(`{"tool":"read_file","tool_call_id":"sub_1","args":"{}","delegated":true}`)})
+	if !ok || event.ToolName != "read_file" || event.Payload["delegated"] != true {
+		t.Fatalf("event = %+v ok=%v", event, ok)
+	}
 }

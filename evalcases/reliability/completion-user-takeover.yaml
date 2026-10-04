@@ -42,6 +42,10 @@ assert_state:
     type: plan.updated
     payload_contains: '"source":"resumed_run"'
     count_gte: 1
+  - on: events
+    type: plan.updated
+    payload_contains: '"cancellation_disposition":"user_takeover"'
+    count_gte: 1
   - on: file
     path: draft.txt
     contains: Draft ready

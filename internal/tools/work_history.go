@@ -292,6 +292,10 @@ func (t *WorkInspectTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	if run.ID == scope.RunID {
 		result["selection_notice"] = "This is the current Run and it is already selected. Continue directly with its plan and evidence; work_select only accepts a different historical Run."
+	} else if resumable, candidates, err := runIsResumable(ctx, t.store, scope.ControlTenantID, scope.PersonID, run); err != nil {
+		return "", err
+	} else if !resumable {
+		result["selection_notice"] = settledRunNotice(run, candidates)
 	}
 	if run.FinishedAt != nil {
 		result["finished_at"] = run.FinishedAt.UTC().Format(time.RFC3339)
@@ -345,6 +349,21 @@ func (t *WorkInspectTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	encoded, _ := json.Marshal(result)
 	return string(encoded), nil
+}
+
+// settledRunNotice guides the next step after inspecting a run that cannot be
+// resumed. Proposing a resume for every past run sent qwen, continuing a
+// finished plan, into a refusal it then had to recover from.
+func settledRunNotice(run *control.Run, candidates []control.Run) string {
+	status := strings.TrimSpace(run.Status)
+	if status == "" {
+		status = "settled"
+	}
+	notice := "Inspection is read-only and did not attach this turn. This run is " + status + " and cannot be resumed; "
+	if len(candidates) > 0 {
+		return notice + "the resumable run of the same work is " + candidates[0].ID + ". If the current request continues that work, call work_select with action resume on " + candidates[0].ID + ". For this run's outcome or files, call work_select with action observe. If the request is unrelated, do not select it."
+	}
+	return notice + "work that builds on it continues in the current run. For its outcome or files, call work_select with action observe. If the request is unrelated, do not select it."
 }
 
 func summarizeWorkEvent(event control.Event) workEventSummary {

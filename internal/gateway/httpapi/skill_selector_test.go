@@ -87,6 +87,9 @@ func TestTaskSkillBindingRequiresDeterministicAttachAndHonorsFailureGuard(t *tes
 
 func TestSkillCandidateCatalogueIssuesDurableWorkUnitRefs(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	// Candidate count must not depend on skills in the developer's checkout
+	// ancestors (for example ~/.codex/skills when testing a Codex worktree).
+	t.Chdir(t.TempDir())
 	ctx := context.Background()
 	store := controltest.NewStore(t)
 	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "candidate-selector", "Candidate Selector")

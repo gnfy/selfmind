@@ -1,0 +1,84 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "`settings/feature.txt"
+    },
+    {
+      "usage": {
+        "input_tokens": 4387,
+        "output_tokens": 6,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "` currently contains:\n\n```text\nOBSERVED_FEATURE_ENABLED\n```\n\nRegarding work continuity:\n- **Resumed previous"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 28,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " work:** No previous work was resumed in this turn.\n- **Narrative vs. actions:** Prior references to resuming"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " an old task or `REMEMBERED_FEATURE_DISABLED` were historical context from an earlier turn. In this turn"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": ", no continuation occurred; the only action performed was directly reading `settings/feature.txt` in the workspace."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 23,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 840,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

@@ -11,7 +11,7 @@ import (
 // explicitRoleProvider builds a provider only when the role is explicitly
 // configured. Management judges/labelers run automatically in the background;
 // falling back to the main coding provider would hide cost and latency.
-func explicitRoleProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string, role llm.ModelRole) llm.Provider {
+func explicitRoleProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string, role llm.ModelRole, gates ...*llm.RequestGate) llm.Provider {
 	if cfg == nil {
 		return nil
 	}
@@ -28,14 +28,14 @@ func explicitRoleProvider(mem *memory.MemoryManager, cfg *config.Config, tenantI
 		tenantID = "default"
 	}
 	applyDynamicKeyGetter(provider, mem, tenantID, roleProviderName)
-	return provider
+	return gateResolvedProvider(firstRequestGate(gates), cfg, roleProviderSelection(role, roleProviderName, roleCfg), provider)
 }
 
 // configuredAuxiliaryRoleProvider resolves an automatic/background role from
 // an explicit models.roles override first and models.auxiliary second. It
 // deliberately returns nil when neither is configured so foreground coding
 // capacity is never borrowed invisibly by recurring work.
-func configuredAuxiliaryRoleProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string, role llm.ModelRole) llm.Provider {
+func configuredAuxiliaryRoleProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string, role llm.ModelRole, gates ...*llm.RequestGate) llm.Provider {
 	if cfg == nil {
 		return nil
 	}
@@ -52,7 +52,7 @@ func configuredAuxiliaryRoleProvider(mem *memory.MemoryManager, cfg *config.Conf
 		tenantID = "default"
 	}
 	applyDynamicKeyGetter(provider, mem, tenantID, roleProviderName)
-	return provider
+	return gateResolvedProvider(firstRequestGate(gates), cfg, roleProviderSelection(role, roleProviderName, roleCfg), provider)
 }
 
 func auxiliaryModelRoles() []llm.ModelRole {

@@ -119,11 +119,19 @@ func ProbeResolvedModel(ctx context.Context, rt modelruntime.Runtime) ModelRoleP
 // ProbeResolvedModelForRole validates the actual maintenance/approval contract
 // for bounded roles and the complete native-tool loop for the foreground
 // coding model.
-func ProbeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, role string) ModelRoleProbe {
-	return probeResolvedModelForRole(ctx, rt, role, buildProviderFromRuntime(rt))
+func ProbeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, role string, gates ...*llm.RequestGate) ModelRoleProbe {
+	gate := firstRequestGate(gates)
+	return probeResolvedModelForRole(ctx, rt, role, gate.Wrap(buildProviderFromRuntime(rt), providerRequestRouteID(rt)), gate)
 }
 
-func probeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, role string, provider llm.Provider) ModelRoleProbe {
+func probeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, role string, provider llm.Provider, gates ...*llm.RequestGate) ModelRoleProbe {
+	owner := llm.ModelContextFrom(ctx)
+	owner.Purpose = "model_probe"
+	owner.Role = llm.ModelRole(role)
+	if owner.Role == "" {
+		owner.Role = llm.RoleDefaultChat
+	}
+	ctx = llm.WithModelContext(ctx, owner)
 	probe := ModelRoleProbe{Provider: rt.Provider, Model: rt.Model}
 	start := time.Now()
 	if provider == nil {
@@ -172,7 +180,7 @@ func probeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, rol
 			probe.Err = fmt.Errorf("approval contract failed: %w", err)
 		} else {
 			probe.ApprovalContractPassed = true
-			probe.ApprovalThinkingMode, probe.ApprovalNotice = probeApprovalReasoningOff(ctx, rt, resp, time.Since(start))
+			probe.ApprovalThinkingMode, probe.ApprovalNotice = probeApprovalReasoningOff(ctx, rt, resp, time.Since(start), gates...)
 		}
 	}
 	probe.Latency = time.Since(start)
@@ -189,7 +197,7 @@ func probeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, rol
 // evidence: no endpoint or model name selects the encoding. Whether it may be
 // written is decided against the provider's configuration, which alone knows
 // if a person declared a thinking_mode.
-func probeApprovalReasoningOff(ctx context.Context, rt modelruntime.Runtime, first *llm.ChatResponse, firstLatency time.Duration) (string, string) {
+func probeApprovalReasoningOff(ctx context.Context, rt modelruntime.Runtime, first *llm.ChatResponse, firstLatency time.Duration, gates ...*llm.RequestGate) (string, string) {
 	if !approvalResponseReasoned(first) || modelruntime.LowestLatencyReasoning(rt) != "none" {
 		return "", ""
 	}
@@ -207,7 +215,8 @@ func probeApprovalReasoningOff(ctx context.Context, rt modelruntime.Runtime, fir
 	retryCtx, cancel := context.WithTimeout(ctx, modelProbeTimeout(modelProbeContractApproval))
 	defer cancel()
 	started := time.Now()
-	resp, err := chatProbe(retryCtx, buildProviderFromRuntime(candidate), modelProbeRequest(candidate, false, modelProbeContractApproval))
+	provider := firstRequestGate(gates).Wrap(buildProviderFromRuntime(candidate), providerRequestRouteID(candidate))
+	resp, err := chatProbe(retryCtx, provider, modelProbeRequest(candidate, false, modelProbeContractApproval))
 	if err != nil || modelProbeContentError(resp) != nil || maintenanceFinishReasonTruncated(resp.FinishReason) ||
 		tools.ValidateStructuredApprovalReply(resp.Content) != nil || approvalResponseReasoned(resp) {
 		return "", stillReasoning

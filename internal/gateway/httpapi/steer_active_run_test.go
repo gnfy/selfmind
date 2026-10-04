@@ -9,6 +9,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/control/controltest"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 )
@@ -59,6 +60,8 @@ func TestSteerActiveRunSharedCore(t *testing.T) {
 	resp, ok := daemon.steerActiveRun(ctx, identity, active, api.MessageRequest{
 		Channel: "weixin",
 		Content: "also handle the retry path",
+		ExecutionRoots: []executionenv.RootBinding{{Path: "/work/weixin", Role: executionenv.RootRolePrimary,
+			AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace}},
 	})
 	if !ok {
 		t.Fatal("steerActiveRun returned ok=false on an empty buffer")
@@ -69,6 +72,10 @@ func TestSteerActiveRunSharedCore(t *testing.T) {
 	if resp.Turn == nil || resp.Turn.Status != "accepted" {
 		t.Fatalf("expected turn status 'accepted', got %+v", resp.Turn)
 	}
+	// The run belongs to another session, so the receipt says where it went.
+	if !strings.Contains(resp.Content, "Long task, which is running in another session") {
+		t.Fatalf("receipt for another session's run = %q", resp.Content)
+	}
 	select {
 	case got := <-steerCh:
 		if got.Content != "also handle the retry path" || got.ID == "" {
@@ -77,6 +84,17 @@ func TestSteerActiveRunSharedCore(t *testing.T) {
 	default:
 		t.Fatal("guidance did not reach the steering channel")
 	}
+	// The input keeps the roots its own request froze, for when Main queues it
+	// as separate work.
+	if rows, err := store.ListUnconsumedSteering(ctx, identity.TenantID, run.ID, 10); err != nil || len(rows) != 1 ||
+		!rows[0].RootsRecorded || len(rows[0].ExecutionRoots) != 1 || rows[0].ExecutionRoots[0].Path != "/work/weixin" {
+		t.Fatalf("steering rows = %+v err=%v, want the request's own roots recorded", rows, err)
+	}
+	if own, ok := daemon.steerActiveRun(ctx, identity, active, api.MessageRequest{Channel: "cli", Content: "and the timeout path"}); !ok ||
+		strings.Contains(own.Content, "another session") || !strings.Contains(own.Content, "Added your guidance to Long task") {
+		t.Fatalf("receipt from the run's own session = %q (ok=%v)", own.Content, ok)
+	}
+	<-steerCh
 
 	events, err := store.ListTaskEvents(ctx, task.ID, 10)
 	if err != nil {

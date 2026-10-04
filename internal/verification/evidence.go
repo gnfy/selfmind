@@ -30,15 +30,18 @@ type Binding struct {
 }
 
 type Check struct {
-	ToolCallID string   `json:"tool_call_id,omitempty"`
-	Kind       string   `json:"kind,omitempty"`
-	Command    string   `json:"command,omitempty"`
-	CWD        string   `json:"cwd,omitempty"`
-	Status     string   `json:"status"`
-	ExitCode   int      `json:"exit_code"`
-	StartedAt  int64    `json:"started_at_unix_nano,omitempty"`
-	FinishedAt int64    `json:"finished_at_unix_nano,omitempty"`
-	Binding    *Binding `json:"binding,omitempty"`
+	ToolCallID     string   `json:"tool_call_id,omitempty"`
+	Kind           string   `json:"kind,omitempty"`
+	Command        string   `json:"command,omitempty"`
+	CWD            string   `json:"cwd,omitempty"`
+	Status         string   `json:"status"`
+	ExitCode       int      `json:"exit_code"`
+	StartedAt      int64    `json:"started_at_unix_nano,omitempty"`
+	FinishedAt     int64    `json:"finished_at_unix_nano,omitempty"`
+	Binding        *Binding `json:"binding,omitempty"`
+	ProcessStarted *bool    `json:"process_started,omitempty"`
+	Invoked        *bool    `json:"invoked,omitempty"`
+	EffectState    string   `json:"effect_state,omitempty"`
 }
 
 func ValidBinding(b *Binding) bool {

@@ -112,8 +112,12 @@ func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 		TriageRationale:   msg.Rationale,
 		TriageRisk:        msg.Risk,
 		Options:           msg.Options,
+		Delegated:         msg.Delegated,
 	}, m.common.Theme)
 	record := "⚠ Approval required: " + msg.Tool
+	if msg.Delegated {
+		record += " (sub-agent)"
+	}
 	if reason := strings.TrimSpace(msg.Reason); reason != "" {
 		record += " — " + reason
 	}

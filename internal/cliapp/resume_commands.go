@@ -25,19 +25,24 @@ func (a *App) extractTaskResumeCommand() (bool, int) {
 	return true, 0
 }
 
-func (a *App) pinResumeTask(processor func(context.Context, api.MessageRequest) (api.MessageResponse, int)) error {
+// pinResumeTask continues the named task before the terminal opens, as the
+// terminal's own session, so the terminal then shows that run as its own.
+func (a *App) pinResumeTask(processor func(context.Context, api.MessageRequest) (api.MessageResponse, int), session string) error {
 	ref := strings.TrimSpace(a.resumeTaskRef)
 	if ref == "" || processor == nil {
 		return nil
 	}
 	userID := platformUserID()
 	clientCWD, _ := os.Getwd()
+	if strings.TrimSpace(session) == "" {
+		session = "cli"
+	}
 	resp, status := processor(a.ctx, api.MessageRequest{
 		TenantID:       os.Getenv("SELF_TENANT_ID"),
 		Platform:       "cli",
 		PlatformUserID: userID,
 		DisplayName:    userID,
-		Channel:        "cli",
+		Channel:        session,
 		Content:        "/resume " + ref,
 		WorkspaceID:    os.Getenv("SELF_WORKSPACE_ID"),
 		ClientCWD:      clientCWD,

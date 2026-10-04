@@ -14,7 +14,7 @@ turns:
       Please review draft.txt and deliver it to the recipient I will specify
       later. Delivery is part of the required outcome. You may read the draft
       now, but I have not supplied the recipient and I am not taking over delivery.
-      Do not guess a recipient or send anything. Finish this turn with a
+      Record a two-step plan that preserves review and required delivery as distinct steps. Do not cancel necessary delivery just because the recipient is unavailable. Do not guess a recipient or send anything. Finish this turn with a
       structured outcome and tell me what remains necessary to finish the work.
 expect:
   status: waiting_user
@@ -24,6 +24,10 @@ assert_state:
   - on: run
     field: status
     eq: waiting_user
+  - on: events
+    type: plan.updated
+    payload_contains: '"plan":'
+    count_gte: 1
   - on: file
     path: draft.txt
     contains: Draft ready

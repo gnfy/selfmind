@@ -393,7 +393,7 @@ func TestShouldParallelizeToolCalls(t *testing.T) {
 }
 
 func TestLegacyToolCallsToLLM(t *testing.T) {
-	calls := legacyToolCallsToLLM([]ToolCall{{Name: "read_file", Args: `{"path":"a.txt"}`}}, 2)
+	calls := legacyToolCallsToLLM([]ToolCall{{Name: "read_file", Args: `{"path":"a.txt"}`}}, 2, "")
 	if len(calls) != 1 {
 		t.Fatalf("len(calls) = %d, want 1", len(calls))
 	}

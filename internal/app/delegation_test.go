@@ -57,7 +57,7 @@ func TestDelegateSubBackendStripsDelegateAtDefaultDepth(t *testing.T) {
 	parent := newDelegationTestBackend()
 	cfg := config.DelegationConfig{} // MaxDepth unset => default 1
 
-	sub := buildDelegateSubBackend(nil, parent, cfg, nil, nil, 1)
+	sub := buildDelegateSubBackend(parent, cfg, nil, nil, nil, 1)
 	disp, ok := sub.(*tools.Dispatcher)
 	if !ok {
 		t.Fatalf("expected *tools.Dispatcher sub-backend, got %T", sub)
@@ -83,12 +83,12 @@ func TestDelegateSubBackendKeepsDelegateBelowBudget(t *testing.T) {
 	cfg := config.DelegationConfig{MaxDepth: 2}
 
 	// depth 1 < maxDepth 2 => nested delegate_task present.
-	mid := buildDelegateSubBackend(nil, parent, cfg, nil, nil, 1).(*tools.Dispatcher)
+	mid := buildDelegateSubBackend(parent, cfg, nil, nil, nil, 1).(*tools.Dispatcher)
 	if !hasTool(mid, "delegate_task") {
 		t.Fatal("depth 1 with MaxDepth 2 should retain a nested delegate_task")
 	}
 	// depth 2 == maxDepth 2 => leaf, stripped.
-	leaf := buildDelegateSubBackend(nil, parent, cfg, nil, nil, 2).(*tools.Dispatcher)
+	leaf := buildDelegateSubBackend(parent, cfg, nil, nil, nil, 2).(*tools.Dispatcher)
 	if hasTool(leaf, "delegate_task") {
 		t.Fatal("depth 2 == MaxDepth must be a leaf without delegate_task")
 	}
@@ -100,7 +100,7 @@ func TestDelegateSubBackendToolsetFilter(t *testing.T) {
 	parent := newDelegationTestBackend()
 	cfg := config.DelegationConfig{MaxDepth: 2}
 
-	sub := buildDelegateSubBackend(nil, parent, cfg, nil, []string{"file"}, 1).(*tools.Dispatcher)
+	sub := buildDelegateSubBackend(parent, cfg, nil, nil, []string{"file"}, 1).(*tools.Dispatcher)
 	if !hasTool(sub, "read_file") {
 		t.Error("file toolset should include read_file")
 	}

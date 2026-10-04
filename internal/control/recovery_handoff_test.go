@@ -54,3 +54,38 @@ func TestRecoveryHandoffProjectsPlanEffectsAndSafeAttempts(t *testing.T) {
 		t.Fatalf("cross-person handoff=%+v err=%v", leaked, err)
 	}
 }
+
+func TestRecoveryHandoffKeepsGoalAcrossCapacityContinuations(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, root := newRecoveryFixture(t)
+	if _, err := store.AcceptSteering(ctx, SteeringMessage{TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: root.ID, Content: "Inspect only; do not change files"}); err != nil {
+		t.Fatal(err)
+	}
+	parent := root
+	for range 3 {
+		if err := store.FinishRun(ctx, identity.TenantID, parent.ID, "waiting_external"); err != nil {
+			t.Fatal(err)
+		}
+		child, err := store.StartRunWithOptions(ctx, task, "cli", "Continue this exact work from its durable model-call checkpoint", StartRunOptions{ResumesRunID: parent.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent = child
+	}
+	interruptForAutomaticRecoveryTest(t, store, identity, task, parent)
+	handoff, err := store.RecoveryHandoffForRun(ctx, identity.TenantID, identity.PersonID, parent.ID)
+	if err != nil || handoff == nil || handoff.OriginalGoal != root.InputSummary {
+		t.Fatalf("original user goal replaced by continuation instructions: %+v, %v", handoff, err)
+	}
+	if len(handoff.UserRequirements) != 1 || handoff.UserRequirements[0] != "Inspect only; do not change files" {
+		t.Fatalf("lost user correction: %+v", handoff)
+	}
+	// A forged or incompatible execution edge cannot import another scope's goal.
+	if _, err := store.db.ExecContext(ctx, "UPDATE runs SET workspace_id='another-workspace' WHERE id=?", root.ID); err != nil {
+		t.Fatal(err)
+	}
+	handoff, err = store.RecoveryHandoffForRun(ctx, identity.TenantID, identity.PersonID, parent.ID)
+	if err != nil || handoff == nil || handoff.OriginalGoal != "" || len(handoff.UserRequirements) != 0 {
+		t.Fatalf("cross-scope original goal was exposed: %+v, %v", handoff, err)
+	}
+}

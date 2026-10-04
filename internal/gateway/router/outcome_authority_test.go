@@ -74,6 +74,24 @@ func TestResumableTurnStatusEarnsTheNotice(t *testing.T) {
 	}
 }
 
+// A reply the provider cut short says what cut it, so a content filter is not
+// mistaken for an output budget that a larger limit would fix.
+func TestProviderStopsAreNamedInTheNotice(t *testing.T) {
+	for reason, want := range map[string]string{
+		"output_limit":         "(model output limit reached)",
+		"provider_interrupted": "(model provider interrupted the reply)",
+		"provider_filtered":    "(model provider filtered the reply)",
+	} {
+		var s EventSummary
+		s.Observe(llm.StreamEvent{EventType: "turn.completed", Payload: map[string]interface{}{
+			"status": "incomplete", "completion_reason": reason, "resumable": true,
+		}})
+		if got := s.WithContent("The report begins"); !strings.HasPrefix(got, "The report begins") || !strings.Contains(got, want) {
+			t.Fatalf("%s: %q", reason, got)
+		}
+	}
+}
+
 // A clean run with a final answer keeps the answer untouched.
 func TestSuccessfulOutcomeKeepsTheAnswer(t *testing.T) {
 	var s EventSummary

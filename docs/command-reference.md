@@ -82,7 +82,7 @@ selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind resume [n|run_id]
 selfmind search [query]
-selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|revoke] ...
+selfmind ws [<n|workspace_id>|default <n|id>|add|trust|untrust|grants|observe|effect|revoke] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -139,6 +139,7 @@ selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
+selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
 selfmind ws revoke <capability> [workspace_id]
 ```
 
@@ -157,6 +158,15 @@ selfmind ws revoke <capability> [workspace_id]
   shape, network choice, and credential choice. Editing or replacing the script
   invalidates it automatically. Use `--all-args` only when every argument shape
   is read-only; otherwise put the allowed argument prefix after `--`.
+- `effect` records the local owner's complete target assertion for one exact
+  script invocation. In opt-in parallel mode, matching calls claim those
+  targets instead of the person-wide unknown target. The script bytes,
+  workspace, every argument, network mode, and credential mode must still
+  match. Invoke the executable script directly (for example,
+  `./scripts/deploy.sh`), so a different interpreter cannot change its behavior.
+  This does not approve execution or release a target after dispatch;
+  normal approval and watcher-backed effect resolution still apply. Changed,
+  ambiguous, or unregistered commands return to the unknown-target lane.
 - `approve` and `reject` accept a pending approval token when more than one
   request is waiting.
 - `stop` cancels the active run; with no active run it dismisses only the exact
@@ -417,10 +427,13 @@ before normal agent dispatch.
 /help
 /model
 /id
-/status
+/status [run_id]
+/views [run_id] | /views archive|restore|prune <run_id>
+/apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/diag [learning|memory|context|models|delivery|execution|tools]
+/effects [resolve <claim_id> <watch_id>]
+/diag [learning|memory|context|models|delivery|inbound|execution|tools]
 /report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
@@ -437,8 +450,35 @@ before normal agent dispatch.
 /forget <text|ref>
 /ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)
 /add-dir [path]  (bare = list this session's extra roots)
+/attach [run_id]  (bare = the task running in another session)
 ```
 
+- Each terminal is its own session. It shows its own runs in full; another
+  session's running task, approval, or question appears as one status line,
+  and an approval panel opens only in the session whose run asks.
+  `/attach [run_id]` watches another session's running task here without
+  taking it over: its final answer still goes to the session that started it.
+  A new message typed in another session stays with that session; an exact
+  reply or explicit attach can target the other Run.
+- `/views` lists recent managed Git execution views, and `/views <run_id>`
+  shows committed, uncommitted, untracked, and ignored work in one exact owned Run.
+  `/apply <run_id>` delivers a clean committed view as a separate
+  `selfmind/<view_id>` branch in its original repository. The source branch
+  may have advanced and its worktree may contain another Run's changes; the
+  original repository identity and admitted baseline object must still be
+  intact. Delivery never changes the checked-out branch or discards view
+  files. Uncommitted, untracked, or ignored work in the view stays there for review.
+  After a Run is done, `/views archive <run_id>` moves a delivered, clean view
+  into daemon retention. It refuses views referenced by unfinished work or a
+  queued request, and refuses any undelivered or ignored files. `/views restore
+  <run_id>` moves the same bytes and Git metadata back. Archiving preserves
+  storage; it does not delete files or reclaim disk space. `/views prune
+  <run_id>` explicitly reclaims an archived checkout only when the Run is done,
+  no unfinished work refers to it, its content is clean and delivered, and no
+  extra local Git work exists. It first protects the delivered commit with a
+  source-repository ref, then removes the checkout and its local Git metadata.
+  The checkout cannot be restored after pruning; a failed safety check leaves
+  the archive intact.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.
@@ -449,7 +489,10 @@ before normal agent dispatch.
 - `/approvals grants` and `/approvals revoke <n>` remain available for viewing
   and removing historical remembered grants.
 - `/mode` accepts `on-request`, `read-only`, `auto-edit`, `full-auto`, or
-  `smart`.
+  `smart`. It applies to newly admitted Runs. Existing Runs keep their admitted
+  mode and pending approvals still need `/approve` or `/reject`.
+- `/status` lists all active Runs when more than one is executing;
+  `/status <run_id>` shows one active Run without selecting by recency.
 - `/notify` chooses the bound IM destination for CLI-origin progress and final
   notifications.
 - `/new [title]` keeps its existing task-label behavior. `/new --run <request>`
@@ -463,7 +506,8 @@ before normal agent dispatch.
   clears ONE listed item without running it — the exit a stale item otherwise
   lacked, since retention never archives anything with pending human input and
   pinning an item to dismiss it starts the work you were putting down. Naming
-  the executing Run routes to bare `/stop`, which cancels it. The compatibility
+  an executing Run cancels that Run only. With multiple active Runs, bare
+  `/stop` asks for an exact Run ID. The compatibility
   `Task.status` field on the wire carries the derived vocabulary `active`,
   `needs_attention`, `monitoring`, or `resumable` for Attention, `done` for
   settled listed work, and `archived` for archived Threads; the value is
@@ -492,6 +536,19 @@ before normal agent dispatch.
   The default and `all` views are numbered: use `/watchers 1` to inspect the
   first watcher or `/watchers cancel 1` to stop monitoring it. Cancelling a
   watcher does not cancel the external operation.
+- `/effects` lists unresolved external effects belonging to you. When an
+  unclassified remote command has no adapter that can settle its result,
+  inspect its exact Run and a successful finalized watcher for that Run,
+  then use `/effects resolve <claim_id> <watch_id>` to confirm they refer to
+  the same operation. The runtime checks ownership, Run identity, watcher
+  provenance and terminal evidence before releasing every target of that
+  effect. A model's claim of success cannot release it.
+  An effect profile can bind one exact observation script command to the same
+  target set. Register that script as read-only with `ws observe` too. A
+  `status_json.v1` watcher created by the same Run after dispatch can then
+  release its exact claim automatically after a durable successful verdict,
+  provided both grants and the script hash remain valid. All other effects
+  retain the explicit `/effects resolve` path.
 - `/remember <preference>` saves an explicitly stated personal preference to
   long-term memory (person memory is preference-only); it applies across every
   endpoint. `/forget <text|ref>` forgets one — by its text, or by the ref
@@ -501,6 +558,10 @@ before normal agent dispatch.
   and quarantined external tools are listed by name, issue class, and schema
   hash; raw schemas and values are never printed. Quarantined tools are not
   sent to models and cannot execute.
+- `/diag inbound` lists only the current person's IM inputs that were saved
+  but not confirmed as accepted. A `dispatching` receipt may already have
+  caused effects, so this command never retries it; inspect the related work
+  before sending the request again.
 - `/diag context` starts with the latest provider request estimate, including
   native tool schemas, and labels the separately assembled prompt subtotal as
   excluding native schemas. Fingerprint-capable providers show prefix coverage;

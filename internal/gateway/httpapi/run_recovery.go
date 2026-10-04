@@ -52,9 +52,11 @@ func (c *RunCoordinator) activeRunIDs() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var ids []string
-	for _, active := range c.active {
-		if active != nil && active.RunID != "" {
-			ids = append(ids, active.RunID)
+	for _, runs := range c.active {
+		for active := range runs {
+			if active.RunID != "" {
+				ids = append(ids, active.RunID)
+			}
 		}
 	}
 	return ids
@@ -150,7 +152,7 @@ func (d *Server) recoverApprovalContinuations(ctx context.Context, drain bool) i
 			PersonID:       approval.PersonID,
 			Platform:       route.Platform,
 			PlatformUserID: route.PlatformUserID,
-			Channel:        fallback(channel, route.Platform),
+			Channel:        continuationChannel(route.Platform, fallback(channel, route.Platform), sourceRun),
 			Content:        parkedApprovalDecisionContent(approval.Status, approval.DecisionNote),
 			WorkspaceID:    recoveryWorkspaceID(sourceRun, task),
 			ExecutionRoots: executionRoots,
@@ -248,6 +250,7 @@ func (d *Server) sweepStuckRuns(threshold time.Duration) {
 	}
 	if recovered > 0 {
 		log.Warn("gateway: recovered stuck runs/tasks", "count", recovered, "stale_after", threshold.String())
+		d.drainQueuedWhenReady(context.Background())
 	}
 	// A maintenance job stuck 'running' means the daemon died mid-pass; the
 	// claim CAS makes reset-then-reclaim safe, so return it to pending.

@@ -467,7 +467,7 @@ func EvaluateModeDecision(ctx context.Context, mode ApprovalMode, projectRoot, t
 //     floor, which returned long before this point.
 //  5. Human ask (scope.Approval / clarify). An "approve + remember" decision
 //     records a grant for the next same-class call.
-func SmartApprovalMiddleware(projectRoot string) Middleware {
+func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]interface{}) error) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			toolName, _ := args["_tool_name"].(string)
@@ -493,23 +493,11 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// DANGER detector said, not the latest message written for display.
 			dangerousReason := reason
 			externalUnknown := unclassifiedExternalToolCall(args)
-			// Live mode lookup: the mode is resolved PER ASK, not frozen at run
-			// start, so a /mode change from any endpoint governs the in-flight
-			// run's later asks. ModeGetter carries the gateway's re-resolution
-			// (explicit request mode wins, else current persisted preference);
-			// the static snapshot is the fallback when no getter is installed.
+			// A Run keeps the mode chosen at admission. A later person-level
+			// /mode change applies to new Runs, not this one's authority.
 			mode := ApprovalOnRequest
-			if hasScope {
-				switch {
-				case scope.ModeGetter != nil:
-					if live := scope.ModeGetter(); live != "" {
-						mode = live
-					} else if scope.ApprovalMode != "" {
-						mode = scope.ApprovalMode
-					}
-				case scope.ApprovalMode != "":
-					mode = scope.ApprovalMode
-				}
+			if hasScope && scope.ApprovalMode != "" {
+				mode = scope.ApprovalMode
 			}
 
 			// Durable watcher finalization is deliberately unattended. It consumes
@@ -525,6 +513,16 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					return "", rejectOperation(rejectionCodeCapability, "operation rejected: unattended watcher finalization cannot perform privileged or out-of-workspace operations; finish waiting_user instead")
 				}
 				return next(args)
+			}
+
+			// Read-only admission checks run after the hard floor and execution
+			// classification, before grants, judge calls, or a human ask. They do
+			// not reserve resources or authorize dispatch; the inner middleware
+			// still claims atomically after approval.
+			for _, check := range prechecks {
+				if err := check(args); err != nil {
+					return "", err
+				}
 			}
 
 			// Layer 2: mode bypass, including sandbox containment (C1). A
@@ -567,9 +565,17 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// their review. Only a call the runtime can already prove harmless
 			// stops paying for a judgement about whether it was asked for.
 			contained := containment.AutoApprove() && !denyForcesHuman
+			// Parallel Runs may retain a configured network route and selected
+			// credentials. A shell using either can mutate a shared target that
+			// local workspace isolation cannot protect. Only a proven observation
+			// can skip the one-shot human decision; neither full-auto nor the
+			// model judge can authorize an unclassified remote effect.
+			parallelRemote := hasScope && scope.ParallelWork && isExecTool(toolName) &&
+				!containment.ObservationOnly &&
+				(containment.Network == containmentNetworkShared || containment.Credentials == containmentCredentialsSelected)
 			semanticReview := mode == ApprovalSmart && intentSnapshot.ModelAuthorization &&
 				!contained && (isWriteTool(toolName) || isExecTool(toolName) || dangerous)
-			if !semanticReview && !denyForcesHuman && !externalUnknown && !approvalNeeded(mode, toolName, dangerous, contained) {
+			if !semanticReview && !denyForcesHuman && !externalUnknown && !parallelRemote && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
 					recordScopeTriage(scope, toolName, "", TriageOutcomeContained, TriageAssessment{}, 0, nil)
 					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason, "assessment", containment.Summary())
@@ -606,6 +612,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			case externalUnknown:
 				// External unknown effects are deliberately once-only. Historical
 				// broad grants and live run grants cannot release them.
+			case parallelRemote:
+				// A previous command class cannot grant a new shared-network or
+				// credential-bearing effect from this concurrent Run.
 			case isRunGranted(declaredEffectKey):
 				// A person approved this byte-identical command as part of a bounded
 				// phase. The hard floor and current deny already ran above; identity,
@@ -656,7 +665,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					return next(args)
 				}
 			}
-			if !semanticReview && !denyForcesHuman && !externalUnknown && hasScope && scope.Grants != nil {
+			if !semanticReview && !denyForcesHuman && !externalUnknown && !parallelRemote && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
 					if key == "" || !scope.StandingGrants.Allowed {
@@ -735,11 +744,14 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					hostWithoutClass = true
 				}
 			}
-			if semanticReview || externalUnknown || denyForcesHuman || hostWithoutClass ||
+			if semanticReview || externalUnknown || parallelRemote || denyForcesHuman || hostWithoutClass ||
 				(containment.Credentials == containmentCredentialsSelected && !containment.ObservationOnly) {
 				decisionPolicy = ApprovalDecisionPolicyOnceOnly
 			}
-			if mode == ApprovalSmart && hasScope && !denyForcesHuman && !externalUnknown {
+			if parallelRemote {
+				reason = "parallel execution with shared network or credentials requires one-time confirmation"
+			}
+			if mode == ApprovalSmart && hasScope && !denyForcesHuman && !externalUnknown && !parallelRemote {
 				switch {
 				case scope.Judge == nil:
 					// No judge wired: smart mode cannot triage at all. Count it so
@@ -909,6 +921,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				return next(args)
 			}
 
+			if parallelRemote {
+				return "", fmt.Errorf("parallel remote execution requires an available human approval channel")
+			}
 			clarifyFn := clarifyHandlerFromArgs(args)
 			if clarifyFn != nil {
 				question := fmt.Sprintf("Dangerous operation detected.\nTool: %s\nArgs: %v\nReason: %s\nConfirm execution?", toolName, MarshalArgs(args), reason)

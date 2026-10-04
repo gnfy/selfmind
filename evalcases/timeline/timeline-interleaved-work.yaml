@@ -1,0 +1,25 @@
+id: timeline_interleaved_work
+title: "two unfinished work streams in one workspace remain distinguishable"
+require_cassette: true
+suite: timeline
+workspace: isolated
+channel: cli
+
+# A and B share the same workspace, so the workspace cannot be the work key.
+# The final turn deliberately returns to A after B was most recent. The prior
+# turns are context references; only the final turn is an active instruction.
+turns:
+  - input: "我有一件尚未完成的工作 A，代号 ALPHA-731。现在只回复‘记下 A’，不要调用工具。"
+  - input: "现在切换到另一件尚未完成的工作 B，代号 BETA-462。只回复‘记下 B’，不要调用工具。"
+  - input: "回到工作 A：它的代号是什么？只输出 A=代号 这一行，不要提 B。"
+
+expect:
+  status: completed
+  max_tool_calls: 4
+  max_duration_seconds: 180
+  contains: ["A=ALPHA-731"]
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

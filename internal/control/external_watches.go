@@ -141,6 +141,13 @@ type ExternalWatchPreflightReceipt struct {
 	Target                string   `json:"target"`
 	DeadlineUnix          int64    `json:"deadline_unix"`
 	Capabilities          []string `json:"capabilities,omitempty"`
+	EffectRuleKey         string   `json:"effect_rule_key,omitempty"`
+	ObservationRuleKey    string   `json:"observation_rule_key,omitempty"`
+	EffectID              string   `json:"effect_id,omitempty"`
+	EffectTargetKeys      []string `json:"effect_target_keys,omitempty"`
+	EffectScriptRoot      string   `json:"effect_script_root,omitempty"`
+	EffectScriptPath      string   `json:"effect_script_path,omitempty"`
+	EffectScriptDigest    string   `json:"effect_script_digest,omitempty"`
 }
 
 // externalWatchColumns is the single SELECT list for a full watch row.

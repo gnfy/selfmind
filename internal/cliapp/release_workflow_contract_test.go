@@ -106,8 +106,8 @@ func TestCIWorkflowSeparatesFastPRFromCompleteParallelMainGate(t *testing.T) {
 	if got := strings.Join(workflow.On.Push.Branches, ","); got != "main" {
 		t.Fatalf("CI push branches = %q, want main only; develop pushes duplicate an open PR run", got)
 	}
-	if got := strings.Join(workflow.On.PullRequest.Branches, ","); got != "main" {
-		t.Fatalf("CI pull-request branches = %q, want main", got)
+	if got := strings.Join(workflow.On.PullRequest.Branches, ","); got != "main,develop" {
+		t.Fatalf("CI pull-request branches = %q, want main and develop", got)
 	}
 	for _, name := range []string{"core", "race", "eval", "npm-linux", "macos"} {
 		if _, ok := workflow.Jobs[name]; !ok {

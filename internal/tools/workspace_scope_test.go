@@ -1,10 +1,14 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"selfmind/internal/executionenv"
+	"selfmind/internal/kernel"
 )
 
 func TestResolveScopedPathDefaultsAndBlocksEscape(t *testing.T) {
@@ -77,6 +81,56 @@ func TestWorkspaceScopeMiddlewareMutatesTerminalCWD(t *testing.T) {
 	}
 	if seen != root {
 		t.Fatalf("cwd = %q, want %q", seen, root)
+	}
+}
+
+func TestIsolatedViewRejectsUnclaimedExternalTools(t *testing.T) {
+	root := t.TempDir()
+	person := "isolated-external"
+	cleanup := SetExecutionScope(person, ExecutionScope{PersonID: person, RunID: "isolated-run", WorkspaceRoot: root,
+		AllowedRoots: []string{root}, RootBindings: []executionenv.RootBinding{{Path: root, Source: executionenv.RootSourceExecutionView}}})
+	defer cleanup()
+	calls := 0
+	execute := WorkspaceScopeMiddleware()(func(map[string]interface{}) (string, error) {
+		calls++
+		return "ok", nil
+	})
+	for _, policy := range []toolExecutionPolicy{
+		{Origin: ToolSchemaOriginExternal, ReadOnly: false},
+		{Origin: ToolSchemaOriginExternal, ReadOnly: true},
+		{Origin: ToolSchemaOriginBuiltin, OperationClasses: []OperationClass{OpClassNetwork}},
+	} {
+		if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "remote_action", toolExecutionPolicyArg: policy}); err == nil {
+			t.Fatalf("unclaimed external effect ran under policy %+v", policy)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("unclaimed tool executed %d times", calls)
+	}
+	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "terminal", "sandbox": "host",
+		toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}); err == nil || calls != 0 {
+		t.Fatalf("host escape reached executor: calls=%d err=%v", calls, err)
+	}
+	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "read_file", "path": "file.txt",
+		toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin, ReadOnly: true}}); err != nil || calls != 1 {
+		t.Fatalf("local read blocked: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestParallelWorkRejectsHostEscapeBeforeEffectClaim(t *testing.T) {
+	root := t.TempDir()
+	person := "parallel-host"
+	cleanup := SetExecutionScope(person, ExecutionScope{PersonID: person, RunID: "parallel-run",
+		WorkspaceRoot: root, AllowedRoots: []string{root}, ParallelWork: true})
+	defer cleanup()
+	called := false
+	execute := WorkspaceScopeMiddleware()(func(map[string]interface{}) (string, error) {
+		called = true
+		return "ok", nil
+	})
+	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "terminal",
+		"sandbox": "host", toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}); err == nil || called {
+		t.Fatalf("parallel Run escaped to host before the resource gate: called=%v err=%v", called, err)
 	}
 }
 
@@ -165,5 +219,55 @@ func TestWorkspaceScopeMiddlewareScopesVisionAnalyze(t *testing.T) {
 	}
 	if seen != "https://example.com/a.png" {
 		t.Fatalf("remote URL mutated to %q", seen)
+	}
+}
+
+// A delegated sub-agent's context drops the parent's scope key, but its trusted
+// invocation scope still names the parent's run, so its calls resolve that
+// run's workspace. A call that names a run never borrows the person-level
+// scope, which may belong to another execution; a filesystem call whose run
+// scope is gone is refused rather than run against the daemon's directory.
+func TestDelegatedCallsResolveTheirRunScopeOrNone(t *testing.T) {
+	workspace := t.TempDir()
+	defer SetExecutionScope("person_scope", ExecutionScope{
+		PersonID: "person_scope", RunID: "run_live", WorkspaceRoot: workspace, AllowedRoots: []string{workspace},
+	})()
+	parentCtx := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun("run_live"))
+	delegated := func(tenant, runID, tool string) map[string]interface{} {
+		return map[string]interface{}{
+			"_context":   kernel.ForkDelegationContext(parentCtx),
+			"_tenant_id": tenant,
+			"_tool_name": tool,
+			"_invocation_scope": kernel.ToolInvocationScope{
+				PersonID: "person_scope", RunID: runID, ExecutionScopeKey: ExecutionScopeKeyForRun(runID),
+			},
+		}
+	}
+	var seen string
+	exec := WorkspaceScopeMiddleware()(func(args map[string]interface{}) (string, error) {
+		seen, _ = args["path"].(string)
+		return "ran", nil
+	})
+	call := func(args map[string]interface{}, path string) error {
+		seen = ""
+		args["path"] = path
+		_, err := exec(args)
+		return err
+	}
+
+	if err := call(delegated("system", "run_live", "read_file"), "notes.txt"); err != nil || seen != filepath.Join(workspace, "notes.txt") {
+		t.Fatalf("delegated relative path: seen=%q err=%v", seen, err)
+	}
+	if err := call(delegated("system", "run_live", "read_file"), "/etc/hosts"); err == nil || seen != "" {
+		t.Fatalf("a delegated escape was not refused: seen=%q err=%v", seen, err)
+	}
+	if err := call(delegated("person_scope", "run_gone", "read_file"), "notes.txt"); err == nil || seen != "" {
+		t.Fatalf("a call for a run without a scope ran under another scope: seen=%q err=%v", seen, err)
+	}
+	if err := call(delegated("person_scope", "run_gone", "update_plan"), "notes.txt"); err != nil || seen != "notes.txt" {
+		t.Fatalf("a tool the middleware does not confine was refused: seen=%q err=%v", seen, err)
+	}
+	if err := call(map[string]interface{}{"_tenant_id": "person_scope", "_tool_name": "read_file"}, "notes.txt"); err != nil || seen != filepath.Join(workspace, "notes.txt") {
+		t.Fatalf("a call without a run no longer resolves by person: seen=%q err=%v", seen, err)
 	}
 }

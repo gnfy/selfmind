@@ -506,6 +506,36 @@ func (r *Registry) Wrap(t Tool, mw []Middleware) ToolExecutor {
 	}
 }
 
+// Subset returns a registry holding the tools keep admits, dispatched through
+// this registry's middleware chain, clarify handler and attribution observer.
+// A delegated sub-agent gets fewer tools, never a weaker policy: a bare
+// registry would run them past the safety floor, approvals and workspace
+// scope. Registering into the subset leaves this registry unchanged.
+func (r *Registry) Subset(keep func(name string) bool) *Registry {
+	r.mu.RLock()
+	var kept []Tool
+	for name, t := range r.tools {
+		if compiled, ok := r.schemas[name]; ok && compiled.Report.Status == ToolSchemaQuarantined {
+			continue
+		}
+		if keep(name) {
+			kept = append(kept, t)
+		}
+	}
+	middleware := append([]ResultMiddleware(nil), r.middleware...)
+	clarify, attribution := r.clarifyFn, r.attributionFn
+	r.mu.RUnlock()
+
+	sub := NewRegistry()
+	for _, t := range kept {
+		sub.Register(t)
+	}
+	sub.middleware = middleware
+	sub.clarifyFn = clarify
+	sub.attributionFn = attribution
+	return sub
+}
+
 // UseMiddleware appends a middleware to the global registry
 func (r *Registry) UseMiddleware(mw Middleware) {
 	r.mu.Lock()
@@ -612,6 +642,11 @@ func (d *Dispatcher) ToolExists(name string) bool {
 	}
 	_, ok := d.registry.Get(name)
 	return ok
+}
+
+// Subset is Registry.Subset for a dispatcher.
+func (d *Dispatcher) Subset(keep func(name string) bool) *Dispatcher {
+	return NewDispatcherWithRegistry(d.registry.Subset(keep))
 }
 
 // GetTool returns a registered tool by name

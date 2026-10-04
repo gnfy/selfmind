@@ -8,7 +8,7 @@ on:
   push:
     branches: ["main"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "develop"]
   workflow_dispatch: {}
 
 permissions:
@@ -253,6 +253,11 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     runs-on: macos-14
     timeout-minutes: 20
+    # One build configuration for every step. The npm smoke builds release
+    # binaries with -trimpath; sharing it lets that build reuse what vet,
+    # build and test compiled instead of recompiling every package.
+    env:
+      GOFLAGS: -trimpath
     steps:
       - name: Checkout
         uses: actions/checkout@v5

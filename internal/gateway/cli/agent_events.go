@@ -123,24 +123,37 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 	}
 }
 
-// requestDaemonStop asks the gateway to cancel the person's active run via the
-// /stop control command. Since G0-a, run lifetime is daemon-owned and the run
-// ctx is detached from the endpoint connection, so cancelling the local ctx
-// (m.cancelFn) only detaches this watcher — both the in-process gateway
-// (ProcessMessage detaches internally) and the daemon client (the aborted HTTP
-// request only detaches) need this explicit registry-backed stop. Returns nil
-// on the legacy direct-agent path, where the local ctx still owns the run.
+type MsgDaemonStopResult struct {
+	RunID string
+	Reply string
+	Err   error
+}
+
+// requestDaemonStop addresses the exact Run this session owns. A successful
+// request is not terminal cancellation; run.finished owns that transition.
 func (m *uiModel) requestDaemonStop() tea.Cmd {
 	if m.messageProcessor == nil {
 		return nil
 	}
 	processor := m.messageProcessor
-	req := m.controlMessageRequest("/stop")
+	runID := strings.TrimSpace(m.daemonRunID)
+	if runID == "" || !m.daemonRunOwned {
+		return func() tea.Msg {
+			return MsgDaemonStopResult{Err: fmt.Errorf("No owned Run is bound yet. Keep watching until its Run ID is available, then cancel again.")}
+		}
+	}
+	req := m.controlMessageRequest("/stop " + runID)
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, _ = processor(ctx, req)
-		return nil
+		resp, status := processor(ctx, req)
+		if resp.Error != "" {
+			return MsgDaemonStopResult{RunID: runID, Err: fmt.Errorf("%s", resp.Error)}
+		}
+		if status >= http.StatusBadRequest {
+			return MsgDaemonStopResult{RunID: runID, Err: fmt.Errorf("Cancellation request failed (HTTP %d): %s", status, resp.Content)}
+		}
+		return MsgDaemonStopResult{RunID: runID, Reply: resp.Content}
 	}
 }
 
@@ -164,11 +177,20 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 	m.forwardGatewayEventFrom(event, eventSourceTurn)
 }
 
+// sessionDetailEvents are a run's own progress: only the session that started
+// the run, or a terminal attached to it, renders them.
+var sessionDetailEvents = map[string]bool{
+	"stream": true, "agent.thinking": true, "agent.step": true,
+	"tool.started": true, "tool.completed": true, "tool.output": true, "tool.heartbeat": true,
+	"plan.updated": true, "token.updated": true, "provider.call.usage": true,
+}
+
 func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSource) {
 	if m.program == nil {
 		return
 	}
 	ref := eventRefFromStream(event, source)
+	ref.Detail = sessionDetailEvents[event.EventType]
 	switch event.EventType {
 	case "stream":
 		if event.Content != "" {
@@ -188,7 +210,8 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 		if isHiddenLifecycleTool(event.ToolName) {
 			return
 		}
-		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs, Event: ref})
+		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs,
+			Delegated: event.Payload["delegated"] == true, Event: ref})
 	case "tool.completed":
 		if isHiddenLifecycleTool(event.ToolName) {
 			return
@@ -295,7 +318,9 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 				CodeBytes:     payloadTokenCount(approvalArg("code_bytes")),
 				// The daemon's own answer set for this ask. Absent (older daemon)
 				// leaves it nil and the panel falls back to its built-in options.
-				Options: approvalOptionsFromPayload(event.Payload),
+				Options:   approvalOptionsFromPayload(event.Payload),
+				Delegated: event.Payload["delegated"] == true,
+				Channel:   ref.Channel,
 			})
 		}
 	case "approval.parked":
@@ -333,17 +358,15 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 				id = v
 			}
 		}
-		m.program.Send(MsgClarifyRequest{ID: id, Question: event.Content, Choices: clarifyChoicesFromPayload(event.Payload)})
+		m.program.Send(MsgClarifyRequest{ID: id, Question: event.Content, Choices: clarifyChoicesFromPayload(event.Payload), Channel: ref.Channel})
 	}
 }
 
+// isHiddenLifecycleTool names the run's bookkeeping calls, which draw no tool
+// cell. The gateway keeps prose around the same calls in the run's answer, so
+// the answer that replaces the live text at the end says what streamed here.
 func isHiddenLifecycleTool(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "update_plan", "finish_run":
-		return true
-	default:
-		return false
-	}
+	return kernel.IsRunBookkeepingTool(name)
 }
 
 func clarifyChoicesFromPayload(payload map[string]interface{}) []string {

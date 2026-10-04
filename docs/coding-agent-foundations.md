@@ -52,6 +52,17 @@ own tool evidence, never the request text, and it stays guidance — no plan is
 fabricated and no completion is blocked. Plans update at meaningful progress or
 scope changes; they do not require a transition around every tool call. Stable
 step IDs preserve work-unit attribution without asking the model to repeat it.
+A snapshot that omits ids keeps each step's id by unchanged wording, and a
+reworded step keeps the id of the open step at its position when the snapshot
+keeps the plan's length, so rewording cannot silently replace unfinished steps.
+A plan with open steps that has not changed for 12 tool actions gets a one-line
+reminder at the tail of the next model call, again only after another 12; the
+model decides whether it is still true. The final answer is not a plan step,
+and `finish_run` may follow the final `update_plan` in the same response.
+Prose in a response whose only calls are `update_plan` or `finish_run` stays
+part of the final answer rather than narration, so an answer written beside
+`finish_run` survives a closing line after it; a final answer the plan gate
+sends back is not kept.
 
 Progress snapshots retain an existing step's acceptance condition and required
 verification flag when omitted; cancellation remains explicit. A changed
@@ -61,6 +72,26 @@ an explicit user takeover of remaining work from necessary unfinished work with
 no handoff evidence. The former can conclude the agent's agreed scope; the
 latter remains unfinished. Suggested next steps alone never establish takeover.
 A missing final answer preserves an already known execution blocker.
+
+New Runs use recovery contract v2 for cancellation assessment. Main supplies
+`cancellation_disposition` and `cancellation_reason`: `not_required` for work
+that is genuinely unnecessary or superseded, `user_takeover` for an explicit
+handoff, or `unfinished` for necessary work that remains open. A takeover also
+supplies `user_takeover_quote`; the runtime checks that this quote occurs in
+actual user input or consumed steering on the exact person-scoped continuation
+lineage, excluding sibling work and daemon-originated text. Main still judges
+its meaning against the original goal and later corrections. Unassessed or
+unfinished cancellations remain pending; omitting an open step from a complete
+snapshot retains its exact identity and acceptance condition. These facts
+travel with the existing Plan through restart and continuation. Historical Run
+contracts and snapshots are not rewritten or granted new authority by upgrade.
+
+Command evidence retains invocation and process observations independently.
+Entering a tool does not prove that its process started. Outcomes count
+attempts, observed starts, observed nonzero exits, non-dispatched attempts, and
+unknown dispatch or exit status separately; missing historical facts stay
+unknown unless the exact Run/call has a typed durable completion observation.
+These counters do not establish criterion-bound verification.
 
 `verify` accepts an optional version-1 `check` binding with a stable `criterion`
 and `target`. To correct a check method, Main supplies `replaces` (the prior
@@ -180,8 +211,12 @@ The directory beside the active config file is the only source (normally
   ignore it. Delegated agents keep a dedicated
   parent-facing identity and do not inherit Persona, Progress Updates, or
   Persistent Learning. A delegation fork preserves parent cancellation,
-  workspace/run authority, artifacts, and event evidence, but starts fresh
-  strategy and deferred-tool state. Parent-owned plan, finalization, watch,
+  workspace/run authority, and artifacts, but starts fresh strategy and
+  deferred-tool state and keeps no conversation memory. A sub-agent runs on the
+  parent run's model unless `delegation` names another, acts as the parent
+  run's person, and relays only its tool activity, evidence, and usage to the
+  parent's event stream, marked delegated; its streamed text and turn lifecycle
+  stay its own. Parent-owned plan, finalization, watch,
   memory, and Skill mutation tools are not delegated; results return as a
   structured evidence/files/tests/blockers handoff.
 - `background/memory_extract.md`, `background/background_review.md`,

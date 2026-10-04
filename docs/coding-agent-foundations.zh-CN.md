@@ -40,13 +40,34 @@ plan 指引同样由证据驱动：当一个 Run 已完成若干次互不相同�
 却仍没有持久 plan 时，下一次模型调用会把可选 plan 指引升级为必需措辞。该升级只读取
 Run 自身的工具证据，绝不解析请求文本；它仍然只是指引——不会伪造 plan，也不会阻止完成。
 计划在实质进展或范围变化时更新，无需围绕每次工具调用切换状态。稳定 step ID 自动保留
-work-unit 归属，模型无需重复填写。
+work-unit 归属，模型无需重复填写。快照省略 ID 时，措辞不变的步骤按原文保留 ID；快照
+步骤数不变时，改了措辞的步骤沿用同位置上未完成步骤的 ID，改写措辞不会悄悄替换掉未完成
+的步骤。计划仍有未完成步骤、却已有 12 次工具动作没有更新时，下一次模型调用的末尾会附一行
+提醒，之后要再过 12 次才会再提醒；计划是否仍然准确由模型判断。最终回答不是计划步骤，
+`finish_run` 可以在同一次回复里紧跟最后一次 `update_plan`。
+如果一次回复里只调用了 `update_plan` 或 `finish_run`，其中的正文算作最终回答，
+不算过程说明；所以和 `finish_run` 写在一起的回答，后面再跟一句收尾也不会丢。
+被计划核对打回的那次最终回答不保留。
 
 进度快照省略已有步骤的验收条件或必需验证标记时，系统保留原值；取消必须明确表达。
 已完成步骤改写验收条件时，工具向 Main 返回有界的原条件与现条件对照，由 Main 判断
 用户的范围变更是否支持这项修改。Main 同样区分用户明确接手剩余工作与没有交接依据的
 必要未完成工作：前者可以按约定范围结束 Agent 的责任，后者保持未完成。仅建议用户
 执行下一步不能构成交接。缺少最终回复不会覆盖已经确定的执行阻塞原因。
+
+新 Run 使用 v2 恢复契约记录取消判断。Main 给出 `cancellation_disposition`
+和 `cancellation_reason`：确已无必要或已被替代时使用 `not_required`；用户明确接手时
+使用 `user_takeover`；必要工作仍未完成时使用 `unfinished`。用户接手还需提供
+`user_takeover_quote`，运行时核对原话是否来自同一人的精确续接链中的真实用户输入或
+已消费的补充指令，排除其他任务与 daemon 生成的文字。原话是否构成交接，以及后续
+修正是否改变范围，仍由 Main 判断。缺少判断或必要工作未完成的取消保持待办；完整
+快照遗漏未完成步骤时，保留其精确 ID 和验收条件。这些信息随既有 Plan 跨重启与续接
+保留；升级不重写历史 Run 契约或快照，也不为历史数据增加权限。
+
+命令证据分别保存工具调用与进程观测。进入工具处理不代表进程已启动。结果分别统计
+尝试次数、已观测启动、已观测非零退出、未派发、派发未知与退出状态未知。历史缺失
+信息保持未知，除非同一 Run、同一调用有类型化的持久完成观测。这些统计不构成绑定
+验收条件的验证结论。
 
 `verify` 支持可选的版本 1 `check` 绑定，包含稳定的 `criterion` 和 `target`。
 修正检查方法时，Main 提供 `replaces`（原验证证据 ID）和 `reason`，保持条件与目标
@@ -132,8 +153,11 @@ macOS 支持 CLI、daemon、Provider、workspace 工具和 LaunchAgent 生命周
   系统不通过关键词分类器判断是否适用；提示词自身声明适用边界，并要求模型在其他
   任务中忽略它。委派 Agent 保留面向父 Agent 的专用身份，不继承 Persona、
   Progress Updates 或 Persistent Learning。
-  委派上下文会保留父任务的取消、workspace/run 权限、artifact 和事件证据，但使用
-  全新的策略与延迟工具激活状态。父任务拥有的计划、结束、watch、memory 与 Skill
+  委派上下文会保留父任务的取消、workspace/run 权限和 artifact，但使用全新的策略
+  与延迟工具激活状态，也不保留对话记忆。子 Agent 默认使用父 run 的模型（`delegation`
+  另行指定时除外），以父 run 的 person 身份执行工具，只把工具活动、证据和用量标记为
+  delegated 转发到父事件流；它的流式文本和轮次生命周期不进入父事件流。父任务拥有的
+  计划、结束、watch、memory 与 Skill
   变更工具不会下放；结果以 evidence/files/tests/blockers 的结构化交接返回；
 - `background/memory_extract.md`、`background/background_review.md`、
   `background/skill_curator.md`、`background/summarizer.md` 与

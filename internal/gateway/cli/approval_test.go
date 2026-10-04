@@ -253,7 +253,7 @@ func TestApprovalDenySendsRejectionImmediately(t *testing.T) {
 	model.clientMode = true
 	model.thinking = true
 	var steered bool
-	model.steerFn = func(text string) error {
+	model.steerFn = func(runID, channel, text string) error {
 		steered = true
 		return nil
 	}

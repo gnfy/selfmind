@@ -88,7 +88,9 @@ wait:
 	for {
 		select {
 		case <-tick.C:
-			if _, statErr := os.Stat(filepath.Join(dir, "effect")); statErr == nil {
+			// The redirection creates the file before printf writes it, so the
+			// effect exists only once its content does.
+			if data, readErr := os.ReadFile(filepath.Join(dir, "effect")); readErr == nil && string(data) == "changed" {
 				written = true
 				break wait
 			}

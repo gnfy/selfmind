@@ -2,7 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -446,4 +448,136 @@ func waitForPendingClarify(t *testing.T, store *control.Store, identity *control
 	}
 	t.Fatal("no pending clarify was created")
 	return control.ClarifyRequest{}
+}
+
+// While the terminal that asked a question is open, only it answers with plain
+// text: a message typed in another terminal is that terminal's own input, and
+// used to be taken as the answer. There the question takes the named form
+// "N: answer". Once the asking terminal is gone, any plain reply answers again.
+func TestPlainRepliesAnswerOnlyTheAskingSessionWhileItIsOpen(t *testing.T) {
+	daemon, store, identity, task, run := newClarifyTestServer(t)
+	ctx := context.Background()
+	clarify, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Question: "Which bucket?", Channel: "session-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := func() bool {
+		current, _ := store.GetClarifyRequest(ctx, identity.TenantID, clarify.ID)
+		return current != nil && current.Status == "pending"
+	}
+	_, closeA := daemon.events().subscribe(identity.PersonID, "session-a", "")
+
+	if handled, _, err := daemon.tryHandleClarifyAnswer(ctx, identity, "", "refactor the parser next", "session-b"); err != nil || handled || !pending() {
+		t.Fatalf("another open session's plain message answered the question: handled=%v err=%v", handled, err)
+	}
+	if handled, reply, err := daemon.tryHandleClarifyAnswer(ctx, identity, "", "1: the staging bucket", "session-b"); err != nil || !handled || pending() || !strings.Contains(reply, "Got it") {
+		t.Fatalf("the named form did not answer from another session: handled=%v reply=%q err=%v", handled, reply, err)
+	}
+	if current, _ := store.GetClarifyRequest(ctx, identity.TenantID, clarify.ID); current == nil || current.Answer != "the staging bucket" {
+		t.Fatalf("recorded answer = %+v", current)
+	}
+
+	second, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Question: "Which region?", Channel: "session-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeA()
+	if handled, _, err := daemon.tryHandleClarifyAnswer(ctx, identity, "", "eu-west-1", "session-b"); err != nil || !handled {
+		t.Fatalf("with the asking terminal closed a plain reply must answer: handled=%v err=%v", handled, err)
+	}
+	if current, _ := store.GetClarifyRequest(ctx, identity.TenantID, second.ID); current == nil || current.Answer != "eu-west-1" {
+		t.Fatalf("recorded answer = %+v", current)
+	}
+}
+
+// While another open session also has a question, a numbered reply is read
+// against the whole list, the way a listing numbers it, and a time, a decimal,
+// or a number that starts a plain answer stays the answer. "1. staging" used to
+// land on this session's question with its prefix, even when 1 named the other
+// session's question, and "1:30" named question 1.
+func TestNumberedRepliesCountTheWholeListWhileAnotherSessionAsks(t *testing.T) {
+	daemon, store, identity, task, run := newClarifyTestServer(t)
+	ctx := context.Background()
+	theirs, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Question: "Which bucket?", Channel: "session-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, closeA := daemon.events().subscribe(identity.PersonID, "session-a", "")
+	defer closeA()
+	status := func(id string) (string, string) {
+		current, _ := store.GetClarifyRequest(ctx, identity.TenantID, id)
+		return current.Status, current.Answer
+	}
+	ask := func() string {
+		t.Helper()
+		ours, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+			TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+			Question: "How long should the canary run?", Channel: "session-b",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ours.ID
+	}
+
+	// The listing numbers questions oldest first with an id tie-break, and
+	// both questions may share a second, so take each number from that order.
+	number := func(id string) int {
+		t.Helper()
+		pending, err := store.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.SliceStable(pending, func(i, j int) bool {
+			if pending[i].CreatedAt.Equal(pending[j].CreatedAt) {
+				return pending[i].ID < pending[j].ID
+			}
+			return pending[i].CreatedAt.Before(pending[j].CreatedAt)
+		})
+		for i, clarify := range pending {
+			if clarify.ID == id {
+				return i + 1
+			}
+		}
+		t.Fatalf("question %s is not pending", id)
+		return 0
+	}
+
+	ours := ask()
+	pick := fmt.Sprintf("%d. staging", number(theirs.ID))
+	handled, reply, err := daemon.tryHandleClarifyAnswer(ctx, identity, "", pick, "session-b")
+	if s, _ := status(ours); err != nil || !handled || s != "pending" || !strings.Contains(reply, "Several questions are waiting") {
+		t.Fatalf("%q names the other session's question: handled=%v reply=%q ours=%s err=%v", pick, handled, reply, s, err)
+	}
+	if s, _ := status(theirs.ID); s != "pending" {
+		t.Fatalf("the other session's question was answered by a lax prefix: %s", s)
+	}
+	pick = fmt.Sprintf("%d. staging", number(ours))
+	if handled, _, err := daemon.tryHandleClarifyAnswer(ctx, identity, "", pick, "session-b"); err != nil || !handled {
+		t.Fatalf("%q: handled=%v err=%v", pick, handled, err)
+	}
+	if s, answer := status(ours); s == "pending" || answer != "staging" {
+		t.Fatalf("%q recorded status=%s answer=%q, want this session's question answered with the prefix removed", pick, s, answer)
+	}
+	for _, plain := range []string{"2 buckets", "1:30", "1.5"} {
+		ours := ask()
+		if handled, _, err := daemon.tryHandleClarifyAnswer(ctx, identity, "", plain, "session-b"); err != nil || !handled {
+			t.Fatalf("%q: handled=%v err=%v", plain, handled, err)
+		}
+		if s, answer := status(ours); s == "pending" || answer != plain {
+			t.Fatalf("%q recorded status=%s answer=%q, want it as this session's answer", plain, s, answer)
+		}
+		if s, _ := status(theirs.ID); s != "pending" {
+			t.Fatalf("%q answered the other session's question", plain)
+		}
+	}
 }

@@ -459,7 +459,7 @@ flight_recorder:
 ```yaml
 cron:
   enabled: true       # scheduled jobs (daily summaries, liveness canary)
-delegation:           # multi-agent sub-tasks; empty values use the default model
+delegation:           # sub-agents; empty values run them on the parent run's model
   provider: ""
   model: ""
   api_key: ""

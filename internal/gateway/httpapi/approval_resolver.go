@@ -168,7 +168,7 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 			identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input,
 			control.QueuedTask{
 				PersonID: identity.PersonID, Platform: identity.Platform,
-				PlatformUserID: identity.PlatformUserID, Channel: fallback(channel, identity.Platform),
+				PlatformUserID: identity.PlatformUserID, Channel: continuationChannel(identity.Platform, fallback(channel, identity.Platform), sourceRun),
 				Content: content, WorkspaceID: recoveryWorkspaceID(sourceRun, task), TaskID: task.ID,
 				ApprovalID:     resolved.ID,
 				ExecutionRoots: executionRoots,
@@ -346,12 +346,16 @@ func parseApprovalScopeWord(word string) string {
 }
 
 // tryHandleBareApprovalReply resolves a conversational y/n against the person's
-// pending approvals. It only claims the message when at least one approval is
-// pending, so a bare "y" with nothing pending reaches the agent unchanged. One
+// pending approvals. It only claims the message when an approval this session
+// may answer is pending, so a bare "y" otherwise reaches the agent unchanged. One
 // pending → decide it. Several pending (only possible with parallel runs, since
 // the per-person active-run guard serializes interactive approvals) → the word
 // is ambiguous, so return the numbered list and ask for /approve <n>.
 func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *control.IdentityContext, content, channel string) (bool, string, error) {
+	return d.tryHandleBareApprovalReplyTo(ctx, identity, content, channel, "")
+}
+
+func (d *Server) tryHandleBareApprovalReplyTo(ctx context.Context, identity *control.IdentityContext, content, channel, approvalID string) (bool, string, error) {
 	decision, grantScope, shortcut, ok := parseBareApprovalReply(content)
 	if !ok || d == nil || d.Control == nil || identity == nil {
 		return false, "", nil
@@ -363,6 +367,36 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 		return false, "", nil
 	}
 	sortApprovalsForDisplay(pending)
+	if approvalID != "" {
+		matched := false
+		for _, candidate := range pending {
+			if candidate.ID == approvalID {
+				pending = []control.ApprovalRequest{candidate}
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return true, "That approval is no longer pending; no other approval was changed.", nil
+		}
+	}
+	// A bare reply answers this session's own approval. One that another open
+	// terminal is waiting on stays that terminal's to answer, or /approve's.
+	var answerable []control.ApprovalRequest
+	for _, approval := range pending {
+		if approvalID != "" || d.answersImplicitly(identity, channel, approval.RequestedChannel) {
+			answerable = append(answerable, approval)
+		}
+	}
+	switch {
+	case len(answerable) == 0:
+		// Every pending approval waits on another open terminal. This
+		// session's words stay its own input: an answer to its own question
+		// or an ordinary message. /approve answers across sessions.
+		return false, "", nil
+	case len(answerable) == 1:
+		pending = answerable
+	}
 	if len(pending) > 1 {
 		titles := d.taskTitlesFor(ctx, identity.TenantID, pending)
 		verb := "approve"
@@ -548,4 +582,15 @@ func (d *Server) taskTitlesFor(ctx context.Context, tenantID string, approvals [
 		}
 	}
 	return titles
+}
+
+// continuationChannel is the session an approval continuation runs in. A
+// terminal answer names no session the work belongs to, so the continuation
+// stays in its source run's session, whose terminal shows it. An IM answer
+// keeps its own channel, on which IM delivers the result.
+func continuationChannel(platform, answeredOn string, source *control.Run) string {
+	if platform == "cli" && source != nil && strings.TrimSpace(source.Channel) != "" {
+		return source.Channel
+	}
+	return answeredOn
 }

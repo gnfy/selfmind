@@ -74,7 +74,7 @@ func TestStartupDigestLabelsOlderUnresolvedWorkWithoutAwayClaim(t *testing.T) {
 		UnresolvedTasks: []api.DigestTask{{
 			ID: "t-old", Title: "Implement binary search in Go", Status: "interrupted",
 		}},
-	})
+	}, "")
 	if strings.Contains(text, "While you were away:") || strings.Contains(text, "stopped early") {
 		t.Fatalf("older unresolved work must not be presented as a new away event:\n%s", text)
 	}
@@ -228,7 +228,7 @@ func TestStartupDigestRendersActiveRunProgress(t *testing.T) {
 			},
 			LatestActivity: "running terminal",
 		},
-	})
+	}, "")
 	for _, want := range []string{
 		"▶ A task is running now: Long migration (12m)",
 		"    ✓ Dump the schema",
@@ -245,13 +245,13 @@ func TestStartupDigestRendersActiveRunProgress(t *testing.T) {
 	// No plan/activity: no indented progress lines appear.
 	bare := formatStartupDigest(&api.DigestResponse{
 		ActiveRun: &api.DigestActiveRun{TaskID: "t9", Title: "Long migration", ElapsedSeconds: 720},
-	})
+	}, "")
 	if strings.Contains(bare, "\n    ") {
 		t.Fatalf("bare active run must not render progress lines:\n%s", bare)
 	}
 
 	// The empty-digest contract is untouched.
-	if got := formatStartupDigest(&api.DigestResponse{}); got != "" {
+	if got := formatStartupDigest(&api.DigestResponse{}, ""); got != "" {
 		t.Fatalf("empty digest must render nothing, got %q", got)
 	}
 }

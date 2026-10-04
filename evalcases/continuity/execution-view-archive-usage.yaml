@@ -1,0 +1,27 @@
+id: execution_view_archive_usage
+title: "execution view retention controls remain explicit and model-free"
+suite: continuity
+workspace: isolated
+channel: cli
+model_required: false
+ci:
+  required: true
+  reason: cross_platform
+  platforms: [linux, darwin]
+
+turns:
+  - input: "/views prune"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_tool_errors: 0
+  max_duration_seconds: 30
+  contains:
+    - "Usage: /views [run_id] | /views archive|restore|prune <run_id>"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

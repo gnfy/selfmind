@@ -1,0 +1,24 @@
+id: reliability_native_im_reply_missing
+title: "An unrecognized native IM reply never falls through to another active work item"
+suite: reliability
+workspace: isolated
+channel: im-chat
+model_required: false
+
+turns:
+  - input: "Add this condition to the work I replied to"
+    native_reply_message_id: "missing-platform-message"
+
+expect:
+  status: waiting_user
+  require_no_task: true
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "not linked to your work"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

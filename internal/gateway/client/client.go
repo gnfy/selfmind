@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -87,7 +88,7 @@ func (c *Client) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// and create no run events, so don't open the live stream for them.
 	if observer != nil && !isControlCommand(req.Content) {
 		ready := make(chan struct{})
-		go c.streamEvents(streamCtx, req, observer, nil, ready)
+		go c.streamEvents(streamCtx, req, "", observer, nil, ready)
 		// Subscribe before starting the turn so a fast first token cannot race
 		// ahead of the SSE connection. Failure closes ready as well and simply
 		// degrades to the complete synchronous answer.
@@ -118,22 +119,25 @@ func (c *Client) ProcessMessageDetached(ctx context.Context, req api.MessageRequ
 	return resp, status
 }
 
-// WatchEvents keeps one person-scoped event stream open for the lifetime of a
-// client UI. Unlike ProcessMessage's compatibility stream, it does not stop
-// when a queued POST returns, so daemon-started queued and background runs stay
-// attached to the terminal.
-func (c *Client) WatchEvents(ctx context.Context, tenantID string, observer httpapi.StreamObserver, onEvent func(api.RunEvent)) {
+// WatchEvents keeps one event stream open for the lifetime of a client UI.
+// Unlike ProcessMessage's compatibility stream, it does not stop when a queued
+// POST returns, so daemon-started queued and background runs stay attached to
+// the terminal. The daemon sends it the session's own runs in full and only
+// the person-wide lifecycle and human waits of other sessions.
+func (c *Client) WatchEvents(ctx context.Context, tenantID, session string, observer httpapi.StreamObserver, onEvent func(api.RunEvent)) {
 	c.streamEvents(ctx, api.MessageRequest{
 		TenantID:       tenantID,
 		Platform:       "cli",
 		PlatformUserID: clientUserID(),
-	}, observer, onEvent, nil)
+		Channel:        session,
+	}, "", observer, onEvent, nil)
 }
 
-// streamEvents consumes the daemon's unified person-level SSE stream. Durable
-// events resume from the last committed cursor after reconnect; ephemeral text
-// deltas may be dropped because postMessage still returns the full final answer.
-func (c *Client) streamEvents(ctx context.Context, req api.MessageRequest, observer httpapi.StreamObserver, onEvent func(api.RunEvent), ready chan<- struct{}) {
+// streamEvents consumes the daemon's unified person-level SSE stream as the
+// request's session, plus the one run it attaches to, if any. Durable events
+// resume from the last committed cursor after reconnect; ephemeral text deltas
+// may be dropped because postMessage still returns the full final answer.
+func (c *Client) streamEvents(ctx context.Context, req api.MessageRequest, attachRunID string, observer httpapi.StreamObserver, onEvent func(api.RunEvent), ready chan<- struct{}) {
 	var readyOnce sync.Once
 	markReady := func() {
 		if ready != nil {
@@ -147,7 +151,7 @@ func (c *Client) streamEvents(ctx context.Context, req api.MessageRequest, obser
 		if ctx.Err() != nil {
 			return
 		}
-		httpResp, err := c.openEventStream(ctx, req, cursor)
+		httpResp, err := c.openEventStream(ctx, req, attachRunID, cursor)
 		if err != nil {
 			if !sleepContext(ctx, 250*time.Millisecond) {
 				return
@@ -188,7 +192,7 @@ func (c *Client) streamEvents(ctx context.Context, req api.MessageRequest, obser
 	}
 }
 
-func (c *Client) openEventStream(ctx context.Context, req api.MessageRequest, cursor int64) (*http.Response, error) {
+func (c *Client) openEventStream(ctx context.Context, req api.MessageRequest, attachRunID string, cursor int64) (*http.Response, error) {
 	q := url.Values{}
 	if req.TenantID != "" {
 		q.Set("tenant_id", req.TenantID)
@@ -197,6 +201,12 @@ func (c *Client) openEventStream(ctx context.Context, req api.MessageRequest, cu
 	q.Set("platform_user_id", fallback(req.PlatformUserID, "local"))
 	if req.DisplayName != "" {
 		q.Set("display_name", req.DisplayName)
+	}
+	if req.Channel != "" {
+		q.Set("session", req.Channel)
+	}
+	if attachRunID != "" {
+		q.Set("run", attachRunID)
 	}
 	q.Set("active", "1")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/events/stream?"+q.Encode(), nil)
@@ -254,6 +264,7 @@ func decorateStreamEvent(streamEvent llm.StreamEvent, event api.RunEvent) llm.St
 	streamEvent.LiveSeq = event.LiveSeq
 	streamEvent.TaskID = event.TaskID
 	streamEvent.RunID = event.RunID
+	streamEvent.Channel = event.Channel
 	streamEvent.Durability = event.Durability
 	return streamEvent
 }
@@ -357,6 +368,7 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 			ToolName:   str(p["tool"]),
 			ToolCallID: str(p["tool_call_id"]),
 			ToolArgs:   str(p["args"]),
+			Payload:    p,
 		}, true
 	case ev.Type == "tool.completed":
 		se := llm.StreamEvent{
@@ -508,9 +520,10 @@ func (c *Client) WatchActiveRun(ctx context.Context, observer httpapi.StreamObse
 	return c.watchRun(ctx, "", observer)
 }
 
-// WatchRun follows one explicit daemon run. Person-level event streams may
-// carry activity from a newly queued run before the old stream connection is
-// torn down, so both terminal detection and rendering are filtered by run ID.
+// WatchRun follows one explicit daemon run: the daemon sends an attached run's
+// events whichever session started it. Person-level event streams may carry
+// activity from a newly queued run before the old stream connection is torn
+// down, so both terminal detection and rendering are filtered by run ID.
 func (c *Client) WatchRun(ctx context.Context, runID string, observer httpapi.StreamObserver) string {
 	return c.watchRun(ctx, strings.TrimSpace(runID), observer)
 }
@@ -529,7 +542,7 @@ func (c *Client) watchRun(ctx context.Context, runID string, observer httpapi.St
 			}
 		}
 	}
-	go c.streamEvents(watchCtx, req, filteredObserver, func(event api.RunEvent) {
+	go c.streamEvents(watchCtx, req, runID, filteredObserver, func(event api.RunEvent) {
 		if runID != "" && event.RunID != runID {
 			return
 		}
@@ -626,9 +639,18 @@ func runEventOutcomeSummary(event api.RunEvent) string {
 // pushing to IM. Best-effort by design — a failed ping just lets presence
 // expire, which reads as detached.
 func (c *Client) PingPresence(ctx context.Context) error {
+	return c.pingPresence(ctx, 0)
+}
+
+// pingPresence also reports how many other-session detail events the terminal
+// dropped since its last ping; the daemon counts them as audience misses.
+func (c *Client) pingPresence(ctx context.Context, foreignSessionEvents int64) error {
 	q := url.Values{}
 	q.Set("platform", "cli")
 	q.Set("platform_user_id", clientUserID())
+	if foreignSessionEvents > 0 {
+		q.Set("foreign_session_events", strconv.FormatInt(foreignSessionEvents, 10))
+	}
 	// Presence is endpoint liveness, not keyboard activity. An open client keeps
 	// claiming attachment; an unanswered approval escalates by its own age.
 	q.Set("active", "1")
@@ -655,11 +677,19 @@ func (c *Client) PingPresence(ctx context.Context) error {
 // one every 30 seconds until the returned stop function is called (or ctx is
 // cancelled). Without it an open-but-idle TUI would look detached because the
 // event stream is only open during an active turn/watch. Failures are silent
-// (best-effort presence).
-func (c *Client) StartPresencePing(ctx context.Context) func() {
+// (best-effort presence). foreignSessionEvents, when set, takes the count each
+// ping reports.
+func (c *Client) StartPresencePing(ctx context.Context, foreignSessionEvents func() int64) func() {
 	loopCtx, cancel := context.WithCancel(ctx)
+	ping := func() {
+		var dropped int64
+		if foreignSessionEvents != nil {
+			dropped = foreignSessionEvents()
+		}
+		_ = c.pingPresence(loopCtx, dropped)
+	}
 	go func() {
-		_ = c.PingPresence(loopCtx)
+		ping()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -667,7 +697,7 @@ func (c *Client) StartPresencePing(ctx context.Context) func() {
 			case <-loopCtx.Done():
 				return
 			case <-ticker.C:
-				_ = c.PingPresence(loopCtx)
+				ping()
 			}
 		}
 	}()
@@ -721,15 +751,16 @@ var (
 	ErrSteerBusy = errors.New("steering buffer is full; try again in a moment")
 )
 
-// SteerRun forwards mid-turn user guidance to the daemon's active run
+// SteerRun forwards mid-turn user guidance to this client's focused run
 // (POST /v1/runs/steer). In client mode the run executes inside the daemon
 // process, so the TUI's local steering channel can never reach it — this call
 // is the only path by which mid-run input reaches the agent loop.
-func (c *Client) SteerRun(text string) error {
+func (c *Client) SteerRun(runID, channel, text string) error {
 	req := api.RunSteerRequest{
 		Platform:       "cli",
 		PlatformUserID: clientUserID(),
-		Channel:        "cli",
+		Channel:        channel,
+		RunID:          runID,
 		Text:           text,
 	}
 	body, _ := json.Marshal(req)

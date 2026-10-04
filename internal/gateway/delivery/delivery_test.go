@@ -2,12 +2,36 @@ package delivery
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"selfmind/internal/control"
 )
+
+// A long reply without line breaks is cut at the size limit. The cut must land
+// between characters: a split Chinese character or emoji reaches the chat as
+// replacement glyphs at the seam of both messages.
+func TestSplitMessageNeverSplitsACharacter(t *testing.T) {
+	paragraph := strings.Repeat("结论部分需要完整显示😀", 300)
+	for _, max := range []int{3500, 2000, 97, 98, 99, 100} {
+		parts := splitMessage(paragraph, max)
+		if strings.Join(parts, "") != paragraph {
+			t.Fatalf("max=%d: the parts do not reassemble the reply", max)
+		}
+		for i, part := range parts {
+			if !utf8.ValidString(part) || len(part) > max {
+				t.Fatalf("max=%d part %d: valid=%v bytes=%d", max, i+1, utf8.ValidString(part), len(part))
+			}
+		}
+	}
+	parts := splitMessage(strings.Repeat("中", 20)+"\n"+strings.Repeat("文", 20), 90)
+	if len(parts) != 2 || parts[0] != strings.Repeat("中", 20) {
+		t.Fatalf("a line break in the window must still be preferred: %q", parts)
+	}
+}
 
 // TestNoDoubleDispatch reproduces the live duplicate-push bug: the
 // EnqueueAndTry immediate attempt and the retry poller both saw a freshly

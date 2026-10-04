@@ -9,6 +9,26 @@ import (
 	"testing"
 )
 
+func TestUnreviewedCancellationPreservesNecessaryWork(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{{Step: "Inspect live state", Status: "in_progress", SuccessCriteria: "live observation"}, {Step: "Inspect local records", Status: "pending"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "live access blocked; only local records read", []RunPlanStepInput{{StepID: first.Plan.Steps[0].StepID, Status: "cancelled"}, {StepID: first.Plan.Steps[1].StepID, Status: "completed"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.ValidateRunCompletion(ctx, identity.TenantID, run.ID); err == nil {
+		t.Fatal("unreviewed cancellation erased an unfinished obligation")
+	}
+	snapshot, err := store.RunRecoveryState(ctx, identity.TenantID, run.ID)
+	if err != nil || len(snapshot.UnresolvedStepIDs) != 1 || snapshot.UnresolvedStepIDs[0] != first.Plan.Steps[0].StepID {
+		t.Fatalf("unfinished work is not resumable: %+v err=%v", snapshot, err)
+	}
+}
+
 func interruptForAutomaticRecoveryTest(t *testing.T, store *Store, identity *IdentityContext, task *Task, run *Run) {
 	t.Helper()
 	ctx := context.Background()
@@ -96,8 +116,8 @@ func TestAutomaticRunRecoveryDecisionDoesNotStealSpecialistOrHistoricalRuns(t *t
 func TestRunPlanIssuesStableStepIDsAndVersionsCompleteSnapshots(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
-	if run.RecoveryContractVersion != RunRecoveryContractVersion {
-		t.Fatalf("new run recovery contract=%d, want %d", run.RecoveryContractVersion, RunRecoveryContractVersion)
+	if run.RecoveryContractVersion != CurrentRunRecoveryContractVersion {
+		t.Fatalf("new run recovery contract=%d, want %d", run.RecoveryContractVersion, CurrentRunRecoveryContractVersion)
 	}
 
 	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "start", []RunPlanStepInput{
@@ -136,8 +156,9 @@ func TestRunPlanIssuesStableStepIDsAndVersionsCompleteSnapshots(t *testing.T) {
 		t.Fatalf("reorder retargeted stable step ids: %+v", second.Plan.Steps)
 	}
 
-	// Exact semantic identity preserves ids when a provider omits them. This is
-	// compatibility for existing cassettes/providers; array position is not used.
+	// Exact wording preserves ids when a provider omits them, whatever the
+	// order. Position is only a fallback for a reworded open step; see
+	// TestRewordedPlanKeepsOpenStepsByPosition.
 	third, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "same steps", []RunPlanStepInput{
 		{Step: "Inspect state", Status: "completed", SuccessCriteria: "inputs recorded", WorkUnitID: second.Plan.Steps[0].WorkUnitID, WorkUnit: true},
 		{Step: "Verify behavior", Status: "completed"},

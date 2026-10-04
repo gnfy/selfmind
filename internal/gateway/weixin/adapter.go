@@ -2,6 +2,7 @@ package weixin
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/delivery"
@@ -20,29 +20,24 @@ import (
 	"selfmind/internal/tools"
 )
 
-type MessageHandler func(context.Context, api.MessageRequest) (api.MessageResponse, int)
+type InboundHandler func(context.Context, api.DurableInbound) (api.MessageResponse, int, error)
 
 type Adapter struct {
 	cfg     RuntimeConfig
 	client  *Client
-	store   *control.Store
-	handler MessageHandler
+	handler InboundHandler
 
 	clientMu                  sync.RWMutex
 	credentialRefreshInterval time.Duration
-	mu                        sync.Mutex
-	seen                      map[string]time.Time
 	cancel                    context.CancelFunc
 	done                      chan struct{}
 }
 
-func NewAdapter(cfg RuntimeConfig, store *control.Store, handler MessageHandler) *Adapter {
+func NewAdapter(cfg RuntimeConfig, handler InboundHandler) *Adapter {
 	return &Adapter{
 		cfg:                       cfg,
 		client:                    NewClient(cfg),
-		store:                     store,
 		handler:                   handler,
-		seen:                      map[string]time.Time{},
 		done:                      make(chan struct{}),
 		credentialRefreshInterval: 15 * time.Second,
 	}
@@ -173,16 +168,29 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 		}
 		backoff = time.Second
 		sessionExpiredLogged = false
-		if next := firstNonEmpty(stringFromMap(resp, "get_updates_buf"), stringFromMap(resp, "sync_buf")); next != "" {
-			syncBuf = next
-			a.saveSyncBuf(syncBuf)
-		}
-		for _, msg := range extractMessages(resp) {
+		messages := extractMessages(resp)
+		batchAccepted := true
+		for _, msg := range messages {
 			if err := a.processMessage(ctx, msg); err != nil {
-				log.Warn("weixin message processing failed", "error", tools.RedactSensitive(err.Error()))
+				if errors.Is(err, api.ErrInboundUncertain) {
+					log.Error("weixin inbound effect uncertain; receipt retained for inspection", "error", tools.RedactSensitive(err.Error()))
+					continue
+				}
+				log.Warn("weixin message processing failed; sync cursor retained", "error", tools.RedactSensitive(err.Error()))
+				batchAccepted = false
+				break
 			}
 		}
-		if len(extractMessages(resp)) == 0 {
+		if batchAccepted {
+			if next := firstNonEmpty(stringFromMap(resp, "get_updates_buf"), stringFromMap(resp, "sync_buf")); next != "" {
+				if err := a.saveSyncBuf(next); err != nil {
+					log.Warn("weixin sync cursor could not be saved; batch will be replayed", "error", err)
+				} else {
+					syncBuf = next
+				}
+			}
+		}
+		if !batchAccepted || len(messages) == 0 {
 			select {
 			case <-ctx.Done():
 				return
@@ -198,9 +206,6 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		return nil
 	}
 	msgID := messageID(msg)
-	if msgID != "" && a.isDuplicate(ctx, msgID) {
-		return nil
-	}
 	sender := senderID(msg, a.cfg.AccountID)
 	chatID := chatID(msg, sender, a.cfg.AccountID)
 	if sender == "" || chatID == "" {
@@ -228,18 +233,19 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 	if strings.TrimSpace(text) == "" {
 		text = summarizeAttachments(attachments)
 	}
+	if msgID == "" {
+		return fmt.Errorf("weixin work message has no stable platform message id; sync cursor retained")
+	}
 	displayName := firstNonEmpty(stringFromMap(msg, "sender_nick"), stringFromMap(msg, "display_name"), safeID(sender))
-	tenantID := firstNonEmpty(a.cfg.DefaultTenantID, control.DefaultTenantID)
-	if a.ownerBindingAllowed(sender, chatID, isGroup) && a.store != nil {
-		if _, err := a.store.BindAccount(ctx, tenantID, a.cfg.OwnerPersonID, "weixin", sender, displayName); err != nil {
-			return err
-		}
+	payload, err := json.Marshal(raw)
+	if err != nil {
+		return err
 	}
 	_ = client.SendTyping(ctx, chatID, true)
 	defer client.SendTyping(context.Background(), chatID, false)
 
 	req := api.MessageRequest{
-		TenantID:       tenantID,
+		TenantID:       a.cfg.DefaultTenantID,
 		Platform:       "weixin",
 		PlatformUserID: sender,
 		DisplayName:    displayName,
@@ -251,7 +257,16 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		Async:          !isControlCommand(text),
 		Attachments:    attachments,
 	}
-	resp, status := a.handler(ctx, req)
+	ownerPersonID := ""
+	if a.ownerBindingAllowed(sender, chatID, isGroup) {
+		ownerPersonID = a.cfg.OwnerPersonID
+	}
+	resp, status, err := a.handler(ctx, api.DurableInbound{
+		Request: req, MessageID: msgID, RawPayload: payload, OwnerPersonID: ownerPersonID,
+	})
+	if err != nil {
+		return err
+	}
 	if status >= http.StatusBadRequest || strings.TrimSpace(resp.Error) != "" {
 		errText := firstNonEmpty(resp.Error, fmt.Sprintf("weixin request failed: HTTP %d", status))
 		_ = client.Send(context.Background(), chatID, "SelfMind error: "+errText)
@@ -381,35 +396,6 @@ func (a *Adapter) allowed(sender, chat string, isGroup bool) bool {
 	}
 }
 
-func (a *Adapter) isDuplicate(ctx context.Context, id string) bool {
-	a.mu.Lock()
-	now := time.Now()
-	for key, at := range a.seen {
-		if now.Sub(at) > 24*time.Hour {
-			delete(a.seen, key)
-		}
-	}
-	_, dup := a.seen[id]
-	if !dup {
-		a.seen[id] = now
-	}
-	a.mu.Unlock()
-	if dup {
-		return true
-	}
-	// The in-memory map dies with the process while the iLink sync buffer
-	// replays recent messages on reconnect, so a restart used to re-run the
-	// agent on already-processed messages. The durable first-seen check in
-	// control.db is what closes that window; a store error fails open so a
-	// dedup hiccup never drops a real message.
-	if a.store != nil {
-		if first, err := a.store.MarkInboundSeen(ctx, "weixin", id); err == nil && !first {
-			return true
-		}
-	}
-	return false
-}
-
 func (a *Adapter) syncBufPath() string {
 	return SyncBufFilePath(a.cfg.HomeDir, a.cfg.AccountID)
 }
@@ -422,15 +408,35 @@ func (a *Adapter) loadSyncBuf() string {
 	return strings.TrimSpace(string(data))
 }
 
-func (a *Adapter) saveSyncBuf(value string) {
+func (a *Adapter) saveSyncBuf(value string) error {
 	if strings.TrimSpace(value) == "" {
-		return
+		return nil
 	}
 	path := a.syncBufPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return
+		return err
 	}
-	_ = os.WriteFile(path, []byte(value), 0600)
+	file, err := os.CreateTemp(filepath.Dir(path), ".syncbuf-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	if err := file.Chmod(0600); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.WriteString(value); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
 }
 
 func extractMessages(resp map[string]interface{}) []map[string]interface{} {

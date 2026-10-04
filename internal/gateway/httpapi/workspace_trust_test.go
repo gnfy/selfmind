@@ -100,6 +100,56 @@ func TestObservationProfileEndpointRequiresTrustedWorkspaceAndLocalCLI(t *testin
 	}
 }
 
+func TestEffectProfileEndpointRequiresTrustedLocalOwner(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	t.Setenv("SELF_DAEMON_TOKEN", "")
+	store := controltest.NewStore(t)
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "local", "Local user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	script := filepath.Join(root, "effect.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.EnsureWorkspace(ctx, control.Workspace{TenantID: identity.TenantID,
+		OwnerPersonID: identity.PersonID, Name: "repo", LocalPath: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Control: store, LocalControlToken: "local-secret"}
+	payload, _ := json.Marshal(api.WorkspaceEffectProfileRequest{Platform: "cli", PlatformUserID: "local",
+		WorkspaceID: workspace.ID, ScriptPath: script, Argv: []string{"east"},
+		TargetKeys: []string{"cluster:east"}, AllowNetwork: true})
+	post := func(token string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/v1/workspaces/effect-profiles", bytes.NewReader(payload))
+		request.RemoteAddr = "127.0.0.1:4100"
+		request.Header.Set(api.LocalControlTokenHeader, token)
+		response := httptest.NewRecorder()
+		server.handleWorkspaceEffectProfiles(response, request)
+		return response
+	}
+	if response := post(""); response.Code != http.StatusForbidden {
+		t.Fatalf("missing local authority = %d", response.Code)
+	}
+	if response := post("local-secret"); response.Code != http.StatusConflict {
+		t.Fatalf("untrusted workspace = %d: %s", response.Code, response.Body.String())
+	}
+	if _, err := store.SetWorkspaceTrust(ctx, identity.TenantID, identity.PersonID, workspace.ID,
+		executionenv.TrustTrusted, "local_cli"); err != nil {
+		t.Fatal(err)
+	}
+	if response := post("local-secret"); response.Code != http.StatusOK {
+		t.Fatalf("trusted owner = %d: %s", response.Code, response.Body.String())
+	}
+	grants, err := store.ListApprovalGrants(ctx, identity.TenantID, identity.PersonID, false)
+	if err != nil || len(grants) != 1 || !strings.HasPrefix(grants[0].PatternKey, "rule:effect_script:v1:") {
+		t.Fatalf("effect profile grant = %+v, %v", grants, err)
+	}
+}
+
 func TestWorkspaceTrustEndpointRequiresLocalControlToken(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")

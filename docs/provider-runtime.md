@@ -623,6 +623,30 @@ absorbs these without touching the wire contract:
 - 429 `Retry-After` is honored (`RetryAfterFromError`): the header is folded
   into the error via `foldRetryAfter` at the adapter 4xx/5xx return sites, and
   the codex/OpenAI "try again in N" body phrasing is parsed. Capped at 600s.
+- In the daemon, a process-owned request gate also coordinates the resolved
+  physical provider route across workers, delegated agents, configured
+  background roles, and daemon model probes. A route is provider + normalized
+  endpoint + credential identity, independent of model or logical role. Each
+  route admits at most two
+  concurrent requests; a structured 429 starts a shared, cancellable cooldown
+  (including errors emitted after a stream starts). The permit lasts until the
+  stream closes or its context is canceled. Capacity and cooldown waits for a
+  known Run are recorded as internal `model.provider_wait` events with route,
+  reason, duration, and cancellation. The daily report aggregates these by
+  reason and counts affected Runs. This is request admission, not a
+  complete Run scheduler. A checkpointed foreground Run can park durably at
+  admission and release its worker; its exact continuation remains queued.
+  Capacity contention first gets at most 250ms of cancellable grace in the
+  current Run, avoiding checkpoint/recall churn when a permit is just closing.
+  A 429 cooldown is deferred immediately; long capacity waits retain the same
+  durable retry limits. Permit ownership and role counts change atomically,
+  so acquisition/release races cannot invent an unattributed occupant.
+  Internal `model.provider_admission` events record acquire, release, defer,
+  and cancellation with capacity and occupying role counts, without other
+  people's Run IDs. `provider.call.usage` labels a wait `deferred` and records
+  `provider_dispatched`: local capacity/cooldown deferrals are excluded from
+  remote-call counts, while actual 429 attempts still count. Historical usage
+  events keep their original interpretation.
 - The SSE idle watchdog (`responses_adapter.go` `streamIdleTimeout` +
   `streamResponse`) aborts a stream that stalls without new data, emitting a
   retryable stream-idle error so the loop reconnects. It is config-driven
@@ -654,6 +678,24 @@ absorbs these without touching the wire contract:
   learning failures retain a network-route fingerprint. A direct/proxy or local
   listener state change releases those jobs on the next maintenance sweep; an
   explicit managed restart also grants one fresh attempt.
+- **Stop reasons.** Adapters pass each provider's raw finish or stop reason
+  through unchanged; `llm.ClassifyStopReason` (`stop_reason.go`) is the one
+  table that maps OpenAI, OpenAI-compatible, Responses, and Anthropic values to
+  `complete`, `length`, `interrupted`, `filtered`, `missing`, or `other`. Every
+  `provider.call.usage` event records the bounded raw `finish_reason` and the
+  classified `stop_reason` (`unterminated` or `error` for a failed call). A
+  `length` or `interrupted` reply is continued from where it stopped and, when
+  no iteration remains, ends incomplete and resumable (`output_limit` /
+  `provider_interrupted`). A `filtered` reply is not continued: the turn ends
+  incomplete and resumable (`provider_filtered`) and its tool calls never run.
+  `missing` alone is not evidence of a cut, because several providers omit the
+  reason.
+- **Unterminated streams.** A stream that closes cleanly before its protocol
+  terminator (`data: [DONE]`, `response.completed`/`response.incomplete`,
+  `message_stop`) without having reported a stop reason delivered only a
+  prefix. The adapter raises a retryable `stream_unterminated` error, so the
+  loop continues from the partial text through the non-stream fallback instead
+  of presenting the prefix as the answer.
 - **No cursor resume.** With `store=false` the server never persisted the
   response, so `previous_response_id` resume is impossible — a retry is always
   a full re-send. Do not attempt partial-resume.

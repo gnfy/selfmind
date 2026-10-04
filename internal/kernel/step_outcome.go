@@ -29,17 +29,29 @@ const (
 // turnCompletion is the typed, single-sourced result of a finished turn.
 type turnCompletion struct {
 	Status    string // "completed" | "incomplete"
-	Reason    string // completed | output_limit | tool_budget_exhausted | plan_unresolved | max_iterations
+	Reason    string // completed | output_limit | provider_interrupted | provider_filtered | tool_budget_exhausted | plan_unresolved | max_iterations
 	Resumable bool
+}
+
+// outcomeLabel names how the turn ended for its work-history record: the
+// status, with the reason when the turn stopped short.
+func (c turnCompletion) outcomeLabel() string {
+	if c.Status == "completed" || c.Reason == "" {
+		return c.Status
+	}
+	return c.Status + ": " + c.Reason
 }
 
 // completionSignals is the loop state that decides how a turn is reported.
 type completionSignals struct {
-	FinishStatus        string // structured finish_run status, "" if none
-	ToolBudgetExhausted bool
-	PlanUnresolved      bool
-	OutputLimited       bool // model stopped for output length AND no room to continue
-	IterationCapped     bool // hit the hard safety iteration ceiling
+	FinishStatus         string // structured finish_run status, "" if none
+	ToolBudgetExhausted  bool
+	ToolAdmissionRefused bool
+	PlanUnresolved       bool
+	OutputLimited        bool // model stopped for output length AND no room to continue
+	OutputInterrupted    bool // the provider halted the reply AND no room to continue
+	OutputFiltered       bool // the provider filtered the reply before it finished
+	IterationCapped      bool // hit the hard safety iteration ceiling
 }
 
 // resolveTurnCompletion maps loop state to the reported completion. Precedence
@@ -52,8 +64,14 @@ func resolveTurnCompletion(s completionSignals) turnCompletion {
 	switch {
 	case s.OutputLimited:
 		return turnCompletion{Status: "incomplete", Reason: "output_limit", Resumable: true}
+	case s.OutputInterrupted:
+		return turnCompletion{Status: "incomplete", Reason: "provider_interrupted", Resumable: true}
+	case s.OutputFiltered:
+		return turnCompletion{Status: "incomplete", Reason: "provider_filtered", Resumable: true}
 	case s.ToolBudgetExhausted && strings.TrimSpace(s.FinishStatus) == "":
 		return turnCompletion{Status: "incomplete", Reason: "tool_budget_exhausted", Resumable: true}
+	case s.ToolAdmissionRefused && strings.TrimSpace(s.FinishStatus) == "":
+		return turnCompletion{Status: "incomplete", Reason: "tool_admission_refused", Resumable: true}
 	case s.PlanUnresolved:
 		return turnCompletion{Status: "incomplete", Reason: "plan_unresolved", Resumable: true}
 	case s.IterationCapped:

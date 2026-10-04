@@ -1,0 +1,43 @@
+id: reliability_ordinary_command_evidence_zh
+title: "Changed wording and target preserve the distinction between execution and verification"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [cat]
+setup:
+  files:
+    settings/state.txt: "CURRENT_SETTINGS_ENABLED\n"
+turns:
+  - input: >-
+      请通过 terminal 执行 cat settings/state.txt，告诉我当前文件的内容，保持文件不变。
+      这次只是读取状态，不需要认证测试套件。收尾时说明实际执行过的普通命令，
+      不要把它说成正式验证已经通过。
+expect:
+  status: completed
+  verification_state: not_applicable
+  max_tool_errors: 0
+  max_tool_calls: 4
+  min_tool_calls: 1
+  max_duration_seconds: 120
+  contains:
+    - "CURRENT_SETTINGS_ENABLED"
+  must_not_contain:
+    - "Verification passed"
+assert_state:
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"command"'
+    count_gte: 1
+  - on: events
+    type: run.finished
+    payload_contains: '"ordinary_commands":1'
+    count_gte: 1
+  - on: file
+    path: settings/state.txt
+    contains: CURRENT_SETTINGS_ENABLED
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_mojibake: true

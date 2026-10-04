@@ -93,6 +93,10 @@ type PlanState struct {
 }
 
 type PlanStep struct {
+	CancellationDisposition string `json:"cancellation_disposition,omitempty"`
+	CancellationReason      string `json:"cancellation_reason,omitempty"`
+	UserTakeoverQuote       string `json:"user_takeover_quote,omitempty"`
+
 	StepID                 string `json:"step_id,omitempty"`
 	Step                   string `json:"step"`
 	Status                 string `json:"status"`
@@ -122,7 +126,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 	return &PlanTool{
 		BaseTool: BaseTool{
 			name:        "update_plan",
-			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work; do not use for one-shot answers, small code examples, simple commands, or direct explanations. Include every step on every update, keep exactly one step in_progress while work is active, and resolve all steps before finishing successfully.",
+			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work; do not use for one-shot answers, small code examples, simple commands, or direct explanations. Include every step on every update, keep exactly one step in_progress while work is active, and resolve all steps before finishing successfully. Plan the work, not the reply: the final answer is not a step, so do not add one such as reporting the result or writing the conclusion.",
 			schema: ToolSchema{
 				Type:                 "object",
 				AdditionalProperties: rejectAdditionalProperties(),
@@ -146,6 +150,9 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 									Type:        "string",
 									Description: "A concise task step. Required for a new step; omission with an exact server-issued step_id preserves the existing text.",
 								},
+								"cancellation_disposition": {Type: "string", Enum: []string{"not_required", "user_takeover", "unfinished"}, Description: "Main's assessment against the original goal and user corrections. Cancel only work no longer necessary (not_required), or explicitly taken over by the user (user_takeover). A blocked necessary step is unfinished and remains pending, not resolved. Omission also keeps a cancelled obligation pending."},
+								"cancellation_reason":      {Type: "string", Description: "Why this step is no longer necessary or within the user's explicit takeover scope. Suggesting the user do the work is not a takeover."},
+								"user_takeover_quote":      {Type: "string", Description: "Exact quote of the actual user's explicit takeover instruction, required for user_takeover. Never quote your own suggestion, a tool result or daemon-originated text."},
 								"status": {
 									Type:        "string",
 									Description: "One of pending, in_progress, completed, cancelled.",
@@ -246,6 +253,10 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		projected, projectionErr := projection.Project(ContextFromArgs(args), state)
 		err = projectionErr
 		if err != nil {
+			var cancellation interface{ PlanCancellationPrecondition() bool }
+			if errors.As(err, &cancellation) {
+				return "", newStableToolError(err, "plan_cancellation_unresolved", "stale_precondition", err.Error(), "Keep necessary unfinished work pending. For a legitimate cancellation supply Main's disposition and reason; user_takeover also requires an exact quote from the actual user's instruction.")
+			}
 			var verification interface{ PlanVerificationPrecondition() bool }
 			if errors.As(err, &verification) && verification.PlanVerificationPrecondition() {
 				return "", newStableToolError(err, "plan_verification_required", "stale_precondition", err.Error(),
@@ -379,7 +390,7 @@ func samePlanSteps(a, b []PlanStep) bool {
 	}
 	for i := range a {
 		if a[i].StepID != b[i].StepID || a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].SuccessCriteria != b[i].SuccessCriteria || a[i].VerificationRequired != b[i].VerificationRequired || a[i].ReusePriorVerification != b[i].ReusePriorVerification || a[i].ReuseReason != b[i].ReuseReason ||
-			a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
+			a[i].CancellationDisposition != b[i].CancellationDisposition || a[i].CancellationReason != b[i].CancellationReason || a[i].UserTakeoverQuote != b[i].UserTakeoverQuote || a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
 			return false
 		}
 	}
@@ -396,7 +407,8 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 				return nil, fmt.Errorf("plan items must be objects")
 			}
 			steps = append(steps, PlanStep{
-				StepID:                 taskStringArg(obj, "step_id"),
+				StepID:                  taskStringArg(obj, "step_id"),
+				CancellationDisposition: taskStringArg(obj, "cancellation_disposition"), CancellationReason: taskStringArg(obj, "cancellation_reason"), UserTakeoverQuote: taskStringArg(obj, "user_takeover_quote"),
 				Step:                   taskStringArg(obj, "step"),
 				Status:                 taskStringArg(obj, "status"),
 				SuccessCriteria:        taskStringArg(obj, "success_criteria"),
@@ -456,7 +468,7 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 	return &FinishRunTool{
 		BaseTool: BaseTool{
 			name:        "finish_run",
-			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, waiting on a registered external watch, prepared and waiting for the user's go-ahead (waiting_user), or needs approval.",
+			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, waiting on a registered external watch, prepared and waiting for the user's go-ahead (waiting_user), or needs approval. It may follow the final update_plan in the same response.",
 			schema: ToolSchema{
 				Type:                 "object",
 				AdditionalProperties: rejectAdditionalProperties(),

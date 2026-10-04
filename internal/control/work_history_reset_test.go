@@ -102,6 +102,34 @@ func TestResetWorkHistoryBacksUpAndPreservesOwnerConfiguration(t *testing.T) {
 	}
 }
 
+func TestResetWorkHistoryDeletesThreadlessCoordinationEvents(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunForOwner(ctx, RunOwner{TenantID: owner.TenantID, PersonID: owner.PersonID},
+		"im", "route message", StartRunOptions{ExecutionClass: "coordination"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, Event{TaskID: run.ID, RunID: run.ID, TenantID: owner.TenantID,
+		PersonID: owner.PersonID, Type: "coordination.decided", Visibility: "private"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, owner.TenantID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ResetWorkHistory(ctx, owner.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	var remaining int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_events WHERE run_id = ?`, run.ID).Scan(&remaining); err != nil || remaining != 0 {
+		t.Fatalf("orphaned coordination events after reset: %d, %v", remaining, err)
+	}
+}
+
 func TestResetWorkHistoryRefusesEachLiveWorkClass(t *testing.T) {
 	tests := []struct {
 		name string

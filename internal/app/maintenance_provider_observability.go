@@ -79,13 +79,7 @@ func isMaintenanceOutputExhausted(err error) bool {
 	if !ok || info.Class != llm.ProviderErrorEmptyResponse {
 		return false
 	}
-	reason := strings.ToLower(strings.TrimSpace(info.StopReason))
-	switch reason {
-	case "max_tokens", "max_output_tokens", "length", "token_limit":
-		return true
-	default:
-		return strings.Contains(reason, "max_token") || strings.Contains(reason, "length")
-	}
+	return llm.ClassifyStopReason(info.StopReason) == llm.StopLength
 }
 
 func (c *maintenanceProviderChain) recordProviderCall(ctx context.Context, candidate namedMaintenanceProvider,

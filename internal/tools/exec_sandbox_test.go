@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"net"
 	"path/filepath"
 	"runtime"
@@ -189,6 +190,13 @@ func TestMountBackedPlanIsRefusedRatherThanSilentlyWidened(t *testing.T) {
 	if _, _, _, err := sandboxedCommandWithMaterial(context.Background(),
 		[]string{"/bin/sh", "-c", "echo hi"}, material, SandboxIsolated, runtime.GOOS, true); err == nil {
 		t.Fatal("an explicit isolated request must fail when the plan is unenforceable")
+	} else {
+		var classified *stableToolError
+		if !errors.As(err, &classified) || classified.ToolFailurePhase() != "preparation" ||
+			classified.ToolEffectState() != "not_dispatched" || classified.ToolStateChanged() ||
+			!strings.Contains(classified.ModelSafeMessage(), "mount-backed state") {
+			t.Fatalf("preparation failure lost its cause or effect certainty: %v", err)
+		}
 	}
 
 	// Generality: the same plan WITHOUT the mount is enforceable, so the

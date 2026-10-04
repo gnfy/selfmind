@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestAES128ECBRoundTrip(t *testing.T) {
@@ -41,6 +42,21 @@ func TestSplitTextForDelivery(t *testing.T) {
 	parts = splitTextForDelivery(strings.Repeat("x", 11), 5, false)
 	if len(parts) != 3 {
 		t.Fatalf("chunk split = %+v", parts)
+	}
+}
+
+func TestSplitTextForDeliveryNeverSplitsACharacter(t *testing.T) {
+	paragraph := strings.Repeat("结论部分需要完整显示😀", 200)
+	for _, max := range []int{2000, 97, 98, 99, 100} {
+		parts := splitTextForDelivery(paragraph, max, false)
+		if strings.Join(parts, "") != paragraph {
+			t.Fatalf("max=%d: the chunks do not reassemble the reply", max)
+		}
+		for i, part := range parts {
+			if !utf8.ValidString(part) || len(part) > max {
+				t.Fatalf("max=%d chunk %d: valid=%v bytes=%d", max, i+1, utf8.ValidString(part), len(part))
+			}
+		}
 	}
 }
 

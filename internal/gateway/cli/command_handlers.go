@@ -154,7 +154,7 @@ func (m *uiModel) handleMigration() tea.Cmd {
 	}
 }
 
-func (m *uiModel) handleStatus() tea.Cmd {
+func (m *uiModel) handleStatus(args ...string) tea.Cmd {
 	return func() tea.Msg {
 		elapsed := time.Since(m.startTime)
 		usage := fmt.Sprintf("%s total · %s", compactCount(m.totalTokens), formatUsage(m.runTokens, m.tokenLimit))
@@ -171,7 +171,11 @@ func (m *uiModel) handleStatus() tea.Cmd {
 			m.providerName, m.modelName, contextWindow, lastRequest, formatDuration(elapsed), usage)
 
 		if m.messageProcessor != nil {
-			resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest("/status"))
+			statusCommand := "/status"
+			if len(args) == 1 {
+				statusCommand += " " + args[0]
+			}
+			resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest(statusCommand))
 			if resp.Error != "" {
 				status += fmt.Sprintf("- **Current Task**: error: %s\n", resp.Error)
 			} else if strings.TrimSpace(resp.Content) != "" {

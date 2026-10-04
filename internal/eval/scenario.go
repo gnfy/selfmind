@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,8 +11,10 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/tools"
 )
@@ -29,6 +32,16 @@ type Setup struct {
 	// it deliberately do not get: a delivery surface changes which notification
 	// paths a run takes, and that must stay opt-in.
 	Deliveries []SeedDelivery `yaml:"deliveries,omitempty" json:"deliveries,omitempty"`
+	Inbound    []SeedInbound  `yaml:"inbound,omitempty" json:"inbound,omitempty"`
+}
+
+// SeedInbound reproduces durable, unresolved input through the normal receipt
+// store so model-free diagnostics can prove that source content stays private.
+type SeedInbound struct {
+	Platform    string `yaml:"platform" json:"platform"`
+	MessageID   string `yaml:"message_id" json:"message_id"`
+	Content     string `yaml:"content" json:"content"`
+	Dispatching bool   `yaml:"dispatching,omitempty" json:"dispatching,omitempty"`
 }
 
 // SeedSkill creates a managed user Skill before the first turn. It exists so
@@ -72,12 +85,14 @@ type SeedTask struct {
 	ParkedRuns []SeedParkedRun `yaml:"parked_runs,omitempty" json:"parked_runs,omitempty"`
 }
 
-// SeedParkedRun is one pre-existing run parked in a resumable status.
+// SeedParkedRun is one pre-existing run parked on human input, recovery, or a
+// durable provider wait. Waiting_external uses WaitReason and an exact queue.
 type SeedParkedRun struct {
 	Input string `yaml:"input" json:"input"`
 	// Status must be one of the resumable statuses (interrupted, waiting_user,
 	// verification_partial, blocked); empty defaults to waiting_user.
-	Status string `yaml:"status,omitempty" json:"status,omitempty"`
+	Status     string `yaml:"status,omitempty" json:"status,omitempty"`
+	WaitReason string `yaml:"wait_reason,omitempty" json:"wait_reason,omitempty"`
 }
 
 // StatePredicate is a single assertion over the world state after a scenario
@@ -200,7 +215,7 @@ func applySkillSeeds(tenantID, skillsBaseDir string, seeds []SeedSkill) error {
 // applyStateSeeds seeds memory facts and an optional current task before the
 // first turn. Files are handled separately (they must land before the harness
 // starts using the workspace).
-func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot, channel string, setup *Setup) (string, error) {
+func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot, channel string, setup *Setup, parkedRunIDs *[]string) (string, error) {
 	if setup == nil || identity == nil {
 		return "", nil
 	}
@@ -209,6 +224,20 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 	// deterministic candidates reply), so events appended on the seeded Thread
 	// remain assertable.
 	var seededTaskID string
+	for _, seed := range setup.Inbound {
+		payload, err := json.Marshal(map[string]string{"content": seed.Content})
+		if err != nil {
+			return "", err
+		}
+		if _, err := store.BeginInbound(ctx, seed.Platform, seed.MessageID, payload, control.InboundOwner{TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: seed.Content}); err != nil {
+			return "", err
+		}
+		if seed.Dispatching {
+			if ok, err := store.ClaimInbound(ctx, seed.Platform, seed.MessageID); err != nil || !ok {
+				return "", fmt.Errorf("claim seeded inbound %s: claimed=%t err=%v", seed.MessageID, ok, err)
+			}
+		}
+	}
 	for _, f := range setup.Memory {
 		target := strings.TrimSpace(f.Target)
 		if target == "" {
@@ -306,14 +335,43 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			if err != nil {
 				return "", fmt.Errorf("seed parked run %d: %w", i, err)
 			}
+			if parkedRunIDs != nil {
+				*parkedRunIDs = append(*parkedRunIDs, run.ID)
+			}
 			status := strings.TrimSpace(parked.Status)
 			if status == "" {
 				status = "waiting_user"
 			}
 			switch status {
-			case "interrupted", "waiting_user", "verification_partial", "blocked":
+			case "interrupted", "waiting_user", "verification_partial", "blocked", "waiting_external":
 			default:
 				return "", fmt.Errorf("seed parked run %d: status %q is not resumable", i, status)
+			}
+			if status == "waiting_external" {
+				if parked.WaitReason != "capacity" && parked.WaitReason != "rate_limit" {
+					return "", fmt.Errorf("seed parked run %d: provider wait reason must be capacity or rate_limit", i)
+				}
+				snapshot, _ := json.Marshal([]llm.Message{{Role: "user", Content: parked.Input}})
+				if err := store.SaveLoopCheckpoint(ctx, control.LoopCheckpointRecord{
+					TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+					ContractVersion: control.RunRecoveryContractVersion, Outcome: "continue_model", Detail: "provider_request", Snapshot: snapshot,
+				}); err != nil {
+					return "", fmt.Errorf("seed provider checkpoint: %w", err)
+				}
+				summary := "Waiting for the model provider (" + parked.WaitReason + ")."
+				outcome := api.RunOutcome{Status: "waiting_external", CompletionReason: "provider_wait", Summary: summary}
+				payload, _ := json.Marshal(map[string]interface{}{"outcome": outcome, "provider_wait": map[string]string{"reason": parked.WaitReason}})
+				queue := &control.QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Platform: identity.Platform,
+					PlatformUserID: identity.PlatformUserID, Channel: channel, Content: "continue exact provider wait", TaskID: task.ID,
+					WorkspaceID: workspaceID, ExecutionRoots: seedOptions.ExecutionRoots, ReplyToRunID: run.ID,
+					IdempotencyKey: "provider-wait:" + run.ID, NotBefore: time.Now().Add(time.Hour)}
+				if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{Identity: *identity, RunID: run.ID,
+					RunStatus: "waiting_external", TaskID: task.ID, TaskStatus: "in_progress", Summary: summary,
+					Channel: channel, Event: control.Event{Type: "run.finished", Payload: payload},
+					Continuation: queue, ExpectedRunStatus: "running", RequireCheckpoint: true}); err != nil {
+					return "", fmt.Errorf("seed provider wait %d: %w", i, err)
+				}
+				continue
 			}
 			if status == "interrupted" {
 				// A seeded interruption stands for work that was underway when it

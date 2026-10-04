@@ -110,6 +110,8 @@ type ApprovalDetails struct {
 	// of redoing it.
 	TriageRationale string
 	TriageRisk      string
+	// Delegated means a sub-agent of the run made the call, not the main agent.
+	Delegated bool
 	// Options is the server-issued answer set for THIS ask (batch B1). Nil falls
 	// back to the built-in once/deny pair so an older daemon still renders a usable panel;
 	// the panel never invents an option the daemon did not offer.
@@ -334,6 +336,9 @@ func (p *ApprovalPrompt) View(width int) string {
 		}
 	} else if p.tool != "" {
 		addRow(p.styles.tool.Render(p.tool))
+	}
+	if p.details.Delegated {
+		p.addLabeledRows(addRow, "from: ", "a delegated sub-agent of this run", inner, 1)
 	}
 	// Execution context: where it runs, and how big the write is. Order matters —
 	// location before size before rationale, because "wrong directory" is the

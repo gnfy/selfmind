@@ -168,6 +168,47 @@ func TestAutomaticRecoveryQueuesOneExactParentBelowForeground(t *testing.T) {
 	}
 }
 
+func TestBoundQueueCrashRecoversExactRunBeforeAnyPlanOrTool(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	row, err := store.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+		Channel: "cli", Platform: "cli", Content: "dispatch this once",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, claimed, err := store.ClaimQueued(ctx, identity.TenantID, row.ID, time.Minute)
+	if err != nil || !claimed {
+		t.Fatalf("claim = %q/%v, %v", token, claimed, err)
+	}
+	run, err := store.StartRunWithOptions(ctx, task, "cli", "dispatch this once", control.StartRunOptions{QueueID: row.ID, QueueClaimToken: token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := store.MarkInterruptedRuns(ctx, 0); err != nil || recovered != 1 {
+		t.Fatalf("stuck Run recovery = %d, %v", recovered, err)
+	}
+	if replayed, dropped, err := store.RequeueStartedQueued(ctx); err != nil || replayed != 0 || dropped != 1 {
+		t.Fatalf("boot queue recovery = %d/%d, %v; want exact Run retained", replayed, dropped, err)
+	}
+	items, err := store.ListPendingRecoveryNotifications(ctx, 10)
+	if err != nil || len(items) != 1 || items[0].RunID != run.ID {
+		t.Fatalf("recovery notification = %+v, %v", items, err)
+	}
+	if scheduled, err := daemon.scheduleAutomaticRunRecovery(ctx, items[0], false); err != nil || !scheduled {
+		t.Fatalf("exact continuation = %v, %v", scheduled, err)
+	}
+	queued, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(queued) != 1 || queued[0].ReplyToRunID != run.ID {
+		t.Fatalf("recovery queue = %+v, %v", queued, err)
+	}
+	original, err := store.GetQueued(ctx, identity.TenantID, row.ID)
+	if err != nil || original == nil || original.Status != control.QueueStatusFailed || original.RunID != run.ID {
+		t.Fatalf("original queue ownership = %+v, %v", original, err)
+	}
+}
+
 func TestAutomaticRecoveryDisableCancelsPreviouslyScheduledRowBeforeClaim(t *testing.T) {
 	daemon, store, identity, task, _ := newApprovalTestServer(t)
 	ctx := context.Background()
@@ -497,7 +538,7 @@ func assertWatcherRunState(t *testing.T, store *control.Store, identity *control
 	}
 }
 
-func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
+func TestExternalWatchFinalizationKeepsBoundDoneQueueForExactRecovery(t *testing.T) {
 	daemon, store, identity, task, approval := newApprovalTestServer(t)
 	ctx := context.Background()
 	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
@@ -520,7 +561,14 @@ func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
 	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusStarted); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.BindQueuedRun(ctx, watch.TenantID, row.ID, "run_incomplete_finalization"); err != nil {
+	finalizationRun, err := store.StartRun(ctx, task, watch.Channel, "finalize release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, watch.TenantID, row.ID, finalizationRun.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, watch.TenantID, finalizationRun.ID, "interrupted"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusDone); err != nil {
@@ -532,18 +580,78 @@ func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
 
 	daemon.reconcileExternalWatchFinalizations(ctx)
 	row, err = store.GetQueued(ctx, watch.TenantID, row.ID)
-	if err != nil || row == nil || row.Status != control.QueueStatusQueued || row.Restarts != 1 {
-		t.Fatalf("reconciled queue row = %+v, %v", row, err)
+	if err != nil || row == nil || row.Status != control.QueueStatusDone || row.RunID != finalizationRun.ID || row.Restarts != 0 {
+		t.Fatalf("bound queue row changed or replayed = %+v, %v", row, err)
 	}
 	if strings.Contains(row.Content, "old finalization") || !strings.Contains(row.Content, "authoritative evidence") || !strings.Contains(row.Content, "SUCCESS") {
 		t.Fatalf("reconciled queue kept stale instructions: %q", row.Content)
 	}
-	// A retry is still available, so the watcher Run stays parked for its
-	// finalization rather than being parked on the person.
-	assertWatcherRunState(t, store, identity, run.ID, "waiting_external", "")
+	// The queue message cannot be replayed after a Run may have effects. The
+	// latest exact finalization Run, not its watcher parent, owns Attention.
+	assertWatcherRunState(t, store, identity, run.ID, "blocked", "")
+	assertWatcherRunState(t, store, identity, finalizationRun.ID, "interrupted", control.ThreadActivityResumable)
 }
 
-func TestExternalWatchFinalizationRepairsLegacyGatewayShutdownCancellation(t *testing.T) {
+func TestExternalWatchFinalizationDeliversCommittedResultWithoutReplayingRun(t *testing.T) {
+	daemon, store, identity, task, approval := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_finalization", "WeChat"); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	watch, _ := seedConcludedWatch(t, store, identity, task)
+	row, err := store.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: watch.TenantID, PersonID: watch.PersonID, TaskID: watch.TaskID,
+		Channel: watch.Channel, Platform: "cli", Content: "finalize once",
+		IdempotencyKey: externalWatchFinalizationKey(*watch),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, watch.Channel, "finish release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, watch.TenantID, row.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{
+		Identity: *identity, RunID: run.ID, RunStatus: "done", TaskID: task.ID,
+		TaskStatus: "done", Channel: watch.Channel, EffectKey: row.IdempotencyKey,
+		Summary: "Release complete", AssistantContent: "Release complete and verified.",
+		Event: control.Event{Type: "run.finished", Payload: json.RawMessage(`{"status":"done"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if replayed, dropped, err := store.RequeueStartedQueued(ctx); err != nil || replayed != 0 || dropped != 0 {
+		t.Fatalf("boot recovery = %d/%d, %v; completed Run must not replay", replayed, dropped, err)
+	}
+
+	daemon.reconcileExternalWatchFinalizations(ctx)
+	if len(recorder.messages) != 1 || recorder.messages[0].Content != "Release complete and verified." || recorder.messages[0].RunID != run.ID {
+		t.Fatalf("committed result delivery = %+v", recorder.messages)
+	}
+	if enqueued, err := store.EffectDeliveryEnqueued(ctx, watch.TenantID, row.IdempotencyKey); err != nil || !enqueued {
+		t.Fatalf("delivery receipt = %v, %v", enqueued, err)
+	}
+	daemon.reconcileExternalWatchFinalizations(ctx)
+	if len(recorder.messages) != 1 {
+		t.Fatalf("result was delivered twice: %+v", recorder.messages)
+	}
+	stored, err := store.GetQueued(ctx, watch.TenantID, row.ID)
+	if err != nil || stored == nil || stored.Status != control.QueueStatusDone || stored.RunID != run.ID {
+		t.Fatalf("finalization queue identity = %+v, %v", stored, err)
+	}
+}
+
+func TestExternalWatchFinalizationShutdownDoesNotReplayBoundQueue(t *testing.T) {
 	daemon, store, identity, task, approval := newApprovalTestServer(t)
 	ctx := context.Background()
 	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
@@ -589,10 +697,10 @@ func TestExternalWatchFinalizationRepairsLegacyGatewayShutdownCancellation(t *te
 
 	daemon.reconcileExternalWatchFinalizations(ctx)
 	row, err = store.GetQueued(ctx, watch.TenantID, row.ID)
-	if err != nil || row == nil || row.Status != control.QueueStatusQueued {
-		t.Fatalf("legacy cancelled queue = %+v, %v; want queued", row, err)
+	if err != nil || row == nil || row.Status != control.QueueStatusDone || row.RunID != legacyRunID {
+		t.Fatalf("legacy bound queue = %+v, %v; want original run", row, err)
 	}
-	assertWatcherRunState(t, store, identity, run.ID, "waiting_external", "")
+	assertWatcherRunState(t, store, identity, run.ID, "blocked", control.ThreadActivityResumable)
 }
 
 func TestExternalWatchFinalizationDoesNotReopenLaterUserCancellation(t *testing.T) {

@@ -242,3 +242,27 @@ func TestTUIProcessBudgetKeepsComposerAndStatusVisible(t *testing.T) {
 		t.Fatalf("composer/status or plan was displaced:\n%s", view)
 	}
 }
+
+// The answer a model writes beside finish_run reaches the transcript once.
+// finish_run draws no tool cell, so that text stays in the live stream until
+// the run ends and the run's answer replaces it; the answer now carries the
+// text, where it used to carry only the closing line after it.
+func TestAnswerBesideAHiddenFinishRunReachesTheTranscriptOnce(t *testing.T) {
+	model := NewController("", "", nil, "").model
+	model.width, model.height = 80, 24
+	review := "## Review\n\nOne high finding in approval_resolver.go."
+	closing := "Review closed; conclusion above."
+	model.updateInner(MsgStream{Content: review})
+	model.updateInner(MsgStream{Content: closing})
+	answer := review + "\n\n" + closing
+	model.updateInner(MsgAgentDone{Response: answer})
+	var bodies []string
+	for _, message := range model.messages {
+		if message.Role == "assistant" {
+			bodies = append(bodies, message.Content)
+		}
+	}
+	if len(bodies) != 1 || bodies[0] != answer {
+		t.Fatalf("assistant messages = %q, want the whole answer once", bodies)
+	}
+}

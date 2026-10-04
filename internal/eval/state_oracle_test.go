@@ -1,9 +1,11 @@
 package eval
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"selfmind/internal/control"
@@ -104,5 +106,49 @@ func TestEvaluateStatePredicatesAggregates(t *testing.T) {
 	}, w)
 	if len(results) != 2 || !ChecksPassed(results) {
 		t.Fatalf("expected 2 passing checks, got %+v", results)
+	}
+}
+
+// A live run's early milestones stay visible to the oracle however many
+// events follow them. The oracle read only the newest 200, so a slower model's
+// progress heartbeats pushed a committed selection out of the snapshot and the
+// case reported it missing.
+func TestWorldStateSeesEarlyEventsOfALongRun(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "delivery", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "deliver the receipt")
+	other, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "unrelated", Channel: "cli"})
+	otherRun, _ := store.StartRun(ctx, other, "cli", "unrelated work")
+	appendEvent := func(run *control.Run, eventType, payload string) {
+		t.Helper()
+		if _, err := store.AppendEvent(ctx, control.Event{TaskID: run.TaskID, RunID: run.ID, Type: eventType, Visibility: "task", Payload: json.RawMessage(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendEvent(run, "work.selection_committed", `{"commit_mode":"direct"}`)
+	appendEvent(otherRun, "work.selection_committed", `{"commit_mode":"direct"}`)
+	for i := 0; i < 1200; i++ {
+		appendEvent(run, "agent.thinking", `{"message":"Receiving the model response"}`)
+	}
+
+	world := CollectWorldState(ctx, store, nil, identity, task.ID, run.ID, t.TempDir())
+	committed := StatePredicate{On: "events", Type: "work.selection_committed", PayloadContains: sp(`"commit_mode":"direct"`), CountGte: ip(1), CountLte: ip(1)}
+	mustPass(t, committed, world)
+	mustPass(t, StatePredicate{On: "events", Type: "agent.thinking", CountGte: ip(1200)}, world)
+
+	// A failed read is reported as the failure, not as zero events.
+	store.Close()
+	broken := CollectWorldState(ctx, store, nil, identity, task.ID, run.ID, t.TempDir())
+	if result := evalPredicate(committed, broken); result.OK || !strings.Contains(result.Message, "read task events") {
+		t.Fatalf("a failed event read gave %+v, want the read error", result)
 	}
 }

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,6 +12,77 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 )
+
+func TestOrdinaryCommandRefusalsAreNotExecutions(t *testing.T) {
+	store := controltest.NewStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "facts", "Facts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Observe", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "inspect status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, observation := range []string{`"invoked":false`, `"invoked":true,"process":{"started":false}`, `"invoked":true,"process":{"started":true,"exit_code":2}`, `"invoked":true`} {
+		payload := json.RawMessage(fmt.Sprintf(`{"evidence":{"tool_call_id":"call-%d","tool_name":"terminal","kind":"command","status":"failed","started_at_unix_nano":%d,"command":{"command":"inspect","exit_code":-1},%s}}`, i, i+1, observation))
+		if _, err := store.AppendEvent(ctx, control.Event{RunID: run.ID, Type: "evidence.recorded", Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, _ := (&Server{Control: store}).coordinator().evidenceOutcome(ctx, identity.TenantID, run.ID)
+	if got == nil || got.OrdinaryCommands != 1 || got.OrdinaryCommandFailures != 1 {
+		t.Fatalf("refusals/unknown dispatch counted as executions: %+v", got)
+	}
+	if got.OrdinaryCommandAttempts != 4 || got.OrdinaryCommandNotDispatched != 2 || got.OrdinaryCommandDispatchUnknown != 1 {
+		t.Fatalf("attempt denominator was lost: %+v", got)
+	}
+}
+
+func TestLegacyCommandEvidenceUsesExactRunDispatchFacts(t *testing.T) {
+	store := controltest.NewStore(t)
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "legacy-facts", "Legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Legacy", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "read records")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"started", "refused", "unknown"} {
+		e := kernel.RunEvidence{ToolCallID: id, ToolName: "terminal", Kind: "command", Status: "failed", StartedAt: 10, Command: &kernel.CommandEvidence{Command: "inspect", ExitCode: -1}}
+		if _, err = store.AppendEvent(ctx, control.Event{RunID: run.ID, Type: "evidence.recorded", Payload: mustJSON(map[string]interface{}{"evidence": e})}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, payload := range []string{`{"tool_call_id":"started","process":{"started":true,"exit_code":3}}`, `{"tool_call_id":"refused","invoked":true,"effect_state":"not_dispatched"}`} {
+		if _, err = store.AppendEvent(ctx, control.Event{RunID: run.ID, Type: "tool.completed", Payload: json.RawMessage(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other, err := store.StartRunWithOptions(ctx, task, "cli", "other", control.StartRunOptions{MaxActiveRuns: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AppendEvent(ctx, control.Event{RunID: other.ID, Type: "tool.completed", Payload: json.RawMessage(`{"tool_call_id":"unknown","process":{"started":true,"exit_code":0}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := (&Server{Control: store}).coordinator().evidenceOutcome(ctx, identity.TenantID, run.ID)
+	if got == nil || got.OrdinaryCommands != 1 || got.OrdinaryCommandFailures != 1 || got.OrdinaryCommandNotDispatched != 1 || got.OrdinaryCommandDispatchUnknown != 1 {
+		t.Fatalf("legacy facts were fabricated or mixed across Runs: %+v", got)
+	}
+}
 
 func TestVerificationStateRequiresChecksAfterLatestMutation(t *testing.T) {
 	checks := []api.VerificationCheck{{Status: "succeeded", StartedAt: 10, FinishedAt: 20}}
@@ -113,7 +185,7 @@ func TestOrdinaryCommandsDoNotDisappearOrBecomeVerification(t *testing.T) {
 	}
 	for _, evidence := range []kernel.RunEvidence{
 		{ToolName: "write_file", Kind: "mutation", Status: "succeeded", StartedAt: 10, FinishedAt: 20, Files: []kernel.FileEffect{{Path: "report.py", BeforeSHA256: "old", AfterSHA256: "new"}}},
-		{ToolName: "terminal", Kind: "command", Status: "succeeded", StartedAt: 30, FinishedAt: 40, Command: &kernel.CommandEvidence{Command: "custom-check", Kind: "command"}},
+		{ToolName: "terminal", Kind: "command", Status: "succeeded", StartedAt: 30, FinishedAt: 40, Process: &kernel.ToolProcessResult{Started: true, ExitCode: new(int)}, Command: &kernel.CommandEvidence{Command: "custom-check", Kind: "command"}},
 	} {
 		if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "evidence.recorded", Payload: mustJSON(map[string]interface{}{"evidence": evidence})}); err != nil {
 			t.Fatal(err)
@@ -121,7 +193,7 @@ func TestOrdinaryCommandsDoNotDisappearOrBecomeVerification(t *testing.T) {
 	}
 	server := &Server{Control: store}
 	got, _ := server.coordinator().evidenceOutcome(ctx, task.TenantID, run.ID)
-	if got == nil || got.State != "not_run" || len(got.Checks) != 0 || !strings.Contains(got.Summary, "1 ordinary command(s) ran") {
+	if got == nil || got.State != "not_run" || len(got.Checks) != 0 || !strings.Contains(got.Summary, "1 ordinary command(s) were observed as started") {
 		t.Fatalf("ordinary execution was lost or promoted to verification: %+v", got)
 	}
 }

@@ -88,7 +88,14 @@ func (m *uiModel) activePlanBlock(width int) string {
 	if m == nil {
 		return ""
 	}
-	plan := strings.TrimRight(renderPlanCellWithStyles(m.activePlanJSON, 0, width, newTranscriptStyles(m.common.Theme)), "\n")
+	note := ""
+	switch n := m.activePlanActions; {
+	case n == 1:
+		note = " · updated 1 action ago"
+	case n > 1:
+		note = fmt.Sprintf(" · updated %d actions ago", n)
+	}
+	plan := strings.TrimRight(renderPlanCellNoted(m.activePlanJSON, 0, width, newTranscriptStyles(m.common.Theme), note), "\n")
 	if strings.TrimSpace(plan) == "" {
 		return ""
 	}

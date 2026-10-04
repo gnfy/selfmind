@@ -46,6 +46,9 @@ func TestCtrlCShowsExitPromptThenCancelViaC(t *testing.T) {
 	model.cancelFn = func() { cancelled = true }
 	model.thinking = true
 	model.localRequestActive = true
+	model.daemonRunID = "run_x"
+	model.daemonRunActive = true
+	model.daemonRunOwned = true
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m := updated.(*uiModel)
@@ -70,14 +73,14 @@ func TestCtrlCShowsExitPromptThenCancelViaC(t *testing.T) {
 
 	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	m = updated.(*uiModel)
-	if !cancelled {
-		t.Fatal("c must cancel the local watcher ctx")
+	if cancelled {
+		t.Fatal("c must keep watching until the daemon observes cancellation")
 	}
 	if m.exitPromptActive {
 		t.Fatal("prompt should dismiss after choosing")
 	}
-	if m.thinking || m.runStatus != "cancelled" {
-		t.Fatalf("thinking=%v runStatus=%q, want cancelled UI state", m.thinking, m.runStatus)
+	if !m.thinking || m.runStatus == "cancelled" {
+		t.Fatalf("thinking=%v runStatus=%q: cancellation was declared before observation", m.thinking, m.runStatus)
 	}
 	if cmd == nil {
 		t.Fatal("c returned no command; /stop was never dispatched")
@@ -85,8 +88,8 @@ func TestCtrlCShowsExitPromptThenCancelViaC(t *testing.T) {
 	runCmdTree(cmd)
 	select {
 	case content := <-got:
-		if !strings.HasPrefix(content, "/stop") {
-			t.Fatalf("dispatched %q, want /stop", content)
+		if content != "/stop run_x" {
+			t.Fatalf("dispatched %q, want exact /stop run_x", content)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("c did not dispatch /stop through the message processor")
@@ -142,5 +145,34 @@ func TestRequestDaemonStopIsNoOpWithoutProcessor(t *testing.T) {
 	model.messageProcessor = nil
 	if cmd := model.requestDaemonStop(); cmd != nil {
 		t.Fatal("requestDaemonStop must be a no-op without a message processor")
+	}
+}
+
+func TestForegroundContinuationCanCancelWithoutLocalHTTP(t *testing.T) {
+	m := NewController("", "", nil, "").model
+	m.daemonRunID, m.daemonRunActive, m.daemonRunOwned = "run_child", true, true
+	m.runStatus = "working"
+	m.messageProcessor = func(_ context.Context, req api.MessageRequest) (api.MessageResponse, int) {
+		if req.Content != "/stop run_child" {
+			t.Fatalf("stop was not exact: %q", req.Content)
+		}
+		return api.MessageResponse{Error: "daemon unavailable"}, 503
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(*uiModel)
+	if !m.exitPromptActive {
+		t.Fatal("foreground child skipped cancellation prompt")
+	}
+	result := m.requestDaemonStop()()
+	updated, _ = m.Update(result)
+	m = updated.(*uiModel)
+	if !m.daemonRunActive || m.runStatus != "working" || !strings.Contains(m.messages[len(m.messages)-1].Content, "daemon unavailable") {
+		t.Fatalf("failed stop concealed active Run: active=%v status=%s", m.daemonRunActive, m.runStatus)
+	}
+	// A stop before ownership arrives must never guess the person's active Run.
+	m.daemonRunID = ""
+	msg := m.requestDaemonStop()().(MsgDaemonStopResult)
+	if msg.Err == nil {
+		t.Fatal("unbound stop guessed an active Run")
 	}
 }

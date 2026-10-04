@@ -25,39 +25,24 @@ func TestChannelPolicyStreamsOnlyForCLI(t *testing.T) {
 	}
 }
 
-func TestAggregateFinalResponsePrefersStructuredStream(t *testing.T) {
-	stream := make(chan llm.StreamEvent, 4)
-	stream <- llm.StreamEvent{EventType: "stream", Content: "hello "}
-	stream <- llm.StreamEvent{EventType: "stream", Content: "world"}
-	stream <- llm.StreamEvent{Content: "hello world"}
-	stream <- llm.StreamEvent{Usage: &llm.UsageStats{InputTokens: 2, OutputTokens: 3}}
-	close(stream)
-
-	content, usage, err := AggregateFinalResponse(&HandleResponse{IsStreaming: true, Stream: stream})
-	if err != nil {
-		t.Fatal(err)
+// summarize feeds a turn's events to an EventSummary the way the run
+// coordinator does, and returns the answer it delivers for content.
+func summarize(content string, events ...llm.StreamEvent) string {
+	var summary EventSummary
+	for _, event := range events {
+		summary.Observe(event)
 	}
-	if content != "hello world" {
-		t.Fatalf("content = %q", content)
-	}
-	if usage.InputTokens != 2 || usage.OutputTokens != 3 {
-		t.Fatalf("usage = %+v", usage)
-	}
+	return summary.WithContent(content)
 }
 
-func TestAggregateFinalResponseDoesNotAppendInternalToolSummary(t *testing.T) {
-	stream := make(chan llm.StreamEvent, 6)
-	stream <- llm.StreamEvent{EventType: "agent.thinking", Content: "Thinking about the request"}
-	stream <- llm.StreamEvent{EventType: "tool.started", ToolName: "terminal", ToolArgs: `{"command":"gh auth status"}`}
-	stream <- llm.StreamEvent{EventType: "tool.output", ToolName: "terminal", Content: "SelfMind diagnostic instruction: this tool failed"}
-	stream <- llm.StreamEvent{EventType: "tool.completed", ToolName: "terminal", Err: fmt.Errorf("command timed out after 30 seconds")}
-	stream <- llm.StreamEvent{EventType: "stream", Content: "我暂时无法确认 GitHub 登录状态。"}
-	close(stream)
-
-	content, _, err := AggregateFinalResponse(&HandleResponse{IsStreaming: true, Stream: stream})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestFinalAnswerDoesNotAppendInternalToolSummary(t *testing.T) {
+	content := summarize("我暂时无法确认 GitHub 登录状态。",
+		llm.StreamEvent{EventType: "agent.thinking", Content: "Thinking about the request"},
+		llm.StreamEvent{EventType: "tool.started", ToolName: "terminal", ToolArgs: `{"command":"gh auth status"}`},
+		llm.StreamEvent{EventType: "tool.output", ToolName: "terminal", Content: "SelfMind diagnostic instruction: this tool failed"},
+		llm.StreamEvent{EventType: "tool.completed", ToolName: "terminal", Err: fmt.Errorf("command timed out after 30 seconds")},
+		llm.StreamEvent{EventType: "stream", Content: "我暂时无法确认 GitHub 登录状态。"},
+	)
 	if content != "我暂时无法确认 GitHub 登录状态。" {
 		t.Fatalf("content = %q", content)
 	}
@@ -68,17 +53,12 @@ func TestAggregateFinalResponseDoesNotAppendInternalToolSummary(t *testing.T) {
 	}
 }
 
-func TestAggregateFinalResponseUsesBriefFallbackWhenNoFinalContent(t *testing.T) {
-	stream := make(chan llm.StreamEvent, 4)
-	stream <- llm.StreamEvent{EventType: "agent.thinking", Content: "Thinking about the request"}
-	stream <- llm.StreamEvent{EventType: "tool.started", ToolName: "terminal", ToolArgs: `{"command":"go test ./..."}`}
-	stream <- llm.StreamEvent{EventType: "tool.completed", ToolName: "terminal", Err: fmt.Errorf("command timed out after 30 seconds")}
-	close(stream)
-
-	content, _, err := AggregateFinalResponse(&HandleResponse{IsStreaming: true, Stream: stream})
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestFinalAnswerUsesBriefFallbackWhenNoFinalContent(t *testing.T) {
+	content := summarize("",
+		llm.StreamEvent{EventType: "agent.thinking", Content: "Thinking about the request"},
+		llm.StreamEvent{EventType: "tool.started", ToolName: "terminal", ToolArgs: `{"command":"go test ./..."}`},
+		llm.StreamEvent{EventType: "tool.completed", ToolName: "terminal", Err: fmt.Errorf("command timed out after 30 seconds")},
+	)
 	if !strings.Contains(content, "tool error") {
 		t.Fatalf("fallback content = %q", content)
 	}
@@ -89,23 +69,15 @@ func TestAggregateFinalResponseUsesBriefFallbackWhenNoFinalContent(t *testing.T)
 	}
 }
 
-func TestAggregateFinalResponseMarksIncompleteTurnResumable(t *testing.T) {
-	stream := make(chan llm.StreamEvent, 2)
-	stream <- llm.StreamEvent{EventType: "stream", Content: "I updated the first file."}
-	stream <- llm.StreamEvent{
-		EventType: "turn.completed",
-		Payload: map[string]interface{}{
+func TestFinalAnswerMarksIncompleteTurnResumable(t *testing.T) {
+	content := summarize("I updated the first file.",
+		llm.StreamEvent{EventType: "stream", Content: "I updated the first file."},
+		llm.StreamEvent{EventType: "turn.completed", Payload: map[string]interface{}{
 			"status":            "incomplete",
 			"completion_reason": "tool_budget_exhausted",
 			"resumable":         true,
-		},
-	}
-	close(stream)
-
-	content, _, err := AggregateFinalResponse(&HandleResponse{IsStreaming: true, Stream: stream})
-	if err != nil {
-		t.Fatal(err)
-	}
+		}},
+	)
 	for _, want := range []string{"I updated the first file.", "tool budget exhausted", "continue"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("content = %q, want %q", content, want)

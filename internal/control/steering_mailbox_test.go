@@ -2,8 +2,11 @@ package control
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
+
+	"selfmind/internal/executionenv"
 )
 
 // TestSteeringMailboxLifecycle pins the durability contract: accepted before
@@ -186,5 +189,174 @@ func TestSteeringExpireOnBackpressure(t *testing.T) {
 	}
 	if deferred, expired, err := store.RecoverSteeringAtBoot(ctx); err != nil || deferred != 0 || expired != 0 {
 		t.Fatalf("expired row leaked into recovery: %d/%d err=%v", deferred, expired, err)
+	}
+}
+
+func steeringRootPaths(roots []executionenv.RootBinding) string {
+	paths := make([]string, 0, len(roots))
+	for _, root := range roots {
+		paths = append(paths, root.Path)
+	}
+	return strings.Join(paths, ",")
+}
+
+// Input steered into another run keeps the roots its own request froze. When
+// Main queues it as separate work, or the run ends before consuming it, the
+// queued work runs with those roots. It used to take the run's, so that run's
+// --add-dir directories reached work whose request never named them.
+func TestSteeredInputQueuesWithItsOwnRoots(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, _ := newRecoveryFixture(t)
+	runRoots := []executionenv.RootBinding{
+		{Path: "/work/a", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace},
+		{Path: "/data/shared", Role: executionenv.RootRoleAdditional, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceCLIAddDir},
+	}
+	inputRoots := []executionenv.RootBinding{
+		{Path: "/work/b", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace},
+	}
+	active, err := store.StartRunWithOptions(ctx, task, "session-a", "long task", StartRunOptions{ExecutionRoots: runRoots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, queue := range map[string]func(*SteeringMessage) (*QueuedTask, error){
+		"queued by Main": func(m *SteeringMessage) (*QueuedTask, error) {
+			return store.QueueSteeringAsIndependent(ctx, identity.TenantID, identity.PersonID, active.ID, m.ID)
+		},
+		"deferred at run end": func(m *SteeringMessage) (*QueuedTask, error) {
+			if err := store.DeferSteering(ctx, *m); err != nil {
+				return nil, err
+			}
+			return store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, "steering:"+m.ID)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			msg, err := store.AcceptSteering(ctx, SteeringMessage{
+				TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: active.ID, TaskID: task.ID,
+				Channel: "session-b", WorkspaceID: "ws-b", ExecutionRoots: inputRoots, Content: "separate work, " + name,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			queued, err := queue(msg)
+			if err != nil || queued == nil {
+				t.Fatalf("queued=%+v err=%v", queued, err)
+			}
+			if got := steeringRootPaths(queued.ExecutionRoots); got != "/work/b" || queued.WorkspaceID != "ws-b" {
+				t.Fatalf("queued work roots=%q workspace=%q, want the input's own", got, queued.WorkspaceID)
+			}
+		})
+	}
+}
+
+// Input steered without roots keeps the steered run's roots when it becomes
+// separate work. The thin steering endpoint sends none, and an empty list was
+// stored as "this input has no roots", so the queued work lost --add-dir.
+func TestSteeringWithoutRootsKeepsTheRunsRoots(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, _ := newRecoveryFixture(t)
+	runRoots := []executionenv.RootBinding{
+		{Path: "/work/a", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceWorkspace},
+		{Path: "/data/shared", Role: executionenv.RootRoleAdditional, AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceCLIAddDir},
+	}
+	active, err := store.StartRunWithOptions(ctx, task, "cli", "long task", StartRunOptions{ExecutionRoots: runRoots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, queue := range map[string]func(*SteeringMessage) (*QueuedTask, error){
+		"queued by Main": func(m *SteeringMessage) (*QueuedTask, error) {
+			return store.QueueSteeringAsIndependent(ctx, identity.TenantID, identity.PersonID, active.ID, m.ID)
+		},
+		"deferred at run end": func(m *SteeringMessage) (*QueuedTask, error) {
+			if err := store.DeferSteering(ctx, *m); err != nil {
+				return nil, err
+			}
+			return store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, "steering:"+m.ID)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			msg, err := store.AcceptSteering(ctx, SteeringMessage{
+				TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: active.ID, TaskID: task.ID,
+				Channel: "cli", Content: "separate work, " + name,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if msg.RootsRecorded {
+				t.Fatal("an input sent without roots was recorded as having its own")
+			}
+			queued, err := queue(msg)
+			if err != nil || queued == nil {
+				t.Fatalf("queued=%+v err=%v", queued, err)
+			}
+			if got, want := steeringRootPaths(queued.ExecutionRoots), steeringRootPaths(runRoots); got != want {
+				t.Fatalf("queued work roots=%q, want the run's %q", got, want)
+			}
+		})
+	}
+}
+
+func TestExactSteeringPreservesTargetAcrossFinalStepAndRestart(t *testing.T) {
+	for _, status := range []string{"interrupted", "done"} {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			store, err := OpenStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := store.CreateTask(ctx, TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: "task A", WorkspaceID: "ws-a", Channel: "session-a"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			roots := []executionenv.RootBinding{{Path: "/work/a", Role: executionenv.RootRolePrimary, AccessCap: executionenv.RootAccessWrite}}
+			run, err := store.StartRunWithOptions(ctx, task, "session-a", "A", StartRunOptions{ExecutionRoots: roots})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := store.AcceptSteering(ctx, SteeringMessage{TenantID: owner.TenantID, PersonID: owner.PersonID, RunID: run.ID, ExactTarget: true, Channel: "session-b", WorkspaceID: "ws-b", ExecutionRoots: []executionenv.RootBinding{{Path: "/work/b"}}, Content: "add the missing criterion"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.FinishRun(ctx, owner.TenantID, run.ID, status); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			store, err = OpenStore(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			if n, _, err := store.RecoverSteeringAtBoot(ctx); err != nil || n != 1 {
+				t.Fatalf("recovery=%d err=%v", n, err)
+			}
+			q, err := store.GetQueuedByIdempotencyKey(ctx, owner.TenantID, "steering:"+m.ID)
+			if err != nil || q == nil || q.TaskID != task.ID || q.WorkspaceID != "ws-a" || steeringRootPaths(q.ExecutionRoots) != "/work/a" {
+				t.Fatalf("exact target lost: %+v err=%v", q, err)
+			}
+			wantParent := ""
+			if status == "interrupted" {
+				wantParent = run.ID
+			}
+			if q.ReplyToRunID != wantParent {
+				t.Fatalf("parent=%q want=%q", q.ReplyToRunID, wantParent)
+			}
+			if n, _, err := store.RecoverSteeringAtBoot(ctx); err != nil || n != 0 {
+				t.Fatalf("duplicate recovery=%d err=%v", n, err)
+			}
+		})
+	}
+}
+
+func TestExactSteeringCannotMintAnotherPersonsTarget(t *testing.T) {
+	ctx := context.Background()
+	store, owner, _, run := newRecoveryFixture(t)
+	if _, err := store.AcceptSteering(ctx, SteeringMessage{TenantID: owner.TenantID, PersonID: "another-person", RunID: run.ID, ExactTarget: true, Content: "continue"}); err == nil {
+		t.Fatal("foreign Run acquired exact reply provenance")
 	}
 }

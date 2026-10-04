@@ -1,8 +1,13 @@
 package kernel
 
-import "context"
+import (
+	"context"
+	"sync/atomic"
+)
 
 type eventChannelContextKey struct{}
+
+type streamLossContextKey struct{}
 
 // WithEventChannel installs a per-run event channel for streaming/tool events.
 // The Agent.EventChannel field remains as a legacy fallback for local TUI paths.
@@ -27,4 +32,19 @@ func eventChannelFromContext(ctx context.Context, fallback chan string) chan str
 // Tool packages use this to emit progress without depending on Agent internals.
 func EventChannelFromContext(ctx context.Context) chan string {
 	return eventChannelFromContext(ctx, nil)
+}
+
+// WithStreamLossReport lets the caller learn whether any assistant text delta
+// of the run failed to reach the event channel. A consumer that assembles the
+// answer from those deltas then holds an incomplete copy, and the run's own
+// answer must replace it.
+func WithStreamLossReport(ctx context.Context) (context.Context, func() bool) {
+	lost := new(atomic.Bool)
+	return context.WithValue(ctx, streamLossContextKey{}, lost), lost.Load
+}
+
+func reportStreamLoss(ctx context.Context) {
+	if lost, ok := ctx.Value(streamLossContextKey{}).(*atomic.Bool); ok {
+		lost.Store(true)
+	}
 }

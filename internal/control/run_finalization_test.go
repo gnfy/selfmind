@@ -60,6 +60,12 @@ func TestMaterializeRunFinalizationIsAtomicAndReplaySafe(t *testing.T) {
 	if first.ID != second.ID {
 		t.Fatalf("replay returned event %q; want %q", second.ID, first.ID)
 	}
+	if content, err := store.RunAssistantContent(ctx, identity.TenantID, identity.PersonID, run.ID); err != nil || content != input.AssistantContent {
+		t.Fatalf("committed run reply = %q, %v", content, err)
+	}
+	if _, err := store.RunAssistantContent(ctx, identity.TenantID, "another-person", run.ID); err == nil {
+		t.Fatal("another person read a run reply")
+	}
 
 	assertCount := func(table, where string, args ...any) {
 		t.Helper()

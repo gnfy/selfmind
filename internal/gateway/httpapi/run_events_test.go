@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
 
@@ -99,6 +100,62 @@ func TestAggregateGatewayResponseUsesTypedAssistantPhase(t *testing.T) {
 	}
 	if !hasFinal || content != "Everything is healthy." {
 		t.Fatalf("content=%q hasFinal=%v, want typed final only", content, hasFinal)
+	}
+}
+
+// The run's own answer arrives on the result channel, which never drops. When
+// the kernel reports that live deltas were lost, that whole answer replaces the
+// streamed copy, and live events the forwarder delivers after it cannot change
+// it. Without that report the streamed copy stands, as it always has.
+func TestAggregateGatewayResponseTakesTheWholeAnswerWhenDeltasWereLost(t *testing.T) {
+	whole := "The report begins and ends here."
+	lost := map[string]interface{}{"stream_incomplete": true}
+	for _, tc := range []struct {
+		name   string
+		events []llm.StreamEvent
+		want   string
+	}{
+		{name: "lost deltas", want: whole, events: []llm.StreamEvent{
+			{EventType: "stream", Content: "The report begins"},
+			{Content: whole, Payload: lost},
+		}},
+		{name: "live delta after the whole answer", want: whole, events: []llm.StreamEvent{
+			{EventType: "stream", Content: "The report begins"},
+			{Content: whole, Payload: lost},
+			{EventType: "stream", Content: " and ends"},
+		}},
+		{name: "stale tool start after the whole answer", want: whole, events: []llm.StreamEvent{
+			{EventType: "stream", Content: "The report begins"},
+			{Content: whole, Payload: lost},
+			{EventType: "tool.started", ToolName: "read_file"},
+		}},
+		{name: "whole answer before any live delta", want: whole, events: []llm.StreamEvent{
+			{Content: whole},
+			{EventType: "stream", Content: whole},
+		}},
+		{name: "nothing lost", want: "The report begins", events: []llm.StreamEvent{
+			{EventType: "stream", Content: "The report begins"},
+			{Content: whole},
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := make(chan llm.StreamEvent, len(tc.events))
+			for _, event := range tc.events {
+				stream <- event
+			}
+			close(stream)
+			server := &Server{}
+			content, _, _, hasFinal, err := server.coordinator().aggregateGatewayResponse(
+				context.Background(), "cli", nil, nil,
+				&router.HandleResponse{Stream: stream, IsStreaming: true},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !hasFinal || content != tc.want {
+				t.Fatalf("content=%q hasFinal=%v, want %q", content, hasFinal, tc.want)
+			}
+		})
 	}
 }
 
@@ -258,4 +315,62 @@ func TestRecordSteeringConsumedIsDurableAndRedacted(t *testing.T) {
 		return
 	}
 	t.Fatal("run.steering_consumed event was not recorded")
+}
+
+// Prose around the run's bookkeeping calls stays in its answer. qwen wrote a
+// full review in the same response as finish_run and then one closing line;
+// resetting the answer at finish_run kept only that line, which the TUI then
+// showed in place of the review, and IM and work history got the same.
+func TestAggregateGatewayResponseKeepsAnswerProseAcrossBookkeepingCalls(t *testing.T) {
+	started := func(tool string) llm.StreamEvent { return llm.StreamEvent{EventType: "tool.started", ToolName: tool} }
+	completed := func(tool string) llm.StreamEvent {
+		return llm.StreamEvent{EventType: "tool.completed", ToolName: tool, ToolResult: "ok"}
+	}
+	prose := func(text string) llm.StreamEvent { return llm.StreamEvent{EventType: "stream", Content: text} }
+	planGate := llm.StreamEvent{EventType: "agent.thinking", Content: "reconciling the plan",
+		Payload: map[string]interface{}{"phase": kernel.PlanReconciliationPhase}}
+	for _, tc := range []struct {
+		name   string
+		events []llm.StreamEvent
+		want   string
+	}{
+		{"answer with finish_run, then a closing line", []llm.StreamEvent{
+			started("read_file"), completed("read_file"),
+			prose("## Review\n1 high, 2 medium findings."), started("finish_run"), completed("finish_run"),
+			prose("Review closed; conclusion above."),
+		}, "## Review\n1 high, 2 medium findings.\n\nReview closed; conclusion above."},
+		{"answer with the final plan and finish_run", []llm.StreamEvent{
+			started("terminal"), completed("terminal"),
+			prose("Released and verified."), started("update_plan"), completed("update_plan"),
+			started("finish_run"), completed("finish_run"),
+		}, "Released and verified."},
+		{"work after a plan update ends the narration", []llm.StreamEvent{
+			prose("Plan updated, checking the logs next."), started("update_plan"), completed("update_plan"),
+			started("terminal"), completed("terminal"), prose("The logs are clean."),
+		}, "The logs are clean."},
+		{"an answer the plan gate sends back is not the answer", []llm.StreamEvent{
+			started("terminal"), completed("terminal"), prose("Everything is done."), planGate,
+			started("update_plan"), completed("update_plan"), prose("Implemented and verified."),
+		}, "Implemented and verified."},
+		{"prose kept by a bookkeeping call survives the plan gate", []llm.StreamEvent{
+			started("terminal"), completed("terminal"),
+			prose("## Review\nOne finding."), started("update_plan"), completed("update_plan"),
+			prose("Closed."), planGate, started("update_plan"), completed("update_plan"),
+			prose("Closed after reconciling the plan."),
+		}, "## Review\nOne finding.\n\nClosed after reconciling the plan."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := make(chan llm.StreamEvent, len(tc.events)+1)
+			for _, event := range tc.events {
+				stream <- event
+			}
+			stream <- llm.StreamEvent{EventType: "turn.completed", Payload: map[string]interface{}{"status": "completed", "completion_reason": "completed"}}
+			close(stream)
+			content, _, _, hasFinal, err := (&Server{}).coordinator().aggregateGatewayResponse(
+				context.Background(), "cli", nil, nil, &router.HandleResponse{Stream: stream, IsStreaming: true})
+			if err != nil || !hasFinal || content != tc.want {
+				t.Fatalf("content=%q hasFinal=%v err=%v, want %q", content, hasFinal, err, tc.want)
+			}
+		})
+	}
 }

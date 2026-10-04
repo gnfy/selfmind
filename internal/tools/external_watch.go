@@ -168,7 +168,23 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	if err != nil && !(waitGroupKey != "" && observed.Status != "") {
 		return "", err
 	}
-	if verdict != "" && waitGroupKey == "" {
+	var effectObservation EffectObservationBinding
+	effectObservationID := ""
+	if observationAdapter == ExternalWatchAdapterStatusJSON {
+		effectObservation, _ = RegisteredEffectObservation(args, t.store)
+		if effectObservation.RuleKey != "" {
+			effectID, lookupErr := t.store.FindUnresolvedExternalEffectForTargets(contextFromArgs(args),
+				scope.TenantID, scope.PersonID, scope.RunID, effectObservation.TargetKeys)
+			if lookupErr != nil {
+				return "", lookupErr
+			}
+			if effectID == "" {
+				effectObservation = EffectObservationBinding{}
+			}
+			effectObservationID = effectID
+		}
+	}
+	if verdict != "" && waitGroupKey == "" && effectObservation.RuleKey == "" {
 		return verdict, nil
 	}
 
@@ -240,7 +256,14 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 			Version: control.ExternalWatchContinuationReceiptVersion, CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))),
 			EnvironmentGeneration: identity.Generation, Adapter: observationAdapter,
 			Target: firstNonEmptyPreflight(targetPattern, description), DeadlineUnix: timeoutAt.Unix(),
-			Capabilities: append([]string(nil), capabilities...),
+			Capabilities:       append([]string(nil), capabilities...),
+			EffectRuleKey:      effectObservation.RuleKey,
+			ObservationRuleKey: effectObservation.ObservationRuleKey,
+			EffectID:           effectObservationID,
+			EffectTargetKeys:   append([]string(nil), effectObservation.TargetKeys...),
+			EffectScriptRoot:   effectObservation.ScriptRoot,
+			EffectScriptPath:   effectObservation.ScriptPath,
+			EffectScriptDigest: effectObservation.ScriptDigest,
 		},
 		Status:                observed.Status,
 		OperationStatus:       observed.OperationStatus,
@@ -396,12 +419,14 @@ func validateExternalWatchStatic(args map[string]interface{}) error {
 	return nil
 }
 
+// invalidExternalWatchSpec names what is wrong: the reason is about the model's
+// own arguments, and without it the one correction the hint allows is a guess.
 func invalidExternalWatchSpec(err error) error {
 	return newStableToolRecoveryError(
 		err,
 		"watch_spec_invalid", "invalid_request",
-		"The durable watcher specification is invalid, so registration was not attempted.",
-		"Correct the watcher command or state patterns once before choosing another strategy.",
+		"The durable watcher specification is invalid ("+truncateRunes(toSingleLine(err.Error()), 240)+"), so registration was not attempted.",
+		"Correct that argument once before choosing another strategy.",
 		"preparation", "same_strategy_after_correction", "not_dispatched", false,
 	)
 }

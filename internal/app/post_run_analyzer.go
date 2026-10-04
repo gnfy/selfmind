@@ -91,9 +91,9 @@ const (
 // compatibility-only intermediate hops until config upgrade removes them.
 // NewConfiguredPostRunAnalyzer binds the process-frozen prompt snapshot while
 // keeping the response schema and governance contract locked.
-func NewConfiguredPostRunAnalyzer(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) httpapi.PostRunAnalyzer {
+func NewConfiguredPostRunAnalyzer(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store, gates ...*llm.RequestGate) httpapi.PostRunAnalyzer {
 	role := llm.RoleMemoryExtract
-	provider, routes := configuredMaintenanceProvider(mem, cfg, tenantID, controlStore, role)
+	provider, routes := configuredMaintenanceProvider(mem, cfg, tenantID, controlStore, role, gates...)
 	if provider == nil {
 		log.Info("post-run analyzer disabled: configure models.auxiliary or the maintenance role under models.roles", "role", role)
 		return nil
@@ -223,15 +223,7 @@ func maintenanceRouteIdentityFor(cfg *config.Config, role llm.ModelRole,
 	if err != nil {
 		return maintenanceRouteIdentity{}, 0, ""
 	}
-	credential := maintenanceCredentialIdentity(&rt)
-	credentialSum := sha256.Sum256([]byte(credential))
-	payload := strings.Join([]string{
-		strings.ToLower(strings.TrimSpace(rt.Provider)),
-		normalizeMaintenanceQuotaEndpoint(rt.BaseURL),
-		fmt.Sprintf("%x", credentialSum[:]),
-	}, "\x00")
-	sum := sha256.Sum256([]byte(payload))
-	quotaID := fmt.Sprintf("%x", sum[:])
+	quotaID := providerRequestRouteID(rt)
 	contractPayload := strings.Join([]string{
 		quotaID, strings.TrimSpace(rt.Model), strings.TrimSpace(rt.Protocol),
 		strings.TrimSpace(rt.ReasoningEffort), fmt.Sprintf("%d", rt.MaxTokens), "post-run-v4",
@@ -531,9 +523,7 @@ func (a *llmPostRunAnalyzer) outputContractError(ctx context.Context, err error)
 }
 
 func maintenanceFinishReasonTruncated(reason string) bool {
-	reason = strings.ToLower(strings.TrimSpace(reason))
-	return reason == "length" || reason == "max_tokens" || reason == "max_output_tokens" ||
-		strings.Contains(reason, "max_token")
+	return llm.ClassifyStopReason(reason) == llm.StopLength
 }
 
 func finishReason(resp *llm.ChatResponse) string {

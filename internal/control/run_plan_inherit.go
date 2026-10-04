@@ -74,6 +74,7 @@ func (s *Store) inheritRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, childR
 	for _, source := range parent.Steps {
 		steps = append(steps, RunPlanStepInput{
 			Step: source.Step, Status: source.Status, SuccessCriteria: source.SuccessCriteria,
+			CancellationDisposition: source.CancellationDisposition, CancellationReason: source.CancellationReason, UserTakeoverQuote: source.UserTakeoverQuote,
 			VerificationRequired: source.VerificationRequired, RelatedTaskID: source.RelatedTaskID,
 			WorkUnit: source.WorkUnit,
 		})

@@ -370,7 +370,9 @@ func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Respon
 						emitText(responsesTextFromItem(item), NormalizeAssistantPhase(stringValue(item["phase"])), itemID)
 					}
 				}
-			case "response.completed":
+			// An incomplete response carries the same payload; its
+			// incomplete_details reason says why it stopped early.
+			case "response.completed", "response.incomplete":
 				if response, ok := ev["response"].(map[string]interface{}); ok {
 					payload := responsesResponseFromMap(response)
 					for _, item := range payload.Output {
@@ -424,6 +426,10 @@ func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Respon
 				if !ok {
 					if scanErr != nil {
 						ch <- StreamEvent{Err: scanErr}
+					} else {
+						// The body closed cleanly before [DONE] or a terminal
+						// response event: what arrived is a prefix.
+						ch <- StreamEvent{Err: streamUnterminatedError("")}
 					}
 					return
 				}
@@ -804,11 +810,7 @@ func responsesFinishReason(payload responsesResponse) string {
 	if reason := strings.TrimSpace(payload.IncompleteDetails.Reason); reason != "" {
 		return reason
 	}
-	status := strings.TrimSpace(payload.Status)
-	if status == "" || status == "completed" {
-		return ""
-	}
-	return status
+	return strings.TrimSpace(payload.Status)
 }
 
 func responsesSafeToolName(name string) string {

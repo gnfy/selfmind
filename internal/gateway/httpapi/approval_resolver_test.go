@@ -695,3 +695,122 @@ func TestApprovalActionTarget(t *testing.T) {
 		}
 	}
 }
+
+// Answering a parked approval from a terminal continues the source run's work
+// in that run's session, so the terminal that started it shows the
+// continuation; the answer's bare "cli" names no session. An IM answer keeps
+// its channel, which IM delivery needs.
+func TestParkedApprovalContinuationStaysInTheSourceRunsSession(t *testing.T) {
+	for _, tc := range []struct {
+		platform, answeredOn, want string
+	}{
+		{"cli", "cli", "session-a"},
+		{"cli", "session-b", "session-a"},
+		{"weixin", "weixin", "weixin"},
+	} {
+		source := &control.Run{Channel: "session-a"}
+		if got := continuationChannel(tc.platform, tc.answeredOn, source); got != tc.want {
+			t.Errorf("%s answer on %q: continuation channel %q, want %q", tc.platform, tc.answeredOn, got, tc.want)
+		}
+	}
+
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "session-a", "publish the release")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		ActionType: "tool_call", AuthorizationFingerprint: "resume:v1:session",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ParkApprovalRequest(ctx, identity.TenantID, approval.ID, "waiter gone"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daemon.respondApprovalByToken(ctx, identity, approval.ID, "approved", "cli", control.ApprovalDecisionInput{DecisionID: "once"}); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := store.GetQueuedByIdempotencyKey(ctx, identity.TenantID, "approval-resume:"+approval.ID)
+	if err != nil || queued == nil || queued.Channel != "session-a" {
+		t.Fatalf("continuation=%+v err=%v, want it in the source run's session", queued, err)
+	}
+}
+
+// A bare y/n answers the replying session's own approval. While another open
+// terminal waits on the approval, it stays that terminal's, or /approve's: a
+// bare "y" typed in the other window used to approve it.
+func TestBareReplyAnswersOnlyTheAskingSessionWhileItIsOpen(t *testing.T) {
+	daemon, store, identity, task, fixture := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, fixture.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
+		t.Fatal(err)
+	}
+	approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+		ActionType: "tool_call", RequestedChannel: "session-a",
+		Payload: json.RawMessage(`{"tool":"terminal","args":{"command":"git push"}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := func() string {
+		current, _ := store.GetApprovalRequest(ctx, identity.TenantID, approval.ID)
+		return current.Status
+	}
+	_, closeA := daemon.events().subscribe(identity.PersonID, "session-a", "")
+	defer closeA()
+
+	if handled, reply, err := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "session-b"); err != nil || handled || status() != "pending" {
+		t.Fatalf("another open session's bare y was claimed: handled=%v reply=%q status=%s err=%v", handled, reply, status(), err)
+	}
+	if handled, reply, err := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "session-a"); err != nil || !handled || status() != "approved" {
+		t.Fatalf("the asking session's bare y: handled=%v reply=%q status=%s err=%v", handled, reply, status(), err)
+	}
+}
+
+// A bare reply in one session answers that session's own question even while
+// another open session waits on an approval. The approval leg runs first and
+// used to claim the "y" with a pointer to the other session, so the question it
+// was meant for stayed pending.
+func TestAnotherSessionsApprovalLeavesThisSessionsAnswerAlone(t *testing.T) {
+	daemon, store, identity, task, run := newClarifyTestServer(t)
+	ctx := context.Background()
+	approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+		ActionType: "tool_call", RequestedChannel: "session-a",
+		Payload: json.RawMessage(`{"tool":"terminal","args":{"command":"git push"}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, closeA := daemon.events().subscribe(identity.PersonID, "session-a", "")
+	defer closeA()
+	approvalStatus := func() string {
+		current, _ := store.GetApprovalRequest(ctx, identity.TenantID, approval.ID)
+		return current.Status
+	}
+	for _, reply := range []string{"y", "好的"} {
+		question, err := store.CreateClarifyRequest(ctx, control.ClarifyRequest{
+			TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+			Question: "Deploy to staging now?", Channel: "session-b",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handled, _, _, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "session-b", Content: reply})
+		answered, _ := store.GetClarifyRequest(ctx, identity.TenantID, question.ID)
+		if err != nil || !handled || answered == nil || answered.Status == "pending" || answered.Answer != reply {
+			t.Fatalf("%q in session-b: handled=%v question=%+v err=%v", reply, handled, answered, err)
+		}
+		if approvalStatus() != "pending" {
+			t.Fatalf("%q in session-b decided session-a's approval: %s", reply, approvalStatus())
+		}
+	}
+	// With nothing of its own waiting, the word is this session's message.
+	if handled, reply, _, err := daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "session-b", Content: "y"}); err != nil || handled || approvalStatus() != "pending" {
+		t.Fatalf("a plain y with nothing waiting in session-b: handled=%v reply=%q status=%s err=%v", handled, reply, approvalStatus(), err)
+	}
+}

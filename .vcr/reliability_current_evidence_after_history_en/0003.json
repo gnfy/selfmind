@@ -1,0 +1,59 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will read `settings/feature"
+    },
+    {
+      "usage": {
+        "input_tokens": 10637,
+        "output_tokens": 7,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": ".txt` in the workspace to inspect its current content."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 20,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_34713",
+          "Function": "read_file",
+          "Args": "{\"path\":\"settings/feature.txt\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EvEGCu4GAWkUfRN38U2OCNXC/dL3woXq66COxs9HNBSdeyIuuXIUdrm/0fBhEXRwpc2oS4Pb4BNTADV0DjEdUgOnoH/bCjx13JUFxotocJSlYIlTV3k/BDsRMYq6j/LRQ+0UdZfDP39PqkbiHG/4Wkd3W+dyv9BxMRXztD9vP0NcWm8v8keNBtpZzsD0dHQiXQptiiyvfZisGZ8NnhYlonnE10IYSnD2qaUhPyvAQIJFNiJdpUYAmVOH+btTVX9gthDtCFI5A9p6XyIRKEo+JRneJIXKLM3WPf6H3Y8PomCHBGrQ7r9aL0mP9kKjKIh0fI5Zv5/SNKEHMnzsU0r2R5Q2ng6kD20tmKhJlSnmgngrHG22sW3pYgoJn2CJigukNYxgKuDs1yAZlO1O51ojAgJezUUoayk28ma9yIJ9FYYZjv5IfjQ31S6aBzirEWPmdUy38lo3DL0XCzDAxuK0A1ASmHTBLCEAXw7o2tCvrzbxQHj1ekzvaXsjlF97pGRbgMotmoo3bf6Y+2L1YUXeMDa993VMfsKDNdsV/LABpKLNHDWtJ/Sjmyp0ygkxXRrAqE/OQyYMUys2pfkjZSwLwTKzdxfJ7zO97Ef1dPeTSYL3kw8g87S43F2ijV+3zyQx2GyF8sJTQY922yvmZQ8PO3xW6pGMBsp8MmwRr4N8qCQqE2hBVWRs9r7Syh/vIzPgsvN90+YXa9IwDi1mJqWTCFfT72pOqyv11mTprPgQARL44Oo/gM3t4484k12jPu270qm4f6VzfeKOS3KYhUH3ORoI81++OjEWF7buyemSmwjxwEpnuFpFQbdAP9tJGqncX9wgWiWFd7tJ5dUUoePgtrQX3a+mMSLmtpxoN2GdNt1qNLps9qS2NP+Q+uuZIXEsy2BfSuwAp70Ea3Udh9pZxhgDykkjJvyeRt9jYqZM1PQV9Ber2Lx18XiiPCDcEOYnknHyvJSeg33l42iiGPfei3o1yR2TVR886KbiO81+Mv4GDnKdbKmtRZ+psL1uwOfQj7ucYD4tewBtZyW04xwDl8a4xWczGgbKQ6IaqjTfEmkhk/9hWnTe7+j0a8sYNSbw8RJanOB0xQL7UYFbt00Lc8PSzysHr6C0KSHVulHVErcOddWl9o1ZoMkCiG6uai8bIB4A6Bns8cp0e5nu2LWu/1QCNg0="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

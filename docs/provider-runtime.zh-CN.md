@@ -637,6 +637,21 @@ providers:
   **致命**错误，直接失败。新增 provider 错误要可分类——暴露状态码或可识别短语。
 - 429 的 `Retry-After` 会被遵守（`RetryAfterFromError`）：响应头经 `foldRetryAfter`
   折叠进错误信息，并解析 codex/OpenAI 的 "try again in N" 正文措辞；上限 600s。
+- daemon 内由进程持有的请求门控协调不同 worker、子代理、已配置后台角色及模型诊断所用的
+  物理 provider 线路。线路按 provider、规范化 endpoint 和凭据身份识别，不按模型或
+  逻辑角色拆开；每条线路最多同时两个请求。结构化 429 会触发共享、可取消的冷却，
+  包括流启动后才返回的错误；流结束或上下文取消才释放请求名额。这只是请求准入，
+  已知 Run 的容量或冷却等待会以内部 `model.provider_wait` 事件记录线路、原因、时长及
+  是否取消；日报按原因汇总并统计受影响的 Run 数。这不是完整的 Run 调度：等待
+  provider 的完整 Run 调度。已保存 checkpoint 的前台 Run 可在准入时持久等待并释放
+  worker，精确续接仍在队列中。容量争用先在当前 Run 内最多等待 250ms，且可取消，
+  避免名额刚释放时就反复保存检查点并重新召回上下文。429 冷却立即延后；较长的容量
+  等待继续使用既有持久续接和重试上限。名额归属与角色计数在同一锁内变更，避免取得/
+  释放竞态制造没有归属的占用者。内部 `model.provider_admission` 事件记录取得、释放、
+  延后和取消，并带容量及占用角色的计数，不包含其他人的 Run ID。
+  `provider.call.usage` 把等待标为 `deferred`，并记录 `provider_dispatched`：本地容量或
+  冷却导致的未派发不计入远程调用数，实际发出后收到 429 的尝试仍计入；历史事件保持
+  原有解释。
 - SSE 空闲看门狗（`responses_adapter.go`）在流长时间无新数据时中止并抛出可重试的
   空闲错误，让循环重连；由配置驱动
   （`SELFMIND_STREAM_IDLE_TIMEOUT` 环境变量 > 配置默认 > 180s），且从不改动
@@ -660,6 +675,19 @@ providers:
   并给出具体恢复操作。因网络失败的后台学习任务会保留网络路由指纹；直连/代理或
   本地监听状态改变后，下一个 maintenance sweep 会自动释放任务，显式 managed
   restart 也会给予一次新的尝试。
+- **停止原因。** 适配器原样传出各 provider 的 finish/stop reason；
+  `llm.ClassifyStopReason`（`stop_reason.go`）是唯一一张把 OpenAI、OpenAI 兼容、
+  Responses、Anthropic 取值映射为 `complete`、`length`、`interrupted`、
+  `filtered`、`missing`、`other` 的表。每个 `provider.call.usage` 事件都记录限长后的
+  原始 `finish_reason` 与归类后的 `stop_reason`（调用失败时为 `unterminated` 或
+  `error`）。`length` 与 `interrupted` 的回复会从断点续写，没有剩余轮次时以可恢复的
+  未完成状态结束（`output_limit` / `provider_interrupted`）。`filtered` 的回复不续写：
+  本轮以可恢复的未完成状态结束（`provider_filtered`），其中的工具调用一律不执行。
+  单独的 `missing` 不算截断证据，因为不少 provider 不返回停止原因。
+- **未终止的流。** 流在协议终止事件（`data: [DONE]`、`response.completed`/
+  `response.incomplete`、`message_stop`）之前正常关闭、且从未报告停止原因时，
+  收到的只是前缀。适配器会抛出可重试的 `stream_unterminated` 错误，循环经由非流式
+  回退从已收到的部分续写，而不会把前缀当成最终回答。
 - **不做游标续传。** `store=false` 时服务端从未持久化响应，无法用
   `previous_response_id` 续传——重试始终是整体重发，不要尝试部分续传。
 

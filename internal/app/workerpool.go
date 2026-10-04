@@ -15,16 +15,16 @@ import (
 	"selfmind/internal/promptassets"
 )
 
-// workerCount reads SELFMIND_WORKERS (default 1). 1 keeps the single-agent
-// serialized path unchanged; >1 enables the worker pool. Capped to a sane max.
+// workerCount reads SELFMIND_WORKERS (default 2). Explicit 1 keeps the
+// single-agent path; >1 enables the worker pool. Capped to a sane max.
 func workerCount() int {
 	v := strings.TrimSpace(os.Getenv("SELFMIND_WORKERS"))
 	if v == "" {
-		return 1
+		return 2
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
-		return 1
+		return 2
 	}
 	if n > 16 {
 		n = 16
@@ -36,7 +36,7 @@ func workerCount() int {
 // SELFMIND_WORKERS>1. It builds N-1 fully independent worker agents (each its
 // own InitAgent + InitTools, sharing only the concurrency-safe memory/control
 // stores and the process-global auth manager) and hands them to the gateway.
-// A no-op at the default (N=1), so the default path is unchanged.
+// A no-op when explicitly configured with N=1.
 func MaybeEnableWorkerPool(gw *router.Gateway, mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store, gates ...*llm.RequestGate) (int, error) {
 	n := workerCount()
 	if gw == nil || n <= 1 {

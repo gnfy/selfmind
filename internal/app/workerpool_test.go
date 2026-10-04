@@ -9,14 +9,15 @@ import (
 
 func TestWorkerCountParsesEnv(t *testing.T) {
 	cases := map[string]int{
-		"":    1,
+		"":    2,
 		"1":   1,
+		"2":   2,
 		"4":   4,
 		"16":  16,
 		"99":  16, // capped
-		"0":   1,  // invalid → default
-		"-3":  1,
-		"abc": 1,
+		"0":   2,  // invalid → default
+		"-3":  2,
+		"abc": 2,
 		" 3 ": 3,
 	}
 	for in, want := range cases {

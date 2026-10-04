@@ -324,9 +324,8 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("app.InitGateway failed: %w", err)
 	}
-	// Optional multi-worker execution (SELFMIND_WORKERS>1) for the daemon, where
-	// concurrent CLI/IM/cron requests can actually exercise it. Default 1 = the
-	// single-agent serialized path, unchanged.
+	// Two independent workers by default; explicit SELFMIND_WORKERS=1 keeps
+	// the single-agent path. Admission capacity is checked against this count.
 	workerCount := 1
 	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, defaultTenantID, prompts, controlStore, requestGate); werr != nil {
 		if cfg.Gateway.MaxActiveWorkRuns > 1 {

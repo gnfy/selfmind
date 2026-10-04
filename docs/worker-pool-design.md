@@ -45,9 +45,10 @@ single-threaded by construction, so it's uncontended).
 
 ## 3. Scheduler / queue policy (RunCoordinator becomes the dispatcher)
 
-- **Per-person**: production still admits at most one active interactive Run
-  per human. A transaction checks the capacity when creating each Run; the
-  registry retains cancel/steer handles for several Runs but is not authority.
+- **Per-person**: production defaults to at most two active top-level work Runs
+  per human. A transaction checks the configured capacity when creating each
+  Run; the registry retains cancel/steer handles for several Runs but is not
+  authority.
 - **Per-workspace write-serialization**: a turn that may write files acquires a
   per-workspace token; concurrent same-workspace writes queue (avoid clobber).
   Enforced read-only turns skip it; an unknown workspace takes a conservative
@@ -88,42 +89,37 @@ without running. Dependency-free and tested in isolation; wiring into
 `RunCoordinator` is the next step. The per-person guard stays where it is (the
 existing `active map[personID]`), applied before dispatch.
 
-## 3b. Integration — shipped (flagged, default off)
+## 3b. Integration — shipped (two workers by default)
 
 - `Gateway` gained `pool *runpool.Pool` + `agents chan *kernel.Agent` and
   `EnableWorkerPool(extra)`; `runConversation` checks out a worker (serialized
   per workspace via `workspaceSerialKey`) when the pool is set, else calls the
   single agent exactly as before. `runAgentStreaming` routes through it.
-- `app.MaybeEnableWorkerPool` reads `SELFMIND_WORKERS` (default 1), builds N-1
+- `app.MaybeEnableWorkerPool` reads `SELFMIND_WORKERS` (default 2), builds N-1
   fully independent worker agents (own `InitAgent`+`InitTools`, sharing only the
   serialized memory/skill stores + global auth manager), and enables the pool;
   wired in the daemon runner (`internal/runtime/gateway/runner.go`), the only
-  execution path. **N=1 is a no-op → default path byte-identical.**
+  execution path. Explicit **N=1** leaves the single-Agent path enabled.
 - Tests: `runpool` (race), `TestWorkerCountParsesEnv`, `TestWorkspaceSerialKey`,
   `TestEnableWorkerPoolWiring`. Existing suite green at default.
-- **Pending: real soak** at `SELFMIND_WORKERS=4` (CLI + WeChat + cron) before
-  raising the default — the concurrent-execution correctness can't be fully
-  headless-verified. While one run per person holds, N>1 only overlaps
-  different people's runs; the session-concurrency plan
-  (`docs/plans/session-concurrency.zh-CN.md`) owns the default change
-  and the soak.
+- The session-concurrency plan (`docs/plans/session-concurrency.zh-CN.md`)
+  owns the 2026-10-04 owner-authorized default of two, further capacity changes,
+  and remaining sustained-throughput and real IM acceptance. Changing the
+  default does not declare those gates passed.
 
-## 4. Flag & rollout (zero risk until opted in)
+## 4. Configuration and rollout
 
-- `SELFMIND_WORKERS=N` — default **1** = today's single-worker serialized
-  behavior (no change). `N>1` enables the pool.
-- `gateway.max_active_work_runs` — default **1**. Explicit capacity 2 or 3
-  requires at least as many `SELFMIND_WORKERS`; daemon startup rejects a
-  mismatched or out-of-range setting. This is a controlled test setting while
-  the session-concurrency release gates remain open, not a default rollout.
-- Step 1: an `AgentFactory` that builds a worker Agent from shared deps; wire a
-  `Dispatcher` in `RunCoordinator` behind the flag; default 1 keeps the current
-  path.
-- Step 2: route gateway-router + CLI runs through the dispatcher; delegation
-  sub-agents already use separate instances (verify they draw workers from the
-  pool or stay independent — independent is fine).
-- Step 3: enable `N>1` in dev, run the verification below, then make a sensible
-  default.
+- `SELFMIND_WORKERS=N` — default **2**. `N>1` enables the pool; explicit **1**
+  retains the single-Agent path.
+- `gateway.max_active_work_runs` — default **2**, supported range **1–3**.
+  Capacity must not exceed the worker count; daemon startup rejects a
+  mismatched or out-of-range setting. Explicit capacity **1** serializes work
+  even with two available workers. To run only one worker, set both values to
+  **1**. Capacity **3** requires `SELFMIND_WORKERS=3` or higher in the daemon's
+  environment. Existing explicit values are preserved.
+- The default change reuses Run admission, independent worker checkout,
+  resource conflict protection and provider request limits. It does not relax
+  these checks or alter delegation ownership.
 
 ## 5. Concurrency-safety audit (gate before enabling N>1)
 

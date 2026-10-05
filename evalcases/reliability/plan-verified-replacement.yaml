@@ -1,0 +1,40 @@
+id: reliability_plan_verified_replacement
+title: "A verified alternative can settle the same unchanged acceptance condition"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [bash, cat, test]
+setup:
+  files:
+    current.txt: "queue-a depth=7\n"
+turns:
+  - input: >-
+      Verify that the current export contains queue-a depth=7. The earlier route
+      legacy.txt is unavailable; current.txt is the accepted current export.
+      Keep a two-step Plan so the change of method is accountable: inspect the
+      earlier route, and verify the accepted export. Both steps share the exact
+      success_criteria "The current export contains queue-a depth=7" and require
+      verification. First record their stable step IDs. Execute the check using
+      verify bound to the accepted-export step, then complete that step. Set the
+      redundant earlier route to cancelled/not_required with replacement_step_id
+      pointing to the verified step and explain why it covers the same condition.
+      Finish with the result; no network access or new files are needed.
+expect:
+  status: done
+  max_tool_errors: 0
+  max_duration_seconds: 120
+  contains: [queue-a, depth=7]
+assert_state:
+  - on: events
+    type: plan.updated
+    payload_contains: '"replacement_step_id":'
+    count_gte: 1
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"status":"succeeded"'
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

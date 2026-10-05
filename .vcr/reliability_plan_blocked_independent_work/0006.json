@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am writing"
+    },
+    {
+      "usage": {
+        "input_tokens": 12334,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " checklist.txt to record the collection items for each inventory queue."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 63,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1535,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_3227980",
+          "Function": "write_file",
+          "Args": "{\"content\":\"# Local Queue Collection Checklist\\n\\n- [ ] queue-a: Collect queue depth from live-sample.json\\n- [ ] queue-b: Collect queue depth from live-sample.json\\n\",\"path\":\"checklist.txt\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EtkGCtYGAWkUfRO9JGoIqn7rW51fxTbAeYqKEmUzs4O4ummFrBstDB51JFJ2O7e57EeNYhl5A4k/OhnKBvgGqjLh5WPhW/zUCw3ZHObpsgprFyoqYdCa9lh2/CS7hCDzRyfHxMxQ5JalAGObbVijRM0Uvbq/lGdtR368RRRuEeh4azbnmR0VE/HyI8sbQw2uVMOvyB5x6JuufDsDzXCEAS/GfL5vFxJ08BjXt3OrEdzX/UeE4GR+B33BOhMf8zJlO4fHGyaWVV4m88NbraMaOR8fQv4lMtwjgqDzPi5ffsRr7F97HS63fDNd//DxBxvb4/7SS4a2OME4Mby24oYODKVp1k/2WS8bvenKq0P5U3qvFNks+lLVNywuaA/1AmwI7HKO4ArZN0Go18P40542MSn7wZRR/z/gSCLhy1SpiNnET90B4JE2fFxCCeyQzlMSpH9I16Zuwh9nhx8wOjfDREfKHBXnFv6RUXagIz5IW2cltRR9oLA/fxm0erXYfdjFInJXK0nMP4BKirCGw1hNsj7YKOLVSJxlUGfUhPJeAGZQ73C5XfvOClX29ufEEPgz27BqsJiiOPv754gW4hFhoQiYSI9IiEJXXlMYfaWRyQlNef6RElcbWRlNsJcw4+8BWGNhzSs9VVqhjztaeTZlpuvAbnJuh34wNxfiWtFhqAuGnsL8Y1JWCPVSkhgcQP9TmlKbQ5dHwGVPjPFD2K0FJaNvxAsJuRTOm8e9z3fBD4ktYB/geMev/Eo0qK0RUzftf5G+0/U8b+nKMz4Kb2O/ajz3DlECLWH/dmjj6LIhxPyAvaglUt1NRYG3yv4WIUvxJFnZQecMCNXGeOJLXuLlkFu9f5/FvFSVM2WbAa633LTe3inhA4kGyP6cXQkQYTzA6b/qPAJokJgCBZZXv4mVoKRi6fqT0nyUvss6fAAyIggvbTaDpJyISwHes+5w1FyIWnohdGN8Ew6homYE8max8gC8zKEotEU1zpm8LylQGlwYjcJosHUczO2C+4yMwIAakukQLyHAQz8pvTjgYel0m9spBIaImvf3PDo7IYklHqS1beHruJUMBGeimPE7OhvogGY8tle7J3+QwGTj3TUlQHLTtiXRBkFvEL4pDeBRSMtmI/WAzbBgVhUd5d8="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

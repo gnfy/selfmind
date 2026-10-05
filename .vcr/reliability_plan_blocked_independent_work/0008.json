@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am recording the task outcome as blocked because live-sample.json is unavailable."
+    },
+    {
+      "usage": {
+        "input_tokens": 13066,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 171,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2920,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4188008",
+          "Function": "finish_run",
+          "Args": "{\"risks\":[\"live-sample.json is not present in the workspace and no external service is available to retrieve live queue depths\"],\"summary\":\"Local inventory was inspected and checklist.txt was prepared, but obtaining current queue depths is blocked because live-sample.json is not available in the workspace and there is no external service available.\",\"status\":\"blocked\",\"files\":[\"checklist.txt\"],\"next_steps\":[\"Provide live-sample.json in the workspace with current queue depths for queue-a and queue-b\",\"Inspect current queue depths once the live sample is provided\"],\"done\":[\"Inspected inventory.txt to identify queue names (queue-a, queue-b)\",\"Prepared and saved collection checklist to checklist.txt\"]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EoIHCv8GAWkUfRP+XhKKzxgTHu1MunNRa8/gH0klPVZC0KFHhH5WcHQV7pGelVKoSI1Eg8tlNJaiNQLaFKlkioPI4J616UaKdgW3EezbBg45WjAR58ErCTbjZoqr7LoiYruFwxgK6++8sRCAUEyEbDLc7LeG9iwnne1sARriV7rSDdkDZskOMiMnCCnIxPZpvmItzzoXXj/9V9FNyszJJUh0Eu8XJerc1szw62R5YPOzmagLQFc044W9GZOcV2+75Xsvil75AATi3sfHuYzZXTJfe8hKGL3f2D/DB6Tw2zwd4xVYmjqHMeN6d6/hzQY2L7JxlQVdUcwlj0Ivy2wCxAwdEJHAKXGIWYe28ZG6DMyKU/gBzyNityuxcHoGDhQHHXEtYcCq3XpcVhvJXyqm/T9n4cl1FrQdCX77RSa/B9ukZtAYkaPFsJME3M4gbz6rn3vJQ+TvXA64Ya9fHKsCGTY4jaLY6I0ewJomxKbQtEcI/dpcI9wQs5w9uvPRljMnFbQdSvZ244rMXISfMn/VECvzaFGw5KX/khhCX+fukJVNk1iBkg7EA7FmEtfIEwVu/3LCNmn89qNa9WSSBXS6sbng8hM4m18xHbKmZdtAWybINUy2qM+xaB7RD4R6rRCSuvyvzmptUWTMy/4Sh7NftDdLKH32h5pDe1uChnCwrzzsYIlfN3RgT6kJf/Ox3dYZiK4LGjskBqpyxuWtFiB+jokgizCHHhXHhjp5/UKEq7CvLm+sjYxOid2k2Ij74WPuC4tb2a0b9l54lIxUEgeN/39tAVzoJyYn95AdHnperQdIUbYEjJvwk0HOrFOxKM51A2629V6Q42qT2t11ypFimTuESzoAzMUilceHaKPewcMFYEssErtriS04M81IhmLjsz3FSC2S72hdIAyOJYnF9ePIiGvXcS0KRPtbpOOUtPHIt5fHcNbSpgyj5dBF/6HuOqACE9PvNhhLfEPoXJZP261uNTXiR5lrfESpn4tpaTLE7PqQgTJmyaZY8TfQrI1b8hlchElRBvK91+KOOwhJOfiGOE+3lv7SAMkMRX4H70QuvmMvkhHwu3sRLM0vqOYuKP2BiKwKonJYelpQlOWRdSGxlFEP5IpS4kidnRslfxcP8LjdGU/UM5HpaU6leNf4pi5qV6qRnrjPFg/2fMlD93yz4JtvKn1PpeD31ZfT6DSzbQzwZA=="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

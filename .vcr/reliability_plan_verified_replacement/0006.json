@@ -1,0 +1,84 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "The current export in `current.txt"
+    },
+    {
+      "usage": {
+        "input_tokens": 5511,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "` contains `queue-a depth=7`.\n\n- Verified `current.txt` directly with `grep -F \"queue-a depth"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 29,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "=7\" current.txt` against criterion \"The current export contains queue-a depth=7\".\n- The unavailable earlier"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 26,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " route (`legacy.txt`) step was cancelled as `not_required` with `replacement_step_id` pointing to the completed"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 27,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " `current.txt` verification step, which satisfies the identical success criterion."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 15,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 3556,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

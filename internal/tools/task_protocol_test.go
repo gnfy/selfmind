@@ -89,6 +89,29 @@ func TestPlanStepParserPreservesOmittedTextForExactIDInheritance(t *testing.T) {
 	}
 }
 
+func TestPlanCancellationEvidenceSurvivesParsingAndDeduplication(t *testing.T) {
+	steps, err := planStepsFromArgs([]interface{}{map[string]interface{}{
+		"step_id": "step-issued", "status": "cancelled",
+		"replacement_step_id": "verified-step", "scope_change_quote": "Only prepare the checklist",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps[0].ReplacementStepID != "verified-step" || steps[0].ScopeChangeQuote != "Only prepare the checklist" {
+		t.Fatalf("cancellation provenance lost: %+v", steps)
+	}
+	changed := append([]PlanStep(nil), steps...)
+	changed[0].ReplacementStepID = "other-step"
+	if samePlanSteps(steps, changed) {
+		t.Fatal("a changed evidence reference was deduplicated")
+	}
+	changed = append([]PlanStep(nil), steps...)
+	changed[0].ScopeChangeQuote = "Only inspect local data"
+	if samePlanSteps(steps, changed) {
+		t.Fatal("a changed user scope quote was deduplicated")
+	}
+}
+
 func TestUpdatePlanToolReturnsSynchronousWorkUnitIdentities(t *testing.T) {
 	tool := NewUpdatePlanTool()
 	ctx := WithPlanProjectionSink(context.Background(), func(_ context.Context, steps []PlanStep) ([]PlanWorkUnitIdentity, error) {

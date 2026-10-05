@@ -28,6 +28,8 @@ type PlanItem struct {
 	CancellationDisposition string `json:"cancellation_disposition,omitempty"`
 	CancellationReason      string `json:"cancellation_reason,omitempty"`
 	UserTakeoverQuote       string `json:"user_takeover_quote,omitempty"`
+	ReplacementStepID       string `json:"replacement_step_id,omitempty"`
+	ScopeChangeQuote        string `json:"scope_change_quote,omitempty"`
 	StepID                  string `json:"step_id,omitempty"`
 	Step                    string `json:"step"`
 	Status                  string `json:"status"`

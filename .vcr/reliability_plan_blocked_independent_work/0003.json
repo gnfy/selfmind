@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am updating the plan to mark inventory inspection complete and checklist preparation in progress."
+    },
+    {
+      "usage": {
+        "input_tokens": 11310,
+        "output_tokens": 16,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 167,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1277,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4233891",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"Inventory inspected; progressing to checklist preparation.\",\"plan\":[{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\"},{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_2}}\",\"status\":\"completed\"},{\"status\":\"in_progress\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_3}}\"}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EvYBCvMBAWkUfRPAqJdzEbWhhfTOti+OoNsI0EdR/Yg+Xqi3BHJEDTVBRJ8qf/q93YnL438KX10B3dkH6W8rpraZUC7CyTldpxoNmxwBcf0rwOO7+azxH1fk9wkCC3yHRuBCzjUfKzcEv7iM8GO0SOojtijgA5/PHa+q71tpDvhaE4ieoasVhUXm8fupFM1zNszahpHXqt2Flka+gTdSeC7Nmo6X67hFz7yUbQVgufyt9ZweO5spLfbnn9yYATWhUEd1v6m9uxMnGMkGoM1Zl3jba5qDWdR9FDyjZGLX9gouGaXf/nzwDYIs5whZ0x2tYZ2K0u7w7zST"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

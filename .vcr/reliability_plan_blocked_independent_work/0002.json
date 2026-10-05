@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am inspecting inventory.txt to review the queue names before preparing the checklist."
+    },
+    {
+      "usage": {
+        "input_tokens": 11255,
+        "output_tokens": 16,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 18,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1251,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_5695258",
+          "Function": "read_file",
+          "Args": "{\"path\":\"inventory.txt\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EuEBCt4BAWkUfRNWzjpGDb3Sql7GPe8Jx6dZbMcHnwEPrkQgSnkcVVF+AFVJNK3mNxJeg4pJAQaxXJLEZLuCMHA57UKzysLmdMsUGLv5d1/6TMyifS0M6c52fo7Dana0t/TfrSxn4BWobuwCTtWTRjdLUQIhyq7QvrbTIzv3KcXAz2a1Pi3rxmj0vSDo+M2Uk8CfoJBMpG0OZ9Wk0IkmEtmncEdUAXQVsYCMrC0w3r27DyaWGGmW7Ws8HWvzKCc3XZyDO6yRzHFSzZ3hzbJ3lRf0n5OSN1NHIpgKxIAmguhuBeX/"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -73,10 +73,15 @@ no handoff evidence. The former can conclude the agent's agreed scope; the
 latter remains unfinished. Suggested next steps alone never establish takeover.
 A missing final answer preserves an already known execution blocker.
 
-New Runs use recovery contract v2 for cancellation assessment. Main supplies
+New Runs use recovery contract v3 for cancellation assessment. Main supplies
 `cancellation_disposition` and `cancellation_reason`: `not_required` for work
 that is genuinely unnecessary or superseded, `user_takeover` for an explicit
-handoff, or `unfinished` for necessary work that remains open. A takeover also
+handoff, or `unfinished` for necessary work that remains open. `not_required`
+references a completed `replacement_step_id` preserving the original success
+criterion and required verification, or an actual user `scope_change_quote`
+establishing the changed scope. A failure alone is not evidence of either.
+The runtime checks referenced Plan state and quote provenance; Main judges
+whether they cover the goal. A takeover also
 supplies `user_takeover_quote`; the runtime checks that this quote occurs in
 actual user input or consumed steering on the exact person-scoped continuation
 lineage, excluding sibling work and daemon-originated text. Main still judges

@@ -16,6 +16,14 @@ func assessedCancellation(step RunPlanStepInput) bool {
 	return strings.TrimSpace(step.CancellationReason) != "" && (step.CancellationDisposition == "not_required" || (step.CancellationDisposition == "user_takeover" && strings.TrimSpace(step.UserTakeoverQuote) != ""))
 }
 
+func assessedCancellationForContract(step RunPlanStepInput, version int) bool {
+	if !assessedCancellation(step) {
+		return false
+	}
+	return version < scopeEvidencePlanContractVersion || step.CancellationDisposition != "not_required" ||
+		step.ReplacementStepID != "" || step.ScopeChangeQuote != ""
+}
+
 func retainOmittedOpenSteps(steps []RunPlanStep, previous *RunPlan) ([]RunPlanStep, []RunPlanStep) {
 	if previous == nil {
 		return steps, nil
@@ -45,8 +53,12 @@ func retainOmittedOpenSteps(steps []RunPlanStep, previous *RunPlan) ([]RunPlanSt
 // the provenance of the quoted user instruction. Missing judgment cannot erase
 // an obligation. This normalization is part of the existing Plan transaction.
 func assessRunPlanCancellationsTx(ctx context.Context, tx *sql.Tx, tenant, run string, version int, steps []RunPlanStep) ([]RunPlanStep, error) {
-	if version < CurrentRunRecoveryContractVersion {
+	if version < assessedPlanCancellationContractVersion {
 		return nil, nil
+	}
+	original, err := originalPlanCriteriaTx(ctx, tx, tenant, run)
+	if err != nil {
+		return nil, err
 	}
 	var deferred []RunPlanStep
 	for i := range steps {
@@ -54,17 +66,34 @@ func assessRunPlanCancellationsTx(ctx context.Context, tx *sql.Tx, tenant, run s
 		s.CancellationDisposition = strings.TrimSpace(s.CancellationDisposition)
 		s.CancellationReason = strings.TrimSpace(s.CancellationReason)
 		s.UserTakeoverQuote = strings.TrimSpace(s.UserTakeoverQuote)
+		s.ReplacementStepID = strings.TrimSpace(s.ReplacementStepID)
+		s.ScopeChangeQuote = strings.TrimSpace(s.ScopeChangeQuote)
 		if s.Status != "cancelled" {
-			s.CancellationDisposition, s.CancellationReason, s.UserTakeoverQuote = "", "", ""
+			if s.Status != "pending" || s.CancellationDisposition != "unfinished" {
+				s.CancellationDisposition, s.CancellationReason = "", ""
+			}
+			s.UserTakeoverQuote, s.ReplacementStepID, s.ScopeChangeQuote = "", "", ""
 			continue
 		}
 		switch s.CancellationDisposition {
 		case "", "unfinished":
 			s.Status = "pending"
+			s.CancellationDisposition = "unfinished"
 			deferred = append(deferred, *s)
 		case "not_required", "user_takeover":
 			if !assessedCancellation(s.RunPlanStepInput) {
 				return nil, &planCancellationPreconditionError{fmt.Sprintf("step %s cancellation requires a reason and user_takeover requires an exact user quote", s.StepID)}
+			}
+			if s.CancellationDisposition == "not_required" && version >= scopeEvidencePlanContractVersion {
+				covered, err := cancellationScopeEvidenceTx(ctx, tx, tenant, run, *s, steps, original)
+				if err != nil {
+					return nil, err
+				}
+				if !covered {
+					s.Status, s.CancellationDisposition = "pending", "unfinished"
+					s.ReplacementStepID, s.ScopeChangeQuote = "", ""
+					deferred = append(deferred, *s)
+				}
 			}
 			if s.CancellationDisposition == "user_takeover" {
 				found, err := hasUserTakeoverQuoteTx(ctx, tx, tenant, run, s.UserTakeoverQuote)
@@ -80,6 +109,37 @@ func assessRunPlanCancellationsTx(ctx context.Context, tx *sql.Tx, tenant, run s
 		}
 	}
 	return deferred, nil
+}
+
+// Main explains whether evidence covers the goal; this transaction checks the
+// referenced state, unchanged criterion, and actual user-input provenance. No
+// command name or wording of a failure decides necessity.
+func cancellationScopeEvidenceTx(ctx context.Context, tx *sql.Tx, tenant, run string, step RunPlanStep, steps []RunPlanStep, original map[string]string) (bool, error) {
+	if step.ScopeChangeQuote != "" {
+		found, err := hasUserTakeoverQuoteTx(ctx, tx, tenant, run, step.ScopeChangeQuote)
+		if err != nil {
+			return false, err
+		}
+		if !found {
+			return false, &planCancellationPreconditionError{fmt.Sprintf("step %s scope_change_quote was not found in this work lineage's actual user input", step.StepID)}
+		}
+		return true, nil
+	}
+	criterion, declared := original[step.StepID]
+	if !declared {
+		criterion = step.SuccessCriteria
+	}
+	if strings.TrimSpace(criterion) == "" || step.ReplacementStepID == "" || step.ReplacementStepID == step.StepID {
+		return false, nil
+	}
+	for _, replacement := range steps {
+		if replacement.StepID != step.ReplacementStepID || replacement.Status != "completed" {
+			continue
+		}
+		return normalizeRunPlanText(criterion) == normalizeRunPlanText(replacement.SuccessCriteria) &&
+			(!step.VerificationRequired || replacement.VerificationRequired), nil
+	}
+	return false, nil
 }
 
 func hasUserTakeoverQuoteTx(ctx context.Context, tx *sql.Tx, tenant, run, quote string) (bool, error) {

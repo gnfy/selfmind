@@ -374,6 +374,12 @@ substrate). Document results in this file.
 - The pinned plan's heading says how many of its run's tool actions ago it
   last changed (`· updated N actions ago`), so a plan that stopped moving reads
   as possibly stale rather than as the current state.
+- Cancelled steps use `×` and name their disposition and reason; pending steps
+  remain empty checkboxes. An unsupported cancellation shows `Unfinished` with
+  its reason. The heading counts completed and cancelled steps separately, and
+  wraps at terminal width. Step order is Main's planned order, not an enforced
+  execution sequence: independent work may advance while an earlier obligation
+  remains open.
 - Digest reattachment and live events feed one reducer. `run_id` owns the
   projection, durable `plan_version` orders complete snapshots, and the event
   cursor breaks equal-version replay ties. A lower version, a late event from a

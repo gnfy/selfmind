@@ -119,6 +119,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 						StepID: step.StepID, Step: step.Step, Status: step.Status,
 						SuccessCriteria: step.SuccessCriteria, VerificationRequired: step.VerificationRequired,
 						CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
+						ReplacementStepID: step.ReplacementStepID, ScopeChangeQuote: step.ScopeChangeQuote,
 					})
 				}
 			}

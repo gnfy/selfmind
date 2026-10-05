@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am updating the plan to mark pre"
+    },
+    {
+      "usage": {
+        "input_tokens": 11379,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "-checks complete and proceed with script execution and verification."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 173,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 572,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_5825",
+          "Function": "update_plan",
+          "Args": "{\"plan\":[{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\",\"success_criteria\":\"Bash version is confirmed and collector.sh syntax check passes without errors\",\"status\":\"completed\"},{\"success_criteria\":\"collector.sh executes successfully and outputs RESULT=7\",\"verification_required\":true,\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_2}}\",\"status\":\"in_progress\"}],\"explanation\":\"Pre-execution checks completed; proceeding to execution and output verification.\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EvIDCu8DAWkUfRP5vdK1ebWkt7qzeq0mUoJX8HKC75hvBbhGjNTaXX0xEzTg+xCxSHNzW6NV6mZYtH3Zrxo3BsDjKAI5CAEgbyDaTcN38yK0NdTTu04dDzul3F51/g1OCzNG1vc5DE0vKbZdnueiyWmcvibfBw3eXBoWGwqqjl0Cgkj7oKvcfpilgBA6e1rCD/5Hvf8HeBZF6g78aMnhzDNrNWFV+o7cIFb6jI+qN/r2Z8s6ErNE70dE0bBMq5k1eQ5yLoxr6AGdoXBS/hLZTDrv3Vwp+nLBgjPaeHw4vBoZgwvXnuEzK9nDvARnc6QW0faYPEeWT2INaWxZ/1h1X0hf8kOy5Ei6bgzLtn5dEUdrcr33oGoVzfXLzU2ot2OPPzY34Y9BRSupBPU0QvZxtpwN7lCqrHHjlIbjUXMw03Rre4OXJOOTaNRgZz8rXJ4QJ/3pRMzqL6D1F5l4nUQ7OuBJmFYo2I9LB2dw6zpzBQDe8+aZI/LgF2yuzMjYPpOR6d6mG/HLgXgZ/giHysUcl/ibKID8sPX1awewZqvHKU76tu3AhquDASuNFxW4i2A4LBiJ5j1vAUNWMxg0lPJvpvY2co7iUDtnDpYONK2IknE9jitrR+XoRK7MXjh+FBwaV4hQDz51tUS0wXcOIwCJ88UEZ/Pj"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

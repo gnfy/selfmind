@@ -460,10 +460,10 @@ func validateType(param string, val interface{}, expectedType string) error {
 
 // CoerceArgs 将 string/bool/int 等动态类型强制转换为 schema 声明的类型
 func CoerceArgs(schema ToolSchema, args map[string]interface{}) (map[string]interface{}, error) {
-	return coerceObject("", args, schema.Properties, schema.AdditionalProperties, true)
+	return coerceObject("", args, schema.Properties, schema.Required, schema.AdditionalProperties, true)
 }
 
-func coerceObject(path string, args map[string]interface{}, properties map[string]PropertyDef, additional *bool, root bool) (map[string]interface{}, error) {
+func coerceObject(path string, args map[string]interface{}, properties map[string]PropertyDef, required []string, additional *bool, root bool) (map[string]interface{}, error) {
 	coerced := make(map[string]interface{}, len(args))
 	for name, value := range args {
 		if root && strings.HasPrefix(name, "_") {
@@ -477,6 +477,12 @@ func coerceObject(path string, args map[string]interface{}, properties map[strin
 			}
 			// Open schemas preserve fields instead of silently discarding them.
 			coerced[name] = value
+			continue
+		}
+		if value == nil && def.Type != "" && def.Type != "null" {
+			if stringInList(name, required) {
+				return nil, fmt.Errorf("required parameter %s cannot be null", joinParameterPath(path, name))
+			}
 			continue
 		}
 		item, err := coerceProperty(joinParameterPath(path, name), value, def)
@@ -496,7 +502,7 @@ func coerceProperty(path string, value interface{}, def PropertyDef) (interface{
 	switch def.Type {
 	case "object":
 		if object, ok := coerced.(map[string]interface{}); ok {
-			return coerceObject(path, object, def.Properties, def.AdditionalProperties, false)
+			return coerceObject(path, object, def.Properties, def.Required, def.AdditionalProperties, false)
 		}
 	case "array":
 		if items, ok := coerced.([]interface{}); ok && def.Items != nil {
@@ -514,6 +520,9 @@ func coerceProperty(path string, value interface{}, def PropertyDef) (interface{
 }
 
 func coerceValue(param string, val interface{}, targetType string) (interface{}, error) {
+	if val == nil && targetType != "" && targetType != "null" {
+		return nil, fmt.Errorf("parameter %s cannot be null", param)
+	}
 	switch targetType {
 	case "integer":
 		switch v := val.(type) {

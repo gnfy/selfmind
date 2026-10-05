@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am checking the Bash version and validating the syntax of checks/probe.sh."
+    },
+    {
+      "usage": {
+        "input_tokens": 11297,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 25,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 510,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4802291",
+          "Function": "terminal",
+          "Args": "{\"command\":\"bash --version \u0026\u0026 bash -n checks/probe.sh\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EqIFCp8FAWkUfRNeCBFHaUnWBsbTMSQMhlIOgGiTnJFFLrY/vIPHuPfBTtO2kESa0PFicMmCQqb2T7Pwz8qulfrNeQadii3eqvKw3aPYPjYlPwV4Kyz5747ZKGMpoLS9Mi+dYfA0gYUCx7THz5/l+mDe6FmQCRuJlphGF/Z7W6+6XdZEDwMWxWlxwQLyvAcgX/EeTvOnIR2yLsAehoES/P8qZuSA0kgJZI6XSmzl5kHYRWjG/WIHVBu/nb8PIc3ZsWSzbtqZFRSUKvkf9tnKTGCsw5mDic8Lloy8zXiBQLq0kzHcVPOCjNgHns69Lc20EXj3Im3QahDHBWjiJv3OlN2AqJ05b0PW89v3770sxsR7yTxs6ptrpylwzRejlt4ZSJ1FAVxPKCSarUbMzOu9+e/8Uq+YM05jSVZ6bALE+bnCFazzBRWWLdVzJREmutNMu9QQtwPHSwuNxNdh6DWSOAAHrQLGUr0uVf1ZosCPaN3Krv0im9sa4lexzfwQbsjyJCPKauIa8Zj8IRA44nD7YVPcB57wi8bH7cnobkwT0r0akW2/46ZfXE+gzUt/6GfcCjCL73Y1wlizOcyGyDecRWRc3cV5msNaCpMJCWgbcg91/JCuuMwZN8hR0FJxQ2Z0Kj6FRGhXSI/hYzNu5yk0wgSpw3pYDxWHcbjM3UINVutSUwFvCBmaGB4z9XVz8UpJ1tUSOaB0TYxMyFiqMFqyQlB8ZMzy5TkT9CJabWOdC4eCBpBN7ShUiQ/frc0iLJSlbTFp5Jbii9qTw5jyx14T3gl5gZMPgfX6oATUezfw1hPy3JwXtfRZc5Bdf2kXVRNzzoPqavmlzKYZdlyY6rTH65miEi221QvLKt/w5FwulMrpM+Uf3vyAL07EaqG7yJWAhsahqGI="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

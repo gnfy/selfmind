@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "collector.sh ./collector.sh RESULT=7 bash collector.sh"
+}

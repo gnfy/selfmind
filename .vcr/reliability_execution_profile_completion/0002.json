@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will"
+    },
+    {
+      "usage": {
+        "input_tokens": 11262,
+        "output_tokens": 2,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " inspect the Bash version and validate the syntax of collector.sh in the isolated environment."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 29,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 431,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_43354",
+          "Function": "terminal",
+          "Args": "{\"sandbox\":\"isolated\",\"command\":\"bash --version \u0026\u0026 bash -n collector.sh\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EoAGCv0FAWkUfRMmRrOTeZNI7nlfIKHpRWqiZUNbOzyrlf7/ruGOA/o0ETlbN6KSY26vQc5zE1TqLmLosAkKlwdJEMUXDJsjWI0oAao4jkqoenumdCY8eQdvG5j4FFeClQtZtIOgahCb/fZSUUg3hT3BulTbU5bU0bQMHhQ31nDr/FEAYLWQ5ltk4XgyJu8vcFqjnIOG7Amq7lgHyQi3zygb/hRyk1DyWl66xyUZL9806fDx9N3Ck6pWmKsUxCksVL9Pxt2SzcwxqAFssuQaeqrr5WehJjas6lTHylLGp1jJMjm21R04In27Fi5aOhx80YUZFNZSDtRkgZGVx5eZ7P3GQz0+z5TSti2RZCcGpOqNHXjAfjmW3kJIpqg5irJRk2iGqFzeOevS40KtZU7G0nCEZfez1Ni4gFmZZbbuh0iFfmYZyOL+LU2DAvebgq3ckth7hmjMskzqQ6XdYqbivacR16rsCgHS9H05ZeUxmhzA3Bmf4XJ5un+M8o4O3bFdKo1qPRVRU1kPchhh4XAyXQ+v118IM4fcOh2vnZ4Vrqrf7xNC0JMtIxkb9STRnXY7iLeY5bydzfpkTbLuTKYyc0ILrdzn8MFeA3lBtCr4hy1e4HXS84ZN5vFYS3zYLOVd2D/TwtehTjNFaHo0fmoQwQrKKKMdvvmAq71usmO1oQwC6CdJjI+A2Rsh0xOfwTPaAaESw55bxdqEEImRv0g6hPaG5Zez5vgwGAsNLdwGq5SZDXjtJTSnv5hcpncjYTgZYE7LjpNOargIHTU7K2rK/Gd3suRdH8Y1Ur6kIN+DA67JvC4F/UExQbnih+GNyDGAdIvOM5LWOXORvgldU/1Ht61NAvSp2jksio3OBc9wQ8KoKwcO472bnK0TX5emiMYfPUzDuixr0x4zNaGlN3YOZXc96sxTtzsDhF+TX4csRWWsic4fGwEpsW/6bnjzjB0gbfCkwj0tmKB9aRKDzDT/r6I7baBe6B4BkARPu9sfJRHZNku/eqi7vgxEcnkf5p172f8W"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

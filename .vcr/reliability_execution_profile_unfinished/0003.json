@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am moving to the verification phase by updating the plan status."
+    },
+    {
+      "usage": {
+        "input_tokens": 11408,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 138,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 638,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2557151",
+          "Function": "update_plan",
+          "Args": "{\"plan\":[{\"status\":\"completed\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\"},{\"verification_required\":true,\"status\":\"in_progress\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_2}}\"}],\"explanation\":\"Bash version and syntax check succeeded; progressing to formal verification of checks/probe.sh output.\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "ErkJCrYJAWkUfRM9/2Kcwav2KVE4BNtMrZjuTZsIp/T4W+W4DT8iBytaRsff9DZFDBL6JpxdGAMeP3W/KSpAkH1UmpxZx2l8sKgLomRyAX0RylHvUn4ADOeW86aLnF90dvPKRBPCHoSdI0CnTP5DAbju+04riFz77MDOc+wUTHN2A2WCFEK9GMfBwx+cEZkUyITiqSwzlcjVwrzxsqN5Oxh4SsGJw4D95f99dryA1UazPIMU7NLbOR0GTonvsnt59HI/W23NPk29EBNzeiI5/FNJ6526nMU4zdoXMWoTiAOg6NXcPnEsW8FdD7I36aE1e2S06nv62UEhkVrVlwz1nYqtmvaVaS0HbdVLpXcJ+MNczbPRwc5RB4E2Spw0idFTVxRMdsRLICel+OxrW66ejbehkrQileQ3PlFqU5SbCyZZEbrwGuXnOlunApH9zEtb11+Rc44qYoGNV93igJtU8hv21SdPAXTuflIGidedoM4V3n6QLi6kl0Ilv82ICqeFqiwz5BLa/FbMBkLv0+lL4cunCyzNNmAI129d2yEmdUW+rlPQZT/tZYMwxF1uSVWw2TAoNwCZH+a/C3hB/LHD8+c7Lkk4R2XW+DXfKyOG0pPfLHNE7Kkb+7OXUncUAgDBuEoPuJKUaAILAp3ta3fnzFoK6ccXjcruc6rbiuT26H7PPUfdv4qzxmwJzHRFmmTLnmOQE/68kDImqyv0ztNHSa4CrsIpSZrHK/+0++9R8bNIFjjZI90vhRJqeI6uK3Py2r35gQQrablyJYCLShZfCMIoROiPw5BSJXKyXy7xktIEtZjdwB5+fq1xvt8mCEQR7pZldtf0m8egFiiTty+oHBz9+uwztmafIDzyyhbEU9lf6CWiQE80KqXCWitoswo+BDdMnZsCn2bFcwLFvGyI4oxxumeUicdp8ng2Of9w83rLO5R5hjV3FPq1QLFtQy5SK/PXNUHrDeyEaPi9oPjZ3LMQyb0FA4wQsdDgUdGUvg3mG1Oeo8bVFzY3w0M+F8gfRWPvCZ0VBT00ONyBFHBah8RRsh5+lt2lihMwDp4VI4SNlu0athIx54i6C44Ev3qS1vgyu97rWi3RKEteueYhSTe74J+PpZ7pFpEdBzZ6wzWCoh4NAxe13QlBqk5vJMmz2I5KQfr03onuTbagSxsmYqpWC34DGYx2AKTIDE5wBJPrDEufcXrh8O/17meACKavRFvoeyXBTNVyEs+R/9dIaqQYz5WLlLw8yL2MRkFOqc7fhXch0543oOYA6G8jT/2qBqZ25VHymO6w05DuJA4+MQd6w/OglazTDoudVgmepI0avrkdzGxm1uwXAgI+q0qEIu0Avhqn98CO1aDVS9hhgk50ibkIYvEv5CjlfHD+khB8AzYCiXHgkDnsZXLlVKO4YP+uF4i/Nlf//KTppIduEdwUq9GxnpcCX3y9YVRQvltDMgAFxA1jrmVwEXsoXlC0HxeHFSJTHjgIkdIt/tJLBAjNYDlqV+nVowyAjnoX9egnclPOXnS2wZR41rkeQOlKv6Hz/pbD73llDOY2UsAfJ4gtbGan5MiSazYRu3JXCaLg5HBs71Li9l07dmY1ZkHc5ucN/9jb936GqT9R"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

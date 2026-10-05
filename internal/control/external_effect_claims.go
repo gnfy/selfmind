@@ -167,7 +167,7 @@ func (s *Store) ObserveEffectClaimsForWatch(ctx context.Context, tenantID, watch
 		return false, err
 	}
 	var receipt ExternalWatchPreflightReceipt
-	if json.Unmarshal([]byte(receiptJSON), &receipt) != nil || receipt.EffectID == "" ||
+	if json.Unmarshal([]byte(receiptJSON), &receipt) != nil || receipt.RecoveryClaimID != "" || receipt.EffectID == "" ||
 		receipt.EffectRuleKey == "" || receipt.ObservationRuleKey == "" || len(receipt.EffectTargetKeys) == 0 ||
 		receipt.EffectScriptRoot == "" || receipt.EffectScriptPath == "" || receipt.EffectScriptDigest == "" ||
 		status != ExternalWatchSucceeded || adapter != "status_json.v1" ||
@@ -266,7 +266,7 @@ func (s *Store) ObserveEffectClaimsForWatch(ctx context.Context, tenantID, watch
 
 // ObserveExternalEffectWithWatch is the conservative fallback for an unknown
 // external target. The person explicitly relates an exact effect to a
-// successful, finalized daemon observation created by the same Run after the
+// successful, finalized daemon observation created by the same Run or an explicitly bound exact continuation after the
 // effect was claimed. Both identities and the release commit in one
 // transaction; model prose and a merely finished Run are never evidence.
 func (s *Store) ObserveExternalEffectWithWatch(ctx context.Context, tenantID, personID, claimID, watchID string) (ExternalEffectClaim, error) {
@@ -304,7 +304,18 @@ func (s *Store) ObserveExternalEffectWithWatch(ctx context.Context, tenantID, pe
 	if err := json.Unmarshal([]byte(receiptJSON), &receipt); err != nil {
 		return ExternalEffectClaim{}, fmt.Errorf("watcher has no valid preflight receipt: %w", err)
 	}
-	if watchRun != claim.RunID || watchCreated < claimedAt || watchStatus != ExternalWatchSucceeded ||
+	if watchRun != claim.RunID {
+		if receipt.Version < ExternalWatchRecoveryReceiptVersion || receipt.RecoveryClaimID != claim.ID {
+			return ExternalEffectClaim{}, fmt.Errorf("continuation observation requires an explicit versioned binding to this effect claim")
+		}
+		if _, err := externalEffectForObservationTx(ctx, tx, tenantID, personID, watchRun, claim.ID); err != nil {
+			return ExternalEffectClaim{}, err
+		}
+	}
+	if receipt.RecoveryClaimID != "" && receipt.RecoveryClaimID != claim.ID {
+		return ExternalEffectClaim{}, fmt.Errorf("watcher is bound to another effect claim")
+	}
+	if watchCreated < claimedAt || watchStatus != ExternalWatchSucceeded ||
 		watchFinalized == 0 || receipt.Version < ExternalWatchContinuationReceiptVersion ||
 		receipt.CommandHash != fmt.Sprintf("%x", sha256.Sum256([]byte(command))) {
 		return ExternalEffectClaim{}, fmt.Errorf("watcher is not a finalized trusted observation of this exact run after the effect")

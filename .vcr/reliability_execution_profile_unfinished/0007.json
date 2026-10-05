@@ -1,0 +1,84 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "Formal verification failed because `checks/probe"
+    },
+    {
+      "usage": {
+        "input_tokens": 5710,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": ".sh` produced `RESULT=6` instead of the required `RESULT=7`.\n\n- Unfinished criterion: `checks/probe."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 29,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "sh execution outputs RESULT=7.`\n- Actual observed output: `RESULT=6`\n- Syntax and environment: GNU"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 25,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " bash 3.2 syntax check on `checks/probe.sh` passed.\n- Script modification was forbidden,"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " so no changes or retries were attempted, and the run has been marked failed."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 3435,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
+}

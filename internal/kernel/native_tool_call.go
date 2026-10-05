@@ -989,6 +989,8 @@ func planItemsFromArgs(args map[string]interface{}) []PlanItem {
 		workUnit, _ := obj["work_unit"].(bool)
 		verificationRequired, _ := obj["verification_required"].(bool)
 		items = append(items, PlanItem{
+			CancellationDisposition: stringArg(obj, "cancellation_disposition"), CancellationReason: stringArg(obj, "cancellation_reason"),
+			UserTakeoverQuote: stringArg(obj, "user_takeover_quote"), ReplacementStepID: stringArg(obj, "replacement_step_id"), ScopeChangeQuote: stringArg(obj, "scope_change_quote"),
 			StepID: stringArg(obj, "step_id"), Step: fmt.Sprintf("%v", obj["step"]),
 			Status: fmt.Sprintf("%v", obj["status"]), SuccessCriteria: stringArg(obj, "success_criteria"),
 			VerificationRequired: verificationRequired,

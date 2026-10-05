@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am running verify to confirm that current.txt contains queue-a depth=7."
+    },
+    {
+      "usage": {
+        "input_tokens": 11277,
+        "output_tokens": 18,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 66,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2196,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4724593",
+          "Function": "verify",
+          "Args": "{\"criterion\":\"The current export contains queue-a depth=7\",\"local_dependencies\":[\"current.txt\"],\"kind\":\"test\",\"command\":\"grep -F \\\"queue-a depth=7\\\" current.txt\",\"target\":\"current.txt\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EsoKCscKAWkUfROZMKxUsMYsYiGloNjDTWDzhH46NWv0M168Gtyx6gbyZzu3x/qgh54yQNd3QJYfiUIGL4klexZd/eMlUUeAMkgWx5wuGi3ijp2TOstAseBzi8Haqng1GsNMxl36MgvZQtdtSHI161X1UqRwaLYJxFnt94fKGuqOIIPUVFACi92ZrVIeBh7aMuKYQnK7BQarKz+Mvg6ER9Mu2B/FJPpO1gQZLrM8u0Zhj61kc4hkZa+1XRchLxHXLl7SHOwJu1Z11Qj9agFi6aMHPuzwABVfq4cG0Fu0Lo+h0QMNv6PEYFvyv27qmWs6aytbpHFPi3wTgoIAkAb7M1xiZpjpGmmcwm6jbM+quooXPU8bePyRjq6N6aAqEAQDNXmaZg0n6n1SWSY7dBfKByeyOjsGRT3U8DPWeZZ01giGA9ffsxdoTfUKW/80Z6daV9AzqbLA/j62+DxSINFluidVfxDOBn3kNcaepNCfB9Pz/PCXjTtEJkS35+wefr+lmXJuRUw2PFmUnrbjfx4PHdMqs0OGO9z0l5bjapEaQ06hVWch9AvsG8DdDMk8lOnuNBlMBSK3w+8/NMMYRaZKYloO4aMFr8hoa52HrywUnN6A8V3omKoNGsrcTOopMBPK1QrXfD2ba5lSBxZn8WyUB++roI8A3IQ293/V2kNoB0hgsB7PqQH3YZmqlEmCEplNkK7mVAtuSqN0VX6aVladz2RZWEeeIrj5Eca1N9cRTY1n3Wmv5K8uupToDd+AVbLopxoGLv9SstoBEdc+1cE3Moz5syT4s+gVHApR93gbt0OF6kbHyfHEbU7AZ+UJyEUArZHtx4u0IF4mThuGwfzzOVcH705YYHGdEM+xn1yyIl5In0eUEMbpPO8Wiv9ccWWuYf0MqBDsHCeyFqUKChKTfvTyHrpLbOSpLPAbHCMYdD+Qpvr+S+HmWcz0ByKhqWTKAETAGc0VDsEfiisgsLvU+TuJmbejH9ApysqIXaaCfUeRmgzYUg/DmuFr66h4SExKFAob48hZXmPjL/wtljtnjR2OEK1Rq6uEG0W2FVVzJOPrv3qz1ytMY4tLaizUGCEWguLodkfm6wdSfxO8rb7gvqBXx1Gcmj5XNTjJE6AFWyKpVtLVh3toUEKVI4FbtQNPCsoaqXkqpIkGSMmAr0fSshrhQ9aUnBpYcQNg4fkAESxPDBXoTKGFyaW9hMKIsmeZ4oK/WwArX709cVHDv3WYJX9eHPUiG/ZgVlkpr4c7BB/YtzTEj/zUv/ghqKgGOsqHkLc7ZZ6COtAa7Xgs2nUUWHv42r3Spo4YfsZNsJpbHikWwp00dnwrHMfXqYgWwTEv4fFikbPKYBqaCsgjEeDvUoxg4MspNaj2Ib6MrxXEK1+8C7EeCZbFK0nj1po++02EwVCVZfbGU6ZbQZQSeFxMsx7wEL1m3er4BTZ5pJYf2dJlR0ykcIH8zLpPREdDUGqKHZQmPZSQvi4IUT5j0st74M7aQyzxuRbh4zQ/q/Bbz9P3CKynNag3ZIswHFds8HCOdEngKqwywmXqhoaO8jXLpMFeBmW2VO1jK4auEopL5E8497oWyAGoGK80E9674vSmTqYzlL0uF4b4km5qqmuG4+cVfIcIjllQNA/YoK3hqLIfSiIfthgRorbFfioqywwrRkkUWxZ3KRtSLvD7ot3QyLu1PRQj5QbpxmwMFXjeSGV31QZtaUWKwODQHqgZGbS1nP3dy7NGaf/t/Q8KnwWdiiHrVkh0YGGrp2kDAHOPil2apWR/pCxEhJIKWAsr99EwXJ6UhDgdVUUr15bWxA=="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

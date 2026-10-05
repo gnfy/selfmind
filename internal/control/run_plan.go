@@ -15,8 +15,10 @@ import (
 
 const RunRecoveryContractVersion = 1
 
-// Existing recovery mechanics remain v1; only new Runs opt into assessed cancellations.
-const CurrentRunRecoveryContractVersion = 2
+// Historical Runs retain their declared recovery authority.
+const assessedPlanCancellationContractVersion = 2
+const scopeEvidencePlanContractVersion = 3
+const CurrentRunRecoveryContractVersion = scopeEvidencePlanContractVersion
 
 // completionPreconditionError distinguishes a correctable verdict from a
 // storage failure. No completion state was committed when this is returned.
@@ -29,6 +31,8 @@ type RunPlanStepInput struct {
 	CancellationDisposition string `json:"cancellation_disposition,omitempty"`
 	CancellationReason      string `json:"cancellation_reason,omitempty"`
 	UserTakeoverQuote       string `json:"user_takeover_quote,omitempty"`
+	ReplacementStepID       string `json:"replacement_step_id,omitempty"`
+	ScopeChangeQuote        string `json:"scope_change_quote,omitempty"`
 
 	StepID                 string `json:"step_id,omitempty"`
 	Step                   string `json:"step"`
@@ -262,9 +266,14 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		}
 	}
 	var retained []RunPlanStep
-	if contractVersion >= CurrentRunRecoveryContractVersion {
+	if contractVersion >= assessedPlanCancellationContractVersion {
 		steps, retained = retainOmittedOpenSteps(steps, identityPrevious)
 	}
+	verificationPrevious := identityPrevious
+	if verificationPrevious != nil && len(verificationPrevious.Steps) == 0 {
+		verificationPrevious = nil
+	}
+	verificationDeferred := normalizeFirstPlanVerification(steps, verificationPrevious)
 	cancellationDeferred, err := assessRunPlanCancellationsTx(ctx, tx, tenant, runID, contractVersion, steps)
 	cancellationDeferred = append(cancellationDeferred, retained...)
 	if err != nil {
@@ -295,11 +304,6 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 			return RunPlanProjection{}, fmt.Errorf("plan[%d] cannot reuse prior verification: %w", i, err)
 		}
 	}
-	verificationPrevious := identityPrevious
-	if verificationPrevious != nil && len(verificationPrevious.Steps) == 0 {
-		verificationPrevious = nil
-	}
-	verificationDeferred := normalizeFirstPlanVerification(steps, verificationPrevious)
 	workInput, boundaries := projectRunPlanWorkUnits(steps)
 	units, err := s.syncRunWorkUnitsTx(ctx, tx, tenant, runID, workInput, replace)
 	if err != nil {
@@ -400,11 +404,11 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		if _, err := tx.ExecContext(ctx, `INSERT INTO run_plan_steps
 			(run_id, tenant_id, plan_version, step_id, sequence, step_text, status, success_criteria,
 			 verification_required, related_task_id, work_unit_id, work_unit_boundary, source_step_id, source_plan_version,
-			 prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote, created_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
+			 prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote, replacement_step_id, scope_change_quote, created_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
 			step.Step, step.Status, step.SuccessCriteria, boolInt(step.VerificationRequired), step.RelatedTaskID, stepWorkUnits[i],
 			boolInt(isRunPlanBoundary(steps, i)), step.SourceStepID, step.SourcePlanVersion,
-			boolInt(step.ReusePriorVerification), step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, now.Unix()); err != nil {
+			boolInt(step.ReusePriorVerification), step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.ReplacementStepID, step.ScopeChangeQuote, now.Unix()); err != nil {
 			return RunPlanProjection{}, err
 		}
 	}
@@ -615,8 +619,9 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 				item.SuccessCriteria = old.SuccessCriteria
 			}
 			item.VerificationRequired = item.VerificationRequired || old.VerificationRequired
-			if item.Status == "cancelled" && old.Status == "cancelled" && item.CancellationDisposition == "" && item.CancellationReason == "" && item.UserTakeoverQuote == "" {
+			if (item.Status == "cancelled" && old.Status == "cancelled" || item.Status == "pending" && old.Status == "pending") && item.CancellationDisposition == "" && item.CancellationReason == "" && item.UserTakeoverQuote == "" && item.ReplacementStepID == "" && item.ScopeChangeQuote == "" {
 				item.CancellationDisposition, item.CancellationReason, item.UserTakeoverQuote = old.CancellationDisposition, old.CancellationReason, old.UserTakeoverQuote
+				item.ReplacementStepID, item.ScopeChangeQuote = old.ReplacementStepID, old.ScopeChangeQuote
 			}
 		}
 		// Execution attribution is already known for an existing step. A
@@ -751,8 +756,8 @@ func aggregateRunPlanStatus(steps []RunPlanStep) string {
 
 func hashRunPlanSteps(steps []RunPlanStep, workUnitIDs []string) string {
 	type hashStep struct {
-		StepID, Step, Status, SuccessCriteria, RelatedTaskID, WorkUnitID, ReuseReason, CancellationDisposition, CancellationReason, UserTakeoverQuote string
-		VerificationRequired, WorkUnit, ReusePriorVerification                                                                                        bool
+		StepID, Step, Status, SuccessCriteria, RelatedTaskID, WorkUnitID, ReuseReason, CancellationDisposition, CancellationReason, UserTakeoverQuote, ReplacementStepID, ScopeChangeQuote string
+		VerificationRequired, WorkUnit, ReusePriorVerification                                                                                                                             bool
 	}
 	canonical := make([]hashStep, 0, len(steps))
 	for i, step := range steps {
@@ -761,7 +766,7 @@ func hashRunPlanSteps(steps []RunPlanStep, workUnitIDs []string) string {
 			workUnitID = workUnitIDs[i]
 		}
 		canonical = append(canonical, hashStep{step.StepID, step.Step, step.Status, step.SuccessCriteria, step.RelatedTaskID, workUnitID,
-			step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.VerificationRequired, step.WorkUnit, step.ReusePriorVerification})
+			step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.ReplacementStepID, step.ScopeChangeQuote, step.VerificationRequired, step.WorkUnit, step.ReusePriorVerification})
 	}
 	data, _ := json.Marshal(canonical)
 	sum := sha256.Sum256(data)
@@ -783,7 +788,7 @@ func latestRunPlanTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (*
 	plan.CreatedAt = time.Unix(created, 0)
 	rows, err := tx.QueryContext(ctx, `SELECT step_id, sequence, step_text, status, success_criteria, verification_required,
 		related_task_id, work_unit_id, work_unit_boundary, source_step_id, source_plan_version,
-		prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote FROM run_plan_steps
+		prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote, replacement_step_id, scope_change_quote FROM run_plan_steps
 		WHERE tenant_id=? AND run_id=? AND plan_version=? ORDER BY sequence`, tenantID, runID, plan.Version)
 	if err != nil {
 		return nil, err
@@ -795,7 +800,7 @@ func latestRunPlanTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (*
 		var verificationRequired, boundary, reused int
 		if err := rows.Scan(&step.StepID, &step.Sequence, &step.Step, &step.Status, &step.SuccessCriteria, &verificationRequired,
 			&step.RelatedTaskID, &workUnitID, &boundary, &step.SourceStepID, &step.SourcePlanVersion,
-			&reused, &step.ReuseReason, &step.CancellationDisposition, &step.CancellationReason, &step.UserTakeoverQuote); err != nil {
+			&reused, &step.ReuseReason, &step.CancellationDisposition, &step.CancellationReason, &step.UserTakeoverQuote, &step.ReplacementStepID, &step.ScopeChangeQuote); err != nil {
 			return nil, err
 		}
 		step.VerificationRequired = verificationRequired != 0
@@ -846,7 +851,7 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 	var unresolved []string
 	if plan != nil {
 		for _, step := range plan.Steps {
-			if step.Status != "completed" && (step.Status != "cancelled" || (contractVersion >= CurrentRunRecoveryContractVersion && !assessedCancellation(step.RunPlanStepInput))) {
+			if step.Status != "completed" && (step.Status != "cancelled" || (contractVersion >= assessedPlanCancellationContractVersion && !assessedCancellationForContract(step.RunPlanStepInput, contractVersion))) {
 				unresolved = append(unresolved, step.Step)
 			}
 		}
@@ -901,7 +906,7 @@ func (s *Store) RunRecoveryState(ctx context.Context, tenantID, runID string) (R
 			if step.Status == "in_progress" {
 				snapshot.CurrentPlanStepID = step.StepID
 			}
-			if step.Status != "completed" && (step.Status != "cancelled" || (snapshot.ContractVersion >= CurrentRunRecoveryContractVersion && !assessedCancellation(step.RunPlanStepInput))) {
+			if step.Status != "completed" && (step.Status != "cancelled" || (snapshot.ContractVersion >= assessedPlanCancellationContractVersion && !assessedCancellationForContract(step.RunPlanStepInput, snapshot.ContractVersion))) {
 				snapshot.UnresolvedStepIDs = append(snapshot.UnresolvedStepIDs, step.StepID)
 			}
 		}

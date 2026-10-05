@@ -205,6 +205,17 @@ explicit /new, /resume, /choose
   recorded, otherwise the accepted Plan's completed and open steps followed by
   recorded file and verification evidence. Display bounds count characters, so
   CJK text keeps the same visible length as ASCII.
+- New Runs use recovery contract v3 for Plan cancellations. Main judges whether
+  a step remains necessary and explains its decision. A `not_required` verdict
+  references either a completed `replacement_step_id` with the same original
+  success criterion and required verification, or a `scope_change_quote` from
+  actual user input in the exact work lineage. The runtime checks those
+  references and provenance within the Plan transaction; it does not infer
+  scope from command names or failure wording. An unsupported verdict remains
+  pending with an `unfinished` assessment, while independent steps may proceed.
+  Explicit user takeover keeps its quoted, scoped handoff contract. Schema v25
+  adds inert evidence fields; historical v1/v2 Runs keep their authority, while
+  a new continuation reassesses inherited cancellations under its own contract.
 - Read-only discovery uses the same trusted registration facts for dispatch,
   recovery, and plan-progress accounting. A proven read-only command (ledger
   effect class `observation`) is discovery too and leaves the selection window

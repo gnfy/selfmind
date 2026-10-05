@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am recording the task outcome to complete the run."
+    },
+    {
+      "usage": {
+        "input_tokens": 12093,
+        "output_tokens": 11,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 101,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 3422,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2933096",
+          "Function": "finish_run",
+          "Args": "{\"done\":[\"Verified that current.txt contains queue-a depth=7\",\"Cancelled unavailable legacy route step with replacement_step_id pointing to the verified export step\"],\"summary\":\"Verified that the current export current.txt contains queue-a depth=7.\",\"status\":\"done\",\"tests\":[\"grep -F \\\"queue-a depth=7\\\" current.txt\"],\"files\":[\"current.txt\"]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EqsFCqgFAWkUfRNKI7qDHED+gpu2MTswVgOyaJgtVTotKuc5Bez9WvxrNe6ecl6zIbKG6Ri5hW3CfHe/zz/jaBxxHUvZeZSTc1puYJmqnjpLWZPNtLwb8HnPqK/WX6YxEMjkp0tYPcQJZAvoGdc4at5jrdZ9BIBQmq3vb6jGs1lhoqpBK129hjzMynwTdzrqj2K6JmZReNRcxnWzXAdCAi4DDXlGHs+BvCEnvigmEn/uheimJ84N4oMq108lfG5V2KNip6KxBhfvjR2FDdJ6NddGR79mimTU6FSjfFLXy5EG2Ttwi8a28Un72DEmdiGdCVi3ljvUV13+ba4meePOzuZtJE2nat6zsW5olT/VoN7i08g1D9bazskFOLUFDly1j1calOM5EtXVNvLuACKRVWc+XKmKdw0oYBC+Dr8fP8YVp93iBfU7mbV2nuW/zoPbrXPSmOYjoCP+OacqJJYjvOwhgU8I7sIfbv3p35H6C+zDS7ooCKiacpDBviO7CiIERE8WHsAXAjFUbktkwTuyZqMXbqeoA8rDEdmy7+cSxkBRExDaCsojj8D04zUMUvKIVd7jygVVxqrVnn2iceeitLjnOOCzwIZmi2yfApEUl5nDF8HpcAIYIEqgeknxDJFKZu4J4PmoAefUsCYjVSOlATk3dvBSdZwd+Vvvu3yWk7UkFSBkaJ3Pv0IU/a/KAec6VZ/jAEVOIrNoY2TnpvzZOfUUH42ChHIv5tmhtnxiaS+Co/YCdupPKs0+p6ngxGpMuViv5cRoR0CvM1ay1ci3tbXtMwDgy2q5iOQ4EpHKXQBoP2fUnnBtcVxg4FuqAV1vZnV3NFhmljMpVTwJwIEiB0xCsX2HhMoUp/nN5XwM8Z8YKXe9GTVGGRIcZM+Q0N5KfXGVZqhK0jf6CGPehwI="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

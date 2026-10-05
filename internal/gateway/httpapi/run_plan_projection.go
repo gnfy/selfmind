@@ -36,6 +36,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 		input = append(input, control.RunPlanStepInput{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
 			CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
+			ReplacementStepID: step.ReplacementStepID, ScopeChangeQuote: step.ScopeChangeQuote,
 			SuccessCriteria:        step.SuccessCriteria,
 			VerificationRequired:   step.VerificationRequired,
 			ReusePriorVerification: step.ReusePriorVerification,
@@ -72,7 +73,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 		if len(review) >= 8 {
 			break
 		}
-		review = append(review, fmt.Sprintf("Step %s remains pending: cancellation does not resolve necessary unfinished work. Judge against the original goal and user corrections. If genuinely unnecessary, cancel with cancellation_disposition=not_required and a reason. An explicit user takeover additionally requires user_takeover_quote from actual user input. Otherwise keep the obligation open and finish blocked or waiting as appropriate.", step.StepID))
+		review = append(review, fmt.Sprintf("Step %s remains pending. Preserve its original success_criteria and finish blocked or waiting when necessary work cannot proceed. For not_required, explain coverage and reference a completed replacement_step_id with that original criterion and required verification, or supply scope_change_quote from the user's actual instruction. For explicit user takeover, supply user_takeover_quote. Continue independent work while this obligation remains open.", step.StepID))
 	}
 	for _, step := range projection.VerificationDeferred {
 		if len(review) >= 8 {
@@ -89,6 +90,7 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 		plan.Plan = append(plan.Plan, tools.PlanStep{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
 			CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
+			ReplacementStepID: step.ReplacementStepID, ScopeChangeQuote: step.ScopeChangeQuote,
 			SuccessCriteria:        step.SuccessCriteria,
 			VerificationRequired:   step.VerificationRequired,
 			ReusePriorVerification: step.ReusePriorVerification,

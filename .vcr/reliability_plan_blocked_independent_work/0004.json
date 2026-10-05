@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am updating the plan to mark inventory"
+    },
+    {
+      "usage": {
+        "input_tokens": 11662,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " inspection complete and checklist preparation in progress."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 174,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1321,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4868266",
+          "Function": "update_plan",
+          "Args": "{\"plan\":[{\"status\":\"pending\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\"},{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_2}}\",\"status\":\"completed\"},{\"status\":\"in_progress\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_3}}\"}],\"explanation\":\"Inventory inspection complete, moving to checklist preparation.\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EpQCCpECAWkUfRNw8IKUQ9tKVLbgXK/fsKhFLSDFdvuuB5gLD2QZy43lLHjX4uSQHIvdI1TiUBLCi0iK49vNHihNJeKdWri0TQ0JXo7pEppsXPnDyAmhBDNRBKZsQV6Y5RBjX3ypOEso6sNWfLRs0WLsMBg9Ht02dFMvOs8aU4fAxBfmp+jpnSsYmMuJz0b6kunpQHLIHWtq+iGATLmPiWHu8xJ7Hc+4ONW9J+xa77ZExzkahT0qFT9N9t/PsKqp2DwDxonbY86qzT3PPMVqNiJMZ9Esuew8VSDlKxLytgwU3buPjIiBAfw/0t8eiy92ElWtuwWCtJGvFyqEL9z3xWWvn7a1BwV2oA3RyhsSbfTVpe4cFrTl"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

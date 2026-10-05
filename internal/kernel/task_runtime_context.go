@@ -443,6 +443,9 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 			entry := fmt.Sprintf("- step_id=%s [%s] %s; success_criteria=%q verification_required=%t\n", trimLine(step.StepID, 80), trimLine(step.Status, 40), trimLine(step.Step, 240), trimLine(step.SuccessCriteria, 400), step.VerificationRequired)
 			if step.CancellationDisposition != "" {
 				entry += fmt.Sprintf("  cancellation_disposition=%s reason=%q user_takeover_quote=%q\n", trimLine(step.CancellationDisposition, 40), trimLine(step.CancellationReason, 240), trimLine(step.UserTakeoverQuote, 240))
+				if step.ReplacementStepID != "" || step.ScopeChangeQuote != "" {
+					entry += fmt.Sprintf("  replacement_step_id=%s scope_change_quote=%q\n", trimLine(step.ReplacementStepID, 80), trimLine(step.ScopeChangeQuote, 240))
+				}
 			}
 			if plan.Len()+len(entry) > maxChars/3 {
 				plan.WriteString("- Additional plan context omitted by budget; inspect the current Run before updating omitted steps.\n")

@@ -55,9 +55,12 @@ work-unit 归属，模型无需重复填写。快照省略 ID 时，措辞不变
 必要未完成工作：前者可以按约定范围结束 Agent 的责任，后者保持未完成。仅建议用户
 执行下一步不能构成交接。缺少最终回复不会覆盖已经确定的执行阻塞原因。
 
-新 Run 使用 v2 恢复契约记录取消判断。Main 给出 `cancellation_disposition`
+新 Run 使用 v3 恢复契约记录取消判断。Main 给出 `cancellation_disposition`
 和 `cancellation_reason`：确已无必要或已被替代时使用 `not_required`；用户明确接手时
-使用 `user_takeover`；必要工作仍未完成时使用 `unfinished`。用户接手还需提供
+使用 `user_takeover`；必要工作仍未完成时使用 `unfinished`。`not_required` 需引用
+已完成且保留原验收条件和必需验证的 `replacement_step_id`，或说明范围变更的真实用户
+原话 `scope_change_quote`。单纯失败不构成这两类证据。运行时核对引用的 Plan 状态和
+原话来源，Main 判断是否覆盖目标。用户接手还需提供
 `user_takeover_quote`，运行时核对原话是否来自同一人的精确续接链中的真实用户输入或
 已消费的补充指令，排除其他任务与 daemon 生成的文字。原话是否构成交接，以及后续
 修正是否改变范围，仍由 Main 判断。缺少判断或必要工作未完成的取消保持待办；完整

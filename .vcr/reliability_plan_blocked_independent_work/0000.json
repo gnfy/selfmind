@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "live-sample.json inventory.txt checklist.txt finish_run queue-depths"
+}

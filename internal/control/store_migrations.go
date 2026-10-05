@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 24
+const CurrentControlSchemaVersion = 25
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -632,6 +632,15 @@ DROP TABLE IF EXISTS task_references;`)
 	{Version: 24, Name: "assessed-plan-cancellations", Apply: func(ctx context.Context, db *sql.DB) error {
 		// Empty values grant no new authority to historical plans or Runs.
 		for _, name := range []string{"cancellation_disposition", "cancellation_reason", "user_takeover_quote"} {
+			if err := ensureMigrationColumn(ctx, db, "run_plan_steps", name, "TEXT NOT NULL DEFAULT ''"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}},
+	{Version: 25, Name: "plan-cancellation-scope-evidence", Apply: func(ctx context.Context, db *sql.DB) error {
+		// Historical Runs keep their contract and receive no new authority.
+		for _, name := range []string{"replacement_step_id", "scope_change_quote"} {
 			if err := ensureMigrationColumn(ctx, db, "run_plan_steps", name, "TEXT NOT NULL DEFAULT ''"); err != nil {
 				return err
 			}

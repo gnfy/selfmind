@@ -96,6 +96,8 @@ type PlanStep struct {
 	CancellationDisposition string `json:"cancellation_disposition,omitempty"`
 	CancellationReason      string `json:"cancellation_reason,omitempty"`
 	UserTakeoverQuote       string `json:"user_takeover_quote,omitempty"`
+	ReplacementStepID       string `json:"replacement_step_id,omitempty"`
+	ScopeChangeQuote        string `json:"scope_change_quote,omitempty"`
 
 	StepID                 string `json:"step_id,omitempty"`
 	Step                   string `json:"step"`
@@ -152,6 +154,8 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"cancellation_disposition": {Type: "string", Enum: []string{"not_required", "user_takeover", "unfinished"}, Description: "Main's assessment against the original goal and user corrections. Cancel only work no longer necessary (not_required), or explicitly taken over by the user (user_takeover). A blocked necessary step is unfinished and remains pending, not resolved. Omission also keeps a cancelled obligation pending."},
 								"cancellation_reason":      {Type: "string", Description: "Why this step is no longer necessary or within the user's explicit takeover scope. Suggesting the user do the work is not a takeover."},
+								"replacement_step_id":      {Type: "string", Description: "For not_required: an exact step id in this Plan that is completed and covers this step's original success_criteria. Preserve that original criterion on the replacement and its required verification. A preparation or failed check does not replace the requested result."},
+								"scope_change_quote":       {Type: "string", Description: "For not_required without a completed replacement: exact actual user text establishing the changed or limited scope. Explain why that instruction makes this step unnecessary. Runtime verifies quote provenance; Main judges its meaning."},
 								"user_takeover_quote":      {Type: "string", Description: "Exact quote of the actual user's explicit takeover instruction, required for user_takeover. Never quote your own suggestion, a tool result or daemon-originated text."},
 								"status": {
 									Type:        "string",
@@ -390,7 +394,7 @@ func samePlanSteps(a, b []PlanStep) bool {
 	}
 	for i := range a {
 		if a[i].StepID != b[i].StepID || a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].SuccessCriteria != b[i].SuccessCriteria || a[i].VerificationRequired != b[i].VerificationRequired || a[i].ReusePriorVerification != b[i].ReusePriorVerification || a[i].ReuseReason != b[i].ReuseReason ||
-			a[i].CancellationDisposition != b[i].CancellationDisposition || a[i].CancellationReason != b[i].CancellationReason || a[i].UserTakeoverQuote != b[i].UserTakeoverQuote || a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
+			a[i].CancellationDisposition != b[i].CancellationDisposition || a[i].CancellationReason != b[i].CancellationReason || a[i].UserTakeoverQuote != b[i].UserTakeoverQuote || a[i].ReplacementStepID != b[i].ReplacementStepID || a[i].ScopeChangeQuote != b[i].ScopeChangeQuote || a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
 			return false
 		}
 	}
@@ -409,6 +413,7 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 			steps = append(steps, PlanStep{
 				StepID:                  taskStringArg(obj, "step_id"),
 				CancellationDisposition: taskStringArg(obj, "cancellation_disposition"), CancellationReason: taskStringArg(obj, "cancellation_reason"), UserTakeoverQuote: taskStringArg(obj, "user_takeover_quote"),
+				ReplacementStepID: taskStringArg(obj, "replacement_step_id"), ScopeChangeQuote: taskStringArg(obj, "scope_change_quote"),
 				Step:                   taskStringArg(obj, "step"),
 				Status:                 taskStringArg(obj, "status"),
 				SuccessCriteria:        taskStringArg(obj, "success_criteria"),

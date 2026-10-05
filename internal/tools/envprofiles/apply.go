@@ -35,7 +35,10 @@ type ApplyContext struct {
 	Trust string
 	// HasCredentialRead reports whether the workspace holds the credential:read
 	// capability, which is what lets an untrusted workspace use operator state.
-	HasCredentialRead bool
+	HasCredentialRead    bool
+	ProgramArguments     map[string][][]string
+	OpaquePrograms       bool
+	EnvironmentOverrides map[string]bool
 }
 
 // Result is the material a set of profiles contributes to one command.
@@ -94,7 +97,7 @@ func Apply(profiles []*EnvProfile, ctx ApplyContext) (Result, error) {
 	// A conditional dependency is resolved from the tool's OWN configuration,
 	// not assumed. This is what keeps an EKS or local-cluster kubectl from
 	// dragging in Google credentials it will never use.
-	profiles = ctx.expandConditionalRequires(profiles)
+	profiles = Resolve(profiles, ctx)
 	redirects := map[string]string{}
 	redirectOwner := map[string]string{}
 
@@ -317,7 +320,7 @@ func Resolve(profiles []*EnvProfile, ctx ApplyContext) []*EnvProfile {
 	if ctx.Lookup == nil {
 		ctx.Lookup = func(string) (string, bool) { return "", false }
 	}
-	return ctx.expandConditionalRequires(profiles)
+	return ctx.resolveMountState(ctx.expandConditionalRequires(profiles))
 }
 
 // credentialAccessAllowed is the trust decision. A trusted workspace may use the

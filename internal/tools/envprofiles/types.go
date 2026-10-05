@@ -189,6 +189,24 @@ type ConditionalRequire struct {
 	MaxBytes int64
 }
 
+// ConfigurationSelection limits a state requirement to literal selected INI
+// sections. Unknown program arguments conservatively inspect every section.
+type ConfigurationSelection struct {
+	Option         string
+	EnvVars        []string
+	DefaultSection string
+	SectionPrefix  string
+}
+
+// MountStateCondition gates mount-backed state, never credential authority.
+// Missing files have no requirement; unreadable/malformed files retain it.
+type MountStateCondition struct {
+	From      StateSource
+	Keys      []string
+	Selection *ConfigurationSelection
+	MaxBytes  int64
+}
+
 // EnvProfile is one tool's execution-environment contract.
 type EnvProfile struct {
 	ID string
@@ -208,9 +226,10 @@ type EnvProfile struct {
 	MapRW               []MapRW
 	// SynthesizeDir must precede MapRWAt entries that land inside it; Apply
 	// emits them in that order for exactly that reason.
-	SynthesizeDir []SynthesizeDir
-	MapRWAt       []MapRWAt
-	EnvRedirect   []EnvRedirect
+	SynthesizeDir  []SynthesizeDir
+	MapRWAt        []MapRWAt
+	MountStateWhen []MountStateCondition
+	EnvRedirect    []EnvRedirect
 	// WriteBack stays nil in P0; the field exists so the protocol slot is
 	// reserved rather than retrofitted later.
 	WriteBack *WriteBackSpec

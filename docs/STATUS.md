@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-10-04
+**Snapshot:** 2026-10-05
 
 Dated delivery and validation records live in
 [`status-history.md`](status-history.md); this file keeps current state only.
@@ -27,11 +27,22 @@ Commands inherit the runtime proxy route by default. Literal standard-proxy
 removals retain independent read-only proof; smart-mode review sees configured
 route changes, and typed process results expose bounded network/proxy facts.
 
+Interpreter version/syntax inspection no longer acquires unrelated operator
+state. Mount-backed profile state follows bounded selected authentication
+configuration; static credentials keep read-only access while required writable
+caches retain fail-closed backend requirements. Exact-Run execution notes no
+longer promise host fallback under parallel isolation. V3 recovery receipts bind
+an observation to an exact effect claim in its same-person continuation; an
+already-successful check is atomically recorded without a new wait or Run.
+Unknown effects still require explicit person confirmation. Historical receipts
+remain inert for cross-Run recovery. Real remote authentication variants and
+post-rollout daily-driver effectiveness remain evidence gates.
+
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 100 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
+- Release corpus: 102 valid YAML cases in the full offline profile; model-backed ones carry committed cassettes, deterministic ones
   declare `model_required: false`. One pins the containment release, which unit tests cannot see.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.

@@ -622,7 +622,7 @@ func TestOrdinaryInspectionDoesNotAcquireInventoryMounts(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".aws"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(home, ".aws", "config"), []byte("[default]\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".aws", "config"), []byte("[default]\nsso_session=example\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tenant, workspace := profileExecScope(t, home, fakeGcloudOnPath(t, base), executionenv.TrustUntrusted)

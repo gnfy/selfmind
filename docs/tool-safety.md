@@ -233,9 +233,15 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   observation must do so. Target sets are acquired and observed atomically.
   For an unknown target, `/effects resolve <claim_id> <watch_id>` is a
   person-controlled fallback: one transaction checks the exact person's
-  claim against a successful finalized watcher from the same Run, a valid
-  frozen preflight receipt, and a watcher registered no earlier than the
-  claim. The person's explicit association supplies the judgment that the
+  claim against a successful finalized watcher from the same Run, or an exact
+  same-person continuation with an explicit `effect_claim_id` binding in a v3
+  receipt. It checks the frozen preflight receipt and that the watcher was
+  registered no earlier than the claim. Historical receipts remain same-Run
+  only. A successful recovery preflight is atomically saved as a finalized,
+  observation requiring no asynchronous notification, without parking work or
+  scheduling another Run. Saving it never releases the claim; the person's explicit command does.
+  The observer uses its own approved environment binding, not the old effect's
+  credentials or permissions. The person's explicit association supplies the judgment that the
   observation covers this effect; model text alone cannot release it.
   Parallel Runs also require an enforced process sandbox for terminal calls;
   explicit host escape is rejected before approval or claim creation. A
@@ -246,8 +252,9 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   requires one-time human approval even in full-auto or smart mode. It then
   enters the durable effect-claim lane; neither a stored command grant nor a
   model judge can authorize it alone.
-  Typed provider target adapters and real restart/transport acceptance are
-  still open, so the production per-person active-Run ceiling remains one.
+  Typed provider target adapters and real restart/transport acceptance remain
+  open. Default capacity is two; explicit capacity one retains serialized
+  admission. Both preserve the uncertain-effect gate.
 
 An authenticated local owner can register one exact script invocation with
 `selfmind ws effect`. The revocable grant binds a trusted workspace, script
@@ -861,6 +868,11 @@ exact or bounded same-line-count normalized match and otherwise fails without
 writing. `/stop` records a cancellation request, while terminal run state is
 owned by the goroutine after the execution body exits.
 
+Known optional typed properties supplied as JSON `null` are normalized to omission
+at the argument adapter, recursively. Required typed properties and typed array
+elements reject null; unknown closed-schema fields still reject, and open
+extension data retains null. No provider-name branch repairs argument spelling.
+
 ### Tool environment profiles
 
 A profile declares what host state a command-line tool needs. The engine
@@ -877,6 +889,18 @@ A dependency between profiles is either inherent (`RequiresProfiles`) or proven
 own configuration names it). Assuming a dependency is a defect in both
 directions: it breaks the tools that do not need it and widens credential
 exposure for commands that never touch that provider.
+
+Environment dependency analysis distinguishes non-executing interpreter modes
+from script execution without changing read-only proof or approval authority.
+Mount-backed state may be conditional on bounded, selected configuration keys.
+Literal command options and snapshot variables select INI sections; opaque
+scripts, dynamic selectors, configuration overrides and unreadable/malformed
+configuration retain conservative requirements. Static authentication retains
+read-only state without synthetic roots or writable cache mounts. Preparation
+cache keys include the resolved mount requirements. Backend inability remains
+an explicit non-dispatch refusal, never permission to drop required state or
+escape to host. Model-facing execution notes use the exact Run's frozen policy;
+parallel host refusal is a policy restriction, not an occupied-worker condition.
 
 Credential access is a POLICY decision, never a catalog one. A trusted workspace
 may use operator credential state; an untrusted one needs the `credential:read`

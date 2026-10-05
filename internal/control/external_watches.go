@@ -133,6 +133,10 @@ type ExternalWatch struct {
 // Historical receipts retain their observation and file-only finalization policy.
 const ExternalWatchContinuationReceiptVersion = 2
 
+// Version 3 may bind a person-confirmed recovery observation to an exact claim.
+// Existing receipts acquire no cross-Run recovery authority.
+const ExternalWatchRecoveryReceiptVersion = 3
+
 type ExternalWatchPreflightReceipt struct {
 	Version               int      `json:"version"`
 	CommandHash           string   `json:"command_hash"`
@@ -143,6 +147,7 @@ type ExternalWatchPreflightReceipt struct {
 	Capabilities          []string `json:"capabilities,omitempty"`
 	EffectRuleKey         string   `json:"effect_rule_key,omitempty"`
 	ObservationRuleKey    string   `json:"observation_rule_key,omitempty"`
+	RecoveryClaimID       string   `json:"recovery_claim_id,omitempty"`
 	EffectID              string   `json:"effect_id,omitempty"`
 	EffectTargetKeys      []string `json:"effect_target_keys,omitempty"`
 	EffectScriptRoot      string   `json:"effect_script_root,omitempty"`
@@ -249,6 +254,18 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if watch.PreflightReceipt.RecoveryClaimID != "" {
+		if watch.PreflightReceipt.Version < ExternalWatchRecoveryReceiptVersion {
+			return nil, fmt.Errorf("effect recovery binding requires a versioned observation receipt")
+		}
+		claim, err := externalEffectForObservationTx(ctx, tx, watch.TenantID, watch.PersonID, watch.RunID, watch.PreflightReceipt.RecoveryClaimID)
+		if err != nil {
+			return nil, err
+		}
+		if claim.State == ExternalClaimObserved {
+			return nil, fmt.Errorf("effect claim is already observed")
+		}
+	}
 	if watch.WaitGroupID != "" && watch.PreflightReceipt.Version >= ExternalWatchContinuationReceiptVersion {
 		var allowed, duplicate int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_watch_groups g WHERE g.tenant_id=? AND g.id=? AND g.person_id=? AND g.run_id=? AND g.status='pending' AND (SELECT COUNT(*) FROM external_watches w WHERE w.tenant_id=g.tenant_id AND w.wait_group_id=g.id)<g.expected_count`, watch.TenantID, watch.WaitGroupID, watch.PersonID, watch.RunID).Scan(&allowed); err != nil {
@@ -299,11 +316,13 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 				operation = WatchOperationFailed
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE external_watches SET status=?, checker_status=?, operation_status=?, last_output=?, last_output_hash=?, finished_at=? WHERE id=? AND tenant_id=?`, initialStatus, WatchCheckerOK, operation, initialOutput, fmt.Sprintf("%x", sha256.Sum256([]byte(initialOutput))), now.Unix(), watch.ID, watch.TenantID); err != nil {
+		settledRecovery := watch.PreflightReceipt.RecoveryClaimID != "" && watch.WaitGroupID == ""
+		if _, err := tx.ExecContext(ctx, `UPDATE external_watches SET status=?, checker_status=?, operation_status=?, last_output=?, last_output_hash=?, finished_at=?, finalized=?, notified=? WHERE id=? AND tenant_id=?`, initialStatus, WatchCheckerOK, operation, initialOutput, fmt.Sprintf("%x", sha256.Sum256([]byte(initialOutput))), now.Unix(), settledRecovery, settledRecovery, watch.ID, watch.TenantID); err != nil {
 			return nil, err
 		}
 		watch.Status, watch.LastOutput, watch.CheckerStatus, watch.OperationStatus = initialStatus, initialOutput, WatchCheckerOK, operation
 		watch.FinishedAt = &now
+		watch.Finalized, watch.Notified = settledRecovery, settledRecovery
 	}
 	// A live watcher is durable work evidence: list the Run's Thread now
 	// rather than only at finalization.

@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "checks/probe.sh probe.sh RESULT=7 finish_run"
+}

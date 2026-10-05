@@ -136,12 +136,35 @@ func isolationUnavailableReason(goos string) string {
 // instructions; without it, a network-less sandbox burned whole turns on
 // blind retries that surfaced as timeouts (observed live against an
 // IP-allowlisted ArgoCD). Empty when commands run directly on the host.
+func ExecSandboxPromptNoteForContext(ctx context.Context) string {
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_context": ctx}); ok {
+		policy := scope.SandboxPolicy
+		if policy == nil {
+			policy = CurrentExecSandboxPolicy()
+		}
+		if scope.ParallelWork || isolatedExecutionView(scope) || policy.Required {
+			note := "Shell/exec tools require an enforced OS sandbox for this Run. Host execution is unavailable by policy, regardless of occupied worker slots; ending another Run does not change this policy. Unsupported environment requirements are preparation blocks: no process starts, and retrying unchanged requirements cannot repair them. "
+			if policy.AllowNetwork {
+				note += "Network uses the configured execution view and proxy route; normal network/credential permissions and effect claims still apply.\n"
+			} else {
+				note += "Network is disabled by default; request the normal network:shared capability when needed.\n"
+			}
+			return note
+		}
+		return execSandboxPromptNoteForPolicy(policy)
+	}
+	return ExecSandboxPromptNote()
+}
+
 func ExecSandboxPromptNote() string {
-	enabled, _, network := execSandboxPolicy()
-	if !enabled || !ExecSandboxAvailable() {
+	return execSandboxPromptNoteForPolicy(CurrentExecSandboxPolicy())
+}
+
+func execSandboxPromptNoteForPolicy(policy *ExecSandboxPolicy) string {
+	if !policy.Enabled || !ExecSandboxAvailable() {
 		return ""
 	}
-	if network {
+	if policy.AllowNetwork {
 		return "Shell/exec tools run inside an OS sandbox: the filesystem outside the workspace is read-only; network shares the daemon host namespace, and proxy settings are projected into that network view. A command that must write outside the workspace can request sandbox=host (approval required) once.\n"
 	}
 	return "Shell/exec tools run inside an OS sandbox: the filesystem outside the workspace is read-only and network is disabled by default. Commands that clearly need egress request the workspace-scoped network:shared capability before execution. A timeout alone is not proof of a network problem, and missing credentials are not a reason to switch to host execution.\n"

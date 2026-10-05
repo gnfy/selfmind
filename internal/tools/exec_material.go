@@ -99,7 +99,7 @@ func applyEnvProfiles(
 	material *execMaterial,
 ) ([]string, error) {
 	toolName := stringArg(args, "_tool_name")
-	programs, opaque := execCommandProgramSet(toolName, args)
+	programs, arguments, opaque := execCommandAnalysis(toolName, args)
 	toolchainRoot := ""
 	if root, err := executionenv.ToolchainDir(scope.PersonID, "."); err == nil {
 		toolchainRoot = root
@@ -114,13 +114,16 @@ func applyEnvProfiles(
 	}
 	snapshotEnv := material.Env
 	applyCtx := envprofiles.ApplyContext{
-		Home:              envValue(snapshotEnv, "HOME"),
-		StateRoot:         scratch.StateDir,
-		ScratchTmp:        scratch.TmpDir,
-		ToolchainRoot:     toolchainRoot,
-		Lookup:            func(name string) (string, bool) { return lookupEnv(snapshotEnv, name) },
-		Trust:             scope.TrustLevel,
-		HasCredentialRead: credentialReadAllowed(scope, args),
+		Home:                 envValue(snapshotEnv, "HOME"),
+		StateRoot:            scratch.StateDir,
+		ScratchTmp:           scratch.TmpDir,
+		ToolchainRoot:        toolchainRoot,
+		Lookup:               func(name string) (string, bool) { return lookupEnv(snapshotEnv, name) },
+		Trust:                scope.TrustLevel,
+		HasCredentialRead:    credentialReadAllowed(scope, args),
+		ProgramArguments:     arguments,
+		OpaquePrograms:       opaque,
+		EnvironmentOverrides: execEnvironmentOverrides(execCommandPayload(toolName, args)),
 	}
 	// The command's own program set, plus — ONLY when the payload hides what it
 	// will run — every operator profile this host actually has.
@@ -199,8 +202,8 @@ func profileIDsNotMatched(profiles []*envprofiles.EnvProfile, programs []string)
 
 // execCommandPrograms returns every real program a command will run, skipping
 // shell builtins and control keywords. It reuses the same segmentation the
-// safety floor uses, so profile matching and approval classification can never
-// disagree about what a command actually invokes.
+// safety floor uses. Dependency-only interpreter optimizations do not change
+// the independent read-only proof or approval classification.
 func execCommandPrograms(toolName string, args map[string]interface{}) []string {
 	programs, _ := execCommandProgramSet(toolName, args)
 	return programs
@@ -217,9 +220,14 @@ func execCommandPrograms(toolName string, args map[string]interface{}) []string 
 // the truth is what left gcloud without credential state in a durable check
 // that had no way to recover.
 func execCommandProgramSet(toolName string, args map[string]interface{}) ([]string, bool) {
+	programs, _, opaque := execCommandAnalysis(toolName, args)
+	return programs, opaque
+}
+
+func execCommandAnalysis(toolName string, args map[string]interface{}) ([]string, map[string][][]string, bool) {
 	if strings.EqualFold(strings.TrimSpace(toolName), "execute_code") {
 		// Arbitrary Python: it can invoke anything, by construction.
-		return []string{"python3"}, true
+		return []string{"python3"}, nil, true
 	}
 	payload := strings.TrimSpace(execCommandPayload(toolName, args))
 	if payload == "" {
@@ -228,20 +236,22 @@ func execCommandProgramSet(toolName string, args map[string]interface{}) ([]stri
 		payload = strings.TrimSpace(stringArg(args, "command"))
 	}
 	if payload == "" {
-		return nil, false
+		return nil, nil, false
 	}
-	segments, unparsed := expandCommandSegments(payload, 0)
+	segments, unparsed := expandEnvironmentSegments(payload, 0)
 	seen := map[string]bool{}
 	programs := make([]string, 0, len(segments))
 	opaque := unparsed
 	for _, fields := range segments {
 		base := segmentRealProgram(fields)
-		if base == "" || seen[base] {
+		if base == "" {
 			continue
 		}
-		seen[base] = true
-		programs = append(programs, base)
-		if scriptCarryingPrograms[base] {
+		if !seen[base] {
+			seen[base] = true
+			programs = append(programs, base)
+		}
+		if scriptCarryingPrograms[base] && !nonExecutingProgram(fields) {
 			opaque = true
 		}
 		// A script path is opaque only when executed. Data paths such as
@@ -266,7 +276,8 @@ func execCommandProgramSet(toolName string, args map[string]interface{}) ([]stri
 			}
 		}
 	}
-	return programs, opaque
+	arguments, unknownArguments := execLiteralProgramArguments(payload, 0)
+	return programs, arguments, opaque || unknownArguments
 }
 
 // scriptCarryingPrograms run a script (or an arbitrary command) supplied as

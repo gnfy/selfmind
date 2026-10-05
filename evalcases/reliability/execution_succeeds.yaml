@@ -1,0 +1,36 @@
+id: reliability_execution_profile_completion
+title: "Interpreter checks and actual script execution reach verified completion"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [bash, cat, test]
+setup:
+  files:
+    collector.sh: "printf 'RESULT=7\\n'\n"
+turns:
+  - input: >-
+      Run collector.sh and obtain the real result RESULT=7. Keep a two-step plan:
+      first check the Bash version with bash --version and syntax with
+      bash -n collector.sh; then execute bash collector.sh and formally verify
+      its actual output equals RESULT=7. Use isolated execution. Do not edit the
+      script or replace execution with a description. Finish only when the
+      execution and verification have actually succeeded.
+expect:
+  status: completed
+  verification_state: passed
+  max_tool_errors: 0
+  max_duration_seconds: 180
+  contains: ["RESULT=7"]
+assert_state:
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 1
+  - on: file
+    path: collector.sh
+    contains: "RESULT=7"
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

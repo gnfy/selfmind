@@ -46,6 +46,6 @@ func (d *Server) effectsCommandReply(ctx context.Context, identity *control.Iden
 	for _, claim := range claims {
 		fmt.Fprintf(&sb, "- %s | run %s | target %s | %s\n", claim.ID, claim.RunID, claim.TargetKey, claim.State)
 	}
-	sb.WriteString("After a watcher for the same run succeeds and finalizes, confirm the relation with /effects resolve <claim_id> <watch_id>.")
+	sb.WriteString("Resume the exact owner Run and register a read-only watcher with effect_claim_id. An already-successful recovery check is saved immediately. After the observation succeeds and finalizes, confirm that it covers the effect with /effects resolve <claim_id> <watch_id>.")
 	return sb.String(), nil
 }

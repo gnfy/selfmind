@@ -39,7 +39,8 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 			Type:                 "object",
 			AdditionalProperties: rejectAdditionalProperties(),
 			Properties: map[string]PropertyDef{
-				"description": {Type: "string", Description: "Short user-facing description of what is being watched"},
+				"description":     {Type: "string", Description: "Short user-facing description of what is being watched"},
+				"effect_claim_id": {Type: "string", Description: "Optional exact unresolved effect claim to observe in this Run or its exact continuation. Records evidence only; the person must confirm the association with /effects resolve before an unknown effect is released. An already-successful check is saved without waiting."},
 				// "Read-only command that checks the external state" promised a
 				// wider input than the evaluator accepts: read-only here means
 				// STATICALLY PROVABLE, and the model could only discover that by
@@ -143,6 +144,19 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	waitGroupMode := strings.TrimSpace(stringArg(args, "wait_group_mode"))
 	waitGroupSize := intArg(args, "wait_group_size", 0)
 
+	recoveryClaimID := strings.TrimSpace(stringArg(args, "effect_claim_id"))
+	if recoveryClaimID != "" {
+		if waitGroupKey != "" {
+			return "", fmt.Errorf("effect recovery observations cannot enter a wait group")
+		}
+		claim, err := t.store.ExternalEffectForObservation(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.RunID, recoveryClaimID)
+		if err != nil {
+			return "", err
+		}
+		if claim.State == control.ExternalClaimObserved {
+			return "", fmt.Errorf("effect claim is already observed")
+		}
+	}
 	// Preflight: run the frozen check ONCE, here, with this run's material.
 	//
 	// Both live watcher failures were unrecoverable in the background — the
@@ -170,7 +184,7 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	}
 	var effectObservation EffectObservationBinding
 	effectObservationID := ""
-	if observationAdapter == ExternalWatchAdapterStatusJSON {
+	if observationAdapter == ExternalWatchAdapterStatusJSON && recoveryClaimID == "" {
 		effectObservation, _ = RegisteredEffectObservation(args, t.store)
 		if effectObservation.RuleKey != "" {
 			effectID, lookupErr := t.store.FindUnresolvedExternalEffectForTargets(contextFromArgs(args),
@@ -184,7 +198,7 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 			effectObservationID = effectID
 		}
 	}
-	if verdict != "" && waitGroupKey == "" && effectObservation.RuleKey == "" {
+	if verdict != "" && waitGroupKey == "" && effectObservation.RuleKey == "" && recoveryClaimID == "" {
 		return verdict, nil
 	}
 
@@ -235,6 +249,10 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		}
 		waitGroupID = group.ID
 	}
+	receiptVersion := control.ExternalWatchContinuationReceiptVersion
+	if recoveryClaimID != "" {
+		receiptVersion = control.ExternalWatchRecoveryReceiptVersion
+	}
 	watch, err := t.store.CreateExternalWatch(context.Background(), control.ExternalWatch{
 		TenantID:               scope.TenantID,
 		PersonID:               scope.PersonID,
@@ -253,7 +271,7 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		TerminalFailurePattern: terminalFailurePattern,
 		ObservationAdapter:     observationAdapter,
 		PreflightReceipt: control.ExternalWatchPreflightReceipt{
-			Version: control.ExternalWatchContinuationReceiptVersion, CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))),
+			Version: receiptVersion, RecoveryClaimID: recoveryClaimID, CommandHash: fmt.Sprintf("%x", sha256.Sum256([]byte(command))),
 			EnvironmentGeneration: identity.Generation, Adapter: observationAdapter,
 			Target: firstNonEmptyPreflight(targetPattern, description), DeadlineUnix: timeoutAt.Unix(),
 			Capabilities:       append([]string(nil), capabilities...),
@@ -301,7 +319,14 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		Payload:    payload,
 	})
 	if err != nil {
-		return "", fmt.Errorf("record external watch registration: %w", err)
+		return "", fmt.Errorf("watcher %s was saved, but its registration event could not be recorded: %w; inspect /watchers before registering another observation", watch.ID, err)
+	}
+	if recoveryClaimID != "" && watch.Status == control.ExternalWatchSucceeded && watch.Finalized {
+		result, err := json.Marshal(map[string]interface{}{
+			"watch_id": watch.ID, "effect_claim_id": recoveryClaimID, "observed": "succeeded", "requires_confirmation": true,
+			"message": fmt.Sprintf("Saved finalized read-only observation %s. No waiting or additional Run is needed. The effect remains occupied until the person confirms coverage with /effects resolve %s %s.", watch.ID, recoveryClaimID, watch.ID),
+		})
+		return string(result), err
 	}
 	incomplete, err := t.store.IncompleteRunWatchGroups(context.Background(), scope.TenantID, scope.RunID)
 	if err != nil {

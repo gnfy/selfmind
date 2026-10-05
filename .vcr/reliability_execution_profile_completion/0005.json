@@ -1,0 +1,70 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will formally verify that collector"
+    },
+    {
+      "usage": {
+        "input_tokens": 11967,
+        "output_tokens": 6,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": ".sh produces the expected output RESULT=7 in isolation."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 61,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 990,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 8079,
+        "cache_miss_input_tokens": 4878,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4758853",
+          "Function": "verify",
+          "Args": "{\"criterion\":\"collector.sh executes successfully and outputs RESULT=7\",\"target\":\"collector.sh\",\"command\":\"test \\\"$(bash collector.sh)\\\" = \\\"RESULT=7\\\"\",\"sandbox\":\"isolated\",\"kind\":\"test\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "ErYGCrMGAWkUfRN0hdQPhT3RHkfDO9s/jUSmaz9t1MxngjHGLTF98aYXSXVe4DCjdKvq65pIYOlxgvrtmvTYp5O3dzycgn+eczUs300bunH5pLEum3lW1JQx1DKAJGISlPzxzwKKATD9hYMUHnwWZoVwOj25HPGdsjIVa8CF6w6hyVjBawB0gQY0wQQVvkWCOEi8Q72M4awQzkbzkJ6s2Rui8soSLPII1O+ErQkjFT1tRZGrKa5YHiuLt565mXPJiwcoeXeJxhj03LUZOGfIaxVcIbLZAchTAM89zsWKfbfFRHxzwqZhxd9H1hkma4lTCEsdb2vXIu3MCApU1eovIibDsqV65Mgfdd4R+ZAdkJnH93ta29lbA6NvyhpNfu3ux7yeV+jPZk6wcG5bHbj+ytI/+hYDb6p/sSzYGP34SPr7HIykxHQlnnReCmiRHC7Ambi/opoBfUmWNFINRZbB6YkI7AbVZ4Nyqn8JoJ7K1Pk8ucChSDIZ7Z5p8f8xE18jnjmbxP1YWnnJmBsCDCxoJQwTvEESoUNbhwpAC/aStyUUc1tPjz4u9001mPomb8NOWg5drzqJLnaTwD1wt9w/qgl/ejd6FgHz3LqGKMCSajz9zdYKKVoDNr1i9c+I64y9VhFOmkTWO+QMoJX7h19b0WqSRmsB7eUFxxFh7uaRTmiD3SLkBInS2RXb18pfk/vCI3BzHVYWsypDaoSnxuVUbgz3HLe76QkS7b0fBMkduO209GLDUay1oDggDcX/i+pgLzJ9qKLrUDYqC8RbR8oFILqbb3O2qGOuwadFU3CxclZxKTZi//WQxVkZqr4YCdvHFuug9QCJQe5W9wUY1H8Ky+Gas/QcGVWtFfeVDUYP9lEFMBq7DCQ4bNvWojyUddvJomIkoxvfVUfYIjq5Y7TGRLYDw3MUbag5SMa15t6yAlzRxbXvZK4TCFze1SxUBrVzWFXZo4MT15agAehlWHNYPdh++GtUQcO+yXyVhGEqG9cVPkews1YYVSGv72nV8SmAtsN1Ff9MpWQZ/XeYKy8jwR/rVkDBZ7tf5KPETWofN5xnETHhYq/RscVbw4mLAkBJv3Di4FH9xS9P"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

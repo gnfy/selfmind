@@ -764,7 +764,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// (crash-orphaned) side-effect tool calls must verify before repeating
 	// (P0-B closure — a boot-requeued run re-drains as a "new" message).
 	agentInput = c.withUncertainToolWarning(ctx, identity, task, agentInput)
-	ctx = kernel.WithTaskStrategy(ctx, taskStrategyForRequest(req, intent))
+	strategy := taskStrategyForRequest(req, intent)
+	strategy.ExecSandboxNote = tools.ExecSandboxPromptNoteForContext(ctx)
+	ctx = kernel.WithTaskStrategy(ctx, strategy)
 
 	if d.Gateway == nil {
 		err := fmt.Errorf("gateway is not configured")

@@ -157,7 +157,16 @@ func TestAPlantedEntryIsRepairedBeforeTheNextCommandRuns(t *testing.T) {
 func TestAPanicAfterTheStartStillRepairsTheCache(t *testing.T) {
 	f := newGuardFixture(t, "panic")
 	previous := afterGuardedStart
-	afterGuardedStart = func() { panic("injected after the command started") }
+	afterGuardedStart = func() {
+		if _, err := os.Stat(filepath.Join(f.cache, "stub-sso-dev.json")); err != nil {
+			t.Fatalf("fixture: the command must write its cache before the panic: %v", err)
+		}
+		// Inject the unsafe entry at the failure boundary independently of
+		// whether this kernel permits a sandboxed RENAME_SWAP attack.
+		mustDo(t, os.MkdirAll(f.cache, 0o700))
+		mustDo(t, os.Symlink(f.victim, filepath.Join(f.cache, "panic-planted.json")))
+		panic("injected after the command started")
+	}
 	t.Cleanup(func() { afterGuardedStart = previous })
 	func() {
 		defer func() {
@@ -165,7 +174,7 @@ func TestAPanicAfterTheStartStillRepairsTheCache(t *testing.T) {
 				t.Fatal("fixture: the injected panic did not happen")
 			}
 		}()
-		_, _ = f.execute(context.Background(), f.plant("swap", f.ws+"/link", f.cache+"/stub-sso-dev.json"))
+		_, _ = f.execute(context.Background(), "true")
 	}()
 	requireNoPlantedEntry(t, f.cache)
 	if f.quarantined(t) == 0 {

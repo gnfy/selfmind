@@ -146,10 +146,12 @@ func TestRemoveLegacyLocalControlToken(t *testing.T) {
 }
 
 func TestDaemonPrivateStateFollowsTheDataLayout(t *testing.T) {
-	home, err := filepath.EvalSymlinks(t.TempDir())
+	// Exercise the socket-inside-runtime case on both supported platforms.
+	home, err := filepath.EvalSymlinks(filepath.Dir(shortDataDir(t)))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Setenv("HOME", home)
 	dataDir := filepath.Join(home, ".selfmind", "data")
 	if err := os.MkdirAll(filepath.Join(dataDir, "gateway"), 0o700); err != nil {
 		t.Fatal(err)
@@ -166,7 +168,8 @@ func TestDaemonPrivateStateFollowsTheDataLayout(t *testing.T) {
 		}
 		return false
 	}
-	for _, dir := range []string{filepath.Join(dataDir, "gateway"), filepath.Join(dataDir, "backups")} {
+	expectedDirs := []string{filepath.Join(dataDir, "gateway"), filepath.Join(dataDir, "backups"), filepath.Join(home, ".selfmind", "weixin", "accounts")}
+	for _, dir := range expectedDirs {
 		if !contains(private.Dirs, dir) {
 			t.Fatalf("private dirs %v miss %s", private.Dirs, dir)
 		}
@@ -179,7 +182,7 @@ func TestDaemonPrivateStateFollowsTheDataLayout(t *testing.T) {
 	if len(private.Sockets) != 1 || len(private.TCPPorts) != 1 || private.TCPPorts[0].Port != 8765 || private.TCPPorts[0].AllHosts {
 		t.Fatalf("listeners = %v %v", private.Sockets, private.TCPPorts)
 	}
-	if strings.HasPrefix(socket, filepath.Join(dataDir, "gateway")) && len(private.Dirs) != 2 {
+	if strings.HasPrefix(socket, filepath.Join(dataDir, "gateway")) && len(private.Dirs) != len(expectedDirs) {
 		t.Fatalf("a socket inside the runtime dir needs no separate dir: %v", private.Dirs)
 	}
 	// A daemon bound beyond loopback is closed on every address.

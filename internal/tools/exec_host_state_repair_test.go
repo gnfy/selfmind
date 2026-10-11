@@ -66,20 +66,20 @@ func TestSandboxedCommandLeavesNoPlantedEntryInTheCredentialCache(t *testing.T) 
 	}
 	for _, tc := range []struct {
 		name string
-		// command plants into the cache; planted says the operation must have
-		// succeeded for the probe to mean anything.
-		command func(workspace, cache string) string
-		planted bool
+		// command attempts to plant into the cache. Swap probes require a
+		// positive control when the sandbox itself prevents the attack.
+		command   func(workspace, cache string) string
+		swapProbe bool
 		// later is how long a background planter would need to act.
 		later time.Duration
 	}{
-		{name: "swap-symlink", planted: true, command: func(ws, cache string) string {
+		{name: "swap-symlink", swapProbe: true, command: func(ws, cache string) string {
 			return plant("swap", ws+"/link", cache+"/stub-sso-dev.json")
 		}},
-		{name: "swap-fifo", planted: true, command: func(ws, cache string) string {
+		{name: "swap-fifo", swapProbe: true, command: func(ws, cache string) string {
 			return plant("swap", ws+"/pipe", cache+"/stub-sso-dev.json")
 		}},
-		{name: "swap-directory", planted: true, command: func(ws, cache string) string {
+		{name: "swap-directory", swapProbe: true, command: func(ws, cache string) string {
 			return plant("swap", ws+"/dir", cache+"/stub-sso-dev.json")
 		}},
 		{name: "rename-directory-in", command: func(ws, cache string) string {
@@ -124,8 +124,20 @@ func TestSandboxedCommandLeavesNoPlantedEntryInTheCredentialCache(t *testing.T) 
 			if !result.Started || !strings.Contains(result.Output, "cache write ok: sso") {
 				t.Fatalf("fixture: the sandboxed aws must have written its cache: %+v", result)
 			}
-			if tc.planted && !strings.Contains(result.Output, "planted by") {
-				t.Fatalf("fixture: the probe must plant: %s", result.Output)
+			if tc.swapProbe && !strings.Contains(result.Output, "planted by") {
+				denied := strings.Contains(result.Output, "plant swap refused: operation not permitted") ||
+					strings.Contains(result.Output, "plant swap refused: permission denied")
+				if !denied {
+					t.Fatalf("fixture: the probe must plant or be denied by the sandbox: %s", result.Output)
+				}
+				// Prove the same operation works on these fixtures outside the
+				// sandbox, then undo the exchange before checking the cache.
+				for i := 0; i < 2; i++ {
+					out, err := exec.Command("/bin/sh", "-c", tc.command(canonicalPath(t, ws), cache)).CombinedOutput()
+					if err != nil || !strings.Contains(string(out), "planted by swap") {
+						t.Fatalf("fixture: unconfined swap control %d failed: %v (%s)", i, err, out)
+					}
+				}
 			}
 			time.Sleep(tc.later)
 

@@ -13,8 +13,9 @@ func (m *uiModel) resolveClarifyElsewhere(msg MsgClarifyResolved) {
 	if !m.acceptEvent(msg.Event) || msg.ID == "" {
 		return
 	}
-	if m.otherClarifyID == msg.ID {
-		m.otherClarify, m.otherClarifyID = "", ""
+	if _, pending := m.otherClarifications[msg.ID]; pending {
+		delete(m.otherClarifications, msg.ID)
+		m.projectOtherSessionQuestion()
 		m.refreshOtherSessionNotice()
 	}
 	if !m.clarifyGateway || m.clarifyReq.ID != msg.ID {

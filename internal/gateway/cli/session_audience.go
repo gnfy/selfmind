@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"sort"
 	"strings"
 	"time"
 
@@ -67,13 +68,23 @@ func (m *uiModel) otherSessionRunStarted(msg MsgDaemonRunStarted) {
 // otherSessionRunFinished clears another session's finished run and says so
 // briefly. It reports the command that expires that line.
 func (m *uiModel) otherSessionRunFinished(msg MsgDaemonRunFinished) tea.Cmd {
+	// Human waits are owned independently of the latest running notice. A
+	// parked Run keeps its question; only settled Runs or exact resolution clear it.
+	if msg.Status == "done" || msg.Status == "cancelled" {
+		for id, question := range m.otherClarifications {
+			if question.RunID != "" && question.RunID == strings.TrimSpace(msg.RunID) {
+				delete(m.otherClarifications, id)
+			}
+		}
+		m.projectOtherSessionQuestion()
+		m.refreshOtherSessionNotice()
+	}
 	if m.otherRunID == "" || strings.TrimSpace(msg.RunID) != m.otherRunID {
 		return nil
 	}
 	title := m.otherRunTitle
 	m.otherRunID, m.otherRunTitle = "", ""
-	m.otherClarify, m.otherClarifyID = "", ""
-	if len(m.otherApprovals) > 0 {
+	if len(m.otherApprovals) > 0 || len(m.otherClarifications) > 0 {
 		m.refreshOtherSessionNotice()
 		return nil
 	}
@@ -118,10 +129,28 @@ func (m *uiModel) otherSessionApprovalResolved(id string) bool {
 // otherSessionClarify records a question another session's run waits on.
 // While that terminal is open it takes the answer; a plain message typed here
 // stays this session's own input.
+type otherSessionQuestion struct{ RunID, Question string }
+
 func (m *uiModel) otherSessionClarify(msg MsgClarifyRequest) {
-	m.otherClarify = textutil.Truncate(strings.TrimSpace(msg.Question), 80)
-	m.otherClarifyID = strings.TrimSpace(msg.ID)
+	if m.otherClarifications == nil {
+		m.otherClarifications = map[string]otherSessionQuestion{}
+	}
+	m.otherClarifications[strings.TrimSpace(msg.ID)] = otherSessionQuestion{RunID: strings.TrimSpace(msg.RunID), Question: textutil.Truncate(strings.TrimSpace(msg.Question), 80)}
+	m.projectOtherSessionQuestion()
 	m.refreshOtherSessionNotice()
+}
+
+func (m *uiModel) projectOtherSessionQuestion() {
+	m.otherClarify, m.otherClarifyID = "", ""
+	ids := make([]string, 0, len(m.otherClarifications))
+	for id := range m.otherClarifications {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) > 0 {
+		m.otherClarifyID = ids[0]
+		m.otherClarify = m.otherClarifications[ids[0]].Question
+	}
 }
 
 // refreshOtherSessionNotice shows the most pressing fact about other sessions
@@ -136,6 +165,8 @@ func (m *uiModel) refreshOtherSessionNotice() {
 	switch {
 	case len(m.otherApprovals) > 0:
 		kind, text = noticeWarning, "Pending: "+countNoun(len(m.otherApprovals), "approval")+" from another session — /approvals · /approve <n|id> to continue."
+	case len(m.otherClarifications) > 1:
+		kind, text = noticeWarning, "Other sessions: "+countNoun(len(m.otherClarifications), "question")+" waiting. Answer them in their sessions."
 	case m.otherClarify != "":
 		kind, text = noticeWarning, "Other session: question waiting — “"+m.otherClarify+"”. Answer it in that session."
 	case m.otherRunID != "":

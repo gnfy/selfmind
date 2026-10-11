@@ -299,20 +299,6 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		if steps[i].Status != "completed" || !steps[i].VerificationRequired || strings.TrimSpace(steps[i].ReuseReason) == "" {
 			return RunPlanProjection{}, fmt.Errorf("plan[%d] can reuse prior verification only for a completed required check with a reason", i)
 		}
-		if identityPrevious != nil {
-			alreadyAccepted := false
-			for _, old := range identityPrevious.Steps {
-				if old.StepID == steps[i].StepID && old.ReusePriorVerification && old.Status == "completed" &&
-					old.ReuseReason == steps[i].ReuseReason && normalizeRunPlanText(old.SuccessCriteria) == normalizeRunPlanText(steps[i].SuccessCriteria) &&
-					old.SourceStepID == steps[i].SourceStepID && old.SourcePlanVersion == steps[i].SourcePlanVersion {
-					alreadyAccepted = true
-					break
-				}
-			}
-			if alreadyAccepted {
-				continue
-			}
-		}
 		if err := validatePriorVerificationReuseTx(ctx, tx, tenant, runID, steps[i]); err != nil {
 			return RunPlanProjection{}, fmt.Errorf("plan[%d] cannot reuse prior verification: %w", i, err)
 		}
@@ -888,14 +874,20 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 	if s == nil || s.db == nil || strings.TrimSpace(runID) == "" {
 		return nil
 	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	tenant := normalizeTenant(tenantID)
 	var contractVersion int
-	if err := s.db.QueryRowContext(ctx, `SELECT recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`, normalizeTenant(tenantID), runID).Scan(&contractVersion); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).Scan(&contractVersion); err != nil {
 		return err
 	}
 	if contractVersion < RunRecoveryContractVersion {
 		return nil
 	}
-	plan, err := s.LatestRunPlan(ctx, tenantID, runID)
+	plan, err := latestRunPlanTx(ctx, tx, tenant, runID)
 	if err != nil {
 		return err
 	}
@@ -910,23 +902,35 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 	if len(unresolved) > 0 {
 		return &completionPreconditionError{fmt.Sprintf("successful run still has unresolved durable plan steps: %s", strings.Join(unresolved, "; "))}
 	}
+	if plan != nil {
+		for _, step := range plan.Steps {
+			if step.ReusePriorVerification {
+				if err := validatePriorVerificationReuseTx(ctx, tx, tenant, runID, step); err != nil {
+					if _, correctable := err.(*completionPreconditionError); !correctable {
+						return err
+					}
+					return &completionPreconditionError{fmt.Sprintf("step %s cannot reuse prior verification: %v", step.StepID, err)}
+				}
+			}
+		}
+	}
 	var unverified int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_plan_steps p
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_plan_steps p
 		LEFT JOIN run_work_units w ON w.run_id=p.run_id AND w.id=p.work_unit_id
 		WHERE p.tenant_id=? AND p.run_id=?
 		  AND p.plan_version=(SELECT MAX(version) FROM run_plan_versions WHERE tenant_id=? AND run_id=?)
 		  AND p.status='completed' AND p.verification_required=1
-		  AND COALESCE(w.verification_state,'')<>'passed'`, normalizeTenant(tenantID), runID,
-		normalizeTenant(tenantID), runID).Scan(&unverified); err != nil {
+		  AND COALESCE(w.verification_state,'')<>'passed'`, tenant, runID,
+		tenant, runID).Scan(&unverified); err != nil {
 		return err
 	}
 	if unverified > 0 {
 		return &completionPreconditionError{fmt.Sprintf("successful run still has %d completed plan step(s) without required verification evidence", unverified)}
 	}
 	var uncertain int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_ledger
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_ledger
 		WHERE tenant_id=? AND run_id=? AND status IN (?, ?) AND retry_class=? AND verification_state<>'verified'`,
-		normalizeTenant(tenantID), runID, ToolLedgerStarted, ToolLedgerDispatched, "side_effect").Scan(&uncertain); err != nil {
+		tenant, runID, ToolLedgerStarted, ToolLedgerDispatched, "side_effect").Scan(&uncertain); err != nil {
 		return err
 	}
 	if uncertain > 0 {

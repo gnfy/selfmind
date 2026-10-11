@@ -195,6 +195,7 @@ type uiModel struct {
 	otherApprovals      map[string]string
 	otherClarify        string
 	otherClarifyID      string
+	otherClarifications map[string]otherSessionQuestion
 	otherNoticeID       uint64
 	foreignDetailEvents atomic.Int64
 	// backgroundRunID is the daemon run whose progress this terminal must NOT
@@ -395,6 +396,7 @@ type MsgClarifyRequest struct {
 	Choices  []string
 	// Channel is the session whose run asks; only that session arms the prompt.
 	Channel string
+	RunID   string
 }
 
 type MsgClarifyAnswerResult struct {

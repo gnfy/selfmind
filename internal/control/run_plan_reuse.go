@@ -13,11 +13,11 @@ import (
 // method never guesses that an old external observation remains current.
 func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, childRunID string, step RunPlanStep) error {
 	if step.SourceStepID == "" || step.SourcePlanVersion < 1 {
-		return fmt.Errorf("step has no exact source verification")
+		return reusePreconditionf("step has no exact source verification")
 	}
 	reason := strings.TrimSpace(step.ReuseReason)
 	if reason == "" || len(reason) > 1000 {
-		return fmt.Errorf("reuse reason must be present and at most 1000 bytes")
+		return reusePreconditionf("reuse reason must be present and at most 1000 bytes")
 	}
 	var sourceRunID, personID, workspaceID, rootsJSON string
 	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(resumes_run_id,''), person_id, COALESCE(workspace_id,''), COALESCE(execution_roots_json,'[]')
@@ -26,7 +26,7 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 		return err
 	}
 	if sourceRunID == "" {
-		return fmt.Errorf("run has no exact continuation parent")
+		return reusePreconditionf("run has no exact continuation parent")
 	}
 	var currentChecks int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_events WHERE run_id=? AND type='evidence.recorded'
@@ -36,7 +36,7 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 		return err
 	}
 	if currentChecks > 0 {
-		return fmt.Errorf("this run has already checked the step; use its current result instead")
+		return reusePreconditionf("this run has already checked the step; use its current result instead")
 	}
 	sourceStepID, sourceVersion := step.SourceStepID, step.SourcePlanVersion
 	var exactReference *InheritedPlanEvidence
@@ -44,7 +44,7 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 		return err
 	} else if ok {
 		if ref.CriterionChanged || ref.ReuseBlockedReason != "" {
-			return fmt.Errorf("source acceptance condition or inputs changed: %s", ref.ReuseBlockedReason)
+			return reusePreconditionf("source acceptance condition or inputs changed: %s", ref.ReuseBlockedReason)
 		}
 		if ref.CheckID != "" {
 			exactReference = &ref
@@ -57,12 +57,12 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 			FROM runs WHERE tenant_id=? AND id=?`, tenant, sourceRunID).
 			Scan(&sourcePersonID, &sourceWorkspaceID, &sourceRootsJSON, &nextRunID); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("exact source run is unavailable")
+				return reusePreconditionf("exact source run is unavailable")
 			}
 			return err
 		}
 		if sourcePersonID != personID || sourceWorkspaceID != workspaceID || sourceRootsJSON != rootsJSON {
-			return fmt.Errorf("source verification belongs to a different person or execution scope")
+			return reusePreconditionf("source verification belongs to a different person or execution scope")
 		}
 		var status, sourceStep, criterion, workUnitID, nextStepID, priorReason string
 		var nextVersion, reused int
@@ -72,26 +72,26 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 			tenant, sourceRunID, sourceVersion, sourceStepID).
 			Scan(&status, &sourceStep, &criterion, &workUnitID, &nextStepID, &nextVersion, &reused, &priorReason); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("exact source plan step is unavailable")
+				return reusePreconditionf("exact source plan step is unavailable")
 			}
 			return err
 		}
 		if status == "cancelled" || normalizeRunPlanText(sourceStep) != normalizeRunPlanText(step.Step) ||
 			normalizeRunPlanText(criterion) != normalizeRunPlanText(step.SuccessCriteria) {
-			return fmt.Errorf("source step is cancelled or its target or acceptance criterion changed")
+			return reusePreconditionf("source step is cancelled or its target or acceptance criterion changed")
 		}
 		var verificationState string
 		if err := tx.QueryRowContext(ctx, `SELECT verification_state FROM run_work_units
 			WHERE identity_tenant_id=? AND run_id=? AND id=?`, tenant, sourceRunID, workUnitID).
 			Scan(&verificationState); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("source work unit has no verification record")
+				return reusePreconditionf("source work unit has no verification record")
 			}
 			return err
 		}
 		if reused != 0 {
 			if status != "completed" || verificationState != "passed" || strings.TrimSpace(priorReason) == "" || nextRunID == "" || nextStepID == "" || nextVersion < 1 {
-				return fmt.Errorf("source reuse has no complete provenance chain")
+				return reusePreconditionf("source reuse has no complete provenance chain")
 			}
 			sourceRunID, sourceStepID, sourceVersion = nextRunID, nextStepID, nextVersion
 			continue
@@ -101,21 +101,24 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 			return err
 		}
 		if len(checks) == 0 {
-			return fmt.Errorf("source verification has no bound observation for this step")
+			return reusePreconditionf("source verification has no bound observation for this step")
 		}
 		if state != "passed" {
-			return fmt.Errorf("source step has unresolved verification (%s): %s", state, blockers)
+			return reusePreconditionf("source step has unresolved verification (%s): %s", state, blockers)
 		}
 		if exactReference != nil {
 			if _, err := inheritedSourceChecksTx(ctx, tx, *exactReference); err != nil {
-				return fmt.Errorf("exact source observation is not effective in its work-unit window: %w", err)
+				if !errors.Is(err, sql.ErrNoRows) {
+					return err
+				}
+				return reusePreconditionf("exact source observation is not effective in its work-unit window: %v", err)
 			}
 		}
 		// Every effective check must stay fresh; a newer independent target
 		// cannot mask changes to another observation's declared inputs.
 		for _, check := range checks {
 			if check.ToolCallID == "" || check.Status != "succeeded" || check.Binding.Target == "" || check.FinishedAt <= 0 {
-				return fmt.Errorf("source verification has no successful, bound observation")
+				return reusePreconditionf("source verification has no successful, bound observation")
 			}
 			for _, id := range []string{sourceRunID, childRunID} {
 				changed, err := verificationInputsChangedTx(ctx, tx, id, check)
@@ -123,11 +126,17 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 					return err
 				}
 				if changed {
-					return fmt.Errorf("recorded changes affect verification inputs; observe the current state instead")
+					return reusePreconditionf("recorded changes affect verification inputs; reopen this step as in_progress, run verify with its step_id, then mark it completed using the fresh evidence")
 				}
 			}
 		}
 		return nil
 	}
-	return fmt.Errorf("source verification chain exceeds the bounded lineage depth")
+	return reusePreconditionf("source verification chain exceeds the bounded lineage depth")
+}
+
+// Missing or stale proof is correctable; storage failures retain their own
+// diagnostic identity rather than asking Main to repair a plan that is valid.
+func reusePreconditionf(format string, args ...interface{}) error {
+	return &completionPreconditionError{fmt.Sprintf(format, args...)}
 }

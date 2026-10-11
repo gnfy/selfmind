@@ -1405,6 +1405,26 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		emitTurnCompleted(eventCh, answer, completion, streamLost)
 		return answer
 	}
+	completeAnswer := func(i int, resp string, planUnresolved bool) string {
+		history.Outcome = resp
+		completion := resolveTurnCompletion(completionSignals{
+			FinishStatus:         successfulFinishStatus,
+			ToolBudgetExhausted:  toolBudgetExhausted,
+			ToolAdmissionRefused: toolAdmissionRefused,
+			PlanUnresolved:       planUnresolved,
+		})
+
+		// Append this turn to the spine under the same key used to load it
+		// (slim entry: user text + final answer + touched paths + how the turn
+		// ended), and refresh the task-coherent FTS index.
+		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, completion.outcomeLabel(), messages)
+
+		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
+
+		recordStep(i, StepCompleteTurn, completion.Reason)
+		emitTurnCompleted(eventCh, resp, completion, streamLost)
+		return resp
+	}
 	if resume, ok := humanWaitResumeFromContext(ctx); ok {
 		calls, resumeErr := pendingHumanWaitCalls(messages, resume.ToolCallID)
 		if resumeErr != nil {
@@ -1533,6 +1553,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}})
 		}
 		var fullResp strings.Builder
+		finalProseOnly := true
+		appendResponseContent := func(content string, phase llm.AssistantPhase) {
+			fullResp.WriteString(content)
+			if content != "" && phase != llm.AssistantPhaseFinalAnswer {
+				finalProseOnly = false
+			}
+		}
 		var reasoningResp strings.Builder
 		var nativeCalls []llm.ToolCall
 		var streamErr error
@@ -1563,7 +1590,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			pendingStreamPhase = llm.AssistantPhaseUnspecified
 		}
 		handleStreamContent := func(content string, phase llm.AssistantPhase) {
-			fullResp.WriteString(content)
+			appendResponseContent(content, phase)
 			if suppressLegacyToolStream {
 				return
 			}
@@ -1598,7 +1625,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 		appendChatResponse := func(chatResp *llm.ChatResponse) {
 			if chatResp.Content != "" {
-				fullResp.WriteString(textutil.CleanUTF8(chatResp.Content))
+				appendResponseContent(textutil.CleanUTF8(chatResp.Content), chatResp.Phase)
 			}
 			if chatResp.ReasoningContent != "" {
 				reasoningResp.WriteString(textutil.CleanUTF8(chatResp.ReasoningContent))
@@ -1940,6 +1967,14 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if handoffReady {
 				return completeHandoff(i, handoff), totalUsage, nil
 			}
+			// Only an explicit, complete final-answer phase beside accepted
+			// bookkeeping can avoid the tool-free closing call. Commentary,
+			// unknown phases, refusals and partial transport recovery still ask.
+			if successfulFinishStatus != "" && finalProseOnly && !legacyMarkupPresent && streamErr == nil &&
+				len(refused) == 0 && droppedForBudget == 0 && deferredAcrossWorkUnitBoundary == 0 && deferredAcrossWatchHandoff == 0 &&
+				acceptedFinishAnswer(calls, results, resp) {
+				return completeAnswer(i, answerCarry.String(), false), totalUsage, nil
+			}
 			if deferredAcrossWorkUnitBoundary > 0 {
 				messages = append(messages, runtimeControlMessage("SelfMind applied the work-unit boundary before later tool calls. Re-issue only the calls still needed for the new in-progress work unit.", "notice"))
 			}
@@ -2092,25 +2127,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				resp = carried
 			}
 		}
-		history.Outcome = resp
-
-		completion := resolveTurnCompletion(completionSignals{
-			FinishStatus:         successfulFinishStatus,
-			ToolBudgetExhausted:  toolBudgetExhausted,
-			ToolAdmissionRefused: toolAdmissionRefused,
-			PlanUnresolved:       planUnresolved,
-		})
-
-		// Append this turn to the spine under the same key used to load it
-		// (slim entry: user text + final answer + touched paths + how the turn
-		// ended), and refresh the task-coherent FTS index.
-		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, completion.outcomeLabel(), messages)
-
-		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
-
-		recordStep(i, StepCompleteTurn, completion.Reason)
-		emitTurnCompleted(eventCh, resp, completion, streamLost)
-		return resp, totalUsage, nil
+		return completeAnswer(i, resp, planUnresolved), totalUsage, nil
 	}
 
 	// Iteration cap is a pure SAFETY backstop now, not a completion mechanism:

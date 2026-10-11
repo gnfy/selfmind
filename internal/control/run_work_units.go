@@ -112,6 +112,7 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 		return nil, err
 	}
 	used := map[string]bool{}
+	matched := map[string]bool{}
 	for i, item := range plan {
 		sequence := i + 1
 		item.WorkUnitID = strings.TrimSpace(item.WorkUnitID)
@@ -133,10 +134,21 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 		var unit *RunWorkUnit
 		var err error
 		if !replace {
-			unit, err = resolvePlanWorkUnit(runID, item, existing, byID, used)
+			unit, err = resolvePlanWorkUnit(runID, item, existing, byID, matched)
 		}
 		if err != nil {
 			return nil, err
+		}
+		if unit != nil {
+			if matched[unit.ID] {
+				return nil, fmt.Errorf("work unit %s appears more than once in the plan snapshot", unit.ID)
+			}
+			matched[unit.ID] = true
+			// Reopening an obligation starts a new execution window. Keep
+			// the closed unit available to exact historical evidence references.
+			if workUnitTerminal(unit.Status) && (item.PlanStatus == "pending" || item.PlanStatus == "in_progress") {
+				unit = nil
+			}
 		}
 		if unit == nil {
 			unit = &RunWorkUnit{
@@ -166,7 +178,9 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 		}
 		remainingSequence++
 		unit.Sequence = remainingSequence
-		unit.PlanStatus = "cancelled"
+		if !workUnitTerminal(unit.Status) {
+			unit.PlanStatus = "cancelled"
+		}
 		if err := upsertProjectedWorkUnitTx(ctx, tx, unit, currentCursor, now); err != nil {
 			return nil, err
 		}

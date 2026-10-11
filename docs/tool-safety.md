@@ -2613,9 +2613,12 @@ cannot move the program word. An inline selector the snapshot cannot resolve
 including inside a `-c` script: it keeps that tool's conservative state
 requirement without pulling in the host inventory.
 Mount-backed state may be conditional on bounded, selected configuration keys.
-Literal command options and snapshot variables select INI sections; opaque
+Literal command options and snapshot variables select INI sections. A partial
+long option that could select a configuration section retains conservative
+state requirements: without the CLI's complete grammar it cannot prove which
+section an abbreviation selects. `--` ends option interpretation. Opaque
 scripts, dynamic selectors, configuration overrides and unreadable/malformed
-configuration retain conservative requirements. Static authentication retains
+configuration retain conservative requirements. Proven static authentication retains
 read-only state without synthetic roots or writable cache mounts. Preparation
 cache keys include the resolved mount requirements. Backend inability remains
 an explicit non-dispatch refusal, never permission to drop required state or

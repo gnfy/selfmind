@@ -67,7 +67,12 @@ reminder at the tail of the next model call, again only after another 12; the
 model decides whether it is still true. The final answer is not a plan step,
 and `finish_run` may follow the final `update_plan` in the same response.
 Prose in a response whose only calls are `update_plan` or `finish_run` stays
-part of the final answer rather than narration, so an answer written beside
+part of the final answer rather than narration. A complete native reply
+explicitly marked `final_answer` can close without another model request only
+after every bookkeeping call, including `finish_run`, is accepted. Missing or
+commentary phases, action calls, refusals and partial transport recovery keep
+the tool-free closing request; no model or provider name selects this path.
+An answer written beside
 `finish_run` survives a closing line after it; a final answer the plan gate
 sends back is not kept. An answer continued across an output limit is
 assembled into the assistant message that produced it; results paired with

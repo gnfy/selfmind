@@ -239,8 +239,8 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 			}
 			// Bind progress to this exact Run; a shared Thread can have another
 			// continuation whose latest task event belongs elsewhere.
-			run.PlanSteps = digestPlanLines(d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, active.TaskID, active.RunID))
 			run.PlanJSON = d.latestPlanPayloadForRun(ctx, identity, active.TaskID, active.RunID)
+			run.PlanSteps = digestPlanLines(taskPlanStepsFromPayload(run.PlanJSON))
 			run.LatestActivity = d.latestActivityForRun(ctx, identity, control.Run{ID: active.RunID, TaskID: active.TaskID})
 		}
 		out.ActiveRuns = append(out.ActiveRuns, *run)

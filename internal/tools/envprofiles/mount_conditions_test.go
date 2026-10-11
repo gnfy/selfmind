@@ -107,4 +107,9 @@ func TestMountSelectionHonorsSnapshotFallbackAndOverrides(t *testing.T) {
 	if err != nil || len(result.OverlayMounts) != 1 {
 		t.Fatalf("catalog condition isn't generic: %+v %v", result, err)
 	}
+	ctx.ProgramArguments = map[string][][]string{"custom-tool": {{"custom-tool", "--ident=session"}}}
+	result, err = Apply([]*EnvProfile{generic}, ctx)
+	if err != nil || len(result.OverlayMounts) != 1 {
+		t.Fatalf("unknown selector prefix lost generic state requirements: %+v %v", result, err)
+	}
 }

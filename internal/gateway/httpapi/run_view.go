@@ -84,7 +84,8 @@ func (d *Server) runView(ctx context.Context, identity *control.IdentityContext,
 		return api.RunView{}, err
 	}
 	active := d.coordinator().activeForRun(identity.PersonID, run.ID)
-	plan := d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID)
+	planJSON := d.latestPlanPayloadForRun(ctx, identity, run.TaskID, run.ID)
+	plan := taskPlanStepsFromPayload(planJSON)
 	content := fmt.Sprintf("Run %s\n", run.ID) + formatTaskStatus(&copy, handoff, active, plan)
 	if active != nil {
 		content += "\n\n" + d.activeProgress(ctx, identity, active)
@@ -126,7 +127,7 @@ func (d *Server) runView(ctx context.Context, identity *control.IdentityContext,
 	if handoff != nil {
 		view.Summary = handoff.Summary
 	}
-	view.PlanJSON = d.latestPlanPayloadForRun(ctx, identity, run.TaskID, run.ID)
+	view.PlanJSON = planJSON
 	return view, nil
 }
 

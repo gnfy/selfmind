@@ -119,6 +119,16 @@ func (c ApplyContext) configurationSections(profile *EnvProfile, selection *Conf
 				}
 			}
 			for i := 1; i < len(fields); i++ {
+				if fields[i] == "--" {
+					break
+				}
+				option, _, _ := strings.Cut(fields[i], "=")
+				// Some CLIs accept unique long-option prefixes. Without the
+				// CLI's complete option grammar we cannot prove which section
+				// a prefix selects; inspect this tool's bounded configuration.
+				if strings.HasPrefix(option, "--") && option != selection.Option && strings.HasPrefix(selection.Option, option) {
+					return nil, true
+				}
 				if fields[i] == selection.Option {
 					if i+1 >= len(fields) {
 						return nil, true

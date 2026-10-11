@@ -297,7 +297,10 @@ func TestExactContinuationCanAdoptUnchangedVerifiedStep(t *testing.T) {
 	}
 	if _, err := store.SyncRunPlan(ctx, identity.TenantID, child.ID, "later work", []RunPlanStepInput{{
 		StepID: step.StepID, Step: step.Step, Status: "completed",
-	}}); err != nil {
-		t.Fatalf("later work must not retroactively unaccept an earlier check: %v", err)
+	}}); err == nil || !strings.Contains(err.Error(), "recorded changes affect") {
+		t.Fatalf("unknown later mutation must require a fresh check: %v", err)
+	}
+	if err := store.ValidateRunCompletion(ctx, identity.TenantID, child.ID); err == nil {
+		t.Fatal("stale adopted verification satisfied completion")
 	}
 }

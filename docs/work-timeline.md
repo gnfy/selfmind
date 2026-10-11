@@ -311,7 +311,11 @@ daemon-origin gate: task text only, a command is refused
   `update_plan`; the runtime verifies its source step, criterion, scope, and
   that the exact effective checks in the source Work Unit's evidence window
   remain fresh against their declared inputs, including source-tail and child
-  changes. An unrelated report write does not invalidate a check with explicit
+  changes. Reuse is revalidated on each later snapshot and at completion, even
+  without another Plan update; acceptance does not freeze input freshness.
+  Reopening a completed obligation starts a new Work Unit; the closed unit
+  keeps its frozen evidence window for historical references.
+  An unrelated report write does not invalidate a check with explicit
   independent dependencies; historical undeclared dependencies remain
   conservative. A later check outside the frozen window cannot replace that
   source proof, including references saved by older binaries. A read-only look
@@ -361,7 +365,11 @@ daemon-origin gate: task text only, a command is refused
   runtime owns this source: `update_plan` drops one a model supplies. Restating
   the same quote keeps the recorded source, a changed quote records the input
   it now matches, a step that is no longer cancelled drops it, and an exact
-  continuation inherits it. Every plan surface (the live plan, a plan resumed
+  continuation inherits it. Exact Run display, status, digest and compatibility
+  resume context read the
+  accepted durable Plan rather than a bounded event tail; a Run without a
+  durable projection retains legacy event compatibility. Every plan surface
+  (the live plan, a plan resumed
   by `/resume` or a direct `work_select` claim, `/status`, and `work_inspect`)
   names the authorizing input in the person's terms (`authorized by your
   guidance at 14:02`), never an id or more of the input than the quote; an

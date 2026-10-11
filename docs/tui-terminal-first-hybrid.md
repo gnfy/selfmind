@@ -500,6 +500,9 @@ mistaken for one request exceeding the displayed context capacity.
   count-free history hint. Pending human waits are separate from resumability.
   Another session's approval appears once as a live `Pending` notice, including
   `/approvals` and `/approve <n|id>`; closing its terminal does not revoke it.
+  Foreign questions retain their exact question and Run identities. Finishing
+  unrelated work never withdraws a question, parking its Run keeps it pending,
+  and exact resolution or settlement of its own Run clears only that wait.
   Only the requesting session restores the interactive panel. Startup hydration
   still records foreign approvals when there is no transcript digest to print,
   transient notice expiry restores pending human waits, and resolution withdraws

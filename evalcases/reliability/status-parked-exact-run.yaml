@@ -11,10 +11,14 @@ setup:
     parked_runs:
       - input: "finish release alpha"
         status: waiting_user
+      - input: "verify release beta"
+        status: interrupted
 
 turns:
   - input: "/status"
     seeded_run_ordinal: 1
+  - input: "/status"
+    seeded_run_ordinal: 2
 
 expect:
   status: completed
@@ -24,6 +28,8 @@ expect:
   contains:
     - "Parked release alpha"
     - "waiting_user"
+    - "interrupted"
+    - "Current step: verify release beta"
 
 checks:
   no_mojibake: true

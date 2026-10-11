@@ -48,7 +48,7 @@ remain inert for cross-Run recovery. Real remote authentication variants and
 post-rollout daily-driver effectiveness remain evidence gates.
 
 Verification selects pending Plan steps directly; named independent checks and retries stay standalone.
-Continuations retain exact frozen-window checks with explicit Main adoption and dependency/scope checks, even before Plan close-out.
+Continuations retain exact frozen-window checks with explicit Main adoption and dependency/scope checks, even before Plan close-out. Reuse is checked again on updates and completion; reopened obligations get fresh Work Units while closed evidence windows remain available. Exact Run views read durable Plans; unrelated session completions preserve pending questions. Explicit final-answer phases with accepted finish receipts can avoid the extra closing model call.
 Bounded context separates blockers; final replies report unresolved runtime claims. Schema, capacity, model and settlement authority are unchanged.
 
 ## Release Health

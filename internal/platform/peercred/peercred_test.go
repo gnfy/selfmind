@@ -3,9 +3,11 @@
 package peercred
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +55,13 @@ func acceptVerdicts(t *testing.T, verifier Verifier) (string, <-chan Verdict) {
 				return
 			}
 			verdicts <- verifier.Check(conn)
-			_, _ = conn.Write([]byte("HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok"))
+			// Raw socket clients close after receiving their verdict. HTTP
+			// clients must finish sending before we respond and close, or
+			// curl can fail with a broken pipe while writing its request.
+			_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+			if _, err := http.ReadRequest(bufio.NewReader(conn)); err == nil {
+				_, _ = conn.Write([]byte("HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok"))
+			}
 			conn.Close()
 		}
 	}()

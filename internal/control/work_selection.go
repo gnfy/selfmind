@@ -87,7 +87,7 @@ func (s *Store) RunSelectionEffectBoundary(ctx context.Context, tenantID, person
 	var count int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_ledger
 		WHERE tenant_id = ? AND run_id = ? AND retry_class <> 'read_only'
-		  AND COALESCE(effect_class, '') <> 'observation'
+		  AND COALESCE(effect_class, '') NOT IN ('observation', 'run_bookkeeping')
 		  AND tool_name NOT IN ('work_select', 'update_plan', 'finish_run')`, tenantID, runID).Scan(&count); err != nil {
 		return false, "", err
 	}

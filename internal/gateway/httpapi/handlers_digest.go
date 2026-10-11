@@ -61,7 +61,7 @@ func (d *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	digest, err := d.buildDigest(r.Context(), identity)
@@ -142,7 +142,13 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 	// Executing and monitoring Runs have their own sections. Fresh disruptions
 	// already have the stronger event line, so they are suppressed here rather
 	// than mislabelled as a new event in the away window.
-	attention, err := control.NewWorkTimeline(d.Control).Attention(ctx, identity.TenantID, identity.PersonID, maxDigestTasks*2)
+	timeline := control.NewWorkTimeline(d.Control)
+	resumableCount, err := timeline.ResumableRunCount(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return out, err
+	}
+	out.ResumableRunCount = &resumableCount
+	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, maxDigestTasks*2)
 	if err != nil {
 		return out, err
 	}

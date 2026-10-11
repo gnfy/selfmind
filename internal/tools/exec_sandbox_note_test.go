@@ -17,13 +17,13 @@ func withExecSandboxPolicy(t *testing.T, enabled, required, network bool) {
 
 // TestExecSandboxPromptNote pins the model-facing environment awareness: the
 // note must state the network posture (the live failure mode was the model
-// blind-retrying network commands in a network-less sandbox), and stay empty
+// blind-retrying network commands in a network-less sandbox), and explain the exclusive lane
 // when commands run directly on the host.
 func TestExecSandboxPromptNote(t *testing.T) {
-	// Disabled sandbox → no note, regardless of host capability.
+	// Disabled sandbox → host execution lane, regardless of host capability.
 	withExecSandboxPolicy(t, false, false, false)
-	if note := ExecSandboxPromptNote(); note != "" {
-		t.Fatalf("disabled sandbox must yield no note, got %q", note)
+	if note := ExecSandboxPromptNote(); !strings.Contains(note, "exclusively") || !strings.Contains(note, "Smart reviews every host invocation") {
+		t.Fatalf("disabled sandbox must explain host execution, got %q", note)
 	}
 
 	if !ExecSandboxAvailable() {
@@ -38,7 +38,7 @@ func TestExecSandboxPromptNote(t *testing.T) {
 
 	withExecSandboxPolicy(t, true, false, false)
 	note = ExecSandboxPromptNote()
-	if !strings.Contains(note, "network is disabled by default") || !strings.Contains(note, "network:shared") || strings.Contains(note, "sandbox=host") {
+	if !strings.Contains(note, "network is disabled by default") || !strings.Contains(note, "network:shared") || !strings.Contains(note, "exclusively holds") {
 		t.Fatalf("network-less sandbox note must describe the narrow capability, got %q", note)
 	}
 }

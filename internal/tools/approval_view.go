@@ -65,7 +65,8 @@ func ApprovalPersistentArgs(toolName string, args map[string]interface{}) map[st
 	}
 	code, _ := args["code"].(string)
 	sum := sha256.Sum256([]byte(code))
-	preview := code
+	// Mask before cutting: a cut secret is no longer recognizable.
+	preview := RedactSensitive(code)
 	if lines := strings.Split(preview, "\n"); len(lines) > 20 {
 		preview = strings.Join(lines[:20], "\n")
 	}
@@ -75,7 +76,7 @@ func ApprovalPersistentArgs(toolName string, args map[string]interface{}) map[st
 	out["code_lines"] = strings.Count(code, "\n") + 1
 	out["code_bytes"] = len(code)
 	out["code_sha256"] = fmt.Sprintf("%x", sum[:])
-	out["code_preview"] = RedactSensitive(preview)
+	out["code_preview"] = preview
 	return out
 }
 

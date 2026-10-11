@@ -26,11 +26,12 @@ func TestGrantFloorRejectsUnboundedClasses(t *testing.T) {
 		{"git runs hooks and aliases", "git status", "", false},
 		{"find has -exec", "find . -name x -delete", "", false},
 		{"destructive by nature", "rm -rf build", "", false},
-		// A shell wrapper we CAN see through keys on the unwrapped program, which
-		// is narrower than codex's literal-prefix model: `bash -lc 'rm -rf /'`
-		// still resolves to a banned program and is refused below.
-		{"transparent shell wrapper keys on the payload", "bash -lc 'gcloud builds list'", "gcloud builds list", true},
-		{"transparent wrapper around a banned program", "bash -lc 'rm -rf /tmp/x'", "", false},
+		// A shell re-reads its script, and a login shell its startup files,
+		// which may change PATH and so which program runs: only wrappers that
+		// change neither identity, privilege nor reading may be looked through.
+		{"shell wrapper mints no class", "bash -lc 'gcloud builds list'", "", false},
+		{"shell wrapper around a banned program", "bash -lc 'rm -rf /tmp/x'", "", false},
+		{"neutral wrapper keys on the payload", "timeout 60 gcloud builds list", "gcloud builds list", true},
 
 		// Ordinary dangerous operations stay approvable classes.
 		{"chmod remains a class", "chmod 755 script.sh", "chmod", true},

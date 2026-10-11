@@ -118,6 +118,29 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if input.Identity.PersonID != "" && input.Identity.PersonID != personID {
 		return nil, fmt.Errorf("finalization identity does not own task")
 	}
+	var cancelRequested bool
+	var currentStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(cancel_requested,0),status FROM runs
+		WHERE tenant_id=? AND person_id=? AND thread_id=? AND id=?`, tenant, personID, input.TaskID, input.RunID).Scan(&cancelRequested, &currentStatus); err != nil {
+		return nil, fmt.Errorf("load finalization Run: %w", err)
+	}
+	if input.RunStatus != "cancelled" && (cancelRequested || currentStatus == "cancelled") {
+		return nil, ErrRunCancellationRequested
+	}
+	var cancellationEvents []Event
+	if input.RunStatus == "cancelled" {
+		resolutions, err := expireRunHumanRequestsTx(ctx, tx, tenant, personID, input.RunID, "Run execution was cancelled")
+		if err != nil {
+			return nil, err
+		}
+		if err := cancelUnboundRunContinuationsTx(ctx, tx, tenant, personID, input.RunID); err != nil {
+			return nil, err
+		}
+		cancellationEvents, err = insertScopedEventsTx(ctx, tx, tenant, personID, input.RunID, input.TaskID, input.Channel, resolutions)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if input.RequireCheckpoint {
 		var count int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM loop_checkpoints
@@ -160,7 +183,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		if json.Unmarshal([]byte(encodedTargets), &recordedTargets) != nil || !slices.Equal(recordedTargets, wait.TargetKeys) {
 			return nil, fmt.Errorf("resource wait target set changed")
 		}
-		blockers, needsObservation, err := externalResourceBlockers(ctx, tx, tenant, personID, input.RunID, wait.TargetKeys)
+		blockers, needsObservation, err := externalResourceBlockers(ctx, tx, s.instance, tenant, personID, input.RunID, wait.TargetKeys)
 		if err != nil {
 			return nil, err
 		}
@@ -188,16 +211,31 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if q := input.Continuation; q != nil {
 		if input.RunStatus != "waiting_external" || q.TenantID != tenant || q.PersonID != personID ||
 			q.TaskID != input.TaskID || q.ReplyToRunID != input.RunID ||
-			q.IdempotencyKey != "provider-wait:"+input.RunID || strings.TrimSpace(q.Content) == "" {
-			return nil, fmt.Errorf("exact provider continuation has invalid ownership or wait state")
+			(q.IdempotencyKey != "provider-wait:"+input.RunID && q.IdempotencyKey != "execution-lane:"+input.RunID) || strings.TrimSpace(q.Content) == "" {
+			return nil, fmt.Errorf("exact resource continuation has invalid ownership or wait state")
 		}
-		var workspaceID, rootsJSON, channel string
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(workspace_id,''), COALESCE(execution_roots_json,'[]'), channel
+		if q.IdempotencyKey == "execution-lane:"+input.RunID {
+			var bound bool
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM loop_checkpoints WHERE tenant_id=? AND person_id=? AND run_id=? AND outcome='await_execution' AND wait_kind IN ('execution_lane','execution_host_lane') AND wait_ref=? AND wait_tool_call_id<>'')`, tenant, personID, input.RunID, input.RunID).Scan(&bound); err != nil {
+				return nil, fmt.Errorf("read execution wait checkpoint: %w", err)
+			}
+			if !bound {
+				return nil, fmt.Errorf("execution wait has no exact pending tool checkpoint")
+			}
+		}
+		var workspaceID, rootsJSON, channel, parkedAdmission string
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(workspace_id,''), COALESCE(execution_roots_json,'[]'), channel, admission_json
 			FROM runs WHERE tenant_id=? AND person_id=? AND thread_id=? AND id=?`,
-			tenant, personID, input.TaskID, input.RunID).Scan(&workspaceID, &rootsJSON, &channel); err != nil {
+			tenant, personID, input.TaskID, input.RunID).Scan(&workspaceID, &rootsJSON, &channel, &parkedAdmission); err != nil {
 			return nil, fmt.Errorf("load exact provider continuation scope: %w", err)
 		}
 		q.WorkspaceID, q.Channel = workspaceID, channel
+		// The continuation runs under the parked Run's own authority, copied in
+		// this transaction, never one re-derived from its scheduling text.
+		admissionJSON, err := parkedRunAdmissionJSON(q.Admission, parkedAdmission)
+		if err != nil {
+			return nil, fmt.Errorf("provider continuation admission: %w", err)
+		}
 		var accounts int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM accounts WHERE tenant_id=? AND person_id=?
 			AND platform=? AND platform_user_id=? AND status='active'`, tenant, personID,
@@ -217,14 +255,15 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		_, err = tx.ExecContext(ctx, `INSERT INTO task_queue
 			(id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode,
 			 workspace_id, execution_roots_json, thread_id, reply_to_run_id, idempotency_key,
-			 class, priority, not_before, status, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			 class, priority, not_before, status, created_at, admission_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			q.ID, tenant, personID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
 			q.WorkspaceID, rootsJSON, q.TaskID, q.ReplyToRunID, q.IdempotencyKey,
-			QueueClassFinalization, QueuePriorityFinalization, deadline, QueueStatusQueued, now.Unix())
+			QueueClassFinalization, QueuePriorityFinalization, deadline, QueueStatusQueued, now.Unix(), admissionJSON)
 		if err != nil {
 			return nil, fmt.Errorf("enqueue provider continuation: %w", err)
 		}
+		q.setStoredAdmission(admissionJSON)
 		if input.ConsumedQueueID != "" || input.ConsumedQueueClaimToken != "" {
 			if input.ConsumedQueueID == "" || input.ConsumedQueueClaimToken == "" {
 				return nil, fmt.Errorf("provider wait source queue requires its id and claim token")
@@ -401,6 +440,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	s.publishParkedCancellation(cancellationEvents)
 	if s.events != nil {
 		if outcomeEvent != nil {
 			s.events.publish(*outcomeEvent)

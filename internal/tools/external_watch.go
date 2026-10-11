@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -40,7 +41,7 @@ func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStor
 			AdditionalProperties: rejectAdditionalProperties(),
 			Properties: map[string]PropertyDef{
 				"description":     {Type: "string", Description: "Short user-facing description of what is being watched"},
-				"effect_claim_id": {Type: "string", Description: "Optional exact unresolved effect claim to observe in this Run or its exact continuation. Records evidence only; the person must confirm the association with /effects resolve before an unknown effect is released. An already-successful check is saved without waiting."},
+				"effect_claim_id": {Type: "string", Description: "Optional unresolved external effect claim of this Run or the Run it continues that this check observes. A successful check releases the claim: at once when the check already succeeds (no waiting), otherwise when the watcher succeeds. You judge whether the check shows the effect's result."},
 				// "Read-only command that checks the external state" promised a
 				// wider input than the evaluator accepts: read-only here means
 				// STATICALLY PROVABLE, and the model could only discover that by
@@ -149,12 +150,22 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		if waitGroupKey != "" {
 			return "", fmt.Errorf("effect recovery observations cannot enter a wait group")
 		}
-		claim, err := t.store.ExternalEffectForObservation(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.RunID, recoveryClaimID)
-		if err != nil {
-			return "", err
+		if !observationReadsState("watch_external", args) {
+			return "", newStableToolRecoveryError(errors.New(effectObservationReadsNoState), "effect_observation_reads_no_state", "invalid_request",
+				effectObservationReadsNoState, effectObservationReadsNoStateHint, "preparation", "corrected_input", "not_dispatched", false)
 		}
-		if claim.State == control.ExternalClaimObserved {
-			return "", fmt.Errorf("effect claim is already observed")
+		// The watcher observes a claim of this work chain whose call has
+		// returned; another Run's claim is observed with a one-shot check.
+		claim, err := t.store.ExternalEffectObservationTarget(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.RunID, recoveryClaimID)
+		switch {
+		case errors.Is(err, control.ErrExternalEffectAlreadyReleased):
+			return "", fmt.Errorf("effect claim %s is already released; no observation is needed", recoveryClaimID)
+		case errors.Is(err, control.ErrExternalEffectInFlight):
+			return "", fmt.Errorf("effect claim %s is still in flight: its call has not returned, so an observation now could precede its result", recoveryClaimID)
+		case err != nil:
+			return "", err
+		case !claim.SameChain:
+			return "", fmt.Errorf("watch_external binds only an effect claim of this work chain; observe another run's claim %s with a one-shot read-only terminal check that sets effect_claim_id", recoveryClaimID)
 		}
 	}
 	// Preflight: run the frozen check ONCE, here, with this run's material.
@@ -183,20 +194,24 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		return "", err
 	}
 	var effectObservation EffectObservationBinding
-	effectObservationID := ""
+	var effectRef control.ExternalEffectRef
 	if observationAdapter == ExternalWatchAdapterStatusJSON && recoveryClaimID == "" {
 		effectObservation, _ = RegisteredEffectObservation(args, t.store)
 		if effectObservation.RuleKey != "" {
-			effectID, lookupErr := t.store.FindUnresolvedExternalEffectForTargets(contextFromArgs(args),
+			ref, lookupErr := t.store.FindUnresolvedExternalEffectForTargets(contextFromArgs(args),
 				scope.TenantID, scope.PersonID, scope.RunID, effectObservation.TargetKeys)
 			if lookupErr != nil {
 				return "", lookupErr
 			}
-			if effectID == "" {
+			if ref.EffectID == "" {
 				effectObservation = EffectObservationBinding{}
 			}
-			effectObservationID = effectID
+			effectRef = ref
 		}
+	}
+	effectRunID := ""
+	if effectRef.RunID != scope.RunID {
+		effectRunID = effectRef.RunID
 	}
 	if verdict != "" && waitGroupKey == "" && effectObservation.RuleKey == "" && recoveryClaimID == "" {
 		return verdict, nil
@@ -240,6 +255,20 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	binding := executionenv.BindingFromLease("", *lease, scope.TrustLevel, capabilities, identity)
 	binding.CapabilityBindings = externalWatchCapabilityBindings(
 		binding.ExecutionCapabilities, scope, activeGrants, timeoutAt)
+	// Polls run under the policy this Run's call ran under, so an operator
+	// change after registration cannot widen them.
+	binding.SandboxPolicy = frozenSandboxPolicy(args)
+	// The boundary this registration was approved for, which every poll is
+	// pinned to: one approved as contained is never run on the host, and one
+	// approved for the host is refused if the policy comes to require isolation.
+	if boundary, _ := approvedSandboxBoundary(args); boundary != "" {
+		binding.ApprovedBoundary = string(boundary)
+	}
+	// Polls run with no approval at hand, so they are held to the in-place
+	// credential writes this registration's approval covered.
+	if approved, recorded := args[approvedHostWritesArg].([]string); recorded && len(approved) > 0 {
+		binding.HostStateWrites = append([]string(nil), approved...)
+	}
 	waitGroupID := ""
 	if waitGroupKey != "" {
 		group, groupErr := t.store.ResolveOrCreateExternalWatchGroup(context.Background(), scope.TenantID, scope.PersonID,
@@ -277,7 +306,8 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 			Capabilities:       append([]string(nil), capabilities...),
 			EffectRuleKey:      effectObservation.RuleKey,
 			ObservationRuleKey: effectObservation.ObservationRuleKey,
-			EffectID:           effectObservationID,
+			EffectID:           effectRef.EffectID,
+			EffectRunID:        effectRunID,
 			EffectTargetKeys:   append([]string(nil), effectObservation.TargetKeys...),
 			EffectScriptRoot:   effectObservation.ScriptRoot,
 			EffectScriptPath:   effectObservation.ScriptPath,
@@ -322,9 +352,14 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		return "", fmt.Errorf("watcher %s was saved, but its registration event could not be recorded: %w; inspect /watchers before registering another observation", watch.ID, err)
 	}
 	if recoveryClaimID != "" && watch.Status == control.ExternalWatchSucceeded && watch.Finalized {
+		_, released, releaseErr := t.store.ReleaseExternalEffectForWatch(context.WithoutCancel(contextFromArgs(args)), scope.TenantID, watch.ID)
+		message := fmt.Sprintf("Saved finalized read-only observation %s and released effect claim %s with it. No waiting or additional Run is needed; effects of this work may continue.", watch.ID, recoveryClaimID)
+		if releaseErr != nil || !released {
+			message = fmt.Sprintf("Saved finalized read-only observation %s, but it did not release effect claim %s: an observation releases a claim only when it succeeds after the effect's call returned. The claim stays unresolved; the person can settle it with /effects settle %s.", watch.ID, recoveryClaimID, recoveryClaimID)
+		}
 		result, err := json.Marshal(map[string]interface{}{
-			"watch_id": watch.ID, "effect_claim_id": recoveryClaimID, "observed": "succeeded", "requires_confirmation": true,
-			"message": fmt.Sprintf("Saved finalized read-only observation %s. No waiting or additional Run is needed. The effect remains occupied until the person confirms coverage with /effects resolve %s %s.", watch.ID, recoveryClaimID, watch.ID),
+			"watch_id": watch.ID, "effect_claim_id": recoveryClaimID, "observed": "succeeded", "released": released && releaseErr == nil,
+			"message": message,
 		})
 		return string(result), err
 	}

@@ -82,28 +82,38 @@ func TestGhAPIUnresolvableVerbFailsClosed(t *testing.T) {
 	}
 }
 
-// apiMethodFromArgs is the single parser both layers call. Pin its contract
+// ghAPIRequest is the single parser both layers call. Pin its contract
 // directly so a future caller cannot be added against a misremembered one.
-func TestAPIMethodFromArgs(t *testing.T) {
+func TestGhAPIRequest(t *testing.T) {
 	cases := []struct {
-		args   string
-		method string
-		ok     bool
+		args     string
+		method   string
+		body     bool
+		endpoint string
+		ok       bool
 	}{
-		{"api repos/o/r", "get", true},
-		{"api -X delete repos/o/r", "delete", true},
-		{"api -X=delete repos/o/r", "delete", true},
-		{"api -Xdelete repos/o/r", "delete", true},
-		{"api --method delete repos/o/r", "delete", true},
-		{"api --method=delete repos/o/r", "delete", true},
-		{"api repos/o/r -X", "", false},
-		{"api repos/o/r -X -q", "", false},
-		{"api repos/o/r --method=", "", false},
+		{"repos/o/r", "get", false, "repos/o/r", true},
+		{"-X delete repos/o/r", "delete", false, "repos/o/r", true},
+		{"-X=delete repos/o/r", "delete", false, "repos/o/r", true},
+		{"-Xdelete repos/o/r", "delete", false, "repos/o/r", true},
+		{"--method delete repos/o/r", "delete", false, "repos/o/r", true},
+		{"--method=delete repos/o/r", "delete", false, "repos/o/r", true},
+		{"repos/o/r -f a=1", "post", true, "repos/o/r", true},
+		{"-fa=1 repos/o/r", "post", true, "repos/o/r", true},
+		{"-if a=1 repos/o/r", "post", true, "repos/o/r", true},
+		{"repos/o/r --input body.json", "post", true, "repos/o/r", true},
+		{"-X GET -f a=1 repos/o/r", "get", true, "repos/o/r", true},
+		{"-q .x -H Accept:json repos/o/r", "get", false, "repos/o/r", true},
+		{"repos/o/r -X", "", false, "", false},
+		{"repos/o/r -X -q", "", false, "", false},
+		{"repos/o/r --method=", "", false, "", false},
+		{"repos/o/r -z", "", false, "", false},
 	}
 	for _, tc := range cases {
-		method, ok := apiMethodFromArgs(strings.Fields(tc.args))
-		if method != tc.method || ok != tc.ok {
-			t.Errorf("apiMethodFromArgs(%q) = (%q, %v), want (%q, %v)", tc.args, method, ok, tc.method, tc.ok)
+		call, ok := ghAPIRequest(strings.Fields(tc.args))
+		if ok != tc.ok || (ok && (call.method != tc.method || call.body != tc.body || call.endpoint != tc.endpoint)) {
+			t.Errorf("ghAPIRequest(%q) = (%+v, %v), want method %q body %v endpoint %q ok %v",
+				tc.args, call, ok, tc.method, tc.body, tc.endpoint, tc.ok)
 		}
 	}
 }

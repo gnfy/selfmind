@@ -69,11 +69,11 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 			}),
 		})
 	}
-	for _, step := range projection.CancellationDeferred {
+	for _, deferral := range projection.CancellationDeferred {
 		if len(review) >= 8 {
 			break
 		}
-		review = append(review, fmt.Sprintf("Step %s remains pending. Preserve its original success_criteria and finish blocked or waiting when necessary work cannot proceed. For not_required, explain coverage and reference a completed replacement_step_id with that original criterion and required verification, or supply scope_change_quote from the user's actual instruction. For explicit user takeover, supply user_takeover_quote. Continue independent work while this obligation remains open.", step.StepID))
+		review = append(review, cancellationDeferralReview(deferral))
 	}
 	for _, step := range projection.VerificationDeferred {
 		if len(review) >= 8 {
@@ -86,11 +86,12 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 		review = append(review, fmt.Sprintf("Step %s returned to pending while required verification for an earlier step remains open. Keep it pending until that check passes, then resubmit the complete snapshot.", step.StepID))
 	}
 	plan := tools.PlanState{Explanation: projection.Plan.Explanation, Plan: make([]tools.PlanStep, 0, len(projection.Plan.Steps))}
+	origins := tools.PlanQuoteOrigins(ctx, p.coordinator.srv.Control, p.identity.TenantID, p.run.ID, projection.Plan.Steps)
 	for _, step := range projection.Plan.Steps {
 		plan.Plan = append(plan.Plan, tools.PlanStep{
 			StepID: step.StepID, Step: step.Step, Status: step.Status,
 			CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
-			ReplacementStepID: step.ReplacementStepID, ScopeChangeQuote: step.ScopeChangeQuote,
+			ReplacementStepID: step.ReplacementStepID, ScopeChangeQuote: step.ScopeChangeQuote, CancellationAuthorizedBy: origins[step.CancellationQuoteSource],
 			SuccessCriteria:        step.SuccessCriteria,
 			VerificationRequired:   step.VerificationRequired,
 			ReusePriorVerification: step.ReusePriorVerification,
@@ -154,6 +155,45 @@ func (p *controlRunPlanProjection) GuardrailRevision(ctx context.Context, comple
 
 func (p *controlRunPlanProjection) ValidateVerification(ctx context.Context, binding verification.Binding, cwd string) error {
 	return p.coordinator.srv.Control.ValidateVerificationReplacement(ctx, p.identity.TenantID, p.run.ID, binding, cwd)
+}
+
+// cancellationDeferralReview names the one fact the runtime could not find for
+// a cancellation it kept open, and an exact way to settle it. The settling
+// bar follows the step: a step planned without success_criteria is never told
+// to repeat a criterion it does not have.
+func cancellationDeferralReview(d control.RunPlanCancellationDeferral) string {
+	step, replacement := d.Step.StepID, d.ReplacementStepID
+	var missing string
+	switch d.Reason {
+	case control.CancellationDeferredUnfinished:
+		return fmt.Sprintf("Step %s remains pending as unfinished necessary work. Continue independent work, and finish blocked or waiting if it cannot proceed.", step)
+	case control.CancellationDeferredOmitted:
+		return fmt.Sprintf("Step %s remains pending: the complete snapshot omitted it. Include it with its current status; cancelling it needs an assessed cancellation_disposition.", step)
+	case control.CancellationDeferredNoDisposition:
+		missing = "the cancellation has no cancellation_disposition"
+	case control.CancellationDeferredNoCoverage:
+		missing = "not_required cites neither a replacement_step_id nor a scope_change_quote"
+	case control.CancellationDeferredReplacementUnknown:
+		missing = fmt.Sprintf("replacement_step_id %q is not another step of this plan", replacement)
+	case control.CancellationDeferredReplacementOpen:
+		missing = fmt.Sprintf("replacement step %s is %s, not completed", replacement, d.Replacement.Status)
+	case control.CancellationDeferredCriterionChanged:
+		missing = fmt.Sprintf("replacement step %s has success_criteria %q instead of this step's %q", replacement, boundedReviewCriterion(d.Replacement.SuccessCriteria), boundedReviewCriterion(d.Criterion))
+	case control.CancellationDeferredCriterionUnstated:
+		missing = fmt.Sprintf("replacement step %s states no success_criteria", replacement)
+	case control.CancellationDeferredVerificationDropped:
+		missing = fmt.Sprintf("replacement step %s does not require the verification this step requires", replacement)
+	default:
+		missing = "its cancellation is not assessed"
+	}
+	cite := "a completed replacement_step_id that states its own success_criteria (this step has none to repeat)"
+	if d.Criterion != "" {
+		cite = fmt.Sprintf("a completed replacement_step_id whose success_criteria is exactly %q", boundedReviewCriterion(d.Criterion))
+		if d.Step.VerificationRequired {
+			cite += " and that requires verification"
+		}
+	}
+	return fmt.Sprintf("Step %s remains pending: %s. To settle it as not_required, explain the coverage in cancellation_reason and cite %s, or a scope_change_quote copied exactly from one user instruction. An explicit user takeover uses user_takeover with user_takeover_quote. Otherwise keep it open, continue independent work, and finish blocked or waiting if it cannot proceed.", step, missing, cite)
 }
 
 func boundedReviewCriterion(value string) string {

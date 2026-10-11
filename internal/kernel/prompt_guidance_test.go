@@ -47,3 +47,17 @@ func TestInterfaceGuidanceIsSemanticAndProjectLed(t *testing.T) {
 		t.Fatal("workspace guidance must make project verification capability-aware")
 	}
 }
+
+// The always-on guidance states the same cancellation evidence the runtime
+// checks; it must not ask a criteria-less step for an original criterion.
+func TestTaskGuidanceStatesTheCancellationEvidenceRules(t *testing.T) {
+	guidance := taskExecutionGuidance()
+	for _, want := range []string{"established success_criteria", "planned without success_criteria", "states its own", "whole user message", "whole sentence", "punctuation", "neither grants nor vetoes"} {
+		if !strings.Contains(guidance, want) {
+			t.Errorf("guidance lacks %q", want)
+		}
+	}
+	if strings.Contains(guidance, "covering the original success_criteria") {
+		t.Error("guidance still demands an original criterion from every replacement")
+	}
+}

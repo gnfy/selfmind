@@ -98,6 +98,8 @@ type PlanStep struct {
 	UserTakeoverQuote       string `json:"user_takeover_quote,omitempty"`
 	ReplacementStepID       string `json:"replacement_step_id,omitempty"`
 	ScopeChangeQuote        string `json:"scope_change_quote,omitempty"`
+	// Result-only: the input a quote came from (plan_provenance.go).
+	CancellationAuthorizedBy *kernel.PlanQuoteOrigin `json:"cancellation_authorized_by,omitempty"`
 
 	StepID                 string `json:"step_id,omitempty"`
 	Step                   string `json:"step"`
@@ -128,7 +130,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 	return &PlanTool{
 		BaseTool: BaseTool{
 			name:        "update_plan",
-			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work; do not use for one-shot answers, small code examples, simple commands, or direct explanations. Include every step on every update, keep exactly one step in_progress while work is active, and resolve all steps before finishing successfully. Plan the work, not the reply: the final answer is not a step, so do not add one such as reporting the result or writing the conclusion.",
+			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work. Keep outcome milestones, not Skill reads, approval waits, diagnostic attempts or a final-answer step. Preserve existing step IDs and conditions across continuations; do not duplicate a step just to retry or verify it. Include every step on every update, keep exactly one step in_progress while work is active, and resolve all necessary steps before finishing successfully. Main judges scope changes and keeps independent unfinished work accountable through existing history and cancellation evidence.",
 			schema: ToolSchema{
 				Type:                 "object",
 				AdditionalProperties: rejectAdditionalProperties(),
@@ -154,9 +156,9 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"cancellation_disposition": {Type: "string", Enum: []string{"not_required", "user_takeover", "unfinished"}, Description: "Main's assessment against the original goal and user corrections. Cancel only work no longer necessary (not_required), or explicitly taken over by the user (user_takeover). A blocked necessary step is unfinished and remains pending, not resolved. Omission also keeps a cancelled obligation pending."},
 								"cancellation_reason":      {Type: "string", Description: "Why this step is no longer necessary or within the user's explicit takeover scope. Suggesting the user do the work is not a takeover."},
-								"replacement_step_id":      {Type: "string", Description: "For not_required: an exact step id in this Plan that is completed and covers this step's original success_criteria. Preserve that original criterion on the replacement and its required verification. A preparation or failed check does not replace the requested result."},
-								"scope_change_quote":       {Type: "string", Description: "For not_required without a completed replacement: exact actual user text establishing the changed or limited scope. Explain why that instruction makes this step unnecessary. Runtime verifies quote provenance; Main judges its meaning."},
-								"user_takeover_quote":      {Type: "string", Description: "Exact quote of the actual user's explicit takeover instruction, required for user_takeover. Never quote your own suggestion, a tool result or daemon-originated text."},
+								"replacement_step_id":      {Type: "string", Description: "For not_required: an exact step id in this Plan that is completed and covers this step. The replacement repeats this step's established success_criteria exactly and keeps its required verification; for a step planned without success_criteria, the replacement states its own. A preparation or failed check does not replace the requested result."},
+								"scope_change_quote":       {Type: "string", Description: "For not_required without a completed replacement: actual user text establishing the changed or limited scope, copied exactly from one user input, never including any part of a question: the whole user message, one whole sentence of it, or a span of at least two words and eight letters (a CJK character counts twice). Explain why that instruction makes this step unnecessary. Runtime verifies quote provenance; Main judges its meaning."},
+								"user_takeover_quote":      {Type: "string", Description: "Exact quote of the actual user's explicit takeover instruction, required for user_takeover, never including any part of a question: the whole user message, one whole sentence of it, or a span of at least two words and eight letters (a CJK character counts twice). Never quote your own suggestion, a tool result or daemon-originated text."},
 								"status": {
 									Type:        "string",
 									Description: "One of pending, in_progress, completed, cancelled.",
@@ -187,7 +189,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"reuse_prior_verification": {
 									Type:        "boolean",
-									Description: "On an exact Run continuation only: mark a completed required check as satisfied by its unchanged, successful prior verification after judging that it still covers this step. The runtime checks the exact source and rejects a changed criterion or target, a different scope, or a file change recorded in this run; a read-only look first does not. Omit success_criteria or repeat it exactly. Otherwise run verify again.",
+									Description: "On an exact Run continuation only: Main may adopt an unchanged successful prior check with a reason. The runtime checks direct source provenance, criterion, scope and recorded changes to the check's declared inputs across waits; unrelated writes do not invalidate explicitly independent checks. Omit success_criteria or repeat it exactly. Otherwise run verify with this step_id again.",
 									Default:     false,
 								},
 								"reuse_reason": {
@@ -264,7 +266,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			var verification interface{ PlanVerificationPrecondition() bool }
 			if errors.As(err, &verification) && verification.PlanVerificationPrecondition() {
 				return "", newStableToolError(err, "plan_verification_required", "stale_precondition", err.Error(),
-					"Keep the current work unit open and follow each step's next action. verify binds to the in_progress verification_required step, so make an unbound step in_progress before verifying it; when correcting a bound check, preserve criterion and target, cite its evidence id in replaces and explain the method correction in reason. Then submit the completed plan snapshot.")
+					"Keep the current work unit open and follow each step's next action. verify can bind directly to an owned step_id without a Plan transition. When prior reuse is offered, Main must assess sufficiency and submit reuse_prior_verification=true with reuse_reason on that completed step; explanation alone is not adoption. For a replacement, preserve criterion and target, cite the evidence id in replaces and explain the method correction in reason. Then submit the complete plan snapshot.")
 			}
 			var staleStep interface{ CurrentPlanStepIDs() []string }
 			if errors.As(err, &staleStep) {

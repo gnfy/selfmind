@@ -1,111 +1,62 @@
 package tools
 
 import (
-	"path/filepath"
 	"strings"
-
-	"mvdan.cc/sh/v3/syntax"
 )
 
 // Unlike program discovery, configuration selection needs exact argv values.
 // Retain quoted literal boundaries; dynamic words leave selection unknown.
 func execLiteralProgramArguments(command string, depth int) (map[string][][]string, bool) {
 	arguments := map[string][][]string{}
-	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
-	if err != nil || depth > maxWrapperDepth {
+	commands, ok := shellCommands(command, depth)
+	if !ok {
 		return arguments, true
 	}
 	unknown := false
-	var record func([]string, int)
-	record = func(fields []string, level int) {
-		if len(fields) == 0 || level > maxWrapperDepth {
-			unknown = true
-			return
+	for _, read := range commands {
+		// A nested script the shell could not parse has no literal boundaries.
+		unknown = unknown || read.fallback
+		program := read.id.program()
+		if program.Word == "" || read.id.HasScript {
+			continue
 		}
-		base := strings.ToLower(filepath.Base(fields[0]))
-		if _, shell := shellDashCWrappers[base]; shell {
-			if script, found := dashCScript(fields[1:]); found {
-				nested, opaque := execLiteralProgramArguments(script, level+1)
-				unknown = unknown || opaque
-				for name, values := range nested {
-					arguments[name] = append(arguments[name], values...)
-				}
-				return
-			}
+		if !read.anyDynamic() {
+			arguments[program.Name] = append(arguments[program.Name], program.argv())
+			continue
 		}
-		if _, wrapper := execPrefixWrappers[base]; wrapper {
-			if inner, found := execWrappedCommand(base, fields[1:]); found {
-				record(inner, level+1)
-				return
-			}
-		}
-		arguments[base] = append(arguments[base], fields)
+		// An expanded word leaves this invocation's selection unknown. When it
+		// may be the program word, or the word a wrapper runs, the program set
+		// is unknown too.
+		arguments[program.Name] = append(arguments[program.Name], nil)
+		unknown = unknown || read.dynamicWord(program.index) || len(read.id.Layers) > 1
 	}
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if call, ok := node.(*syntax.CallExpr); ok && len(call.Args) > 0 {
-			fields := make([]string, 0, len(call.Args))
-			for _, word := range call.Args {
-				value, literal := staticObservationWord(word)
-				if !literal {
-					program, known := staticObservationWord(call.Args[0])
-					base := strings.ToLower(filepath.Base(program))
-					arguments[base] = append(arguments[base], nil)
-					_, shell := shellDashCWrappers[base]
-					_, wrapper := execPrefixWrappers[base]
-					unknown = unknown || !known || shell || wrapper
-					return true
-				}
-				fields = append(fields, value)
-			}
-			record(fields, depth)
-		}
-		return true
-	})
 	return arguments, unknown
 }
 
-// Environment analysis shares the command grammar with the safety floor, but
-// non-executing interpreter modes don't depend on programs inside a script.
-// This must never turn an invocation into a proven read-only or approved call.
+// Environment analysis names programs through identifyCommand, the same
+// identification as the safety floor, but non-executing interpreter modes
+// don't depend on programs inside a script. This must never turn an
+// invocation into a proven read-only or approved call.
+//
+// The payload is read as the shell parses it. A leading VAR=value changes what
+// the program sees, not which program runs, whatever the value: `TZ=UTC date`,
+// `KUBECONFIG=/x kubectl ...` and `FOO="a b" aws ...` prepare like the bare
+// command. A selector the snapshot cannot resolve (AWS_PROFILE=x aws ...)
+// reaches preparation as an environment override instead.
 func expandEnvironmentSegments(command string, depth int) ([][]string, bool) {
 	var segments [][]string
 	opaque := false
-	for _, part := range splitTopLevelSegments(command) {
-		fields := shellFields(part)
-		index, ok := segmentProgram(fields)
-		if !ok {
-			continue
-		}
-		if index > 0 {
+	for _, read := range preparationCommands(command, depth) {
+		argv := read.id.program().argv()
+		if read.id.Opaque && !nonExecutingProgram(argv) {
 			opaque = true
 		}
-		fields = fields[index:]
-		base := strings.ToLower(filepath.Base(fields[0]))
-		if nonExecutingProgram(fields) {
-			segments = append(segments, fields)
+		// A command that only assigns runs nothing; one that runs a script is
+		// represented by the script's own commands.
+		if len(argv) == 0 || read.id.HasScript {
 			continue
 		}
-		if depth < maxWrapperDepth {
-			if _, shell := shellDashCWrappers[base]; shell {
-				if script, found := dashCScript(fields[1:]); found {
-					nested, unknown := expandEnvironmentSegments(script, depth+1)
-					segments = append(segments, nested...)
-					opaque = opaque || unknown
-					continue
-				}
-			}
-			if _, wrapper := execPrefixWrappers[base]; wrapper {
-				if inner, found := execWrappedCommand(base, fields[1:]); found {
-					nested, unknown := expandEnvironmentSegments(strings.Join(inner, " "), depth+1)
-					segments = append(segments, nested...)
-					opaque = opaque || unknown
-					continue
-				}
-			}
-		}
-		nested, unknown := expandSegment(fields, depth)
-		segments = append(segments, nested...)
-		opaque = opaque || unknown
+		segments = append(segments, argv)
 	}
 	return segments, opaque
 }
@@ -114,8 +65,8 @@ func nonExecutingProgram(fields []string) bool {
 	if len(fields) < 2 {
 		return false
 	}
-	base := strings.ToLower(filepath.Base(fields[0]))
-	_, shell := shellDashCWrappers[base]
+	base := programName(fields[0])
+	_, shell := shellGrammars[base]
 	if !shell && !scriptCarryingPrograms[base] {
 		return false
 	}
@@ -133,63 +84,50 @@ func nonExecutingProgram(fields []string) bool {
 // Shell-local configuration overrides cannot be resolved from the immutable
 // process snapshot. Preserve their state requirements rather than assuming the
 // snapshot's default authentication; proxy-only edits don't widen dependencies.
+// Overrides count wherever the shell applies them, including inside the
+// scripts a command runs.
 func execEnvironmentOverrides(command string) map[string]bool {
 	overrides := map[string]bool{}
-	file, err := syntax.NewParser().Parse(strings.NewReader(command), "")
-	if err != nil {
+	commands, ok := shellCommands(command, 0)
+	if !ok {
 		overrides["*"] = true
 		return overrides
 	}
-	syntax.Walk(file, func(node syntax.Node) bool {
-		if assignment, ok := node.(*syntax.Assign); ok && assignment.Name != nil {
-			overrides[assignment.Name.Value] = true
-		}
-		call, ok := node.(*syntax.CallExpr)
-		if !ok || len(call.Args) == 0 {
-			return true
-		}
-		words := make([]string, 0, len(call.Args))
-		known := true
-		for _, word := range call.Args {
-			value, literal := staticObservationWord(word)
-			known = known && literal
-			words = append(words, value)
-		}
-
-		base := filepath.Base(words[0])
-		if base != "env" && base != "unset" {
-			return true
-		}
-		if !known {
+	for _, read := range commands {
+		if read.fallback {
 			overrides["*"] = true
-			return true
+			continue
 		}
-		for i := 1; i < len(words); i++ {
-			if base == "unset" {
-				if !strings.HasPrefix(words[i], "-") {
-					overrides[words[i]] = true
-				}
+		for _, assignment := range read.id.assignments() {
+			if name, ok := assignmentName(assignment); ok {
+				overrides[name] = true
+			}
+		}
+		program := read.id.program()
+		for _, layer := range read.id.Layers {
+			if layer.Name != "env" {
 				continue
 			}
-			if words[i] == "-i" || words[i] == "--ignore-environment" {
+			if read.anyDynamic() {
 				overrides["*"] = true
 			}
-			if words[i] == "-u" || words[i] == "--unset" {
-				if i+1 < len(words) {
-					i++
-					overrides[words[i]] = true
+			for _, option := range prefixWrappers["env"].wrapperOptions(layer.Args).options {
+				if option.name == "-" || option.name == "-i" || option.name == "--ignore-environment" {
+					overrides["*"] = true
 				}
-				continue
 			}
-			if variable, ok := strings.CutPrefix(words[i], "--unset="); ok {
-				overrides[variable] = true
-				continue
-			}
-			if variable, _, ok := strings.Cut(words[i], "="); ok {
-				overrides[variable] = true
+			for _, name := range envUnsetVariables(layer) {
+				overrides[name] = true
 			}
 		}
-		return true
-	})
+		if program.Name == "unset" {
+			if read.anyDynamic() {
+				overrides["*"] = true
+			}
+			for _, name := range unsetVariables(program.Args) {
+				overrides[name] = true
+			}
+		}
+	}
 	return overrides
 }

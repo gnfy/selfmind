@@ -1,20 +1,57 @@
 {
   "plan_binding_version": 1,
-  "method": "chat",
-  "chat": {
-    "Content": "{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"Writing receipt.txt with VERIFIED in the workspace matches the exact effect the person authorized in run_269887fc ('我授权...receipt.txt 写入') after the receipt-handoff wait group succeeded, and no accepted restriction excludes it.\"}",
-    "ReasoningContent": "",
-    "Phase": "",
-    "ToolCalls": [],
-    "Usage": {
-      "input_tokens": 2424,
-      "output_tokens": 71,
-      "cache_read_input_tokens": 0,
-      "cache_miss_input_tokens": 2424,
-      "cache_creation_input_tokens": 0,
-      "reasoning_output_tokens": 0,
-      "cache_usage_reported": true
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will set up the execution plan for delivery and verification."
     },
-    "FinishReason": "stop"
-  }
+    {
+      "usage": {
+        "input_tokens": 17937,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 109,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 385,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 16111,
+        "cache_miss_input_tokens": 2211,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_527438",
+          "Function": "update_plan",
+          "Args": "{\"plan\":[{\"success_criteria\":\"receipt.txt 文件已创建，内容为 VERIFIED\",\"step\":\"创建 receipt.txt，写入内容 VERIFIED\",\"status\":\"in_progress\"},{\"success_criteria\":\"test \\\"$(cat receipt.txt)\\\" = VERIFIED 返回 0\",\"step\":\"验证 receipt.txt 内容为 VERIFIED\",\"verification_required\":true,\"status\":\"pending\"}],\"explanation\":\"初始化交付与校验步骤计划\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
+        }
+      ]
+    }
+  ]
 }

@@ -16,6 +16,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"selfmind/internal/platform/atomicfile"
 )
 
 const (
@@ -500,11 +502,10 @@ func writeAuthStore(path string, payload map[string]interface{}) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// A fresh exclusive temporary file, never `<path>.tmp`: this store holds the
+	// refresh token, and a command that could write the directory could have
+	// planted a symlink at the predictable name.
+	return atomicfile.Write(path, data, 0o600)
 }
 
 func openBrowser(rawURL string) error {

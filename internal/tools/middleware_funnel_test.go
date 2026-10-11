@@ -98,7 +98,8 @@ func TestHardlineBlocksEvenFullAuto(t *testing.T) {
 
 // TestApprovalPatternKeyStability pins the key point of the funnel: two
 // different chmod commands are the SAME class, so approving one covers the
-// other; a different dangerous binary (rm) is a different class.
+// other; a different dangerous binary (rm) is a different class. The class is
+// the command, never the reason the call asked.
 func TestApprovalPatternKeyStability(t *testing.T) {
 	_, r1 := dangerousToolCall("", "terminal", map[string]interface{}{"command": "chmod 777 a.sh"})
 	_, r2 := dangerousToolCall("", "terminal", map[string]interface{}{"command": "chmod +x /some/other/file"})
@@ -107,7 +108,7 @@ func TestApprovalPatternKeyStability(t *testing.T) {
 	if k1 != k2 {
 		t.Fatalf("two chmod commands must key to the same class: %q vs %q", k1, k2)
 	}
-	if k1 != "exec:invokes dangerous command: chmod" {
+	if k1 != "exec:terminal|class=chmod" {
 		t.Fatalf("unexpected chmod class key: %q", k1)
 	}
 
@@ -126,7 +127,7 @@ func TestApprovalPatternKeyStability(t *testing.T) {
 }
 
 func TestHostApprovalPatternIsScopedToWorkspaceAndCommandFamily(t *testing.T) {
-	args := map[string]interface{}{"command": "chmod 755 script.sh", "sandbox": "host"}
+	args := map[string]interface{}{"command": "kubectl get pods", "sandbox": "host"}
 	_, reason := dangerousToolCall("", "terminal", args)
 	scopeA := ExecutionScope{WorkspaceID: "ws-a", WorkspaceRoot: "/work/a"}
 	scopeB := ExecutionScope{WorkspaceID: "ws-b", WorkspaceRoot: "/work/b"}
@@ -140,8 +141,14 @@ func TestHostApprovalPatternIsScopedToWorkspaceAndCommandFamily(t *testing.T) {
 	if keyA == keyB {
 		t.Fatalf("host approval leaked across workspaces: %q", keyA)
 	}
-	if !strings.Contains(keyA, "command:chmod") {
+	if !strings.Contains(keyA, "command:kubectl get") {
 		t.Fatalf("host key must retain the effective command family: %q", keyA)
+	}
+	// A command dangerous for its own sake has no class on the host.
+	chmodArgs := map[string]interface{}{"command": "chmod 755 script.sh", "sandbox": "host"}
+	_, chmodReason := dangerousToolCall("", "terminal", chmodArgs)
+	if key := approvalPatternKeyForScope("terminal", chmodArgs, chmodReason, scopeA, true); key != "" {
+		t.Fatalf("host chmod must not mint a reusable key, got %q", key)
 	}
 	// An arbitrary network client takes its method, its target and its output
 	// file as arguments, so no leading token bounds what a standing permission

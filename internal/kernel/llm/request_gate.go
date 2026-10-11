@@ -105,10 +105,15 @@ func (p *gatedProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 	if err := p.acquire(ctx); err != nil {
 		return nil, err
 	}
+	owned := true
+	defer func() {
+		if owned {
+			p.release(ctx)
+		}
+	}()
 	stream, err := p.inner.StreamChat(ctx, req)
 	if err != nil || stream == nil {
 		p.route.observe(err)
-		p.release(ctx)
 		return stream, err
 	}
 	out := make(chan StreamEvent)
@@ -139,6 +144,7 @@ func (p *gatedProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 			}
 		}
 	}()
+	owned = false // The forwarding goroutine now owns the permit.
 	return out, nil
 }
 

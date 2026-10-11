@@ -238,7 +238,7 @@ const runWorkEvidenceSQL = `(COALESCE(r.resumes_run_id, '') != ''
 	OR EXISTS (SELECT 1 FROM run_plan_steps s WHERE s.tenant_id = r.tenant_id AND s.run_id = r.id
 	     GROUP BY s.plan_version HAVING COUNT(*) > 1)
 	OR EXISTS (SELECT 1 FROM tool_ledger l WHERE l.tenant_id = r.tenant_id AND l.run_id = r.id
-	     AND COALESCE(l.retry_class, '') != 'read_only' AND COALESCE(l.effect_class, '') != 'observation'
+	     AND COALESCE(l.retry_class, '') != 'read_only' AND COALESCE(l.effect_class, '') NOT IN ('observation', 'run_bookkeeping')
 	     AND l.tool_name NOT IN ` + nonWorkToolNamesSQL + `
 	     AND COALESCE(l.status, '') != 'planned')
 	OR EXISTS (SELECT 1 FROM approval_requests a WHERE a.tenant_id = r.tenant_id AND a.run_id = r.id)
@@ -493,6 +493,20 @@ func (w *WorkTimeline) attentionTotal(ctx context.Context, tenantID, personID st
 	err := w.store.db.QueryRowContext(ctx, attentionRankedSQL+`SELECT COUNT(*)`+attentionFromSQL,
 		attentionArgs(tenantID, personID)...).Scan(&total)
 	return total, err
+}
+
+// ResumableRunCount counts the full Attention projection's resumable band.
+// A pending human wait outranks resumability, so it is not also history. This
+// shares the paging projection without materializing or capping its rows.
+func (w *WorkTimeline) ResumableRunCount(ctx context.Context, tenantID, personID string) (int, error) {
+	if w == nil || w.store == nil {
+		return 0, fmt.Errorf("work timeline is unavailable")
+	}
+	var count int
+	args := append(attentionArgs(tenantID, personID), ThreadActivityResumable)
+	err := w.store.db.QueryRowContext(ctx, attentionRankedSQL+`SELECT COUNT(*)`+attentionFromSQL+` AND ranked.activity = ?`,
+		args...).Scan(&count)
+	return count, err
 }
 
 func (w *WorkTimeline) attentionItems(ctx context.Context, tenantID, personID, preferChannel string, limit, offset int) ([]AttentionItem, error) {

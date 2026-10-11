@@ -1,0 +1,75 @@
+id: reliability_im_choice_provider_wait
+title: "An IM choice preserves its exact parent through a provider cooldown"
+suite: reliability
+workspace: isolated
+model_required: false
+
+setup:
+  task:
+    title: "Independent report awaiting provider"
+    parked_runs:
+      - input: "Compile the independent report"
+        status: waiting_external
+        wait_reason: rate_limit
+  turn_choices:
+    - platform: weixin
+      channel: wx-chat-1
+      request: "Also attach the error summary"
+      options:
+        - action: steer
+          parked_run: 1
+        - action: new
+
+turns:
+  - input: "1"
+    platform: weixin
+    channel: wx-chat-1
+    assert_state:
+      - on: runs
+        status: waiting_external
+        count_gte: 1
+        count_lte: 1
+      - on: runs
+        count_gte: 1
+        count_lte: 1
+      - on: queued
+        status: queued
+        count_gte: 2
+        count_lte: 2
+      - on: turn_choices
+        status: resolved
+        count_gte: 1
+        count_lte: 1
+  - input: "/stop"
+    seeded_run_ordinal: 1
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "Cancelled parked run"
+
+assert_state:
+  - on: runs
+    status: cancelled
+    count_gte: 1
+    count_lte: 1
+  - on: runs
+    count_gte: 1
+    count_lte: 1
+  - on: queued
+    status: cancelled
+    count_gte: 2
+    count_lte: 2
+  - on: queued
+    status: queued
+    count_gte: 0
+    count_lte: 0
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

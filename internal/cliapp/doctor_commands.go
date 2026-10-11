@@ -84,7 +84,7 @@ func (a *App) doctor(args []string) int {
 	if cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath}); loadErr == nil {
 		promptSection = buildPromptWorkspaceDoctorSection(store, dataDir, cfg)
 	}
-	fullReport := buildDoctorReport(ctx, store, identity, dataDir, a.gatewayStatusLine(), configDiagnostics.section(), promptSection, doctorLogLines)
+	fullReport := buildDoctorReport(ctx, store, identity, dataDir, a.gatewayStatusLine(), a.localControlDoctorSection(ctx), configDiagnostics.section(), promptSection, doctorLogLines)
 	if cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath}); loadErr == nil {
 		storage, storageErr := appcore.ResolveSkillStorage(cfg)
 		if storageErr != nil {
@@ -235,6 +235,10 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 					Actions:  gatewayDoctorActions(body),
 				})
 			}
+		case "Local control":
+			if issue, ok := localControlDoctorIssue(body); ok {
+				issues = append(issues, issue)
+			}
 		case "Config":
 			if issue, ok := configDoctorIssue(configDiagnostics); ok {
 				issues = append(issues, issue)
@@ -380,6 +384,18 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 						},
 					})
 				}
+			}
+		case "Schedules":
+			if strings.Contains(body, "warning:") {
+				issues = append(issues, doctorIssue{
+					Category: "SCHEDULE",
+					Title:    "Schedules that do not run",
+					Details:  body,
+					Actions: []doctorAction{{
+						Description: "Remove a job that should not exist, or ask SelfMind to add it again for one of your own chats.",
+						Commands:    []string{`selfmind send "remove cron job <id>"`},
+					}},
+				})
 			}
 		case "Person asset partitions":
 			if !strings.Contains(body, "healthy:") {
@@ -566,6 +582,10 @@ func doctorReportHasFatalIssue(report string) bool {
 			}
 		case "Skill presentation":
 			if strings.Contains(body, "[FATAL]") {
+				return true
+			}
+		case "Local control":
+			if localControlReportIsFatal(body) {
 				return true
 			}
 		}
@@ -956,7 +976,7 @@ func (a *App) gatewayStatusLine() string {
 	}
 	ctx, cancel := contextWithTimeout(a.ctx, 3*time.Second)
 	defer cancel()
-	if data, code, err := gatewayrt.RequestStatus(ctx, a.gatewayURL()); err == nil && code < 400 {
+	if data, code, err := a.requestGatewayStatus(ctx); err == nil && code < 400 {
 		var status api.GatewayStatusResponse
 		if json.Unmarshal(data, &status) == nil {
 			rt := status.Runtime
@@ -968,6 +988,10 @@ func (a *App) gatewayStatusLine() string {
 				if len(status.MCP.Failures) > 0 {
 					failure := status.MCP.Failures[0]
 					mcpState += fmt.Sprintf(",first:%s:%s", oneLine(failure.Name, 40), oneLine(failure.Error, 120))
+				}
+				if len(status.MCP.Warnings) > 0 {
+					warning := status.MCP.Warnings[0]
+					mcpState += fmt.Sprintf(",warnings:%d,first_warning:%s:%s", len(status.MCP.Warnings), oneLine(warning.Name, 40), oneLine(warning.Warning, 120))
 				}
 			}
 			catalogState := gatewayToolCatalogDoctorState(status.ToolCatalog)
@@ -1042,7 +1066,7 @@ func gatewayToolCatalogDoctorState(preview llm.ToolCatalogPreview) string {
 // buildDoctorReport assembles the redacted diagnostic bundle from durable
 // control-plane state and the on-disk log. It is separated from CLI plumbing so
 // it can be unit-tested against a seeded temp store.
-func buildDoctorReport(ctx context.Context, store *control.Store, identity *control.IdentityContext, dataDir, gatewayStatus, configSection, promptSection string, logLines int) string {
+func buildDoctorReport(ctx context.Context, store *control.Store, identity *control.IdentityContext, dataDir, gatewayStatus, localControlSection, configSection, promptSection string, logLines int) string {
 	var sb strings.Builder
 	sb.WriteString("SelfMind doctor — diagnostic bundle\n")
 	fmt.Fprintf(&sb, "generated: %s\n", time.Now().UTC().Format(time.RFC3339))
@@ -1051,6 +1075,10 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	fmt.Fprintf(&sb, "%s\n\n", formatControlSchemaLine(store.SchemaStatus()))
 
 	fmt.Fprintf(&sb, "== Gateway ==\n%s\n\n", gatewayStatus)
+	if strings.TrimSpace(localControlSection) != "" {
+		sb.WriteString(localControlSection)
+		sb.WriteString("\n\n")
+	}
 	if strings.TrimSpace(configSection) != "" {
 		sb.WriteString(configSection)
 		sb.WriteString("\n\n")
@@ -1234,6 +1262,10 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	sb.WriteString(cronGovernanceSection(ctx, dataDir))
 	sb.WriteString("\n")
 
+	sb.WriteString("== Schedules ==\n")
+	sb.WriteString(scheduleReviewSection(ctx, store, identity, dataDir))
+	sb.WriteString("\n")
+
 	// Presence snapshot (durable last_seen recency per bound account).
 	sb.WriteString("== Presence (bound accounts) ==\n")
 	if accounts, err := store.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID); err != nil {
@@ -1292,6 +1324,9 @@ func formatControlSchemaLine(status control.StoreSchemaStatus) string {
 	backup := strings.TrimSpace(status.MigrationBackup)
 	if backup == "" {
 		backup = "none"
+	}
+	if len(status.MissingTables) > 0 {
+		backup += "; missing tables: " + strings.Join(status.MissingTables, ", ")
 	}
 	return fmt.Sprintf("control schema: %d/%d (backup: %s)", status.Version, status.CurrentVersion, backup)
 }

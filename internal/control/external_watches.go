@@ -127,6 +127,11 @@ type ExternalWatch struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	FinishedAt          *time.Time
+	// Sequence orders the registration among claims, watchers, and events
+	// (see nextEffectSequenceTx). Zero means the watcher was registered before
+	// schema v26: it precedes every sequenced row, and two zero rows have no
+	// recorded order.
+	Sequence int64
 }
 
 // Version 2 pins scalar matching and ordinary approval-controlled Main continuation.
@@ -153,6 +158,10 @@ type ExternalWatchPreflightReceipt struct {
 	EffectScriptRoot      string   `json:"effect_script_root,omitempty"`
 	EffectScriptPath      string   `json:"effect_script_path,omitempty"`
 	EffectScriptDigest    string   `json:"effect_script_digest,omitempty"`
+
+	// EffectRunID names the Run that dispatched EffectID when it is an earlier
+	// Run of the watcher's exact chain. Empty means the watcher's own Run.
+	EffectRunID string `json:"effect_run_id,omitempty"`
 }
 
 // externalWatchColumns is the single SELECT list for a full watch row.
@@ -175,7 +184,7 @@ const externalWatchColumns = `id, tenant_id, person_id,
 	COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
 	COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
 	COALESCE(credential_source_hash, ''), COALESCE(execution_binding_json, '{}'),
-	created_at, updated_at, finished_at`
+	created_at, updated_at, finished_at, sequence`
 
 func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*ExternalWatch, error) {
 	if s == nil || s.db == nil {
@@ -281,6 +290,9 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 			return nil, fmt.Errorf("this observation is already registered in the wait group; register a distinct missing target")
 		}
 	}
+	if watch.Sequence, err = nextEffectSequenceTx(ctx, tx); err != nil {
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO external_watches (
 		id, tenant_id, person_id, workspace_id, thread_id, run_id, channel,
 		description, cwd, command, success_pattern, failure_pattern,
@@ -290,8 +302,8 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		attempts, last_output, last_output_hash, last_error,
 		environment_snapshot_id, environment_generation, principal_fingerprint,
 		environment_fingerprint, credential_source_hash, execution_binding_json,
-		created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+		created_at, updated_at, sequence)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		watch.ID, watch.TenantID, watch.PersonID, watch.WorkspaceID, watch.TaskID,
 		watch.RunID, watch.Channel, watch.Description, watch.CWD, watch.Command,
 		watch.SuccessPattern, watch.FailurePattern, watch.SpecVersion, watch.TargetPattern,
@@ -300,7 +312,7 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		watch.NextCheckAt.Unix(),
 		watch.EnvironmentSnapshotID, watch.EnvironmentGeneration, watch.PrincipalFingerprint,
 		watch.EnvironmentFingerprint, watch.CredentialSourceHash, string(bindingJSON),
-		now.Unix(), now.Unix()); err != nil {
+		now.Unix(), now.Unix(), watch.Sequence); err != nil {
 		return nil, err
 	}
 	if watch.PreflightReceipt.Version >= ExternalWatchContinuationReceiptVersion && (initialStatus == ExternalWatchSucceeded || initialStatus == ExternalWatchFailed) {
@@ -972,7 +984,7 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 		&watch.EnvironmentSnapshotID, &watch.EnvironmentGeneration, &watch.PrincipalFingerprint,
 		&watch.EnvironmentFingerprint, &watch.CredentialSourceHash,
 		&bindingJSON,
-		&createdAt, &updatedAt, &finishedAt)
+		&createdAt, &updatedAt, &finishedAt, &watch.Sequence)
 	if err != nil {
 		return ExternalWatch{}, err
 	}

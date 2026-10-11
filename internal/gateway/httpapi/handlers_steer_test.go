@@ -42,6 +42,8 @@ func TestRunSteerEndpoint(t *testing.T) {
 			Text:           text,
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/runs/steer", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = asLocalCLI(req)
 		rec := httptest.NewRecorder()
 		daemon.Handler().ServeHTTP(rec, req)
 		return rec
@@ -173,7 +175,9 @@ func TestRunSteerEndpointKeepsTheRunsRoots(t *testing.T) {
 
 	body, _ := json.Marshal(api.RunSteerRequest{Platform: "cli", PlatformUserID: "local", RunID: run.ID, Channel: "cli", Text: "separately, bump the changelog"})
 	rec := httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/runs/steer", bytes.NewReader(body)))
+	steerReq := asLocalCLI(httptest.NewRequest(http.MethodPost, "/v1/runs/steer", bytes.NewReader(body)))
+	steerReq.Header.Set("Content-Type", "application/json")
+	daemon.Handler().ServeHTTP(rec, steerReq)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("steer status = %d, body = %s", rec.Code, rec.Body.String())
 	}

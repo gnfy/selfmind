@@ -12,54 +12,89 @@ import (
 	"github.com/google/uuid"
 )
 
-// PeekPendingTurnChoice is a read-only snapshot for preparing managed
-// attachments and execution scope. RoutePendingTurnChoice rechecks this exact
-// snapshot inside its write transaction before it accepts the answer.
-func (s *Store) PeekPendingTurnChoice(ctx context.Context, tenantID, personID, choiceID string, now time.Time, bareWindow time.Duration) (*PendingTurnChoice, error) {
+// PeekPendingTurnChoice is a read-only snapshot of one named choice for
+// preparing managed attachments and execution scope. RoutePendingTurnChoice
+// rechecks this exact snapshot inside its write transaction before it accepts
+// the answer. A named choice is person-scoped: any of the person's endpoints
+// may answer it until it expires.
+func (s *Store) PeekPendingTurnChoice(ctx context.Context, tenantID, personID, choiceID string, now time.Time) (*PendingTurnChoice, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("control store is unavailable")
 	}
 	tenantID, personID, choiceID = normalizeTenant(tenantID), strings.TrimSpace(personID), strings.TrimSpace(choiceID)
-	if personID == "" {
+	if personID == "" || choiceID == "" {
 		return nil, ErrTurnChoiceNotFound
 	}
 	if now.IsZero() {
 		now = time.Now()
 	}
-	if bareWindow <= 0 {
-		bareWindow = 30 * time.Minute
-	}
-	if choiceID != "" {
-		choice, err := scanPendingTurnChoice(s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, account_id, channel, resolution_id,
-			request_json, options_json, status, chosen_key, created_at, expires_at, claimed_at
-			FROM pending_turn_choices WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = ? AND expires_at > ?`,
-			tenantID, personID, choiceID, TurnChoicePending, now.Unix()))
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrTurnChoiceNotFound
-		}
-		return choice, err
-	}
-	cutoff := now.Add(-bareWindow).Unix()
-	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_turn_choices
-		WHERE tenant_id = ? AND person_id = ? AND status = ? AND expires_at > ? AND created_at >= ?`,
-		tenantID, personID, TurnChoicePending, now.Unix(), cutoff).Scan(&count); err != nil {
-		return nil, err
-	}
-	if count == 0 {
-		return nil, ErrTurnChoiceNotFound
-	}
-	if count != 1 {
-		return nil, ErrTurnChoiceAmbiguous
-	}
 	choice, err := scanPendingTurnChoice(s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, account_id, channel, resolution_id,
 		request_json, options_json, status, chosen_key, created_at, expires_at, claimed_at
-		FROM pending_turn_choices WHERE tenant_id = ? AND person_id = ? AND status = ? AND expires_at > ? AND created_at >= ?
-		ORDER BY created_at DESC LIMIT 1`, tenantID, personID, TurnChoicePending, now.Unix(), cutoff))
+		FROM pending_turn_choices WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = ? AND expires_at > ?`,
+		tenantID, personID, choiceID, TurnChoicePending, now.Unix()))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrTurnChoiceNotFound
 	}
 	return choice, err
+}
+
+// TurnChoiceEndpoint is the exact account and channel a bare numbered answer
+// arrived on.
+type TurnChoiceEndpoint struct {
+	AccountID string
+	Channel   string
+}
+
+// PeekBareTurnChoice selects the choice a bare number answers: the single
+// pending choice shown on the same account and channel within window. The same
+// digits from another CLI window, another chat, or the same chat name on
+// another account are that endpoint's own input and can never consume a
+// request parked elsewhere. Two eligible choices on one endpoint are
+// ambiguous; /choose names either one exactly.
+func (s *Store) PeekBareTurnChoice(ctx context.Context, tenantID, personID string, endpoint TurnChoiceEndpoint, now time.Time, window time.Duration) (*PendingTurnChoice, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("control store is unavailable")
+	}
+	tenantID, personID = normalizeTenant(tenantID), strings.TrimSpace(personID)
+	endpoint.AccountID, endpoint.Channel = strings.TrimSpace(endpoint.AccountID), strings.TrimSpace(endpoint.Channel)
+	if personID == "" || endpoint.AccountID == "" || endpoint.Channel == "" {
+		return nil, ErrTurnChoiceNotFound
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if window <= 0 {
+		window = 30 * time.Minute
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, tenant_id, person_id, account_id, channel, resolution_id,
+		request_json, options_json, status, chosen_key, created_at, expires_at, claimed_at
+		FROM pending_turn_choices
+		WHERE tenant_id = ? AND person_id = ? AND account_id = ? AND channel = ? AND status = ? AND expires_at > ? AND created_at >= ?
+		ORDER BY created_at DESC, id LIMIT 2`,
+		tenantID, personID, endpoint.AccountID, endpoint.Channel, TurnChoicePending, now.Unix(), now.Add(-window).Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var found []*PendingTurnChoice
+	for rows.Next() {
+		choice, err := scanPendingTurnChoice(rows)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, choice)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	switch len(found) {
+	case 0:
+		return nil, ErrTurnChoiceNotFound
+	case 1:
+		return found[0], nil
+	default:
+		return nil, ErrTurnChoiceAmbiguous
+	}
 }
 
 type TurnChoiceWorkRoute struct {
@@ -302,7 +337,7 @@ func (s *Store) routePendingTurnChoiceOnce(ctx context.Context, route TurnChoice
 		if err != nil {
 			return nil, err
 		}
-		if option.Action == "resume" && !continuityRunResumableForQueue(runStatus) {
+		if option.Action == "resume" && !RunAcceptsQueuedContinuation(runStatus) {
 			return nil, ErrTurnChoiceNotFound
 		}
 		if option.Action == "steer" && runStatus == "running" {
@@ -316,7 +351,7 @@ func (s *Store) routePendingTurnChoiceOnce(ctx context.Context, route TurnChoice
 			if err := json.Unmarshal([]byte(rootsJSON), &q.ExecutionRoots); err != nil {
 				return nil, err
 			}
-			if option.Action == "resume" || continuityRunResumableForQueue(runStatus) {
+			if option.Action == "resume" || RunAcceptsQueuedContinuation(runStatus) {
 				q.ReplyToRunID = option.RunID
 			}
 		}
@@ -403,21 +438,31 @@ func insertChoiceQueueTx(ctx context.Context, tx *sql.Tx, q QueuedTask, choiceID
 	if err != nil {
 		return nil, err
 	}
+	// The snapshot the gateway built from the person's own words, which this
+	// row carries; the answer that chose its destination grants nothing.
+	var admissionJSON string
+	q.Admission, admissionJSON, err = encodeAdmissionSnapshot(q.Admission)
+	if err != nil {
+		return nil, fmt.Errorf("encode choice admission snapshot: %w", err)
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO task_queue
 		(id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json,
-		 thread_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at, attachments_json)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, 0, ?, ?, ?)`,
+		 thread_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at, attachments_json, admission_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?, 0, ?, ?, ?, ?)`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, rootsJSON,
-		q.TaskID, q.ReplyToRunID, q.IdempotencyKey, q.Class, q.Priority, q.Status, now.Unix(), attachmentsJSON)
+		q.TaskID, q.ReplyToRunID, q.IdempotencyKey, q.Class, q.Priority, q.Status, now.Unix(), attachmentsJSON, admissionJSON)
 	if err != nil {
 		return nil, err
 	}
 	return &q, nil
 }
 
-func continuityRunResumableForQueue(status string) bool {
+// RunAcceptsQueuedContinuation preserves an exact reply edge while work waits.
+// It does not authorize execution: ResolveQueuedContinuation waits for the
+// system child and admission rechecks the inherited authority at claim time.
+func RunAcceptsQueuedContinuation(status string) bool {
 	switch status {
-	case "interrupted", "waiting_user", "verification_partial", "blocked":
+	case "interrupted", "waiting_user", "waiting_external", "verification_partial", "blocked":
 		return true
 	default:
 		return false

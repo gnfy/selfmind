@@ -142,6 +142,58 @@ type QueuedTask struct {
 	LeaseUntil        time.Time `json:"lease_until,omitempty"`
 	AttemptGeneration int       `json:"attempt_generation,omitempty"`
 	CreatedAt         time.Time `json:"created_at"`
+	// Admission freezes the authority the queued request was accepted with,
+	// so a drain restores it instead of re-deriving it from content or keys,
+	// and the claimed Run records it verbatim. EnqueueQueued and the
+	// turn-choice insert record the one given; the turn-choice snapshot is
+	// built from the person's own words. The approval, clarification and
+	// provider-wait inserts copy the parked Run's own snapshot inside their
+	// transaction; a caller may only restate it. A row with none (accepted
+	// before schema v26, deferred steering, or a continuation whose parent has
+	// none) keeps today's derivation. EnqueueQueued's idempotent replay returns
+	// the first row's snapshot.
+	Admission AdmissionSnapshot `json:"-"`
+	// AdmissionError is a *QueuedAdmissionError, with Admission left zero,
+	// when the stored snapshot cannot be read.
+	AdmissionError error `json:"-"`
+}
+
+// QueuedAdmissionError marks a queued row whose stored admission snapshot this
+// binary cannot read. Every reader still returns the row, so it stays listed
+// and droppable, but a drain never launches it: reading it as "no snapshot"
+// could widen the authority it was accepted with. Until it is dropped it holds
+// the later rows of its source behind it, as an unlaunchable head would.
+type QueuedAdmissionError struct {
+	QueueID string
+	Err     error
+}
+
+func (e *QueuedAdmissionError) Error() string {
+	return fmt.Sprintf("queued work %s: %v", e.QueueID, e.Err)
+}
+
+func (e *QueuedAdmissionError) Unwrap() error { return e.Err }
+
+// queueSourceKey is the per-source FIFO identity: platform, account, and
+// channel, the same key the gateway's drain orders by.
+func queueSourceKey(q QueuedTask) string {
+	return q.Platform + "\x00" + q.PlatformUserID + "\x00" + q.Channel
+}
+
+// HasPendingQueuedSource reports input ahead of a fresh direct admission.
+// An unbound claim still holds its source: the drain has claimed it but has
+// not yet registered or created its Run. Like NextQueuedWhere, fresh admission
+// considers due input; an unreadable due row keeps its source's place.
+func (s *Store) HasPendingQueuedSource(ctx context.Context, tenantID, personID, platform, platformUserID, channel string) (bool, error) {
+	var pending bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM task_queue WHERE tenant_id = ? AND person_id = ?
+		  AND platform = ? AND platform_user_id = ? AND channel = ?
+		  AND status IN (?, ?) AND COALESCE(run_id, '') = ''
+		  AND COALESCE(not_before, 0) <= ?
+	)`, normalizeTenant(tenantID), personID, platform, platformUserID, channel,
+		QueueStatusQueued, QueueStatusStarted, time.Now().Unix()).Scan(&pending)
+	return pending, err
 }
 
 // DueQueuedRoute identifies one person with work that may be claimed now.
@@ -208,6 +260,11 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	if err != nil {
 		return nil, fmt.Errorf("encode queue attachments: %w", err)
 	}
+	var admissionJSON string
+	q.Admission, admissionJSON, err = encodeAdmissionSnapshot(q.Admission)
+	if err != nil {
+		return nil, fmt.Errorf("encode queue admission snapshot: %w", err)
+	}
 	notBefore := q.NotBefore.Unix()
 	if q.NotBefore.IsZero() {
 		notBefore = 0
@@ -216,13 +273,13 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 		// never claims a row before its requested (for example, 429) cooldown.
 		notBefore++
 	}
-	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at, attachments_json)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, reply_to_run_id, approval_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at, attachments_json, admission_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if q.IdempotencyKey != "" {
 		query += ` ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`
 	}
 	result, err := s.db.ExecContext(ctx, query,
-		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, rootsJSON, q.TaskID, q.ReplyToRunID, q.ApprovalID, q.ClarifyID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix(), attachmentsJSON)
+		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, rootsJSON, q.TaskID, q.ReplyToRunID, q.ApprovalID, q.ClarifyID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix(), attachmentsJSON, admissionJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -258,12 +315,14 @@ func scanQueuedTask(rows interface {
 	var created, notBefore, leaseUntil int64
 	var rootsJSON string
 	var attachmentsJSON string
+	var admissionJSON string
 	if err := rows.Scan(&q.ID, &q.TenantID, &q.PersonID, &q.Channel, &q.Platform, &q.PlatformUserID,
 		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &rootsJSON, &q.TaskID, &q.RunID, &q.ReplyToRunID, &q.ApprovalID, &q.ClarifyID,
 		&q.IdempotencyKey, &q.Class, &q.Priority, &notBefore, &q.Status, &q.Restarts, &q.ClaimToken,
-		&leaseUntil, &q.AttemptGeneration, &created, &attachmentsJSON); err != nil {
+		&leaseUntil, &q.AttemptGeneration, &created, &attachmentsJSON, &admissionJSON); err != nil {
 		return QueuedTask{}, err
 	}
+	q.setStoredAdmission(admissionJSON)
 	q.CreatedAt = time.Unix(created, 0)
 	if notBefore > 0 {
 		q.NotBefore = time.Unix(notBefore, 0)
@@ -287,7 +346,7 @@ const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESC
 	COALESCE(run_id, ''), COALESCE(reply_to_run_id, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), COALESCE(idempotency_key, ''), COALESCE(class, 'foreground'),
 	COALESCE(priority, 100), COALESCE(not_before, 0), status, COALESCE(restarts, 0),
 	COALESCE(claim_token, ''), COALESCE(lease_until, 0), COALESCE(attempt_generation, 0), created_at,
-	COALESCE(attachments_json, '[]')`
+	COALESCE(attachments_json, '[]'), admission_json`
 
 const defaultQueueClaimLease = 2 * time.Minute
 
@@ -355,6 +414,26 @@ func (s *Store) RequeueUnboundClaim(ctx context.Context, tenantID, id, token str
 		 WHERE tenant_id = ? AND id = ? AND status = ? AND claim_token = ?
 		   AND COALESCE(run_id, '') = ''`,
 		QueueStatusQueued, normalizeTenant(tenantID), id, QueueStatusStarted, token)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// FailUnboundQueued ends a refused launch before a claim, or while this token
+// still owns it. A bound or newer attempt is untouched.
+func (s *Store) FailUnboundQueued(ctx context.Context, tenantID, id, token string) (bool, error) {
+	if strings.TrimSpace(id) == "" {
+		return false, fmt.Errorf("queue id is required")
+	}
+	status := QueueStatusQueued
+	if token != "" {
+		status = QueueStatusStarted
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE task_queue SET status = ?, claim_token = '', lease_until = 0
+		WHERE tenant_id = ? AND id = ? AND status = ? AND COALESCE(claim_token, '') = ? AND COALESCE(run_id, '') = ''`,
+		QueueStatusFailed, normalizeTenant(tenantID), id, status, token)
 	if err != nil {
 		return false, err
 	}
@@ -448,6 +527,11 @@ func (s *Store) ListDueQueuedContinuations(ctx context.Context, tenantID, person
 // unbounded queue. The predicate must be pure and must not query this Store:
 // SQLite may be configured with one connection. Callers can skip a resource-
 // blocked head row while preserving source order in the predicate.
+//
+// A row with an unreadable admission snapshot is never returned, and the later
+// rows of its source are skipped without consulting the predicate. The
+// predicate still sees that row, so the caller can report it; its answer is
+// ignored.
 func (s *Store) NextQueuedWhere(ctx context.Context, tenantID, personID string, eligible func(QueuedTask) bool) (*QueuedTask, error) {
 	if strings.TrimSpace(personID) == "" {
 		return nil, fmt.Errorf("person id is required")
@@ -456,16 +540,32 @@ func (s *Store) NextQueuedWhere(ctx context.Context, tenantID, personID string, 
 		`SELECT `+queueSelectColumns+`
 		 FROM task_queue WHERE tenant_id = ? AND person_id = ? AND status = ?
 		   AND COALESCE(run_id, '') = '' AND COALESCE(not_before, 0) <= ?
+		   AND NOT EXISTS (SELECT 1 FROM task_queue held
+		     WHERE held.tenant_id = task_queue.tenant_id AND held.person_id = task_queue.person_id
+		       AND held.platform = task_queue.platform AND held.platform_user_id = task_queue.platform_user_id
+		       AND held.channel = task_queue.channel AND held.status = 'started' AND COALESCE(held.run_id, '') = '')
 		 ORDER BY priority DESC, created_at ASC, rowid ASC`,
 		normalizeTenant(tenantID), personID, QueueStatusQueued, time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	held := map[string]bool{}
 	for rows.Next() {
 		q, err := scanQueuedTask(rows)
 		if err != nil {
 			return nil, err
+		}
+		source := queueSourceKey(q)
+		if held[source] {
+			continue
+		}
+		if q.AdmissionError != nil {
+			held[source] = true
+			if eligible != nil {
+				eligible(q)
+			}
+			continue
 		}
 		if eligible == nil || eligible(q) {
 			return &q, nil
@@ -662,14 +762,7 @@ func (s *Store) ClearQueued(ctx context.Context, tenantID, personID string) (int
 	if strings.TrimSpace(personID) == "" {
 		return 0, fmt.Errorf("person id is required")
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE task_queue SET status = ? WHERE tenant_id = ? AND person_id = ? AND status = ?`,
-		QueueStatusCancelled, normalizeTenant(tenantID), personID, QueueStatusQueued)
-	if err != nil {
-		return 0, err
-	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	return s.clearQueuedAndParkedRuns(ctx, tenantID, personID)
 }
 
 // ListAllQueued returns due rows across all persons/tenants in scheduler order.

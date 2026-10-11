@@ -41,7 +41,20 @@ type Store struct {
 	events          *eventAppendBus
 	schemaVersion   int
 	migrationBackup string
+	// missingTables are current-version tables an opened database lacks
+	// (see amendedCurrentSchemaTables).
+	missingTables []string
+	// instance names the daemon process that opened this store. A background
+	// effect dispatched here stays in flight while this process can still
+	// observe its exit (see external_effect_lifecycle.go).
+	instance string
 }
+
+// daemonInstance is fixed when the process starts: every store a process
+// opens shares it, because a background process and the observer that records
+// its exit live as long as the daemon process that started them. A dispatch
+// record carries the id; claims compare it, nothing else.
+var daemonInstance = "daemon_" + uuid.NewString()
 
 // ExecutionViewsDir is the daemon-owned physical home for isolated run views.
 // It is a location, not execution authority; the exact view must still be
@@ -220,8 +233,8 @@ func OpenStore(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("configure sqlite: %w", err)
 	}
-	store := &Store{db: db, dataDir: dataDir, events: newEventAppendBus()}
-	if err := store.prepareAndMigrateSchema(context.Background(), dataDir, dbPath, existing, quickCheckDB); err != nil {
+	store := &Store{db: db, dataDir: dataDir, events: newEventAppendBus(), instance: daemonInstance}
+	if err := store.prepareAndMigrateSchema(context.Background(), dataDir, dbPath, existing, quickCheckDB, orderedMigrations); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -261,7 +274,7 @@ func OpenExistingStoreReadOnly(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("configure read-only sqlite: %w", err)
 	}
-	store := &Store{db: db, dataDir: dataDir, events: newEventAppendBus()}
+	store := &Store{db: db, dataDir: dataDir, events: newEventAppendBus(), instance: daemonInstance}
 	version, versioned, err := store.readSchemaVersion(context.Background())
 	if err != nil {
 		db.Close()
@@ -1818,6 +1831,29 @@ func (s *Store) GetPersonSetting(ctx context.Context, tenantID, personID, key st
 	return value, nil
 }
 
+// GetPersonSettingStamped is GetPersonSetting with the unix second the value
+// was last written, for a reader that must tell a preference the person set
+// after some moment from one they already had. An unset preference is "" and 0.
+func (s *Store) GetPersonSettingStamped(ctx context.Context, tenantID, personID, key string) (string, int64, error) {
+	if strings.TrimSpace(personID) == "" || strings.TrimSpace(key) == "" {
+		return "", 0, fmt.Errorf("person id and key are required")
+	}
+	var (
+		value     string
+		updatedAt int64
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT value, updated_at FROM person_settings WHERE tenant_id = ? AND person_id = ? AND key = ?`,
+		normalizeTenant(tenantID), personID, key).Scan(&value, &updatedAt)
+	if err == sql.ErrNoRows {
+		return "", 0, nil
+	}
+	if err != nil {
+		return "", 0, err
+	}
+	return value, updatedAt, nil
+}
+
 func (s *Store) RegisterWorkspace(ctx context.Context, ws Workspace) (*Workspace, error) {
 	return s.registerWorkspace(ctx, ws, true)
 }
@@ -2412,6 +2448,9 @@ type StartRunOptions struct {
 	// inside the transaction; a lost race surfaces as ErrResumeTargetClaimed and
 	// creates nothing.
 	ResumesRunID string
+	// Admission freezes the authority this Run was admitted with, in the same
+	// row. Zero records none. It is never rewritten after creation.
+	Admission AdmissionSnapshot
 }
 
 // StartRunWithWorkKey atomically creates a run with its deterministic work
@@ -2516,6 +2555,10 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 	if err != nil {
 		return nil, fmt.Errorf("encode run execution roots: %w", err)
 	}
+	_, admissionJSON, err := encodeAdmissionSnapshot(options.Admission)
+	if err != nil {
+		return nil, fmt.Errorf("encode run admission snapshot: %w", err)
+	}
 	// Insert the Run and touch its Thread atomically. Execution state remains
 	// solely on the Run.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -2554,10 +2597,28 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 			return nil, err
 		}
 	}
+	if options.QueueID != "" {
+		// A claimed row's Run runs under the authority the row was accepted
+		// with, copied in this transaction. A missing row is a lost claim; the
+		// bind below would refuse it the same way.
+		var queuedAdmission string
+		err := tx.QueryRowContext(ctx, `SELECT admission_json FROM task_queue
+			WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = ? AND claim_token = ?`,
+			run.TenantID, run.PersonID, options.QueueID, QueueStatusStarted, options.QueueClaimToken).Scan(&queuedAdmission)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrQueueClaimLost
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read queued admission snapshot: %w", err)
+		}
+		if admissionJSON, err = queuedRunAdmissionJSON(options.Admission, queuedAdmission); err != nil {
+			return nil, err
+		}
+	}
 	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO runs (id, thread_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, resumes_run_id, recovery_contract_version, status, started_at, heartbeat_at, execution_class)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.ResumesRunID, run.RecoveryContractVersion, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix(), run.ExecutionClass); err != nil {
+		`INSERT INTO runs (id, thread_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, resumes_run_id, recovery_contract_version, status, started_at, heartbeat_at, execution_class, admission_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.ResumesRunID, run.RecoveryContractVersion, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix(), run.ExecutionClass, admissionJSON); err != nil {
 		if run.ResumesRunID != "" && isResumeEdgeUniqueViolation(err) {
 			return nil, ErrResumeTargetClaimed
 		}

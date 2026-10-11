@@ -106,8 +106,9 @@ func shouldRemindStalePlan(strategy TaskStrategy, openSteps, actionsSinceUpdate,
 // only looks at state may still be a direct answer that needs no visible plan.
 // Everything else — mutation, commands, unknown tools — fails toward "this is
 // real work", using the same dispatch classification as the durable ledger.
-func countsTowardPlanEvidence(toolName string, retryClass ToolRetryClass) bool {
-	if isLifecycleToolName(toolName) {
+func countsTowardPlanEvidence(toolName string, retryClass ToolRetryClass, effectClasses ...string) bool {
+	if isLifecycleToolName(toolName) || (len(effectClasses) > 0 &&
+		(effectClasses[0] == ToolEffectBookkeeping || effectClasses[0] == ToolEffectObservation)) {
 		return false
 	}
 	return retryClass != ToolRetryReadOnly
@@ -294,6 +295,20 @@ func BuildTaskStrategy(prompt, channel string) TaskStrategy {
 	}
 	policy.HiddenTools = hiddenToolsFor(policy.PlanPolicy, policy.WebPolicy)
 	return policy
+}
+
+// AdmittedTaskStrategy rebuilds the strategy a Run was admitted with from the
+// identity its admission froze. The hidden tool set follows from the plan and
+// web policies and budgets start from the defaults, exactly as for a strategy
+// built from the request; prompt framing derived from the current
+// environment, such as the sandbox note, is the caller's to add.
+func AdmittedTaskStrategy(class TaskClass, toolMode ToolMode, plan PlanPolicy, web WebPolicy, channelMode string, verificationOnly bool) TaskStrategy {
+	strategy := DefaultTaskStrategy()
+	strategy.Class, strategy.ToolMode, strategy.PlanPolicy, strategy.WebPolicy = class, toolMode, plan, web
+	strategy.ChannelMode, strategy.VerificationOnly = channelMode, verificationOnly
+	strategy.HiddenTools = hiddenToolsFor(plan, web)
+	strategy.Reason = "the strategy this work was admitted with"
+	return strategy
 }
 
 func normalizeChannelMode(channel string) string {

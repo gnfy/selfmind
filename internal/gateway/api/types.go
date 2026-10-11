@@ -11,7 +11,6 @@ import (
 )
 
 const (
-	LocalControlTokenHeader        = "X-SelfMind-Local-Control-Token"
 	ShutdownReasonServiceReconcile = "service_reconcile"
 	ModelControlProtocolVersion    = 4
 )
@@ -28,9 +27,11 @@ type ActiveRunStatus struct {
 }
 
 type GatewayRuntimeInfo struct {
-	PID                   int    `json:"pid"`
-	InstanceID            string `json:"instance_id,omitempty"`
-	Addr                  string `json:"addr"`
+	PID        int    `json:"pid"`
+	InstanceID string `json:"instance_id,omitempty"`
+	Addr       string `json:"addr"`
+	// LocalControlSocket is where the person's own CLI reaches the daemon.
+	LocalControlSocket    string `json:"local_control_socket,omitempty"`
 	DataDir               string `json:"data_dir,omitempty"`
 	RuntimeDir            string `json:"runtime_dir,omitempty"`
 	State                 string `json:"state"`
@@ -70,6 +71,27 @@ type GatewayStatusResponse struct {
 	ToolCatalog    llm.ToolCatalogPreview `json:"tool_catalog,omitempty"`
 	MCP            MCPHealth              `json:"mcp,omitempty"`
 	StoreSchema    StoreSchemaHealth      `json:"store_schema,omitempty"`
+	// LocalControl is the daemon's verdict on the connection this status was
+	// requested over. It exists so `selfmind doctor` can tell the person
+	// whether their own terminal is accepted as their CLI.
+	LocalControl LocalControlPeer `json:"local_control"`
+	// LivenessOnly is set when the daemon answered a caller that is neither the
+	// person's own CLI nor a holder of the gateway token: only the liveness
+	// fields are filled in, and the rest is not "empty" but withheld.
+	LivenessOnly bool `json:"liveness_only,omitempty"`
+}
+
+// LocalControlPeer describes one connection to the daemon, as the daemon
+// judged it from kernel peer credentials. It carries no secret.
+type LocalControlPeer struct {
+	// Socket is true when the request arrived on the local control socket.
+	Socket bool `json:"socket"`
+	// Verified is true when the peer is the person's own CLI: the daemon
+	// owner's process, outside the daemon's process tree.
+	Verified bool `json:"verified"`
+	PID      int  `json:"pid,omitempty"`
+	// Refusal explains why a socket peer was refused.
+	Refusal string `json:"refusal,omitempty"`
 }
 
 type ProviderToolCatalogProbeResponse struct {
@@ -143,12 +165,23 @@ type MCPHealth struct {
 	Connected  int                `json:"connected"`
 	Failed     int                `json:"failed"`
 	Failures   []MCPServerFailure `json:"failures,omitempty"`
+	// Warnings are configuration problems that leave a server usable, such
+	// as a read_only_tools name the server does not expose.
+	Warnings []MCPServerWarning `json:"warnings,omitempty"`
+}
+
+type MCPServerWarning struct {
+	Name    string `json:"name"`
+	Warning string `json:"warning"`
 }
 
 type StoreSchemaHealth struct {
 	Version        int  `json:"version"`
 	CurrentVersion int  `json:"current_version"`
 	BackupCreated  bool `json:"backup_created,omitempty"`
+	// MissingTables are tables the current version requires that the
+	// database, already stamped with it, lacks.
+	MissingTables []string `json:"missing_tables,omitempty"`
 }
 
 type ToolSchemaHealth struct {
@@ -243,6 +276,25 @@ type MessageRequest struct {
 	// never accepted from the wire. Clients read it back from `run.started` and
 	// render such a run as a result line instead of replaying its progress.
 	Origin string `json:"-"`
+	// OriginID names the initiator's source, such as the cron job whose
+	// schedule a person authorized. It is never accepted from the wire.
+	OriginID string `json:"-"`
+	// Admission is the authority a durable row or exact parent froze for this
+	// work. The gateway restores it on a drain and never accepts it from the
+	// wire. Empty means the request is a new admission, built from the
+	// authority in force when it is admitted.
+	Admission control.AdmissionSnapshot `json:"-"`
+	// AdmissionRestored marks a request whose Admission came from a durable row
+	// or an exact parent, not one built for it now. The gateway sets it when it
+	// starts the Run, so work that waited can be narrowed by a tightening of the
+	// person's mode that work admitted just now never is.
+	AdmissionRestored bool `json:"-"`
+	// FrozenApprovalMode is the mode the gateway read from the person's
+	// preference at ingress for a new admission. It is not a mode the request
+	// named: only ApprovalMode is, and only that is carried onto guidance or
+	// queued rows, so work that waits takes the mode in force when it is
+	// admitted rather than one read earlier.
+	FrozenApprovalMode string `json:"-"`
 	// RecoveryMode is trusted queue-derived state for a daemon-owned recovery
 	// child. "verify_only" narrows the provider-visible and dispatchable tool
 	// surface to read-only observation plus lifecycle tools.
@@ -298,6 +350,9 @@ type MessageResponse struct {
 	Error    string                   `json:"error,omitempty"`
 	Accepted bool                     `json:"accepted,omitempty"`
 	Choice   *TurnChoice              `json:"choice,omitempty"`
+	// DeliveryEnqueued means the reply is already owned by the durable outbox.
+	// IM adapters keep Content for inspection but must not send it again.
+	DeliveryEnqueued bool `json:"delivery_enqueued,omitempty"`
 	// Workspace is the session's workspace after a control command that
 	// selected or re-trusted one. Clients derive trust state from this, never
 	// from the reply prose.
@@ -389,6 +444,9 @@ type RunSteerRequest struct {
 	Channel        string `json:"channel"`
 	RunID          string `json:"run_id,omitempty"`
 	Text           string `json:"text"`
+	// ApprovalMode carries only an explicit session override, never the active
+	// Run's frozen mode or a client-side copy of the saved preference.
+	ApprovalMode string `json:"approval_mode,omitempty"`
 }
 
 // RunSteerResponse acknowledges that guidance was handed to the active run.
@@ -420,8 +478,16 @@ type RunOutcome struct {
 	// operation. A failed deployment does not mean the SelfMind finalization run
 	// failed: the run may have correctly detected, recorded, and reported that
 	// external failure.
-	External        *ExternalOutcome `json:"external,omitempty"`
-	ClaimMismatches []string         `json:"claim_mismatches,omitempty"`
+	External          *ExternalOutcome     `json:"external,omitempty"`
+	ClaimMismatches   []string             `json:"claim_mismatches,omitempty"`
+	UnresolvedEffects []ExternalEffectFact `json:"unresolved_effects,omitempty"`
+}
+
+type ExternalEffectFact struct {
+	ClaimID string `json:"claim_id"`
+	RunID   string `json:"run_id"`
+	Target  string `json:"target"`
+	State   string `json:"state"`
 }
 
 // ExternalOutcome is daemon-derived from a durable watcher. Models do not
@@ -472,6 +538,10 @@ type DigestResponse struct {
 	// are point-in-time state, not evidence that a run stopped while the client
 	// was away, so clients must present them separately from DisruptedTasks.
 	UnresolvedTasks []DigestTask `json:"unresolved_tasks,omitempty"`
+	// ResumableRunCount counts the full person-scoped Attention projection's
+	// resumable Runs, excluding pending human waits and active/monitoring Runs.
+	// Nil identifies an older daemon whose bounded list cannot prove a total.
+	ResumableRunCount *int `json:"resumable_run_count,omitempty"`
 	// PendingApprovals is every approval still waiting for the person, in the
 	// same stable display order as /approvals (so ordinals keep meaning).
 	PendingApprovals []DigestApproval `json:"pending_approvals,omitempty"`
@@ -521,6 +591,7 @@ func (d *DigestResponse) Empty() bool {
 	return d == nil ||
 		(len(d.FinishedTasks) == 0 && len(d.DisruptedTasks) == 0 &&
 			len(d.UnresolvedTasks) == 0 &&
+			(d.ResumableRunCount == nil || *d.ResumableRunCount == 0) &&
 			len(d.PendingApprovals) == 0 && len(d.PendingClarifies) == 0 &&
 			len(d.UnconfirmedPushes) == 0 && d.ActiveRun == nil && len(d.ActiveRuns) == 0)
 }
@@ -637,6 +708,30 @@ type WorkspaceTrustRequest struct {
 	TrustLevel     string `json:"trust_level"`
 }
 
+// ScheduleAdoptRequest asks, from the authenticated local CLI only, to show a
+// stored schedule no one can be shown to own and, with Adopt set, to record
+// that the requesting person owns it.
+type ScheduleAdoptRequest struct {
+	TenantID       string `json:"tenant_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	JobID          int64  `json:"job_id"`
+	Adopt          bool   `json:"adopt"`
+}
+
+// ScheduleAdoptResponse shows the schedule as stored and whether it was
+// adopted.
+type ScheduleAdoptResponse struct {
+	JobID    int64  `json:"job_id"`
+	Name     string `json:"name"`
+	CronExpr string `json:"cron_expr"`
+	Prompt   string `json:"prompt"`
+	Enabled  bool   `json:"enabled"`
+	// Standing is "unclaimed", "yours", or "someone else's".
+	Standing string `json:"standing"`
+	Adopted  bool   `json:"adopted"`
+}
+
 type WorkspaceCapabilityRequest struct {
 	TenantID       string `json:"tenant_id"`
 	Platform       string `json:"platform"`
@@ -681,6 +776,13 @@ type WorkspaceEffectProfileRequest struct {
 	// Optional exact read-only command which observes the same target set.
 	// The owner must also approve it as an observation script.
 	ObservationCommand string `json:"observation_command,omitempty"`
+	// Cwd, Env and one of StdinText or StdinFile declare the rest of the
+	// exact invocation: the workspace directory it runs from, its NAME=VALUE
+	// assignments, and its here-string or redirected workspace file.
+	Cwd       string   `json:"cwd,omitempty"`
+	Env       []string `json:"env,omitempty"`
+	StdinText *string  `json:"stdin_text,omitempty"`
+	StdinFile string   `json:"stdin_file,omitempty"`
 }
 
 type BindAccountRequest struct {

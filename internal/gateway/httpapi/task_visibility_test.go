@@ -278,7 +278,7 @@ func TestTaskEventsEndpointDerivesSubjectFromAttention(t *testing.T) {
 		t.Fatalf("subject = %q, %v; want attention thread %s", subject, err, task.ID)
 	}
 	rec := httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local", nil))
+	daemon.Handler().ServeHTTP(rec, asLocalCLI(httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local", nil)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}

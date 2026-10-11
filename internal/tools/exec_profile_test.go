@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"selfmind/internal/executionenv"
+	"selfmind/internal/tools/sandbox"
 )
 
 // fakeGcloudHome builds a host state directory shaped like ~/.config/gcloud: a
@@ -117,7 +118,9 @@ func profileExecScope(t *testing.T, home, extraPath, trust string, capabilities 
 	if err != nil {
 		t.Skip("no home directory for a runtime root outside /tmp")
 	}
-	root := filepath.Join(realHome, ".selfmind-test-runtime", "profile-"+t.Name())
+	// A subtest name holds "/", which no lease id or path component may.
+	name := strings.ReplaceAll(t.Name(), "/", "-")
+	root := filepath.Join(realHome, ".selfmind-test-runtime", "profile-"+name)
 	if err := executionenv.SetRuntimeRoot(root); err != nil {
 		t.Skipf("runtime root unavailable: %v", err)
 	}
@@ -132,7 +135,7 @@ func profileExecScope(t *testing.T, home, extraPath, trust string, capabilities 
 		"PATH=" + extraPath + string(os.PathListSeparator) + "/usr/bin" + string(os.PathListSeparator) + "/bin",
 		"HOME=" + home,
 	}, "inherited", "principal-test", nil)
-	registry.BindLease("lease-"+t.Name(), snapshot.ID)
+	registry.BindLease("lease-"+name, snapshot.ID)
 
 	workspace = filepath.Join(filepath.Dir(home), "workspace")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
@@ -140,12 +143,13 @@ func profileExecScope(t *testing.T, home, extraPath, trust string, capabilities 
 	}
 	tenant = "tenant-profile-" + t.Name()
 	cleanup := SetExecutionScope(tenant, ExecutionScope{
+		Runtime:       NewExecutionRuntime("", executionenv.RuntimeRoot(), sandbox.PrivateState{}, nil),
 		TenantID:      tenant,
 		PersonID:      "person-profile",
 		WorkspaceID:   "ws-profile",
 		WorkspaceRoot: workspace,
 		AllowedRoots:  []string{workspace},
-		LeaseID:       "lease-" + t.Name(),
+		LeaseID:       "lease-" + name,
 		TrustLevel:    trust,
 		Capabilities:  capabilities,
 		ApprovalMode:  ApprovalFullAuto,
@@ -459,7 +463,7 @@ func TestCredentialReadRunGrantIsReusedForSafeObservation(t *testing.T) {
 		"_tenant_id": tenant, "_tool_name": "terminal",
 		"command": "gcloud builds list", "cwd": workspace,
 	}
-	if firstFP, secondFP := credentialCapabilityFingerprint("ws-profile", "terminal", first), credentialCapabilityFingerprint("ws-profile", "terminal", second); firstFP != secondFP {
+	if firstFP, secondFP := credentialCapabilityFingerprint("ws-profile", "terminal", first, nil), credentialCapabilityFingerprint("ws-profile", "terminal", second, nil); firstFP != secondFP {
 		t.Fatalf("credential profile fingerprints differ: first=%s second=%s first_programs=%v second_programs=%v",
 			firstFP, secondFP, execCommandPrograms("terminal", first), execCommandPrograms("terminal", second))
 	}

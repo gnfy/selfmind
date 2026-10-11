@@ -34,14 +34,14 @@ func TestModelControlRejectsLegacyTextSubcommands(t *testing.T) {
 
 func TestGatewayModelChangeEndpointReturnsStructuredPreview(t *testing.T) {
 	service, _ := testModelChangeService(t)
-	server := &Server{ModelChanges: service, LocalControlToken: "local-secret"}
+	server := &Server{ModelChanges: service}
 	reasoning := "high"
 	body, _ := json.Marshal(api.ModelChangeRequest{
 		Action: "prepare", Route: "primary", Provider: "codex-cli", Model: "gpt-5.6-sol", Reasoning: &reasoning,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:43210"
-	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	req = asLocalCLI(req)
 	recorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -64,11 +64,11 @@ func TestGatewayModelChangeForgetsOnlyRememberedEntry(t *testing.T) {
 	if err := config.SaveConfig(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	server := &Server{ModelChanges: service, LocalControlToken: "local-secret"}
+	server := &Server{ModelChanges: service}
 	body, _ := json.Marshal(api.ModelChangeRequest{Action: "forget_recent", Provider: "google", Model: "retired-model"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:43210"
-	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	req = asLocalCLI(req)
 	recorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -117,7 +117,6 @@ func TestGatewayModelCancelResumesWorkParkedByReadiness(t *testing.T) {
 		t.Fatal(err)
 	}
 	daemon.ModelChanges = service
-	daemon.LocalControlToken = "local-secret"
 	response, statusCode := daemon.ProcessMessage(context.Background(), api.MessageRequest{
 		TenantID: identity.TenantID, Platform: "cli", PlatformUserID: identity.PlatformUserID,
 		Channel: "cli", Content: "run after the preview is cancelled", Async: true,
@@ -128,7 +127,7 @@ func TestGatewayModelCancelResumesWorkParkedByReadiness(t *testing.T) {
 	body, _ := json.Marshal(api.ModelChangeRequest{Action: "cancel", ChangeID: prepared.Change.ID})
 	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:43210"
-	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	req = asLocalCLI(req)
 	recorder := httptest.NewRecorder()
 	daemon.handleGatewayModelChange(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -149,7 +148,7 @@ func TestGatewayModelCancelResumesWorkParkedByReadiness(t *testing.T) {
 
 func TestGatewayModelChangeValidatesWholeDraftWithoutWriting(t *testing.T) {
 	service, path := testModelChangeService(t)
-	server := &Server{ModelChanges: service, LocalControlToken: "local-secret"}
+	server := &Server{ModelChanges: service}
 	reasoning := "high"
 	body, _ := json.Marshal(api.ModelChangeRequest{
 		Action: "validate",
@@ -162,7 +161,7 @@ func TestGatewayModelChangeValidatesWholeDraftWithoutWriting(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:43210"
-	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	req = asLocalCLI(req)
 	recorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -212,7 +211,7 @@ func TestGatewayModelValidationStagesNewProviderCredentialOnlyAfterSuccessfulPro
 		}
 		return []modelchange.ProbeResult{{Route: routes[0], OK: true, Provider: "deepseek", Model: "deepseek-chat"}}
 	}
-	server := &Server{ModelChanges: service, LocalControlToken: "local-secret"}
+	server := &Server{ModelChanges: service}
 	body, _ := json.Marshal(api.ModelChangeRequest{
 		Action: "validate",
 		Patches: []api.ModelSelectionPatch{{
@@ -222,7 +221,7 @@ func TestGatewayModelValidationStagesNewProviderCredentialOnlyAfterSuccessfulPro
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:43210"
-	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	req = asLocalCLI(req)
 	recorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -260,7 +259,7 @@ func TestGatewayModelValidationDoesNotSaveCredentialAfterFailedProbe(t *testing.
 		}
 		return []modelchange.ProbeResult{{Route: routes[0], Error: "authentication failed"}}
 	}
-	server := &Server{ModelChanges: service, LocalControlToken: "local-secret"}
+	server := &Server{ModelChanges: service}
 	body, _ := json.Marshal(api.ModelChangeRequest{
 		Action: "validate",
 		Patches: []api.ModelSelectionPatch{{
@@ -270,7 +269,7 @@ func TestGatewayModelValidationDoesNotSaveCredentialAfterFailedProbe(t *testing.
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:43210"
-	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	req = asLocalCLI(req)
 	recorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(recorder, req)
 	if recorder.Code != http.StatusOK {
@@ -291,7 +290,7 @@ func TestGatewayModelValidationDoesNotSaveCredentialAfterFailedProbe(t *testing.
 func TestGatewayModelChangeAppliesPrimaryBackgroundAndRolesInOneTransaction(t *testing.T) {
 	service, _ := testModelChangeService(t)
 	server := &Server{
-		ModelChanges: service, LocalControlToken: "local-secret",
+		ModelChanges:     service,
 		ModelRestartFunc: func(string) error { return nil },
 	}
 	body, _ := json.Marshal(api.ModelChangeRequest{
@@ -304,7 +303,7 @@ func TestGatewayModelChangeAppliesPrimaryBackgroundAndRolesInOneTransaction(t *t
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:43210"
-	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	req = asLocalCLI(req)
 	recorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(recorder, req)
 	if recorder.Code != http.StatusAccepted {
@@ -331,7 +330,7 @@ func TestGatewayCustomProviderRouteAndCredentialUseOneTransaction(t *testing.T) 
 		}
 		return []modelchange.ProbeResult{{Route: routes[0], OK: true, Provider: "company-gateway", Model: "company-model"}}
 	}
-	server := &Server{ModelChanges: service, LocalControlToken: "local-secret", ModelRestartFunc: func(string) error { return nil }}
+	server := &Server{ModelChanges: service, ModelRestartFunc: func(string) error { return nil }}
 	patch := api.ModelSelectionPatch{Route: "primary", Provider: "company-gateway", Model: "company-model", APIKey: "sk-company"}
 	providerPatch := modelchange.ProviderPatch{Connection: modelchange.ProviderConnection{
 		ID: "company-gateway", Custom: true, BaseURL: "https://llm.company.example/v1",
@@ -343,7 +342,7 @@ func TestGatewayCustomProviderRouteAndCredentialUseOneTransaction(t *testing.T) 
 	})
 	validateReq := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(validateBody))
 	validateReq.RemoteAddr = "127.0.0.1:43210"
-	validateReq.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	validateReq = asLocalCLI(validateReq)
 	validateRecorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(validateRecorder, validateReq)
 	if validateRecorder.Code != http.StatusOK {
@@ -368,7 +367,7 @@ func TestGatewayCustomProviderRouteAndCredentialUseOneTransaction(t *testing.T) 
 	})
 	applyReq := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(applyBody))
 	applyReq.RemoteAddr = "127.0.0.1:43210"
-	applyReq.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	applyReq = asLocalCLI(applyReq)
 	applyRecorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(applyRecorder, applyReq)
 	if applyRecorder.Code != http.StatusOK && applyRecorder.Code != http.StatusAccepted {
@@ -412,7 +411,7 @@ func TestGatewayModelChangeApplyReportsRestartScheduling(t *testing.T) {
 	service, _ := testModelChangeService(t)
 	called := ""
 	server := &Server{
-		ModelChanges: service, LocalControlToken: "local-secret",
+		ModelChanges:     service,
 		ModelRestartFunc: func(changeID string) error { called = changeID; return nil },
 	}
 	body, _ := json.Marshal(api.ModelChangeRequest{
@@ -420,7 +419,7 @@ func TestGatewayModelChangeApplyReportsRestartScheduling(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:43210"
-	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	req = asLocalCLI(req)
 	recorder := httptest.NewRecorder()
 	server.handleGatewayModelChange(recorder, req)
 	var response api.ModelChangeResponse
@@ -435,7 +434,7 @@ func TestGatewayModelChangeApplyReportsRestartScheduling(t *testing.T) {
 func TestGatewayModelChangeConfirmRetryDoesNotSpawnSecondRestart(t *testing.T) {
 	service, _ := testModelChangeService(t)
 	calls := 0
-	server := &Server{ModelChanges: service, LocalControlToken: "local-secret", ModelRestartFunc: func(string) error { calls++; return nil }}
+	server := &Server{ModelChanges: service, ModelRestartFunc: func(string) error { calls++; return nil }}
 	prepared, err := service.Prepare(context.Background(), modelchange.PrepareRequest{
 		Candidate: func() modelchange.Snapshot {
 			status, _ := service.Inspect()
@@ -452,7 +451,7 @@ func TestGatewayModelChangeConfirmRetryDoesNotSpawnSecondRestart(t *testing.T) {
 		body, _ := json.Marshal(api.ModelChangeRequest{Action: "confirm", ChangeID: prepared.Change.ID})
 		req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
 		req.RemoteAddr = "127.0.0.1:43210"
-		req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+		req = asLocalCLI(req)
 		recorder := httptest.NewRecorder()
 		server.handleGatewayModelChange(recorder, req)
 		if recorder.Code != http.StatusAccepted {

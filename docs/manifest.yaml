@@ -87,7 +87,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: 908da693e3a2d4a4
+    source_hash: 8d4fc3c9304f9dea
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -101,7 +101,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 27c4edea68c745ff
+    source_hash: 951fd68f6bdbdd86
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -115,7 +115,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: d932bc5c41ee347b
+    source_hash: 933b13e19a311ff5
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -269,8 +269,8 @@ documents:
     state: active
     language: zh-CN
     approved_by: project-owner
-    review_by: 2026-10-10
-    verdict: "2026-09-29: approved by the owner and activated the same day; the run-centric work-history plan is paused to free the slot. The owner subsequently clarified that Run is the concurrency unit: CLI windows have independent focus, one IM chat can manage several Runs, and ordinary supplements require exact routing or Main judgment. The target default remains three executing work Runs per person, with managed worktrees, external resource conflict protection, and cross-endpoint continuity gates. The 2026-10-10 review checks batch A/B progress."
+    review_by: 2026-10-18
+    verdict: "2026-10-11: continue the owner-authorized hardening; independent review found two pre-worker-refusal and durable-notice boundaries, now covered by injected-failure and replay regressions. The real IM and 24-hour soak gates remain open. 2026-09-29: approved by the owner and activated the same day; the run-centric work-history plan is paused to free the slot. The owner subsequently clarified that Run is the concurrency unit: CLI windows have independent focus, one IM chat can manage several Runs, and ordinary supplements require exact routing or Main judgment. The target default remains three executing work Runs per person, with managed worktrees, external resource conflict protection, and cross-endpoint continuity gates. The 2026-10-10 review checks batch A/B progress. 2026-10-05: after an audit found defects in the default-two configuration, the owner kept that default and approved a hardening batch on a local integration branch; release waits for owner verification."
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference

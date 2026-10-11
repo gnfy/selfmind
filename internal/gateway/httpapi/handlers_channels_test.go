@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/control/controltest"
+	"selfmind/internal/gateway/api"
 )
 
 func feishuSig(ts, nonce, key string, body []byte) string {
@@ -111,10 +112,11 @@ func TestIMWebhookDuplicateAcknowledgedWithoutProcessing(t *testing.T) {
 		control.InboundOwner{TenantID: identity.TenantID, PersonID: identity.PersonID}); err != nil {
 		t.Fatal(err)
 	}
-	if claimed, err := store.ClaimInbound(context.Background(), "feishu", "ev-dup-1"); err != nil || !claimed {
-		t.Fatalf("claim = %t, %v", claimed, err)
+	claim, err := store.ClaimInbound(context.Background(), "feishu", "ev-dup-1")
+	if err != nil || claim == 0 {
+		t.Fatalf("claim = %d, %v", claim, err)
 	}
-	if err := store.AcceptInbound(context.Background(), "feishu", "ev-dup-1"); err != nil {
+	if err := store.AcceptInbound(context.Background(), "feishu", "ev-dup-1", claim); err != nil {
 		t.Fatal(err)
 	}
 	req := httptest.NewRequest("POST", "/v1/im/feishu", strings.NewReader(body))
@@ -143,7 +145,11 @@ func TestIMWebhookRetriesWhenDedupStorageIsUnavailable(t *testing.T) {
 	req := httptest.NewRequest("POST", "/v1/im/feishu", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	daemon.handleIMWebhook(rec, req)
-	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "retry delivery") {
+	var reply api.MessageResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("refusal body is not a message response: %q", rec.Body.String())
+	}
+	if rec.Code != 503 || !strings.Contains(reply.Error, "not started") || !strings.Contains(reply.Error, "retried automatically") {
 		t.Fatalf("unrecorded webhook was acknowledged: code=%d body=%q", rec.Code, rec.Body.String())
 	}
 }
@@ -184,14 +190,54 @@ func TestIMWebhookReplaysOnlyBeforeDispatch(t *testing.T) {
 	if _, err := store.BeginInbound(context.Background(), "webhook", "in-2", uncertain, owner); err != nil {
 		t.Fatal(err)
 	}
-	if claimed, err := store.ClaimInbound(context.Background(), "webhook", "in-2"); err != nil || !claimed {
-		t.Fatalf("claimed = %t, %v", claimed, err)
+	if claim, err := store.ClaimInbound(context.Background(), "webhook", "in-2"); err != nil || claim == 0 {
+		t.Fatalf("claim = %d, %v", claim, err)
 	}
 	req := httptest.NewRequest("POST", "/v1/im/webhook", strings.NewReader(string(uncertain)))
 	rec := httptest.NewRecorder()
 	daemon.handleIMWebhook(rec, req)
 	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "uncertain") {
 		t.Fatalf("uncertain input was blindly replayed: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A webhook refused before admission returns its receipt to pending and asks
+// the platform to redeliver; the redelivery after restart runs once and a
+// further copy is acknowledged as a duplicate.
+func TestIMWebhookRefusedBeforeAdmissionStaysRedeliverable(t *testing.T) {
+	store := controltest.NewStore(t)
+	body := `{"message_id":"in-drain","user_id":"im-owner","chat_id":"im-chat","content":"start the release"}`
+	deliver := func(daemon *Server) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/v1/im/webhook", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		daemon.handleIMWebhook(rec, req)
+		return rec
+	}
+	draining := newInboundTestServer(store, newSlowLLMProvider("unused"))
+	draining.beginDraining("signal terminated")
+	refused := deliver(draining)
+	var reply api.MessageResponse
+	if err := json.Unmarshal(refused.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("refusal body is not a message response: %q", refused.Body.String())
+	}
+	if refused.Code != 503 || !strings.Contains(reply.Error, "shutting down") || !strings.Contains(reply.Error, "retried automatically") {
+		t.Fatalf("refusal = %d %+v; want 503 with cause and retry hint", refused.Code, reply)
+	}
+	if state, _, err := store.InboundReceipt(context.Background(), "webhook", "in-drain"); err != nil || state != control.InboundPending {
+		t.Fatalf("refused webhook receipt = %q, %v; want pending", state, err)
+	}
+
+	provider := newSlowLLMProvider("release started")
+	provider.releaseNow()
+	restarted := newInboundTestServer(store, provider)
+	if accepted := deliver(restarted); accepted.Code != 200 || !strings.Contains(accepted.Body.String(), "release started") {
+		t.Fatalf("redelivery after restart = %d %s", accepted.Code, accepted.Body.String())
+	}
+	if state, _, err := store.InboundReceipt(context.Background(), "webhook", "in-drain"); err != nil || state != control.InboundAccepted {
+		t.Fatalf("redelivered webhook receipt = %q, %v; want accepted", state, err)
+	}
+	if duplicate := deliver(restarted); duplicate.Code != 200 || !strings.Contains(duplicate.Body.String(), "duplicate") {
+		t.Fatalf("second redelivery = %d %s; want duplicate", duplicate.Code, duplicate.Body.String())
 	}
 }
 
@@ -211,6 +257,64 @@ func TestIMWebhookRequiresStableIDForWork(t *testing.T) {
 		daemon.handleIMWebhook(rec, req)
 		if rec.Code != tc.want {
 			t.Fatalf("idless input %s returned %d, want %d", tc.body, rec.Code, tc.want)
+		}
+	}
+}
+
+// A webhook redelivery may change its timestamp, retry counter, or display
+// name; those keep it the same message. A different attachment — a path, a
+// media path, or an unnamed URL — or a different tenant, task, workspace, or
+// reply target makes it a different message.
+func TestWebhookEssentialSeparatesMediaAndRouting(t *testing.T) {
+	essential := webhookEssential("telegram")
+	digest := func(mutate func(map[string]interface{})) string {
+		t.Helper()
+		payload := map[string]interface{}{
+			"message_id": "in-1", "user_id": "im-owner", "chat_id": "im-chat", "content": "review these",
+			"attachments": []interface{}{"/tmp/a.png", map[string]interface{}{"url": "https://files.example/a"}},
+			"media_paths": []interface{}{"/tmp/c.png"},
+			"timestamp":   1, "retry_count": 0, "display_name": "Owner",
+		}
+		if mutate != nil {
+			mutate(payload)
+		}
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, err := essential(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	base := digest(nil)
+	for name, mutate := range map[string]func(map[string]interface{}){
+		"timestamp":    func(p map[string]interface{}) { p["timestamp"] = 2 },
+		"retry":        func(p map[string]interface{}) { p["retry_count"] = 3 },
+		"display name": func(p map[string]interface{}) { p["display_name"] = "Owner (phone)" },
+	} {
+		if got := digest(mutate); got != base {
+			t.Fatalf("%s change made a different message: %s vs %s", name, got, base)
+		}
+	}
+	for name, mutate := range map[string]func(map[string]interface{}){
+		"attachment path": func(p map[string]interface{}) {
+			p["attachments"] = []interface{}{"/tmp/b.png", map[string]interface{}{"url": "https://files.example/a"}}
+		},
+		"attachment url": func(p map[string]interface{}) {
+			p["attachments"] = []interface{}{"/tmp/a.png", map[string]interface{}{"url": "https://files.example/b"}}
+		},
+		"media path": func(p map[string]interface{}) { p["media_paths"] = []interface{}{"/tmp/d.png"} },
+		"tenant":     func(p map[string]interface{}) { p["tenant_id"] = "other-tenant" },
+		"task":       func(p map[string]interface{}) { p["task_id"] = "task-other" },
+		"workspace":  func(p map[string]interface{}) { p["workspace_id"] = "ws-other" },
+		"reply": func(p map[string]interface{}) {
+			p["message"] = map[string]interface{}{"reply_to_message": map[string]interface{}{"message_id": "77"}}
+		},
+	} {
+		if got := digest(mutate); got == base {
+			t.Fatalf("%s change still matched the original message", name)
 		}
 	}
 }

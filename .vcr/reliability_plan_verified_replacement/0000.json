@@ -1,5 +1,5 @@
 {
   "plan_binding_version": 1,
   "method": "completion",
-  "completion": "\"queue-a\" \"depth=7\" current.txt legacy.txt replacement_step_id"
+  "completion": "queue-a current.txt legacy.txt replacement_step_id depth=7"
 }

@@ -49,7 +49,9 @@ func TestAnotherSessionsRunLeavesThisTerminalAlone(t *testing.T) {
 
 	// Asking to watch it is the only way its progress appears here.
 	m.clientMode = true
-	m.runWatcher = func(context.Context, string, httpapi.StreamObserver) string { return "" }
+	m.runWatcher = func(context.Context, string, httpapi.StreamObserver) (api.RunObservation, error) {
+		return api.RunObservation{}, nil
+	}
 	m.handleAttach(nil)
 	if !m.watchingRun || m.watchedRunID != "run_b" {
 		t.Fatalf("/attach did not watch the other session's run: watching=%v run=%q", m.watchingRun, m.watchedRunID)
@@ -97,11 +99,11 @@ func TestAnotherSessionsHumanWaitsAreReportedNotArmed(t *testing.T) {
 	if m.approvalPrompt != nil || m.approvalFlowActive() {
 		t.Fatal("another session's approval armed a panel here")
 	}
-	if !strings.Contains(m.statusMsg, "approval waiting for terminal → git push") || !strings.Contains(m.statusMsg, "/approve") {
+	if !strings.Contains(m.statusMsg, "Pending: 1 approval from another session") || !strings.Contains(m.statusMsg, "/approve <n|id>") {
 		t.Fatalf("status = %q, want the waiting approval and how to answer it", m.statusMsg)
 	}
 	m.Update(MsgApprovalResolved{ID: "apr_a", Status: "approved", Event: uiEventRef{EventID: "ev_resolved"}})
-	if strings.Contains(m.statusMsg, "approval waiting") {
+	if strings.Contains(m.statusMsg, "Pending: 1 approval") {
 		t.Fatalf("an answered approval is still reported: %q", m.statusMsg)
 	}
 
@@ -116,6 +118,38 @@ func TestAnotherSessionsHumanWaitsAreReportedNotArmed(t *testing.T) {
 	m.Update(MsgApprovalRequest{ID: "apr_b", Tool: "terminal", Target: "make test", Channel: "session-b"})
 	if m.approvalPrompt == nil {
 		t.Fatal("this session's own approval did not arm its panel")
+	}
+}
+
+func TestForeignApprovalNoticeReturnsAfterTransientNotice(t *testing.T) {
+	for _, initiallyCovered := range []bool{false, true} {
+		m := NewController("", "", nil, "").model
+		m.channel = "new-session"
+		var transientID uint64
+		if initiallyCovered {
+			transientID = m.setStatusNotice(noticeError, "Temporary connection warning")
+		}
+		m.startupDigest = &api.DigestResponse{PendingApprovals: []api.DigestApproval{{
+			ID: "apr-old", Channel: "earlier-session", Tool: "terminal", Target: "git push",
+		}}}
+		m.maybeShowStartupDigest(100)
+		if !initiallyCovered {
+			transientID = m.setStatusNotice(noticeSuccess, "Settings saved")
+		}
+		m.Update(MsgClearStatus{NoticeID: transientID})
+		if !strings.Contains(m.statusMsg, "Pending: 1 approval") || len(m.messages) != 0 {
+			t.Fatalf("pending approval lost after transient notice (covered=%v): status=%q history=%+v", initiallyCovered, m.statusMsg, m.messages)
+		}
+		// The expired timer cannot clear the restored, differently identified notice.
+		restoredID := m.statusNoticeID
+		m.Update(MsgClearStatus{NoticeID: transientID})
+		if m.statusNoticeID != restoredID {
+			t.Fatal("an old timer cleared the restored human wait")
+		}
+		m.otherSessionApprovalResolved("apr-old")
+		if m.statusMsg != "" {
+			t.Fatalf("resolved approval remains visible: %q", m.statusMsg)
+		}
 	}
 }
 
@@ -141,7 +175,9 @@ func TestStartupDigestReportsAnotherSessionsWork(t *testing.T) {
 	model.width, model.height = 100, 30
 	model.clientMode = true
 	model.channel = "session-b"
-	model.runWatcher = func(context.Context, string, httpapi.StreamObserver) string { return "" }
+	model.runWatcher = func(context.Context, string, httpapi.StreamObserver) (api.RunObservation, error) {
+		return api.RunObservation{}, nil
+	}
 	model.startupDigest = &api.DigestResponse{
 		ActiveRun:        &api.DigestActiveRun{RunID: "run_a", Channel: "session-a", Title: "gcp release", PlanJSON: sessionTestPlan},
 		PendingApprovals: []api.DigestApproval{{ID: "apr_a", Channel: "session-a", Tool: "terminal", Target: "git push", Line: "[terminal] git push"}},
@@ -153,12 +189,15 @@ func TestStartupDigestReportsAnotherSessionsWork(t *testing.T) {
 		t.Fatalf("attached to another session's work: watching=%v plan=%q panel=%v", model.watchingRun, model.activePlanJSON, model.approvalPrompt != nil)
 	}
 	digest := model.messages[len(model.messages)-1].Content
-	for _, want := range []string{"Another session is running: gcp release", "1 approval waiting in another session"} {
+	for _, want := range []string{"Another session is running: gcp release", "new input stays in this session"} {
 		if !strings.Contains(digest, want) {
 			t.Fatalf("digest missing %q:\n%s", want, digest)
 		}
 	}
-	if model.otherRunID != "run_a" || !strings.Contains(model.statusMsg, "approval waiting") {
+	if strings.Contains(digest, "approval") {
+		t.Fatalf("approval duplicated in the startup transcript: %s", digest)
+	}
+	if model.otherRunID != "run_a" || !strings.Contains(model.statusMsg, "Pending: 1 approval") {
 		t.Fatalf("other session not reported: run=%q status=%q", model.otherRunID, model.statusMsg)
 	}
 }

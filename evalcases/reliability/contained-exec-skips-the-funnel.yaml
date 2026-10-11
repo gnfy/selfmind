@@ -46,6 +46,17 @@ assert_state:
   - on: events
     type: tool.sandbox
     payload_contains: '"mode":"isolated"'
+  # The call records why it had no network: this workspace permits it (trust
+  # under a policy that allows egress), and a read of a local file does not need
+  # it. A permission is not a reason, and the record says so.
+  - on: events
+    type: tool.sandbox
+    payload_contains: '"network_decision":"withheld: not network-bound by policy"'
+    count_gte: 1
+  - on: events
+    type: tool.sandbox
+    payload_contains: '"network_permission":"trust"'
+    count_gte: 1
   # Released by containment...
   - on: approval_triage
     status: contained

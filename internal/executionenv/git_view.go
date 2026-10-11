@@ -2,9 +2,9 @@ package executionenv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -53,16 +53,22 @@ func EnsureGitView(ctx context.Context, viewsDir, viewID string, baseline GitBas
 	} else if !os.IsNotExist(err) {
 		return GitView{}, fmt.Errorf("%w: inspect view: %v", ErrGitViewUnavailable, err)
 	}
-	if _, err := gitViewCommand(ctx, baseline.Root, "cat-file", "-e", baseline.Commit+"^{commit}"); err != nil {
+	if _, err := gitSourceCommand(ctx, baseline, "cat-file", "-e", baseline.Commit+"^{commit}"); err != nil {
 		return GitView{}, err
 	}
-	common, err := gitViewCommand(ctx, baseline.Root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	common, err := gitSourceProbe(ctx, baseline.Root, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil || filepath.Clean(common) != filepath.Clean(baseline.CommonDir) {
 		return GitView{}, fmt.Errorf("%w: source repository identity changed", ErrGitViewUnavailable)
 	}
-	configKeys, err := gitViewCommand(ctx, baseline.Root, "config", "--list", "--name-only")
-	if err != nil || hasExecutableGitFilter(configKeys) {
-		return GitView{}, fmt.Errorf("%w: executable Git filter configuration", ErrGitViewUnavailable)
+	configKeys, err := gitSourceCommand(ctx, baseline, "config", "--list", "--name-only")
+	if err != nil {
+		return GitView{}, err
+	}
+	if err := screenGitSourceConfigKeys(configKeys); err != nil {
+		return GitView{}, err
+	}
+	if err := gitSourceObjectIndirection(baseline.CommonDir); err != nil {
+		return GitView{}, err
 	}
 	if err := os.Mkdir(view.Path, 0o700); err != nil {
 		// A concurrent creator may have won the same ID. It is safe to return
@@ -89,7 +95,7 @@ func EnsureGitView(ctx context.Context, viewsDir, viewID string, baseline GitBas
 		return GitView{}, err
 	}
 	for _, key := range []string{"user.name", "user.email"} {
-		if value, err := gitViewCommand(ctx, baseline.Root, "config", "--local", "--get", key); err == nil && value != "" {
+		if value, err := gitSourceCommand(ctx, baseline, "config", "--local", "--get", key); err == nil && value != "" {
 			if _, err := gitViewCommand(ctx, view.Path, "config", "--local", key, value); err != nil {
 				return GitView{}, err
 			}
@@ -112,17 +118,47 @@ func EnsureGitView(ctx context.Context, viewsDir, viewID string, baseline GitBas
 // missing view may have contained uncommitted work, so recovery must park it
 // rather than silently rebuilding an empty checkout from the base commit.
 func InspectGitView(ctx context.Context, viewsDir, viewID string, baseline GitBaseline) (GitView, error) {
+	view, _, err := inspectBoundGitView(ctx, viewsDir, viewID, baseline)
+	return view, err
+}
+
+func inspectBoundGitView(ctx context.Context, viewsDir, viewID string, baseline GitBaseline) (GitView, gitViewState, error) {
 	if !safeGitViewID(viewID) || !filepath.IsAbs(viewsDir) || baseline.Root == "" || baseline.CommonDir == "" || baseline.Commit == "" {
-		return GitView{}, fmt.Errorf("%w: invalid view identity", ErrGitViewUnavailable)
+		return GitView{}, gitViewState{}, fmt.Errorf("%w: invalid view identity", ErrGitViewUnavailable)
 	}
 	physicalDir, err := filepath.EvalSymlinks(filepath.Clean(viewsDir))
 	if err != nil {
-		return GitView{}, fmt.Errorf("%w: resolve view directory: %v", ErrGitViewUnavailable, err)
+		return GitView{}, gitViewState{}, fmt.Errorf("%w: resolve view directory: %v", ErrGitViewUnavailable, err)
 	}
 	if overlappingGitViewRoots(physicalDir, baseline.Root) || overlappingGitViewRoots(physicalDir, baseline.CommonDir) {
-		return GitView{}, fmt.Errorf("%w: view storage overlaps the source repository", ErrGitViewUnavailable)
+		return GitView{}, gitViewState{}, fmt.Errorf("%w: view storage overlaps the source repository", ErrGitViewUnavailable)
 	}
-	return inspectExistingGitView(ctx, GitView{ID: viewID, Path: filepath.Join(physicalDir, viewID), Baseline: baseline})
+	view := GitView{ID: viewID, Path: filepath.Join(physicalDir, viewID), Baseline: baseline}
+	if _, err := os.Lstat(view.Path); errors.Is(err, os.ErrNotExist) {
+		return GitView{}, gitViewState{}, missingGitViewError(physicalDir, viewID)
+	}
+	state, err := inspectGitViewState(ctx, view)
+	if err != nil {
+		return GitView{}, gitViewState{}, err
+	}
+	return view, state, nil
+}
+
+// A Run that resumes after its view left the live path must learn where the
+// work went instead of seeing an unexplained missing directory.
+func missingGitViewError(viewsDir, viewID string) error {
+	archive := filepath.Join(viewsDir, ".retired")
+	if info, err := os.Lstat(filepath.Join(archive, ".pruned", viewID+".json")); err == nil && info.Mode().IsRegular() {
+		return fmt.Errorf("%w: execution view was pruned after delivery; its committed work is retained at %s in the source repository and the checkout cannot be restored",
+			ErrGitViewUnavailable, retainedGitViewRef(viewID))
+	}
+	if info, err := os.Lstat(filepath.Join(archive, viewID)); err == nil && info.IsDir() {
+		return fmt.Errorf("%w: execution view was archived; restore it with /views restore <run_id> before continuing", ErrGitViewUnavailable)
+	}
+	if info, err := os.Lstat(filepath.Join(archive, ".pruning", viewID)); err == nil && info.IsDir() {
+		return fmt.Errorf("%w: execution view is being pruned", ErrGitViewUnavailable)
+	}
+	return fmt.Errorf("%w: existing view is missing or is not a directory", ErrGitViewUnavailable)
 }
 
 func overlappingGitViewRoots(a, b string) bool {
@@ -135,107 +171,165 @@ func overlappingGitViewRoots(a, b string) bool {
 	return false
 }
 
+// gitViewState is the validated evidence one inspection derived from a view:
+// its passive repository settings and the exact HEAD commit it inspected.
+type gitViewState struct {
+	config gitViewConfig
+	head   string
+}
+
 func inspectExistingGitView(ctx context.Context, view GitView) (GitView, error) {
-	info, err := os.Lstat(view.Path)
-	if err != nil || !info.IsDir() {
-		return GitView{}, fmt.Errorf("%w: existing view is missing or is not a directory", ErrGitViewUnavailable)
-	}
-	meta, err := os.Lstat(filepath.Join(view.Path, ".git"))
-	if err != nil || !meta.IsDir() {
-		return GitView{}, fmt.Errorf("%w: existing view has no independent Git metadata", ErrGitViewUnavailable)
-	}
-	if err := validateGitViewConfig(ctx, view.Path); err != nil {
+	if _, err := inspectGitViewState(ctx, view); err != nil {
 		return GitView{}, err
-	}
-	gitDir, err := gitViewCommand(ctx, view.Path, "rev-parse", "--absolute-git-dir")
-	if err != nil {
-		return GitView{}, err
-	}
-	if filepath.Clean(gitDir) != filepath.Join(view.Path, ".git") {
-		return GitView{}, fmt.Errorf("%w: Git metadata escaped the view", ErrGitViewUnavailable)
-	}
-	alternatePath := filepath.Join(view.Path, ".git", "objects", "info", "alternates")
-	alternateInfo, err := os.Lstat(alternatePath)
-	if err != nil || !alternateInfo.Mode().IsRegular() {
-		return GitView{}, fmt.Errorf("%w: source object binding is missing", ErrGitViewUnavailable)
-	}
-	alternate, err := os.ReadFile(alternatePath)
-	if err != nil {
-		return GitView{}, fmt.Errorf("%w: read source object binding: %v", ErrGitViewUnavailable, err)
-	}
-	objects, err := filepath.EvalSymlinks(filepath.Join(view.Baseline.CommonDir, "objects"))
-	if err != nil || string(alternate) != objects+"\n" {
-		return GitView{}, fmt.Errorf("%w: source object binding changed", ErrGitViewUnavailable)
-	}
-	head, err := gitViewCommand(ctx, view.Path, "rev-parse", "--verify", "HEAD^{commit}")
-	if err != nil {
-		return GitView{}, err
-	}
-	if head != view.Baseline.Commit {
-		if _, err := gitViewCommand(ctx, view.Path, "merge-base", "--is-ancestor", view.Baseline.Commit, head); err != nil {
-			return GitView{}, fmt.Errorf("%w: existing view left its baseline", ErrGitViewUnavailable)
-		}
 	}
 	return view, nil
 }
 
-// A model can write the managed checkout, including its .git/config. Every
-// later daemon-side Git probe and /apply import must refuse command-bearing
-// repository configuration before invoking Git in that checkout. The view is
-// initialized with only these passive keys; unexpected additions preserve it
-// for inspection instead of being interpreted by a host-side Git process.
-func validateGitViewConfig(ctx context.Context, viewPath string) error {
-	gitCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(gitCtx, "git", "config", "--file", filepath.Join(viewPath, ".git", "config"),
-		"--null", "--list", "--no-includes")
-	cmd.Env = cleanGitProbeEnv(os.Environ())
-	output, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("%w: view Git configuration is unreadable", ErrGitViewUnavailable)
+func inspectGitViewState(ctx context.Context, view GitView) (gitViewState, error) {
+	info, err := os.Lstat(view.Path)
+	if err != nil || !info.IsDir() {
+		return gitViewState{}, fmt.Errorf("%w: existing view is missing or is not a directory", ErrGitViewUnavailable)
 	}
-	seen := make(map[string]bool)
-	for _, entry := range strings.Split(string(output), "\x00") {
+	if err := validateGitViewMetadata(view); err != nil {
+		return gitViewState{}, err
+	}
+	config, err := validateGitViewConfig(ctx, view.Path)
+	if err != nil {
+		return gitViewState{}, err
+	}
+	head, err := gitViewCommand(ctx, view.Path, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return gitViewState{}, err
+	}
+	if head != view.Baseline.Commit {
+		if _, err := gitViewCommand(ctx, view.Path, "merge-base", "--is-ancestor", view.Baseline.Commit, head); err != nil {
+			return gitViewState{}, fmt.Errorf("%w: existing view left its baseline", ErrGitViewUnavailable)
+		}
+	}
+	return gitViewState{config: config, head: head}, nil
+}
+
+// gitViewRedirects are files through which Git would read repository state
+// from outside the view's own .git directory, or rewrite the history that
+// reachability proofs rely on. A view is created without any of them.
+var gitViewRedirects = []string{"commondir", "gitdir", "config.worktree", filepath.Join("info", "grafts"), "shallow"}
+
+// validateGitViewMetadata checks the view's .git structure before any Git
+// process reads it. Pinning GIT_DIR and GIT_COMMON_DIR already stops these
+// files from steering daemon-side commands; rejecting them also keeps a
+// redirected view from ever being delivered, archived, or resumed.
+func validateGitViewMetadata(view GitView) error {
+	gitDir := filepath.Join(view.Path, ".git")
+	meta, err := os.Lstat(gitDir)
+	if err != nil || !meta.IsDir() {
+		return fmt.Errorf("%w: existing view has no independent Git metadata", ErrGitViewUnavailable)
+	}
+	for _, name := range gitViewRedirects {
+		if _, err := os.Lstat(filepath.Join(gitDir, name)); err == nil {
+			return fmt.Errorf("%w: view Git metadata contains unsupported indirection %s", ErrGitViewUnavailable, name)
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: inspect view Git metadata: %v", ErrGitViewUnavailable, err)
+		}
+	}
+	alternatePath := filepath.Join(gitDir, "objects", "info", "alternates")
+	alternateInfo, err := os.Lstat(alternatePath)
+	if err != nil || !alternateInfo.Mode().IsRegular() {
+		return fmt.Errorf("%w: source object binding is missing", ErrGitViewUnavailable)
+	}
+	alternate, err := os.ReadFile(alternatePath)
+	if err != nil {
+		return fmt.Errorf("%w: read source object binding: %v", ErrGitViewUnavailable, err)
+	}
+	objects, err := filepath.EvalSymlinks(filepath.Join(view.Baseline.CommonDir, "objects"))
+	if err != nil || string(alternate) != objects+"\n" {
+		return fmt.Errorf("%w: source object binding changed", ErrGitViewUnavailable)
+	}
+	return nil
+}
+
+// gitViewConfig is the complete set of passive settings a view may carry.
+// The view is initialized with only these keys; anything else, including
+// includes and every key that names a program, preserves the view for
+// inspection instead of being interpreted by a host-side Git process.
+type gitViewConfig struct {
+	values map[string]string
+}
+
+var gitViewBooleanKeys = []string{"core.filemode", "core.ignorecase", "core.precomposeunicode", "core.symlinks"}
+
+// inspectionConfig is what host-side worktree reads use instead of the
+// view's writable .git/config.
+func (c gitViewConfig) inspectionConfig() string {
+	var b strings.Builder
+	b.WriteString("[core]\n\trepositoryformatversion = 0\n\tbare = false\n")
+	for _, key := range gitViewBooleanKeys {
+		if value, ok := c.values[key]; ok {
+			fmt.Fprintf(&b, "\t%s = %s\n", strings.TrimPrefix(key, "core."), value)
+		}
+	}
+	return b.String()
+}
+
+// validateGitViewConfig parses the view's own config file with Git itself, so
+// the allowlist judges exactly the entries Git would read; metadata validation
+// has already ruled out every other repository configuration source.
+func validateGitViewConfig(ctx context.Context, viewPath string) (gitViewConfig, error) {
+	output, err := runHostGit(ctx, 5*time.Second, viewPath, gitViewEnv(viewPath), nil,
+		"config", "--file", filepath.Join(viewPath, ".git", "config"), "--null", "--list", "--no-includes")
+	if err != nil {
+		return gitViewConfig{}, fmt.Errorf("%w: view Git configuration is unreadable", ErrGitViewUnavailable)
+	}
+	config := gitViewConfig{values: make(map[string]string)}
+	for _, entry := range strings.Split(output, "\x00") {
 		if entry == "" {
 			continue
 		}
 		key, value, ok := strings.Cut(entry, "\n")
 		key = strings.ToLower(key)
-		if !ok || seen[key] {
-			return fmt.Errorf("%w: view Git configuration is ambiguous", ErrGitViewUnavailable)
+		if _, duplicate := config.values[key]; !ok || duplicate {
+			return gitViewConfig{}, fmt.Errorf("%w: view Git configuration is ambiguous", ErrGitViewUnavailable)
 		}
-		seen[key] = true
-		switch key {
-		case "core.repositoryformatversion":
-			if value != "0" {
-				return fmt.Errorf("%w: view Git format changed", ErrGitViewUnavailable)
-			}
-		case "core.filemode", "core.ignorecase", "core.precomposeunicode", "core.symlinks":
-			if value != "true" && value != "false" {
-				return fmt.Errorf("%w: view Git configuration changed", ErrGitViewUnavailable)
-			}
-		case "core.bare":
-			if value != "false" {
-				return fmt.Errorf("%w: view became a bare repository", ErrGitViewUnavailable)
-			}
-		case "core.logallrefupdates":
-			if value != "true" {
-				return fmt.Errorf("%w: view Git reference policy changed", ErrGitViewUnavailable)
-			}
-		case "core.hookspath":
-			if value != os.DevNull {
-				return fmt.Errorf("%w: view Git hooks changed", ErrGitViewUnavailable)
-			}
-		case "user.name", "user.email":
-			if len(value) > 256 || strings.ContainsAny(value, "\r\n\x00") {
-				return fmt.Errorf("%w: view Git identity changed unexpectedly", ErrGitViewUnavailable)
-			}
-		default:
-			return fmt.Errorf("%w: view Git configuration contains unsupported key %q", ErrGitViewUnavailable, key)
+		config.values[key] = value
+		if err := validateGitViewConfigEntry(key, value); err != nil {
+			return gitViewConfig{}, err
 		}
 	}
-	if !seen["core.repositoryformatversion"] || !seen["core.bare"] || !seen["core.hookspath"] {
-		return fmt.Errorf("%w: view Git configuration is incomplete", ErrGitViewUnavailable)
+	for _, required := range []string{"core.repositoryformatversion", "core.bare", "core.hookspath"} {
+		if _, ok := config.values[required]; !ok {
+			return gitViewConfig{}, fmt.Errorf("%w: view Git configuration is incomplete", ErrGitViewUnavailable)
+		}
+	}
+	return config, nil
+}
+
+func validateGitViewConfigEntry(key, value string) error {
+	switch key {
+	case "core.repositoryformatversion":
+		if value != "0" {
+			return fmt.Errorf("%w: view Git format changed", ErrGitViewUnavailable)
+		}
+	case "core.filemode", "core.ignorecase", "core.precomposeunicode", "core.symlinks":
+		if value != "true" && value != "false" {
+			return fmt.Errorf("%w: view Git configuration changed", ErrGitViewUnavailable)
+		}
+	case "core.bare":
+		if value != "false" {
+			return fmt.Errorf("%w: view became a bare repository", ErrGitViewUnavailable)
+		}
+	case "core.logallrefupdates":
+		if value != "true" {
+			return fmt.Errorf("%w: view Git reference policy changed", ErrGitViewUnavailable)
+		}
+	case "core.hookspath":
+		if value != os.DevNull {
+			return fmt.Errorf("%w: view Git hooks changed", ErrGitViewUnavailable)
+		}
+	case "user.name", "user.email":
+		if len(value) > 256 || strings.ContainsAny(value, "\r\n\x00") {
+			return fmt.Errorf("%w: view Git identity changed unexpectedly", ErrGitViewUnavailable)
+		}
+	default:
+		return fmt.Errorf("%w: view Git configuration contains unsupported key %q", ErrGitViewUnavailable, key)
 	}
 	return nil
 }
@@ -251,25 +345,4 @@ func safeGitViewID(id string) bool {
 		return false
 	}
 	return true
-}
-
-func gitViewCommand(ctx context.Context, root string, args ...string) (string, error) {
-	output, err := gitViewCommandRaw(ctx, root, args...)
-	return strings.TrimSpace(output), err
-}
-
-func gitViewCommandRaw(ctx context.Context, root string, args ...string) (string, error) {
-	return gitViewCommandRawTimeout(ctx, root, 15*time.Second, args...)
-}
-
-func gitViewCommandRawTimeout(ctx context.Context, root string, timeout time.Duration, args ...string) (string, error) {
-	gitCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	cmd := exec.CommandContext(gitCtx, "git", append([]string{"-C", root, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull}, args...)...)
-	cmd.Env = cleanGitProbeEnv(os.Environ())
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("%w: git %s: %v", ErrGitViewUnavailable, args[0], err)
-	}
-	return string(output), nil
 }

@@ -3,12 +3,12 @@
   "method": "stream",
   "events": [
     {
-      "content": "The current export in `current.txt"
+      "content": "The accepted export `current."
     },
     {
       "usage": {
-        "input_tokens": 5511,
-        "output_tokens": 8,
+        "input_tokens": 5771,
+        "output_tokens": 6,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -16,12 +16,12 @@
       }
     },
     {
-      "content": "` contains `queue-a depth=7`.\n\n- Verified `current.txt` directly with `grep -F \"queue-a depth"
+      "content": "txt` contains `queue-a depth=7`.\n\n- Verification command: `grep -F \"queue-a depth=7\""
     },
     {
       "usage": {
         "input_tokens": 0,
-        "output_tokens": 29,
+        "output_tokens": 28,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -29,7 +29,7 @@
       }
     },
     {
-      "content": "=7\" current.txt` against criterion \"The current export contains queue-a depth=7\".\n- The unavailable earlier"
+      "content": " current.txt` succeeded with output `queue-a depth=7`.\n- Plan accounting: The earlier route step (`legacy"
     },
     {
       "usage": {
@@ -42,12 +42,12 @@
       }
     },
     {
-      "content": " route (`legacy.txt`) step was cancelled as `not_required` with `replacement_step_id` pointing to the completed"
+      "content": ".txt`) was cancelled as `not_required` with its replacement pointing to the completed and verified step for `current."
     },
     {
       "usage": {
         "input_tokens": 0,
-        "output_tokens": 27,
+        "output_tokens": 25,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -55,12 +55,12 @@
       }
     },
     {
-      "content": " `current.txt` verification step, which satisfies the identical success criterion."
+      "content": "txt`, which satisfies the identical acceptance criteria."
     },
     {
       "usage": {
         "input_tokens": 0,
-        "output_tokens": 15,
+        "output_tokens": 9,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -72,7 +72,7 @@
     },
     {
       "usage": {
-        "input_tokens": 3556,
+        "input_tokens": 2591,
         "output_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,

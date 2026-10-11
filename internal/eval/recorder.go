@@ -120,7 +120,7 @@ func (r *Recorder) StartTurn(index int, input, channel string) {
 		TurnIndex:    index,
 		Channel:      channel,
 		InputHash:    hashText(input),
-		InputPreview: preview(input, 180),
+		InputPreview: preview(tools.RedactSensitive(input), 180),
 	})
 }
 
@@ -159,7 +159,7 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 			CaseID:     r.caseID,
 			Tool:       event.ToolName,
 			ToolCallID: event.ToolCallID,
-			Message:    tools.RedactSensitive(preview(event.ToolArgs, 300)),
+			Message:    preview(tools.RedactSensitive(event.ToolArgs), 300),
 		})
 	case "tool.completed":
 		ok := event.Err == nil
@@ -170,7 +170,7 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 			ToolCallID: event.ToolCallID,
 			OK:         &ok,
 			DurationMS: int64(event.DurationSeconds * 1000),
-			Message:    tools.RedactSensitive(preview(event.ToolResult, 500)),
+			Message:    preview(tools.RedactSensitive(event.ToolResult), 500),
 		}
 		if event.Err != nil {
 			e.Type = "tool_failed"
@@ -203,7 +203,7 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 				CaseID:     r.caseID,
 				Tool:       event.ToolName,
 				ToolCallID: event.ToolCallID,
-				Message:    tools.RedactSensitive(preview(event.Content, 500)),
+				Message:    preview(tools.RedactSensitive(event.Content), 500),
 				Metadata:   event.Payload,
 			})
 		}
@@ -211,6 +211,16 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 }
 
 func (r *Recorder) FinishTurn(index, httpStatus int, content, errText string, inputTokens, outputTokens int, started time.Time) {
+	r.finishTurn(index, httpStatus, "", content, errText, inputTokens, outputTokens, started)
+}
+
+// FinishStoppedTurn records a held turn whose Run the case stopped. Stopping
+// it was the case's own decision, so its cancellation is not an error.
+func (r *Recorder) FinishStoppedTurn(index, httpStatus int, content string, inputTokens, outputTokens int, started time.Time) {
+	r.finishTurn(index, httpStatus, "cancelled", content, "", inputTokens, outputTokens, started)
+}
+
+func (r *Recorder) finishTurn(index, httpStatus int, status, content, errText string, inputTokens, outputTokens int, started time.Time) {
 	if content != "" {
 		r.mu.Lock()
 		current := r.output.String()
@@ -232,20 +242,23 @@ func (r *Recorder) FinishTurn(index, httpStatus int, content, errText string, in
 		HTTPStatus:    httpStatus,
 		DurationMS:    time.Since(started).Milliseconds(),
 		Chars:         len([]rune(content)),
-		OutputPreview: preview(content, 400),
+		OutputPreview: preview(tools.RedactSensitive(content), 400),
 		InputTokens:   inputTokens,
 		OutputTokens:  outputTokens,
 	}
-	if errText != "" {
+	switch {
+	case errText != "":
 		e.Status = "failed"
 		e.Error = tools.RedactSensitive(errText)
 		e.ErrorCategory = classifyError(errText)
 		r.recordError(e.Error, e.ErrorCategory)
-	} else {
+	case status != "":
+		e.Status = status
+	default:
 		e.Status = "completed"
 	}
 	if r.recordContent {
-		e.Metadata = map[string]interface{}{"content": content}
+		e.Metadata = map[string]interface{}{"content": tools.RedactSensitive(content)}
 	}
 	r.Write(e)
 }

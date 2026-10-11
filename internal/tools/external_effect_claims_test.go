@@ -97,12 +97,18 @@ func TestExternalEffectMiddlewareUsesTrustedTargetAndRetainsAsyncClaim(t *testin
 			t.Fatalf("own effect incorrectly promised an automatic wakeup: %v", err)
 		}
 	}
-	if _, err := dispatch(runs[1], prod.Name(), "call-b"); err == nil || !strings.Contains(err.Error(), "occupied") || prod.calls != 1 {
+	// The asynchronous adapter's call returned without proving completion, so
+	// another Run needs the person's one-time approval; this scope has no
+	// approval channel, so the call is not dispatched and names the claim.
+	if _, err := dispatch(runs[1], prod.Name(), "call-b"); err == nil || !strings.Contains(err.Error(), "needs the person's one-time approval") || prod.calls != 1 {
 		t.Fatalf("conflicting target executed or lacked explanation: calls=%d err=%v", prod.calls, err)
 	} else {
-		var boundary interface{ ToolRunPauseStatus() string }
-		if !errors.As(err, &boundary) || boundary.ToolRunPauseStatus() != "waiting_external" {
-			t.Fatalf("resource conflict did not release the worker through a typed pause: %v", err)
+		var facts interface {
+			ToolErrorCode() string
+			ToolEffectState() string
+		}
+		if !errors.As(err, &facts) || facts.ToolErrorCode() != "external_effect_approval_unavailable" || facts.ToolEffectState() != "not_dispatched" {
+			t.Fatalf("approval-needed conflict was not a typed refusal: %v", err)
 		}
 	}
 	if _, err := dispatch(runs[2], stage.Name(), "call-c"); err != nil || stage.calls != 1 {
@@ -125,13 +131,24 @@ func TestExternalEffectMiddlewareClassifiesUnknownAndIsolatedCommands(t *testing
 	if !externalEffectPossible(map[string]interface{}{toolExecutionPolicyArg: unknown, "_tool_name": "external_read"}) {
 		t.Fatal("external tool metadata was trusted to bypass the conservative lane")
 	}
+	if !externalEffectPossible(map[string]interface{}{"_tool_name": "web_search"}) {
+		t.Fatal("a call without an execution policy bypassed the conservative lane")
+	}
+	for _, by := range []string{ReadOnlyMarkedByOperator, ReadOnlyMarkedByPerson} {
+		marked := toolExecutionPolicy{Origin: ToolSchemaOriginExternal, ReadOnly: true, ReadOnlyMarkedBy: by}
+		if externalEffectPossible(map[string]interface{}{toolExecutionPolicyArg: marked, "_tool_name": "external_read"}) {
+			t.Fatalf("an external tool marked read-only by the %s still claimed a target", by)
+		}
+	}
 	registry := NewRegistry()
 	registry.Register(&externalClaimTestTool{newClaimTestTool("external_read", "deploy:production", true)})
-	keys, complete := externalEffectTargets(map[string]interface{}{
+	// The external tool's own adapter cannot narrow its target. Being a
+	// synchronous call, its successful return still settles the claim.
+	keys, settleOnSuccess := externalEffectTargets(map[string]interface{}{
 		toolExecutionPolicyArg: unknown, "_tool_name": "external_read", "_registry": registry,
 	}, nil)
-	if len(keys) != 1 || keys[0] != control.UnknownExternalTarget || complete {
-		t.Fatalf("external tool claimed a narrow resource through its own metadata: %v, %v", keys, complete)
+	if len(keys) != 1 || keys[0] != control.UnknownExternalTarget || !settleOnSuccess {
+		t.Fatalf("external tool claimed a narrow resource through its own metadata: %v, %v", keys, settleOnSuccess)
 	}
 	localExec := map[string]interface{}{toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin},
 		"_tool_name": "terminal", "_effective_sandbox_mode": string(SandboxIsolated), "_network_shared": false}

@@ -1,0 +1,44 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " inspect that"
+    },
+    {
+      "reasoning_content": " exact run to get"
+    },
+    {
+      "reasoning_content": " its plan and hand"
+    },
+    {
+      "reasoning_content": "off."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13029,
+        "output_tokens": 74,
+        "cache_read_input_tokens": 12288,
+        "cache_miss_input_tokens": 741,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 13,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "work_inspect",
+          "Args": "{\"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+        }
+      ]
+    }
+  ]
+}

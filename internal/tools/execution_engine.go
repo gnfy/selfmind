@@ -2,13 +2,16 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"runtime"
 	"strings"
 	"time"
 
+	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel"
+	"selfmind/internal/tools/envprofiles"
 )
 
 // The execution engine.
@@ -34,7 +37,12 @@ import (
 // do not exist, which aborts the sandbox instead of degrading.
 // 3 adds ProxyMode so a plan records when snapshot proxy values were omitted
 // because the execution network could not reach them.
-const SandboxPlanVersion = 3
+// 4 adds HostStateWrites: on a backend that cannot mount, mount-backed tool
+// state is the real host subpath written in place. A node that ignored them
+// would deny the tool's own state write instead of granting it.
+// 5 adds FlatHostStateWrites: a node that ignored them would let a directory
+// appear in a cache whose tool keeps only files there.
+const SandboxPlanVersion = 5
 
 // SandboxPlan is the serializable description of an execution boundary.
 //
@@ -62,6 +70,13 @@ type SandboxPlan struct {
 	// would mount the overlays above into a path it cannot create, so a plan
 	// carrying them is not interpretable by an older node — hence the version.
 	SynthesizedDirs []SandboxSynthesizedDir `json:"synthesized_dirs,omitempty"`
+	// HostStateWrites are declared tool-state subpaths written in place on the
+	// host, by a backend that cannot mount the private overlay above. They are
+	// the only part of the host such a plan makes writable beyond its roots.
+	HostStateWrites []string `json:"host_state_writes,omitempty"`
+	// FlatHostStateWrites are the HostStateWrites whose tool keeps only files
+	// directly in them, so no directory may be created or moved in there.
+	FlatHostStateWrites []string `json:"flat_host_state_writes,omitempty"`
 	// NetworkMode is "isolated" or "shared".
 	NetworkMode string `json:"network_mode"`
 	// ProxyMode is a non-secret route decision. It never carries an endpoint or
@@ -84,7 +99,12 @@ type SandboxPlan struct {
 type ProcessMaterial struct {
 	env        []string
 	scratchTmp string
+	canary     string
 }
+
+// SandboxCanary is the per-command mark a backend that supports one puts on
+// the command's sandbox, or "".
+func (m ProcessMaterial) SandboxCanary() string { return m.canary }
 
 // Env returns a copy for the spawn call.
 func (m ProcessMaterial) Env() []string {
@@ -97,15 +117,19 @@ func (m ProcessMaterial) Env() []string {
 // mount view.
 func (m ProcessMaterial) ScratchTmp() string { return m.scratchTmp }
 
-// SandboxBackend enforces a plan. Linux uses bubblewrap; macOS currently uses
-// approval-controlled host execution with the SAME plan, snapshot, scratch and
-// profiles, so adding a native macOS sandbox later replaces this one interface
-// implementation and nothing above it.
+// SandboxBackend enforces a plan. Linux uses bubblewrap and macOS seatbelt,
+// from the SAME plan, snapshot, scratch and profiles; host execution is the
+// approval-controlled boundary on every platform.
 type SandboxBackend interface {
 	// Name identifies the backend in plans and diagnostics.
 	Name() string
 	// Available reports whether this backend can enforce a plan on this host.
 	Available() bool
+	// MountsToolState reports whether the backend realizes mount-backed tool
+	// state (private overlays, synthesized state roots) inside its own view.
+	// Preparation asks it: a backend that cannot mount receives that state as
+	// in-place writes on the declared host subpaths instead.
+	MountsToolState() bool
 	// Command builds the process for argv under the plan.
 	Command(ctx context.Context, argv []string, plan SandboxPlan, material ProcessMaterial) (*exec.Cmd, error)
 }
@@ -127,8 +151,22 @@ type ExecutionRequest struct {
 	// unable to write to its own workspace root.
 	WorkspaceRoots []string
 	Sandbox        SandboxMode
+	// Boundary is the execution boundary the approval funnel resolved for this
+	// call, and BoundaryReason why it is the host when the call did not ask for
+	// it. Execution uses exactly that boundary: an approved isolated boundary
+	// the backend cannot enforce at dispatch is not dispatched, never run on
+	// the host. Empty for a call no approval resolved (a durable poll).
+	Boundary       SandboxMode
+	BoundaryReason string
 	NetworkShared  bool
-	Timeout        time.Duration
+	// NetworkDecision and NetworkPermission are the runtime's record of why the
+	// network is or is not shared with this call (executionenv.NetworkDecision*
+	// and NetworkPermission*). They are evidence, never an input to the sandbox:
+	// NetworkShared alone decides the plan. Empty for a call that no capability
+	// decision preceded.
+	NetworkDecision   string
+	NetworkPermission string
+	Timeout           time.Duration
 	// ToolProfile carries the duration class and its clamped timeout, which the
 	// streaming heartbeat needs.
 	ToolProfile ToolProfile
@@ -148,11 +186,16 @@ type ExecutionResult struct {
 	Plan                   SandboxPlan
 	ProfilesMatched        []string
 	FailureClass           string
+	NetworkDecision        string
+	NetworkPermission      string
 	RecoveryAttempted      bool
 	RecoveryOutcome        string
 	HostEscapeReason       string
 	ScratchBytes           int64
 	RequestedProxyRemovals []string
+	// HostStateRepairs are the entries the post-command scan moved out of the
+	// credential caches this command wrote in place.
+	HostStateRepairs []envprofiles.QuarantinedStateEntry
 }
 
 // Recovery outcomes.
@@ -189,13 +232,46 @@ func planFromMaterial(material execMaterial, decision SandboxDecision) SandboxPl
 		OverlayMounts: append([]SandboxOverlayMount{}, material.OverlayMounts...),
 		SynthesizedDirs: append([]SandboxSynthesizedDir{},
 			material.SynthesizedDirs...),
-		NetworkMode: network,
-		ProxyMode:   material.ProxyMode,
-		Profiles:    append([]string{}, material.Profiles...),
-		Backend:     backend,
-		Mode:        decision.Mode,
-		Notes:       append([]string{}, material.ProfileNotes...),
+		HostStateWrites:     append([]string{}, material.HostStateWrites...),
+		FlatHostStateWrites: flatHostStateWrites(material.HostStatePlan),
+		NetworkMode:         network,
+		ProxyMode:           material.ProxyMode,
+		Profiles:            append([]string{}, material.Profiles...),
+		Backend:             backend,
+		Mode:                decision.Mode,
+		Notes:               append([]string{}, material.ProfileNotes...),
 	}
+}
+
+// recordedNetworkDecision reconciles the capability decision the request carries
+// with the network the built boundary actually gives the process. The built
+// boundary wins: host execution carries the daemon's network by construction, so
+// it is recorded as shared even when no capability decision preceded it, and a
+// decision that disagrees with the plan is not evidence of it. A call that no
+// capability decision preceded and that is not shared records nothing: the
+// record never claims a reason the runtime did not decide.
+func recordedNetworkDecision(req ExecutionRequest, decision SandboxDecision) (string, string) {
+	switch {
+	case decision.NetworkShared:
+		if req.NetworkDecision == executionenv.NetworkDecisionShared {
+			return req.NetworkDecision, req.NetworkPermission
+		}
+		return executionenv.NetworkDecisionShared, ""
+	case strings.HasPrefix(req.NetworkDecision, "withheld"):
+		return req.NetworkDecision, req.NetworkPermission
+	}
+	return "", ""
+}
+
+// flatHostStateWrites lists the in-place writes whose tool keeps only files.
+func flatHostStateWrites(plan envprofiles.HostStatePlan) []string {
+	var flat []string
+	for _, write := range plan.Writes {
+		if write.Flat {
+			flat = append(flat, write.Path)
+		}
+	}
+	return flat
 }
 
 // SandboxOverlayMount binds Source over Target inside the sandbox.
@@ -281,7 +357,10 @@ const ScratchQuotaSoftLimitBytes int64 = 2 << 30
 // middleware, event ids); nothing the sandbox itself needs is read from it, so
 // the body below is what a separate execution node would run unchanged.
 func Execute(ctx context.Context, req ExecutionRequest, args map[string]interface{}) (ExecutionResult, error) {
-	result := ExecutionResult{RecoveryOutcome: RecoveryNone}
+	if runtime := executionRuntimeFromArgs(args); runtime != nil {
+		ctx = WithExecutionRuntime(ctx, runtime)
+	}
+	result := ExecutionResult{RecoveryOutcome: RecoveryNone, NetworkDecision: req.NetworkDecision, NetworkPermission: req.NetworkPermission}
 	runCtx := ctx
 	if req.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -314,6 +393,38 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 		decision SandboxDecision
 		material execMaterial
 	)
+	var policy *ExecSandboxPolicy
+	if scope, ok := currentExecutionScopeAny(args); ok {
+		policy = scope.SandboxPolicy
+	}
+	if policy == nil && req.Durable != nil {
+		// A durable action has no live Run scope; its binding carries the policy
+		// its registering Run froze, which the configuration in force now can
+		// only narrow. The boundary below, and so whether its state is written
+		// in place, is resolved under that policy and never a looser one.
+		policy = DurableSandboxPolicy(req.Durable.Binding.SandboxPolicy)
+	}
+	// The boundary is resolved before anything is prepared. Preparation
+	// follows the backend that will enforce it, and an approved boundary that
+	// cannot be had starts nothing — it never becomes a host run.
+	boundary, boundaryErr := resolveSandboxBoundaryForPolicy(req.Sandbox, req.Boundary, req.BoundaryReason,
+		runtime.GOOS, ExecSandboxAvailable(), policy)
+	if boundaryErr != nil {
+		result.FailureClass = "environment"
+		return result, enrichToolFailure(req.ToolName, boundaryErr, "")
+	}
+	managed, release, laneErr := acquireManagedExecution(runCtx, args, &req, boundary.Mode == SandboxHost)
+	if laneErr != nil {
+		if classified, ok := laneErr.(interface{ ToolErrorCategory() string }); ok && classified.ToolErrorCategory() == "environment" {
+			result.FailureClass = "environment"
+		}
+		return result, laneErr
+	}
+	defer release()
+	if token := managed.Value(executionLaneContextKey{}); token != nil {
+		runCtx = context.WithValue(runCtx, executionLaneContextKey{}, token)
+	}
+	inPlaceState := boundary.Mode == SandboxIsolated && !SandboxBackendForMode(SandboxIsolated).MountsToolState()
 	// At most TWO attempts, and the second only when the engine's own preparation
 	// stage is the plausible cause and the command produced no output at all.
 	// "Did it produce output" is the decidable proxy for "did it have side
@@ -321,8 +432,25 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 	// something a tool can do correctly, and replaying a command that already ran
 	// is worse than reporting it.
 	for attempt := 1; attempt <= 2; attempt++ {
-		material = execMaterialForRequest(req, args)
+		material = execMaterialForRequest(req, args, inPlaceState)
 		if material.ProfileError != nil {
+			var unexpressible *envprofiles.UnexpressibleStateError
+			var refusal *stableToolError
+			switch {
+			case errors.As(material.ProfileError, &unexpressible):
+				// The backend cannot enforce this plan; preparing it again
+				// cannot change that, and the host is not a substitute.
+				result.FailureClass = "environment"
+				result.RecoveryOutcome = RecoveryNotEligible
+				return result, enrichToolFailure(req.ToolName,
+					sandboxPreparationError(SandboxBackendName(SandboxIsolated), material.ProfileError), "")
+			case errors.As(material.ProfileError, &refusal):
+				// A typed refusal is a decision about this plan, not a
+				// preparation hiccup a second attempt could clear.
+				result.FailureClass = "environment"
+				result.RecoveryOutcome = RecoveryNotEligible
+				return result, enrichToolFailure(req.ToolName, material.ProfileError, "")
+			}
 			// Preparing a tool's state overlay failed. Running anyway would
 			// produce a misleading downstream error (a partially populated
 			// credential store looks like a broken login). The command has not
@@ -340,16 +468,24 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 			emitProfilePreparation(runCtx, req.ToolName, req.ToolCallID, material)
 		}
 
-		var policy *ExecSandboxPolicy
-		if scope, ok := currentExecutionScopeAny(args); ok {
-			policy = scope.SandboxPolicy
+		if len(material.HostStatePlan.Writes) > 0 {
+			if executionRuntimeFromContext(runCtx) == nil {
+				result.FailureClass = "environment"
+				result.RecoveryOutcome = RecoveryNotEligible
+				return result, enrichToolFailure(req.ToolName,
+					sandboxPreparationError(SandboxBackendName(SandboxIsolated), errors.New("sandbox recovery runtime unavailable; command was not started")), "")
+			}
+			// Marks this command's sandbox so whatever it leaves running can
+			// be found and stopped (runGuardedCommand).
+			material.SandboxCanary = newSandboxCanary()
 		}
-		cmd, attemptDecision, attemptPlan, sandboxErr := sandboxedCommandWithMaterialPolicy(runCtx, argv, material,
-			req.Sandbox, runtime.GOOS, ExecSandboxAvailable(), policy, req.NetworkShared)
+		cmd, attemptDecision, attemptPlan, sandboxErr := commandForBoundary(runCtx, argv, material, boundary, req.NetworkShared)
 		if sandboxErr != nil {
+			result.FailureClass = "environment"
 			return result, enrichToolFailure(req.ToolName, sandboxErr, "")
 		}
 		decision = attemptDecision
+		result.NetworkDecision, result.NetworkPermission = recordedNetworkDecision(req, decision)
 		// The plan comes back from the construction site rather than being
 		// rebuilt here: only that site knows the projection it applied for the
 		// decision it resolved.
@@ -362,7 +498,7 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 		if attempt == 1 {
 			result.HostEscapeReason = classifyHostEscape(decision,
 				execCommandProgramsForPayload(req.ToolName, payloadForDiagnostics), payloadForDiagnostics)
-			emitToolProgress(kernel.EventChannelFromContext(runCtx), "tool.sandbox", map[string]interface{}{
+			payload := map[string]interface{}{
 				"tool_name":          req.ToolName,
 				"tool_call_id":       req.ToolCallID,
 				"mode":               string(decision.Mode),
@@ -373,11 +509,30 @@ func Execute(ctx context.Context, req ExecutionRequest, args map[string]interfac
 				"snapshot_id":        result.Plan.SnapshotID,
 				"generation":         result.Plan.Generation,
 				"host_escape_reason": result.HostEscapeReason,
-			}, string(decision.Mode))
+			}
+			if result.NetworkDecision != "" {
+				// Why the network is or is not shared with this call, as evidence.
+				payload["network_decision"] = result.NetworkDecision
+			}
+			if result.NetworkPermission != "" {
+				payload["network_permission"] = result.NetworkPermission
+			}
+			if len(result.Plan.HostStateWrites) > 0 {
+				// Evidence of the one part of the host an isolated run may write
+				// beyond its roots.
+				payload["host_state_writes"] = result.Plan.HostStateWrites
+			}
+			emitToolProgress(kernel.EventChannelFromContext(runCtx), "tool.sandbox", payload, string(decision.Mode))
 		}
 		cmd.Dir = req.CWD
 
-		out, err = runCommandStreaming(runCtx, cmd, payloadForDiagnostics, req.ToolName, req.ToolCallID, req.ToolProfile)
+		// A command that writes credential caches in place is repaired just
+		// before it starts and, from a deferred step that runs however the
+		// attempt ends, after it: its leftover processes are stopped and the
+		// caches scanned again.
+		out, err = runGuardedCommand(runCtx, req, material, cmd, &result, func() (string, error) {
+			return runCommandStreaming(runCtx, cmd, payloadForDiagnostics, req.ToolName, req.ToolCallID, req.ToolProfile)
+		})
 		result.Output = out
 		result.Started = result.Started || cmd.Process != nil
 		result.ExitCodeKnown = cmd.ProcessState != nil && cmd.ProcessState.ExitCode() >= 0

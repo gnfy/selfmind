@@ -385,7 +385,7 @@ func TestShouldParallelizeToolCalls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := shouldParallelizeToolCalls(tt.calls); got != tt.want {
+			if got := shouldParallelizeToolCalls(nil, tt.calls); got != tt.want {
 				t.Fatalf("shouldParallelizeToolCalls() = %v, want %v", got, tt.want)
 			}
 		})
@@ -393,7 +393,7 @@ func TestShouldParallelizeToolCalls(t *testing.T) {
 }
 
 func TestLegacyToolCallsToLLM(t *testing.T) {
-	calls := legacyToolCallsToLLM([]ToolCall{{Name: "read_file", Args: `{"path":"a.txt"}`}}, 2, "")
+	calls := newToolCallIDs("", nil).legacy([]ToolCall{{Name: "read_file", Args: `{"path":"a.txt"}`}}, 2)
 	if len(calls) != 1 {
 		t.Fatalf("len(calls) = %d, want 1", len(calls))
 	}

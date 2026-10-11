@@ -54,7 +54,7 @@ func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run
 	}
 }
 
-func (c *RunCoordinator) startAsyncProgressNotices(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) func() {
+func (c *RunCoordinator) startAsyncProgressNotices(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, runID string) func() {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || router.ShouldStreamToClient(req.Channel) {
 		return func() {}
 	}
@@ -89,6 +89,7 @@ func (c *RunCoordinator) startAsyncProgressNotices(ctx context.Context, identity
 					Platform:       req.Platform,
 					PlatformUserID: identity.PlatformUserID,
 					Channel:        req.Channel,
+					RunID:          runID,
 					Content:        content,
 				})
 			}
@@ -100,6 +101,9 @@ func (c *RunCoordinator) startAsyncProgressNotices(ctx context.Context, identity
 }
 
 func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, resp api.MessageResponse) bool {
+	if providerWaitIsParked(resp) {
+		return true // The durable wakeup owns delivery of the eventual result.
+	}
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil {
 		return false
 	}
@@ -138,7 +142,7 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		// bound account (conversation-layer rule 4). Task/run identity stays in
 		// delivery metadata; a mutable task title must not pollute the answer.
 		accepted = c.deliverToPreferredIMAccepted(ctx, identity, base)
-		if !accepted && c.preferredIMAccount(ctx, identity) == nil {
+		if !accepted && base.RunID != "" && c.preferredIMAccount(ctx, identity) == nil {
 			// The atomic finalizer already wrote the result to channel_messages.
 			// For a CLI-only user that transcript is the intended durable target.
 			accepted = true
@@ -161,6 +165,9 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 // interactive async path it must skip a "busy" tick (the person was mid-run, so
 // the job did not actually execute) instead of delivering a confusing notice.
 func (c *RunCoordinator) deliverCronResult(ctx context.Context, req api.MessageRequest, resp api.MessageResponse) {
+	if providerWaitIsParked(resp) {
+		return
+	}
 	if c == nil || c.srv == nil || c.srv.Delivery == nil {
 		return
 	}
@@ -190,6 +197,10 @@ func (c *RunCoordinator) deliverCronResult(ctx context.Context, req api.MessageR
 		Kind:           delivery.KindFinalResult,
 		Content:        deliveryContent(resp),
 	})
+}
+
+func providerWaitIsParked(resp api.MessageResponse) bool {
+	return resp.Outcome != nil && resp.Outcome.Status == "waiting_external" && (resp.Outcome.CompletionReason == "provider_wait" || resp.Outcome.CompletionReason == "execution_lane_wait")
 }
 
 // deliveryContent renders the user-facing text for an outbound delivery: a
@@ -440,7 +451,8 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		if event.ToolName == "update_plan" {
 			resultLimit = 8000
 		}
-		payload["result"] = tools.RedactSensitive(truncate(event.ToolResult, resultLimit))
+		// Mask before cutting: a cut secret is no longer recognizable.
+		payload["result"] = truncate(tools.RedactSensitive(event.ToolResult), resultLimit)
 		payload["duration_seconds"] = event.DurationSeconds
 		if event.Err != nil {
 			payload["error"] = tools.RedactSensitive(event.Err.Error())

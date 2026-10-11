@@ -110,7 +110,9 @@ func TestIsolatedGitViewCannotInheritOrRequestNetwork(t *testing.T) {
 	}
 }
 
-func TestParallelGitViewUsesScopedNetworkWithOneShotRemoteApproval(t *testing.T) {
+// The untrusted view still asks for the workspace network capability, but a
+// full-auto parallel Run adds no parallel-only ask for the remote command (D7).
+func TestParallelGitViewUsesScopedNetworkWithoutAParallelOnlyAsk(t *testing.T) {
 	// The process default is offline; the frozen Run policy is authoritative.
 	withExecSandboxPolicy(t, true, true, false)
 	root := t.TempDir()
@@ -124,8 +126,8 @@ func TestParallelGitViewUsesScopedNetworkWithOneShotRemoteApproval(t *testing.T)
 		SandboxPolicy: &ExecSandboxPolicy{Enabled: true, Required: true, AllowNetwork: true},
 		Approval: func(_ context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
 			approvals++
-			if req.ToolName == "terminal" && req.DecisionPolicy != ApprovalDecisionPolicyOnceOnly {
-				t.Fatalf("parallel view remote action offered reusable authority: %+v", req)
+			if req.ToolName == "terminal" {
+				t.Fatalf("full-auto parallel view asked about its remote command: %+v", req)
 			}
 			return ToolApprovalDecision{Approved: true}, nil
 		},
@@ -141,7 +143,7 @@ func TestParallelGitViewUsesScopedNetworkWithOneShotRemoteApproval(t *testing.T)
 	_, err := executor(map[string]interface{}{
 		"_tenant_id": person, "_tool_name": "terminal", "command": "curl https://example.test/upload --data payload",
 	})
-	if err != nil || approvals != 2 || calls != 1 {
+	if err != nil || approvals != 1 || calls != 1 {
 		t.Fatalf("parallel view call: approvals=%d calls=%d err=%v", approvals, calls, err)
 	}
 }
@@ -179,6 +181,8 @@ func TestExecutionCapabilityMiddlewareNeverReplaysUnknownCommand(t *testing.T) {
 	if err == nil || calls != 1 || store.writes != 0 {
 		t.Fatalf("err=%v calls=%d writes=%d", err, calls, store.writes)
 	}
+	// The grant permits; the retry says it needs the network.
+	args["network"] = true
 	if output, retryErr := executor(args); retryErr != nil || output != "connected" || calls != 2 {
 		t.Fatalf("explicit retry did not use run grant: output=%q err=%v calls=%d", output, retryErr, calls)
 	}

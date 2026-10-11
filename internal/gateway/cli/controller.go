@@ -175,7 +175,7 @@ type uiModel struct {
 	activePlanVersion     int       // Durable RunPlan version; rejects out-of-order snapshots
 	activePlanCursor      int64     // Event cursor tie-breaker for equal/legacy versions
 	activePlanActions     int       // Tool actions the plan's run started since this snapshot
-	runStatus             string    // ready | queued | working | done | error | cancelled
+	runStatus             string    // ready | queued | working | waiting_user | waiting_external | done | interrupted | error | cancelled
 	queuedCount           int       // requests submitted by this TUI and accepted into the daemon queue
 	queuedInputs          []string  // local queue acknowledgements awaiting run.started
 	queuedRunIDs          []string  // exact queue acknowledgements awaiting run.started
@@ -194,6 +194,7 @@ type uiModel struct {
 	otherRunTitle       string
 	otherApprovals      map[string]string
 	otherClarify        string
+	otherClarifyID      string
 	otherNoticeID       uint64
 	foreignDetailEvents atomic.Int64
 	// backgroundRunID is the daemon run whose progress this terminal must NOT
@@ -249,7 +250,7 @@ type uiModel struct {
 	skillCompletion   []tools.SkillCompletionCandidate
 	toolDispatchFn    func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
 	approvalResponder func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope is daemon-issued; grantKey is a rule the ask offered)
-	steerFn           func(runID, channel, text string) error                        // client mode: forward guidance to this window's run
+	steerFn           func(runID, channel, text, approvalMode string) error          // client mode: forward guidance to this window's run
 	// Interactive approval panel state (see approval_flow.go). approvalPrompt is
 	// the active panel; approvalQueue holds requests that arrived while one was
 	// already up (FIFO re-arm).
@@ -271,9 +272,17 @@ type uiModel struct {
 	// fetches the digest before the first presence beat and hands it over via
 	// SetStartupDigest; the first sized frame renders it once, and when it
 	// reports a mid-flight run the runWatcher hooks its live events.
-	startupDigest *api.DigestResponse
-	digestShown   bool
-	runWatcher    RunWatcher
+	startupDigest        *api.DigestResponse
+	digestShown          bool
+	runWatcher           RunWatcher
+	runViewer            RunViewer
+	runViewOptions       []api.RunViewOption
+	runViewIndex         int
+	runViewID            string
+	runViewRequest       uint64
+	runViewLoading       bool
+	runViewResumeActions bool
+	runViewCanContinue   bool
 	// watchingRun is PASSIVE spectator mode for a pre-existing daemon run
 	// (no local turn owns it, the composer is NOT captured). Distinct from
 	// m.thinking, which means "a local turn is executing".
@@ -317,6 +326,7 @@ type MsgAgentActivity struct {
 type MsgBackgroundNotice struct {
 	Content string
 	Success bool
+	Event   uiEventRef
 }
 
 // MsgApprovalRequest is emitted (client mode) when the daemon blocks a run
@@ -584,7 +594,7 @@ func (c *Controller) SetApprovalResponder(fn func(approvalID, decision, scope, g
 // (gateway POST /v1/runs/steer). When the run executes inside the daemon, the
 // process-local steering channel can never reach it, so input typed during a
 // run must go through this function instead. Only set in client mode.
-func (c *Controller) SetSteerFunc(fn func(runID, channel, text string) error) {
+func (c *Controller) SetSteerFunc(fn func(runID, channel, text, approvalMode string) error) {
 	if c == nil || c.model == nil {
 		return
 	}
@@ -1091,7 +1101,7 @@ func (m *uiModel) injectMidRunGuidance(input string) tea.Cmd {
 			m.addErrorMessage("The running task has no exact run or session yet; guidance was not sent. Your draft is still in the composer.")
 			kind = noticeWarning
 			status = "Guidance was not accepted by the daemon."
-		} else if err := m.steerFn(m.daemonRunID, m.channel, input); err != nil {
+		} else if err := m.steerFn(m.daemonRunID, m.channel, input, m.approvalMode); err != nil {
 			m.addErrorMessage(fmt.Sprintf("The daemon did not accept the guidance: %v", err))
 			kind = noticeWarning
 			status = "Guidance was not accepted by the daemon."
@@ -1194,11 +1204,12 @@ func (m *uiModel) View() string {
 }
 
 type MsgAgentDone struct {
-	Response string
-	Usage    llm.UsageStats
-	Err      error
-	Input    string
-	Turn     *api.TurnStatus
+	PreviousRunID string // bound Run at dispatch; distinguish a new reply from a late parent
+	Response      string
+	Usage         llm.UsageStats
+	Err           error
+	Input         string
+	Turn          *api.TurnStatus
 }
 
 type MsgModelChangeDone struct {
@@ -1246,6 +1257,7 @@ type MsgDaemonRunStarted struct {
 	// Presentation is runtime-derived through the exact session/parent lineage.
 	Presentation string
 	RunID        string
+	ResumesRunID string
 	QueueID      string
 	TaskID       string
 	WatchID      string

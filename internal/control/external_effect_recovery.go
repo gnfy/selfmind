@@ -24,7 +24,7 @@ func externalEffectForObservationTx(ctx context.Context, tx *sql.Tx, tenantID, p
 	if strings.TrimSpace(personID) == "" || strings.TrimSpace(observerRun) == "" || strings.TrimSpace(claimID) == "" {
 		return claim, fmt.Errorf("exact person, observer Run and effect claim are required")
 	}
-	err := tx.QueryRowContext(ctx, `SELECT id,tenant_id,person_id,run_id,effect_id,target_key,state,observation_ref FROM external_effect_claims WHERE tenant_id=? AND person_id=? AND id=?`, tenantID, personID, claimID).Scan(&claim.ID, &claim.TenantID, &claim.PersonID, &claim.RunID, &claim.EffectID, &claim.TargetKey, &claim.State, &claim.ObservationRef)
+	err := tx.QueryRowContext(ctx, `SELECT id,tenant_id,person_id,run_id,effect_id,target_key,state,observation_ref,sequence FROM external_effect_claims WHERE tenant_id=? AND person_id=? AND id=?`, tenantID, personID, claimID).Scan(&claim.ID, &claim.TenantID, &claim.PersonID, &claim.RunID, &claim.EffectID, &claim.TargetKey, &claim.State, &claim.ObservationRef, &claim.Sequence)
 	if err != nil {
 		return claim, fmt.Errorf("effect claim not found for this person: %w", err)
 	}

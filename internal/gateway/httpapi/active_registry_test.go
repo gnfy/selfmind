@@ -8,29 +8,38 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
+	"selfmind/internal/gateway/api"
 )
+
+// Legacy fixtures register synthetic handles without an execution goroutine.
+// Their cleanup clears those fixtures; production always ends one exact handle.
+func (c *RunCoordinator) endActive(personID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.active, personID)
+}
 
 func TestMultipleActiveRunsRequireExactControl(t *testing.T) {
 	d, _, identity, _, _ := newApprovalTestServer(t)
 	coord := d.coordinator()
 	coord.activeLimit = 2
-	a := &activeRun{TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: "run_alpha", Channel: "cli-a", StartedAt: time.Now()}
-	b := &activeRun{TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: "run_beta", Channel: "cli-b", StartedAt: time.Now().Add(time.Second)}
+	a := &activeRun{TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: "run_alpha", Platform: "cli", PlatformUserID: "local", Channel: "cli-a", StartedAt: time.Now()}
+	b := &activeRun{TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: "run_beta", Platform: "cli", PlatformUserID: "local", Channel: "cli-b", StartedAt: time.Now().Add(time.Second)}
 	if !coord.beginActive(identity.PersonID, a) || !coord.beginActive(identity.PersonID, b) {
 		t.Fatal("two slots were not admitted")
 	}
 	defer coord.endActiveRun(identity.PersonID, a)
 	defer coord.endActiveRun(identity.PersonID, b)
-	if coord.currentActive(identity.PersonID) != nil || coord.stopActive(identity.PersonID) != nil {
-		t.Fatal("ambiguous person-wide control selected a run")
+	if coord.activeCount(identity.PersonID) != 2 {
+		t.Fatal("registry did not retain both runs")
 	}
 	if got := coord.activeForRun(identity.PersonID, "run_alpha"); got == nil || got.Channel != "cli-a" {
 		t.Fatalf("exact run lookup=%+v", got)
 	}
-	if coord.activeForRun(identity.PersonID, "run_missing") != nil || coord.activeForChannel(identity.PersonID, "cli-c") != nil {
+	if coord.activeForRun(identity.PersonID, "run_missing") != nil || coord.activeForIncoming(identity.PersonID, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "cli-c"}) != nil {
 		t.Fatal("unknown target fell back to another run")
 	}
-	if got := coord.activeForChannel(identity.PersonID, "cli-b"); got == nil || got.RunID != "run_beta" {
+	if got := coord.activeForIncoming(identity.PersonID, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "cli-b"}); got == nil || got.RunID != "run_beta" {
 		t.Fatalf("channel focus lookup=%+v", got)
 	}
 	status, err := d.statusReply(context.Background(), identity)
@@ -38,7 +47,7 @@ func TestMultipleActiveRunsRequireExactControl(t *testing.T) {
 		t.Fatalf("ambiguous status=%q err=%v", status, err)
 	}
 	coord.endActiveRun(identity.PersonID, a)
-	if got := coord.currentActive(identity.PersonID); got == nil || got.RunID != "run_beta" {
+	if got := coord.activeForRun(identity.PersonID, b.RunID); got == nil || got.RunID != "run_beta" {
 		t.Fatalf("ending one slot removed or changed the other: %+v", got)
 	}
 }

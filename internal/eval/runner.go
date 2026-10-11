@@ -21,7 +21,6 @@ import (
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/promptassets"
-	"selfmind/internal/tools"
 )
 
 type RunOptions struct {
@@ -55,8 +54,7 @@ type runtimeHarness struct {
 	cfg                   *config.Config
 	mem                   *memory.MemoryManager
 	controlStore          *control.Store
-	cronStop              func()
-	mcpClose              func()
+	gateway               *appcore.GatewayDeps
 	server                *httpapi.Server
 	tenantID              string
 	provider              string
@@ -64,6 +62,13 @@ type runtimeHarness struct {
 	// deliverySender is set only for cases that seed deliveries; it records what
 	// the recovery path actually pushed.
 	deliverySender *evalDeliverySender
+	// leases records which worker served each Run and holds hold_worker Runs.
+	leases *workerLeaseLog
+	// stubDir holds the MCP stub binary and its start logs.
+	stubDir string
+	// choices maps each turn choice the case seeded or was shown to the person
+	// it was asked of.
+	choices map[string]string
 }
 
 func RunCaseFile(ctx context.Context, path string, opts RunOptions) (*RunResult, error) {
@@ -207,6 +212,12 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	if err != nil {
 		return nil, err
 	}
+	// The case person's other endpoint accounts (CLI sessions, IM accounts)
+	// are bound before any seed or turn names them.
+	accounts, err := bindPersonAccounts(ctx, h.controlStore, c, identity)
+	if err != nil {
+		return nil, err
+	}
 	// Bind the workspace explicitly whenever the data dir is fresh (the
 	// default). The gateway's CLI-cwd heuristic only auto-registers a workspace
 	// for cli/terminal channels, so IM-channel scenarios (weixin/feishu/qq)
@@ -234,6 +245,15 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			return nil, err
 		}
 		seededTaskID = seeded
+		choiceIDs, err := applyEndpointSeeds(ctx, h.controlStore, c, endpointSeedContext{
+			accounts: accounts, workspace: workspace, workspaceID: workspaceID, taskID: seededTaskID, parkedRuns: seededParkedRunIDs,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range choiceIDs {
+			h.choices[id] = identity.PersonID
+		}
 	}
 	existingRunIDs := map[string]bool{}
 	if identity != nil {
@@ -290,12 +310,74 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	// no run — queued, candidates, control command — leaves its slot empty).
 	turnRunIDs := make([]string, len(c.Turns))
 	var turnChecks []CheckResult
+	// Held turns finish after later turns. Their Tasks and Runs count as the
+	// case's work, but taskIDs and runIDs, which name the subject of state
+	// assertions, keep only foreground turns.
+	var heldTaskIDs, heldRunIDs []string
+	// noteResponse keeps the ids and usage every turn contributes.
+	noteResponse := func(i int, resp api.MessageResponse, isHeld bool) {
+		if resp.Identity != nil && resp.Identity.PersonID != "" {
+			seenPersons[resp.Identity.PersonID] = true
+		}
+		if resp.Task != nil {
+			if isHeld {
+				heldTaskIDs = append(heldTaskIDs, resp.Task.ID)
+			} else {
+				taskIDs = append(taskIDs, resp.Task.ID)
+			}
+		}
+		if resp.Run != nil {
+			if isHeld {
+				heldRunIDs = append(heldRunIDs, resp.Run.ID)
+			} else {
+				runIDs = append(runIDs, resp.Run.ID)
+			}
+			if !existingRunIDs[resp.Run.ID] {
+				createdRunIDs = append(createdRunIDs, resp.Run.ID)
+				existingRunIDs[resp.Run.ID] = true
+			}
+			turnRunIDs[i] = resp.Run.ID
+		}
+		if resp.Choice != nil && resp.Choice.ID != "" && resp.Identity != nil {
+			h.choices[resp.Choice.ID] = resp.Identity.PersonID
+		}
+		inputTokens += resp.Usage.InputTokens
+		outputTokens += resp.Usage.OutputTokens
+	}
+	var held []*heldTurn
+	// A case that returns early must not close the store under a held Run.
+	defer func() {
+		h.leases.releaseHolds()
+		for _, turn := range held {
+			<-turn.done
+		}
+	}()
 	for i, turn := range c.Turns {
 		turnStart := time.Now()
 		channel := firstNonEmpty(turn.Channel, c.Channel, "cli")
 		input := turn.Input
 		if turn.SeededRunOrdinal > 0 {
 			input += " " + seededParkedRunIDs[turn.SeededRunOrdinal-1]
+		}
+		if turn.SeededEffectOrdinal > 0 {
+			claims, err := h.controlStore.ExternalEffectClaimsForEffect(ctx, identity.TenantID, identity.PersonID,
+				seededParkedRunIDs[turn.SeededEffectOrdinal-1], seededEffectID)
+			if err != nil || len(claims) == 0 {
+				return nil, fmt.Errorf("turn %d: seeded effect of parked run %d is missing: %v", i+1, turn.SeededEffectOrdinal, err)
+			}
+			input += " " + claims[0].ID
+		}
+		if turn.TurnRunOrdinal > 0 {
+			runID := turnRunIDs[turn.TurnRunOrdinal-1]
+			if runID == "" {
+				// Sending the bare control would act on whatever is current.
+				turnChecks = append(turnChecks, CheckResult{
+					Name:    fmt.Sprintf("turn-%d:turn_run_ordinal", i+1),
+					Message: fmt.Sprintf("turn %d started no Run, so this turn was not sent", turn.TurnRunOrdinal),
+				})
+				continue
+			}
+			input += " " + runID
 		}
 		rec.StartTurn(i, input, channel)
 		replyToRunID := ""
@@ -309,33 +391,42 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 				writeLiveProgress(opts.ProgressWriter, c.ID, i, event)
 			}
 		}
+		// Tag the turn with a VCR session (the case id) so model calls can be
+		// recorded/replayed deterministically when SELFMIND_EVAL_VCR is set.
+		// The turn mark lets the worker lease hook name the turn of every Run.
+		vcrCtx := withEvalTurn(evalTurnVCRContext(httpapi.WithStreamObserver(ctx, observer), c.ID, workspace), i+1)
+		// A per-turn platform_user_id override simulates a different platform user
+		// (identity-isolation scenarios); the default keeps the case's identity.
+		req, err := h.turnRequest(c, turn, input, channel, replyToRunID, workspace, workspaceID)
+		if err != nil {
+			return nil, fmt.Errorf("turn %d: %w", i+1, err)
+		}
+		if turn.HoldWorker {
+			// The Run stays on its worker while later turns run; its result is
+			// recorded once it has been stopped. The turn budget bounds it.
+			held = append(held, h.startHeldTurn(vcrCtx, turnBudget(c, opts), i, req))
+			lease, _ := h.leases.turnLease(i + 1)
+			turnRunIDs[i] = lease.runID
+			if len(turn.AssertState) > 0 {
+				world := h.worldState(ctx, identity, lease.taskID, lease.runID, workspace, turn.AssertState)
+				for _, check := range EvaluateStatePredicates(turn.AssertState, world) {
+					check.Name = fmt.Sprintf("turn-%d:%s", i+1, check.Name)
+					turnChecks = append(turnChecks, check)
+				}
+			}
+			continue
+		}
 		// Per-turn deadline: a stalled provider stream (bytes stop arriving
 		// without an EOF) would otherwise hang the eval indefinitely. The
 		// deadline cancels the underlying request so the turn fails cleanly.
-		// Tag the turn with a VCR session (the case id) so model calls can be
-		// recorded/replayed deterministically when SELFMIND_EVAL_VCR is set.
-		vcrCtx := evalTurnVCRContext(httpapi.WithStreamObserver(ctx, observer), c.ID, workspace)
 		turnCtx, cancelTurn := context.WithTimeout(vcrCtx, turnBudget(c, opts))
-		// A per-turn platform_user_id override simulates a different platform user
-		// (identity-isolation scenarios); the default keeps the case's identity.
-		resp, status := h.server.ProcessMessage(turnCtx, api.MessageRequest{
-			TenantID:              h.tenantID,
-			Platform:              "eval",
-			PlatformUserID:        firstNonEmpty(turn.PlatformUserID, "eval-"+c.ID),
-			DisplayName:           "SelfMind Eval",
-			Channel:               channel,
-			Content:               input,
-			ReplyToRunID:          replyToRunID,
-			NativeReplyMessageID:  turn.NativeReplyMessageID,
-			ApprovalID:            turn.ApprovalID,
-			ClarifyID:             turn.ClarifyID,
-			ClientCWD:             workspace,
-			ClientAdditionalRoots: append([]string{}, turn.AdditionalRoots...),
-			WorkspaceID:           workspaceID,
-			// Cases default to full-auto; smart cases exercise the real judge.
-			// Workspace scope and the hard deny floor remain active in both.
-			ApprovalMode: firstNonEmpty(c.ApprovalMode, string(tools.ApprovalFullAuto)),
-		})
+		var resp api.MessageResponse
+		var status int
+		if turn.Scheduled {
+			resp, status = h.fireScheduledTurn(turnCtx, req)
+		} else {
+			resp, status = h.server.ProcessMessage(turnCtx, req)
+		}
 		cancelTurn()
 		if turn.WaitForMaintenance {
 			maintenanceCtx, cancelMaintenance := context.WithTimeout(
@@ -344,20 +435,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			h.server.RunMaintenancePass(maintenanceCtx)
 			cancelMaintenance()
 		}
-		if resp.Identity != nil && resp.Identity.PersonID != "" {
-			seenPersons[resp.Identity.PersonID] = true
-		}
-		if resp.Task != nil {
-			taskIDs = append(taskIDs, resp.Task.ID)
-		}
-		if resp.Run != nil {
-			runIDs = append(runIDs, resp.Run.ID)
-			if !existingRunIDs[resp.Run.ID] {
-				createdRunIDs = append(createdRunIDs, resp.Run.ID)
-				existingRunIDs[resp.Run.ID] = true
-			}
-			turnRunIDs[i] = resp.Run.ID
-		}
+		noteResponse(i, resp, false)
 		if resp.Outcome != nil {
 			lastOutcome = resp.Outcome.Status
 			lastCompletionReason = resp.Outcome.CompletionReason
@@ -366,8 +444,6 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 				lastVerificationState = resp.Outcome.Verification.State
 			}
 		}
-		inputTokens += resp.Usage.InputTokens
-		outputTokens += resp.Usage.OutputTokens
 		lastStatus = "completed"
 		if resp.Turn != nil && strings.TrimSpace(resp.Turn.Status) != "" {
 			lastStatus = resp.Turn.Status
@@ -378,7 +454,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		lastHTTPStatus = status
 		rec.FinishTurn(i, status, resp.Content, resp.Error, resp.Usage.InputTokens, resp.Usage.OutputTokens, turnStart)
 		if len(turn.AssertState) > 0 {
-			world := CollectWorldState(ctx, h.controlStore, h.mem, resp.Identity, lastNonEmpty(taskIDs), lastNonEmpty(runIDs), workspace)
+			world := h.worldState(ctx, resp.Identity, lastNonEmpty(taskIDs), lastNonEmpty(runIDs), workspace, turn.AssertState)
 			for _, check := range EvaluateStatePredicates(turn.AssertState, world) {
 				check.Name = fmt.Sprintf("turn-%d:%s", i+1, check.Name)
 				turnChecks = append(turnChecks, check)
@@ -402,6 +478,19 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			}
 		}
 	}
+	// Held turns end when the case stops their Runs; the case's status stays
+	// that of its last foreground turn.
+	h.joinHeldTurns(held)
+	for _, turn := range held {
+		noteResponse(turn.index, turn.resp, true)
+		checks := h.heldTurnChecks(ctx, turn)
+		if ChecksPassed(checks) {
+			rec.FinishStoppedTurn(turn.index, turn.status, turn.resp.Content, turn.resp.Usage.InputTokens, turn.resp.Usage.OutputTokens, turn.started)
+		} else {
+			rec.FinishTurn(turn.index, turn.status, turn.resp.Content, turn.resp.Error, turn.resp.Usage.InputTokens, turn.resp.Usage.OutputTokens, turn.started)
+		}
+		turnChecks = append(turnChecks, checks...)
+	}
 	// Every eval turn is synchronous, so its run must be terminal once
 	// ProcessMessage returns. Anything still `running` here is a finalization
 	// bug or an interrupted write; force a terminal state so eval never leaves
@@ -409,8 +498,8 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	// the user's /tasks forever).
 	forceFinalized := finalizeLeftoverRuns(ctx, h.controlStore, h.tenantID, seenPersons, 3*time.Second)
 	snap := rec.Snapshot()
-	snap.TaskIDs = taskIDs
-	snap.RunIDs = runIDs
+	snap.TaskIDs = append(append([]string(nil), taskIDs...), heldTaskIDs...)
+	snap.RunIDs = append(append([]string(nil), runIDs...), heldRunIDs...)
 	snap.CreatedRunIDs = createdRunIDs
 	snap.HTTPStatus = lastHTTPStatus
 	snap.Workspace = observedRunWorkspace(ctx, h.controlStore, h.tenantID, runIDs)
@@ -445,7 +534,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			// for durable-event assertions.
 			subjectTaskID = seededTaskID
 		}
-		world := CollectWorldState(ctx, h.controlStore, h.mem, identity, subjectTaskID, lastNonEmpty(runIDs), workspace)
+		world := h.worldState(ctx, identity, subjectTaskID, lastNonEmpty(runIDs), workspace, c.AssertState)
 		checks = append(checks, EvaluateStatePredicates(c.AssertState, world)...)
 	}
 
@@ -639,9 +728,15 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// Isolated scenarios get a fresh data dir so control.db / memory start clean
 	// and never touch the user's real ~/.selfmind data.
 	isolatedEvalConfig(cfg, dataDirOverride)
-	// Eval runs are explicit foreground checks. Avoid starting unrelated cron
-	// jobs while preserving the same agent/tool/runtime path.
-	cfg.Cron.Enabled = false
+	// The case's runtime block, applied before any worker is built: capacity,
+	// the cron tool (its scheduler never starts) and the MCP stub servers.
+	stubDir := ""
+	if dataDirOverride != "" {
+		stubDir = filepath.Join(filepath.Dir(dataDirOverride), "mcp")
+	}
+	if err := applyRuntimeConfig(cfg, c.Runtime, stubDir, c.Path()); err != nil {
+		return nil, err
+	}
 	log.Init(log.Options{Level: cfg.Agent.LogLevel})
 
 	mem, dataDir, err := appcore.InitStorage(cfg)
@@ -680,51 +775,36 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		}
 	}
 	evalPrompts := promptassets.Empty(filepath.Join(dataDir, "prompts"))
-	agent, err := appcore.InitAgent(mem, cfg, tenantID, evalPrompts, nil)
-	if err != nil {
-		if mem != nil {
-			_ = mem.Close()
-		}
-		return nil, err
-	}
-	disp, err := appcore.InitTools(mem, cfg, agent, tenantID, evalPrompts, nil)
-	if err != nil {
-		if mem != nil {
-			_ = mem.Close()
-		}
-		return nil, err
-	}
-	agent.SetBackend(disp)
-	gwDeps, err := appcore.InitGateway(dataDir, mem, agent, cfg)
-	if err != nil {
-		if mem != nil {
-			_ = mem.Close()
-		}
-		return nil, err
-	}
-	appcore.RegisterCronTool(disp, gwDeps.CronScheduler)
 	controlStore, err := control.OpenStore(dataDir)
 	if err != nil {
-		appcore.StopCron(gwDeps.CronScheduler)
 		if mem != nil {
 			_ = mem.Close()
 		}
 		return nil, err
 	}
-	// The eval harness creates the control store after the core tool set. Add
-	// daemon-owned tools here so reliability cases exercise the production
-	// registration path instead of silently running with a smaller tool set.
-	registerDaemonOwnedEvalTools(disp, controlStore)
-	skillStorage, err := appcore.ResolveSkillStorage(cfg)
+	// The daemon's own construction path: with the control store, every worker
+	// gets the daemon-owned tools, external-effect claims and the durable
+	// review queue, so a case cannot run a smaller or different tool set.
+	gwDeps, err := appcore.InitGateway(appcore.GatewayOptions{
+		DataDir: dataDir, Memory: mem, Config: cfg, TenantID: tenantID, Prompts: evalPrompts,
+		Control: controlStore, Workers: c.Runtime.workers(),
+	})
 	if err != nil {
-		appcore.StopCron(gwDeps.CronScheduler)
 		_ = controlStore.Close()
 		if mem != nil {
 			_ = mem.Close()
 		}
 		return nil, err
 	}
-	mcpManager := appcore.InitMCP(disp, cfg)
+	skillStorage, err := appcore.ResolveSkillStorage(cfg)
+	if err != nil {
+		gwDeps.Close()
+		_ = controlStore.Close()
+		if mem != nil {
+			_ = mem.Close()
+		}
+		return nil, err
+	}
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	recallOptions := []httpapi.RecallEngineOption(nil)
 	if llm.VCRRecordMode() {
@@ -757,12 +837,36 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// path inside the isolated data dir.
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
+	// The daemon's MCP views: /tools readonly and /diag read the same shared
+	// manager the workers call.
+	if gwDeps.MCP != nil {
+		server.MCPHealthFunc = gwDeps.MCP.Health
+		server.MCPServersFunc = gwDeps.MCP.Servers
+	}
 	// No human is attached to eval, so an unexpected ask must fail promptly in
 	// every approval mode. Full-auto still asks for capability escalations such
 	// as network:shared, and the production budget parked such a call until 30
 	// seconds before the turn deadline: 494 of one case's 510 seconds on a
 	// Linux runner whose sandbox withheld the network.
 	server.ApprovalWait, server.ApprovalWaitUnattended = evalApprovalWait, evalApprovalWait
+	// The daemon's admission ceiling: the durable check and the process
+	// registry share it, and it may not exceed the worker count.
+	if err := server.ConfigureWorkRunCapacity(c.Runtime.capacity(), len(gwDeps.Workers)); err != nil {
+		gwDeps.Close()
+		_ = controlStore.Close()
+		if mem != nil {
+			_ = mem.Close()
+		}
+		return nil, err
+	}
+	// Like the daemon, durable background reviews run through the primary
+	// worker's engine, so a review a worker queued has an executor when the case
+	// runs a maintenance pass.
+	if primary := gwDeps.Workers[0].Agent; primary.ReviewEngine != nil {
+		server.SkillReviewer = primary.ReviewEngine
+	}
+	leases := newWorkerLeaseLog()
+	gwDeps.Gateway.SetWorkerLeaseHook(leases.hook)
 	if c.ApprovalMode == "smart" {
 		server.ApprovalJudge = appcore.NewConfiguredApprovalJudge(mem, cfg, tenantID)
 	}
@@ -772,10 +876,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 			Debounce: -1, MaxWait: -1, BatchMaxRuns: 10,
 		}
 		if server.PostRunAnalyzer == nil {
-			appcore.StopCron(gwDeps.CronScheduler)
-			if mcpManager != nil {
-				_ = mcpManager.Close()
-			}
+			gwDeps.Close()
 			_ = controlStore.Close()
 			if mem != nil {
 				_ = mem.Close()
@@ -787,16 +888,14 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		cfg:          cfg,
 		mem:          mem,
 		controlStore: controlStore,
-		cronStop:     func() { appcore.StopCron(gwDeps.CronScheduler) },
-		mcpClose: func() {
-			if mcpManager != nil {
-				_ = mcpManager.Close()
-			}
-		},
-		server:   server,
-		tenantID: tenantID,
-		provider: firstNonEmpty(displayProvider, provider, "default"),
-		model:    firstNonEmpty(displayModel, model, "default"),
+		gateway:      gwDeps,
+		server:       server,
+		tenantID:     tenantID,
+		provider:     firstNonEmpty(displayProvider, provider, "default"),
+		model:        firstNonEmpty(displayModel, model, "default"),
+		leases:       leases,
+		stubDir:      stubDir,
+		choices:      map[string]string{},
 	}
 	if c.ApprovalMode == "smart" {
 		harness.stopApprovalTelemetry = appcore.InstallApprovalTelemetry(controlStore)
@@ -805,21 +904,6 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// surface and change which notification paths its runs take.
 	server.Delivery = newEvalDeliveryService(c, harness)
 	return harness, nil
-}
-
-func registerDaemonOwnedEvalTools(disp *tools.Dispatcher, store *control.Store) {
-	if disp == nil || store == nil {
-		return
-	}
-	disp.RegisterTool(tools.NewExternalWatchTool(store))
-	disp.RegisterTool(tools.NewQueueUserInputTool(store))
-	disp.RegisterTool(tools.NewSetDeliveryTargetTool(store))
-	disp.RegisterTool(tools.NewWorkSearchTool(store))
-	disp.RegisterTool(tools.NewWorkInspectTool(store))
-	disp.RegisterTool(tools.NewWorkSelectTool(store))
-	disp.RegisterTool(tools.NewSkillSelectTool(store))
-	disp.RegisterTool(tools.NewSkillFallbackTool(store))
-	disp.RegisterTool(tools.NewSkillLifecycleManageTool(store))
 }
 
 func caseNeedsPostRunMaintenance(c *Case) bool {
@@ -1089,12 +1173,10 @@ func (h *runtimeHarness) Close() {
 	if h.stopApprovalTelemetry != nil {
 		h.stopApprovalTelemetry()
 	}
-	if h.cronStop != nil {
-		h.cronStop()
+	if h.leases != nil {
+		h.leases.releaseHolds()
 	}
-	if h.mcpClose != nil {
-		h.mcpClose()
-	}
+	h.gateway.Close()
 	if h.controlStore != nil {
 		_ = h.controlStore.Close()
 	}

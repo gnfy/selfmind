@@ -184,8 +184,11 @@ func TestSteeringExpireOnBackpressure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkSteeringExpired(ctx, identity.TenantID, msg.ID); err != nil {
-		t.Fatal(err)
+	if expired, err := store.MarkSteeringExpired(ctx, identity.TenantID, msg.ID); err != nil || !expired {
+		t.Fatalf("expire live row: %t %v", expired, err)
+	}
+	if expired, err := store.MarkSteeringExpired(ctx, identity.TenantID, msg.ID); err != nil || expired {
+		t.Fatalf("expiring an expired row reported %t %v; want nothing expired", expired, err)
 	}
 	if deferred, expired, err := store.RecoverSteeringAtBoot(ctx); err != nil || deferred != 0 || expired != 0 {
 		t.Fatalf("expired row leaked into recovery: %d/%d err=%v", deferred, expired, err)

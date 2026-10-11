@@ -8,6 +8,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
 )
 
@@ -152,29 +153,41 @@ func (c *RunCoordinator) resumeCandidatesResponse(ctx context.Context, identity 
 	newKey := fmt.Sprintf("%d", len(options)+1)
 	options = append(options, control.TurnChoiceOption{Key: newKey, Label: "This is new work", Action: "new"})
 	fmt.Fprintf(&sb, "%s. This is new work\n", newKey)
-	choice, choiceErr := c.srv.createTurnChoice(ctx, identity, req, options)
-	if choiceErr == nil {
-		fmt.Fprintf(&sb, "Reply with a number, or use /choose %s <number> from another endpoint.", choice.ID)
-	} else {
-		sb.WriteString("Use /resume <run_id> to choose precisely.")
+	var notice *control.PendingTurnChoiceNotice
+	if req.QueueID != "" {
+		notice = &control.PendingTurnChoiceNotice{TaskID: task.ID, Question: sb.String()}
+		c.srv.events() // Observe only committed choice notices on the same stream.
 	}
+	choice, choiceErr := c.srv.createTurnChoiceWithNotice(ctx, identity, req, options, notice)
+	if choiceErr != nil {
+		// A human wait transfers the original input to this durable choice.
+		// Without it, the queued worker must retain the unstarted request.
+		log.Warn("gateway: continuation choice could not be saved", "task_id", task.ID, "error", choiceErr)
+		content := "The continuation choice could not be saved. No task action was dispatched."
+		return api.MessageResponse{Identity: identity, Task: task, Error: content,
+			Turn: messageTurn("failed", task.Status, "idle", task.ID, "", content)}
+	}
+	fmt.Fprintf(&sb, "Reply with a number, or use /choose %s <number> from another endpoint.", choice.ID)
 	content := sb.String()
-	if c != nil && c.srv != nil && c.srv.Control != nil {
+	if notice == nil && c != nil && c.srv != nil && c.srv.Control != nil {
 		ids := make([]string, 0, len(candidates))
 		for _, run := range candidates {
 			ids = append(ids, run.ID)
 		}
-		_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
+		_, eventErr := c.srv.Control.AppendEvent(ctx, control.Event{
 			TaskID:     task.ID,
 			Type:       "continuation.candidates",
 			Visibility: "task",
-			Channel:    task.LastChannel,
+			Channel:    req.Channel,
 			Payload: mustJSON(map[string]interface{}{
 				"count":     len(candidates),
 				"run_ids":   ids,
 				"choice_id": choiceID(choice),
 			}),
 		})
+		if eventErr != nil {
+			log.Warn("gateway: continuation candidate audit could not be saved", "choice_id", choice.ID, "error", eventErr)
+		}
 	}
 	return api.MessageResponse{
 		Identity: identity,

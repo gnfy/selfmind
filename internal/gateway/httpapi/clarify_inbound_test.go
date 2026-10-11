@@ -36,7 +36,7 @@ func newClarifyTestServer(t *testing.T) (*Server, *control.Store, *control.Ident
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{Control: store, DefaultTenantID: "default"}, store, identity, task, run
+	return &Server{Control: store, DefaultTenantID: "default", ExecutionRuntime: newTestExecutionRuntime(t)}, store, identity, task, run
 }
 
 // TestClarifyAnswerResolvesPendingQuestion is the core inbound contract: with a

@@ -89,14 +89,15 @@ selfmind reject [token]
 selfmind stop [n|run_id]
 selfmind id
 selfmind new [title]
+selfmind cron adopt <job_id> [--yes]
 ```
 
 - `send` dispatches a message without opening the TUI. `--async` returns after
   acceptance. `MODE` is one of `on-request`, `read-only`, `auto-edit`,
   `full-auto`, or `smart`. When no preference has been saved, the default is
   `smart`; without a configured triage model it safely falls back to asking.
-- `--add-dir` is repeatable and available only to an authenticated local CLI
-  connected to the loopback gateway. Relative paths resolve in the launching
+- `--add-dir` is repeatable and available only to your own CLI on the local
+  gateway's control socket (see "How the CLI reaches the gateway" below). Relative paths resolve in the launching
   shell. Each path is canonicalized, bounded to eight entries, frozen into the
   queued run, and included in project-instruction discovery and filesystem
   conflict scheduling. It expands the run's filesystem scope but never grants
@@ -139,7 +140,7 @@ selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
-selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
+selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--cwd <dir>] [--env NAME=VALUE...] [--stdin <text> | --stdin-file <path>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
 selfmind ws revoke <capability> [workspace_id]
 ```
 
@@ -148,30 +149,84 @@ selfmind ws revoke <capability> [workspace_id]
   directory of their own. A local CLI or TUI turn started inside a directory
   keeps using that directory's workspace either way.
 
-- Only an authenticated local CLI can change workspace trust. Omitting the
+- Only your own CLI on the local control socket can change workspace trust. Omitting the
   workspace ID targets the current workspace. `untrust` also revokes active
   execution-capability grants for that workspace.
 - `grants` lists temporary execution capabilities such as `network:shared`;
-  `revoke` removes one immediately. These controls are also local-CLI only.
+  `revoke` removes one immediately. These controls are also available only to
+  your own CLI.
 - `observe` registers one trusted workspace script as observation-only. The
   grant is bound to the workspace, resolved script path, content hash, argument
-  shape, network choice, and credential choice. Editing or replacing the script
-  invalidates it automatically. Use `--all-args` only when every argument shape
-  is read-only; otherwise put the allowed argument prefix after `--`.
+  shape, network choice, and credential choice; a `--network` registration
+  matches a call that runs with network, as described under `effect`. Editing
+  or replacing the script invalidates it automatically. Use `--all-args` only
+  when every argument shape is read-only; otherwise put the allowed argument
+  prefix after `--`.
 - `effect` records the local owner's complete target assertion for one exact
   script invocation. In opt-in parallel mode, matching calls claim those
   targets instead of the person-wide unknown target. The script bytes,
   workspace, every argument, network mode, and credential mode must still
-  match. Invoke the executable script directly (for example,
+  match, and so must the rest of the invocation: the directory it runs from
+  (`--cwd`, workspace-relative, default the workspace root), each
+  `NAME=VALUE` assignment written before the script (`--env`), and its one
+  standard input, a here-string (`--stdin`) or a workspace file redirected
+  with `<` (`--stdin-file`, also bound to the file's content). The script path
+  and the directory are matched as written as well as resolved, so a symlink
+  alias of either is a different invocation. A `--network` profile matches a
+  call that runs with network: a script whose name shows no remote service sets
+  `network: true`, because a network grant or trust only permits network and
+  does not network every command. Invoke the
+  executable script directly (for example,
   `./scripts/deploy.sh`), so a different interpreter cannot change its behavior.
-  This does not approve execution or release a target after dispatch;
-  normal approval and watcher-backed effect resolution still apply. Changed,
-  ambiguous, or unregistered commands return to the unknown-target lane.
+  This does not approve execution; normal approval still applies. Without
+  `--observe-command`, a matching call that exits 0 releases its claim like
+  any command. With it, the claim stays held until a `status_json.v1` watcher
+  of that command, created after dispatch by the same Run or a later Run of
+  its chain, releases it. Changed, ambiguous, or unregistered commands return
+  to the unknown-target lane.
 - `approve` and `reject` accept a pending approval token when more than one
   request is waiting.
 - `stop` cancels the active run; with no active run it dismisses only the exact
   pinned Run and refuses while that Run still has a pending approval,
   clarification, or live watcher. `new` creates a fresh visible task.
+- `cron adopt` shows a schedule stored by an older release that no one can be
+  shown to have created — its prompt and when it runs — and, with `--yes`,
+  records that it is yours, so it runs as you. Only your own CLI on the local
+  control socket can adopt a schedule, and a schedule another person created
+  cannot be adopted. `selfmind doctor` lists such schedules.
+
+### How the CLI reaches the gateway
+
+The daemon grants CLI identity only to your own terminal. `selfmind` and the TUI
+reach a local gateway on its local control socket (`control.sock` in the
+gateway's runtime directory, or a per-user directory under `/tmp` when that path
+is too long for a socket address), which only your OS user can enter. The daemon
+verifies each client from the operating system's record of who connected: the
+process must run as you and must not be the gateway or a process the gateway
+started, so a tool the agent runs can never act as your CLI.
+
+- Everything that acts as you travels there with no fallback to TCP: sending
+  messages, approvals (`approve`, `reject`), mode changes, workspace trust and
+  grants, `--add-dir`, model changes, `cron adopt`, and the TUI's event stream.
+  A request that claims the `cli` platform over TCP is refused, and a configured
+  `gateway.token` never grants it.
+- `selfmind gateway status` and `selfmind gateway stop` ask a gateway on this
+  machine on the same socket, and a gateway that predates it over TCP. Without
+  `gateway.token` a gateway refuses a stop over TCP, naming the socket, and
+  describes itself over TCP only as running or draining, how many runs are
+  active, and its build; the full status and `stop` need your own terminal or the
+  token. A status read that way is marked `liveness only`, and says where the
+  rest is.
+- A CLI pointed at a remote gateway (`SELF_GATEWAY_URL` or `gateway.url` naming a
+  non-loopback host) cannot act as you there; point it at the gateway on this
+  machine. Integrations over TCP keep their own authentication and act as the
+  non-CLI identity they name.
+- A gateway that predates the socket answers health checks but cannot serve the
+  CLI: commands say so and name `selfmind gateway restart`, which works against
+  it. `selfmind gateway status` shows the socket, and `selfmind doctor` reports
+  the channel and whether this terminal is accepted (`[CONTROL]` findings).
+  Run `selfmind` from your own terminal: from inside a tool the gateway started,
+  it is refused.
 
 ## Configuration, models, and channels
 
@@ -297,7 +352,7 @@ selfmind weixin status
   of presenting a silently truncated total.
 - `doctor` reports only current problems by default, together with a concrete
   recovery or inspection command. Findings carry stable category tags such as
-  `[CONFIG]`, `[PROMPT]`, `[TRUST]`, `[DELIVERY]`, and `[SKILLS]`; every command
+  `[CONFIG]`, `[PROMPT]`, `[TRUST]`, `[CONTROL]`, `[DELIVERY]`, and `[SKILLS]`; every command
   is gathered into one numbered `Next actions` section. Interactive terminals use the TUI
   warning, error, info, success, text, and muted palette. Pipes, redirection,
   `NO_COLOR`, `CLICOLOR=0`, and `TERM=dumb` remain plain text. Healthy
@@ -432,7 +487,7 @@ before normal agent dispatch.
 /apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/effects [resolve <claim_id> <watch_id>]
+/effects [settle <claim_id> [reason] | resolve <claim_id> <watch_id>]
 /diag [learning|memory|context|models|delivery|inbound|execution|tools]
 /report daily [--since 24h]
 /events
@@ -440,45 +495,64 @@ before normal agent dispatch.
 /approve <n|id|all> [run]
 /reject <n|id|all>
 /mode [on-request|read-only|auto-edit|full-auto|smart]
+/tools readonly [<server>/<tool> on|off]
 /stop [n|run_id]
 /cancel
 /notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
-/resume [n|run_id]  (bare = list what needs attention)
+/resume [n|run_id]  (bare = view work)
 /choose <choice_id> <number>
 /remember <preference>
 /forget <text|ref>
 /ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)
 /add-dir [path]  (bare = list this session's extra roots)
-/attach [run_id]  (bare = the task running in another session)
 ```
 
 - Each terminal is its own session. It shows its own runs in full; another
   session's running task, approval, or question appears as one status line,
   and an approval panel opens only in the session whose run asks.
-  `/attach [run_id]` watches another session's running task here without
-  taking it over: its final answer still goes to the session that started it.
-  A new message typed in another session stays with that session; an exact
-  reply or explicit attach can target the other Run.
+  Bare `/resume` opens a chooser of waiting, running and recent Runs. Use
+  arrow keys and Enter to view an exact Run's status, Plan and pending human
+  input; `r` refreshes details and Esc/q returns. Viewing does not execute or
+  answer work. Where continuation is available, `c` selects that exact Run
+  for this session's next message. `/attach [run_id]` remains a read-only
+  compatibility entry. An active selection may stream here when this terminal
+  has no executing foreground Run. Waiting remains waiting, and a lost
+  observation does not imply completion.
+  A new message typed in another session stays with that session; only an exact
+  reply edge or explicit `/resume` selection targets another Run's execution.
+  Viewing alone does not select an input parent.
 - `/views` lists recent managed Git execution views, and `/views <run_id>`
-  shows committed, uncommitted, untracked, and ignored work in one exact owned Run.
-  `/apply <run_id>` delivers a clean committed view as a separate
+  shows committed, uncommitted, untracked, ignored, and hidden work in one
+  exact owned Run. While a Run may still write the view, it shows committed
+  work only. `/apply <run_id>` delivers a clean committed view as a separate
   `selfmind/<view_id>` branch in its original repository. The source branch
   may have advanced and its worktree may contain another Run's changes; the
   original repository identity and admitted baseline object must still be
   intact. Delivery never changes the checked-out branch or discards view
-  files. Uncommitted, untracked, or ignored work in the view stays there for review.
+  files, and it refuses while a Run may still write the view. It also waits,
+  and names what it waits for, while the original checkout can still change:
+  another of your Runs starting, running, or parked with write access to it, or
+  a background process such a Run started. Uncommitted,
+  untracked, or ignored work in the view stays there for review. A view whose
+  Git metadata points elsewhere or whose configuration gained a key that can
+  run a program is unavailable to every command; its files are kept.
   After a Run is done, `/views archive <run_id>` moves a delivered, clean view
-  into daemon retention. It refuses views referenced by unfinished work or a
-  queued request, and refuses any undelivered or ignored files. `/views restore
-  <run_id>` moves the same bytes and Git metadata back. Archiving preserves
-  storage; it does not delete files or reclaim disk space. `/views prune
-  <run_id>` explicitly reclaims an archived checkout only when the Run is done,
-  no unfinished work refers to it, its content is clean and delivered, and no
-  extra local Git work exists. It first protects the delivered commit with a
-  source-repository ref, then removes the checkout and its local Git metadata.
-  The checkout cannot be restored after pruning; a failed safety check leaves
-  the archive intact.
+  into daemon retention. It refuses views referenced by unfinished work, a
+  queued request, or a Run that is starting, and refuses undelivered, ignored,
+  or hidden work: skip-worktree or assume-unchanged index entries, linked
+  worktrees, and submodule repositories. `/views restore <run_id>` moves the
+  same bytes and Git metadata back for any owned Run bound to the view,
+  including work that parked because its view was archived. Archiving
+  preserves storage; it does not delete files or reclaim disk space.
+  `/views prune <run_id>` explicitly reclaims an archived checkout only when
+  the Run is done, no unfinished work refers to it, its content is clean and
+  delivered, and no extra local Git work exists: no extra refs, and no object
+  the view stores itself, loose or packed, that the delivered commit cannot
+  reach. It first protects the delivered commit with a source-repository ref,
+  then removes the checkout and its local Git metadata, and like `/apply` it
+  waits while the original checkout can still change. The checkout cannot be
+  restored after pruning; a failed safety check leaves the archive intact.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.
@@ -489,8 +563,20 @@ before normal agent dispatch.
 - `/approvals grants` and `/approvals revoke <n>` remain available for viewing
   and removing historical remembered grants.
 - `/mode` accepts `on-request`, `read-only`, `auto-edit`, `full-auto`, or
-  `smart`. It applies to newly admitted Runs. Existing Runs keep their admitted
-  mode and pending approvals still need `/approve` or `/reject`.
+  `smart`. It applies to newly admitted Runs. Tightening applies to queued and
+  parked work; loosening does not: work that waits (queued, or parked on the
+  model provider, an approval or a question) runs under the narrower of the
+  mode it was admitted with and your current mode, but only when you set the
+  current mode after that work was first admitted, so an explicit per-run mode
+  is not demoted by an older preference. A Run that is already running keeps
+  its mode (use `/stop` to stop it). Pending approvals still need `/approve` or
+  `/reject`; one you already approved still passes. In the terminal `/mode` is
+  session-local: it sets the mode this session's later messages send and does
+  not change your saved preference, so it does not narrow work that is already
+  queued or parked. Set `/mode` from IM or HTTP, which saves it, or `/stop`
+  that work and ask again. An explicit terminal session mode also travels with
+  mid-run guidance that becomes separate deferred work; an unset session mode
+  remains unset until that work is admitted.
 - `/status` lists all active Runs when more than one is executing;
   `/status <run_id>` shows one active Run without selecting by recency.
 - `/notify` chooses the bound IM destination for CLI-origin progress and final
@@ -498,8 +584,9 @@ before normal agent dispatch.
 - `/new [title]` keeps its existing task-label behavior. `/new --run <request>`
   is the deterministic escape hatch for sending unrelated work without a
   continuity model decision.
-- A bare `/resume` renders current Attention and is the numbered list every
-  ordinal resolves against. `/resume <n|run_id>` continues one Run exactly; a
+- A bare `/resume` views work in CLI; IM renders current Attention as its
+  endpoint-local numbered list. `/resume <n|run_id>` selects one exact Run for
+  the next user agent input in the selecting session, captured before queueing; a
   Thread id is still accepted when it has exactly one unresolved Run. An idle
   `/stop` dismisses that exact Run and refuses while it still has a pending
   approval, a pending clarification, or a live watcher. `/stop <n|run_id>`
@@ -529,26 +616,47 @@ before normal agent dispatch.
   stops asking. Ordinary file and command work is unaffected either way.
 - `/choose <choice_id> <number>` answers a durable continuity question exactly,
   including from another bound endpoint or after daemon restart. A bare number
-  is accepted only when the person has one recent pending continuity question.
+  answers only the one recent question shown in the same chat or CLI window on
+  the same account; anywhere else it is ordinary input, and a native reply or
+  other exact edge always goes to its own target.
 - `/watchers` is the same person-scoped, model-free view in CLI and IM. It
   shows checker/operation/verification phases plus finalization and notification
   state, while hiding raw commands, environment fingerprints, and credentials.
   The default and `all` views are numbered: use `/watchers 1` to inspect the
   first watcher or `/watchers cancel 1` to stop monitoring it. Cancelling a
   watcher does not cancel the external operation.
-- `/effects` lists unresolved external effects belonging to you. When an
-  unclassified remote command has no adapter that can settle its result,
-  inspect its exact Run and a successful finalized watcher for that Run,
-  then use `/effects resolve <claim_id> <watch_id>` to confirm they refer to
-  the same operation. The runtime checks ownership, Run identity, watcher
-  provenance and terminal evidence before releasing every target of that
-  effect. A model's claim of success cannot release it.
+- `/effects` lists unresolved external effects belonging to you: each claim's
+  run, target, state (in flight, uncertain, or watched), redacted command
+  summary, and how its call ended. When several work runs at once, a command
+  or tool that may change an external system claims its target; a successful
+  return releases the claim by itself, and only a failure, timeout,
+  cancellation, or crash leaves it uncertain.
+  `/effects settle <claim_id> [reason]` releases an uncertain effect whose
+  result you know. Only you can settle your claims; the settlement records
+  your account, this channel, and the reason, and work waiting on the effect
+  then continues. A call that is still in flight cannot be settled yet.
+  The run that made the effect can instead release it with a successful
+  read-only check bound to the claim. `/effects resolve <claim_id> <watch_id>`
+  relates a successful finalized watcher that nobody bound to the claim; the
+  runtime checks ownership, Run identity, that the watcher came after the
+  effect, and terminal evidence before releasing every target of that effect.
+  A model's claim of success cannot release it.
   An effect profile can bind one exact observation script command to the same
   target set. Register that script as read-only with `ws observe` too. A
-  `status_json.v1` watcher created by the same Run after dispatch can then
-  release its exact claim automatically after a durable successful verdict,
-  provided both grants and the script hash remain valid. All other effects
-  retain the explicit `/effects resolve` path.
+  `status_json.v1` watcher created after dispatch by the same Run, or a later
+  Run of its chain, can then release its exact claim automatically after a
+  durable successful verdict, provided both grants and the script hash remain
+  valid.
+- `/tools readonly` lists the MCP tools marked read-only: the operator's
+  `mcp.servers[].read_only_tools` names and your own markings, with when and
+  from where you made each. `/tools readonly <server>/<tool> on` marks one
+  exact tool of a connected server read-only for you; `off` withdraws it. Only
+  a command you type changes a marking; a scheduled prompt cannot. A marked
+  tool's calls need no approval, claim no external target, and may run
+  alongside other reads, so mark only tools that never change anything. The
+  server's own annotations never count. A marking belongs to the server's
+  configured command, arguments or URL; if that changes, the listing shows the
+  marking as inactive until you mark the tool again.
 - `/remember <preference>` saves an explicitly stated personal preference to
   long-term memory (person memory is preference-only); it applies across every
   endpoint. `/forget <text|ref>` forgets one — by its text, or by the ref
@@ -559,9 +667,12 @@ before normal agent dispatch.
   hash; raw schemas and values are never printed. Quarantined tools are not
   sent to models and cannot execute.
 - `/diag inbound` lists only the current person's IM inputs that were saved
-  but not confirmed as accepted. A `dispatching` receipt may already have
-  caused effects, so this command never retries it; inspect the related work
-  before sending the request again.
+  but not confirmed as accepted, each with its recorded reason. A `pending`
+  receipt has not started — for example it arrived while SelfMind was shutting
+  down — and its source delivers it again; a redelivery whose content changed
+  is rejected and recorded on it instead. A `dispatching` receipt may already
+  have caused effects, so this command never retries it; inspect the related
+  work before sending the request again.
 - `/diag context` starts with the latest provider request estimate, including
   native tool schemas, and labels the separately assembled prompt subtotal as
   excluding native schemas. Fingerprint-capable providers show prefix coverage;

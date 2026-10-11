@@ -40,7 +40,15 @@ type ClarifyRequest struct {
 	Channel   string    `json:"channel,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// ParkedAt is when the asking Run released its resources while the
+	// question stayed answerable. Nil means it was never parked, which every
+	// question asked before schema v26 reads as.
+	ParkedAt *time.Time `json:"parked_at,omitempty"`
 }
+
+const clarifySelectColumns = `id, tenant_id, person_id, COALESCE(thread_id, ''), COALESCE(run_id, ''), question,
+	COALESCE(options_json, '[]'), status, COALESCE(answer, ''), COALESCE(channel, ''),
+	created_at, updated_at, parked_at`
 
 func (s *Store) CreateClarifyRequest(ctx context.Context, req ClarifyRequest) (*ClarifyRequest, error) {
 	req.TenantID = normalizeTenant(req.TenantID)
@@ -101,9 +109,7 @@ func (s *Store) ListClarifyRequests(ctx context.Context, tenantID, personID, sta
 	tenantID = normalizeTenant(tenantID)
 	status = normalizeName(status, "pending")
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, COALESCE(thread_id, ''), COALESCE(run_id, ''), question,
-		        COALESCE(options_json, '[]'), status, COALESCE(answer, ''), COALESCE(channel, ''),
-		        created_at, updated_at
+		`SELECT `+clarifySelectColumns+`
 		 FROM clarify_requests
 		 WHERE tenant_id = ? AND person_id = ? AND status = ?
 		 ORDER BY created_at ASC, id ASC LIMIT ?`,
@@ -129,9 +135,7 @@ func (s *Store) GetClarifyRequest(ctx context.Context, tenantID, clarifyID strin
 		return nil, fmt.Errorf("clarify id is required")
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, tenant_id, person_id, COALESCE(thread_id, ''), COALESCE(run_id, ''), question,
-		        COALESCE(options_json, '[]'), status, COALESCE(answer, ''), COALESCE(channel, ''),
-		        created_at, updated_at
+		`SELECT `+clarifySelectColumns+`
 		 FROM clarify_requests WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), clarifyID)
 	item, err := scanClarifyRequest(row)
@@ -204,15 +208,15 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var status, owner, taskID, runID, runStatus, runPersonID, runTaskID, legacyClaim string
+	var status, owner, taskID, runID, runStatus, runPersonID, runTaskID, legacyClaim, parkedAdmission string
 	if err := tx.QueryRowContext(ctx,
 		`SELECT c.status, c.person_id, COALESCE(c.thread_id, ''), COALESCE(c.run_id, ''),
 		        COALESCE(r.status, ''), COALESCE(r.person_id, ''), COALESCE(r.thread_id, ''),
-		        COALESCE(r.resumed_by_run_id, '')
+		        COALESCE(r.resumed_by_run_id, ''), COALESCE(r.admission_json, '')
 		 FROM clarify_requests c
 		 LEFT JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.run_id
 		 WHERE c.tenant_id = ? AND c.id = ?`, tenantID, clarifyID,
-	).Scan(&status, &owner, &taskID, &runID, &runStatus, &runPersonID, &runTaskID, &legacyClaim); err != nil {
+	).Scan(&status, &owner, &taskID, &runID, &runStatus, &runPersonID, &runTaskID, &legacyClaim, &parkedAdmission); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil, fmt.Errorf("clarify request not found: %s", clarifyID)
 		}
@@ -259,6 +263,10 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 			return expireUnavailable("origin run is already claimed")
 		}
 
+		if q.ReplyToRunID != "" && q.ReplyToRunID != runID {
+			return nil, nil, fmt.Errorf("clarification continuation cannot name a different Run")
+		}
+		q.ReplyToRunID = runID
 		q.TenantID, q.PersonID, q.TaskID, q.ClarifyID = tenantID, personID, taskID, clarifyID
 		q.Platform = normalizeName(q.Platform, "cli")
 		q.Channel = normalizeName(q.Channel, q.Platform)
@@ -278,16 +286,20 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 		if encodeErr != nil {
 			return nil, nil, fmt.Errorf("encode clarification resume roots: %w", encodeErr)
 		}
+		admissionJSON, encodeErr := parkedRunAdmissionJSON(q.Admission, parkedAdmission)
+		if encodeErr != nil {
+			return nil, nil, encodeErr
+		}
 		notBefore := q.NotBefore.Unix()
 		if q.NotBefore.IsZero() {
 			notBefore = 0
 		}
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, clarify_id, idempotency_key, class, priority, not_before, status, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, clarify_id, reply_to_run_id, idempotency_key, class, priority, not_before, status, created_at, admission_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 			q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
-			q.WorkspaceID, rootsJSON, q.TaskID, q.ClarifyID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+			q.WorkspaceID, rootsJSON, q.TaskID, q.ClarifyID, q.ReplyToRunID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix(), admissionJSON)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -297,6 +309,7 @@ func (s *Store) AnswerClarifyRequestWithResume(ctx context.Context, tenantID, pe
 		).Scan(&q.ID); err != nil {
 			return nil, nil, err
 		}
+		q.setStoredAdmission(admissionJSON)
 		queued = &q
 	}
 
@@ -336,9 +349,7 @@ func (s *Store) MarkClarifyNotified(ctx context.Context, tenantID, clarifyID str
 // tenants, oldest first. Mirrors ListPendingApprovalsForEscrow (Fix 2).
 func (s *Store) ListPendingClarifiesForEscrow(ctx context.Context, createdBefore time.Time) ([]ClarifyRequest, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, COALESCE(thread_id, ''), COALESCE(run_id, ''), question,
-		        COALESCE(options_json, '[]'), status, COALESCE(answer, ''), COALESCE(channel, ''),
-		        created_at, updated_at
+		`SELECT `+clarifySelectColumns+`
 		 FROM clarify_requests
 		 WHERE status = 'pending' AND notified_at IS NULL AND created_at <= ?
 		 ORDER BY created_at ASC, id ASC LIMIT 100`,
@@ -416,13 +427,17 @@ func scanClarifyRequest(rows interface {
 }) (ClarifyRequest, error) {
 	var item ClarifyRequest
 	var options string
-	var created, updated int64
+	var created, updated, parked int64
 	if err := rows.Scan(&item.ID, &item.TenantID, &item.PersonID, &item.TaskID, &item.RunID, &item.Question,
-		&options, &item.Status, &item.Answer, &item.Channel, &created, &updated); err != nil {
+		&options, &item.Status, &item.Answer, &item.Channel, &created, &updated, &parked); err != nil {
 		return ClarifyRequest{}, err
 	}
 	item.Options = json.RawMessage(options)
 	item.CreatedAt = time.Unix(created, 0)
 	item.UpdatedAt = time.Unix(updated, 0)
+	if parked > 0 {
+		at := time.Unix(parked, 0)
+		item.ParkedAt = &at
+	}
 	return item, nil
 }

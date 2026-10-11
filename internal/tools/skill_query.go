@@ -15,19 +15,11 @@ func ListSkillsForTenant(tenantID string, includeArchived bool, invocation ...ma
 	if err != nil {
 		return nil, err
 	}
-	userUsage := map[string]SkillUsageRecord{}
-	if userDir, err := userSkillsDirForTenant(tenantID, invocation...); err == nil {
-		userUsage, _ = loadSkillUsageForDir(userDir)
-	}
+	userUsage := userSkillUsage(tenantID, invocation...)
 	var skills []SkillInfo
 	seen := map[string]bool{}
 	for _, root := range roots {
-		usage, _ := loadSkillUsageForDir(root.Path)
-		for name, rec := range userUsage {
-			if _, ok := usage[name]; !ok {
-				usage[name] = rec
-			}
-		}
+		usage := rootSkillUsage(root.Path, userUsage)
 		scan, err := discoverSkillPaths(root)
 		if err != nil {
 			return nil, err
@@ -315,6 +307,42 @@ func (e *skillAmbiguousError) Error() string {
 		e.Name, len(e.Candidates), strings.Join(e.Candidates, ", "))
 }
 
+// userSkillUsage returns the usage records of the tenant's user root. They
+// also govern same-named Skills on roots that keep no record of their own.
+func userSkillUsage(tenantID string, invocation ...map[string]interface{}) map[string]SkillUsageRecord {
+	userDir, err := userSkillsDirForTenant(tenantID, invocation...)
+	if err != nil {
+		return nil
+	}
+	usage, _ := loadSkillUsageForDir(userDir)
+	return usage
+}
+
+// rootSkillUsage returns the usage records that govern a root's Skills: the
+// root's own, with the user root's filling the names it lacks.
+func rootSkillUsage(rootPath string, userUsage map[string]SkillUsageRecord) map[string]SkillUsageRecord {
+	usage, _ := loadSkillUsageForDir(rootPath)
+	if usage == nil {
+		usage = map[string]SkillUsageRecord{}
+	}
+	for name, rec := range userUsage {
+		if _, ok := usage[name]; !ok {
+			usage[name] = rec
+		}
+	}
+	return usage
+}
+
+// skillUsageRecord returns a Skill's usage record, which may be filed under
+// the sanitized form of its name.
+func skillUsageRecord(usage map[string]SkillUsageRecord, name string) SkillUsageRecord {
+	rec := usage[name]
+	if rec.Name == "" {
+		rec = usage[kernel.SanitizeSkillName(name)]
+	}
+	return rec
+}
+
 func readSkillInfo(path, format string, usage map[string]SkillUsageRecord, root SkillRoot) (SkillInfo, bool) {
 	if format == "dir" && isDeveloperAgentOnlySkill(path) {
 		return SkillInfo{}, false
@@ -342,10 +370,7 @@ func readSkillInfo(path, format string, usage map[string]SkillUsageRecord, root 
 	if name == "" {
 		name = strings.TrimSuffix(filepath.Base(path), ".md")
 	}
-	rec := usage[name]
-	if rec.Name == "" {
-		rec = usage[kernel.SanitizeSkillName(name)]
-	}
+	rec := skillUsageRecord(usage, name)
 	state := rec.State
 	if state == "" {
 		state = SkillStateActive

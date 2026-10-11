@@ -621,7 +621,7 @@ func TestDoctorReportsControlSchemaVersionInSummaryAndBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	report := buildDoctorReport(ctx, store, identity, dataDir, "not running", "", "", 5)
+	report := buildDoctorReport(ctx, store, identity, dataDir, "not running", "", "", "", 5)
 	want := formatControlSchemaLine(store.SchemaStatus())
 	if !strings.HasPrefix(want, "control schema: ") || !strings.Contains(report, "\n"+want+"\n") {
 		t.Fatalf("verbose bundle lacks %q:\n%s", want, report)

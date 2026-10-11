@@ -9,11 +9,15 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
 )
 
 type taskPlanStep struct {
-	Step   string `json:"step"`
-	Status string `json:"status"`
+	Step                     string                  `json:"step"`
+	Status                   string                  `json:"status"`
+	CancellationDisposition  string                  `json:"cancellation_disposition,omitempty"`
+	CancellationReason       string                  `json:"cancellation_reason,omitempty"`
+	CancellationAuthorizedBy *kernel.PlanQuoteOrigin `json:"cancellation_authorized_by,omitempty"`
 }
 
 func buildRunOutcome(content string) api.RunOutcome {

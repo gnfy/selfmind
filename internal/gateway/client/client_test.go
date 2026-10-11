@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -150,6 +153,16 @@ func TestEventToStreamMapping(t *testing.T) {
 				}
 				if status, _ := se.Payload["task_status"].(string); status != "waiting_finalization" {
 					t.Fatalf("task status not carried: %+v", se.Payload)
+				}
+			},
+		},
+		{
+			name:    "clarify expiration keeps exact identity",
+			ev:      control.Event{ID: "6b", Type: "clarify.expired", Payload: mustJSON(map[string]any{"clarify_id": "clar_123"})},
+			wantTyp: "clarify.expired",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.Payload["clarify_id"] != "clar_123" {
+					t.Fatalf("clarify resolution lost identity: %+v", se)
 				}
 			},
 		},
@@ -436,21 +449,42 @@ func TestProcessMessageSkipsPollingForControlCommands(t *testing.T) {
 	}
 }
 
-func TestProcessMessageSendsLocalControlToken(t *testing.T) {
-	header := make(chan string, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		header <- r.Header.Get(api.LocalControlTokenHeader)
+// The person's CLI injects the local control socket transport: every request
+// then travels on it, whatever host the base URL names, and no shared secret
+// rides along.
+func TestClientSendsEveryRequestThroughItsInjectedTransport(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "smcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	socket := filepath.Join(dir, "control.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(chan *http.Request, 4)
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen <- r
 		writeJSONResp(w, api.MessageResponse{Content: "ok"})
-	}))
+	})}
+	go srv.Serve(listener)
 	defer srv.Close()
-	c := New(srv.URL, "")
-	c.SetLocalControlToken("local-secret")
+	c := New("http://127.0.0.1:1", "")
+	c.HTTP = &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		var dialer net.Dialer
+		return dialer.DialContext(ctx, "unix", socket)
+	}}}
 	resp, status := c.ProcessMessageDetached(context.Background(), api.MessageRequest{Content: "inspect"})
 	if status != http.StatusOK || resp.Content != "ok" {
 		t.Fatalf("response = %#v, status = %d", resp, status)
 	}
-	if got := <-header; got != "local-secret" {
-		t.Fatalf("local control header = %q", got)
+	request := <-seen
+	if request.Header.Get("X-SelfMind-Local-Control-Token") != "" {
+		t.Fatal("the retired local-control token must not be sent")
+	}
+	if request.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("a state change must declare JSON, got %q", request.Header.Get("Content-Type"))
 	}
 }
 
@@ -574,23 +608,36 @@ func TestSteerRun(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "")
-	if err := c.SteerRun("run-123", "session-a", "focus on the failing test"); err != nil {
+	if err := c.SteerRun("run-123", "session-a", "focus on the failing test", ""); err != nil {
 		t.Fatalf("SteerRun: %v", err)
 	}
 	if gotReq.Text != "focus on the failing test" || gotReq.RunID != "run-123" || gotReq.Channel != "session-a" {
 		t.Fatalf("server saw request = %+v", gotReq)
 	}
 
+	if err := c.SteerRun("run-123", "session-a", "read the changelog", "read-only"); err != nil {
+		t.Fatal(err)
+	}
+	if gotReq.ApprovalMode != "read-only" {
+		t.Fatalf("explicit mode missing: %+v", gotReq)
+	}
+	if err := c.SteerRun("run-123", "session-a", "check the next path", ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotReq.ApprovalMode != "" {
+		t.Fatalf("unset mode inherited previous call: %+v", gotReq)
+	}
+
 	status = http.StatusConflict
-	if err := c.SteerRun("run-123", "session-a", "late guidance"); !errors.Is(err, ErrNoActiveRun) {
+	if err := c.SteerRun("run-123", "session-a", "late guidance", ""); !errors.Is(err, ErrNoActiveRun) {
 		t.Fatalf("409 should map to ErrNoActiveRun, got %v", err)
 	}
 	status = http.StatusTooManyRequests
-	if err := c.SteerRun("run-123", "session-a", "rapid guidance"); !errors.Is(err, ErrSteerBusy) {
+	if err := c.SteerRun("run-123", "session-a", "rapid guidance", ""); !errors.Is(err, ErrSteerBusy) {
 		t.Fatalf("429 should map to ErrSteerBusy, got %v", err)
 	}
 	status = http.StatusInternalServerError
-	err := c.SteerRun("run-123", "session-a", "broken daemon")
+	err := c.SteerRun("run-123", "session-a", "broken daemon", "")
 	if err == nil || errors.Is(err, ErrNoActiveRun) || errors.Is(err, ErrSteerBusy) {
 		t.Fatalf("500 should be a generic error, got %v", err)
 	}
@@ -726,12 +773,12 @@ func TestWatchRunFiltersOtherRunEventsAndPreservesIdentity(t *testing.T) {
 	var got []llm.StreamEvent
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	summary := c.WatchRun(ctx, "run-target", func(event llm.StreamEvent) {
+	result, err := c.WatchRun(ctx, "run-target", func(event llm.StreamEvent) {
 		got = append(got, event)
 	})
 
-	if summary != "target complete" {
-		t.Fatalf("summary = %q, want target complete", summary)
+	if err != nil || result.Summary != "target complete" || result.Status != "done" {
+		t.Fatalf("observation = %+v, error=%v", result, err)
 	}
 	if len(got) != 1 {
 		t.Fatalf("observer events = %+v, want one target event", got)

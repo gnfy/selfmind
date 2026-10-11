@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/textutil"
 )
@@ -310,6 +312,11 @@ func (t *WriteFileTool) Execute(args map[string]interface{}) (string, error) {
 	if path == "" || !contentOK {
 		return "", fmt.Errorf("path and content are required")
 	}
+	_, release, err := acquireManagedExecution(contextFromArgs(args), args, nil, false)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 	// Capture the pre-image so an overwrite can be shown as a real diff instead
 	// of an opaque "all-added" dump (W2d). Best-effort: a read error just means
 	// we treat it as a new file.
@@ -385,12 +392,17 @@ func NewExecuteCommandTool() *ExecuteCommandTool {
 						Description: "Whether to run in background",
 						Default:     false,
 					},
+					"effect_claim_id": {
+						Type:        "string",
+						Description: "Optional unresolved external effect claim that this check observes. Only a proven read-only command or an owner-approved observation script may carry it. A successful check releases a claim of this work, or lets this run's next conflicting call pass another run's claim once; you judge whether the check shows the effect's result.",
+					},
 					"sandbox": {
 						Type:        "string",
-						Description: "Execution isolation: auto prefers an isolated filesystem sandbox whose network follows exec_sandbox.allow_network; isolated requires it; host uses host credentials/network and requires approval",
+						Description: "Execution isolation: auto prefers an isolated filesystem sandbox that gets the daemon's network only for a command that reaches a remote service or sets network; isolated requires it; host uses host credentials/network under the current approval mode",
 						Enum:        []string{"auto", "isolated", "host"},
 						Default:     "auto",
 					},
+					"network": networkRequestProperty(),
 				},
 				Required: []string{"command"},
 			},
@@ -414,20 +426,40 @@ func (t *ExecuteCommandTool) ExecuteResult(args map[string]interface{}) (kernel.
 	}
 	background, _ := args["background"].(bool)
 	if background {
+		// Every refusal before the process launches reports that nothing started,
+		// so the external-effect claim this call holds is released rather than
+		// left uncertain for work that never ran.
+		notStarted := kernel.ToolDispatchResult{Process: &kernel.ToolProcessResult{Started: false}}
 		mode, err := requestedSandboxMode(args)
 		if err != nil {
-			return kernel.ToolDispatchResult{}, err
+			return notStarted, err
 		}
 		if mode != SandboxHost {
-			return kernel.ToolDispatchResult{}, fmt.Errorf("background commands require sandbox=host and approval; use watch_external for durable unattended waits")
+			return notStarted, fmt.Errorf("background commands require sandbox=host explicitly under the current approval mode; use watch_external for durable unattended waits")
 		}
+		// Host execution by contract, so the foreground boundary rule applies: a
+		// policy that requires isolation forbids the start, whatever approved it.
+		var policy *ExecSandboxPolicy
+		if scope, ok := currentExecutionScopeAny(args); ok {
+			policy = scope.SandboxPolicy
+		}
+		approved, approvedReason := approvedSandboxBoundary(args)
+		if _, err := resolveSandboxBoundaryForPolicy(mode, approved, approvedReason, runtime.GOOS, ExecSandboxAvailable(), policy); err != nil {
+			return notStarted, enrichToolFailure("terminal", err, "")
+		}
+		managed, release, laneErr := acquireManagedExecution(contextFromArgs(args), args, nil, true)
+		if laneErr != nil {
+			return notStarted, laneErr
+		}
+		defer release()
+		args["_context"] = managed
 		// A background command belongs to its run: it gets the run's environment
 		// binding, scratch space, and tool state overlays like any other command.
 		// Skipping that made the same command behave differently depending only
 		// on whether it was backgrounded.
 		material := execMaterialForArgs(args, absoluteCWD(cwd))
 		if material.ProfileError != nil {
-			return kernel.ToolDispatchResult{}, enrichToolFailure("terminal", fmt.Errorf("prepare execution environment: %w", material.ProfileError), "")
+			return notStarted, enrichToolFailure("terminal", fmt.Errorf("prepare execution environment: %w", material.ProfileError), "")
 		}
 		runCtx := contextFromArgs(args)
 		emitProfilePreparation(runCtx, "terminal", stringArg(args, "_tool_call_id"), material)
@@ -436,9 +468,15 @@ func (t *ExecuteCommandTool) ExecuteResult(args map[string]interface{}) (kernel.
 		// is not a work limit: watch_external is the durable, observable way to
 		// wait a long time for something external.
 		ceiling := backgroundProcessCeiling(args)
-		id, err := registry.StartProcess(cmdStr, cwd, material.Env, ceiling)
+		// A claimed external effect stays held until this process's observed
+		// exit settles it (exit 0) or leaves it uncertain.
+		var onExit func(string, int, error)
+		if observer, ok := args[effectProcessObserverArg].(*effectProcessObserver); ok {
+			onExit = observer.exitHook()
+		}
+		id, err := registry.StartObservedProcessInContext(WithExecutionRuntime(contextFromArgs(args), executionRuntimeFromArgs(args)), cmdStr, cwd, material.Env, ceiling, onExit)
 		if err != nil {
-			return kernel.ToolDispatchResult{}, err
+			return notStarted, err
 		}
 		// Background execution is host execution by contract above, so it is
 		// recorded as such: an unattributed host escape is invisible to the
@@ -451,8 +489,10 @@ func (t *ExecuteCommandTool) ExecuteResult(args map[string]interface{}) (kernel.
 			"mode":         string(decision.Mode),
 			"reason":       decision.Reason,
 			"network":      decision.NetworkShared,
-			"background":   true,
-			"profiles":     material.Profiles,
+			// Host execution carries the daemon's network by construction.
+			"network_decision": executionenv.NetworkDecisionShared,
+			"background":       true,
+			"profiles":         material.Profiles,
 			// The plan is recorded even though a detached process cannot report a
 			// streamed result: an execution with no auditable boundary is exactly
 			// what made background commands invisible.
@@ -462,7 +502,7 @@ func (t *ExecuteCommandTool) ExecuteResult(args map[string]interface{}) (kernel.
 			"ceiling_seconds":    int(ceiling / time.Second),
 			"host_escape_reason": HostEscapeHostWrite,
 		}, string(decision.Mode))
-		return kernel.ToolDispatchResult{Output: fmt.Sprintf("Started background process with ID: %s", id), Process: &kernel.ToolProcessResult{Started: true, SandboxMode: string(plan.Mode)}}, nil
+		return kernel.ToolDispatchResult{Output: fmt.Sprintf("Started background process with ID: %s\nWarning: the host execution lane is released after startup; this process may still affect files used by other Runs.", id), Process: &kernel.ToolProcessResult{Started: true, SandboxMode: string(plan.Mode), NetworkDecision: executionenv.NetworkDecisionShared}}, nil
 	}
 
 	return executeForegroundCommand(args, "terminal", 30)
@@ -490,21 +530,47 @@ func NewVerifyTool() *VerifyTool {
 			},
 			"sandbox": {
 				Type:        "string",
-				Description: "Execution isolation: auto prefers an isolated filesystem sandbox whose network follows exec_sandbox.allow_network; isolated requires it; host uses host credentials/network and requires approval",
+				Description: "Execution isolation: auto prefers an isolated filesystem sandbox that gets the daemon's network only for a command that reaches a remote service or sets network; isolated requires it; host uses host credentials/network under the current approval mode",
 				Enum:        []string{"auto", "isolated", "host"},
 				Default:     "auto",
 			},
+			"network": networkRequestProperty(),
 		},
 		Required: []string{"command"},
 	}
 	for name, property := range verificationBindingProperties() {
 		schema.Properties[name] = property
 	}
+	schema.Properties["effect_claim_id"] = NewExecuteCommandTool().Schema().Properties["effect_claim_id"]
 	return &VerifyTool{BaseTool: BaseTool{
-		name:        "verify",
-		description: "Run a test, build, lint, typecheck, syntax, smoke, or custom verification command and record its exit status as durable run evidence. Declare criterion and target directly; the runtime binds the check to the in_progress verification_required plan step, so make the step you are verifying in_progress first.",
-		schema:      schema,
+		name: "verify",
+		description: "Run a test, build, lint, typecheck, syntax, smoke, or custom verification command and record its exit status as durable run evidence. Select a current Plan step with step_id, including a pending step, instead of changing Plan state just to bind a check. When declaring criterion or target, omission of step_id keeps the check standalone. Bind effect_claim_id when this same proven read-only check observes an unresolved effect; unbound verification never releases a claim. " +
+			"A check runs offline unless it reaches a remote service; set network: true when it needs its dependencies downloaded. A pass that ran offline although the workspace permits network is reported as such.",
+		schema: schema,
 	}}
+}
+
+// networkRequestProperty is the `network` parameter of the execution tools that
+// take one (terminal, verify). It asks; it never grants.
+func networkRequestProperty() PropertyDef {
+	return PropertyDef{
+		Type: "boolean",
+		Description: "Set true when this command needs network access that its name does not show, such as a script that calls a remote service or a build that downloads dependencies on a cold cache. " +
+			"Permission still comes from the workspace's network grant or an approval; this never grants anything. npm install, git push and cloud CLIs get the network by themselves; builds and tests run offline.",
+		Default: false,
+	}
+}
+
+// codeNetworkRequestProperty is the same parameter on execute_code, whose
+// payload is the model's own program: nothing but the model can tell that it
+// calls a remote service, so the program is offline unless it asks.
+func codeNetworkRequestProperty() PropertyDef {
+	return PropertyDef{
+		Type: "boolean",
+		Description: "Set true when this code needs network access, such as calling a remote service or downloading data. " +
+			"Permission still comes from the workspace's network grant or an approval; this never grants anything. Without it the code runs offline.",
+		Default: false,
+	}
 }
 
 func (t *VerifyTool) NormalizeArguments(args map[string]interface{}) (map[string]interface{}, error) {
@@ -562,6 +628,9 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, stan
 	}
 
 	scope, _ := currentExecutionScopeAny(args)
+	// The boundary the approval funnel resolved, not the requested mode: an
+	// approval that assumed isolation must never run on the host.
+	boundary, boundaryReason := approvedSandboxBoundary(args)
 	request := ExecutionRequest{
 		ToolName:       toolName,
 		ToolCallID:     stringArg(args, "_tool_call_id"),
@@ -572,10 +641,13 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, stan
 		CWD:            cwd,
 		WorkspaceRoots: append([]string{}, scope.AllowedRoots...),
 		Sandbox:        requestedMode,
+		Boundary:       boundary,
+		BoundaryReason: boundaryReason,
 		NetworkShared:  networkSharedArg(args),
 		Timeout:        profile.Timeout,
 		ToolProfile:    profile,
 	}
+	request.NetworkDecision, request.NetworkPermission = stringArg(args, networkDecisionArg), stringArg(args, networkPermissionArg)
 	result, err := Execute(contextFromArgs(args), request, args)
 	if result.Plan.Mode != "" {
 		args["_sandbox_mode"] = string(result.Plan.Mode)
@@ -599,31 +671,59 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolNa
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
+	if process, ok := cmd.(*exec.Cmd); ok {
+		recordSpawnedGroup(ctx, process)
+	}
 
 	eventCh := kernel.EventChannelFromContext(ctx)
 	var mu sync.Mutex
 	var output strings.Builder
 	var wg sync.WaitGroup
 
+	// The live stream reaches clients before the result middleware sees the
+	// whole output, so it is masked here, line by line with state across
+	// lines; the captured output stays raw for that middleware.
+	// The command is masked once and marked, so that the event redactor does
+	// not mask it again on every line of the output.
+	var shownCommand kernel.RedactedText
+	if eventCh != nil {
+		shownCommand = kernel.RedactedText(RedactSensitive(command))
+	}
+	redactors := map[string]*lineStreamRedactor{"stdout": newLineStreamRedactor(), "stderr": newLineStreamRedactor()}
+	emitLines := func(stream string, lines []string) {
+		for _, line := range lines {
+			emitToolProgress(eventCh, "tool.output", map[string]interface{}{
+				"tool_name":    toolName,
+				"tool_call_id": toolCallID,
+				"stream":       stream,
+				"command":      shownCommand,
+				"line":         line,
+			}, line)
+		}
+	}
+	var captured []capturedLine
 	appendLine := func(stream, line string) {
 		mu.Lock()
 		if output.Len() > 0 {
 			output.WriteByte('\n')
 		}
+		start := output.Len()
 		output.WriteString(line)
+		captured = append(captured, capturedLine{stderr: stream == "stderr", start: start, end: output.Len()})
 		mu.Unlock()
-		emitToolProgress(eventCh, "tool.output", map[string]interface{}{
-			"tool_name":    toolName,
-			"tool_call_id": toolCallID,
-			"stream":       stream,
-			"command":      command,
-			"line":         line,
-		}, line)
+		if eventCh != nil {
+			emitLines(stream, redactors[stream].push(line))
+		}
+	}
+	endStream := func(stream string) {
+		if eventCh != nil {
+			emitLines(stream, redactors[stream].flush())
+		}
 	}
 
 	wg.Add(2)
-	go scanCommandOutput(stdout, "stdout", appendLine, &wg)
-	go scanCommandOutput(stderr, "stderr", appendLine, &wg)
+	go scanCommandOutput(stdout, "stdout", appendLine, endStream, &wg)
+	go scanCommandOutput(stderr, "stderr", appendLine, endStream, &wg)
 
 	done := make(chan error, 1)
 	go func() {
@@ -653,14 +753,14 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolNa
 		select {
 		case err := <-done:
 			mu.Lock()
-			result := output.String()
+			result := maskInterleavedStreams(output.String(), captured)
 			mu.Unlock()
 			return result, err
 		case <-ticker.C:
 			emitToolProgress(eventCh, "tool.heartbeat", map[string]interface{}{
 				"tool_name":       toolName,
 				"tool_call_id":    toolCallID,
-				"command":         command,
+				"command":         shownCommand,
 				"elapsed_seconds": time.Since(start).Seconds(),
 			}, "")
 		case <-ctx.Done():
@@ -674,7 +774,7 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolNa
 			err := <-done
 			drain.Stop()
 			mu.Lock()
-			result := output.String()
+			result := maskInterleavedStreams(output.String(), captured)
 			mu.Unlock()
 			if err != nil {
 				return result, err
@@ -691,8 +791,9 @@ type commandRunner interface {
 	Wait() error
 }
 
-func scanCommandOutput(r io.Reader, stream string, appendLine func(stream, line string), wg *sync.WaitGroup) {
+func scanCommandOutput(r io.Reader, stream string, appendLine func(stream, line string), endStream func(stream string), wg *sync.WaitGroup) {
 	defer wg.Done()
+	defer endStream(stream)
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {

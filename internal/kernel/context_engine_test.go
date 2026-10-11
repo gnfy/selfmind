@@ -338,7 +338,7 @@ func TestTruncateMessagesDoesNotStackSummaries(t *testing.T) {
 	big := strings.Repeat("context word ", 40)
 	messages := []llm.Message{
 		{Role: "system", Content: "sys"},
-		{Role: "user", Content: "[CONTEXT COMPACTION - REFERENCE ONLY] prior handoff\n\n## Active Task\nold"},
+		{Role: "user", Content: "[CONTEXT COMPACTION - REFERENCE ONLY] prior handoff\n\n## Active Task\nold", ContextOrigin: llm.MessageOriginCompaction},
 	}
 	for i := 0; i < 6; i++ {
 		messages = append(messages, llm.Message{Role: "assistant", Content: big})
@@ -443,7 +443,10 @@ func TestRecoverMessagesDropsOptionalProjectContextAndKeepsLatestUser(t *testing
 		{Role: "assistant", Content: strings.Repeat("old answer ", 120)},
 		{Role: "user", Content: "LATEST-INSTRUCTION"},
 	}
-	got := engine.RecoverMessages(messages)
+	ctx := withContextSystemSections(context.Background(), []PromptSection{
+		{Category: "project_context", Content: "# PROJECT CONTEXT\n" + strings.Repeat("large project rules ", 200)},
+	})
+	got := engine.RecoverMessagesCtx(ctx, messages)
 	if len(got) == 0 || got[len(got)-1].Content != "LATEST-INSTRUCTION" {
 		t.Fatalf("latest user instruction was not preserved: %+v", got)
 	}

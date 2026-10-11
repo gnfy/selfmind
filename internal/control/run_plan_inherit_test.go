@@ -162,7 +162,8 @@ func TestExactContinuationCanAdoptUnchangedVerifiedStep(t *testing.T) {
 		"started_at_unix_nano": int64(10), "finished_at_unix_nano": int64(11),
 		"command": map[string]interface{}{"command": "inspect target", "cwd": "/workspace", "binding": binding},
 	}})
-	if _, err := store.AppendEvent(ctx, Event{TaskID: parentTask.ID, RunID: parent.ID, Type: "evidence.recorded", Payload: raw}); err != nil {
+	originalCheck, err := store.AppendEvent(ctx, Event{TaskID: parentTask.ID, RunID: parent.ID, Type: "evidence.recorded", Payload: raw})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.SyncRunPlan(ctx, identity.TenantID, parent.ID, "checked", []RunPlanStepInput{{
@@ -255,7 +256,18 @@ func TestExactContinuationCanAdoptUnchangedVerifiedStep(t *testing.T) {
 	}}); err == nil || !strings.Contains(err.Error(), "no bound observation") {
 		t.Fatalf("missing source check should fail with an actionable reason, got %v", err)
 	}
-	if _, err := store.AppendEvent(ctx, Event{TaskID: parentTask.ID, RunID: parent.ID, Type: "evidence.recorded", Payload: raw}); err != nil {
+	restoredCheck, err := store.AppendEvent(ctx, Event{TaskID: parentTask.ID, RunID: parent.ID, Type: "evidence.recorded", Payload: raw})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SyncRunPlan(ctx, identity.TenantID, child.ID, "late observation", []RunPlanStepInput{{
+		StepID: step.StepID, Status: "completed", ReusePriorVerification: true, ReuseReason: "same target",
+	}}); err == nil {
+		t.Fatal("a new observation after the frozen window impersonated its source proof")
+	}
+	// Restore the original cursor, as restoring the journal would, rather than
+	// writing new evidence after the frozen source window.
+	if _, err := store.db.ExecContext(ctx, `UPDATE task_events SET cursor=? WHERE id=?`, originalCheck.Cursor, restoredCheck.ID); err != nil {
 		t.Fatal(err)
 	}
 	adopted, err := store.SyncRunPlan(ctx, identity.TenantID, child.ID, "still valid", []RunPlanStepInput{{

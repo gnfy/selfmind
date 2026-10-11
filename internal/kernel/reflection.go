@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/platform/atomicfile"
 )
 
 // ─────────────────────────────────────────
@@ -479,13 +480,9 @@ func (r *ReflectionEngine) ArchiveSkill(ctx context.Context, result *ReviewResul
 	}
 
 	// 原子写入：先写临时文件，再 rename
-	tmpPath := targetPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(result.Content), 0644); err != nil {
-		return fmt.Errorf("write tmp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, targetPath); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("rename file: %w", err)
+	// 独占的临时文件，而不是可预测的 ".tmp" 名字：受限命令可能预先在那里放了符号链接。
+	if err := atomicfile.Write(targetPath, []byte(result.Content), 0644); err != nil {
+		return fmt.Errorf("write skill file: %w", err)
 	}
 
 	// 发送通知

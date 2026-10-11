@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"path/filepath"
 	"time"
 )
 
@@ -81,7 +83,7 @@ func EnsureRunning(ctx context.Context, opts EnsureOptions) (EnsureResult, error
 	// and also keeps compatibility with externally supervised gateways.
 	if pingHealth(ctx, url) == nil {
 		rec, _ := manager.RunningRecord()
-		return EnsureResult{URL: url, Record: rec}, nil
+		return EnsureResult{URL: url, Record: rec}, requireLocalControl(url, dataDir, rec)
 	}
 	// If the endpoint is not ready but the runtime lock is owned, wait for that
 	// owner rather than spawning a duplicate. PID metadata is descriptive only.
@@ -92,7 +94,7 @@ func EnsureRunning(ctx context.Context, opts EnsureOptions) (EnsureResult, error
 		// than spawning a duplicate that would just lose the flock race.
 		if err := waitHealthy(ctx, url, timeout); err == nil {
 			rec, _ := manager.RunningRecord()
-			return EnsureResult{URL: url, Record: rec}, nil
+			return EnsureResult{URL: url, Record: rec}, requireLocalControl(url, dataDir, rec)
 		}
 	}
 
@@ -109,7 +111,30 @@ func EnsureRunning(ctx context.Context, opts EnsureOptions) (EnsureResult, error
 			url, timeout, err)
 	}
 	rec, _ := manager.RunningRecord()
-	return EnsureResult{URL: url, Record: rec, Started: true}, nil
+	return EnsureResult{URL: url, Record: rec, Started: true}, requireLocalControl(url, dataDir, rec)
+}
+
+// requireLocalControl confirms that a local daemon also answers on its local
+// control socket, the person's only CLI channel. A daemon from before that
+// socket answers health on TCP but refuses every CLI request, so it is named
+// with the remedy instead of being handed back as ready. A remote daemon is
+// not checked: it has no local socket and grants no CLI identity.
+func requireLocalControl(url, dataDir string, rec StatusRecord) error {
+	if !LocalGatewayURL(url) {
+		return nil
+	}
+	path := LocalControlSocketPath(dataDir)
+	if err := checkPrivateSocketDir(filepath.Dir(path)); err == nil {
+		if conn, dialErr := net.DialTimeout("unix", path, time.Second); dialErr == nil {
+			_ = conn.Close()
+			return nil
+		}
+	}
+	owner := "the running gateway"
+	if rec.PID > 0 {
+		owner = fmt.Sprintf("the running gateway (pid %d)", rec.PID)
+	}
+	return fmt.Errorf("%s answers on %s but not on its local control socket %s; it predates this selfmind version or failed to open the socket. Restart it with `selfmind gateway restart` and check the daemon log", owner, url, path)
 }
 
 // waitHealthy polls /health until it returns 200, the deadline passes, or ctx is

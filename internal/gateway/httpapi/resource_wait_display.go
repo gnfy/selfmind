@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"selfmind/internal/control"
@@ -27,22 +26,47 @@ func formatResourceWaitBacklog(waits []control.ExternalResourceWaitProjection, n
 	if !oldest.IsZero() {
 		age = now.Sub(oldest).Round(time.Second).String()
 	}
-	return fmt.Sprintf("External resource waits now: waiting for live observation %d, ready %d, needs observation %d, oldest %s (bounded to 100 Runs).\n", pending, ready, observation, age)
+	return fmt.Sprintf("External resource waits now: waiting on an in-flight effect %d, ready %d, waiting on an unresolved effect %d, oldest %s (bounded to 100 Runs).\n", pending, ready, observation, age)
 }
 
 func formatResourceWaitDetail(wait control.ExternalResourceWaitProjection) string {
 	if wait.RunStatus == "blocked" && wait.Ready {
-		return "The held effect has been observed. Use /resume " + wait.RunID + " to assess and finish the remaining work."
+		if wait.WakeOnRelease {
+			return "The held effect has been released; this work continues automatically when admitted."
+		}
+		return "The held effect has been released. Use /resume " + wait.RunID + " to assess and finish the remaining work."
 	}
 	if wait.RunStatus == "blocked" || wait.NeedsObservation {
-		var ids []string
-		for _, claim := range wait.BlockingClaims {
-			ids = append(ids, claim.ID)
-		}
-		return "External effect needs observation; automatic continuation is unavailable. Claims: " + strings.Join(ids, ", ") + ". Use /effects, then /resume " + wait.RunID + " for read-only inspection. The blocked call was not dispatched."
+		claims, first := resourceWaitClaimSummary(wait.BlockingClaims)
+		return "This work waits on an unresolved external effect (" + claims + "); its conflicting call was not dispatched. " +
+			"If you know the effect's result, settle it with /effects settle " + first + " [reason]. " +
+			resourceWaitResumeStep(wait.RunID, wait.BlockingClaims)
 	}
 	if wait.Ready {
 		return "External target is available; the exact continuation is waiting for dispatch."
 	}
-	return "External target is occupied; a live run or bound watcher is providing observation. The blocked call was not dispatched."
+	// The wait is for the claims in flight or watched; another Run's
+	// left-uncertain claim is decided after it, as the claim gate orders them.
+	var waited, decide []control.ExternalEffectClaim
+	for _, claim := range wait.BlockingClaims {
+		if claim.Disposition == control.ExternalClaimLeftUncertain && !claim.SameChain {
+			decide = append(decide, claim)
+		} else {
+			waited = append(waited, claim)
+		}
+	}
+	text := "External target is held by another run's in-flight call or by a watcher bound to it; "
+	then := "this work continues when that claim is released."
+	if ownWatchedResourceWait(waited) {
+		claims, first := resourceWaitClaimSummary(waited)
+		text = "External target is held by an earlier effect of this work that a watcher bound to it still observes (" + claims + "); "
+		then = "this work continues when that watcher releases it, or settle it with /effects settle " + first + " [reason]."
+	}
+	if len(decide) > 0 {
+		claims, first := resourceWaitClaimSummary(decide)
+		then = "once it is released, this work still needs your decision on another run's unresolved effect (" + claims +
+			"): settle it with /effects settle " + first + " [reason] and the work continues by itself, or then /resume " +
+			wait.RunID + " and approve the conflicting call once."
+	}
+	return text + then + " The blocked call was not dispatched."
 }

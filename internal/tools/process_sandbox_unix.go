@@ -40,3 +40,18 @@ func configureCommandCancellation(cmd *exec.Cmd) {
 		}
 	}
 }
+
+// leadsOwnGroup reports whether the started command became the leader of a new
+// process group, so its pid is that group's id.
+func leadsOwnGroup(cmd *exec.Cmd) bool {
+	return cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid && cmd.SysProcAttr.Pgid == 0
+}
+
+// stopProcessGroup kills whatever a finished command left running in its
+// process group, so nothing it started can act after the caller moves on.
+func stopProcessGroup(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+}

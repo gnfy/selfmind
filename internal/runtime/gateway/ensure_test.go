@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -132,6 +133,12 @@ func TestEnsureRunningUsesExistingDaemon(t *testing.T) {
 	if err := m.WriteStatus("running", "default", ""); err != nil {
 		t.Fatal(err)
 	}
+	// A current daemon also answers on its local control socket.
+	control, err := listenLocalControl(LocalControlSocketPath(dataDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
 
 	res, err := EnsureRunning(context.Background(), EnsureOptions{ConfigPath: cfgPath, Timeout: 2 * time.Second})
 	if err != nil {
@@ -145,5 +152,26 @@ func TestEnsureRunningUsesExistingDaemon(t *testing.T) {
 	}
 	if res.Record.PID != os.Getpid() {
 		t.Fatalf("record PID = %d, want %d", res.Record.PID, os.Getpid())
+	}
+}
+
+// A daemon from before the local control socket answers health on TCP but
+// cannot serve the person's CLI. EnsureRunning must say so and how to fix it,
+// not hand back a URL whose every CLI request would be refused.
+func TestEnsureRunningNamesALegacyDaemonWithoutTheLocalControlSocket(t *testing.T) {
+	srv, _ := healthServer(t, 0)
+	dataDir := t.TempDir()
+	cfgPath := filepath.Join(dataDir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("storage:\n  data_dir: "+dataDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_GATEWAY_URL", srv.URL)
+	m := NewManager(dataDir, "127.0.0.1:8765")
+	if err := m.WriteStatus("running", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := EnsureRunning(context.Background(), EnsureOptions{ConfigPath: cfgPath, Timeout: time.Second})
+	if err == nil || !strings.Contains(err.Error(), "selfmind gateway restart") || !strings.Contains(err.Error(), LocalControlSocketPath(dataDir)) {
+		t.Fatalf("a daemon without the local control socket must be named with the restart remedy, got %v", err)
 	}
 }

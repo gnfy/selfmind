@@ -3,109 +3,53 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Both"
-    },
-    {
-      "reasoning_content": " ver"
-    },
-    {
-      "reasoning_content": "ifications"
-    },
-    {
-      "reasoning_content": " passed"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Now"
-    },
-    {
-      "reasoning_content": " confirm"
-    },
-    {
-      "reasoning_content": " file"
-    },
-    {
-      "reasoning_content": " content"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " resolve"
-    },
-    {
-      "reasoning_content": " plan"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " finish"
-    },
-    {
-      "reasoning_content": "_run"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " quickly"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " file"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " confirm"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "8"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "\"."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I will update the plan to mark the second work unit as completed."
     },
     {
       "usage": {
-        "input_tokens": 13033,
-        "output_tokens": 93,
-        "cache_read_input_tokens": 12800,
-        "cache_miss_input_tokens": 233,
+        "input_tokens": 13442,
+        "output_tokens": 14,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 28,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 187,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 3599,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 12145,
+        "cache_miss_input_tokens": 4896,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_Y9zvyerSOwQNT4hZYiD05603",
-          "Function": "batch_read",
-          "Args": "{\"operations\": [{\"path\": \"setting.txt\", \"tool\": \"read_file\"}, {\"path\": \".\", \"tool\": \"ls_r\"}]}"
+          "ID": "call_2285716",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"Both work units have been verified and completed.\",\"plan\":[{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_2}}\",\"verification_required\":true,\"step\":\"Create setting.txt with 7 and verify positive integer\",\"success_criteria\":\"setting is positive\",\"status\":\"completed\"},{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\",\"step\":\"Update setting.txt with 8 and reverify positive integer\",\"status\":\"completed\",\"verification_required\":true,\"success_criteria\":\"setting is positive\"}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
         }
       ]
     }

@@ -29,6 +29,7 @@ const legacyVerificationStepIDArg = "_legacy_verification_step_id"
 
 func verificationBindingProperties() map[string]PropertyDef {
 	return map[string]PropertyDef{
+		"step_id":            {Type: "string", Description: "Server-issued current Plan step this check proves, including a pending step. Select it explicitly when declaring a criterion or target; omission keeps such a check standalone and cannot complete a Plan step."},
 		"criterion":          {Type: "string", Description: "Observable condition being verified; preserve it across retries."},
 		"target":             {Type: "string", Description: "Exact artifact or operation this condition concerns."},
 		"replaces":           {Type: "string", Description: "Previous verification evidence id in this Run, only when correcting or retrying that check. Checks without declared local_dependencies retain their original open-work-unit boundary."},
@@ -54,9 +55,8 @@ func normalizeVerificationArgs(args map[string]interface{}) (map[string]interfac
 	for key, value := range legacy {
 		destination := key
 		if key == "step_id" {
-			// step_id was part of the published nested shape. Keep accepting it
-			// for old clients and replays, but do not republish it in the flat
-			// schema: the runtime validates and owns this association.
+			// Keep the old nested shape; the native field now exposes the same
+			// server-issued identity without asking Main to move Plan state first.
 			destination = legacyVerificationStepIDArg
 		} else if _, known := properties[key]; !known {
 			return nil, fmt.Errorf("unknown parameter: check.%s", key)
@@ -84,6 +84,9 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 		}
 	}
 	if value, ok := normalized[legacyVerificationStepIDArg]; ok {
+		if current, present := raw["step_id"]; present && !reflect.DeepEqual(current, value) {
+			return nil, fmt.Errorf("conflicting verification parameter: step_id")
+		}
 		raw["step_id"] = value
 		explicit = true
 	}

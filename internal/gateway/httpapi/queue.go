@@ -8,6 +8,7 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"net/http"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
@@ -44,24 +45,48 @@ func (d *Server) backgroundReadyForWork() bool {
 	return status.RouteReady(modelchange.RouteAuxiliary)
 }
 
-func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
+// The enqueue helpers below admit input that cannot start now. A failed queue
+// write leaves nothing behind for the input (it runs under exactWrite), so it
+// is reported as a refusal a durable inbound receipt may return to pending.
+
+// queueRefusal reports a queue write that saved nothing.
+func queueRefusal(identity *control.IdentityContext, background string, err error) (api.MessageResponse, *notDispatched) {
+	return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", background, "", "", err.Error())},
+		&notDispatched{reason: refusalSave, cause: err}
+}
+
+// admitted returns an admission outcome as a message result.
+func admitted(resp api.MessageResponse, refusal *notDispatched) (api.MessageResponse, int, *notDispatched) {
+	return resp, http.StatusOK, refusal
+}
+
+func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, *notDispatched) {
 	if d == nil || d.Control == nil || identity == nil {
-		message := "Model readiness is incomplete. Open `selfmind model` to repair the configured routes."
-		return api.MessageResponse{Identity: identity, Error: message, Turn: messageTurn("failed", "", "idle", "", "", message)}
+		return queueRefusal(identity, "idle", fmt.Errorf("model readiness is incomplete and the queue is not available"))
 	}
 	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	ahead += d.coordinator().activeCount(identity.PersonID)
+	// Frozen now: the drain restores it rather than resolving the mode,
+	// web opt-in or schedule authority again at its claim. A mode that cannot
+	// be read refuses the input before it is saved.
+	admission, admissionErr := d.queuedAdmission(ctx, identity, req)
+	if admissionErr != nil {
+		resp, _, refusal := modeRefusal(identity, admissionErr)
+		return resp, refusal
+	}
 	attachments := d.admitQueuedAttachments(ctx, identity, req)
-	queued, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
+	queued, err := d.Control.EnqueueQueued(exactWrite(ctx), control.QueuedTask{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
 		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
 		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
 		ExecutionRoots: req.ExecutionRoots, ReplyToRunID: req.ReplyToRunID,
 		ApprovalID: req.ApprovalID, ClarifyID: req.ClarifyID,
 		Attachments: attachments,
+		Admission:   admission,
+		Class:       queuedClass(ctx, req),
 	})
 	if err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}
+		return queueRefusal(identity, "idle", err)
 	}
 	content := fmt.Sprintf("Queued until the configured models are ready (%d ahead). Open `selfmind model` to review or repair them.", ahead)
 	turn := messageTurn("queued", "queued", "idle", "", "", content)
@@ -69,20 +94,49 @@ func (d *Server) enqueueUntilModelReady(ctx context.Context, identity *control.I
 	return api.MessageResponse{
 		Identity: identity, Content: content, Accepted: true,
 		Turn: turn,
+	}, nil
+}
+
+// queuedClass keeps a scheduled turn scheduled across the queue: it waits
+// below the person's own input, and the drain starts it with its origin, so it
+// is never mistaken for something the person typed. The row's admission
+// snapshot keeps the schedule's authorisation instant, so the drained turn
+// consumes exactly the remembered classes that existed then. A row written
+// without a snapshot has no instant to restore and consumes none, rather than
+// every class the person holds.
+func queuedClass(ctx context.Context, req api.MessageRequest) string {
+	if runOrigin(ctx, req) == runOriginCron {
+		return control.QueueClassCron
 	}
+	return ""
 }
 
 // enqueueBehindActive stores deferred work behind the person's active run and
 // returns an honest, conversational acceptance. Most rows become new root
 // work; a row with an exact ReplyToRunID resumes that historical parent when
 // drained. "N ahead" counts the running task (1) plus earlier queued rows.
-func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
+func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, *notDispatched) {
 	if d == nil || d.Control == nil || identity == nil {
-		return api.MessageResponse{Identity: identity, Error: "queue is not available", Turn: messageTurn("failed", "", "", "", "", "queue is not available")}
+		return queueRefusal(identity, "", fmt.Errorf("queue is not available"))
 	}
+	coord := d.coordinator()
+	coord.mu.Lock()
+	defer coord.mu.Unlock()
+	return d.enqueueBehindActiveLocked(ctx, identity, req)
+}
+
+// The coordinator holds its registry mutex across both the readiness decision
+// and this write, so a later direct input cannot pass a blocked source while
+// the earlier input is still being saved to its queue.
+func (d *Server) enqueueBehindActiveLocked(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, *notDispatched) {
 	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
-	ahead += d.coordinator().activeCount(identity.PersonID)
-	queued, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
+	ahead += len(d.coordinator().active[identity.PersonID])
+	admission, admissionErr := d.queuedAdmission(ctx, identity, req)
+	if admissionErr != nil {
+		resp, _, refusal := modeRefusal(identity, admissionErr)
+		return resp, refusal
+	}
+	queued, err := d.Control.EnqueueQueued(exactWrite(ctx), control.QueuedTask{
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
 		Channel:        req.Channel,
@@ -91,45 +145,62 @@ func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.Iden
 		Content:        req.Content,
 		ApprovalMode:   req.ApprovalMode,
 		Attachments:    d.admitQueuedAttachments(ctx, identity, req),
+		Admission:      admission,
 		WorkspaceID:    req.WorkspaceID,
 		ExecutionRoots: req.ExecutionRoots,
 		ReplyToRunID:   req.ReplyToRunID,
 		ApprovalID:     req.ApprovalID,
 		ClarifyID:      req.ClarifyID,
+		Class:          queuedClass(ctx, req),
 	})
 	if err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}
+		return queueRefusal(identity, "", err)
 	}
-	content := fmt.Sprintf("Queued behind the running task (%d ahead). I'll start it when the current one finishes.", ahead)
-	turn := messageTurn("queued", "queued", "running", "", "", content)
+	active := make([]*activeRun, 0, len(d.coordinator().active[identity.PersonID]))
+	for run := range d.coordinator().active[identity.PersonID] {
+		active = append(active, run)
+	}
+	content := "Queued: " + d.queueWaitReason(ctx, identity, *queued, active) + fmt.Sprintf(" (%d ahead).", ahead)
+	background := "idle"
+	if len(active) > 0 {
+		background = "running"
+	}
+	turn := messageTurn("queued", "queued", background, "", "", content)
 	turn.QueueID = queued.ID
 	return api.MessageResponse{
 		Identity: identity,
 		Content:  content,
 		Accepted: true,
 		Turn:     turn,
-	}
+	}, nil
 }
 
 // enqueueDuringModelChange accepts new work while the daemon is draining for a
 // confirmed model transaction. The boot drain will start it with the new
 // frozen route; rejecting it would make the safe switch look like downtime.
-func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
+func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, *notDispatched) {
 	if d == nil || d.Control == nil || identity == nil {
-		return api.MessageResponse{Identity: identity, Error: "queue is not available", Turn: messageTurn("failed", "", "draining", "", "", "queue is not available")}
+		return queueRefusal(identity, "draining", fmt.Errorf("queue is not available"))
 	}
 	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	ahead += d.coordinator().activeCount(identity.PersonID)
-	queued, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
+	admission, admissionErr := d.queuedAdmission(ctx, identity, req)
+	if admissionErr != nil {
+		resp, _, refusal := modeRefusal(identity, admissionErr)
+		return resp, refusal
+	}
+	queued, err := d.Control.EnqueueQueued(exactWrite(ctx), control.QueuedTask{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
 		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
 		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
 		ExecutionRoots: req.ExecutionRoots, ReplyToRunID: req.ReplyToRunID,
 		ApprovalID: req.ApprovalID, ClarifyID: req.ClarifyID,
 		Attachments: d.admitQueuedAttachments(ctx, identity, req),
+		Admission:   admission,
+		Class:       queuedClass(ctx, req),
 	})
 	if err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "draining", "", "", err.Error())}
+		return queueRefusal(identity, "draining", err)
 	}
 	content := fmt.Sprintf("Queued for the model change (%d ahead). It will start after SelfMind applies the new model.", ahead)
 	turn := messageTurn("queued", "queued", "draining", "", "", content)
@@ -137,7 +208,7 @@ func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control
 	return api.MessageResponse{
 		Identity: identity, Content: content, Accepted: true,
 		Turn: turn,
-	}
+	}, nil
 }
 
 // RecoverQueuedAtBoot repairs durable queue and mailbox state before any
@@ -202,7 +273,12 @@ func (d *Server) DrainReadyQueued(ctx context.Context) {
 // a process restart. It only selects due persons; the coordinator repeats
 // readiness, capacity, lineage, and resource checks before claiming a row.
 func (d *Server) drainQueuedWhenReady(ctx context.Context) {
-	if d == nil || d.Control == nil || !d.modelReadyForWork() {
+	if d == nil || d.Control == nil || d.IsDraining() {
+		return
+	}
+	d.coordinator().retryUnboundQueueReturns(ctx)
+	d.coordinator().retryQueuedNotices(ctx)
+	if !d.modelReadyForWork() {
 		return
 	}
 	rows, err := d.Control.ListDueQueuedRoutes(ctx, 0)

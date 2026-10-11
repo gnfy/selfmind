@@ -78,7 +78,9 @@ func (e *BackgroundReviewEngine) SetControlTenantID(tenantID string) {
 // set, SpawnReview serializes a bounded snapshot and enqueues it instead of
 // spawning a goroutine — the daemon maintenance worker executes it with
 // dedup, rate limiting, and bounded retries, and a crash no longer loses the
-// review. Nil (tests, eval, CLI-only) keeps the immediate in-process path.
+// review. fn reports whether the queue now owns the review, including one
+// that was already queued; false falls back to the immediate path. app wires
+// it on every agent worker; nil (unit tests) keeps the immediate path.
 func (e *BackgroundReviewEngine) SetEnqueue(fn func(tenantID, payloadJSON string) bool) {
 	e.enqueue = fn
 }

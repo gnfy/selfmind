@@ -7,9 +7,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v3"
+
+	"selfmind/internal/platform/atomicfile"
 )
 
 const defaultConfigTemplate = `
@@ -172,10 +175,13 @@ web:
   api_key: ""
 
 # Shell/Python execution prefers an isolated Linux sandbox (read-only host
-# root, writable workspace). allow_network keeps the HOST network namespace
-# inside the sandbox and inherits the daemon's proxy/DNS environment. Set
-# allow_network: false for a fully network-less sandbox — commands needing
-# network must then request sandbox=host through approval.
+# root, writable workspace). allow_network PERMITS sharing the HOST network
+# namespace and the daemon's proxy/DNS environment; only a command that reaches
+# a remote service (package installs, git remotes, cloud CLIs) or sets
+# network: true receives it, so builds and tests run offline; an untrusted
+# workspace still needs a network:shared grant or approval first. Set
+# allow_network: false so that trust alone never shares the network: only a
+# network:shared grant or approval a person gives does.
 exec_sandbox:
   enabled: true
   required: false
@@ -499,6 +505,26 @@ type MCP_SERVER struct {
 	Headers   map[string]string `mapstructure:"headers,omitempty" yaml:"headers,omitempty"`
 	Auth      map[string]string `mapstructure:"auth,omitempty" yaml:"auth,omitempty"`
 	EnvFilter []string          `mapstructure:"env_filter,omitempty" yaml:"env_filter,omitempty"`
+	// ReadOnlyTools are exact remote tool names the operator marks read-only
+	// for this server. The server's own annotations are never consulted.
+	ReadOnlyTools []string `mapstructure:"read_only_tools,omitempty" yaml:"read_only_tools,omitempty"`
+}
+
+// validateMCPReadOnlyTools accepts only exact tool names. Whether the server
+// exposes a name is known once it connects; an unexposed name is then a
+// diagnostic warning, not a load error.
+func validateMCPReadOnlyTools(servers []MCP_SERVER) error {
+	for index, server := range servers {
+		for _, name := range server.ReadOnlyTools {
+			if strings.ContainsAny(name, "*?[]") {
+				return fmt.Errorf("invalid mcp.servers[%d].read_only_tools entry %q: patterns are not allowed; list each tool by its exact name", index, name)
+			}
+			if name == "" || strings.TrimSpace(name) != name || strings.IndexFunc(name, unicode.IsControl) >= 0 {
+				return fmt.Errorf("invalid mcp.servers[%d].read_only_tools entry %q: use the tool's exact name", index, name)
+			}
+		}
+	}
+	return nil
 }
 
 type EvolutionConfig struct {
@@ -1036,6 +1062,9 @@ func LoadConfig(options ...Options) (*Config, error) {
 	if err := cfg.ValidateTUI(); err != nil {
 		return nil, err
 	}
+	if err := validateMCPReadOnlyTools(cfg.MCP.Servers); err != nil {
+		return nil, err
+	}
 	for _, provider := range cfg.Providers.Custom {
 		if err := validateCustomProvider(provider); err != nil {
 			return nil, err
@@ -1066,11 +1095,9 @@ func SaveConfig(path string, cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// The configuration holds every provider key and chat token: write it
+	// through a fresh exclusive temporary file, not a predictable `.tmp` name.
+	return atomicfile.Write(path, data, 0600)
 }
 
 func ResolveConfigPath(explicit string) (string, bool) {

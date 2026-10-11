@@ -21,7 +21,7 @@ func (d *Server) handleApprovals(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
@@ -61,15 +61,14 @@ func (d *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	identity, err := d.Control.ResolveOrCreateAccount(
-		r.Context(),
+	identity, err := d.resolveRequestIdentity(r,
 		d.tenantID(req.TenantID),
 		fallback(req.Platform, "cli"),
 		fallback(req.PlatformUserID, "local"),
 		req.DisplayName,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	// ApprovalID accepts the same references as /approve: the /approvals list

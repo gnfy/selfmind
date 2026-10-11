@@ -26,7 +26,8 @@ func TestGrantPrefixSeparatesReadsFromWrites(t *testing.T) {
 	if read == write {
 		t.Fatalf("a read and a write must not share a class: %q", read)
 	}
-	if read != "aws codebuild batch-get-builds" || write != "aws codebuild start-build" {
+	// The profile the call acts as is part of its class.
+	if read != "aws codebuild batch-get-builds --profile=cw3" || write != "aws codebuild start-build --profile=cw3" {
 		t.Fatalf("prefixes = %q / %q", read, write)
 	}
 }

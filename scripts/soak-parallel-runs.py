@@ -16,14 +16,17 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shlex
 import shutil
 import socket
 import sqlite3
 import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import soak_http  # noqa: E402
 
 
 def parse_args():
@@ -42,23 +45,9 @@ def parse_args():
     return args
 
 
-def http_request(base, token, path, payload=None):
-    headers = {"Authorization": "Bearer " + token}
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-    request = urllib.request.Request(
-        base + path,
-        data=json.dumps(payload).encode() if payload is not None else None,
-        headers=headers,
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=35) as response:
-            return response.status, json.load(response)
-    except urllib.error.HTTPError as error:
-        try:
-            return error.code, json.loads(error.read().decode())
-        except (ValueError, UnicodeError):
-            return error.code, {}
+def http_request(base, token, path, payload=None, socket_path=None):
+    """One request; CLI-identity requests travel on the daemon's control socket."""
+    return soak_http.request_json(base, token, path, payload, socket_path, timeout=35)
 
 
 def wait_for_health(request, process):
@@ -75,34 +64,137 @@ def wait_for_health(request, process):
     raise RuntimeError("isolated daemon did not become healthy")
 
 
-def tool_intervals(database, lineages):
+PROBE_RECEIPT_PREFIX = "SELF_MIND_PROCESS_PROBE "
+EXECUTION_TOOLS = {"terminal", "exec_command", "verify", "execute_command", "shell",
+                   "execute_code", "watch_external"}
+WRITE_TOOLS = {"write_file", "edit", "edit_file", "patch", "apply_patch"}
+PROBE_SOURCE = '''import json
+import os
+from pathlib import Path
+import sys
+import time
+
+nonce, duration = sys.argv[1:]
+receipt_path = Path(".selfmind-soak-probe-" + nonce + ".json")
+# Reserve this receipt before doing work: a replay must not replace evidence.
+started = time.monotonic_ns()
+with receipt_path.open("x") as receipt_file:
+    time.sleep(float(duration))
+    receipt = {"nonce": nonce, "pid": os.getpid(), "cwd": os.getcwd(),
+               "start_ns": started, "end_ns": time.monotonic_ns()}
+    encoded = json.dumps(receipt, separators=(",", ":"))
+    receipt_file.write(encoded)
+print("SELF_MIND_PROCESS_PROBE " + encoded, flush=True)
+'''
+
+
+def prepare_process_probe(workspace, name, duration=20):
+    workspace = workspace.resolve()
+    script_name = ".selfmind-soak-probe.py"
+    (workspace / script_name).write_text(PROBE_SOURCE)
+    nonce = name + "-" + secrets.token_hex(8)
+    return {"workspace": workspace, "nonce": nonce,
+            "receipt_path": workspace / (".selfmind-soak-probe-" + nonce + ".json"),
+            "command": shlex.join(["python3", script_name, nonce, str(duration)])}
+
+
+def execution_or_mutation(payload):
+    classes = set(payload.get("operation_classes") or [])
+    return bool(payload.get("process")
+                or classes.intersection({"write", "delete", "exec", "exec.in_turn", "exec.delegated"})
+                or payload.get("tool") in EXECUTION_TOOLS | WRITE_TOOLS
+                or (payload.get("tool_category") == "filesystem"
+                    and payload.get("tool_read_only") is not True)
+                or ((payload.get("tool_origin") == "external" or payload.get("tool_category") == "mcp")
+                    and payload.get("tool_read_only") is not True))
+
+
+def process_intervals(database, lineages, probes):
+    """Bind independent process clocks to exact successful runtime receipts.
+
+    Tool event timestamps include approval and lane waiting, so they are never
+    execution evidence. Reject extra execution/mutations whose actual intervals
+    this deliberately narrow workload cannot measure.
+    """
     intervals = {}
     for root_id, run_ids in lineages.items():
+        probe = probes[root_id]
+        try:
+            receipt = json.loads(probe["receipt_path"].read_text())
+        except (OSError, ValueError) as error:
+            raise RuntimeError("missing process probe receipt: " + root_id) from error
+        if (receipt.get("nonce") != probe["nonce"]
+                or receipt.get("cwd") != str(probe["workspace"])
+                or any(type(receipt.get(key)) is not int or receipt[key] <= 0
+                       for key in ("pid", "start_ns", "end_ns"))
+                or receipt["end_ns"] <= receipt["start_ns"]):
+            raise RuntimeError("invalid process probe receipt: " + root_id)
         completed = []
         for run_id in run_ids:
             started = {}
-            for kind, raw, at in database.execute(
-                "SELECT type, payload_json, created_at FROM task_events "
+            for kind, raw in database.execute(
+                "SELECT type, payload_json FROM task_events "
                 "WHERE run_id = ? AND type IN ('tool.started', 'tool.completed') "
                 "ORDER BY cursor", (run_id,)
             ):
-                try:
-                    payload = json.loads(raw or "{}")
-                except ValueError:
-                    continue
-                if payload.get("tool") not in ("terminal", "exec_command"):
-                    continue
+                payload = json.loads(raw or "{}")
                 call_id = payload.get("tool_call_id")
-                if not call_id:
-                    continue
                 if kind == "tool.started":
-                    started[call_id] = at
-                elif call_id in started and not payload.get("error"):
-                    completed.append((started.pop(call_id), at))
-        if not completed:
-            raise RuntimeError("a work lineage never completed its terminal sleep: " + root_id)
-        intervals[root_id] = max(completed, key=lambda item: item[1] - item[0])
+                    started[call_id] = payload
+                    continue
+                invocation = started.pop(call_id, {})
+                if payload.get("invoked") is False:
+                    continue  # Explicitly refused/parked before entering the body.
+                process = payload.get("process") or {}
+                if payload.get("tool") not in ("terminal", "exec_command"):
+                    if execution_or_mutation(payload):
+                        raise RuntimeError("unmeasured mutation/execution in " + run_id)
+                    continue
+                arguments = invocation.get("args") or "{}"
+                if isinstance(arguments, str):
+                    arguments = json.loads(arguments)
+                command = arguments.get("command", "")
+                if (not call_id or invocation.get("tool") != payload.get("tool")
+                        or shlex.split(command) != shlex.split(probe["command"])):
+                    raise RuntimeError("unmeasured terminal execution in " + run_id)
+                if (payload.get("error") or payload.get("invoked") is not True
+                        or process.get("started") is not True
+                        or type(process.get("exit_code")) is not int or process["exit_code"] != 0
+                        or process.get("sandbox_mode") not in ("host", "isolated")):
+                    raise RuntimeError("process probe lacks successful typed process evidence: " + run_id)
+                output = payload.get("result", "")
+                try:
+                    emitted = json.loads(output.split(PROBE_RECEIPT_PREFIX, 1)[1].splitlines()[0])
+                except (IndexError, ValueError) as error:
+                    raise RuntimeError("process probe receipt missing from exact tool result: " + run_id) from error
+                if emitted != receipt:
+                    raise RuntimeError("process probe receipt does not match exact tool result: " + run_id)
+                completed.append({**receipt, "sandbox_mode": process["sandbox_mode"],
+                                  "run_id": run_id, "tool_call_id": call_id})
+            if any(execution_or_mutation(item) for item in started.values()):
+                raise RuntimeError("unmeasured unfinished execution/mutation invocation in " + run_id)
+        if len(completed) != 1:
+            raise RuntimeError("a work lineage must have exactly one successful process probe: " + root_id)
+        intervals[root_id] = completed[0]
     return intervals
+
+
+def validate_process_intervals(intervals, minimum_overlap_seconds=5):
+    measured = list(intervals.values())
+    for index, left in enumerate(measured):
+        for right in measured[index + 1:]:
+            overlap = min(left["end_ns"], right["end_ns"]) - max(left["start_ns"], right["start_ns"])
+            if "host" in (left["sandbox_mode"], right["sandbox_mode"]) and overlap > 0:
+                raise RuntimeError("host process overlapped another mutation/terminal probe")
+    overlap_seconds = max(0, min(item["end_ns"] for item in measured)
+                          - max(item["start_ns"] for item in measured)) / 10**9
+    if all(item["sandbox_mode"] == "isolated" for item in measured):
+        if overlap_seconds < minimum_overlap_seconds:
+            raise RuntimeError(f"isolated process probes did not overlap sufficiently: {overlap_seconds}s")
+        policy = "isolated-overlap"
+    else:
+        policy = "host-exclusive" if all(item["sandbox_mode"] == "host" for item in measured) else "mixed-host-exclusive"
+    return {"execution_policy": policy, "process_overlap_seconds": overlap_seconds}
 
 
 def isolate_configuration(source_config, runtime_root):
@@ -132,6 +224,8 @@ def main():
         workspaces = [root / name for name in names]
         for workspace in workspaces:
             workspace.mkdir()
+        probes = [] if args.restart else [
+            prepare_process_probe(workspace, name) for name, workspace in zip(names, workspaces)]
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -166,9 +260,11 @@ def main():
 
             process = launch()
             base = f"http://127.0.0.1:{port}"
-            request = lambda path, payload=None: http_request(base, token, path, payload)
+            control = {"socket": None}
+            request = lambda path, payload=None: http_request(base, token, path, payload, control["socket"])
             try:
                 wait_for_health(request, process)
+                control["socket"] = soak_http.daemon_socket(base, token)
                 if args.third_im:
                     code, setup = request("/v1/message", {
                         "platform": "cli", "platform_user_id": "local",
@@ -180,9 +276,11 @@ def main():
                     (f"For the {name.title()} local marker task, use terminal to run "
                      "`printf x >> marker.txt; sleep 25` in the current workspace, "
                      "then report the file status.") if args.restart else
-                    (f"For the {name.title()} task, use the terminal tool to run `sleep 20`, "
-                     f"then answer in one sentence that {name.title()} is ready.")
-                    for name in names
+                    (f"For the {name.title()} task, use the terminal tool exactly once to run "
+                     f"`{probes[index]['command']}` in the current workspace. "
+                     "Preserve the provided probe and its receipt. No extra terminal calls are needed. "
+                     f"After it finishes, answer in one sentence that {name.title()} is ready.")
+                    for index, name in enumerate(names)
                 ]
                 cli_names = names[:2] if args.third_im else names
                 payloads = [
@@ -220,6 +318,7 @@ def main():
                     process.wait(timeout=5)
                     process = launch()
                     wait_for_health(request, process)
+                    control["socket"] = soak_http.daemon_socket(base, token)
                     database = sqlite3.connect(data_dir / "control.db")
                     original = dict(database.execute(
                         "SELECT channel, id FROM runs WHERE execution_class = 'work' AND resumes_run_id = ''"
@@ -363,23 +462,11 @@ def main():
                 else:
                     raise RuntimeError("work lineages did not settle: " + repr({
                         "leaves": leaves, "pending_queue": pending_queue, "active": active}))
-                intervals = tool_intervals(database, lineages)
-                overlap = min(end for _, end in intervals.values()) - max(start for start, _ in intervals.values())
-                if overlap < 5:
-                    evidence = []
-                    for run_id, kind, raw, at in database.execute(
-                        "SELECT run_id, type, payload_json, created_at FROM task_events "
-                        "WHERE type IN ('model.provider_admission','provider.call.usage') ORDER BY cursor"
-                    ):
-                        payload = json.loads(raw or "{}")
-                        evidence.append({"run_id": run_id, "kind": kind, "at": at,
-                                         "admission": payload.get("admission"), "role": payload.get("role"),
-                                         "status": payload.get("status"), "duration_ms": payload.get("duration_ms")})
-                    print(json.dumps({"terminal_intervals": intervals, "admission_evidence": evidence[:80]}), flush=True)
-                    raise RuntimeError(f"terminal work did not overlap sufficiently: {overlap}s")
+                intervals = process_intervals(database, lineages, dict(zip(run_ids, probes)))
+                execution = validate_process_intervals(intervals)
                 print(json.dumps({"result": "PASS", "capacity": args.capacity,
-                                  "peak_active": peak, "done_runs": len(run_ids),
-                                  "terminal_overlap_seconds": overlap,
+                                  "peak_admitted_active_runs": peak, "done_runs": len(run_ids),
+                                  "process_intervals": intervals, **execution,
                                   "im_supplement": "birch", "stranger_isolated": True,
                                   "third_from_im": args.third_im}))
                 database.close()

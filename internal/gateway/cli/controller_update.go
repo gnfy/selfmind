@@ -151,6 +151,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgBackgroundNotice:
+		if !m.acceptEvent(msg.Event) {
+			return m, nil
+		}
 		if content := strings.TrimSpace(textutil.CleanUTF8(msg.Content)); content != "" {
 			kind := noticeWarning
 			if msg.Success {
@@ -458,6 +461,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.pager != nil {
+			if handled, cmd := m.runViewKey(msg); handled {
+				return m, cmd
+			}
 			closed, cmd := m.pager.Update(msg)
 			if closed {
 				m.pager = nil
@@ -499,6 +505,18 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgAgentDone:
+		// An HTTP acknowledgement is not execution completion. Control replies
+		// and late parent replies own no part of another live Run's projection.
+		if m.replyOutsideLiveRun(msg) {
+			m.localRequestActive, m.localRequestInput = false, ""
+			m.steerCh, m.cancelFn = nil, nil
+			if msg.Err != nil {
+				m.addErrorMessage(fmt.Sprintf("Error: %v", msg.Err))
+			} else if response := strings.TrimSpace(textutil.CleanUTF8(msg.Response)); response != "" {
+				m.addMessage("assistant", response)
+			}
+			return m, spinnerCmd
+		}
 		if !m.daemonRunActive || msg.Turn == nil || strings.TrimSpace(msg.Turn.RunID) == "" || strings.TrimSpace(msg.Turn.RunID) == m.daemonRunID {
 			m.stopModelWait()
 		}
@@ -556,7 +574,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			noticeID := m.setStatusNotice(noticeGuidance, "Sent to the running task as guidance.")
 			return m, tea.Batch(spinnerCmd, clearStatusNoticeAfter(noticeID, 3*time.Second))
 		}
-		newerDaemonRun := m.daemonRunActive && msg.Turn != nil &&
+		newerDaemonRun := m.daemonRunID != "" && m.daemonRunID != msg.PreviousRunID && msg.Turn != nil &&
 			strings.TrimSpace(msg.Turn.RunID) != "" &&
 			strings.TrimSpace(msg.Turn.RunID) != m.daemonRunID
 		if newerDaemonRun {
@@ -568,8 +586,14 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if response := strings.TrimSpace(textutil.CleanUTF8(msg.Response)); response != "" {
 				m.addMessage("assistant", response)
 			}
-			m.runStatus = "working"
+			if m.daemonRunActive {
+				m.runStatus = "working"
+			}
 			return m, spinnerCmd
+		}
+		if msg.Turn != nil && strings.TrimSpace(msg.Turn.RunID) != "" {
+			// The HTTP outcome is authoritative even if run.started was missed.
+			m.daemonRunID = strings.TrimSpace(msg.Turn.RunID)
 		}
 		// Live waiters die with the run, but a parked approval deliberately stays
 		// answerable and starts a continuation. Preserve those panels.
@@ -610,7 +634,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer)
 			m.addErrorMessage(fmt.Sprintf("Error: %v", msg.Err))
 		} else if m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer) {
-			m.runStatus = "done"
+			m.runStatus = replyOutcomeStatus(msg.Turn)
 			if strings.TrimSpace(msg.Input) != "" && !strings.HasPrefix(strings.TrimSpace(msg.Input), "/") {
 				m.completeFirstOnboardingTask()
 			}
@@ -629,11 +653,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.acceptEvent(msg.Event) {
 			return m, spinnerCmd
 		}
+		follow := m.followWatchedContinuation(msg)
 		if m.otherSession(msg.Event.Channel) {
 			// Another session's run: say that work runs there, and leave this
 			// terminal's run state, plan and tool cells as they are.
 			m.otherSessionRunStarted(msg)
-			return m, spinnerCmd
+			return m, tea.Batch(spinnerCmd, follow)
 		}
 		localMatch := m.localRequestActive && sameQueuedInput(m.localRequestInput, msg.Input)
 		queuedMatch := m.consumeQueuedRun(msg.QueueID)
@@ -641,6 +666,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !queuedMatch && strings.TrimSpace(msg.QueueID) == "" {
 				queuedMatch = m.consumeQueuedInput(msg.Input)
 			}
+		}
+		if m.watchingRun && m.watchedRunID != msg.RunID && (localMatch || queuedMatch || msg.Presentation == "foreground") {
+			m.detachWatchedRunForNewTurn()
 		}
 		m.daemonRunActive = true
 		m.daemonRunID = msg.RunID
@@ -717,7 +745,8 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.daemonRunOwned = false
 		m.daemonRunActive = false
 		m.backgroundTickRunning = false
-		m.daemonRunID = ""
+		// Retain the latest bound Run identity after it stops. A delayed parent
+		// HTTP reply must not overwrite this child's waiting or final outcome.
 		m.daemonRunQueueID = ""
 		m.daemonRunStarted = time.Time{}
 		m.daemonRunAwaitingDone = false
@@ -756,6 +785,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, spinnerCmd
 
+	case MsgRunViewLoaded:
+		return m, m.showRunView(msg)
+
 	case MsgAttachedRunDone:
 		// The watched (re-attached) daemon run ended. Unlike MsgAgentDone there
 		// is no synchronous answer to finalize — the conversation reply follows
@@ -767,8 +799,25 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.RunID != "" && m.watchedRunID != "" && msg.RunID != m.watchedRunID {
 			return m, spinnerCmd
 		}
+		if m.daemonRunActive && m.daemonRunID != msg.RunID {
+			// The old observer can end after an exact continuation starts. It
+			// may release its own subscription, never the child's live state.
+			m.watchingRun, m.watchedRunID, m.watchedTaskTitle = false, "", ""
+			m.watchCancel = nil
+			return m, spinnerCmd
+		}
+		if !msg.Cancelled && msg.Err == nil && msg.Status == "running" && msg.ObservedRunID != "" {
+			m.watchingRun = false
+			m.watchCancel = nil
+			m.watchedRunID = msg.ObservedRunID
+			return m, m.attachToActiveRun()
+		}
 		wasWatching := m.watchingRun
-		m.finalizeLiveStream("", llm.AssistantPhaseFinalAnswer)
+		if !msg.Cancelled && msg.Err == nil && strings.TrimSpace(msg.FinalAnswer) != "" {
+			m.finalizeLiveStream(msg.FinalAnswer, llm.AssistantPhaseFinalAnswer)
+		} else {
+			m.finalizeLiveStream("", llm.AssistantPhaseCommentary)
+		}
 		m.watchingRun = false
 		m.watchedRunID = ""
 		m.watchedTaskTitle = ""
@@ -794,11 +843,23 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, spinnerCmd
 		}
-		m.runStatus = "done"
-		if summary := strings.TrimSpace(msg.Summary); summary != "" {
-			m.addMessage("notice", "The running task finished: "+summary)
-		} else {
-			m.addMessage("notice", "The running task finished. Use /status for details.")
+		m.runStatus = uiStatusForDaemonOutcome(msg.Status)
+		if msg.Err != nil || msg.Status == "" {
+			m.runStatus = "interrupted"
+			notice := "Observation stopped without a recorded outcome. /resume shows the current Run state."
+			if msg.Err != nil {
+				notice += " " + msg.Err.Error()
+			}
+			m.addNotice(noticeWarning, notice)
+		} else if strings.TrimSpace(msg.FinalAnswer) == "" {
+			label := "Run stopped (" + strings.ReplaceAll(msg.Status, "_", " ") + ")"
+			if m.runStatus == "done" {
+				label = "The running task finished"
+			}
+			if summary := strings.TrimSpace(msg.Summary); summary != "" {
+				label += ": " + summary
+			}
+			m.addMessage("notice", label)
 		}
 		return m, spinnerCmd
 
@@ -807,6 +868,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.otherSessionApproval(msg)
 			return m, nil
 		}
+		m.closeRunViewForHumanWait()
 		m.stopModelWait()
 		if m.hasApprovalRequest(msg.ID) {
 			return m, nil
@@ -851,11 +913,16 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgClarifyRequest:
 		if m.otherSession(msg.Channel) {
-			m.otherSessionClarify(msg.Question)
+			m.otherSessionClarify(msg)
 			return m, nil
 		}
+		m.closeRunViewForHumanWait()
 		m.stopModelWait()
 		m.armClarifyPrompt(tools.ClarifyRequest{ID: msg.ID, Question: msg.Question, Choices: msg.Choices}, true)
+		return m, nil
+
+	case MsgClarifyResolved:
+		m.resolveClarifyElsewhere(msg)
 		return m, nil
 
 	case MsgClarifyAnswerResult:
@@ -1172,13 +1239,14 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				response := m.resolveClarifyResponse(input)
 				m.addMessage("user", response)
 				if m.clarifyGateway {
+					answerCmd := m.answerClarifyViaGateway(response)
 					m.clarifyMode = false
 					m.clarifyGateway = false
 					m.clarifyChoices = nil
 					m.clarifyReq = tools.ClarifyRequest{}
 					m.runStatus = "working"
 					waitCmd := m.startModelWait("Waiting for the model to continue the task")
-					return m, tea.Batch(m.answerClarifyViaGateway(response), waitCmd, workingTick())
+					return m, tea.Batch(answerCmd, waitCmd, workingTick())
 				}
 				m.clarifyBridge.Submit(m.clarifyReq, response)
 				m.clarifyMode = false

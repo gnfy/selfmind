@@ -16,22 +16,23 @@ import (
 // it. The full Main coordination path remains a separate capacity gate; until
 // it exists, a durable, person-scoped choice is safer than silently selecting
 // one Run or starting an effectful third Run under the wrong objective.
-func (d *Server) ambiguousActiveInput(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, bool) {
+func (d *Server) ambiguousActiveInput(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, bool, *notDispatched) {
 	if d == nil || identity == nil || req.Platform == "cli" || req.Platform == "eval" ||
 		!isUserOriginTurn(ctx, req) || req.ForceNew || req.ReplyToRunID != "" ||
 		req.ApprovalID != "" || req.ClarifyID != "" || req.TaskID != "" || req.ContinuityAction != "" {
-		return api.MessageResponse{}, false
+		return api.MessageResponse{}, false, nil
 	}
 	active := d.coordinator().activeRunsForPerson(identity.PersonID)
 	if len(active) < 2 {
-		return api.MessageResponse{}, false
+		return api.MessageResponse{}, false, nil
 	}
 	workspace, err := d.coordinator().prepareRequestWorkspace(ctx, identity, &req)
 	if err == nil {
 		err = d.coordinator().prepareRequestExecutionRoots(ctx, workspace, &req)
 	}
 	if err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}, true
+		response, refusal := readRefusal(identity, err)
+		return response, true, refusal
 	}
 	req.Attachments = d.coordinator().importAttachments(ctx, identity, nil, req.Attachments)
 	options := make([]control.TurnChoiceOption, 0, len(active)+1)
@@ -74,23 +75,28 @@ func (d *Server) ambiguousActiveInput(ctx context.Context, identity *control.Ide
 	newKey := fmt.Sprintf("%d", len(options)+1)
 	options = append(options, control.TurnChoiceOption{Key: newKey, Label: "This is new work", Action: "new"})
 	fmt.Fprintf(&message, "%s. This is new work\n", newKey)
-	choice, err := d.createTurnChoice(ctx, identity, req, options, "multi_active")
+	choice, err := d.createTurnChoice(ctx, identity, req, options, multiRunChoiceKind)
 	if err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}, true
+		// The choice row is what admits the input; without it nothing holds it.
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}, true,
+			&notDispatched{reason: refusalSave, cause: err}
 	}
 	if pending, peekErr := d.Control.PeekPendingTurnChoice(ctx, identity.TenantID, identity.PersonID,
-		choice.ID, time.Now(), turnChoiceBareWindow); peekErr == nil {
+		choice.ID, time.Now()); peekErr == nil {
 		if decision := d.mainCoordinationSelection(ctx, identity, req, pending); decision.Key != "" {
 			if decision.Action == "observe" {
-				return d.observeMultiRunChoice(ctx, identity, pending, decision.Key), true
+				return d.observeMultiRunChoice(ctx, identity, pending, decision.Key), true, nil
 			}
-			return d.routeMultiRunChoice(ctx, identity, req, pending, decision.Key), true
+			// The choice above already holds the input, so a failed route is
+			// not a refusal of it.
+			response, _ := d.routeMultiRunChoice(ctx, identity, req, pending, decision.Key)
+			return response, true, nil
 		}
 	}
 	fmt.Fprintf(&message, "Choosing a number submits your original request. For status only, use /status <run_id>.\nReply with a number, or use /choose %s <number> from another endpoint.", choice.ID)
 	content := message.String()
 	return api.MessageResponse{Identity: identity, Content: content, Choice: choice,
-		Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, true
+		Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, true, nil
 }
 
 func (d *Server) observeMultiRunChoice(ctx context.Context, identity *control.IdentityContext, choice *control.PendingTurnChoice, optionKey string) api.MessageResponse {
@@ -130,10 +136,12 @@ func (d *Server) observeMultiRunChoice(ctx context.Context, identity *control.Id
 	return d.multiRunChoiceReceipt(identity, result, false)
 }
 
-func (d *Server) routeMultiRunChoice(ctx context.Context, identity *control.IdentityContext, answer api.MessageRequest, choice *control.PendingTurnChoice, optionKey string) api.MessageResponse {
+// routeMultiRunChoice commits an answer and its destination together. A
+// refusal means that transaction failed, so the choice is still pending.
+func (d *Server) routeMultiRunChoice(ctx context.Context, identity *control.IdentityContext, answer api.MessageRequest, choice *control.PendingTurnChoice, optionKey string) (api.MessageResponse, *notDispatched) {
 	original, err := restorePendingTurnRequest(answer, choice.RequestJSON)
 	if err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}, nil
 	}
 	var selected *control.TurnChoiceOption
 	for i := range choice.Options {
@@ -144,17 +152,25 @@ func (d *Server) routeMultiRunChoice(ctx context.Context, identity *control.Iden
 	}
 	if selected == nil || (selected.Action != "new" && selected.Action != "steer" && selected.Action != "resume") {
 		content := "That option is not available. Choose one of the numbers shown with the question."
-		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}
+		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, nil
 	}
 	// Managed attachment refs and the original execution roots were frozen
 	// before the question was shown. The answer endpoint supplies delivery
 	// identity, but cannot widen the original request's filesystem scope.
 	refs := attachmentRefsFromAPI(original.Attachments)
+	// Built from the person's own words, never from the answer that chose
+	// where they go. A mode that cannot be read leaves the choice pending.
+	admission, admissionErr := d.queuedAdmission(ctx, identity, original)
+	if admissionErr != nil {
+		resp, _, refusal := modeRefusal(identity, admissionErr)
+		return resp, refusal
+	}
 	queued := control.QueuedTask{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
 		Channel: answer.Channel, Platform: answer.Platform, PlatformUserID: answer.PlatformUserID,
 		Content: original.Content, ApprovalMode: original.ApprovalMode,
 		WorkspaceID: original.WorkspaceID, ExecutionRoots: original.ExecutionRoots, Attachments: refs,
+		Admission: admission,
 	}
 	steering := control.SteeringMessage{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
@@ -169,10 +185,11 @@ func (d *Server) routeMultiRunChoice(ctx context.Context, identity *control.Iden
 	})
 	if errors.Is(err, control.ErrTurnChoiceNotFound) {
 		content := "That choice expired or was already used. Send the request again so I can re-check current work."
-		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}
+		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, nil
 	}
 	if err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())}
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())},
+			&notDispatched{reason: refusalSave, cause: err}
 	}
 	if routed.Steering != nil {
 		active := d.coordinator().activeForRun(identity.PersonID, routed.Steering.RunID)
@@ -187,14 +204,14 @@ func (d *Server) routeMultiRunChoice(ctx context.Context, identity *control.Iden
 					// advisory handoff mark could not be written.
 				}
 				appendRunSteeredEvent(ctx, d.Control, active, routed.Steering)
-				return d.multiRunChoiceReceipt(identity, routed, true)
+				return d.multiRunChoiceReceipt(identity, routed, true), nil
 			default:
 				// The accepted mailbox row remains durable. Finalization or
 				// restart moves unconsumed guidance to exact follow-up work.
 			}
 		}
 	}
-	return d.multiRunChoiceReceipt(identity, routed, false)
+	return d.multiRunChoiceReceipt(identity, routed, false), nil
 }
 
 func (d *Server) multiRunChoiceReceipt(identity *control.IdentityContext, routed *control.TurnChoiceWorkResult, sentToLiveRun bool) api.MessageResponse {

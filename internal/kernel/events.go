@@ -38,7 +38,26 @@ type PlanItem struct {
 	RelatedTaskID           string `json:"related_task_id,omitempty"`
 	WorkUnitID              string `json:"work_unit_id,omitempty"`
 	WorkUnit                bool   `json:"work_unit,omitempty"`
+	// CancellationAuthorizedBy comes only from an accepted plan's projection.
+	CancellationAuthorizedBy *PlanQuoteOrigin `json:"cancellation_authorized_by,omitempty"`
 }
+
+// PlanQuoteOrigin names the person input whose words a cancelled step's quote
+// was verified against, for display: whether it was the request a Run started
+// with or guidance sent while it ran, when it arrived, and whether an earlier
+// Run of the same work received it. It never carries an id or the input's
+// text; the runtime records the exact input and derives this from it.
+type PlanQuoteOrigin struct {
+	Input      string `json:"input"`
+	ReceivedAt string `json:"received_at,omitempty"`
+	EarlierRun bool   `json:"earlier_run,omitempty"`
+}
+
+// The inputs a PlanQuoteOrigin names.
+const (
+	PlanQuoteFromRequest  = "request"
+	PlanQuoteFromGuidance = "guidance"
+)
 
 type AgentEvent struct {
 	Type            string                 `json:"type"`
@@ -63,6 +82,18 @@ func EncodeAgentEvent(event AgentEvent) string {
 	return agentEventPrefix + string(data)
 }
 
+// redactBoundaryText masks text with the installed output-boundary redactor,
+// for messages the kernel writes itself that can quote model input.
+func redactBoundaryText(text string) string {
+	agentEventRedactorMu.RLock()
+	redactor := agentEventRedactor
+	agentEventRedactorMu.RUnlock()
+	if redactor == nil {
+		return text
+	}
+	return redactor(text)
+}
+
 func redactAgentEvent(event AgentEvent) AgentEvent {
 	agentEventRedactorMu.RLock()
 	redactor := agentEventRedactor
@@ -78,6 +109,12 @@ func redactAgentEvent(event AgentEvent) AgentEvent {
 	return event
 }
 
+// RedactedText is a payload string that its producer has already masked. The
+// event redactor passes it on as it is instead of masking it again for every
+// event that carries it, which a long command shown on each line of its
+// output would cost once per line.
+type RedactedText string
+
 func redactEventMap(input map[string]interface{}, redactor func(string) string) map[string]interface{} {
 	if len(input) == 0 {
 		return input
@@ -85,6 +122,8 @@ func redactEventMap(input map[string]interface{}, redactor func(string) string) 
 	out := make(map[string]interface{}, len(input))
 	for key, value := range input {
 		switch typed := value.(type) {
+		case RedactedText:
+			out[key] = string(typed)
 		case string:
 			out[key] = redactor(typed)
 		case map[string]interface{}:

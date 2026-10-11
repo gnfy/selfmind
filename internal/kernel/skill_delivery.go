@@ -61,7 +61,8 @@ func ValidateSkillMainDeliveryReceipt(contractVersion int, mode, content, delive
 
 // RuntimeContextBudgetForContextTokens keeps Skill presentation proportional
 // to the provider's usable context while preserving the existing 8 KiB budget
-// for non-Skill runtime context. Unknown model metadata uses an explicit 512
+// for optional non-Skill context. Required state is not byte-cut to fit it.
+// Unknown model metadata uses an explicit 512
 // token fallback; it is never silently treated as a 128K model.
 func RuntimeContextBudgetForContextTokens(contextTokens int) RuntimeContextBudget {
 	mainTokens := fallbackSkillSliceTokens

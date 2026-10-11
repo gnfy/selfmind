@@ -19,6 +19,8 @@ const ExecutionProfileWatchFinalization = "watch-finalization"
 // tools default to the task workspace and cannot wander into another user's
 // project directory.
 type ExecutionScope struct {
+	// Runtime is owned by the daemon; model arguments cannot install it.
+	Runtime       *ExecutionRuntime
 	TenantID      string
 	PersonID      string
 	WorkspaceID   string
@@ -64,7 +66,8 @@ type ExecutionScope struct {
 	Approval         ToolApprovalHandler
 	// Clarify lets gateway/IM execution contexts answer the clarify tool
 	// without a blocking interactive prompt (which only the local TUI has).
-	Clarify ClarifyHandler
+	Clarify     ClarifyHandler
+	ClarifyWait ClarifyWaitHandler
 	// ApprovalMode is the codex-style approval policy for this turn (read-only /
 	// auto-edit / full-auto / smart / on-request). It is frozen when the Run
 	// starts; empty means on-request.
@@ -88,7 +91,14 @@ type ExecutionScope struct {
 	// = no triage, so smart mode behaves as on-request (human ask). The
 	// gateway/app installs a judge backed by a cheap role model, kept OFF the
 	// run's main provider.
-	Judge ApprovalJudge
+	Judge           ApprovalJudge
+	ParallelContext func(context.Context) ([]ParallelExecutionContext, error)
+	// ParkExecutionWait saves and parks the exact uninvoked call, or retains its worker on failure.
+	ParkExecutionWait  func(context.Context, string, bool) (bool, error)
+	ExecutionWaitGrace time.Duration
+	// ExecutionWaitRef is derived from the exact owned host checkpoint at resume.
+	ExecutionWaitRef      string
+	RefreshExecutionWaits func(context.Context) error
 	// TriageIntent supplies the person's own words for this run so the judge can
 	// rule on AUTHORIZATION, not only on risk: the same command is a different
 	// decision when the person asked for it. The gateway installs it (it owns the
@@ -347,7 +357,8 @@ func WorkspaceScopeMiddleware() Middleware {
 			}
 			if isolatedExecutionView(scope) {
 				policy, known := args[toolExecutionPolicyArg].(toolExecutionPolicy)
-				if !known || policy.Origin != ToolSchemaOriginBuiltin {
+				// A marked read-only external tool has no target to claim.
+				if !known || (policy.Origin != ToolSchemaOriginBuiltin && policy.ReadOnlyMarkedBy == "") {
 					return "", fmt.Errorf("external tool execution is unavailable in this isolated view until its target can be claimed")
 				}
 				if !policy.ReadOnly {
@@ -360,10 +371,10 @@ func WorkspaceScopeMiddleware() Middleware {
 			}
 
 			toolName, _ := args["_tool_name"].(string)
-			if (isolatedExecutionView(scope) || scope.ParallelWork) && isExecTool(toolName) {
+			if isolatedExecutionView(scope) && isExecTool(toolName) {
 				if requested, err := requestedSandboxMode(args); err == nil && requested == SandboxHost {
-					return "", newStableToolRecoveryError(fmt.Errorf("host execution is unavailable for parallel work"),
-						"parallel_host_execution_unavailable", "policy", "Host execution is unavailable for parallel work; this call was not dispatched.",
+					return "", newStableToolRecoveryError(fmt.Errorf("host execution is unavailable in this isolated view"),
+						"view_host_execution_unavailable", "policy", "Host execution is unavailable in this isolated view; this call was not dispatched.",
 						"Keep the enforced isolated scope. Use an exposed read-only inspection tool or correct the unsupported isolated preparation; do not retry with host execution.",
 						"admission", "after_policy_change", "not_dispatched", false)
 				}

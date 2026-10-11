@@ -3,408 +3,83 @@
   "method": "stream",
   "events": [
     {
-      "content": "Done"
-    },
-    {
-      "content": " —"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "result"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " is"
-    },
-    {
-      "content": " written"
-    },
-    {
-      "content": " and"
-    },
-    {
-      "content": " verified"
-    },
-    {
-      "content": ".\n\n"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": " Re"
-    },
-    {
-      "content": "-read"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "instructions"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`:"
-    },
-    {
-      "content": " required"
-    },
-    {
-      "content": " content"
-    },
-    {
-      "content": " is"
-    },
-    {
-      "content": " exactly"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "READ"
-    },
-    {
-      "content": "Y"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " followed"
-    },
-    {
-      "content": " by"
-    },
-    {
-      "content": " a"
-    },
-    {
-      "content": " new"
-    },
-    {
-      "content": "line"
-    },
-    {
-      "content": ".\n"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": " Res"
-    },
-    {
-      "content": "umed"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " waiting"
-    },
-    {
-      "content": " run"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "run"
-    },
-    {
-      "content": "_"
-    },
-    {
-      "content": "6"
-    },
-    {
-      "content": "ec"
-    },
-    {
-      "content": "b"
-    },
-    {
-      "content": "430"
-    },
-    {
-      "content": "f"
-    },
-    {
-      "content": "-a"
-    },
-    {
-      "content": "6"
-    },
-    {
-      "content": "dc"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": "4"
-    },
-    {
-      "content": "c"
-    },
-    {
-      "content": "5"
-    },
-    {
-      "content": "f"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": "9"
-    },
-    {
-      "content": "c"
-    },
-    {
-      "content": "15"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": "39"
-    },
-    {
-      "content": "ee"
-    },
-    {
-      "content": "a"
-    },
-    {
-      "content": "5"
-    },
-    {
-      "content": "b"
-    },
-    {
-      "content": "aff"
-    },
-    {
-      "content": "61"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " ("
-    },
-    {
-      "content": "direct"
-    },
-    {
-      "content": " commit"
-    },
-    {
-      "content": ")"
-    },
-    {
-      "content": " rather"
-    },
-    {
-      "content": " than"
-    },
-    {
-      "content": " starting"
-    },
-    {
-      "content": " new"
-    },
-    {
-      "content": " work"
-    },
-    {
-      "content": ".\n"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": " W"
-    },
-    {
-      "content": "rote"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "result"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " in"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " workspace"
-    },
-    {
-      "content": " root"
-    },
-    {
-      "content": ".\n"
-    },
-    {
-      "content": "-"
-    },
-    {
-      "content": " Verification"
-    },
-    {
-      "content": " passed"
-    },
-    {
-      "content": ":"
-    },
-    {
-      "content": " "
-    },
-    {
-      "content": "6"
-    },
-    {
-      "content": " bytes"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " hex"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "52"
-    },
-    {
-      "content": " "
-    },
-    {
-      "content": "45"
-    },
-    {
-      "content": " "
-    },
-    {
-      "content": "41"
-    },
-    {
-      "content": " "
-    },
-    {
-      "content": "44"
-    },
-    {
-      "content": " "
-    },
-    {
-      "content": "59"
-    },
-    {
-      "content": " "
-    },
-    {
-      "content": "0"
-    },
-    {
-      "content": "a"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " (`"
-    },
-    {
-      "content": "READ"
-    },
-    {
-      "content": "Y"
-    },
-    {
-      "content": "\\n"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": "),"
-    },
-    {
-      "content": " via"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "od"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " +"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "wc"
-    },
-    {
-      "content": " -"
-    },
-    {
-      "content": "c"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " comparison"
-    },
-    {
-      "content": "."
+      "content": "I am updating the plan"
+    },
+    {
+      "usage": {
+        "input_tokens": 16011,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " to mark all steps completed and finishing the run."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 121,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 164,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
     },
     {
       "finish_reason": "stop"
     },
     {
       "usage": {
-        "input_tokens": 14778,
-        "output_tokens": 131,
-        "cache_read_input_tokens": 4096,
-        "cache_miss_input_tokens": 10682,
+        "input_tokens": 1314,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 12144,
+        "cache_miss_input_tokens": 5181,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true
       }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_586316",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"All steps completed and verified.\",\"plan\":[{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_2}}\",\"status\":\"completed\"},{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\",\"status\":\"completed\"}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
+        },
+        {
+          "ID": "call_586333",
+          "Function": "finish_run",
+          "Args": "{\"files\":[\"result.txt\"],\"tests\":[\"python3 -c \\\"data = open('result.txt', 'rb').read(); assert data == b'READY\\\\\\\\n', repr(data)\\\"\"],\"done\":[\"Read instructions.txt and reviewed requirements\",\"Resumed {{SELFMIND_VCR_RUN_2}}\",\"Created result.txt with exactly READY followed by a newline\",\"Verified result.txt content and format\"],\"status\":\"done\",\"summary\":\"Successfully resumed the run, created result.txt with READY followed by a newline, and verified its contents.\"}"
+        }
+      ]
     }
   ]
 }

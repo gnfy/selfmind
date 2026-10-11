@@ -29,7 +29,7 @@ func NewExecuteCodeTool() *ExecuteCodeTool {
 	return &ExecuteCodeTool{
 		BaseTool: BaseTool{
 			name:        "execute_code",
-			description: "Execute one isolated Python script for bounded local computation. This tool does not expose SelfMind tools inside Python; use normal tool calls for files, network, or external actions.",
+			description: "Execute one isolated Python script for bounded local computation. This tool does not expose SelfMind tools inside Python; use normal tool calls for files or external actions. The script runs offline; set network: true when it needs network access, such as calling a remote service.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
@@ -50,10 +50,11 @@ func NewExecuteCodeTool() *ExecuteCodeTool {
 					"execution_class": toolExecutionClassProperty(),
 					"sandbox": {
 						Type:        "string",
-						Description: "Execution isolation: auto prefers an isolated filesystem sandbox whose network follows exec_sandbox.allow_network; isolated requires it; host uses host credentials/network and requires approval",
+						Description: "Execution isolation: auto prefers an isolated filesystem sandbox that gets the daemon's network only when network is set; isolated requires it; host uses host credentials/network under the current approval mode",
 						Enum:        []string{"auto", "isolated", "host"},
 						Default:     "auto",
 					},
+					"network": codeNetworkRequestProperty(),
 				},
 				Required: []string{"code"},
 			},
@@ -132,6 +133,7 @@ func (t *ExecuteCodeTool) ExecuteResult(args map[string]interface{}) (kernel.Too
 	// one. Routing it separately is how execute_code previously missed the run's
 	// environment binding and scratch space.
 	scope, _ := currentExecutionScopeAny(args)
+	boundary, boundaryReason := approvedSandboxBoundary(args)
 	request := ExecutionRequest{
 		ToolName:       "execute_code",
 		ToolCallID:     stringArg(args, "_tool_call_id"),
@@ -141,10 +143,13 @@ func (t *ExecuteCodeTool) ExecuteResult(args map[string]interface{}) (kernel.Too
 		CWD:            tmpDir,
 		WorkspaceRoots: append(append([]string{}, scope.AllowedRoots...), tmpDir),
 		Sandbox:        requestedMode,
+		Boundary:       boundary,
+		BoundaryReason: boundaryReason,
 		NetworkShared:  networkSharedArg(args),
 		Timeout:        profile.Timeout,
 		ToolProfile:    profile,
 	}
+	request.NetworkDecision, request.NetworkPermission = stringArg(args, networkDecisionArg), stringArg(args, networkPermissionArg)
 	result, execErr := Execute(ctx, request, args)
 	decision := SandboxDecision{Mode: result.Plan.Mode, NetworkShared: result.Plan.NetworkMode == "shared"}
 	args["_sandbox_mode"] = string(decision.Mode)

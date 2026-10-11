@@ -145,7 +145,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if configPath != "" {
 		_ = os.Setenv("SELF_CONFIG", configPath)
 	}
-	app.applyGatewayConfigEnv()
+	if !app.developerOnlyCommand() {
+		app.applyGatewayConfigEnv()
+	}
 
 	if handled, exitCode := app.runSetupCommandIfRequested(); handled {
 		return exitCode
@@ -187,6 +189,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return exitCode
 	}
 	if handled, exitCode := app.runMaintenanceCommandIfRequested(); handled {
+		return exitCode
+	}
+	if handled, exitCode := app.runCronCommandIfRequested(); handled {
 		return exitCode
 	}
 	if handled, exitCode := app.runDoctorCommandIfRequested(); handled {
@@ -253,6 +258,7 @@ var documentedCLIUsages = []string{
 	"selfmind prompt [list|show|edit|diff|validate|test|reset|apply] ...",
 	"selfmind auth [login|status|logout] ...",
 	"selfmind doctor [--verbose] [--out FILE] [--probe-models]",
+	"selfmind cron adopt <job_id> [--yes]",
 	"selfmind docs [check|index]",
 	"selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]",
 	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
@@ -455,6 +461,21 @@ func splitAddDirFlags(args []string) ([]string, []string, error) {
 		dirs = append(dirs, canonical)
 	}
 	return cleaned, dirs, nil
+}
+
+// developerOnlyCommand reports a command that inspects the SelfMind source
+// checkout rather than a person's runtime. It needs no gateway settings and
+// must not bootstrap per-user state, so it skips the config load that would
+// create a missing config on first run.
+func (a *App) developerOnlyCommand() bool {
+	if len(a.args) < 2 {
+		return false
+	}
+	switch a.args[1] {
+	case "docs", "selfcheck":
+		return true
+	}
+	return false
 }
 
 func (a *App) applyGatewayConfigEnv() {

@@ -126,29 +126,34 @@ func TestRecoveryWatchProductionPreflightPreservesTerminalMeaning(t *testing.T) 
 			if err != nil {
 				t.Fatalf("production recovery registration: %v", err)
 			}
+			// The model bound this successful check to the claim of the Run it
+			// continues, so the check releases that claim itself (item 3).
 			var response struct {
-				WatchID              string `json:"watch_id"`
-				RequiresConfirmation bool   `json:"requires_confirmation"`
+				WatchID  string `json:"watch_id"`
+				Released bool   `json:"released"`
 			}
-			if err := json.Unmarshal([]byte(result), &response); err != nil || response.WatchID == "" || response.RequiresConfirmation != (observed == "SUCCEEDED") {
+			if err := json.Unmarshal([]byte(result), &response); err != nil || response.WatchID == "" || !response.Released {
 				t.Fatalf("reply=%s err=%v", result, err)
 			}
-			if strings.Contains(result, "lifecycle_handoff") {
-				t.Fatal("settled observation parked the Run")
+			if strings.Contains(result, "lifecycle_handoff") || strings.Contains(result, "/effects resolve") {
+				t.Fatalf("settled observation parked the Run or asked for a confirmation: %s", result)
 			}
 			watch, err := store.GetExternalWatch(ctx, person.TenantID, response.WatchID)
 			if err != nil || watch.Status != strings.ToLower(observed) || !watch.Finalized || !watch.Notified {
 				t.Fatalf("observation was not atomically settled: %+v %v", watch, err)
 			}
+			// Its polls keep the policy the registering Run's call ran under.
+			if frozen := watch.ExecutionBinding.SandboxPolicy; frozen == nil ||
+				*frozen != (executionenv.SandboxPolicy{Enabled: true, Required: true}) {
+				t.Fatalf("registration froze sandbox policy %+v, want the Run's", frozen)
+			}
 			unresolved, err := store.ListUnresolvedExternalEffects(ctx, person.TenantID, person.PersonID, 10)
-			if err != nil || len(unresolved) != 1 {
-				t.Fatalf("observation itself released authority: %+v %v", unresolved, err)
+			if err != nil || len(unresolved) != 0 {
+				t.Fatalf("bound successful observation did not release the claim: %+v %v", unresolved, err)
 			}
-			if _, err := store.ObserveExternalEffectWithWatch(ctx, person.TenantID, person.PersonID, claim.Claims[0].ID, watch.ID); err != nil {
-				t.Fatalf("person-confirmed observation: %v", err)
-			}
-			if _, err := store.ObserveExternalEffectWithWatch(ctx, person.TenantID, person.PersonID, claim.Claims[0].ID, watch.ID); err != nil {
-				t.Fatalf("confirmation wasn't idempotent: %v", err)
+			released, err := store.ExternalEffectClaimsForEffect(ctx, person.TenantID, person.PersonID, parent.ID, "uncertain-operation")
+			if err != nil || len(released) != 1 || released[0].ObservationRef != "watch:"+watch.ID+":r1:bound" {
+				t.Fatalf("release does not name the watcher: %+v %v", released, err)
 			}
 		})
 	}

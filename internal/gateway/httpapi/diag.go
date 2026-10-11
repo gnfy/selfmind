@@ -26,8 +26,19 @@ import (
 
 const diagRecentEvents = 5
 
-func (d *Server) toolsDiagReply(_ context.Context, _ *control.IdentityContext) (string, error) {
-	if d == nil || d.ToolSchemaReportFunc == nil {
+func (d *Server) toolsDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if d == nil {
+		return "Tool schema diagnostics unavailable.", nil
+	}
+	reply, err := d.toolSchemaDiag()
+	if lines := d.mcpReadOnlyDiagLines(ctx, identity); len(lines) > 0 {
+		reply += "\nMCP read-only markings:\n- " + strings.Join(lines, "\n- ")
+	}
+	return reply, err
+}
+
+func (d *Server) toolSchemaDiag() (string, error) {
+	if d.ToolSchemaReportFunc == nil {
 		return "Tool schema diagnostics unavailable.", nil
 	}
 	reports := d.ToolSchemaReportFunc()
@@ -83,7 +94,8 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 	fmt.Fprintf(&sb, "Sandbox backend: %s\n", diag.Backend)
 	fmt.Fprintf(&sb, "Sandbox policy: enabled=%t, required=%t, available=%t\n",
 		diag.Enabled, diag.Required, diag.Available)
-	fmt.Fprintf(&sb, "Sandbox network: %s\n", diag.Network)
+	fmt.Fprintf(&sb, "Sandbox network: %s\n", sandboxNetworkExplanation(diag.Network))
+	sb.WriteString("Managed execution: host commands exclusively hold the person execution lane; other commands and file edits wait. Host background processes release it after startup and may still affect other Runs.\n")
 	fmt.Fprintf(&sb, "Process environment: %s\n", diag.Environment)
 	// Snapshot state: without this, "the daemon is using a stale PATH" is
 	// invisible and a first-command failure has no diagnosable cause.
@@ -102,6 +114,10 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 		sb.WriteString("Run scratch: unavailable (falling back to a private tmpfs)\n")
 	}
 	fmt.Fprintf(&sb, "Environment profiles available: %s\n", strings.Join(envprofiles.IDs(), ", "))
+	writeCredentialProfileDiag(&sb, tools.CredentialProfileDiagnostics())
+	if status := d.ExecutionRuntime.HostStateQuarantineStatus(); status != "" {
+		fmt.Fprintf(&sb, "Credential cache quarantine: %s\n", status)
+	}
 	if ws, err := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); err == nil && ws != nil {
 		fmt.Fprintf(&sb, "Workspace: %s\n", ws.Name)
 		fmt.Fprintf(&sb, "Workspace trust: %s\n", fallback(ws.TrustLevel, "untrusted"))
@@ -119,6 +135,12 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 				sb.WriteString("Workspace capabilities: none\n")
 			} else {
 				fmt.Fprintf(&sb, "Workspace capabilities: %s\n", strings.Join(names, ", "))
+				for _, name := range names {
+					if name == executionenv.CapabilityNetworkShared {
+						sb.WriteString("Network grant: a permission, not a reason; a command gets the network only when it reaches a remote service or sets network: true\n")
+						break
+					}
+				}
 			}
 		}
 	} else {
@@ -172,6 +194,50 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 	return strings.TrimSpace(sb.String()), nil
 }
 
+// sandboxNetworkExplanation says what the operator policy's network mode means
+// for a command: a permission to share the daemon's network, which a command
+// receives only when it reaches a remote service or asks for it. It never
+// reads as "every command has the network", and it never reads as "the policy
+// alone is enough": an untrusted workspace needs a grant or an approval under
+// either mode.
+func sandboxNetworkExplanation(mode string) string {
+	if mode == "shared" {
+		return "shared (operator policy allows it: a trusted workspace shares the network only with commands that reach a remote service or set network: true; an untrusted workspace still needs a network:shared grant or approval first)"
+	}
+	return "isolated (operator policy withholds it: trust alone never shares the network, only a network:shared grant or approval a person gave does, and then only commands that reach a remote service or set network: true receive it)"
+}
+
+// writeCredentialProfileDiag states, per credential profile on this host,
+// whether the platform's sandbox can run it and which host paths a sandboxed
+// run writes. Paths only: no configuration or credential content.
+func writeCredentialProfileDiag(sb *strings.Builder, diagnostics []tools.CredentialProfileDiagnostic) {
+	enabled, _, available := tools.ExecSandboxStatus()
+	backend := "no isolation backend available"
+	switch {
+	case !enabled:
+		backend = "exec_sandbox disabled: commands run on the host"
+	case available:
+		backend = tools.SandboxBackendName(tools.SandboxIsolated)
+	}
+	fmt.Fprintf(sb, "Credential profiles on this host (%s):\n", backend)
+	for _, diagnostic := range diagnostics {
+		switch {
+		case !diagnostic.HostState:
+			fmt.Fprintf(sb, "- %s: no state on this host\n", diagnostic.Profile)
+		case !diagnostic.Runnable:
+			fmt.Fprintf(sb, "- %s: not sandbox-runnable: %s\n", diagnostic.Profile, diagnostic.Reason)
+		case len(diagnostic.InPlaceWrites) > 0:
+			fmt.Fprintf(sb, "- %s: sandbox-runnable; credential cache written in place on the host (weaker than a private overlay): %s\n",
+				diagnostic.Profile, strings.Join(diagnostic.InPlaceWrites, ", "))
+		case len(diagnostic.OverlayTargets) > 0:
+			fmt.Fprintf(sb, "- %s: sandbox-runnable; private overlays over %s (host never modified)\n",
+				diagnostic.Profile, strings.Join(diagnostic.OverlayTargets, ", "))
+		default:
+			fmt.Fprintf(sb, "- %s: sandbox-runnable; no host path is writable\n", diagnostic.Profile)
+		}
+	}
+}
+
 func shortOpaqueID(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) <= 12 {
@@ -188,17 +254,18 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	sb.WriteString("SelfMind diagnostics\nLearning evidence and skip reasons: /diag learning\n")
 
 	// Active run.
-	active := d.coordinator().currentActive(identity.PersonID)
+	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
 	var currentTaskID string
-	if active != nil {
+	if len(activeRuns) == 1 {
+		active := activeRuns[0]
 		currentTaskID = active.TaskID
 		title := strings.TrimSpace(active.Summary)
 		if title == "" {
 			title = "(starting)"
 		}
 		fmt.Fprintf(&sb, "Active run: %s (%s elapsed)\n", truncate(toOneLine(title), 60), time.Since(active.StartedAt).Round(time.Second))
-	} else if count := d.coordinator().activeCount(identity.PersonID); count > 1 {
-		fmt.Fprintf(&sb, "Active runs: %d (use /status for exact run IDs)\n", count)
+	} else if len(activeRuns) > 1 {
+		fmt.Fprintf(&sb, "Active runs: %d (use /status for exact run IDs)\n", len(activeRuns))
 	} else {
 		sb.WriteString("Active run: none\n")
 	}
@@ -679,8 +746,12 @@ func (d *Server) contextDiagReply(ctx context.Context, identity *control.Identit
 		return "Context diagnostics unavailable.", nil
 	}
 	taskID := ""
-	if active := d.coordinator().currentActive(identity.PersonID); active != nil {
-		taskID = active.TaskID
+	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(activeRuns) > 1 {
+		return "Context diagnostics\nSeveral runs are active; use /status <run_id> for exact work details.", nil
+	}
+	if len(activeRuns) == 1 {
+		taskID = activeRuns[0].TaskID
 	} else if task, _ := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); task != nil {
 		taskID = task.ID
 	}
@@ -1271,6 +1342,7 @@ func (d *Server) recentExecutionSummary(ctx context.Context, tenantID, taskID, r
 	notes := 0
 	recoveries := 0
 	escapes := map[string]int{}
+	networkDecisions := map[string]int{}
 	for _, event := range events {
 		if strings.TrimSpace(runID) != "" && event.RunID != runID {
 			continue
@@ -1293,13 +1365,19 @@ func (d *Server) recentExecutionSummary(ctx context.Context, tenantID, taskID, r
 			var payload struct {
 				Mode             string `json:"mode"`
 				HostEscapeReason string `json:"host_escape_reason"`
+				NetworkDecision  string `json:"network_decision"`
 			}
-			if json.Unmarshal(event.Payload, &payload) == nil && payload.Mode == "host" {
-				escapes[fallback(payload.HostEscapeReason, "unclassified")]++
+			if json.Unmarshal(event.Payload, &payload) == nil {
+				if payload.Mode == "host" {
+					escapes[fallback(payload.HostEscapeReason, "unclassified")]++
+				}
+				if payload.NetworkDecision != "" {
+					networkDecisions[payload.NetworkDecision]++
+				}
 			}
 		}
 	}
-	if len(profiles) == 0 && recoveries == 0 && len(escapes) == 0 {
+	if len(profiles) == 0 && recoveries == 0 && len(escapes) == 0 && len(networkDecisions) == 0 {
 		return ""
 	}
 	var sb strings.Builder
@@ -1324,6 +1402,14 @@ func (d *Server) recentExecutionSummary(ctx context.Context, tenantID, taskID, r
 		}
 		sort.Strings(reasons)
 		fmt.Fprintf(&sb, "Host escapes this run: %s\n", strings.Join(reasons, ", "))
+	}
+	if len(networkDecisions) > 0 {
+		decisions := make([]string, 0, len(networkDecisions))
+		for decision, count := range networkDecisions {
+			decisions = append(decisions, fmt.Sprintf("%s=%d", decision, count))
+		}
+		sort.Strings(decisions)
+		fmt.Fprintf(&sb, "Network decisions this run: %s\n", strings.Join(decisions, ", "))
 	}
 	return sb.String()
 }

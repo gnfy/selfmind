@@ -11,9 +11,12 @@
 ; codex's seatbelt profile (codex-rs/sandboxing/src/seatbelt_base_policy.sbpl),
 ; which credits Chromium's macOS sandbox policy for the same ground.
 ;
-; The generated suffix appends the writable-root and network clauses; this file
-; must stay valid on its own so a profile with no writable roots is still a
-; closed sandbox rather than a parse error.
+; The generated suffix appends the writable-root and network clauses and, last,
+; the denials for the daemon's own state (see seatbeltPrivateRules). Seatbelt
+; applies the last matching rule, so those denials follow every allow: a
+; writable root that contains the data directory, or the shared network, cannot
+; reopen them. This file must stay valid on its own so a profile with no
+; writable roots is still a closed sandbox rather than a parse error.
 
 (version 1)
 
@@ -29,7 +32,10 @@
 ; Read-only view of the host. This is the direct analogue of bwrap's
 ; `--ro-bind / /`: reads are unrestricted, writes are not. Credential exposure
 ; is governed separately by the approval layer's credential axis, exactly as it
-; is under bubblewrap.
+; is under bubblewrap. The one exception is the daemon's own state (its runtime
+; directory, control store, credentials file, and listeners), denied by the
+; generated suffix: a confined tool runs as the daemon's user, so it must not be
+; able to read the daemon's records or reach its control channel.
 (allow file-read*)
 
 ; Unrestricted sysctl reads. Restricting them buys only fingerprinting

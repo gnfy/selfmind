@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"selfmind/internal/executionenv"
 )
 
 // Binding is a model-declared proof obligation, not a claim that it is met.
@@ -42,6 +44,47 @@ type Check struct {
 	ProcessStarted *bool    `json:"process_started,omitempty"`
 	Invoked        *bool    `json:"invoked,omitempty"`
 	EffectState    string   `json:"effect_state,omitempty"`
+	// NetworkDecision and NetworkPermission are what the runtime recorded about
+	// the network for this check's process (see executionenv.NetworkDecision*).
+	// Evidence written before they existed carries neither, and says nothing.
+	NetworkDecision   string `json:"network_decision,omitempty"`
+	NetworkPermission string `json:"network_permission,omitempty"`
+	// NetworkMayFetch: the command can fetch dependencies when it runs (a build
+	// or a test, not a vet or a formatter). It is set only on a check that ran
+	// offline despite a grant, and says whether that is worth telling anyone.
+	NetworkMayFetch bool `json:"network_may_fetch,omitempty"`
+}
+
+// offlineCoverageLost reports a passing attempt whose coverage the missing
+// network may have reduced: it ran offline although a grant permits the network,
+// and its command can fetch dependencies.
+func offlineCoverageLost(c Check) bool {
+	return c.NetworkMayFetch && executionenv.NetworkOfflineDespiteGrant(c.NetworkDecision, c.NetworkPermission)
+}
+
+// OfflineDespiteGrant counts the effective passing attempts that ran without
+// network although a network grant permits it, and whose command can fetch
+// dependencies. A pass is evidence of what the check exercised; for such an
+// attempt that excludes anything needing a remote service, and the summaries
+// say so instead of letting a bare "passed" claim more. A failing or blocked
+// attempt reports its own failure instead, and a check that cannot fetch
+// anything has no coverage to lose.
+func OfflineDespiteGrant(checks []Check) int {
+	offline := 0
+	for _, c := range Latest(checks) {
+		if c.Status == "succeeded" && offlineCoverageLost(c) {
+			offline++
+		}
+	}
+	return offline
+}
+
+// offlineCoverageNote is the sentence appended to a passing summary.
+func offlineCoverageNote(offline int) string {
+	if offline == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" %d of them ran without network although this workspace's network grant permits it: coverage that needs remote data was not exercised; re-run with network: true if the criterion needs it.", offline)
 }
 
 func ValidBinding(b *Binding) bool {
@@ -164,11 +207,14 @@ func state(latestMutation int64, checks []Check, affectedAt func(Check) int64) (
 	if len(current) == 0 {
 		return "stale", "Verification exists, but it ran before the latest file change."
 	}
-	passed, failed, blocked := 0, 0, 0
+	passed, failed, blocked, offline := 0, 0, 0, 0
 	for _, c := range Latest(current) {
 		switch c.Status {
 		case "succeeded":
 			passed++
+			if offlineCoverageLost(c) {
+				offline++
+			}
 		case "blocked":
 			blocked++
 		default:
@@ -181,10 +227,10 @@ func state(latestMutation int64, checks []Check, affectedAt func(Check) int64) (
 	case stale > 0:
 		return "stale", fmt.Sprintf("%d verification check(s) need review after changes to their inputs.", stale)
 	case passed > 0 && blocked == 0:
-		return "passed", fmt.Sprintf("%d current verification check(s) passed.", passed)
+		return "passed", fmt.Sprintf("%d current verification check(s) passed.", passed) + offlineCoverageNote(offline)
 	case passed == 0 && blocked > 0:
 		return "blocked", fmt.Sprintf("%d verification check(s) were blocked.", blocked)
 	default:
-		return "partial", fmt.Sprintf("%d verification check(s) passed and %d were blocked.", passed, blocked)
+		return "partial", fmt.Sprintf("%d verification check(s) passed and %d were blocked.", passed, blocked) + offlineCoverageNote(offline)
 	}
 }

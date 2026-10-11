@@ -169,9 +169,12 @@ func (d *Server) answerClarifyTarget(ctx context.Context, identity *control.Iden
 		return nil, err
 	} else if sourceRun != nil {
 		queuedInput.ExecutionRoots = executionenv.CloneRootBindings(sourceRun.ExecutionRoots)
-		if queuedInput.WorkspaceID == "" {
-			queuedInput.WorkspaceID = sourceRun.WorkspaceID
+		queuedInput.WorkspaceID = recoveryWorkspaceID(sourceRun, &control.Task{WorkspaceID: queuedInput.WorkspaceID})
+		checkpoint, _ := d.Control.IncompleteLoopCheckpointForRun(ctx, identity.TenantID, sourceRun.ID)
+		if checkpoint != nil && checkpoint.Outcome == "await_human" && checkpoint.WaitKind == control.LoopCheckpointWaitClarification && checkpoint.WaitRef == target.ID {
+			queuedInput.Platform, queuedInput.PlatformUserID, queuedInput.Channel = d.humanWaitContinuationRoute(ctx, identity, sourceRun, control.LoopCheckpointWaitClarification, target.ID, channel)
 		}
+		queuedInput.ReplyToRunID = sourceRun.ID
 	}
 	clarify, queued, err := d.Control.AnswerClarifyRequestWithResume(ctx,
 		identity.TenantID, identity.PersonID, target.ID, answer, channel, queuedInput)

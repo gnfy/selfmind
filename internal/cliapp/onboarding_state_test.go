@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,7 +83,7 @@ func TestReadyModelsProceedToManagedRuntimeRepairWithoutModelPromptOrProbe(t *te
 		t.Fatal(err)
 	}
 	var actions []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newFakeGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/workspaces/register":
 			actions = append(actions, "register workspace")
@@ -283,7 +282,7 @@ func TestActiveGatewayKeepsForegroundAvailableAsRuntimeDegraded(t *testing.T) {
 	cfg.Normalize()
 	modelFingerprint := modelchange.SnapshotFromConfig(cfg).Fingerprint()
 	resolvedConfig, _ := config.ResolveConfigPath(configPath)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newFakeGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/gateway/shutdown":
 			w.WriteHeader(http.StatusAccepted)

@@ -91,6 +91,13 @@ func TestWorkSelectClaimsSameDomainResumeInTurn(t *testing.T) {
 		childPlan.Steps[0].SourceStepID != parentPlan.Steps[0].StepID || childPlan.Steps[1].SourceStepID != parentPlan.Steps[1].StepID {
 		t.Fatalf("direct continuation must preserve logical step ids with exact source steps: %+v", childPlan)
 	}
+	var receipt struct {
+		Plan    []planStepView `json:"plan"`
+		Version int            `json:"plan_version"`
+	}
+	if err := json.Unmarshal([]byte(result), &receipt); err != nil || receipt.Version != childPlan.Version || len(receipt.Plan) != len(childPlan.Steps) || receipt.Plan[1].StepID != childPlan.Steps[1].StepID {
+		t.Fatalf("loop receipt must carry the accepted current-Run plan: %s", result)
+	}
 	events, _ := store.ListRunEvents(ctx, person.TenantID, person.PersonID, targetTask.ID, interactionRun.ID, 20)
 	var committed, inherited bool
 	for _, event := range events {

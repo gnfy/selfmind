@@ -1,0 +1,54 @@
+id: reliability_worker_catalog_parity
+title: "Every agent worker offers the same catalogue, including cron and a shared MCP server"
+suite: reliability
+workspace: isolated
+model_required: false
+
+# Two workers built through app.InitGateway with the cron tool and the stdio
+# MCP stub of internal/tools/mcptest. A Run may land on either worker, so both
+# must offer cron and the MCP tools, from one shared stub process.
+requires:
+  commands: [go]
+
+runtime:
+  max_active_work_runs: 2
+  workers: 2
+  cron: true
+  mcp_stubs:
+    - name: stub
+
+turns:
+  - input: "/status"
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 120
+  contains:
+    - "No active task."
+
+assert_state:
+  - on: workers
+    count_gte: 2
+    count_lte: 2
+  - on: worker_tool
+    target: cron
+    count_gte: 2
+  - on: worker_tool
+    target: mcp:stub/echo
+    count_gte: 2
+  - on: worker_tool
+    target: mcp:stub/rendezvous
+    count_gte: 2
+  - on: worker_catalogs
+    count_lte: 1
+  - on: mcp_server_starts
+    target: stub
+    count_gte: 1
+    count_lte: 1
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

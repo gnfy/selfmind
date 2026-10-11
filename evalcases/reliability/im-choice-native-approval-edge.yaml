@@ -1,0 +1,60 @@
+id: reliability_im_choice_native_approval_edge
+title: "A native IM reply to an approval never answers the multi-Run choice pending on that chat"
+suite: reliability
+workspace: isolated
+model_required: false
+
+# The chat has a pending multi-Run choice whose option 2 submits new work. The
+# reply below is to an approval message whose approval no longer exists, so
+# its approval edge must be refused before any bare-number choice lookup: no
+# Run, no queued work, and the choice stays pending.
+setup:
+  task:
+    title: "Nightly report"
+    parked_runs:
+      - input: "Compile the nightly report"
+        status: waiting_user
+  turn_choices:
+    - platform: weixin
+      channel: wx-chat-1
+      request: "Also attach the error summary"
+      options:
+        - action: resume
+          parked_run: 1
+        - action: new
+  sent_messages:
+    - platform: weixin
+      channel: wx-chat-1
+      message_id: wx-msg-approval-1
+      approval_id: approval_missing
+      content: "Approve running the export script?"
+
+turns:
+  - input: "2"
+    platform: weixin
+    channel: wx-chat-1
+    native_reply_message_id: wx-msg-approval-1
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "Reply with an offered approval choice"
+  must_not_contain:
+    - "Saved your request as queued work"
+
+assert_state:
+  - on: runs
+    count_lte: 1
+  - on: turn_choices
+    status: pending
+    count_gte: 1
+  - on: queued
+    count_lte: 0
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

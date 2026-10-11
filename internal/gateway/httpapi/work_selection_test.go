@@ -285,6 +285,13 @@ func TestIdleMainSelectionCommitsThroughNormalRunAndHidesInteractionLabel(t *tes
 	if err != nil || queued == nil || queued.ReplyToRunID != targetRun.ID {
 		t.Fatalf("selected queue=%+v err=%v", queued, err)
 	}
+	// The transfer carries the person's request on under the authority that
+	// request was admitted with, and the Run it starts records the same.
+	interactionAdmission, admissionErr := store.RunAdmissionSnapshot(ctx, identity.TenantID, resp.Run.ID)
+	if admissionErr != nil || interactionAdmission.IsZero() || queued.Admission != interactionAdmission ||
+		queued.Admission.Input.Summary != "Please revisit the old release and take it forward" {
+		t.Fatalf("transfer admission = %+v, interaction Run admission = %+v err=%v", queued.Admission, interactionAdmission, admissionErr)
+	}
 	interactionTask, _ := store.GetTask(ctx, identity.TenantID, resp.Task.ID)
 	if interactionTask == nil || interactionTask.Kind != control.ThreadKindInteraction || interactionTask.Visibility != control.ThreadVisibilityUnlisted {
 		t.Fatalf("interaction projection = %+v", interactionTask)
@@ -292,7 +299,7 @@ func TestIdleMainSelectionCommitsThroughNormalRunAndHidesInteractionLabel(t *tes
 	provider.release()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if daemon.coordinator().currentActive(identity.PersonID) == nil {
+		if daemon.coordinator().activeCount(identity.PersonID) == 0 {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -317,7 +324,9 @@ func TestIdleMainSelectionContinuesSameDomainRunInTurn(t *testing.T) {
 	}
 	_ = store.FinishRun(ctx, identity.TenantID, targetRun.ID, "interrupted")
 	provider := &workSelectionProvider{targetRunID: targetRun.ID, childStarted: make(chan struct{}), releaseChild: make(chan struct{})}
-	defer provider.release()
+	// There is no child to wait for in a direct continuation. Let the fake
+	// answer plan-repair requests too: its prose does not resolve the Plan.
+	provider.release()
 	registry := tools.NewRegistry()
 	dispatcher := tools.NewDispatcherWithRegistry(registry)
 	dispatcher.RegisterTool(tools.NewWorkSelectTool(store))
@@ -354,16 +363,20 @@ func TestIdleMainSelectionContinuesSameDomainRunInTurn(t *testing.T) {
 	if !committed || !inherited {
 		t.Fatalf("direct continuation must record its commit and restore the parent plan: %+v", events)
 	}
-	if unresolved, _ := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, targetTask.ID, 10); len(unresolved) != 0 {
-		t.Fatalf("the parent must be claimed by the continuing run: %+v", unresolved)
+	if unresolved, _ := store.ListUnresolvedRuns(ctx, identity.TenantID, identity.PersonID, targetTask.ID, 10); len(unresolved) != 1 || unresolved[0].ID != resp.Run.ID {
+		t.Fatalf("the parent must be claimed; unfinished work stays on the continuing run: %+v", unresolved)
 	}
 	provider.mu.Lock()
 	calls := provider.calls
 	provider.mu.Unlock()
-	if calls != 2 {
-		t.Fatalf("same-domain continuation used %d model calls, want one interpretation turn that continues the work", calls)
+	continued, runErr := store.GetRun(ctx, identity.TenantID, resp.Run.ID)
+	if calls <= 2 || runErr != nil || continued == nil || continued.Status != "interrupted" {
+		t.Fatalf("selected unfinished plan was ignored: calls=%d run=%+v err=%v", calls, continued, runErr)
 	}
-	provider.release()
+	plan, err := store.LatestRunPlan(ctx, identity.TenantID, resp.Run.ID)
+	if err != nil || plan == nil || len(plan.Steps) != 2 || plan.Steps[1].Status != "in_progress" {
+		t.Fatalf("direct continuation erased unfinished plan: %+v err=%v", plan, err)
+	}
 }
 
 func TestLiveCorrectionReplacesImplicitSelectionBeforeEffects(t *testing.T) {

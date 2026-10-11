@@ -81,15 +81,18 @@ func (s *TelegramSender) SendWithNativeReceipt(ctx context.Context, msg Message)
 		return false, "", fmt.Errorf("telegram sendMessage failed: %s %s", resp.Status, strings.TrimSpace(string(data)))
 	}
 	var result struct {
-		OK     bool `json:"ok"`
+		OK     *bool `json:"ok"`
 		Result struct {
 			MessageID int64 `json:"message_id"`
 		} `json:"result"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&result); err != nil {
-		return false, "", fmt.Errorf("telegram sendMessage response: %w", err)
+		return false, "", &UnconfirmedSendError{Cause: fmt.Errorf("telegram sendMessage response: %w", err)}
 	}
-	if !result.OK {
+	if result.OK == nil {
+		return false, "", &UnconfirmedSendError{Cause: fmt.Errorf("telegram sendMessage response has no delivery verdict")}
+	}
+	if !*result.OK {
 		return false, "", fmt.Errorf("telegram sendMessage did not confirm delivery")
 	}
 	if result.Result.MessageID <= 0 {

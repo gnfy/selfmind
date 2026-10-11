@@ -30,8 +30,12 @@ const (
 // authority. It contains identifiers only: credentials and environment values
 // never cross this boundary.
 type ToolInvocationScope struct {
-	ControlTenantID       string
-	PersonID              string
+	ControlTenantID string
+	PersonID        string
+	// AccountID is the bound platform account the Run arrived through or acts
+	// through. It names an endpoint, never authority: a tool that targets an
+	// endpoint still checks that it belongs to PersonID.
+	AccountID             string
 	TaskID                string
 	WorkspaceID           string
 	RunID                 string

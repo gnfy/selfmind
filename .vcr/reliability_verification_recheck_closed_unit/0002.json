@@ -3,310 +3,65 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Now"
-    },
-    {
-      "reasoning_content": " create"
-    },
-    {
-      "reasoning_content": " setting"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " "
-    },
-    {
-      "reasoning_content": "7"
-    },
-    {
-      "reasoning_content": " +"
-    },
-    {
-      "reasoning_content": " new"
-    },
-    {
-      "reasoning_content": "line"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Use"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": "_file"
-    },
-    {
-      "reasoning_content": "?"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": "_file"
-    },
-    {
-      "reasoning_content": " writes"
-    },
-    {
-      "reasoning_content": " content"
-    },
-    {
-      "reasoning_content": " literally"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Content"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "7"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "\""
-    },
-    {
-      "reasoning_content": " —"
-    },
-    {
-      "reasoning_content": " I"
-    },
-    {
-      "reasoning_content": " need"
-    },
-    {
-      "reasoning_content": " actual"
-    },
-    {
-      "reasoning_content": " new"
-    },
-    {
-      "reasoning_content": "line"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Provide"
-    },
-    {
-      "reasoning_content": " content"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "7"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "\""
-    },
-    {
-      "reasoning_content": " as"
-    },
-    {
-      "reasoning_content": " actual"
-    },
-    {
-      "reasoning_content": " string"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " new"
-    },
-    {
-      "reasoning_content": "line"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Better"
-    },
-    {
-      "reasoning_content": " use"
-    },
-    {
-      "reasoning_content": " printf"
-    },
-    {
-      "reasoning_content": " via"
-    },
-    {
-      "reasoning_content": " terminal"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " guarantee"
-    },
-    {
-      "reasoning_content": " new"
-    },
-    {
-      "reasoning_content": "line"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " But"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": "_file"
-    },
-    {
-      "reasoning_content": " content"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "7"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "\""
-    },
-    {
-      "reasoning_content": " —"
-    },
-    {
-      "reasoning_content": " in"
-    },
-    {
-      "reasoning_content": " JSON"
-    },
-    {
-      "reasoning_content": " I"
-    },
-    {
-      "reasoning_content": "'d"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "7"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "\""
-    },
-    {
-      "reasoning_content": " which"
-    },
-    {
-      "reasoning_content": " becomes"
-    },
-    {
-      "reasoning_content": " actual"
-    },
-    {
-      "reasoning_content": " new"
-    },
-    {
-      "reasoning_content": "line"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " That"
-    },
-    {
-      "reasoning_content": " works"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " do"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": "_file"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " content"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "7"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "\"."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I will write the"
     },
     {
       "usage": {
-        "input_tokens": 10799,
-        "output_tokens": 189,
-        "cache_read_input_tokens": 10240,
-        "cache_miss_input_tokens": 559,
+        "input_tokens": 12222,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 95,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " number 7 followed by a newline to setting.txt."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 25,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 970,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_3op5hTjHQ0Q60RJOftzA4503",
+          "ID": "call_2077940",
           "Function": "write_file",
-          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/setting.txt\", \"content\": \"7\\n\"}"
+          "Args": "{\"path\":\"setting.txt\",\"content\":\"7\\n\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
         }
       ]
     }

@@ -27,6 +27,21 @@ func TestDispatchFactsExposeEnvironmentOnlyToModel(t *testing.T) {
 	}
 }
 
+// A result that redaction had to leave unparseable tells the model to read it
+// as text; the raw capture and preview are unchanged.
+func TestDispatchFactsTellTheModelAboutAnUnparseableRedaction(t *testing.T) {
+	envelope := ToolResultEnvelope{Raw: `{"a":[REDACTED]}`, Preview: "observed", ModelContent: `{"a":[REDACTED]}`}
+	applyDispatchFacts(&envelope, ToolDispatchResult{RedactionUnparseable: true})
+	if !strings.HasPrefix(envelope.ModelContent, "Redaction: ") || !strings.HasSuffix(envelope.ModelContent, `{"a":[REDACTED]}`) || envelope.Raw != `{"a":[REDACTED]}` {
+		t.Fatalf("unparseable redaction was not explained: %+v", envelope)
+	}
+	clean := ToolResultEnvelope{ModelContent: `{"a":1}`}
+	applyDispatchFacts(&clean, ToolDispatchResult{})
+	if clean.ModelContent != `{"a":1}` {
+		t.Fatalf("a parseable result gained a redaction note: %s", clean.ModelContent)
+	}
+}
+
 type resultFaultLedger struct {
 	claimErr, outcomeErr error
 	states               map[string]string

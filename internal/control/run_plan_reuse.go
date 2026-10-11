@@ -28,19 +28,6 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 	if sourceRunID == "" {
 		return fmt.Errorf("run has no exact continuation parent")
 	}
-	// A check goes stale on the same evidence inside one Run and across a
-	// continuation: a recorded file change. A replay class is the wrong test —
-	// it made a read-only `od -c` before adoption look like an effect, so
-	// looking first, the careful order, lost the prior check. Uncertain effects
-	// still block completion through ValidateRunCompletion.
-	var mutations int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_events WHERE run_id=? AND type='evidence.recorded'
-		AND json_extract(payload_json,'$.evidence.kind')='mutation'`, childRunID).Scan(&mutations); err != nil {
-		return err
-	}
-	if mutations > 0 {
-		return fmt.Errorf("this run recorded a mutation; observe the current state instead")
-	}
 	var currentChecks int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_events WHERE run_id=? AND type='evidence.recorded'
 		AND json_extract(payload_json,'$.evidence.kind')='verification'
@@ -52,6 +39,18 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 		return fmt.Errorf("this run has already checked the step; use its current result instead")
 	}
 	sourceStepID, sourceVersion := step.SourceStepID, step.SourcePlanVersion
+	var exactReference *InheritedPlanEvidence
+	if ref, ok, err := inheritedEvidenceReferenceTx(ctx, tx, childRunID, sourceRunID, step.StepID); err != nil {
+		return err
+	} else if ok {
+		if ref.CriterionChanged || ref.ReuseBlockedReason != "" {
+			return fmt.Errorf("source acceptance condition or inputs changed: %s", ref.ReuseBlockedReason)
+		}
+		if ref.CheckID != "" {
+			exactReference = &ref
+			sourceRunID, sourceStepID, sourceVersion = ref.SourceRunID, ref.SourceStepID, ref.SourcePlanVersion
+		}
+	}
 	for depth := 0; depth < 8; depth++ {
 		var sourcePersonID, sourceWorkspaceID, sourceRootsJSON, nextRunID string
 		if err := tx.QueryRowContext(ctx, `SELECT person_id, COALESCE(workspace_id,''), COALESCE(execution_roots_json,'[]'), COALESCE(resumes_run_id,'')
@@ -77,9 +76,9 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 			}
 			return err
 		}
-		if status != "completed" || normalizeRunPlanText(sourceStep) != normalizeRunPlanText(step.Step) ||
+		if status == "cancelled" || normalizeRunPlanText(sourceStep) != normalizeRunPlanText(step.Step) ||
 			normalizeRunPlanText(criterion) != normalizeRunPlanText(step.SuccessCriteria) {
-			return fmt.Errorf("source step is incomplete or its target or acceptance criterion changed")
+			return fmt.Errorf("source step is cancelled or its target or acceptance criterion changed")
 		}
 		var verificationState string
 		if err := tx.QueryRowContext(ctx, `SELECT verification_state FROM run_work_units
@@ -90,34 +89,43 @@ func validatePriorVerificationReuseTx(ctx context.Context, tx *sql.Tx, tenant, c
 			}
 			return err
 		}
-		if verificationState != "passed" {
-			return fmt.Errorf("source work unit has no passed verification")
-		}
 		if reused != 0 {
-			if strings.TrimSpace(priorReason) == "" || nextRunID == "" || nextStepID == "" || nextVersion < 1 {
+			if status != "completed" || verificationState != "passed" || strings.TrimSpace(priorReason) == "" || nextRunID == "" || nextStepID == "" || nextVersion < 1 {
 				return fmt.Errorf("source reuse has no complete provenance chain")
 			}
 			sourceRunID, sourceStepID, sourceVersion = nextRunID, nextStepID, nextVersion
 			continue
 		}
-		var checkStatus, target string
-		var checkedAt sql.NullInt64
-		err := tx.QueryRowContext(ctx, `SELECT COALESCE(json_extract(payload_json,'$.evidence.status'),''),
-			COALESCE(json_extract(payload_json,'$.evidence.command.binding.target'),''),
-			json_extract(payload_json,'$.evidence.finished_at_unix_nano')
-			FROM task_events WHERE run_id=? AND type='evidence.recorded'
-			  AND json_extract(payload_json,'$.evidence.kind')='verification'
-			  AND json_extract(payload_json,'$.evidence.command.binding.step_id')=?
-			ORDER BY cursor DESC LIMIT 1`, sourceRunID, sourceStepID).
-			Scan(&checkStatus, &target, &checkedAt)
+		state, blockers, checks, err := sourceStepVerificationTx(ctx, tx, sourceRunID, sourceStepID, workUnitID)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("source verification has no bound observation for this step")
-			}
 			return err
 		}
-		if checkStatus != "succeeded" || target == "" || !checkedAt.Valid || checkedAt.Int64 <= 0 {
-			return fmt.Errorf("source verification has no successful, bound observation")
+		if len(checks) == 0 {
+			return fmt.Errorf("source verification has no bound observation for this step")
+		}
+		if state != "passed" {
+			return fmt.Errorf("source step has unresolved verification (%s): %s", state, blockers)
+		}
+		if exactReference != nil {
+			if _, err := inheritedSourceChecksTx(ctx, tx, *exactReference); err != nil {
+				return fmt.Errorf("exact source observation is not effective in its work-unit window: %w", err)
+			}
+		}
+		// Every effective check must stay fresh; a newer independent target
+		// cannot mask changes to another observation's declared inputs.
+		for _, check := range checks {
+			if check.ToolCallID == "" || check.Status != "succeeded" || check.Binding.Target == "" || check.FinishedAt <= 0 {
+				return fmt.Errorf("source verification has no successful, bound observation")
+			}
+			for _, id := range []string{sourceRunID, childRunID} {
+				changed, err := verificationInputsChangedTx(ctx, tx, id, check)
+				if err != nil {
+					return err
+				}
+				if changed {
+					return fmt.Errorf("recorded changes affect verification inputs; observe the current state instead")
+				}
+			}
 		}
 		return nil
 	}

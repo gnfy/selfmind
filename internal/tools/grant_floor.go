@@ -30,7 +30,7 @@ import (
 // never become a standing permission.
 var bannedGrantPrograms = map[string]struct{}{
 	// Shells and interpreters: equivalent to arbitrary code execution.
-	"sh": {}, "bash": {}, "zsh": {}, "dash": {}, "ksh": {}, "fish": {}, "csh": {}, "tcsh": {},
+	"sh": {}, "bash": {}, "zsh": {}, "dash": {}, "ksh": {}, "mksh": {}, "ash": {}, "hush": {}, "fish": {}, "csh": {}, "tcsh": {},
 	"python": {}, "python2": {}, "python3": {}, "node": {}, "nodejs": {}, "deno": {}, "bun": {},
 	"perl": {}, "ruby": {}, "php": {}, "lua": {}, "rscript": {}, "osascript": {},
 	"powershell": {}, "pwsh": {}, "cmd": {}, "awk": {}, "gawk": {}, "sed": {},
@@ -41,14 +41,14 @@ var bannedGrantPrograms = map[string]struct{}{
 	"git": {}, "find": {}, "make": {},
 	// Arbitrary network clients: the method, the target and the output file are
 	// all arguments, so no leading token bounds what a standing permission
-	// would authorise.
-	"curl": {}, "wget": {}, "httpie": {}, "http": {},
+	// would authorise. socat's EXEC and SYSTEM addresses run any program.
+	"curl": {}, "wget": {}, "httpie": {}, "http": {}, "socat": {},
 	// Same shape without the network: xxd's output path is a bare positional
 	// operand, so a standing `xxd` would authorise writing anywhere.
 	"xxd": {},
 	// Irreversible by nature: a standing permission for these cannot be
 	// undone by inspecting the next invocation. Ordinary dangerous operations
-	// (chmod, chown, mv, kill, ...) deliberately stay OUT of this set: they
+	// (chmod, chown, kill, ...) deliberately stay OUT of this set: they
 	// remain approvable classes, which is the documented distinction between
 	// the hard floor and ordinary approval.
 	"rm": {}, "rmdir": {}, "dd": {}, "mkfs": {}, "shred": {}, "wipefs": {}, "fdisk": {},
@@ -79,11 +79,20 @@ var shellControlKeywords = map[string]struct{}{
 }
 
 // grantComplexShellMarkers disqualify a payload from producing a reusable
-// grant. A redirection, substitution, expansion or wildcard means the tokens
-// the class was derived from are not the tokens that will run, so the class
-// cannot bound the command. Same rule codex applies: commands using these
-// features are never evaluated against remembered rules.
-var grantComplexShellMarkers = []string{">", "<", "$", "`", "*", "?"}
+// grant. A redirection, substitution, expansion, wildcard or escape means the
+// tokens the class was derived from are not the tokens that will run, so the
+// class cannot bound the command: `\python3` is python3 and `-\X DELETE` is
+// `-X DELETE`. Same rule codex applies: commands using these features are
+// never evaluated against remembered rules.
+var grantComplexShellMarkers = []string{">", "<", "$", "`", "*", "?", `\`}
+
+// grantDeviceMarkers name raw block devices — every disk prefix the floor
+// knows, the macOS whole-disk nodes included — and the shell's network
+// pseudo-devices. A payload naming one is dangerous for what it touches, not
+// for which program touches it, so the program's class cannot bound it: a
+// remembered `smartctl --scan` must not release `smartctl -t long /dev/sda`.
+var grantDeviceMarkers = append(append(append([]string{}, destructiveSubstrings...), egressSubstrings...),
+	hardlineDiskDevices...)
 
 // HostEscapeApprovalReason is the dangerous-op reason recorded for a command
 // that asks to run outside the sandbox. It is exported because a persisted
@@ -91,17 +100,29 @@ var grantComplexShellMarkers = []string{">", "<", "$", "`", "*", "?"}
 // rather than a copy that can drift.
 const HostEscapeApprovalReason = "requests execution on the host outside the isolated sandbox"
 
-// grantKeyResourceMarker and grantKeyCommandMarker are the structural parts of
-// a host-execution grant key: "exec:<reason>|resource=workspace:<hash>:command:<family>".
+// The structural parts of an exec grant key. Both shapes name the command
+// class the floor derived and nothing else:
+//
+//	host:      exec:<HostEscapeApprovalReason>|resource=workspace:<hash>:command:<class>
+//	sandboxed: exec:<tool>|class=<class>
+//
+// The host shape keeps the host-escape text as a fixed marker so classes
+// remembered before it was fixed stay valid; it is never the reason the call
+// was asked about.
 const (
+	hostGrantKeyBase       = "exec:" + HostEscapeApprovalReason
 	grantKeyResourceMarker = "|resource="
 	grantKeyCommandMarker  = ":command:"
+	grantKeyClassMarker    = "|class="
 )
 
 // DescribeGrantClass renders what a "remember this" decision would authorize,
 // or "" when the payload cannot back a reusable grant. The result is shown to
 // the user at decision time, so it must name the class in plain words and must
-// never contain the command text, a path, or a fingerprint.
+// never contain the command text, a path, or a fingerprint. For an exec call it
+// names the class the key is built from, never the reason the call asked: a
+// label naming the mode while the key covered the whole tool is how one
+// remembered read released every later command.
 func DescribeGrantClass(toolName, dangerousReason string, args map[string]interface{}) string {
 	if !isExecTool(toolName) {
 		return patternReasonBucket(dangerousReason)
@@ -114,20 +135,24 @@ func DescribeGrantClass(toolName, dangerousReason string, args map[string]interf
 	if effectiveSandboxModeArg(args) == SandboxHost {
 		return fmt.Sprintf("host execution of %q in this workspace", family)
 	}
-	if strings.TrimSpace(dangerousReason) != "" {
-		return dangerousReason
-	}
 	return fmt.Sprintf("%q commands", family)
 }
 
 // ReviewPersistedGrantKey decides whether a grant key that is already stored
 // remains eligible under the current floor. It exists because the floor was
 // introduced after grants had been recorded: keys minted by the old
-// first-token derivation (`command:set`, `command:for`) and keys from before
-// host grants were workspace-scoped at all must be withdrawn, while legitimate
-// command families stay. family is returned for reporting and may be empty.
+// first-token derivation (`command:set`, `command:for`), keys from before host
+// grants were workspace-scoped at all, and sandboxed keys built from the
+// approval reason (`exec:terminal requires approval in on-request mode`,
+// `exec:terminal`), which named a tool rather than a class, must be withdrawn,
+// while legitimate command classes stay. A stored key is never rewritten to its
+// normalized form, which could match more than the person approved: an exec
+// key the current derivation would not mint is withdrawn. family is returned
+// for reporting and may be empty.
 func ReviewPersistedGrantKey(patternKey string) (family string, keep bool) {
-	key := strings.TrimSpace(patternKey)
+	// A binding to in-place credential writes only narrows a key; the class it
+	// binds is what faces the floor.
+	key, _, _ := strings.Cut(strings.TrimSpace(patternKey), GrantKeyHostWritesMarker)
 	if key == "" {
 		return "", false
 	}
@@ -135,21 +160,25 @@ func ReviewPersistedGrantKey(patternKey string) (family string, keep bool) {
 		// Write/path tool classes bucket by reason and carry no command family.
 		return "", true
 	}
-	hostEscape := strings.Contains(key, HostEscapeApprovalReason)
-	resourceIdx := strings.Index(key, grantKeyResourceMarker)
-	if resourceIdx < 0 {
-		// A host escape with no workspace/command resource authorises every
-		// command for the person — exactly the shape the resource fingerprint
-		// was introduced to prevent.
-		return "", !hostEscape
+	if base, resource, host := strings.Cut(key, grantKeyResourceMarker); host {
+		commandIdx := strings.LastIndex(resource, grantKeyCommandMarker)
+		if commandIdx < 0 {
+			return "", false
+		}
+		family = strings.ToLower(strings.TrimSpace(resource[commandIdx+len(grantKeyCommandMarker):]))
+		// A host key minted under any other reason, or naming a program that is
+		// dangerous for its own sake, is one the derivation no longer produces
+		// on the host and nothing redeems.
+		return family, base == hostGrantKeyBase && IsGrantableCommandFamily(family) && !hostDangerousFamily(family)
 	}
-	resource := key[resourceIdx+len(grantKeyResourceMarker):]
-	commandIdx := strings.LastIndex(resource, grantKeyCommandMarker)
-	if commandIdx < 0 {
-		return "", false
+	if tool, class, sandboxed := strings.Cut(strings.TrimPrefix(key, "exec:"), grantKeyClassMarker); sandboxed {
+		family = strings.ToLower(strings.TrimSpace(class))
+		return family, isExecTool(tool) && IsGrantableCommandFamily(family)
 	}
-	family = strings.ToLower(strings.TrimSpace(resource[commandIdx+len(grantKeyCommandMarker):]))
-	return family, IsGrantableCommandFamily(family)
+	// Anything else under exec: names a tool, a mode or a reason instead of a
+	// class — including a host escape with no workspace/command resource, which
+	// authorises every command for the person.
+	return "", false
 }
 
 // IsGrantableCommandFamily reports whether a command family may back a reusable
@@ -161,11 +190,16 @@ func ReviewPersistedGrantKey(patternKey string) (family string, keep bool) {
 // subcommand words narrow a class, they never rescue a banned one.
 func IsGrantableCommandFamily(family string) bool {
 	family = strings.ToLower(strings.TrimSpace(family))
-	if family == "" || family == "unknown" {
+	// An escape never survives derivation today; a family holding one was
+	// minted from a misread command.
+	if family == "" || family == "unknown" || strings.Contains(family, `\`) {
 		return false
 	}
 	if head, _, multi := strings.Cut(family, " "); multi {
 		family = strings.TrimSpace(head)
+	}
+	if programName(family) != family {
+		return false
 	}
 	if _, banned := bannedGrantPrograms[family]; banned {
 		return false
@@ -177,6 +211,16 @@ func IsGrantableCommandFamily(family string) bool {
 		return false
 	}
 	return true
+}
+
+// hostDangerousFamily reports a class whose program is dangerous for its own
+// sake (chmod, kill, ssh): the dangerous heuristic always flags it, so on the
+// host it is a once-only decision and never a class.
+func hostDangerousFamily(family string) bool {
+	head, _, _ := strings.Cut(family, " ")
+	_, dangerous := dangerousBinaries[head]
+	_, egress := egressBinaries[head]
+	return dangerous || egress
 }
 
 // grantClassForDecision reports the class a "remember this" decision would

@@ -96,7 +96,7 @@ func TestHasCassetteSessionStrict(t *testing.T) {
 }
 
 // TestResetVCRSessionRestartsNumbering pins the root-cause fix for the
-// continuity_task_attach corruption: without a reset, a second run of the same
+// multi-turn cassette corruption: without a reset, a second run of the same
 // case in one process continues numbering past the first run's files.
 func TestResetVCRSessionRestartsNumbering(t *testing.T) {
 	dir := t.TempDir()

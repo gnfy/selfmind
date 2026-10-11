@@ -1,6 +1,7 @@
 package cliapp
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -103,11 +104,16 @@ func (a *App) evalRun(args []string) int {
 		fmt.Fprintln(a.stderr, "--output can only be used with a single case file")
 		return 2
 	}
-	failed := 0
+	failed, unavailable := 0, 0
 	for _, file := range files {
 		start := time.Now()
 		fmt.Fprintf(a.stdout, "Running %s\n", file)
 		result, err := selfeval.RunCaseFile(a.ctx, file, opts)
+		if errors.Is(err, selfeval.ErrRequirementUnavailable) {
+			unavailable++
+			fmt.Fprintf(a.stdout, "  unavailable: %v\n", err)
+			continue
+		}
 		if err != nil {
 			failed++
 			fmt.Fprintf(a.stdout, "  failed: %v\n", err)
@@ -117,6 +123,11 @@ func (a *App) evalRun(args []string) int {
 			failed++
 		}
 		fmt.Fprintf(a.stdout, "  %s in %s  tools=%d errors=%d  log=%s\n", result.Status, time.Since(start).Round(time.Millisecond), result.ToolCalls, result.ToolErrors, result.OutputPath)
+	}
+	// As in selfcheck, a missing requirement outranks a failure: the
+	// environment, not the product, stopped the run.
+	if unavailable > 0 {
+		return 2
 	}
 	if failed > 0 {
 		return 1

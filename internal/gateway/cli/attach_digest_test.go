@@ -48,8 +48,7 @@ func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
 		"While you were away:",
 		"✔ 2 tasks finished: Ship the report, Fix the build",
 		"✖ 1 task stopped early: Refactor parser (use /resume to continue)",
-		"Still needs attention:",
-		"⚠ 1 approval waiting: [terminal] command=rm -rf build — destructive command — interactive choices restored below",
+		"Pending: 1 approval — choices restored below",
 		"⚠ 1 push may not have reached weixin (see /status)",
 	} {
 		if !strings.Contains(text, want) {
@@ -78,13 +77,8 @@ func TestStartupDigestLabelsOlderUnresolvedWorkWithoutAwayClaim(t *testing.T) {
 	if strings.Contains(text, "While you were away:") || strings.Contains(text, "stopped early") {
 		t.Fatalf("older unresolved work must not be presented as a new away event:\n%s", text)
 	}
-	for _, want := range []string{
-		"Still needs attention:",
-		"↻ 1 earlier run still needs attention: Implement binary search in Go (use /resume to continue)",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("unresolved digest missing %q:\n%s", want, text)
-		}
+	if text != "History: earlier runs available — /resume" {
+		t.Fatalf("legacy unresolved digest = %q", text)
 	}
 }
 
@@ -103,6 +97,68 @@ func TestStartupDigestEmptyRendersNothing(t *testing.T) {
 	}
 }
 
+func TestStartupDigestForeignApprovalHasOneActionableNotice(t *testing.T) {
+	m := NewController("", "", nil, "").model
+	m.channel = "new-session"
+	m.startupDigest = &api.DigestResponse{PendingApprovals: []api.DigestApproval{{
+		ID: "apr-old", Channel: "closed-session", Tool: "terminal", Target: "git push",
+	}}}
+	m.maybeShowStartupDigest(100)
+	if len(m.messages) != 0 {
+		t.Fatalf("approval must appear once in the live notice, not also in history: %+v", m.messages)
+	}
+	if m.approvalPrompt != nil || m.thinking {
+		t.Fatal("an earlier session's approval must not capture this session's input")
+	}
+	for _, want := range []string{"Pending: 1 approval", "another session", "/approvals", "/approve <n|id>"} {
+		if !strings.Contains(m.statusMsg, want) {
+			t.Fatalf("notice missing %q: %q", want, m.statusMsg)
+		}
+	}
+	m.otherSessionApprovalResolved("apr-old")
+	if m.statusMsg != "" {
+		t.Fatalf("answered approval still visible: %q", m.statusMsg)
+	}
+}
+
+func TestStartupDigestLegacyHistoryDoesNotClaimExactCount(t *testing.T) {
+	items := make([]api.DigestTask, 10)
+	for i := range items {
+		items[i] = api.DigestTask{Title: "a long\nmultiline task title", Status: "waiting_user"}
+	}
+	text := formatStartupDigest(&api.DigestResponse{UnresolvedTasks: items}, "")
+	if text != "History: earlier runs available — /resume" {
+		t.Fatalf("legacy capped history must remain compact without inventing a total: %q", text)
+	}
+}
+
+func TestStartupDigestUsesFullResumableCount(t *testing.T) {
+	count := 36
+	digest := &api.DigestResponse{
+		ResumableRunCount: &count,
+		UnresolvedTasks:   make([]api.DigestTask, 10),
+	}
+	if got := formatStartupDigest(digest, ""); got != "History: 36 runs available to resume — /resume" {
+		t.Fatalf("capped history was mistaken for the full count: %q", got)
+	}
+	digest.UnresolvedTasks = nil
+	if digest.Empty() || formatStartupDigest(digest, "") == "" {
+		t.Fatal("a full count must remain visible even without a history page")
+	}
+	count = 0
+	digest.UnresolvedTasks = []api.DigestTask{{Title: "waiting for approval"}}
+	if got := formatStartupDigest(digest, ""); got != "" {
+		t.Fatalf("pending waits must not also be counted as resumable history: %q", got)
+	}
+}
+
+func TestStartupDigestFlattensMultilineAwayTitles(t *testing.T) {
+	digest := &api.DigestResponse{FinishedTasks: []api.DigestTask{{Title: "Check\n\t a different project"}}}
+	if got := formatStartupDigest(digest, ""); got != "While you were away:\n✔ 1 task finished: Check a different project" {
+		t.Fatalf("stored title broke the startup hierarchy: %q", got)
+	}
+}
+
 // TestStartupDigestAttachesToActiveRun: an active run in the digest must (1)
 // announce the attach, (2) flip the running-state flags so the composer
 // behaves as if a run is active, and (3) start the run watcher.
@@ -111,11 +167,11 @@ func TestStartupDigestAttachesToActiveRun(t *testing.T) {
 	c.SetClientMode(true)
 	watcherStarted := make(chan struct{})
 	var watchedRunID string
-	c.SetRunWatcher(func(ctx context.Context, runID string, observer httpapi.StreamObserver) string {
+	c.SetRunWatcher(func(ctx context.Context, runID string, observer httpapi.StreamObserver) (api.RunObservation, error) {
 		watchedRunID = runID
 		close(watcherStarted)
 		<-ctx.Done()
-		return ""
+		return api.RunObservation{}, ctx.Err()
 	})
 	c.SetStartupDigest(&api.DigestResponse{
 		ActiveRun: &api.DigestActiveRun{RunID: "r9", TaskID: "t9", Title: "Long migration", ElapsedSeconds: 720},
@@ -173,7 +229,7 @@ func TestAttachedRunDoneReportsOutcome(t *testing.T) {
 	model.watchingRun = true
 	model.watchedRunID = "r9"
 
-	updated, _ := model.updateInner(MsgAttachedRunDone{RunID: "r9", Summary: "migration complete"})
+	updated, _ := model.updateInner(MsgAttachedRunDone{RunID: "r9", Status: "done", Summary: "migration complete"})
 	model = updated.(*uiModel)
 	if model.watchingRun {
 		t.Fatalf("state after watched run end: watchingRun=%v", model.watchingRun)

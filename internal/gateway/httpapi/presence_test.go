@@ -276,6 +276,7 @@ func TestPresencePingEndpoint(t *testing.T) {
 	daemon, store, identity, _, _ := newApprovalTestServer(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local", nil)
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -296,7 +297,9 @@ func TestPresencePingEndpoint(t *testing.T) {
 
 	// Wrong method is rejected.
 	rec = httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/presence/ping", nil))
+	pingReq := asLocalCLI(httptest.NewRequest(http.MethodPost, "/v1/presence/ping", nil))
+	pingReq.Header.Set("Content-Type", "application/json")
+	daemon.Handler().ServeHTTP(rec, pingReq)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST status = %d", rec.Code)
 	}
@@ -309,12 +312,14 @@ func TestPresencePingRequiresAuth(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "secret")
 
 	rec := httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping", nil))
+	pingReq := asLocalCLI(httptest.NewRequest(http.MethodGet, "/v1/presence/ping", nil))
+	daemon.Handler().ServeHTTP(rec, pingReq)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated status = %d", rec.Code)
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/presence/ping", nil)
+	req = asLocalCLI(req)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec = httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
@@ -332,7 +337,8 @@ func TestPresenceBeatTreatsLegacyActiveZeroAsAttached(t *testing.T) {
 
 	// Legacy active=0 still claims presence and stamps durable recency.
 	rec := httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=0", nil))
+	pingReq := asLocalCLI(httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=0", nil))
+	daemon.Handler().ServeHTTP(rec, pingReq)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ping status = %d", rec.Code)
 	}
@@ -350,7 +356,8 @@ func TestPresenceBeatTreatsLegacyActiveZeroAsAttached(t *testing.T) {
 	// The same contract applies to the event poll/stream path.
 	daemon.presenceTracker().now = func() time.Time { return time.Now().Add(presenceTTL + time.Second) }
 	rec = httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local&active=0", nil))
+	pingReq = asLocalCLI(httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local&active=0", nil))
+	daemon.Handler().ServeHTTP(rec, pingReq)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("event poll status = %d", rec.Code)
 	}
@@ -370,7 +377,8 @@ func TestPresenceExpiresOnlyWhenClientBeatsStop(t *testing.T) {
 
 	// Attached via an active beat.
 	rec := httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local", nil))
+	pingReq := asLocalCLI(httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local", nil))
+	daemon.Handler().ServeHTTP(rec, pingReq)
 	if rec.Code != http.StatusOK || !registry.IsAttached(identity.PersonID, "cli") {
 		t.Fatalf("active beat must attach (status=%d)", rec.Code)
 	}
@@ -379,7 +387,8 @@ func TestPresenceExpiresOnlyWhenClientBeatsStop(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		now = now.Add(30 * time.Second)
 		rec = httptest.NewRecorder()
-		daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=0", nil))
+		pingReq := asLocalCLI(httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=0", nil))
+		daemon.Handler().ServeHTTP(rec, pingReq)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("inactive beat %d status = %d", i, rec.Code)
 		}

@@ -158,23 +158,348 @@ ExecutionRequest
 | 写限定在声明根 | `--bind-try` 每根 | `(allow file-write* (subpath (param …)))` 每根 |
 | 关闭出网 | `--unshare-net` | `(deny default)` 下不发放 network 规则 |
 | PID / IPC / UTS 命名空间 | 有 | **无** |
-| `OverlayMounts` / `SynthesizedDirs` | 有 | **无，计划被拒绝** |
+| `OverlayMounts` / `SynthesizedDirs` | 有：私有、带种子的覆盖层，宿主不被写 | **无**：改为声明子路径原地可写（`HostStateWrites`，§9.4），表达不了的计划被拒绝 |
 | `$SELFMIND_RUN_TMP` 与 `/tmp` | 同一目录（双重绑定） | **不同**；`/tmp` 在可写根之外 |
 
 后两条有具体后果：
 
-- 需要挂载的计划（catalog 里只有 `aws` 的 SSO token cache 用 `MapRWAt`，其余八个
-  profile 靠环境变量重定向）在 macOS 上**被显式拒绝**，而不是悄悄忽略——忽略会让
-  工具状态指回宿主。`auto` 退回 host + 审批并说明原因；`isolated` 或
-  `required` 则失败，不降级。
+- 需要挂载的状态（catalog 里只有 `aws` 的 SSO token cache 与 STS cache 用
+  `MapRWAt`，其余 profile 靠环境变量重定向）在 macOS 上不再被整体拒绝，而是按
+  所有者决定 D3 翻译为宿主真实路径上的逐子路径写授权（§9.4）。这**弱于**
+  Linux：被写的是宿主真实缓存。准备阶段向后端询问能否挂载（`MountsToolState`），
+  不判断平台名。子路径表达不了的需求（解析到声明根之外、不是目录、会覆盖只读
+  配置、没有声明根）仍被拒绝并说明具体原因，绝不丢弃需求或改到 host 执行。
 - `TMPDIR` 已指向 run scratch（`executionenv/scratch.go`），所以 `mktemp` 一类仍在
   可写视图内；依赖字面 `/tmp` 的命令在 macOS 沙箱里会被拒写。
 
-路径以 `sandbox-exec -D` 参数传入，不插值进 policy 文本，因此路径无法终止字符串
-字面量并注入规则；非绝对或未规范化的路径一律拒绝渲染（fail closed），退回审批，
-而不是丢掉一个可写根后产生难以定位的权限失败。
+### 5.1.2 边界在审批前确定，执行固定于已批准的边界（2026-10-07）
 
-2026-10-05 兼容修复：解释器版本查询和明确的非执行语法检查只收集自身依赖，不自动引入未知脚本可能调用的全部工具；这项优化不改变只读证明或审批权限。环境 profile 的挂载状态可由有界配置条件决定，明确的参数和快照变量选择配置段。未知脚本、动态选择、配置覆盖或无法可靠读取的配置保留保守要求。静态认证继续使用只读配置；确实需要写缓存的认证仍要求挂载，macOS 无法兑现时明确拒绝，不静默丢弃、不增加 host 逃逸。准备缓存纳入最终挂载要求。模型收到的是当前 Run 冻结的执行策略；容量二下的 host 拒绝不能解释为另一个任务占了槽位。
+执行边界在任何能力询问（`credential:read`、`network:shared`）、smart 判断模型
+和人工审批之前确定一次（`annotateEffectiveSandboxMode`），所有审批读取它，执行
+固定于它。确定时不只看平台有没有沙箱，还看后端能否兑现**这次调用的计划**：
+
+- 后端兑现不了时，`auto` 调用以 host 执行呈现，判断模型与人看到的是 host
+  边界及原因；显式 `isolated`、操作者的 `exec_sandbox.required` 与受管 Git 执行
+  视图所需的隔离则在审批前以类型化的 `not_dispatched` 失败拒绝，不为不会被执行的
+  沙箱边界请求任何审批。
+- 并行容量不增加隔离或人工审批要求。host 调用按冻结的当前模式决策：smart
+  每次使用廉价角色判断，不复用 host 决定；full-auto 经过硬底线后执行；on-request
+  沿用覆盖当前身份、目标与环境的精确审批或 standing policy。外部效果占用检查
+  在执行通道之前完成，未知效果仍需观察。实际 host 命令独占本人在该 daemon
+  Runtime 中的执行通道；其他 terminal、文件写与 patch 等待，模型调用继续。
+  长等待只有保存精确未派发调用的 checkpoint 并原子落下续接队列后才能释放
+  worker。排队的 host 保留先后顺序，等待审批、澄清或另一外部效果时让出通道
+  意图；续接仍重新通过权限与效果检查。显式 host 后台命令仅启动时独占，并提示
+  启动后进程仍可能影响其他 Run；普通命令保持前台执行。
+- 可行性检查假定待定的 `credential:read` 询问会被批准；凭据被扣留时需要的
+  原地写是其子集，因此结论不会因拒绝授权而变坏。
+- 在原地写入凭据状态的后端上，containment 摘要附带
+  `host_credential_writes=<路径>;<路径>`，判断模型与人看到同一边界；路径集合变化
+  会改变审批指纹，需重新询问。可复用的批准键——记住的命令类、提供的规则、阶段
+  批准的声明效果——都绑定写入集合的摘要（`|host_writes=…`），精确 run 键与判断
+  决定键以及停放审批的续接授权经 containment 摘要同样绑定：在不需要原地写时
+  记住的类或规则，配置改为需要写入后不再放行该命令；以同一写入集合记住的则继续
+  复用。启动审查保留类本身仍过底线的绑定键，`/approvals grants` 注明它只在写
+  同样的缓存时有效。
+- 阶段批准（`request_permissions`）为每条声明命令生成的键，在生成时即绑定该
+  命令获得凭据访问后会做的原地写入，命令标签写明这些路径，询问理由以它们开头；
+  写入出现之前批准的阶段包不会放行它们。不受信任工作区里，正是 `credential:read`
+  询问开启了这些写入，而它放行的受控安全观测之后不再询问第二次；因此该询问同样
+  以写入事实开头，它留下的 run 授权也绑定写入集合。
+- 各界面都会截断审批理由（IM 120 字符，终端面板两行），因此理由以边界事实开头：
+  `writes credential caches in place: ~/.aws/sso/cache, ~/.aws/cli/cache` 或
+  `runs on the host: <原因>`，截断不会丢掉它。external-effect 声明边界自己的
+  一次性询问（针对另一个 Run 的"遗留不确定"效应）放行的是同一次确切调用，因此
+  同样以该事实开头并携带 containment 摘要，停放的批准所留下的授权通过该摘要绑定
+  写入集合。在进程启动前就被拒绝的后台启动会报告"未启动"，其占用的声明随之释放，
+  而不是被留成不确定。
+
+执行使用已批准的边界（`ExecutionRequest.Boundary`）。批准——人、判断模型、
+已存或 run 内授权、停放审批续接时的一次性能力——假定的是隔离，而派发时后端
+兑现不了（配置变化、状态路径被换到根外）时，调用不派发，模型收到类型化的
+`sandbox_boundary_unavailable` 或 `sandbox_plan_unsupported`，并明说没有在 host
+上运行。容量一同样如此；durable watcher 轮询没有轮询时的审批，同样不降级。
+以 host 批准的边界在 host 执行。可选隔离在初始可行性检查中因沙箱关闭、
+无可用后端或后端无法兑现这次计划而解析为 host，发生在审批之前；已批准的
+隔离边界不会在派发时改成 host。
+
+已批准的边界包含它的原地凭据写入：派发准备时，若计划的写入不是放行这次调用的
+决定所覆盖集合的子集（宿主配置在审批与派发之间改变了），在创建任何目录之前即
+拒绝（`approved_host_writes_changed`，`not_dispatched`）。durable watcher 轮询
+没有自己的放行决定，因此受注册时审批所覆盖的写入集合约束：注册把它记录在
+watch 的执行绑定上（`host_state_writes`，位于既有绑定 JSON 中，无 schema 变更）。
+计划写入更多的轮询同样在创建任何目录之前被拒绝，watch 以环境失败停放；没有
+记录写入的绑定（包括绑定出现之前的旧行）不覆盖任何写入。后台启动按约定就是
+host 执行，遵循同一规则：要求隔离的策略拒绝它。watcher 只有在其无人值守的轮询
+（按注册时冻结在 watch 上的策略解析 `auto`，该策略只会被 daemon 当前策略收紧、
+绝不放宽，轮询没有自己的审批）将运行于注册所批准的同一边界时才注册；否则什么都
+不运行并拒绝注册（`watch_boundary_mismatch`），不会出现注册成功却永远无法轮询、
+或在批准之外轮询的 watcher。这两项约束互不依赖对方的输入保持不变：注册之后关闭
+沙箱不会把轮询移到 host（host 上没有可用来约束写入集合的原地计划）；更严格的配置
+把在 host 上注册的 watch 收紧进隔离时，也不会授予它原地写入——它的注册没有覆盖
+任何写入，这样的轮询被拒绝，直到重新注册。
+
+这是有意的行为变化：此前 `exec_sandbox.go` 在后端拒绝计划时把 `auto` 调用静默
+改为 host 执行。2026-10-06 的安全复核（WP-F2，高危）复现：macOS、默认
+`exec_sandbox`（启用、非 required）、smart 模式、未受信工作区且宿主有 AWS SSO
+配置时，`python3 tool.py` 被当作 contained 直接放行，seatbelt 拒绝挂载式 AWS
+状态后在宿主执行。现在它在 seatbelt 中运行（凭据被扣留：宿主缓存保持只读），
+任何路径都不会再静默落到宿主。
+
+路径以 `sandbox-exec -D` 参数传入，不插值进 policy 文本，因此路径无法终止字符串
+字面量并注入规则；非绝对或未规范化的路径一律拒绝渲染（fail closed），调用不派发，
+而不是丢掉一个可写根后产生难以定位的权限失败，也不改到 host 执行。原地写的状态
+子路径（`STATE_WRITE_n`）同样以参数传入，且不能是根目录 `/`。
+
+2026-10-05 兼容修复：解释器版本查询和明确的非执行语法检查只收集自身依赖，不自动引入未知脚本可能调用的全部工具；这项优化不改变只读证明或审批权限。前置 `VAR=value` 赋值只改变程序看到的环境、不改变运行哪个程序，`TZ=UTC date`、`CGO_ENABLED=0 go build` 与不带赋值的命令准备完全一致；程序按 shell 自身的解析、经与安全底线相同的识别得出（无法解析时才退回按字段切分），值含路径或空格（`KUBECONFIG=/x kubectl`、`FOO="a b" aws`）也不会挪动程序词；快照无法解析的内联选择变量（`AWS_PROFILE=x aws …`、`env -u AWS_PROFILE …`，`-c` 脚本内同样）作为配置覆盖保留该工具的保守状态要求，但不引入主机库存。环境 profile 的挂载状态可由有界配置条件决定，明确的参数和快照变量选择配置段。未知脚本、动态选择、配置覆盖或无法可靠读取的配置保留保守要求。静态认证继续使用只读配置；确实需要写缓存的认证仍要求挂载，macOS 无法兑现时明确拒绝，不静默丢弃、不增加 host 逃逸。准备缓存纳入最终挂载要求。模型收到的是当前 Run 冻结的执行策略；显式隔离或操作者 required 的拒绝不能解释为另一个任务占了槽位。
+
+### 5.1.3 受管 Git 视图的 daemon 侧 Git 不进入执行链
+
+`/views`、`/apply`、视图归档与清理由 daemon 在宿主上直接运行 Git，不经过上面的
+沙箱后端；而视图及其 `.git` 对所属 Run 可写。因此视图里可写的状态不得决定宿主
+Git 执行什么（实现见 `internal/executionenv/git_view*.go`）：
+
+- 每条视图命令都把 `GIT_DIR`、`GIT_COMMON_DIR` 和工作树固定到该视图，并在命令行
+  关闭 `core.fsmonitor`、钩子和 untracked cache。daemon 侧的每条 Git 命令（无论对
+  视图还是源仓库）都不读 commit-graph、multi-pack-index 和可达性 bitmap，这是纵深
+  防御：凡可能导致丢失工作的判断都不依赖 Git 读取它们，要么由 daemon 对所依赖的提交
+  和树计算哈希，要么只读视图自身的对象目录（见下文）。只有视图的有效性检查
+  （`merge-base`，误判通过只会让校验遍历列出更多对象）和一个仅供展示的计数还会读取
+  它们。`.git` 不是普通目录，或含 `commondir`、`gitdir`、`config.worktree`、
+  `info/grafts`、`shallow`，或 alternates 不等于准入时的源对象库时，视图不可用但
+  保留文件。
+- `.git/config` 只能含创建时写入的被动键；include 和一切可指定程序或改写 Git
+  去向的键都使视图不可用。
+- 读取检出与索引（status、被忽略和被隐藏的条目）使用 daemon 写入的临时 Git
+  目录，只带校验过的被动键，因此校验之后改写 `.git/config` 也定义不出过滤器；
+  status 不进入子模块，diff 带 `--no-ext-diff --no-textconv`；仍有 Run 可能写入
+  视图时，`/views` 只读已提交内容，`/apply` 拒绝。
+- status 按 Git 读到的样子比较索引与 HEAD 的树，不计算哈希；视图自身不存的树（视图
+  里的 gc 会去掉源仓库已有的对象）来自源仓库。因此 status 判为干净的索引还必须恰好
+  记录 HEAD 的树：对索引副本运行 `write-tree --missing-ok`（不读任何树对象），结果
+  必须等于 daemon 读出并校验哈希的 HEAD 提交中的树，否则检查失败；源仓库写入者植入
+  的树因此无法对归档和清理隐藏已暂存的改动。大小仍相符、或索引条目没有 stat 数据
+  （`read-tree` 之后，或与该链接同一秒写入）的符号链接，Git 也以同样方式读取其 blob
+  来判定。因此 daemon 从检出中读出每个符号链接的目标，按 blob 计算哈希，与索引条目
+  的 id 不同的就算作未提交的工作，不从任何一个对象库读取 blob。普通文件不需要这项检查：
+  Git 直接对文件本身计算哈希，`text=auto` 下它为该文件读取的唯一 blob 只决定是否规范化
+  CRLF 行尾。
+- 清理证明只看视图自身存储的对象（松散与打包），要求它们都能在不计 reflog 时
+  从已交付 HEAD 到达；经 alternates 借用的源仓库对象不属于视图。这次遍历只读视图
+  自身的对象：daemon 建一个只链接视图松散对象目录与 pack 目录、没有 alternates 和
+  其他 info 文件的对象目录。经 alternates，Git 还会读到源仓库，写入者可以在那里植入
+  一个父提交通向已交付 HEAD 丢下的工作的提交。遍历遇到视图自身未存的提交（视图 gc
+  之后）就在那里停止，这只会让归档被保留。视图自身的对象库属于它的 Run：在那里伪造
+  对象的 Run 能对这项检查隐藏它自己不可达的工作，就像它也能直接删掉那些工作一样。
+
+源仓库的 `.git` 对首个直接写入的 Run 可写，且 daemon 侧 Git 工作期间也可能被改。
+确切的保证是：对源仓库的 daemon 侧 Git 不从源配置读取程序、hook 或传输，即使配置
+在筛查之后被改。源命令分四类：
+
+- 身份探测（`--show-toplevel`、`--git-common-dir`）按本人 Git 的方式解析，用来发现
+  拓扑变化；基线冻结只接受公共目录就是自身 `.git`、且其中没有 `commondir`/`gitdir`
+  文件的检出。
+- 配置、对象与索引读取（config、cat-file、ls-files）、交付的对象导入（index-pack）
+  以及新建引用的源侧复核（rev-parse）都没有 hook 事件：固定 `GIT_DIR` 与
+  `GIT_COMMON_DIR` 到准入的 `.git`，置空 `GIT_ALLOW_PROTOCOL`，设
+  `GIT_NO_LAZY_FETCH`，忽略 replace 引用，在命令行覆盖钩子路径与 fsmonitor；
+  每条命令先拒绝事后多出 `commondir`/`gitdir` 的源 `.git`。
+- 引用的读取与创建改走 daemon 写的 Git 目录。固定目录只让配置和对象留在准入的
+  `.git`，Git 仍会顺着其中的 `commondir` 文件解析引用，检查之后植入的文件会让固定
+  目录的引用读取答出另一个仓库的结果，例如把未交付说成已交付。daemon 目录没有
+  `commondir`：它链接源的 `refs`、`packed-refs`、`reftable`，使用源对象目录，配置由
+  daemon 写入，只重复按 Git 自己方式读取的源仓库格式（仓库自身的 config 文件，不跟随
+  include）：`files` 或 `reftable` 引用存储；其他引用存储在写入任何东西之前拒绝，
+  基线冻结暂不接受 SHA-256 仓库。那里完全不读源配置，所以 `update-ref` 不会运行配置式
+  `hook.<name>` reference-transaction hook（`core.hooksPath=/dev/null` 挡不住它）。
+  建引用（`/apply` 分支与清理保留引用）是对“引用不存在”的比较交换，已指向同一提交的
+  引用视为先前相同的创建；不写 reflog。只有在该引用经 daemon 目录、也经按源自身配置的
+  固定读取都解析到预期提交后才报告成功，写到源仓库 Git 看不到之处的引用因此是拒绝，
+  而不是交付。清理还会在受保护的移动内、检出离开恢复路径之前再复核一次，失败则保留
+  归档。
+- 基线冻结的 status 经只带被动比较键的 daemon 目录读取，筛查后再加的 filter 或
+  fsmonitor 不会运行。
+
+基线冻结遵循同样的规则：两次身份探测之后，配置筛查、子模块检查和比较键读取
+（config、ls-files）固定目录，HEAD 经 daemon 引用目录读取，status 经 daemon 写的
+配置读取。`/apply` 不用传输：在视图内构建恰好包含 daemon 校验遍历（见下文）所列
+对象的 pack，经两个 Git 进程之间的管道流入源对象库的 `index-pack --strict`，daemon
+从不持有整个 pack；取消或任一侧失败都会
+停止两侧，并各自报告自己的错误。基线冻结、建视图、交付与清理前按展开后的源配置
+筛查，拒绝配置式 hook、alternate-refs 程序、pack 协议程序、重定向工作树和可执行
+内容驱动，并拒绝通过 alternates/http-alternates 借用对象的源仓库；
+`core.sshCommand`、`credential.*`、`url.*.insteadOf` 等开发者常见键不拦截，靠移除
+传输化解。
+
+引用不等于已交付的工作，对象文件存在也不等于：能写源仓库的 Run 可以把视图的提交和
+树对象复制过去，在每个 blob 的路径放空文件或别的对象，再让分支指向该工作。只有源仓库
+持有工作 HEAD 相对基线新增的每个对象、且内容哈希等于其 id，并且源仓库自己的 Git 仍能
+解析该分支时，工作才算已交付、才可在清理时受保护。每个列出的对象都经 daemon 目录用
+`cat-file --batch` 从源仓库读回并由 daemon 计算哈希（整个过程复用同一个缓冲区），
+忽略 replace 引用，并在读取前后都拒绝经 alternates 借用的对象库。Git 读取时不计算
+哈希，同一个对象也未必只从一个副本读取：当某个 pack（最新或最近用过的）和松散文件都
+持有同一 id 时，Git 2.54 按 pack 副本报出 blob 的大小、却从松散副本输出其内容，而提交
+和树则整个从 pack 副本读取。所以列出对象的每个副本都必须通过哈希：
+与打包副本并存的松散文件、每个索引里列出该 id 的 pack 中的副本（经只含该 pack 的
+对象目录读取），以及源仓库有 multi-pack-index 时它解析出的副本，因为本人的 Git 默认
+经由该索引读取。否则，今天没被 Git 读到的替代对象会等到重新打包时才生效。`/views`、
+归档与清理只在该证明成立时把分支算作已交付。
+
+什么算工作、什么算已在基线中，由 daemon 自己运行的遍历决定。Git 读对象时不计算
+哈希，所以 Run 写进自己视图的 pack，只要其索引把基线历史中某个提交的 id 指向别的
+内容，就能让工作提交看起来属于那段历史；无论怎样配置，这里都不能信任 Git 自己的
+遍历。daemon 经 `cat-file --batch` 读取视图或归档的每个提交和树，只接受哈希等于其
+id 的内容；像 `rev-list` 限定范围那样，从工作 HEAD 和基线两侧按时间从新到旧遍历
+提交，只有当一条经过校验的父提交链从基线通向某个提交时，才把它算作基线。顺序只影响
+遍历读多远，从不排除工作。工作提交按父提交在前的顺序处理，每个工作提交贡献它在某路径
+上持有、而它的任何父提交在同一路径都不持有的树和 blob；再次遇到的树不再重读，因为其下
+的一切当时已列出，或由更早处理的父提交或基线持有。比 `rev-list --objects` 多列是安全
+的，因为源仓库本来就必须持有这些对象；有测试在生成的历史（合并、重命名、模式与类型
+变化、符号链接、gitlink、回退、移回、时钟偏差）上把遍历与 Git 自己的可达性比较，要求
+遍历从不少列。每个树模式条目都按树读取，工作树中同一 id 既作为目录又作为文件出现时
+拒绝。grafts、shallow 文件、replace 引用、commit-graph 以及 HEAD 之外的引用都不参与；
+对象哈希不符的视图无法列出，归档、`/apply` 与清理因此拒绝它。一次遍历最多持有
+100000 个尚未确认属于基线的提交，更多的工作按失败关闭处理。一个提交最多可列 1024 个
+父提交，远超 Git 写出的任何 octopus 合并（重复列出的父提交只保留一份，存放在恰好与
+所保留父提交个数相同的切片里）；一棵树最多位于其提交根树之下 2048 层目录，
+即 Git 自己的默认 `core.maxTreeDepth`；遍历用显式栈读树。它不保留任何提交的文本，每个
+id 只持有一份。必须保留的内容（读过的提交，以及列出、命名或引入过的 id）和正在遍历的树
+按 Go 实际分配的大小计入 512 MiB 的预算，一棵树在构建前就计入；遍历完的树及其名称
+索引在 64 MiB 内缓存，被丢弃后需要时重新读取并校验哈希。遍历自身的工作计入 2^28 步：
+每读一个对象 256 步，外加每 16 字节 1 步（缓存丢弃后重读的树再次计入）；每解析一个树
+条目 4 步；每个与父提交的树比较的条目，每个父提交 1 步，名称每 64 字节再加 1 步；已引入
+或已列出的条目不再比较。遍历过程中也会检查自己的 context，截止或取消时按中断结束。
+超过任一界限时，遍历拒绝并指明是哪个界限。遍历在应为提交或树之处遇到
+blob，或遇到超过 64 MiB 的对象，都立即拒绝并放弃该次读取：Git 按一个副本报出 blob 的
+大小，却可能输出另一个副本，等下去只会在截止时间结束，并被误读为中断。这里不信任视图自身的对象
+库，包括建视图时复制进去的基线历史；视图里的 `git gc` 或重新打包都不改变结果。源仓库
+的写入者只能经由“工作与源仓库共有、而视图从未自己存储”的对象影响清单，这些对象同样
+经过校验。
+
+在负载较高的机器上实测（macOS，Go 1.27）：遍历结束后存活堆从不超过计入量的 1.03 倍，
+即每种情形都在八分之一以内；包含 Go 尚未释放的垃圾在内的峰值为计入量的 1.1 至 2.1 倍，
+反复读取同样的 1 MiB 树时为 3.2 倍。花完 2^28 步消耗 daemon 4 秒到 40 秒的 CPU，视这些
+步花在什么上而定：比较或读取 1 MiB 的树约 5 秒，带 1,024 个父提交行的提交 16 秒，重复
+读取一百万棵很小的树 36 秒（墙钟 90 秒），单父提交 40 秒（由 99,000 个外推）。在 1,024 个
+父提交下、根树为 64 MiB 且重复同一目录条目的 head 在 0.8 秒内完成，那些父提交都没有的
+不同名称在 6 秒后被拒绝。各自都把同一个父提交列 1,024 次的 30,000 个提交的工作在 8 秒内
+列出（计入 14 MiB，存活 11 MiB），100,000 个则在 21 秒（CPU 16 秒）后被拒绝；300 个父
+提交的根树从 1,000 个目录指向 300 棵互不相同的 1 MiB 树，而 head 有 1,000 棵互不相同的
+子树，6 秒后被拒绝；2,000 个共用 1,023 个父提交（200 KiB 的树）的提交 9 秒后被拒绝；
+12,000 个共用 100 个父提交（很小的树）且不缓存任何树的提交 90 秒（CPU 36 秒）后被拒绝。
+诚实的工作绰绰有余：在 8,000 个文件的目录里各改一个文件的 300 次提交用掉 7% 的步数、
+计入 66 MiB（1.1 秒）；500 次提交共 152,000 个对象用掉 2%（0.7 秒）；为归类日期早于基线
+的工作而读取 300,000 个提交的基线历史用掉 30%、计入 123 MiB（墙钟 55 秒，CPU 13 秒）。
+
+`/apply` 与清理每次都先从视图或其归档导入再证明：pack-objects 恰好打包所列对象。
+`index-pack --strict` 会把收到的每个对象与源仓库已有的松散副本比对，但 Git 2.54
+不与打包副本比对，所以导入先按上面的方式检查源仓库已有的每个工作对象副本，发现替代
+对象就拒绝，而不是用更新的 pack 把它遮住。重复的 `/apply` 以及交付之后的清理因此会
+在源仓库留下重复的 pack，直到 Git 重新打包。已清理视图的归档已不在，同一校验遍历
+改为读取源仓库自己的对象。证明、遍历、导入或引用检查超时、被取消时如实报告“未完成”，
+而不当作缺少工作或引用已变；Git 命令失败时带上 Git 自己的信息。从基线可达的对象
+属于源仓库自己的历史，不再重复证明。
+
+`/apply` 与 `/views prune` 还会等待仍可能改动源 checkout 的对象并点名：正在准入或
+运行、对该 checkout（或其上级目录）有可写绑定的本人 Run，可在那里续接的停放 Run，以及
+这类 Run 启动后仍在运行的后台进程（或早先 daemon 记录在该 checkout 中的后台进程）。
+
+剩余风险：
+
+- 在 macOS 上 seatbelt 没有 PID 命名空间，未登记为后台进程、从沙箱前台命令逃逸的
+  子进程可能活过其 Run（Linux 上 bwrap 的 PID 命名空间阻止这种情况）；上面的等待
+  看不到它，它仍保有对该 checkout 的写权限。
+- 对源 checkout 写入者的等待是交付或清理之前的检查，而不是与 Run 准入一同持有的锁
+  （视图移动则是）：`/apply` 或清理在源仓库工作期间被准入的 Run、或被取出执行的排队
+  请求不会被看到。
+- 等待使用共享的路径比较，它尚不把大小写不敏感文件系统（macOS 默认）上只差字母大小写
+  的同一目录拼写视为同一路径；以这种拼写可写绑定该 checkout 的 Run 不会被看到。修复
+  属于该共享比较，随准入路径工作完成。
+
+按上述规则，它们都无法让 daemon 侧 Git 运行程序，但都能在 `/apply` 或清理期间改动
+checkout 的引用与对象；比较交换建引用、`--strict` 导入、对每个新建引用的复核以及
+源仓库持有该工作的证明会把这种干扰变成被拒绝的操作，而不是错误的分支或被删除的
+归档；证明之后才从源仓库删除的对象不在其范围内。普通读取的保证依赖这些命令在已验证的
+Git 版本（2.54）中没有由配置驱动的程序；若 Git 新版本加入，需要重新审查。
+
+`tool-safety.md` 的 Managed Git views 一节给出完整契约，包括归档/清理与 Run 准入
+的原子性。
+
+### 5.1.4 daemon 私有状态对受限命令不可见
+
+工具与 daemon 以同一个操作系统用户运行，文件权限位挡不住受限命令。`(allow file-read*)`
+和共享网络曾让沙箱内的 `cat` 读出 daemon 的 token，并让 `curl` 直连 daemon 的控制
+监听。因此 `sandbox.Policy` 增加 `Private`，由网关 runner 按数据目录布局和自己的
+监听地址一次性派生并安装（`tools.SetDaemonPrivateState`），每个隔离后端在命令自身的
+可写根与网络模式**之后**应用，二者都无法重新打开它：
+
+- 运行时目录（状态、锁、pid、日志、控制 socket）与 `backups` 目录；控制 socket
+  不在运行时目录内时（数据目录路径过长，socket 落到 `/tmp/selfmind-<uid>`），其所在
+  目录也整体私有——该目录由同一用户的所有 daemon 共用，受限命令连其他 daemon 的
+  socket 也够不着；
+- 控制库及其 `-wal`、`-shm`、`-journal`；
+- daemon 实际加载的配置文件（`--config`、`SELF_CONFIG` 或默认路径；含全部 provider
+  key 与聊天 token），连同写在它旁边的副本：保存时的 `config.yaml.tmp`、编辑后的
+  `config.yaml.bak-<时间>`，包括 daemon 启动之后才出现的；
+- 凭证文件（`auth.credentials_file`）及其存储在旁边写的临时文件，以及聊天账号凭证
+  （`~/.selfmind/weixin/accounts`）；
+- 控制 socket 路径与 daemon 的 TCP 端口（绑定到 loopback 之外时，该端口对所有
+  地址一并拒绝）。
+
+私有名字只在它仍指向状态时才起保护作用。seatbelt 按路径匹配，能写数据目录父目录
+的命令曾可以把目录挪走（`mv ~/.selfmind ~/.x`、rename 交换，或先挪走再在原名处放
+符号链接），再通过没有任何规则提到的新名字读取或连接其中的一切，或者让 daemon 在它
+使用的路径上什么也找不到。因此，凡位于命令某个可写根**内部**、且处于私有路径上方的
+目录，都被钉住，不能被改名、交换或删除；私有 socket 本身不能被改名或删除。可写根
+本身早已被钉住，根之上的目录本就不可写。同一目录里的其他读写不受影响。
+
+| 契约 | bubblewrap | seatbelt |
+| --- | --- | --- |
+| 目录不可读写 | `--tmpfs <dir>` 覆盖 | `(deny file-read* file-write* (subpath …))`，置于所有 allow 之后 |
+| 文件不可读写 | `--ro-bind /dev/null <file>` | `(deny file-read* file-write* (literal …))` |
+| 同前缀文件不可读写（配置及其副本） | 命令启动时对已存在的同前缀文件逐个 `--ro-bind /dev/null`（目录用 tmpfs）；其后才出现的副本从下一条命令起生效 | `(deny file-read* file-write* (prefix …))`，其后才出现的副本同样被拒 |
+| 不可连接控制 socket | 隐藏其所在目录 | `(deny network-outbound (literal …))`，加 `(deny file-write-unlink (literal …))`，socket 不能被改名或删除 |
+| 私有目录内的任何 socket 不可连接 | 目录被隐藏 | `(deny network-outbound (subpath …))`（连接 socket 只检查网络规则，不检查文件规则） |
+| 私有路径上方的目录不可改名、交换、删除 | 把每个这样的目录 `--bind-try` 绑定到自身使其成为挂载点（rename、rmdir 得 EBUSY，内容读写不变），排在可写根之后、overlay 与掩码之前；`/tmp` 之下、合成目录或 overlay 路径之内的不绑 | 对每个位于可写根内部的祖先目录 `(deny file-write-unlink (literal …))`；rename、交换、覆盖都检查被替换条目的 unlink |
+| 不可连接 daemon TCP 端口 | **无法做到**：共享网络时沿用宿主网络命名空间 | `(deny network-outbound (remote ip "localhost:<port>"))`，非 loopback 绑定用 `*:<port>` |
+| `/tmp` 之下的路径 | 不生成挂载（`/tmp` 是 run scratch 或私有 tmpfs，挂载点会写进 scratch） | 照常拒绝 |
+| 路径不存在 | 丢弃（只读根下无法创建挂载点，否则整个命令中止） | 照常拒绝（literal 规则对不存在的路径无害） |
+
+后果与取舍：
+
+- seatbelt 规则中的路径同样以 `-D` 参数传入；非绝对、未规范化的条目或越界端口使
+  整个 policy 拒绝渲染（fail closed），退回审批受控的 host 执行，而不是悄悄丢掉一条
+  私有规则。路径先解析符号链接再进入 policy，因为 seatbelt 匹配真实路径。
+- 硬链接：seatbelt 下，为任何带拒绝规则的路径创建硬链接，都由沙箱自身拒绝（在
+  macOS 27 上观察到，并有测试固定），不是 SelfMind 写的规则；因此私有文件无法被
+  硬链接到别处。
+- Linux 上共享网络的沙箱命令仍能连到 daemon 的 TCP 监听。它得不到 CLI 身份（TCP 从不
+  承载 CLI 身份）、够不着控制 socket（已被隐藏），在未设置 `gateway.token` 时也无法
+  停止 daemon 或读取超出存活信息的状态，但仍可冒用它能说出的非 CLI 身份。缓解方式是
+  设置 `gateway.token` 或 `exec_sandbox.allow_network: false`；bubblewrap 的网络模型
+  无法按端口拒绝。挂载点与掩码的行为只有 argv 单元测试，没有在真实 bubblewrap
+  上运行过。
+- 数据目录里不属于上述私有条目的部分（每人记忆库、`cron.db`、附件、工具输出、prompt、
+  skill）不是私有的：它们是受信任的家目录工作区可以读写的用户内容。同一用户的第二个
+  daemon 若把 socket 放在自己的数据目录里，共享网络时也能被连到（`/tmp` 回退目录是
+  私有的）；每个用户只运行一个 daemon，或设置 `exec_sandbox.allow_network: false`。
+- 这条规则**只约束隔离执行**。host 模式本来就不受约束（审批门控的逃逸口），
+  它对控制 socket 的访问由 daemon 对对端的验证（见 `docs/tool-safety.md`）负责。
+- 与 §5.1.2 的原地写凭据缓存（`host_state_writes`，policy 里的
+  `StateWritePaths`/`FlatStatePaths`）组合：seatbelt 按顺序渲染，可写根、原地写子路径
+  的允许规则及其保护规则（目录不可删除、只许建普通文件、扁平缓存不许建目录、canary、
+  运行时记录目录只读）都在前，私有状态的拒绝规则**最后**，所以缓存允许不会重新打开
+  任何私有名字，私有规则也不影响缓存写入。原地写子路径本身就是可写子路径，因此
+  `protectedAncestors` 与 `protectedSymlinks` 把它当作可写根：夹在它与私有路径之间的
+  目录和链接同样被钉住。生产中只声明扁平缓存（只含文件），这一条是 policy 构造器自身
+  不依赖调用方的纵深防御。bubblewrap 拒绝携带原地写子路径的计划，所以这一组合只在
+  seatbelt 上存在。运行时记录目录（`<runtime>/host-state`，canary 记录与隔离区）位于
+  数据目录旁而非私有目录内，仍是只读而不是不可见。
+- 这些组合由真实 `sandbox-exec` 下的测试固定（`private_state_state_writes_darwin_test.go`）：
+  同一份 policy 下缓存写入成功，而重命名/交换/删除数据目录及其祖先、读取配置与备份、
+  植入 `auth.json.tmp` 等临时名、替换符号链接的数据目录或配置都被拒绝；每项对照都在
+  去掉被测规则后观察到攻击成功，调换规则顺序或去掉 `StateWritePaths` 对祖先钉住的
+  计入都会使这些测试失败。
 
 ### 5.2 类型边界
 
@@ -186,6 +511,7 @@ type SandboxPlan struct {
     Generation    int64    `json:"generation"`
     ReadOnlyRoots []string `json:"read_only_roots,omitempty"`
     WritableRoots []string `json:"writable_roots"`
+    HostStateWrites []string `json:"host_state_writes,omitempty"` // 不能挂载的后端原地写的声明子路径（§9.4）
     ScratchHandle string   `json:"scratch_handle"` // = lease ID，不是绝对路径
     NetworkMode   string   `json:"network_mode"`
     Profiles      []string `json:"profiles,omitempty"`
@@ -203,6 +529,7 @@ type ExecutionRequest struct {
     Profile        string        // 超时型 ToolProfile，与环境 profile 正交
     Timeout        time.Duration
     Sandbox        SandboxMode
+    Boundary       SandboxMode   // 审批前确定并被批准的边界；执行固定于它（§5.1.2）
 }
 
 type ExecutionResult struct {
@@ -350,6 +677,22 @@ credential-source 三类指纹才能重绑。后续新增授权不能扩大已�
 下一次命令前停止。一次性注册授权只活到 watcher 的有界 deadline，并可通过取消
 watcher 收回。旧版本没有 Binding 的 watcher 继续走兼容路径，升级不会直接遗弃
 历史工作。
+
+Binding 还冻结三项事实：创建它的调用所处的沙箱策略（`sandbox_policy`：启用、
+required），注册审批所解析出的边界（`approved_boundary`：`isolated` 或
+`host`），以及该审批所覆盖的原地凭据写入（`host_state_writes`，见 §9.4）。网络
+不被冻结：轮询的网络就是 Binding 的 `network:shared` capability，每次轮询前按
+当前策略校验。轮询只靠 Binding 描述自己：执行引擎从中推导策略，无论由谁发起轮询。
+每次轮询在冻结策略之上叠加当前配置，只收紧、绝不放宽，所以注册之后关闭沙箱不会
+把轮询移到 host。每次轮询还像任何已批准的调用一样被钉在已批准的边界上：以隔离
+批准、而后端此刻兑现不了时不派发（`sandbox_boundary_unavailable`，环境失败），
+不会改在 host 上运行；以 host 批准的，在策略要求隔离后被拒绝。host 钉住在运维者
+仅仅启用沙箱时依然有效——审批覆盖的是 host，只有 `required` 才收紧它，要获批隔离
+必须重新注册。每次轮询都受已记录的写入约束。三个字段在存储的 JSON 中都是可选的，
+没有记录它们的旧行照旧：没有冻结策略的 watch 跟随当前配置；没有记录边界的 watch
+只按策略解析（后端消失则落到 host，与以往一致）；没有记录写入的 watch 不覆盖任何
+写入，因此配置让它原地写凭据缓存时，这类轮询被拒绝。本二进制无法解释的边界会拒绝
+轮询而不是猜测；早期版本存在策略里的网络标志被忽略。
 
 凭证值不进入 Binding。文件型 token 由每个 watch 的稳定 overlay 承载，CLI 在
 overlay 内刷新的 token 可供后续轮询继续使用；永久登录变更仍需获批 host 流程，
@@ -522,8 +865,8 @@ ID 且无环；`CopyIn.Include` 非空且三个上限均 > 0；所有相对路�
 `copy_in` | 有界、选择性复制进 lease state | ✅ |
 `map_ro` | 将已批准的宿主路径只读映射 | ✅ |
 `map_rw` | 映射 lease state 或 person 缓存内的可写目录 | ✅ |
-`map_rw_at` | 把 lease state 的可写目录绑定到不可配置的宿主路径上 | ✅ |
-`synthesize_dir` | 在声明的 state root 上挂可写 tmpfs，仅保留声明的子项可读 | ✅ 2026-07-30 |
+`map_rw_at` | 把 lease state 的可写目录绑定到不可配置的宿主路径上；不能挂载的后端改为该声明子路径原地可写（§9.4） | ✅ |
+`synthesize_dir` | 在声明的 state root 上挂可写 tmpfs，仅保留声明的子项可读；不能挂载的后端用它界定原地写的范围 | ✅ 2026-07-30 |
 `env_redirect` | 把工具环境变量指向 lease state / toolchain / scratch | ✅ |
 `write_back` | 把 state 变更写回宿主 | ❌ **仅占协议位** |
 
@@ -545,6 +888,91 @@ tmpfs 是可写的，因此声明 state root 后其下任意嵌套挂载点都�
 - plan 构造后自校验：目标既不存在、又不在任何 synthesized root 之下的 overlay
   **不进 plan**，改为记录 note——宁可让工具自己报"状态缺失"，也不要交出一个
   执行面无法兑付的 plan。这条校验就是 §12 接缝 10（节点可拒绝 plan）的本地版。
+
+### 9.4 不能挂载的后端：声明子路径原地可写（D3，2026-10-07）
+
+seatbelt 没有挂载命名空间，既做不出 tmpfs 外壳，也做不出私有覆盖层。准备阶段
+在后端回答 `MountsToolState() == false` 时设置 `ApplyContext.InPlaceState`：
+`synthesize_dir` 与 `map_rw_at` 不再物化（没有 lease 内私有缓存，也不复制种子
+token），改由 `PlanHostStateWrites` 把每个 `map_rw_at` 需求翻译为宿主真实路径上
+的一条写授权（plan 的 `HostStateWrites`，其中扁平缓存另列于
+`FlatHostStateWrites`，plan 版本 5；seatbelt 策略中的 `STATE_WRITE_n` 参数）。
+规则：
+
+- 只授权声明的子路径本身（如 `~/.aws/sso/cache`、`~/.aws/cli/cache`），且必须
+  严格位于同一 profile 声明的 state root（`synthesize_dir`，如 `~/.aws`）之内；
+  state root 本身、`config` 与 `credentials` 等只读状态永远不可写。子路径目录
+  本身是权限边界，与可写根一样不可删除，其 mode、flags、owner、扩展属性与 ACL
+  也不可修改；目录内的文件仍可写。
+- 只有 profile 声明为扁平（`MapRWAt.Flat`：只放文件，如 AWS SSO 与 CLI 缓存
+  每个 token 一个 JSON 文件）的缓存才原地写入；未声明扁平的需求在规划时拒绝。
+  修复因此只是列出一个沙箱无法替换的目录，沙箱在其下互换什么都无法引偏修复。
+  宿主工具在这样的缓存里只应遇到单链接的普通文件。四层保证：
+  - seatbelt 策略按操作所指的条目拒绝：在缓存内创建符号链接、FIFO、socket、
+    设备节点或目录（原地创建、rename 进来或 clone 进来），以及任何硬链接（指向
+    普通文件的硬链接本身也是普通文件，单靠类型规则会放过它）。
+  - 策略拒绝不了操作没有指名的东西：用 `renamex_np` 的 `RENAME_SWAP` 把工作区
+    的链接、管道或目录与缓存文件互换。因此每条原地写缓存的命令两侧都有守护：
+    启动前，缓存里已有的宿主工具不应遇到的条目（来自更早的运行、其他写入者等）
+    先移走，然后照常运行，规划不再因此拒绝。之后由一个无论如何结束都会执行的
+    延迟步骤（成功、失败、超时、取消，或启动后的 panic）先停掉命令的进程组，再
+    停掉仍在这条命令沙箱下运行的每个进程：每条命令的 seatbelt profile 带一个
+    逐命令的 canary（`com.selfmind.exec.` 加 24 位随机十六进制：只有该 profile
+    能查找的唯一 mach 全局名，背后没有服务），对本用户的进程做 `sandbox_check`
+    即可找到其下的每个进程，无论它换到了哪个进程组或会话（`setsid`、守护进程）。
+    每个 pid 在发信号前再检查一次。检查本身先被确认：在同一 canary 下启动的探针
+    必须被找到，无法回答的进程绝不被当作 canary 之外的进程。无法确认的停止在
+    工具结果与证据中如实报告，绝不算作成功。之后才再次列出缓存。
+  - daemon 启动时（任何命令之前）先停掉仍在某个已记录 canary 下运行的进程
+    （命令未完成——daemon 在其运行时崩溃或被杀，或命令自己的停止未能确认，
+    此时记录保留），只修复这些命令记录过的缓存写路径。版本化记录有大小上限，
+    在命令产生效果前同步落盘，保存失败则不启动命令；根或祖先路径变化、未知记录
+    版本均报告而不扩大范围。旧空记录仅用于清理进程，缺少缓存范围会在日志与
+    `/diag execution` 中说明，不从当前环境推测；未解决的修复保留记录。记录按 daemon 区分（以数据目录
+    命名，因为数据目录并列的 daemon 共用 runtime 根），且只处理生成格式的 canary
+    记录。无论因何关闭，daemon 最多等待 15 秒，让被中断的命令完成修复后再退出。
+    私有路径、进程组收据、恢复记录归属、在途修复计数及最近扫描结果由该 daemon 的
+    `ExecutionRuntime` 持有，通过冻结执行作用域与上下文注入；前台、后台和持久
+    watcher 均使用自己的实例。启动或停止另一个 runtime 不会替换这些状态。
+  - runtime 的记录（`<runtime>/host-state/`：canary 记录与隔离区）对每条
+    seatbelt 命令只读，即使其可写根包含 runtime 根。
+  - 修复把宿主工具不应遇到的条目（链接、特殊文件、多链接文件、目录）移入
+    runtime 根下的隔离区（`<runtime>/host-state/quarantine/…`，绝不在工具的
+    state root 之下）。缓存路径本身不再是真实目录、或超过 4096 个条目时整体
+    移走，由工具重建。列出期间消失的条目（写入者重命名就位的临时文件）直接跳过，
+    绝不因此移走正在使用的缓存。移动失败时，不含自身数据的条目（链接、特殊文件、
+    多链接文件）直接删除，其余留在原处并报告。工具结果写明修复了什么、停掉了
+    什么，最多列出十个条目（"and N more"），每个路径加引号并转义控制字符与方括号；
+    调用证据记录修复（`tool.environment` 的 `state_repairs`，最多列二十个并给出
+    总数）。隔离的副本可能含 operator 的 token，因此每个隔离目录在七天后、或已有
+    二十个更新的隔离目录时删除，启动时与每次修复后清理；`/diag execution` 显示
+    隔离区、保留策略与最近一次启动清理。
+  保证因此是：沙箱命令种下的条目在调用返回前移除，它在沙箱下留下的每个进程也
+  在返回前停掉。宿主工具只可能在这样的命令运行期间遇到种下的条目（窗口是命令
+  本身的运行时间，直到其后的扫描）；若 daemon 在命令运行时死掉，则从那时起直到
+  下一次启动清理——命令的进程在被那次清理停掉之前仍保有写权限。停止无法确认时
+  （探针未被找到、`sandbox_check` 无法回答某个进程、或 canary 下的进程多次 kill
+  后仍存活），调用会如实说明，而不是声称缓存已受守护。Intel Mac（darwin/amd64）
+  上这一停止从未实际运行过，因此不尝试：遗留进程不会被停掉，每次原地写调用都说明
+  在该架构上无法确认停止，也不保留启动清理同样无法处理的记录；只有命令前后的
+  扫描生效。沙箱始终能留下的只是普通文件内容（见下文的污染说明）。
+- 根以下的每一级都必须是真实目录：任何一级是符号链接都拒绝，无论它指向根外
+  （报告"解析到声明根之外"）还是根内——根内的链接可能比声明的子路径更宽
+  （`sso/` 之于 `sso/cache`），能改指向的人就能引导后续授权。不是目录、会覆盖
+  或落入只读状态、或者没有声明根，同样表达不了，拒绝并给出具体原因。
+- 缺失时只在声明根内逐级创建（每级 `0700`，每级都必须是真实目录而非链接）；
+  规划之后若中间目录被换成指向根外的链接，同样拒绝，根外什么也不创建。规划与
+  创建在每条命令上重做，不进准备缓存。
+- 只有策略允许本次调用使用 operator 凭据时才授权。凭据被扣留时没有可给的私有
+  空缓存，宿主缓存保持只读且可见（seatbelt 也无法隐藏它），工具可能报只读而
+  不是"未登录"。
+- 宿主没有 state root 时没有可写的状态，与 Linux 一样跳过并记录 note。
+
+这**弱于** Linux 的重定向：被写的是操作者真实的缓存，沙箱内命令可以刷新、替换
+或污染其中的 token，缓存里的其他内容也可读。因此这些路径属于审批边界：
+containment 摘要列出它们（§5.1.2），`/diag execution` 按 profile 列出在当前配置
+策略下本机是否可在沙箱中运行（`exec_sandbox` 关闭时一律在 host 执行）以及会原地
+写哪些路径（只列路径，不读内容）。
 
 ### 9.1 `copy_in` 实现硬约束
 
@@ -682,7 +1110,7 @@ finalization run 可以正常 `done`，而任务仍根据 external outcome 显�
 引擎准备阶段失败（copy_in / 挂载 / env 解析） | ✅ 用户命令尚未启动 |
 命令已启动、**零输出**、分类为 `sandbox_fs_denied` 且命中已知 profile | ✅ 准备状态后重跑一次 |
 命令已启动并产生任何输出 | ❌ 返回结构化错误交给 agent |
-`network_denied` | 沿用 `network:shared` 审批，授权后**显式**重跑（保持 `execution_capability.go:78` 的不重放立场） |
+`network_denied` | 工作区已有网络许可（信任且策略允许、存量或 run 授权）：不再询问，返回类型化失败 `network_withheld_by_policy`（保留原输出、分类与 effect 确定性，说明未重放，并提醒：命令在联网前若已改变状态，应先检查该状态，因为重试会再次执行那些步骤），由模型以 `network: true` **显式**重跑（`terminal`、`verify`、`execute_code` 都接受该参数）；没有任何许可：沿用 `network:shared` 审批，授权后同样以 `network: true` **显式**重跑（保持不重放立场）。只有命令自身的失败走这条路径：拒绝、安全分诊的否决（其理由可能提到沙箱网络）、挂起的审批、硬底线拦截和未派发的调用都是各自有含义的结果，原样返回，不会被改写成该类型化失败 |
 host escape | ❌ 永远审批 |
 
 **单个工具调用最多一次恢复重试。**
@@ -800,14 +1228,23 @@ macOS：本轮统一 `SandboxPlan` 语义即可。Linux 由 bubblewrap 实现；
   标准代理变量；共享网络保留远端代理和可达的 loopback 代理。若 loopback 监听
   已失效，只从该次子进程环境移除，并在 `SandboxPlan.proxy_mode` 与执行事件中记录
   非敏感原因。模型无需记忆 `unset HTTPS_PROXY` 一类前缀；执行引擎也不按云厂商、
-  项目或命令正文分支。
+  项目或命令正文分支。命令自己显式删除代理变量时，识别程序名的方式与只读证明一致
+  （basename 不区分大小写），`Env -u`、`BASH -c 'unset …'` 与 `/usr/bin/ENV` 都
+  记入 `requested_proxy_removals` 并进入既有审查；审批理由在危险命令理由之后追加
+  代理理由，不替换原理由。
 
 ### P1：可观测性（第 9 步）
 
 `/diag execution` 增加：当前 lease 与 snapshot generation、snapshot 年龄、
 命中的 ToolEnvironmentProfile、sandbox backend、run scratch 是否有效与体积、
-network/credential capability、最近失败分类与恢复结果、host escape 次数与
-原因分布。**不显示环境变量名、值、凭证路径与命令正文。**
+network/credential capability、每次调用的网络决定（`tool.sandbox` 事件与进程事实里的
+`network_decision`：`shared` 或 `withheld: …` 及原因，授权来源 `network_permission`）、
+最近失败分类与恢复结果、host escape 次数与原因分布。网络授权（信任、存量或 run 授权、
+一次性审批）只是**许可**：命令是否真正获得网络，取决于它是否按名字访问远程服务或设置了
+`network: true`；显式的离线或本地形式（`--offline`、`--no-index`、指向本机路径的 git 远程、
+`--help`/`--version`）不算访问远程服务，但出现远程目标（URL、`user@host:path`）或
+`network: true` 时不适用。离线通过的验证只对可能下载依赖的命令（构建、测试等）追加提示，
+`go vet`、lint、格式化不追加。**不显示环境变量名、值、凭证路径与命令正文。**
 
 ## 14. 测试矩阵
 

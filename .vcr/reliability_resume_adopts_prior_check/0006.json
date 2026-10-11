@@ -1,5 +1,45 @@
 {
   "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "value.txt finish_run acceptance criteria verification"
+  "method": "stream",
+  "events": [
+    {
+      "content": "I have completed the verification step and am waiting for your confirmation before reporting"
+    },
+    {
+      "usage": {
+        "input_tokens": 5394,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " the result."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2333,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ]
 }

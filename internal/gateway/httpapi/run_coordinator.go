@@ -51,6 +51,27 @@ type RunCoordinator struct {
 	// async run, whose OWN finalization drains again — a chain that must never
 	// run two drains for one person concurrently. Keyed by person_id.
 	draining map[string]bool
+	// unreadableQueueReported keeps the warning for a queued row with an
+	// unreadable admission snapshot to once per row per process.
+	unreadableQueueReported sync.Map
+	// cronLookupReported keeps the warning for a queued scheduled fire whose
+	// schedule could not be looked up to once per row per process.
+	cronLookupReported sync.Map
+	// pendingQueueReturns retries only claims whose dispatcher confirmed no
+	// Run started. Rows and tokens remain durable; boot recovery owns a crash.
+	pendingQueueReturns sync.Map
+	// Startup notices whose outbox write failed are retried without needing
+	// another work slot or another attempt to execute the queued input.
+	pendingQueueNotices sync.Map
+	// unreadableNotices holds, per such row, what the person has been told.
+	unreadableNotices sync.Map
+	// unreadableNoticeRetry is how long a notice whose durable write or push
+	// failed waits before it is attempted again; zero is the default.
+	unreadableNoticeRetry time.Duration
+	// approvalModeRead reads the person's persisted /mode and when it was
+	// written. Nil reads the control store; it is a seam for injecting a read
+	// that fails.
+	approvalModeRead func(ctx context.Context, tenantID, personID string) (string, int64, error)
 }
 
 // coordinator lazily builds the per-Server RunCoordinator. Lazy construction
@@ -86,6 +107,10 @@ func (d *Server) ConfigureWorkRunCapacity(limit, workers int) error {
 func (c *RunCoordinator) beginActive(personID string, run *activeRun) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.beginActiveLocked(personID, run)
+}
+
+func (c *RunCoordinator) beginActiveLocked(personID string, run *activeRun) bool {
 	if c.active == nil {
 		c.active = make(map[string]map[*activeRun]struct{})
 	}
@@ -136,20 +161,11 @@ func (c *RunCoordinator) updateActive(ctx context.Context, task *control.Task, r
 		active.RunID = run.ID
 		active.StartedAt = run.StartedAt
 		active.ExecutionRoots = executionenv.CloneRootBindings(run.ExecutionRoots)
+		// A continuation names the person's request, not its scheduling text.
+		if summary := strings.TrimSpace(run.InputSummary); summary != "" {
+			active.Summary = run.InputSummary
+		}
 	}
-}
-
-func (c *RunCoordinator) currentActive(personID string) *activeRun {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.active[personID]) != 1 {
-		return nil
-	}
-	for active := range c.active[personID] {
-		copy := *active
-		return &copy
-	}
-	return nil
 }
 
 // activeForRun never falls back to another Run when an explicit target is
@@ -183,38 +199,25 @@ func (c *RunCoordinator) hasActiveTask(personID, taskID string) bool {
 	return false
 }
 
-func (c *RunCoordinator) activeForChannel(personID, channel string) *activeRun {
-	if strings.TrimSpace(channel) == "" {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	var found *activeRun
-	for active := range c.active[personID] {
-		if active.Channel != channel {
-			continue
-		}
-		if found != nil {
-			return nil
-		}
-		copy := *active
-		found = &copy
-	}
-	return found
-}
-
 // activeForIncoming applies only deterministic edges. CLI input belongs to its
-// own session; an exact reply belongs to its named Run. The legacy single-Run
-// fallback keeps existing IM continuation behavior while capacity is one.
-// With multiple IM runs, ordinary prose has no run authority here.
+// own foreground source; an exact reply belongs to its named Run. Ordinary
+// input at any other endpoint never selects an execution parent by cardinality.
 func (c *RunCoordinator) activeForIncoming(personID string, req api.MessageRequest) *activeRun {
 	if runID := strings.TrimSpace(req.ReplyToRunID); runID != "" {
 		return c.activeForRun(personID, runID)
 	}
-	if req.Platform == "cli" {
-		return c.activeForChannel(personID, req.Channel)
+	if req.Platform != "cli" || strings.TrimSpace(req.Channel) == "" || strings.TrimSpace(req.PlatformUserID) == "" {
+		return nil
 	}
-	return c.currentActive(personID)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for active := range c.active[personID] {
+		if active.Platform == req.Platform && active.PlatformUserID == req.PlatformUserID && active.Channel == req.Channel {
+			copy := *active
+			return &copy
+		}
+	}
+	return nil
 }
 
 func (c *RunCoordinator) activeCount(personID string) int {
@@ -259,25 +262,6 @@ func (c *RunCoordinator) activeRunsForPerson(personID string) []*activeRun {
 	return runs
 }
 
-func (c *RunCoordinator) stopActive(personID string) *activeRun {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.active == nil {
-		return nil
-	}
-	if len(c.active[personID]) != 1 {
-		return nil
-	}
-	for active := range c.active[personID] {
-		if active.Cancel != nil {
-			active.Cancel()
-		}
-		copy := *active
-		return &copy
-	}
-	return nil
-}
-
 func (c *RunCoordinator) stopActiveRun(personID, runID string) *activeRun {
 	if strings.TrimSpace(runID) == "" {
 		return nil
@@ -295,14 +279,6 @@ func (c *RunCoordinator) stopActiveRun(personID, runID string) *activeRun {
 		return &copy
 	}
 	return nil
-}
-
-func (c *RunCoordinator) endActive(personID string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.active[personID]) == 1 {
-		delete(c.active, personID)
-	}
 }
 
 func (c *RunCoordinator) endActiveRun(personID string, active *activeRun) {
@@ -407,11 +383,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	ctx, stopWatchdog := router.PrepareRunWatchdog(ctx)
 	defer stopWatchdog()
 	d := c.srv
-	// A drained queue row transitions to 'done' the moment its async run returns
-	// through ANY terminal path — normal completion, an early error return, or a
-	// panic unwinding through this defer. Marking it done (not leaving it
-	// 'started') is what stops boot recovery from re-running already-completed
-	// work. Uses a fresh context so a cancelled turn ctx cannot skip the write.
+	// The async caller settles queue ownership. A created Run keeps its
+	// durable finalizer; a failure before creation retains the unstarted input
+	// instead of treating a worker's return as completed work.
 	if _, err := c.prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
@@ -438,12 +412,16 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		} else {
 			parentRes, err = c.resolveResumeTarget(ctx, identity, task)
 			if parentRes.ambiguous() && attach.selectsPriorRun() && isUserOriginTurn(ctx, req) {
-				return c.resumeCandidatesResponse(ctx, identity, req, task, parentRes.candidates), http.StatusOK
+				resp := c.resumeCandidatesResponse(ctx, identity, req, task, parentRes.candidates)
+				if resp.Error != "" {
+					return resp, http.StatusServiceUnavailable
+				}
+				return resp, http.StatusOK
 			}
 		}
 		if err != nil {
 			if req.QueueID != "" && req.QueueClaimToken != "" && req.ReplyToRunID != "" && isUserOriginTurn(ctx, req) {
-				if released, releaseErr := d.Control.RequeueUnboundClaim(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, req.QueueClaimToken); releaseErr == nil && released {
+				if released, releaseErr := c.returnUnboundQueueClaim(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, req.QueueClaimToken); releaseErr == nil && released {
 					return api.MessageResponse{Identity: identity, Turn: messageTurn("capacity_wait", "queued", "idle", task.ID, "", "exact continuation changed while queued")}, http.StatusOK
 				}
 			}
@@ -457,9 +435,31 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if rootsErr := c.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
 		return api.MessageResponse{Identity: identity, Task: task, Error: rootsErr.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", rootsErr.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusBadRequest
 	}
-	if runOrigin(ctx, req) != runOriginProviderWait {
-		_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
+	// Freeze the authority this Run executes under before it exists: the
+	// snapshot a durable row restored, or a new admission built now. Every
+	// later reader (scope, strategy, standing classes, outcome) takes it from
+	// the request, and the Run row records it in its creating transaction.
+	restoredAdmission := !req.Admission.IsZero()
+	admission, admissionErr := c.requestAdmission(ctx, identity, req, intent)
+	if admissionErr != nil {
+		// Nothing was accepted: a claimed queue row goes back to the queue, and
+		// the sender is told to try again. The mode is never guessed.
+		if req.QueueID != "" && req.QueueClaimToken != "" {
+			if released, releaseErr := c.returnUnboundQueueClaim(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, req.QueueClaimToken); releaseErr == nil && released {
+				if attach.created {
+					_, _ = d.Control.DeleteEmptyTask(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, task.ID)
+				}
+				return api.MessageResponse{Identity: identity, Turn: messageTurn("capacity_wait", "queued", "idle", "", "", "the approval mode could not be read")}, http.StatusOK
+			}
+		}
+		if attach.created {
+			_, _ = d.Control.DeleteEmptyTask(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, task.ID)
+		}
+		resp, status, _ := modeRefusal(identity, admissionErr)
+		return resp, status
 	}
+	req = underAdmission(req, admission)
+	req.AdmissionRestored = restoredAdmission
 
 	// A deliberate continuation claims its resolved parent in the SAME
 	// transaction that creates the child run (P1: creation and ownership are
@@ -471,21 +471,41 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery || runOrigin(ctx, req) == runOriginWatch || runOrigin(ctx, req) == runOriginResource || runOrigin(ctx, req) == runOriginProviderWait) {
 		claimParentID = parent.ID
 	}
-	c.maybeAssignIsolatedGitView(ctx, identity, task, &req, parent != nil)
-	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
-		WorkKey:          attach.workKey,
-		ExecutionRoots:   req.ExecutionRoots,
-		ResumesRunID:     claimParentID,
-		QueueID:          req.QueueID,
-		QueueClaimToken:  req.QueueClaimToken,
-		MaxActiveRuns:    c.activeCapacity(),
-		ExclusiveChannel: req.Platform == "cli",
-	})
+	viewReady := c.maybeAssignIsolatedGitView(ctx, identity, task, &req, parent != nil)
+	var run *control.Run
+	if viewReady {
+		c.setActiveExecutionRoots(ctx, req.ExecutionRoots)
+		run, err = d.Control.StartRunWithOptions(ctx, task, req.Channel, runInputSummary(ctx, req), control.StartRunOptions{
+			WorkKey:          attach.workKey,
+			ExecutionRoots:   req.ExecutionRoots,
+			ResumesRunID:     claimParentID,
+			QueueID:          req.QueueID,
+			QueueClaimToken:  req.QueueClaimToken,
+			MaxActiveRuns:    c.activeCapacity(),
+			ExclusiveChannel: req.Platform == "cli",
+			Admission:        req.Admission,
+		})
+	} else {
+		// Reuse the admission fallback below: a fresh input is durably
+		// queued, and a drain releases its exact unbound claim.
+		err = control.ErrRunCapacity
+	}
 	if errors.Is(err, control.ErrResumeTargetClaimed) || errors.Is(err, control.ErrResumeTargetNotResumable) {
+		if c.handleObsoleteQueueClaim(context.WithoutCancel(ctx), identity, req) {
+			return api.MessageResponse{Identity: identity, Task: task,
+				Turn: messageTurn("stale_claim", "", "idle", task.ID, "", "The exact queued continuation did not start; its saved decision was retained.")}, http.StatusOK
+		}
 		if req.QueueID != "" && req.QueueClaimToken != "" && req.ReplyToRunID != "" && isUserOriginTurn(ctx, req) {
-			if released, releaseErr := d.Control.RequeueUnboundClaim(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, req.QueueClaimToken); releaseErr == nil && released {
+			released, releaseErr := c.returnUnboundQueueClaim(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, req.QueueClaimToken)
+			if releaseErr != nil {
+				return api.MessageResponse{Identity: identity, Task: task, Error: releaseErr.Error(),
+					Turn: messageTurn("failed", "", "idle", task.ID, "", releaseErr.Error())}, http.StatusServiceUnavailable
+			}
+			if released {
 				return api.MessageResponse{Identity: identity, Turn: messageTurn("capacity_wait", "queued", "idle", task.ID, "", "exact continuation changed while queued")}, http.StatusOK
 			}
+			return api.MessageResponse{Identity: identity, Task: task,
+				Turn: messageTurn("stale_claim", "", "idle", task.ID, "", "")}, http.StatusConflict
 		}
 		// A concurrent continuation claimed the parent first (or it stopped
 		// being resumable). No fork: nothing was created; report the claimed
@@ -502,12 +522,20 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 		if errors.Is(err, control.ErrRunCapacity) {
 			if req.QueueID != "" {
-				if _, releaseErr := d.Control.RequeueUnboundClaim(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, req.QueueClaimToken); releaseErr != nil {
+				if _, releaseErr := c.returnUnboundQueueClaim(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, req.QueueClaimToken); releaseErr != nil {
 					return api.MessageResponse{Identity: identity, Error: releaseErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", releaseErr.Error())}, http.StatusInternalServerError
 				}
 				return api.MessageResponse{Identity: identity, Turn: messageTurn("capacity_wait", "queued", "idle", "", "", "")}, http.StatusOK
 			}
-			return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
+			queued, refusal := d.enqueueBehindActive(ctx, identity, req)
+			if refusal != nil {
+				// Never acknowledge input that nothing holds, and keep the
+				// store's error out of what the sender sees.
+				log.Warn("gateway: capacity fallback could not queue the input", "person", identity.PersonID, "error", refusal.cause)
+				text := "This message could not be started because " + refusal.reason + ". Check /status before sending it again."
+				return api.MessageResponse{Identity: identity, Error: text, Turn: messageTurn("failed", "", "idle", "", "", text)}, http.StatusServiceUnavailable
+			}
+			return queued, http.StatusOK
 		}
 		if errors.Is(err, control.ErrQueueClaimLost) {
 			// The attempted Run was rolled back with the stale queue bind. The
@@ -517,14 +545,26 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
+	// A refused insertion did not admit this input to a Run. Recording it on
+	// every retry would duplicate the channel transcript and erase offer context.
+	if runOrigin(ctx, req) != runOriginProviderWait {
+		_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
+	}
 	stopHeartbeat := c.startRunHeartbeat(ctx, run, req.QueueID, req.QueueClaimToken)
 	defer stopHeartbeat()
 	c.updateActive(ctx, task, run)
+	c.signalAsyncAdmission(ctx, identity, task, run)
+	if ctx.Value(asyncAdmissionContextKey{}) != nil {
+		stopProgressNotices := c.startAsyncProgressNotices(ctx, identity, req, run.ID)
+		defer stopProgressNotices()
+	}
 	startedPayload := map[string]interface{}{
-		"input":           truncate(req.Content, 500),
-		"presentation":    c.runPresentation(ctx, run, req),
-		"resumes_run_id":  run.ResumesRunID,
-		"approval_intent": persistedApprovalIntent{Version: 3, Snapshot: c.intentSnapshotWithOffer(ctx, identity, task, run, workspace, req, req.Channel)},
+		"input":            truncate(req.Content, 500),
+		"platform":         req.Platform,
+		"platform_user_id": req.PlatformUserID,
+		"presentation":     c.runPresentation(ctx, run, req),
+		"resumes_run_id":   run.ResumesRunID,
+		"approval_intent":  persistedApprovalIntent{Version: 3, Snapshot: c.intentSnapshotWithOffer(ctx, identity, task, run, workspace, req, req.Channel)},
 	}
 	if queueID := strings.TrimSpace(req.QueueID); queueID != "" {
 		startedPayload["queue_id"] = queueID
@@ -579,7 +619,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 				Visibility: "task",
 				Channel:    req.Channel,
 				Payload: mustJSON(map[string]interface{}{
-					"plan":           inherited.Plan.Steps,
+					"plan":           tools.DisplayedPlanSteps(ctx, d.Control, identity.TenantID, run.ID, inherited.Plan.Steps),
 					"explanation":    "Plan inherited from the continued run",
 					"plan_version":   inherited.Plan.Version,
 					"source":         "resumed_run",
@@ -689,6 +729,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	invocationScope := kernel.ToolInvocationScope{
 		ControlTenantID:   identity.TenantID,
 		PersonID:          identity.PersonID,
+		AccountID:         identity.AccountID,
 		TaskID:            task.ID,
 		WorkspaceID:       req.WorkspaceID,
 		ExecutionScopeKey: runScopeKey,
@@ -758,15 +799,42 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 		ctx = kernel.WithExactLoopReplay(ctx)
 	}
+	if strings.HasPrefix(req.EffectKey, "execution-lane:") {
+		var resumeErr error
+		ctx, resumeErr = c.withExecutionWaitResume(ctx, identity, parent, req.EffectKey)
+		if resumeErr != nil {
+			outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, resumeErr, replay)
+			content, errorText := interruptedRunResponse(task.Title, outcome)
+			return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary)}, http.StatusOK
+		}
+	}
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.ExecutionRoots, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, parent, intent, attach.claimsPriorRuns(), agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
 	// (crash-orphaned) side-effect tool calls must verify before repeating
 	// (P0-B closure — a boot-requeued run re-drains as a "new" message).
 	agentInput = c.withUncertainToolWarning(ctx, identity, task, agentInput)
-	strategy := taskStrategyForRequest(req, intent)
+	// The tool surface is the admitted one: a continuation's scheduling text
+	// is never re-classified, so it can neither earn nor lose web access or a
+	// verification-only surface the work was admitted with.
+	strategy := admittedStrategy(req.Admission)
+	if !restoredAdmission {
+		strategy.Reason = taskStrategyForRequest(req, intent).Reason
+	}
 	strategy.ExecSandboxNote = tools.ExecSandboxPromptNoteForContext(ctx)
 	ctx = kernel.WithTaskStrategy(ctx, strategy)
+	// The work spine records what the person asked for. A daemon continuation
+	// runs on scheduling text, so it carries the admitted request instead, and
+	// scheduled work keeps its source tag however it reached a worker.
+	if continuesParkedWork(ctx, req) && strings.TrimSpace(req.Admission.Input.Summary) != "" {
+		ctx = kernel.WithSpineRequest(ctx, req.Admission.Input.Summary)
+	}
+	// The tag follows the authority the work was admitted with, not the hop
+	// that runs it: a provider wait or an answered approval of a scheduled
+	// fire is still the schedule's work.
+	if (runOrigin(ctx, req) == runOriginCron || req.Admission.Origin.Kind == runOriginCron) && kernel.TurnSourceFromContext(ctx) == "" {
+		ctx = kernel.WithTurnSource(ctx, runOriginCron)
+	}
 
 	if d.Gateway == nil {
 		err := fmt.Errorf("gateway is not configured")
@@ -819,6 +887,11 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// live ctx here made FinishRun/UpdateTaskStatus fail silently and left runs
 	// stuck in `running` forever. WithoutCancel keeps ctx values (observers,
 	// scopes) while guaranteeing the terminal state lands in control.db.
+	if ctx.Err() != nil {
+		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, ctx.Err(), replay)
+		content, errorText := interruptedRunResponse(task.Title, outcome)
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}, http.StatusOK
+	}
 	finCtx := context.WithoutCancel(ctx)
 	// A non-streaming provider never passes through the per-event refresh, so
 	// re-read the run once more: a same-domain direct claim made by work_select
@@ -885,6 +958,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	content = withVerificationNotice(content, outcome.Verification, outcome.ClaimMismatches)
 	content = withCompletionNotice(content, outcome)
+	content = c.withExternalEffectFacts(finCtx, identity.TenantID, identity.PersonID, run.ID, content, &outcome)
 	var finalizeErrs []string
 	recordFinalizeErr := func(action string, err error) {
 		if err == nil {
@@ -922,8 +996,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Channel:    req.Channel,
 		Payload:    mustJSON(map[string]interface{}{"outcome": outcome, "usage": usage}),
 	}
-	recordFinalizeErr("materialize run finalization", c.materializeRunFinalization(finCtx, identity, task, run, taskStatus,
-		replay.WorkspaceID, replay.UserInput, req.Channel, content, outcome, replay.Attach, handoff, terminalEvent))
+	finalizeErr := c.materializeRunFinalization(finCtx, identity, task, run, taskStatus,
+		replay.WorkspaceID, replay.UserInput, req.Channel, content, outcome, replay.Attach, handoff, terminalEvent)
+	if errors.Is(finalizeErr, control.ErrRunCancellationRequested) {
+		outcome := c.finalizeErroredRun(finCtx, identity, task, run, req.Channel, context.Canceled, replay)
+		content, errorText := interruptedRunResponse(task.Title, outcome)
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}, http.StatusOK
+	}
+	recordFinalizeErr("materialize run finalization", finalizeErr)
 	if selection != nil && !selection.Rejected && !selection.Direct {
 		recordFinalizeErr("project work interaction", d.Control.ProjectInteractionTask(finCtx, identity.TenantID, identity.PersonID, task.ID, run.ID))
 	}
@@ -1019,8 +1099,16 @@ func isUserOriginTurn(ctx context.Context, req api.MessageRequest) bool {
 }
 
 // startAsyncRun accepts a turn immediately and runs it in the background,
-// delivering the result back to the source channel when it finishes.
-func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) api.MessageResponse {
+// delivering the result back to the source channel when it finishes. When the
+// slot was taken meanwhile the turn is queued instead, and a failed queue
+// write is returned as a refusal.
+func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, *notDispatched) {
+	baseCtx := c.srv.BackgroundRunContext
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	runCtx, cancelCause := context.WithCancelCause(baseCtx)
+	runCancel := func() { cancelCause(context.Canceled) }
 	active := &activeRun{
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
@@ -1034,43 +1122,46 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		QueueID:        req.QueueID,
 		Summary:        truncate(req.Content, 240),
 		StartedAt:      time.Now(),
+		Cancel:         runCancel,
+		Interrupt:      cancelCause,
 		// Registered here so /v1/runs/steer can inject guidance; wired into the
 		// run ctx below so the agent loop drains it at iteration boundaries.
 		Steer: make(chan kernel.SteeringInput, steerBufferSize),
 	}
-	if ok := c.beginActive(identity.PersonID, active); !ok {
-		if req.QueueID != "" {
-			// The caller still owns the claimed queue row. Do not enqueue a
-			// second copy and then mistake that Accepted response for a Run.
-			// drainQueue will release this exact unbound claim.
-			return api.MessageResponse{Identity: identity,
-				Turn: messageTurn("capacity_wait", "queued", "idle", req.TaskID, "", "capacity is occupied")}
-		}
-		return c.srv.enqueueBehindActive(context.Background(), identity, req)
+	if ok, response, refusal := c.admitActive(runCtx, identity, req, active); !ok {
+		runCancel()
+		return response, refusal
 	}
-
-	baseCtx := c.srv.BackgroundRunContext
-	if baseCtx == nil {
-		baseCtx = context.Background()
-	}
-	runCtx, cancelCause := context.WithCancelCause(baseCtx)
-	runCancel := func() { cancelCause(context.Canceled) }
 	runCtx = kernel.WithSteeringInputs(runCtx, active.Steer)
-	active.Cancel = runCancel
-	active.Interrupt = cancelCause
-	stopProgressNotices := c.startAsyncProgressNotices(runCtx, identity, req)
+	admitted := make(chan api.MessageResponse, 1)
+	runCtx = context.WithValue(runCtx, asyncAdmissionContextKey{}, admitted)
 	go func() {
+		response := api.MessageResponse{Identity: identity, Error: "The run could not be started.",
+			Turn: messageTurn("failed", "", "idle", "", "", "The run could not be started.")}
+		// A pre-Run refusal reaches the caller only after cleanup released its
+		// slot. Successful Run insertion still signals admission immediately.
+		defer func() {
+			select {
+			case admitted <- response:
+			default:
+			}
+		}()
 		// Defers run LIFO: drainQueue is registered first so it runs LAST —
 		// after endActive frees the per-person slot — chaining the next queued
 		// item into its own async run once this one is truly done.
-		defer c.drainQueue(identity)
+		defer func() {
+			// A pre-Run refusal is retried by the periodic scheduler, not this
+			// finalizer chain. Otherwise a persistent startup fault can spin.
+			if active.RunID != "" {
+				c.drainQueue(identity)
+			}
+		}()
 		defer c.endActiveRun(identity.PersonID, active)
 		// Register after endActive so LIFO executes this first: acknowledged
 		// input is durable in the next-turn queue before the active slot becomes
 		// visible as idle to another endpoint.
 		defer c.deferUnconsumedSteering(identity, active)
 		defer runCancel()
-		defer stopProgressNotices()
 		// Panic firewall: async runs (IM, queue drain, cron, detached CLI) have
 		// no net/http per-request recover shielding them, so an unrecovered panic
 		// in runMessage would crash the ENTIRE gateway daemon. Registered LAST so
@@ -1080,28 +1171,51 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		// left wedged behind a dead run.
 		defer func() {
 			if r := recover(); r != nil {
+				if active.RunID == "" && req.QueueID != "" {
+					log.Error("queued startup panicked", "queue_id", req.QueueID, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+					c.retainQueuedStartupFailure(identity, req, "An internal error interrupted startup.")
+					return
+				}
 				accepted := c.recoverAsyncRun(identity, req, active, r)
 				c.settleAsyncQueue(identity, req, accepted)
 			}
 		}()
 		resp, _ := c.runMessage(withActiveRun(runCtx, active), identity, req, intent)
+		response = resp
+		if req.QueueID != "" && active.RunID == "" && resp.Error != "" {
+			c.retainQueuedStartupFailure(identity, req, resp.Error)
+			return
+		}
 		if resp.Turn != nil && (resp.Turn.Status == "stale_claim" || resp.Turn.Status == "capacity_wait") {
+			return
+		}
+		// Before a fresh Run exists this is the admission response the caller
+		// is still awaiting. A second async push would repeat the same refusal
+		// or queue acknowledgement. Already-accepted queue rows still need
+		// their terminal result delivered even when preparation failed.
+		if req.QueueID == "" && active.RunID == "" {
+			return
+		}
+		if resp.Choice != nil && active.RunID == "" {
+			// The choice, its notification intent and the exact queue handoff
+			// committed together. No second settlement or async push is needed.
 			return
 		}
 		accepted := c.deliverAsyncResult(context.Background(), identity, req, resp)
 		c.settleAsyncQueue(identity, req, accepted)
 	}()
+	response := <-admitted
+	if !response.Accepted || response.Turn == nil || response.Turn.Status != "accepted" {
+		return response, nil
+	}
 
 	notice := router.WorkingNotice(req.Channel)
 	if notice == "" {
 		notice = "Started in the background. Use /status to check progress or /stop to cancel."
 	}
-	return api.MessageResponse{
-		Identity: identity,
-		Content:  notice,
-		Accepted: true,
-		Turn:     messageTurn("accepted", "running", "running", "", "", notice),
-	}
+	response.Content = notice
+	response.Turn = messageTurn("accepted", "running", "running", response.Turn.TaskID, response.Turn.RunID, notice)
+	return response, nil
 }
 
 // recoverAsyncRun contains a panicked async run so the daemon survives. It logs
@@ -1255,8 +1369,14 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	// The process registry is a cancel/steer handle, not the admission source.
 	// An older daemon may have left a running Run whose effects are uncertain;
 	// it must be recovered before its slot can be reused.
-	running, err := c.srv.Control.ListRunningRuns(ctx, identity.TenantID, []string{personID})
-	if err != nil || len(running) >= limit {
+	hostWaits, err := c.srv.refreshExecutionWaits(ctx, identity.TenantID, personID)
+	if err != nil {
+		log.Warn("gateway: cannot inspect managed execution waits", "person_id", personID, "error", err)
+		return
+	}
+	reservations, err := c.srv.Control.ListRunRootReservations(ctx, identity.TenantID, personID)
+	workRuns := len(reservations)
+	if err != nil || workRuns >= limit {
 		if err != nil {
 			log.Warn("gateway: cannot inspect durable run capacity before queue drain", "person_id", personID, "error", err)
 		}
@@ -1264,6 +1384,10 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	}
 	var next *control.QueuedTask
 	var claimToken string
+	// Rows this drain found it may not start because the authority they would
+	// run under cannot be read. They hold their source like an unreadable row.
+	held := map[string]bool{}
+	heldSources := map[string]bool{}
 	for {
 		// Resolve exact reply lineage before opening NextQueuedWhere's cursor:
 		// control.db uses one connection and the predicate cannot query it.
@@ -1275,6 +1399,13 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		blockedContinuation := map[string]bool{}
 		for _, row := range rows {
 			_, waiting, resolveErr := c.srv.Control.ResolveQueuedContinuation(ctx, row)
+			var obsolete *control.QueuedContinuationObsolete
+			if errors.As(resolveErr, &obsolete) {
+				if !c.retireObsoleteContinuation(ctx, identity, row, obsolete) {
+					held[row.ID] = true
+				}
+				continue
+			}
 			if waiting || resolveErr != nil {
 				blockedContinuation[row.ID] = true
 				if resolveErr != nil {
@@ -1285,8 +1416,21 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		active := c.activeRunsForPerson(personID)
 		blockedChannels := map[string]bool{}
 		blockedParents := map[string]map[string]bool{}
+		var unreadable []control.QueuedTask
 		next, err = c.srv.Control.NextQueuedWhere(ctx, identity.TenantID, personID, func(q control.QueuedTask) bool {
 			source := queuedSourceKey(q)
+			if heldSources[source] {
+				return false
+			}
+			if q.AdmissionError != nil || held[q.ID] {
+				// The store never launches this row and holds its source; the
+				// person is told why once the cursor is closed.
+				if q.AdmissionError != nil {
+					unreadable = append(unreadable, q)
+				}
+				blockedChannels[source] = true
+				return false
+			}
 			// A user reply to a parked Run waits for its exact system child.
 			// Let that finalization pass the reply in the same source, or strict
 			// source FIFO would deadlock the prerequisite behind its dependent.
@@ -1294,7 +1438,7 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 			if blockedChannels[source] && !prerequisite {
 				return false
 			}
-			if blockedContinuation[q.ID] || (limit > 1 && !queuedResourcesReady(q, active)) {
+			if blockedContinuation[q.ID] || !c.queuedExecutionLaneReady(q, hostWaits) || !queuedResourcesReady(q, active, reservations) {
 				blockedChannels[source] = true
 				if blockedContinuation[q.ID] && q.ReplyToRunID != "" {
 					if blockedParents[source] == nil {
@@ -1306,8 +1450,61 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 			}
 			return true
 		})
+		for _, row := range unreadable {
+			c.noticeUnreadableAdmission(ctx, identity, row, row.AdmissionError)
+		}
 		if err != nil || next == nil {
 			return
+		}
+		// A daemon continuation recorded without a snapshot continues its
+		// exact parent's authority when the parent has one. A parent whose
+		// snapshot cannot be read stops the row rather than letting it run
+		// under a re-derived, possibly wider, authority.
+		if next.Admission.IsZero() && daemonContinuationKey(next.IdempotencyKey) {
+			admission, admissionErr := c.srv.continuationAdmission(ctx, *next)
+			if errors.Is(admissionErr, control.ErrAdmissionSnapshotUnreadable) {
+				held[next.ID] = true
+				c.noticeUnreadableAdmission(ctx, identity, *next, admissionErr)
+				continue
+			}
+			if admissionErr != nil {
+				log.Warn("gateway: queued continuation cannot read its parent's admission", "queue_id", next.ID, "error", admissionErr)
+				return
+			}
+			next.Admission = admission
+		}
+		// A row with no snapshot (accepted before schema v26) and no mode of its
+		// own takes the person's mode when it starts, and that mode is then frozen
+		// for its lineage. When it cannot be read the row is not claimed: it stays
+		// queued, holding its source for this drain, and the next drain tries
+		// again. It never starts under a guess, and nothing spins.
+		if next.Admission.IsZero() && strings.TrimSpace(next.ApprovalMode) == "" {
+			if _, modeErr := c.resolveApprovalMode(ctx, identity, ""); modeErr != nil {
+				held[next.ID] = true
+				continue
+			}
+		}
+		// A scheduled fire is authorized by the schedule the person created, and
+		// the queue can hold it until that schedule is deleted or switched off.
+		// Ask before claiming: a gone schedule's fire is dropped with a notice, a
+		// lookup that fails leaves the row queued and unclaimed (this drain
+		// skips it, the next tick asks again), and nothing spins.
+		if next.Admission.Origin.Kind == runOriginCron {
+			verdict, why, lookupErr := c.srv.queuedCronFire(ctx, *next)
+			switch verdict {
+			case cronFireDropped:
+				if !c.dropOrphanedCronFire(ctx, identity, *next, why) {
+					held[next.ID] = true
+				}
+				continue
+			case cronFireUnknown:
+				if _, logged := c.cronLookupReported.LoadOrStore(next.ID, true); !logged {
+					log.Warn("gateway: could not check the schedule of a queued scheduled fire; it stays queued until the lookup works",
+						"queue_id", next.ID, "job_id", next.Admission.Origin.ID, "error", lookupErr)
+				}
+				held[next.ID] = true
+				continue
+			}
 		}
 		// The operational recovery rollback applies at both creation and claim
 		// time. A row scheduled before the daemon restarted with the switch off
@@ -1325,8 +1522,19 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		}
 		if next.ReplyToRunID != "" {
 			resolved, wait, resolveErr := c.srv.Control.ResolveQueuedContinuation(ctx, *next)
+			var obsolete *control.QueuedContinuationObsolete
+			if errors.As(resolveErr, &obsolete) {
+				next.ClaimToken = claimToken
+				if !c.retireObsoleteContinuation(ctx, identity, *next, obsolete) {
+					held[next.ID] = true
+					if _, releaseErr := c.returnUnboundQueueClaim(ctx, next.TenantID, next.ID, claimToken); releaseErr != nil {
+						log.Warn("gateway: release obsolete continuation claim failed", "queue_id", next.ID, "error", releaseErr)
+					}
+				}
+				continue
+			}
 			if resolveErr != nil || wait {
-				if _, releaseErr := c.srv.Control.RequeueUnboundClaim(ctx, next.TenantID, next.ID, claimToken); releaseErr != nil {
+				if _, releaseErr := c.returnUnboundQueueClaim(ctx, next.TenantID, next.ID, claimToken); releaseErr != nil {
 					log.Warn("gateway: release waiting continuation claim failed", "queue_id", next.ID, "error", releaseErr)
 				}
 				if resolveErr != nil {
@@ -1348,73 +1556,70 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 			log.Warn("gateway: cancelled queued slash-command row instead of draining it", "content", trimmed)
 			continue
 		}
-		break
-	}
-	req := api.MessageRequest{
-		TenantID:       next.TenantID,
-		Platform:       next.Platform,
-		PlatformUserID: next.PlatformUserID,
-		Channel:        next.Channel,
-		Content:        next.Content,
-		ApprovalMode:   next.ApprovalMode,
-		WorkspaceID:    next.WorkspaceID,
-		ExecutionRoots: next.ExecutionRoots,
-		// Files the person attached when the work was accepted. They were
-		// imported into the person's partition before the row was written, so
-		// they are managed copies and the turn sees exactly what was submitted.
-		Attachments: attachmentsFromRefs(next.Attachments),
-		// A system-originated finalization row carries the task it closes;
-		// resolveTask honors an explicit TaskID before any label guess.
-		TaskID: next.TaskID,
-		// Reply metadata survives the durable queue so a threaded reply that
-		// waited behind an active run still binds its exact parent run.
-		ReplyToRunID: next.ReplyToRunID,
-		ApprovalID:   next.ApprovalID,
-		ClarifyID:    next.ClarifyID,
-		Async:        true,
-		// Carry the queue row id so the drained run's finalization marks it done
-		// (QueueStatusDone) — otherwise the row stays 'started' and boot recovery
-		// re-runs the already-completed work.
-		QueueID:         next.ID,
-		QueueClaimToken: claimToken,
-		EffectKey:       next.IdempotencyKey,
-	}
-	if strings.HasPrefix(next.IdempotencyKey, "external-watch:") {
-		req.WatchID = externalWatchIDFromFinalizationKey(next.IdempotencyKey)
-		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
-		if watch, err := c.srv.Control.GetExternalWatch(ctx, next.TenantID, req.WatchID); err == nil && watch != nil {
-			req.ExecutionProfile = externalWatchContinuationProfile(*watch)
+
+		req := api.MessageRequest{
+			TenantID:       next.TenantID,
+			Platform:       next.Platform,
+			PlatformUserID: next.PlatformUserID,
+			Channel:        next.Channel,
+			Content:        next.Content,
+			ApprovalMode:   next.ApprovalMode,
+			WorkspaceID:    next.WorkspaceID,
+			ExecutionRoots: next.ExecutionRoots,
+			// Files the person attached when the work was accepted. They were
+			// imported into the person's partition before the row was written, so
+			// they are managed copies and the turn sees exactly what was submitted.
+			Attachments: attachmentsFromRefs(next.Attachments),
+			// A system-originated finalization row carries the task it closes;
+			// resolveTask honors an explicit TaskID before any label guess.
+			TaskID: next.TaskID,
+			// Reply metadata survives the durable queue so a threaded reply that
+			// waited behind an active run still binds its exact parent run.
+			ReplyToRunID: next.ReplyToRunID,
+			ApprovalID:   next.ApprovalID,
+			ClarifyID:    next.ClarifyID,
+			Async:        true,
+			// Carry the queue row id so the drained run's finalization marks it done
+			// (QueueStatusDone) — otherwise the row stays 'started' and boot recovery
+			// re-runs the already-completed work.
+			QueueID:         next.ID,
+			QueueClaimToken: claimToken,
+			EffectKey:       next.IdempotencyKey,
 		}
-		req.Origin = runOriginWatch
-	} else if strings.HasPrefix(next.IdempotencyKey, "run-recovery:") {
-		req.Origin = runOriginRecovery
-		req.RecoveryMode = recoveryModeFromQueueKey(next.IdempotencyKey)
-	} else if strings.HasPrefix(next.IdempotencyKey, "external-resource:") {
-		req.Origin = runOriginResource
-	} else if strings.HasPrefix(next.IdempotencyKey, "provider-wait:") {
-		req.Origin = runOriginProviderWait
-	} else if strings.TrimSpace(next.ApprovalID) != "" {
-		req.Origin = runOriginApproval
-	}
-	// Reproduce the queued item's route while preserving its durable person.
-	// Never create an account here: system rows may intentionally omit
-	// platform_user_id, and normalizing that blank value to cli:local used to
-	// move external-watch finalization onto a different person.
-	drainIdentity := c.srv.routeIdentityForPerson(ctx, next.TenantID, next.PersonID, next.Channel, next.Platform, identity)
-	// A drained item is an ordinary agent-bound message: rules-based intent
-	// only, and resolveTask gives it the same pre-label guess as any other
-	// message (Work Timeline P3) — harmless, since labels never gate context.
-	intent := c.srv.classifyIntent(ctx, req.Content, req.Channel)
-	resp := c.startAsyncRun(drainIdentity, req, intent)
-	if !resp.Accepted {
-		// A fresh inbound run won the slot between our check and beginActive.
-		// Revert so this item is drained on the next finalization.
-		if _, err := c.srv.Control.RequeueUnboundClaim(ctx, next.TenantID, next.ID, claimToken); err != nil {
-			log.Warn("gateway: release unbound queue claim failed", "queue_id", next.ID, "error", err)
+		req = c.srv.restoreQueuedAuthority(ctx, req, *next)
+		// Reproduce the queued item's route while preserving its durable person.
+		// Never create an account here: system rows may intentionally omit
+		// platform_user_id, and normalizing that blank value to cli:local used to
+		// move external-watch finalization onto a different person.
+		drainIdentity := c.srv.routeIdentityForPerson(ctx, next.TenantID, next.PersonID, next.Channel, next.Platform, identity)
+		// A drained item is an ordinary agent-bound message: rules-based intent
+		// only, and resolveTask gives it the same pre-label guess as any other
+		// message (Work Timeline P3) — harmless, since labels never gate context.
+		intent := c.srv.classifyIntent(ctx, req.Content, req.Channel)
+		// A queued item never re-enqueues, so it has no queue write to refuse.
+		resp, refusal := c.startAsyncRun(drainIdentity, req, intent)
+		if !resp.Accepted {
+			// A typed synchronous refusal means no worker or finalizer started.
+			// Return its exact unbound claim for the next periodic drain, as for
+			// a capacity race. Refusals from a started worker keep their finalizer;
+			// requeueing those can race settlement and cause an immediate spin.
+			if refusal != nil || (resp.Turn != nil && resp.Turn.Status == "capacity_wait") {
+				if _, err := c.returnUnboundQueueClaim(ctx, next.TenantID, next.ID, claimToken); err != nil {
+					log.Warn("gateway: release unbound queue claim failed", "queue_id", next.ID, "error", err)
+				}
+			}
+			if refusal != nil {
+				log.Warn("gateway: queued admission was refused before execution; input retained for a later drain", "queue_id", next.ID, "error", refusal.cause)
+			}
+			// A confirmed startup refusal holds only its own source for this
+			// bounded pass. Other sessions can use the remaining capacity, even
+			// when the failed row is still started because its return write failed.
+			heldSources[queuedSourceKey(*next)] = true
+			continue
 		}
+		startedRun = true
 		return
 	}
-	startedRun = true
 }
 
 func queuedSourceKey(q control.QueuedTask) string {
@@ -1424,27 +1629,37 @@ func queuedSourceKey(q control.QueuedTask) string {
 // The queue uses the same physical path identity as the worker pool, but only
 // for readiness. The worker still owns the final lock after admission. Unknown
 // or missing roots are a person-level conflict until their scope is known.
-func queuedResourcesReady(q control.QueuedTask, active []*activeRun) bool {
+func queuedResourcesReady(q control.QueuedTask, active []*activeRun, durable ...[]control.RunRootReservation) bool {
+	return queuedResourceBlocker(q, active, durable...) == nil
+}
+
+func queuedResourceBlocker(q control.QueuedTask, active []*activeRun, durable ...[]control.RunRootReservation) *queueResourceBlock {
 	qPaths := writableRootPaths(q.ExecutionRoots)
+	for _, reservations := range durable {
+		for _, reserved := range reservations {
+			active = append(active, &activeRun{RunID: reserved.RunID, ExecutionRoots: reserved.ExecutionRoots})
+		}
+	}
 	for _, running := range active {
 		if running == nil {
 			continue
 		}
 		if q.ReplyToRunID != "" && q.ReplyToRunID == running.RunID {
-			return false
+			return &queueResourceBlock{Kind: "continuation", RunID: running.RunID}
 		}
 		if q.Platform == "cli" && running.Platform == "cli" && q.Channel != "" && q.Channel == running.Channel {
-			return false
+			return &queueResourceBlock{Kind: "session", RunID: running.RunID}
 		}
 		rPaths := writableRootPaths(running.ExecutionRoots)
 		if len(qPaths) == 0 || len(rPaths) == 0 {
-			return false
+			return &queueResourceBlock{Kind: "unknown_scope", RunID: running.RunID}
 		}
-		if runpool.PathsConflict(qPaths, rPaths) && !independentGitViewCandidate(q.ExecutionRoots, running.ExecutionRoots) {
-			return false
+		if runpool.PathsConflict(qPaths, rPaths) &&
+			(running.RunID == "" || !independentGitViewCandidate(q.ExecutionRoots, running.ExecutionRoots)) {
+			return &queueResourceBlock{Kind: "directory", RunID: running.RunID}
 		}
 	}
-	return true
+	return nil
 }
 
 func independentGitViewCandidate(queued, active []executionenv.RootBinding) bool {

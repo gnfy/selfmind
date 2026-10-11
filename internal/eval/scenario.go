@@ -32,7 +32,56 @@ type Setup struct {
 	// it deliberately do not get: a delivery surface changes which notification
 	// paths a run takes, and that must stay opt-in.
 	Deliveries []SeedDelivery `yaml:"deliveries,omitempty" json:"deliveries,omitempty"`
-	Inbound    []SeedInbound  `yaml:"inbound,omitempty" json:"inbound,omitempty"`
+	// DeliveryEnabled exposes the real outbox to an isolated notification case.
+	// The transport is recorded in memory; no real IM endpoint is contacted.
+	DeliveryEnabled bool          `yaml:"delivery_enabled,omitempty" json:"delivery_enabled,omitempty"`
+	Inbound         []SeedInbound `yaml:"inbound,omitempty" json:"inbound,omitempty"`
+	// Accounts binds further platform accounts to the case person, the way a
+	// person links another endpoint. A turn or seed naming one of them acts as
+	// the case person instead of a stranger.
+	Accounts []SeedAccount `yaml:"accounts,omitempty" json:"accounts,omitempty"`
+	// TurnChoices seeds pending multi-Run choices: the numbered question the
+	// gateway asks on one channel and account when several Runs could own an
+	// ordinary message.
+	TurnChoices []SeedTurnChoice `yaml:"turn_choices,omitempty" json:"turn_choices,omitempty"`
+	// SentMessages seeds IM messages the daemon already delivered, with their
+	// platform message ids, so that a turn's native_reply_message_id resolves to
+	// the Run, approval or clarification edge recorded for that message.
+	SentMessages []SeedSentMessage `yaml:"sent_messages,omitempty" json:"sent_messages,omitempty"`
+	// Approvals seeds pending approvals that seeded parked Runs are waiting
+	// on, for the case person to answer.
+	Approvals []SeedApproval `yaml:"approvals,omitempty" json:"approvals,omitempty"`
+}
+
+// SeedApproval is one pending approval of a seeded parked Run: the person was
+// asked to allow a terminal command and has not answered.
+type SeedApproval struct {
+	// ParkedRun is a 1-based setup.task.parked_runs ordinal.
+	ParkedRun int    `yaml:"parked_run" json:"parked_run"`
+	Command   string `yaml:"command" json:"command"`
+}
+
+// validateApprovalSeeds checks each seeded approval names a seeded parked Run
+// and the command it asks about.
+func (c *Case) validateApprovalSeeds() error {
+	if c.Setup == nil {
+		return nil
+	}
+	parked := 0
+	if c.Setup.Task != nil {
+		parked = len(c.Setup.Task.ParkedRuns)
+	}
+	for i := range c.Setup.Approvals {
+		seed := &c.Setup.Approvals[i]
+		seed.Command = strings.TrimSpace(seed.Command)
+		if seed.ParkedRun < 1 || seed.ParkedRun > parked {
+			return fmt.Errorf("setup.approvals[%d].parked_run must name a setup.task.parked_runs entry", i)
+		}
+		if seed.Command == "" {
+			return fmt.Errorf("setup.approvals[%d] needs the command it asks about", i)
+		}
+	}
+	return nil
 }
 
 // SeedInbound reproduces durable, unresolved input through the normal receipt
@@ -93,6 +142,44 @@ type SeedParkedRun struct {
 	// verification_partial, blocked); empty defaults to waiting_user.
 	Status     string `yaml:"status,omitempty" json:"status,omitempty"`
 	WaitReason string `yaml:"wait_reason,omitempty" json:"wait_reason,omitempty"`
+	// UnresolvedEffect leaves one external effect this Run dispatched
+	// uncertain, through the production claim path, before the Run parks.
+	UnresolvedEffect *SeedUnresolvedEffect `yaml:"unresolved_effect,omitempty" json:"unresolved_effect,omitempty"`
+}
+
+// SeedUnresolvedEffect is an external effect whose call returned without
+// proving success: Summary is the call's redacted description and ExitCode
+// how it ended. Target defaults to the person-wide unknown target.
+type SeedUnresolvedEffect struct {
+	Summary  string `yaml:"summary" json:"summary"`
+	ExitCode int    `yaml:"exit_code" json:"exit_code"`
+	Target   string `yaml:"target,omitempty" json:"target,omitempty"`
+}
+
+// seededEffectID names the one effect a parked Run may carry, so a turn can
+// find its claim in any state.
+const seededEffectID = "seeded-effect"
+
+func seedUnresolvedEffect(ctx context.Context, store *control.Store, identity *control.IdentityContext, runID string, effect SeedUnresolvedEffect) error {
+	target := firstNonEmpty(strings.TrimSpace(effect.Target), control.UnknownExternalTarget)
+	decision, err := store.ClaimExternalEffects(ctx, control.ExternalEffectClaimRequest{TenantID: identity.TenantID,
+		PersonID: identity.PersonID, RunID: runID, EffectID: seededEffectID, TargetKeys: []string{target}})
+	if err != nil {
+		return err
+	}
+	if !decision.Granted {
+		return fmt.Errorf("target %s is already held by another seeded effect", target)
+	}
+	if err := store.RecordExternalEffectDispatch(ctx, control.ExternalEffectDispatch{TenantID: identity.TenantID, PersonID: identity.PersonID,
+		RunID: runID, EffectID: seededEffectID, ToolCallID: "seeded-call", ToolName: "terminal", Summary: effect.Summary}); err != nil {
+		return err
+	}
+	if err := store.MarkExternalEffectPossible(ctx, identity.TenantID, runID, seededEffectID); err != nil {
+		return err
+	}
+	exit := effect.ExitCode
+	return store.RecordExternalEffectReturn(ctx, control.ExternalEffectReturn{TenantID: identity.TenantID, PersonID: identity.PersonID,
+		RunID: runID, EffectID: seededEffectID, ToolCallID: "seeded-call", Outcome: fmt.Sprintf("exit %d", exit), ExitCode: &exit})
 }
 
 // StatePredicate is a single assertion over the world state after a scenario
@@ -100,7 +187,9 @@ type SeedParkedRun struct {
 // applies whichever operators are set. This keeps YAML readable and Go parsing
 // trivial.
 type StatePredicate struct {
-	On     string `yaml:"on" json:"on"`                           // task|run|handoff|events|artifact|approval|file|memory
+	// task|run|handoff|events|artifact|approval|file|memory, or a multi-Run
+	// target counted from the runtime (see evalRuntimePredicate).
+	On     string `yaml:"on" json:"on"`
 	Field  string `yaml:"field,omitempty" json:"field,omitempty"` // task/run/handoff field
 	Path   string `yaml:"path,omitempty" json:"path,omitempty"`   // file
 	Target string `yaml:"target,omitempty" json:"target,omitempty"`
@@ -233,8 +322,8 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			return "", err
 		}
 		if seed.Dispatching {
-			if ok, err := store.ClaimInbound(ctx, seed.Platform, seed.MessageID); err != nil || !ok {
-				return "", fmt.Errorf("claim seeded inbound %s: claimed=%t err=%v", seed.MessageID, ok, err)
+			if generation, err := store.ClaimInbound(ctx, seed.Platform, seed.MessageID); err != nil || generation == 0 {
+				return "", fmt.Errorf("claim seeded inbound %s: generation=%d err=%v", seed.MessageID, generation, err)
 			}
 		}
 	}
@@ -338,6 +427,11 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			if parkedRunIDs != nil {
 				*parkedRunIDs = append(*parkedRunIDs, run.ID)
 			}
+			if parked.UnresolvedEffect != nil {
+				if err := seedUnresolvedEffect(ctx, store, identity, run.ID, *parked.UnresolvedEffect); err != nil {
+					return "", fmt.Errorf("seed parked run %d unresolved effect: %w", i, err)
+				}
+			}
 			status := strings.TrimSpace(parked.Status)
 			if status == "" {
 				status = "waiting_user"
@@ -391,6 +485,30 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			}
 			if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, "", nil); err != nil {
 				return "", fmt.Errorf("seed parked run %d task status: %w", i, err)
+			}
+		}
+		for i, seed := range setup.Approvals {
+			if parkedRunIDs == nil || seed.ParkedRun < 1 || seed.ParkedRun > len(*parkedRunIDs) {
+				return "", fmt.Errorf("seed approval %d: parked_run must name a seeded parked run", i)
+			}
+			// The run is parked, so the approval is parked with it: answering
+			// it is what resumes the work, as in the daemon.
+			payload, err := json.Marshal(map[string]interface{}{
+				"tool": "terminal", "reason": "seeded approval",
+				"args": map[string]interface{}{"command": seed.Command},
+			})
+			if err != nil {
+				return "", err
+			}
+			approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+				TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+				RunID: (*parkedRunIDs)[seed.ParkedRun-1], ActionType: "tool_call", Payload: payload,
+			})
+			if err != nil {
+				return "", fmt.Errorf("seed approval %d: %w", i, err)
+			}
+			if _, _, err := store.ParkApprovalRequest(ctx, identity.TenantID, approval.ID, "seeded parked run"); err != nil {
+				return "", fmt.Errorf("park seeded approval %d: %w", i, err)
 			}
 		}
 		if skillName := kernel.SanitizeSkillName(setup.Task.DefaultSkill); strings.TrimSpace(setup.Task.DefaultSkill) != "" && skillName != "" {

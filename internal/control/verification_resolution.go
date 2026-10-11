@@ -45,13 +45,12 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 		if b.LocalDependencies == nil {
 			b.LocalDependencies = old.LocalDependencies
 		}
-		b.StepID = old.StepID
+		// A replacement preserves its obligation unless Main explicitly
+		// selects another server-issued step. Current Plan position is not a
+		// semantic relationship between two checks.
 		b.Version = old.Version
-		// Step identity is runtime-owned execution context, not part of Main's
-		// semantic proof obligation. A later work unit may deliberately recheck
-		// the same condition after its declared inputs changed. Bind that attempt
-		// to the one active verification step while preserving criterion, target,
-		// dependencies, and the explicit replacement edge.
+		// A different current step is valid only when Main explicitly selects it.
+		// Keep the original criterion, target and replacement edge for diagnosis.
 		plan, planErr := s.LatestRunPlan(ctx, tenant, runID)
 		if planErr != nil {
 			return nil, planErr
@@ -78,22 +77,18 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 				}
 				oldWorkUnitClosed = workUnitTerminal(status)
 			}
-			// A complete plan snapshot may deliberately remove an obsolete step.
-			// Its historical evidence keeps the old association, but a correction
-			// must attach to the current active obligation rather than an id that can
-			// no longer be projected by the current plan. A completed step that is
-			// still inside an active work unit retains its identity: step status is
-			// model judgment, not authority to move a replacement. Once the owning
-			// work unit is frozen, a declared dependency recheck belongs to the new
-			// active required step and does not rewrite that historical projection.
-			if old.StepID == "" || !oldStepFound || oldWorkUnitClosed {
+			// Frozen historical obligations are not silently reassigned by position.
+			if b.StepID != old.StepID {
+				found := false
 				for _, step := range plan.Steps {
-					if step.Status == "in_progress" && step.VerificationRequired {
-						b.StepID = step.StepID
-						b.Version = 3
-						break
-					}
+					found = found || step.StepID == b.StepID
 				}
+				if !found {
+					return nil, fmt.Errorf("verification step %q does not belong to the current Run plan", b.StepID)
+				}
+				b.Version = 3
+			} else if old.StepID != "" && (!oldStepFound || oldWorkUnitClosed) {
+				return nil, fmt.Errorf("the original verification obligation is closed or unavailable; select the current step_id explicitly for this recheck")
 			}
 		}
 		if err := s.ValidateVerificationReplacement(ctx, tenant, runID, b, cwd); err != nil {
@@ -102,6 +97,9 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 		return &b, nil
 	}
 	explicitStandalone := b.StepID == "" && (b.Criterion != "" || b.Target != "")
+	if explicitStandalone {
+		return &b, nil
+	}
 	plan, err := s.LatestRunPlan(ctx, tenant, runID)
 	if err != nil {
 		return nil, err
@@ -183,9 +181,6 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 	}
 	if b.StepID != "" {
 		return nil, fmt.Errorf("verification step %q does not belong to the current Run plan", b.StepID)
-	}
-	if explicitStandalone {
-		return &b, nil
 	}
 	return nil, nil
 }

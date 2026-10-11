@@ -116,3 +116,71 @@ func TestObservationScriptProfileRejectsSymlinkEscape(t *testing.T) {
 		t.Fatalf("symlink escape accepted: %v", err)
 	}
 }
+
+// The shell follows a symlink before it applies a later "..": from the root,
+// link/../scripts/inspect.sh runs the inspect.sh beside the link's target,
+// which the owner never reviewed, though the path cleans as text to the
+// approved script. Only a path that reaches the approved file redeems the
+// profile, whether the script runs directly or through its interpreter, and
+// a profile cannot be registered through such a path.
+func TestObservationScriptProfileReadsDotDotAsTheShellDoes(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"scripts", "config", "other/deep", "other/scripts"} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, body := range map[string]string{
+		"scripts/inspect.sh":       "#!/bin/sh\necho reviewed\n",
+		"other/scripts/inspect.sh": "#!/bin/sh\necho unreviewed\n",
+		"scripts/inspect.py":       "print('reviewed')\n",
+		"other/scripts/inspect.py": "print('unreviewed')\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, path), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(filepath.Join(root, "other", "deep"), filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	grants := newFakeGrantStore()
+	for _, script := range []string{"scripts/inspect.sh", "scripts/inspect.py"} {
+		rule, err := BuildObservationScriptRule(ObservationScriptProfile{
+			WorkspaceID: "ws-1", ScriptPath: script, AllowTrailing: true,
+		}, root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := grants.GrantApproval(context.Background(), "person", "tenant-1", "person-1", "person-1", rule.Key, time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cleanup := SetExecutionScope("person-1", ExecutionScope{
+		TenantID: "tenant-1", PersonID: "person-1", WorkspaceID: "ws-1", WorkspaceRoot: root,
+		AllowedRoots: []string{root}, TrustLevel: executionenv.TrustTrusted, Grants: grants, StandingGrants: InteractiveStandingGrants(),
+	})
+	defer cleanup()
+	for _, call := range []struct {
+		cwd, command string
+		want         bool
+	}{
+		{root, "./scripts/inspect.sh RUQX-511", true},
+		{root, "config/../scripts/inspect.sh RUQX-511", true},
+		{root, "python3 scripts/inspect.py RUQX-511", true},
+		{root, "link/../scripts/inspect.sh RUQX-511", false},
+		{root, "python3 link/../scripts/inspect.py RUQX-511", false},
+		{root, root + "/link/../scripts/inspect.sh RUQX-511", false},
+		// From the linked directory, ".." is other/, not the workspace root.
+		{filepath.Join(root, "link"), "../scripts/inspect.sh RUQX-511", false},
+	} {
+		args := map[string]interface{}{"_tenant_id": "person-1", "_tool_name": "terminal", "cwd": call.cwd, "command": call.command}
+		if got := observationOnlyExec("terminal", args); got != call.want {
+			t.Errorf("%q in %s observation-only = %v, want %v", call.command, call.cwd, got, call.want)
+		}
+	}
+	if _, err := BuildObservationScriptRule(ObservationScriptProfile{
+		WorkspaceID: "ws-1", ScriptPath: "link/../scripts/inspect.sh", AllowTrailing: true,
+	}, root); err == nil {
+		t.Fatal("a profile reached through a symlink and \"..\" was registered")
+	}
+}

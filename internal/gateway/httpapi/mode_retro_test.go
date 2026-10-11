@@ -58,7 +58,8 @@ func TestModeChangeKeepsPendingRunAuthority(t *testing.T) {
 	for _, mode := range []string{"full-auto", "smart", "auto-edit", "read-only", "on-request"} {
 		resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/mode " + mode})
 		if status != http.StatusOK || !strings.Contains(resp.Content, "for new Runs") ||
-			!strings.Contains(resp.Content, "/approve or /reject") {
+			!strings.Contains(resp.Content, "Tightening applies to queued and parked work; loosening does not") ||
+			!strings.Contains(resp.Content, "/stop") || !strings.Contains(resp.Content, "/approve or /reject") {
 			t.Fatalf("/mode %s: status=%d reply=%q", mode, status, resp.Content)
 		}
 		if got := approvalStatus(t, store, identity, approval.ID); got != "pending" {

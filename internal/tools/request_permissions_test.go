@@ -162,7 +162,7 @@ func TestRequestPermissionsBatchesExactCommandsWithoutBypassingLivePolicy(t *tes
 	cleanup := SetExecutionScope("person-phase", ExecutionScope{
 		TenantID: "tenant-phase", PersonID: "person-phase", TaskID: "task-phase", RunID: "run-phase",
 		WorkspaceID: "ws-phase", WorkspaceRoot: root, AllowedRoots: []string{root},
-		ApprovalMode: ApprovalSmart,
+		ApprovalMode: ApprovalOnRequest,
 		IntentSnapshot: func() RunIntentSnapshot {
 			return RunIntentSnapshot{ModelAuthorization: true, RawUserText: "publish the release"}
 		},

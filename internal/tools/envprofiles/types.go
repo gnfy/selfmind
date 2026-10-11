@@ -119,6 +119,10 @@ type MapRWAt struct {
 	At StateSource
 	// Seed copies the host content in first, so existing tokens stay visible.
 	Seed *CopyIn
+	// Flat declares that the tool keeps only files directly in this directory.
+	// A backend that writes it in place lets no directory appear there, and a
+	// directory found there is irregular like a link or special file.
+	Flat bool
 }
 
 // SynthesizeDir replaces a tool's state ROOT with a writable directory shell

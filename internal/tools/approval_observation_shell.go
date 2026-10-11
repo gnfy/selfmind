@@ -69,42 +69,85 @@ func observationStmtCommands(stmt *syntax.Stmt, depth int) ([][]string, bool) {
 	}
 }
 
+// observationShells are the shells whose -c script the bash parser reads
+// faithfully enough to prove.
+var observationShells = map[string]struct{}{"sh": {}, "bash": {}, "zsh": {}, "dash": {}}
+
+// observationArgvCommands proves the program identifyCommand names, the same
+// program every other analysis names. Each wrapper on the way must also pass
+// the narrow proof grammar, and that grammar must reach the same inner
+// command; any disagreement is unprovable.
 func observationArgvCommands(argv []string, depth int) ([][]string, bool) {
 	if depth > maxObservationShellDepth || len(argv) == 0 || strings.TrimSpace(argv[0]) == "" {
 		return nil, false
 	}
-	program := strings.ToLower(filepath.Base(argv[0]))
-	_, shell := shellDashCWrappers[program]
-	if (shell || program == "timeout" || program == "command" || program == "env") && strings.Contains(argv[0], "/") {
-		// A path-qualified wrapper runs whatever file is at that path; only its
-		// bare name is known to interpret the inner command.
+	id := identifyCommand(argv)
+	last := len(id.Layers) - 1
+	// An assignment can choose which binary runs (PATH) or load code into it
+	// (LD_PRELOAD), including one made by a builtin the catalog would
+	// otherwise accept (`command export PATH=…`, `printf -v PATH …`); none
+	// keeps read-only proof.
+	if id.Opaque || len(id.Nested) > 0 || depth+last > maxObservationShellDepth || len(id.assignments()) > 0 {
 		return nil, false
 	}
-	if shell {
-		script, ok := exactDashCScript(argv[1:])
-		if !ok {
+	for i, layer := range id.Layers {
+		if layer.Word == "" {
 			return nil, false
 		}
-		return parseObservationScript(script, depth+1)
-	}
-	if program == "env" {
-		inner, _, ok := proxyEnvCommand(argv[1:])
-		if !ok {
+		if i == last {
+			break
+		}
+		// Proof vouches for the program a wrapper's exact name resolves to. A
+		// path runs whatever file is there, and a case-sensitive filesystem may
+		// hold a different `Env` or `TIMEOUT`.
+		if layer.Word != layer.Name {
 			return nil, false
 		}
-		return observationArgvCommands(inner, depth+1)
-	}
-	if program == "timeout" || program == "command" {
-		inner, ok := observationWrappedCommand(program, argv[1:])
-		if !ok {
+		inner, ok := observationWrapperInner(layer)
+		if !ok || !sameWords(inner, layer.Inner) {
 			return nil, false
 		}
-		return observationArgvCommands(inner, depth+1)
 	}
-	// Privilege wrappers and xargs are intentionally absent: even when their
-	// visible argv looks read-only, their effective execution authority or
-	// command source is not bounded tightly enough for automatic approval.
-	return [][]string{argv}, true
+	program := id.Layers[last]
+	if !id.HasScript {
+		return [][]string{program.argv()}, true
+	}
+	if _, shell := observationShells[program.Name]; !shell || program.Word != program.Name {
+		return nil, false
+	}
+	script, ok := exactShellCommand(program.Name, program.Args)
+	if !ok || script != id.Script {
+		return nil, false
+	}
+	return parseObservationScript(script, depth+last+1)
+}
+
+// observationWrapperInner applies the proof grammar of the wrappers whose
+// effect on which program runs is fully known. Privilege wrappers, xargs,
+// exec, nice and the rest are intentionally absent: even when their visible
+// argv looks read-only, their effective execution authority or command source
+// is not bounded tightly enough for automatic approval.
+func observationWrapperInner(layer commandLayer) ([]string, bool) {
+	switch layer.Name {
+	case "env":
+		inner, _, ok := proxyEnvCommand(layer.Args)
+		return inner, ok
+	case "command", "timeout":
+		return observationWrappedCommand(layer.Name, layer.Args)
+	}
+	return nil, false
+}
+
+func sameWords(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // observationWrappedCommand accepts only wrapper forms whose effect on command
@@ -148,24 +191,6 @@ func observationWrappedCommand(wrapper string, args []string) ([]string, bool) {
 	return nil, false
 }
 
-func exactDashCScript(args []string) (string, bool) {
-	for i, arg := range args {
-		isDashC := arg == "-c" || arg == "--command" ||
-			(strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && len(arg) > 1 && strings.HasSuffix(arg, "c"))
-		if !isDashC {
-			continue
-		}
-		// Extra positional shell parameters make the effective expansion of $0,
-		// $1, ... less obvious. The static proof stays conservative and rejects
-		// them rather than reconstructing shell parameter semantics.
-		if i+1 >= len(args) || i+2 != len(args) {
-			return "", false
-		}
-		return args[i+1], strings.TrimSpace(args[i+1]) != ""
-	}
-	return "", false
-}
-
 func observationRedirectionsSafe(redirs []*syntax.Redirect) bool {
 	for _, redir := range redirs {
 		if redir == nil {
@@ -190,6 +215,10 @@ func observationRedirectionsSafe(redirs []*syntax.Redirect) bool {
 	return true
 }
 
+// staticObservationWord is the value the shell passes for a word that needs no
+// expansion. The parser keeps escapes as written, so they are removed here as
+// the shell removes them: an analysis that read `-\o` or `-\X` literally would
+// miss the `-o` and `-X` the program receives.
 func staticObservationWord(word *syntax.Word) (string, bool) {
 	if word == nil {
 		return "", false
@@ -198,7 +227,7 @@ func staticObservationWord(word *syntax.Word) (string, bool) {
 	for _, part := range word.Parts {
 		switch value := part.(type) {
 		case *syntax.Lit:
-			b.WriteString(value.Value)
+			b.WriteString(unescapeShellWord(value.Value, false))
 		case *syntax.SglQuoted:
 			if value.Dollar {
 				return "", false
@@ -213,11 +242,35 @@ func staticObservationWord(word *syntax.Word) (string, bool) {
 				if !ok {
 					return "", false
 				}
-				b.WriteString(lit.Value)
+				b.WriteString(unescapeShellWord(lit.Value, true))
 			}
 		default:
 			return "", false
 		}
 	}
 	return b.String(), true
+}
+
+// unescapeShellWord removes the backslashes the shell consumes. Unquoted, a
+// backslash makes the next character literal; inside double quotes it does so
+// only before $, `, ", \ and newline. A backslash-newline joins lines.
+func unescapeShellWord(value string, doubleQuoted bool) string {
+	if !strings.Contains(value, `\`) {
+		return value
+	}
+	var b strings.Builder
+	for i := 0; i < len(value); i++ {
+		if value[i] == '\\' && i+1 < len(value) {
+			next := value[i+1]
+			if !doubleQuoted || strings.IndexByte("$`\"\\\n", next) >= 0 {
+				i++
+				if next != '\n' {
+					b.WriteByte(next)
+				}
+				continue
+			}
+		}
+		b.WriteByte(value[i])
+	}
+	return b.String()
 }

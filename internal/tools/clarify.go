@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,6 +15,10 @@ const MaxChoices = 4
 var ClarifyFn func(question string, choices []string) string
 
 type ClarifyHandler func(question string, choices []string) string
+
+// ClarifyWaitHandler lets a daemon suspend the exact invocation durably.
+// Legacy interactive callbacks remain synchronous and are not checkpointed.
+type ClarifyWaitHandler func(context.Context, string, []string) (string, error)
 
 func clarifyHandlerFromArgs(args map[string]interface{}) ClarifyHandler {
 	if args != nil {
@@ -84,12 +89,20 @@ func (t *ClarifyTool) Execute(args map[string]interface{}) (string, error) {
 		}
 	}
 
-	clarifyFn := clarifyHandlerFromArgs(args)
-	if clarifyFn == nil {
-		return "", fmt.Errorf("clarify tool is not available in this execution context")
+	var userResponse string
+	if scope, ok := currentExecutionScopeAny(args); ok && scope.ClarifyWait != nil {
+		var waitErr error
+		userResponse, waitErr = scope.ClarifyWait(ContextFromArgs(args), question, choices)
+		if waitErr != nil {
+			return "", waitErr
+		}
+	} else {
+		clarifyFn := clarifyHandlerFromArgs(args)
+		if clarifyFn == nil {
+			return "", fmt.Errorf("clarify tool is not available in this execution context")
+		}
+		userResponse = clarifyFn(question, choices)
 	}
-
-	userResponse := clarifyFn(question, choices)
 
 	result, err := json.Marshal(map[string]interface{}{
 		"question":        question,

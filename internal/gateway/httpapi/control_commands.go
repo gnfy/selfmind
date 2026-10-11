@@ -6,6 +6,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 	"strconv"
@@ -36,7 +37,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	if req.NativeReplyMessageID != "" {
 		approvalTarget = req.ApprovalID
 	}
-	if !exactReply || approvalTarget != "" {
+	if (!exactReply && !req.ForceNew) || approvalTarget != "" {
 		if handled, reply, err := d.tryHandleBareApprovalReplyTo(ctx, identity, trimmed, req.Channel, approvalTarget); handled {
 			return true, reply, nil, err
 		}
@@ -49,7 +50,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	// logic, so a blocking run gets its answer instead of the reply being queued
 	// or steered. Runs after the bare y/n approval leg (which wins for y/n-looking
 	// input) and before the "/" gate (slash commands are never answers).
-	if !exactReply {
+	if !exactReply && !req.ForceNew {
 		if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, "", trimmed, req.Channel); handled {
 			return true, reply, nil, err
 		}
@@ -89,29 +90,26 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		return true, d.dismissAttentionByReference(ctx, identity, req.Channel, parts[1]), nil, nil
 	case lower == "/stop":
-		active := d.coordinator().stopActive(identity.PersonID)
-		if active == nil {
-			if d.coordinator().activeCount(identity.PersonID) > 1 {
-				return true, "Several runs are active. Use /status to choose an exact run, then /stop <run_id>.", nil, nil
-			}
-			return true, d.dismissCurrentAttention(ctx, identity), nil, nil
+		activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
+		if req.Platform == "cli" && d.coordinator().activeForIncoming(identity.PersonID, req) == nil {
+			// A released human wait still belongs to this window even when
+			// another window currently occupies a worker.
+			return true, d.dismissCurrentAttention(ctx, identity, req), nil, nil
 		}
-		if active.RunID != "" {
-			_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, active.RunID)
+		if len(activeRuns) > 1 {
+			return true, "Several runs are active. Use /status to choose an exact run, then /stop <run_id>.", nil, nil
 		}
-		if active.TaskID != "" && active.RunID != "" {
-			// Cancellation is a request until the execution body actually exits.
-			// The run goroutine owns terminal materialization; declaring cancelled
-			// here used to let a non-cooperative tool keep running after the DB said
-			// it was gone, and could start queued work against the same workspace.
-			_, _ = d.Control.AppendEvent(context.Background(), control.Event{
-				TaskID:     active.TaskID,
-				RunID:      active.RunID,
-				Type:       "run.cancel_requested",
-				Visibility: "task",
-				Channel:    req.Channel,
-				Payload:    mustJSON(map[string]string{"reason": "user requested stop"}),
-			})
+		if len(activeRuns) == 0 {
+			return true, d.dismissCurrentAttention(ctx, identity, req), nil, nil
+		}
+		active := activeRuns[0]
+		// IM retains the single-work cross-endpoint control contract. A CLI
+		// window owns only its foreground lane, unless an exact reply names it.
+		if req.Platform == "cli" && d.coordinator().activeForIncoming(identity.PersonID, req) == nil {
+			return true, "No active run in this session. Use /status to choose an exact run, then /stop <run_id>.", nil, nil
+		}
+		if err := d.requestActiveRunStop(ctx, identity, active); err != nil {
+			return true, "Could not persist stop request: " + err.Error(), nil, err
 		}
 		reply := fmt.Sprintf("Stopping run %s.", fallback(active.RunID, "(starting)"))
 		// Queued work auto-starts when this run finalizes (the G1+G2 drain
@@ -125,7 +123,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// With no live execution, cancel is the compatibility spelling for
 		// dismissing the one unambiguous Attention item. It never rewrites a
 		// historical Run outcome.
-		return true, d.dismissCurrentAttention(ctx, identity), nil, nil
+		return true, d.dismissCurrentAttention(ctx, identity, req), nil, nil
 	case strings.HasPrefix(lower, "/new"):
 		title := strings.TrimSpace(trimmed[len("/new"):])
 		if title == "" {
@@ -206,12 +204,12 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 				if runID == "" {
 					return true, fmt.Sprintf("No resumable run number %d in the last list; it showed %d (run /resume to refresh).", ordinal, count), nil, nil
 				}
-				handled, reply, err := d.selectExactResumeRun(ctx, identity, runID)
+				handled, reply, err := d.selectExactResumeRun(ctx, identity, req.Channel, runID)
 				return handled, reply, nil, err
 			}
 		}
 		if strings.HasPrefix(strings.ToLower(parts[1]), "run_") {
-			handled, reply, err := d.selectExactResumeRun(ctx, identity, parts[1])
+			handled, reply, err := d.selectExactResumeRun(ctx, identity, req.Channel, parts[1])
 			return handled, reply, nil, err
 		}
 		// A bare number is a list ordinal against the last /resume listing;
@@ -232,7 +230,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		case 0:
 			return true, "That thread has no exact resumable run. Use /search to find the work, then /resume <run_id>.", nil, nil
 		case 1:
-			handled, reply, err := d.selectExactResumeRun(ctx, identity, runs[0].ID)
+			handled, reply, err := d.selectExactResumeRun(ctx, identity, req.Channel, runs[0].ID)
 			return handled, reply, nil, err
 		default:
 			return true, fmt.Sprintf("That thread has %d resumable runs. Run /resume to list them, then /resume <run_id> to choose one exactly.", len(runs)), nil, nil
@@ -247,12 +245,16 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			if err != nil {
 				return true, "", nil, err
 			}
+			if _, err := d.refreshExecutionWaits(ctx, identity.TenantID, identity.PersonID); err != nil {
+				log.Warn("queue cleared but execution wait reconciliation failed", "person_id", identity.PersonID, "error", err)
+			}
 			return true, fmt.Sprintf("Cleared %d queued task(s).", n), nil, nil
 		}
 		queued, err := d.Control.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 		if err != nil {
 			return true, "", nil, err
 		}
+		d.markHeldContinuations(ctx, queued)
 		// `/queue drop <n>` removes one item by its list position (same
 		// ordering as the /queue listing), so a single unwanted task can be
 		// dropped without clearing the whole queue.
@@ -262,17 +264,27 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 				return true, fmt.Sprintf("Usage: /queue drop <n> (1-%d). Run /queue to see positions.", len(queued)), nil, nil
 			}
 			target := queued[n-1]
-			if err := d.Control.MarkQueued(ctx, identity.TenantID, target.ID, control.QueueStatusCancelled); err != nil {
+			dropped, err := d.Control.CancelQueued(ctx, identity.TenantID, identity.PersonID, target.ID)
+			if err != nil {
 				return true, "", nil, err
 			}
+			if !dropped {
+				return true, "That queued item already started or disappeared. Run /queue to refresh.", nil, nil
+			}
+			d.ExecutionRuntime.YieldQueuedHostExecution(identity.TenantID, identity.PersonID, target.ReplyToRunID)
 			return true, "Dropped queued task: " + textutil.Truncate(toOneLine(target.Content), 60), nil, nil
 		}
-		return true, formatQueue(queued), nil, nil
+		reasons := make(map[string]string, len(queued))
+		active := d.coordinator().activeRunsForPerson(identity.PersonID)
+		for _, item := range queued {
+			reasons[item.ID] = d.queueWaitReason(ctx, identity, item, active)
+		}
+		return true, formatQueue(queued, reasons), nil, nil
 	case lower == "/watchers" || strings.HasPrefix(lower, "/watchers "):
 		reply, err := d.watchersCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
 		return true, reply, nil, err
 	case lower == "/effects" || strings.HasPrefix(lower, "/effects "):
-		reply, err := d.effectsCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
+		reply, err := d.effectsCommandReply(ctx, identity, req.Channel, strings.Fields(trimmed)[1:])
 		return true, reply, nil, err
 	case lower == "/diag learning":
 		reply, err := d.learningDiagReply(ctx, identity)
@@ -291,6 +303,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		return true, reply, nil, err
 	case lower == "/diag tools":
 		reply, err := d.toolsDiagReply(ctx, identity)
+		return true, reply, nil, err
+	case lower == "/tools" || strings.HasPrefix(lower, "/tools "):
+		reply, err := d.toolsCommandReply(ctx, identity, req, strings.Fields(trimmed)[1:])
 		return true, reply, nil, err
 	case lower == "/diag inbound":
 		reply, err := d.inboundDiagReply(ctx, identity)
@@ -457,8 +472,12 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	}
 }
 
-func (d *Server) selectExactResumeRun(ctx context.Context, identity *control.IdentityContext, ref string) (bool, string, error) {
-	run, userErr, err := d.resolveUnresolvedRunReference(ctx, identity, ref)
+func (d *Server) selectExactResumeRun(ctx context.Context, identity *control.IdentityContext, channel, ref string) (bool, string, error) {
+	run, err := d.Control.GetRun(ctx, identity.TenantID, ref)
+	userErr := ""
+	if err == nil && (run == nil || run.PersonID != identity.PersonID || run.Status != "running" || run.ExecutionClass == "coordination") {
+		run, userErr, err = d.resolveUnresolvedRunReference(ctx, identity, ref)
+	}
 	if err != nil {
 		return true, "", err
 	}
@@ -472,12 +491,12 @@ func (d *Server) selectExactResumeRun(ctx context.Context, identity *control.Ide
 		}
 		return true, "Run not found or no longer resumable.", nil
 	}
-	// Reopening the thread and writing both pins is one control-store
-	// transaction: a crash can never leave a thread pin without its exact run.
-	if err := d.Control.PinResumeSelection(ctx, identity.TenantID, identity.PersonID, task.ID, run.ID); err != nil {
+	// Reopening the thread and recording this endpoint's exact selection is
+	// atomic. It grants no authority beyond the selected Run's normal admission.
+	if err := d.Control.PinSessionResumeSelection(ctx, identity.TenantID, identity.PersonID, resumeSelectionEndpoint(identity, channel), task.ID, run.ID); err != nil {
 		return true, "", err
 	}
-	return true, fmt.Sprintf("Selected run %s under thread %s. Your next message will continue that exact run.%s",
+	return true, fmt.Sprintf("Selected run %s under thread %s. Your next message in this session will continue that exact run.%s",
 		shortRunID(run.ID), shortTaskID(task.ID), d.resumeWorkspaceNote(ctx, identity, task)), nil
 }
 
@@ -591,7 +610,7 @@ func (d *Server) approvalModeReply(ctx context.Context, identity *control.Identi
 	if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, mode); err != nil {
 		return "", err
 	}
-	reply := "Approval mode set to " + mode + " for new Runs. Existing Runs and pending approvals keep their admitted mode; answer a pending request with /approve or /reject."
+	reply := "Approval mode set to " + mode + " for new Runs. Tightening applies to queued and parked work; loosening does not. A Run that is already running keeps its mode (use /stop to stop it). Answer a pending request with /approve or /reject."
 	if mode == string(tools.ApprovalFullAuto) {
 		reply += " Note: the hard-floor safety limits still apply (filesystem-root deletes, disk formatting, host shutdown, and similar are always blocked)."
 	}
@@ -604,11 +623,18 @@ func (d *Server) approvalModeReply(ctx context.Context, identity *control.Identi
 // an exact Run dismisses nothing, because a Thread is history, not something
 // to stop. Run outcomes and pending control rows remain intact, and a Run that
 // still owns an approval, question, or watcher refuses.
-func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.IdentityContext) string {
+func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) string {
 	if d == nil || d.Control == nil || identity == nil {
 		return "No active run to stop."
 	}
+	if req.ReplyToRunID != "" {
+		return d.dismissAttentionByReference(ctx, identity, req.Channel, req.ReplyToRunID)
+	}
 	timeline := control.NewWorkTimeline(d.Control)
+	selection, err := d.Control.SessionResumeSelection(ctx, identity.TenantID, identity.PersonID, resumeSelectionEndpoint(identity, req.Channel))
+	if err != nil {
+		return "Could not inspect current attention: " + err.Error()
+	}
 	runPin, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey)
 	if err != nil {
 		return "Could not inspect current attention: " + err.Error()
@@ -617,7 +643,14 @@ func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.
 	if err != nil {
 		return "Could not inspect current attention: " + err.Error()
 	}
+	if selection != nil {
+		runPin, threadPin = selection.RunID, selection.ThreadID
+	}
 	clearPins := func() {
+		if selection != nil {
+			_ = d.Control.ClearRunResumeSelections(ctx, identity.TenantID, identity.PersonID, selection.RunID)
+			return
+		}
 		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, "")
 		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, "")
 	}
@@ -629,6 +662,15 @@ func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.
 		if run == nil || run.PersonID != identity.PersonID {
 			clearPins()
 			return "No active run to stop. The pinned resume selection no longer exists, so the pin was cleared."
+		}
+		if selection == nil && req.Platform == "cli" && (req.Channel == "" || run.Channel != req.Channel) {
+			return "No active run in this session. Use /status to choose an exact run, then /stop <run_id>."
+		}
+		if handled, reply, err := d.stopParkedRun(ctx, identity, run.ID); handled {
+			if err == nil {
+				clearPins()
+			}
+			return reply
 		}
 		dismissed, err := timeline.DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID)
 		if err != nil {
@@ -649,6 +691,9 @@ func (d *Server) dismissCurrentAttention(ctx context.Context, identity *control.
 	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 2)
 	if err != nil {
 		return "Could not inspect current attention: " + err.Error()
+	}
+	if handled, reply := d.stopSoleParkedRun(ctx, identity, req, attention); handled {
+		return reply
 	}
 	switch len(attention) {
 	case 0:
@@ -704,9 +749,8 @@ func (d *Server) dismissAttentionByReference(ctx context.Context, identity *cont
 	if run == nil {
 		// The list prints SHORT run ids and this command advertises
 		// `/stop <n|run_id>`, so the id a person can actually see has to
-		// resolve here exactly as it already does for /resume. Expansion is
-		// bounded to what currently needs attention, which is the only set
-		// this command can act on anyway.
+		// resolve here exactly as it already does for /resume. Expansion uses
+		// the person's current Attention and cancellable provider waits.
 		if expanded := d.expandAttentionRunRef(ctx, identity, channel, runID); expanded != "" {
 			if run, err = d.Control.GetRun(ctx, identity.TenantID, expanded); err != nil {
 				return "Could not dismiss attention: " + err.Error()
@@ -716,9 +760,14 @@ func (d *Server) dismissAttentionByReference(ctx context.Context, identity *cont
 	if run == nil || run.PersonID != identity.PersonID {
 		return "That run is not yours or no longer exists."
 	}
-	if active := d.coordinator().stopActiveRun(identity.PersonID, run.ID); active != nil {
-		_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, run.ID)
+	if active := d.coordinator().activeForRun(identity.PersonID, run.ID); active != nil {
+		if err := d.requestActiveRunStop(ctx, identity, active); err != nil {
+			return "Could not persist stop request: " + err.Error()
+		}
 		return fmt.Sprintf("Stopping run %s.", shortRunID(run.ID))
+	}
+	if handled, reply, _ := d.stopParkedRun(ctx, identity, run.ID); handled {
+		return reply
 	}
 	dismissed, err := control.NewWorkTimeline(d.Control).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID)
 	if err != nil {
@@ -734,22 +783,35 @@ func (d *Server) dismissAttentionByReference(ctx context.Context, identity *cont
 }
 
 // expandAttentionRunRef resolves a shortened run reference against what
-// currently needs attention. An ambiguous prefix resolves to nothing: a
-// dismissal must name one exact Run, never the first of several matches.
+// currently needs attention or is parked on a provider. An ambiguous prefix
+// resolves to nothing: a dismissal must name one exact Run, never the first of
+// several matches.
 func (d *Server) expandAttentionRunRef(ctx context.Context, identity *control.IdentityContext, channel, ref string) string {
 	items, _, err := d.openAttentionPage(ctx, identity, "", channel, attentionListLimit, 0)
 	if err != nil {
 		return ""
 	}
 	matched := ""
+	ids, err := d.Control.ParkedProviderRunIDs(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return ""
+	}
+	humanIDs, err := d.Control.ParkedHumanRunIDs(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return ""
+	}
+	ids = append(ids, humanIDs...)
 	for _, item := range items {
-		if item.RunID != ref && shortRunID(item.RunID) != ref && !strings.HasPrefix(item.RunID, ref) {
+		ids = append(ids, item.RunID)
+	}
+	for _, id := range ids {
+		if id != ref && shortRunID(id) != ref && !strings.HasPrefix(id, ref) {
 			continue
 		}
-		if matched != "" && matched != item.RunID {
+		if matched != "" && matched != id {
 			return ""
 		}
-		matched = item.RunID
+		matched = id
 	}
 	return matched
 }
@@ -778,10 +840,11 @@ func (d *Server) reportDismissedAttentionRun(ctx context.Context, identity *cont
 // handoff and plan come from that Run, never from whichever Run in the Thread
 // happens to be newest.
 func (d *Server) statusReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
-	if active := d.coordinator().activeRunsForPerson(identity.PersonID); len(active) > 1 {
+	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(activeRuns) > 1 {
 		var card strings.Builder
-		fmt.Fprintf(&card, "%d runs active:\n", len(active))
-		for _, run := range active {
+		fmt.Fprintf(&card, "%d runs active:\n", len(activeRuns))
+		for _, run := range activeRuns {
 			title := run.Summary
 			if task, err := d.Control.GetTask(ctx, identity.TenantID, run.TaskID); err == nil && task != nil && task.PersonID == identity.PersonID && strings.TrimSpace(task.Title) != "" {
 				title = task.Title
@@ -791,7 +854,10 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		card.WriteString("Use /status <run_id> for details or /stop <run_id> to cancel one run.")
 		return card.String(), nil
 	}
-	active := d.coordinator().currentActive(identity.PersonID)
+	var active *activeRun
+	if len(activeRuns) == 1 {
+		active = activeRuns[0]
+	}
 	var task *control.Task
 	exactRunID := ""
 	if active != nil && active.TaskID != "" {
@@ -805,9 +871,9 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 		if err != nil {
 			return "", err
 		}
-		if task != nil && task.ActiveRunID == "" {
-			// CurrentTask without an executing Run is the explicit /resume pin;
-			// its exact Run pin names the parked Run the card describes.
+		if task != nil {
+			// Without a process handle, a valid exact /resume pin names the Run
+			// being observed, even while its durable child is executing.
 			if pinned, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey); err == nil {
 				if run, err := d.Control.GetRun(ctx, identity.TenantID, strings.TrimSpace(pinned)); err == nil && run != nil && run.TaskID == task.ID {
 					exactRunID = run.ID
@@ -830,6 +896,21 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 	}
 	if task == nil {
 		return "No active task.", nil
+	}
+	if active == nil && exactRunID != "" {
+		run, err := d.Control.GetRun(ctx, identity.TenantID, exactRunID)
+		if err != nil {
+			return "", err
+		}
+		if run != nil && run.PersonID == identity.PersonID {
+			leaf, err := d.waitingRunDisplayLeaf(ctx, identity, run)
+			if err != nil {
+				return "", err
+			}
+			if leaf.ID != run.ID {
+				return d.statusRunReply(ctx, identity, run.ID)
+			}
+		}
 	}
 	if active != nil && task.ID == active.TaskID {
 		current := *task
@@ -964,6 +1045,14 @@ func (d *Server) statusRunReply(ctx context.Context, identity *control.IdentityC
 		}
 		if run == nil || run.PersonID != identity.PersonID || run.ExecutionClass == "coordination" {
 			return "That run is not active or not yours.", nil
+		}
+		leaf, err := d.waitingRunDisplayLeaf(ctx, identity, run)
+		if err != nil {
+			return "", err
+		}
+		if leaf.ID != run.ID {
+			card, err := d.statusRunReply(ctx, identity, leaf.ID)
+			return fmt.Sprintf("Run %s continued as %s.\n", shortRunID(run.ID), shortRunID(leaf.ID)) + card, err
 		}
 		candidate, ok := d.continuityCandidateForRun(ctx, identity, *run, nil, 0, nil)
 		if !ok {

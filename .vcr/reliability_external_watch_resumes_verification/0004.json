@@ -1,5 +1,59 @@
 {
   "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "wait-group receipt-prerequisites READY_A durable-external-observation observation-condition"
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will inspect the task plan steps to get the exact"
+    },
+    {
+      "usage": {
+        "input_tokens": 13422,
+        "output_tokens": 11,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " step IDs and criteria."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 52,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_614203",
+          "Function": "work_inspect",
+          "Args": "{\"run_id\":\"{{SELFMIND_VCR_RUN_1}}\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "Es8PCswPAWkUfROsME5DjnU/C6eGj7000Ic9iGAg3x7UmMZ0lvV6YJnt/5dOa3S9c1tN6v5Gpbl2Mrwb8MaQkOJvTIA77jFUsEAmgXk18m+lvaLkhEQnJuWazkmh8GrbYtjojiaO+5JxITrzn996gHHslLCgbg854vrW5U0Ddkb0l+rgpOoDL457XWa9gCHg0LxcEZKX1O13KpsWF+4RQGoIpOA/+TVbE2QPFOkUpTkl6KP6FloNdzUA7L3UKRltZJljqNb+rKU2/iJV4iThsx1ZR0EGTMlD1JgPWPmjxJp6j4nm9IRj9pz5fCubRzvwJuEDx8oGPdXIO831AOVc6P9FLBjWUYFb1ilfCRotABRzNFg9FHwDaDCIfRfSAlM7qG/l8Ls4MObMope8lXSFjxlRqa/6Ih4KAsHNRTJPJdoXILDSVe139bUBZ5VjnBSK+/2QUIO/7/Q2sKfk6ZVoqyyAh4sYoA9RfNSACvdDeS22LMgliMU/gJkXlMlHnsfz+O2dcwnBapop8wIqAvV6DFB2bVSZTN8Zm/kTGqpqdcra2GqgFKBqNkDJsNB6ysCJfUI4imboq3K4SEW60rXj5MN392DA52vTF9k8KpgRa2jBMPbNphxIbltQy8UDi+Wi+RyUmV67VOovlD5Bsc41p3oKtS9t7DKB7dsOg0rFXpbnZYvdCy+gfofv0W8fWdXTxdRUalw8DpiefpB0FWzc6RDeTcNi+9ukujdW17ujgI5Zen/9St2wg0qEB0PaRHJ2NSzBOwXULyZBXvpL+iarrfCVD6doKmGBPR1k0K3H3Y5mMowvrzE7OHUXaLmei3nACqYh5B2mjKaTX0EK3YpA2jQSJb3wvrMFI4xb6MET5c4hU1th5gMS/ElVLDlCcLAL8dgvFz4zA21+eXs2KarDgDPWur7sONMi/nRLt/HKCGXHT06HG7v6yLTQGI4sXIGFmK6OXRKdiM1eogKxiCFAoItKWG/3ha5bHs/bk9YnmH2qspeBEoiH785QKxw+ZNa1tqB4iB1lj6nrdh/DqjFkBqdXrYgPuryMQmCzcVG0MD8uTn7xcFEo4xrDysOzytSmDBcDPCFD1cqwVOfd5wAWzWC3XND2Oe5TPP/qKtsZNwiQqbu0MwWq4Y9l2J/Tm0l6cN5v7NdMcpw0w2n5ZaPgHBWzyQ2hKCWxB4ogbTrjezTKZOu3OM+EaiImIu+/R1r4M0sx78eyN76O6RrksxWIU43sba3twkcvKRarBVpk7MIsV6zPWi+1mLU1Kxh7SuTTi2XSnIqmkhziec6r4xj0AQZvUoa8ORYJYW/Y9pf7SVFSbS14ty/dyVSEP4DbUWYrqyTiU4DN0q8/b514OttjT6hGjxLNl4nAH+Pb/PBOzILmzWz7CHKdqhjyzm4XNnd0cr6l2nfFZv3ttugiAzfQpkEsPgitQ/yPQmfmHq8CBMeSfz8cJ4TzlAwb6ztnLkUu4Ee1zn0B957ytQzDb0wW0czGlz+nrCHIBauGG/W4+fvAMEwZrtMCm7VPD4DSC3ho7MRCTQbhdfsoQZjvYRnieUdHI5/DUo2JMOVFSvVTIexoRYacBzuPK2S9CCcX/1Te+JhwFEe2zHPVWqXI33qZF+1UDZekqzOFtG/XFVSFUR9ktb5xZY2yTBE7uQdBF44hb31RpiKe+uJ0Z4k7TgKqzsKUlVHtiBPcBHpYfI7Qm/K600c/svECYGi0nax1uh0vCs4ZZvT6HNy2xwIMSy+lqG/WxxYrunx5Gmn9MqK4oQHQ9bluGF6WZhn0WB5phbvHZ4kqFmMP6Sqt2msGpCP0pFIObNhy5BP4an+eOi0ManWa7IrZfzcCojd+Dq9+O2z76WhKzXqFnrqFJyrOoc3Lo+QIcCUwE8jhcgpvXcQ7Jim3A7ckdNZLYusoG8KXR3HfE1rb+1oPuMk8da8Pv3nJIud99T7uAXVNtsMZNc1NTaxF7ihjTzhnEQWFHiqUqdZO142Z5JWvTbg0DKeS9REf8CWvnmVoJ25LUEfPee9B26i5nf31VMyHXSEEOF8q5Qyzmb2jK6JvUHUiVo7YJwiGiPQROIa13YbjR/ztGeNV2EtZtMsJLSUeNUiukk560b4HkVNN9YLLOyfUJ++IILsY1FXVv/6FYPK9A05XRbPP74l6UAcKxP9T11aOl6fopSwaORi0ZGiYZK/Z7jK6tiPhizjjrbPhqMaaZ7I4CUUr6a7w51gvW5DBZZ8m7O97nbRP3x7Z9VHJVa4gJ8ZpfxtZ2L4rD1aPaiGD2llOxCFDoafodQF1JeWS3Nbzb8s411E3QtfKK4gkT1dRDJYAFAsa9mJC7WSETbNiIXXpPh0oOrfyY3vD2IbNwWI1QTjYTkliKZCihs9pW1k0q3kAwhPexo9UBGKHIS/eayNvXXO0cCqls/saVaPQkvHm1lHISMMyJaF3WE7nibVWJXKJjZzxgi/Sj4mwL0bdzs6TzbIx/4DFMrnrrcViCPWq4Gt3+gnMJoZ/XyVzZ2f1tPoOBizwSX+tRYeL9MnSZbMaROwXQ2AUiiw9ZkIe+HIrMEc7ZQkANlTaaA7ITMkxyiBderMUZWQyh5ycJ/PixGwdHBIHzgNYBh1ZZ9741uLIMx4LbHgF5jOg+3DZiTx8/4sivsMBG6FgRo54vakTZQ7xaqj2padq4Q=="
+            }
+          }
+        }
+      ]
+    }
+  ]
 }

@@ -222,23 +222,24 @@ func (m *uiModel) handleControlPassthrough(command string, args []string) tea.Cm
 	}
 	return func() tea.Msg {
 		if m.messageProcessor == nil {
-			return MsgAgentDone{Response: "Gateway not initialized."}
+			return MsgAgentDone{Response: "Gateway not initialized.", Input: content}
 		}
 		resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest(content))
 		if resp.Error != "" {
-			return MsgAgentDone{Response: fmt.Sprintf("Error: %s", resp.Error)}
+			return MsgAgentDone{Response: fmt.Sprintf("Error: %s", resp.Error), Input: content, Turn: resp.Turn}
 		}
-		return MsgAgentDone{Response: resp.Content}
+		return MsgAgentDone{Response: resp.Content, Input: content, Turn: resp.Turn}
 	}
 }
 
-// handleResumeSelect backs /resume. With a reference it is a plain relay. Bare,
-// it turns into a picker: the daemon owns the ordering, so the TUI relays
-// /resume and presents that reply as the menu rather than numbering a list of
-// its own — a locally numbered menu would drift from the resolver that
-// /resume <n> actually uses. armResumePicker makes the next bare number expand
-// to /resume <n>.
+// Bare /resume opens the existing read-only Run viewer. Selecting continuation
+// is explicit. Older daemons retain their endpoint-owned numbered picker.
 func (m *uiModel) handleResumeSelect(args []string) tea.Cmd {
+	if len(args) == 0 && m.runViewer != nil {
+		m.resumePickerArmed = false
+		m.runViewResumeActions = true
+		return m.loadRunView("")
+	}
 	if len(args) > 0 {
 		m.resumePickerArmed = false
 		return m.handleControlPassthrough("/resume", args)
@@ -913,7 +914,9 @@ func (m *uiModel) handleMode(args []string) tea.Cmd {
 	}
 	mode := string(tools.NormalizeApprovalMode(args[0]))
 	m.approvalMode = mode
-	m.addMessage("assistant", "Approval mode set to: "+mode+" (this session's messages send it explicitly; it overrides your saved /mode preference)")
+	m.addMessage("assistant", "Approval mode set to: "+mode+" (this session's messages send it explicitly; it overrides your saved /mode preference)\n"+
+		"Already queued or parked work keeps the mode it was admitted with: only your saved preference narrows it. "+
+		"To narrow it, set the gateway /mode (from IM or HTTP, which saves the preference), or /stop that work and ask again.")
 	return nil
 }
 

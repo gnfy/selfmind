@@ -127,7 +127,7 @@ func TestGrantedRuleSkipsTheAsk(t *testing.T) {
 		return "ok", nil
 	})
 	if _, err := exec(map[string]interface{}{
-		"_tenant_id": "person-rule", "_tool_name": "terminal", "command": "git status --porcelain",
+		"_tenant_id": "person-rule", "_tool_name": "terminal", "command": "git status --porcelain", "_effective_sandbox_mode": string(SandboxIsolated),
 	}); err != nil {
 		t.Fatalf("granted rule should run: %v", err)
 	}

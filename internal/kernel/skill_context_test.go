@@ -23,7 +23,10 @@ func TestActiveSkillPromptIsBoundedAndAuthorityNeutral(t *testing.T) {
 func TestSkillContextExpiresOnFallbackOrWorkUnitSwitch(t *testing.T) {
 	runtimeCtx := withActiveSkillRuntimeState(context.Background())
 	setActiveSkillWorkUnitSequence(runtimeCtx, 1)
-	messages := []llm.Message{{Role: "tool", Name: "skill_select", Content: `{"success":true,"work_unit_sequence":1,"instructions":"secret procedure"}`}}
+	messages := []llm.Message{
+		{Role: "tool", Name: "skill_select", Content: `{"success":true,"work_unit_sequence":1,"instructions":"secret procedure"}`},
+		{Role: "tool", Name: "skill_view", Content: `{"content":"secret linked procedure"}`},
+	}
 	fallback := []toolExecutionResult{{toolName: "skill_fallback", success: true}}
 	if !shouldExpireActiveSkillContext(runtimeCtx, []llm.ToolCall{{Function: "skill_fallback"}}, fallback) {
 		t.Fatal("fallback did not expire active skill context")
@@ -31,6 +34,9 @@ func TestSkillContextExpiresOnFallbackOrWorkUnitSwitch(t *testing.T) {
 	expireActiveSkillToolResults(messages)
 	if strings.Contains(messages[0].Content, "secret procedure") || !strings.Contains(messages[0].Content, "context_expired") {
 		t.Fatalf("skill body remained visible: %s", messages[0].Content)
+	}
+	if strings.Contains(messages[1].Content, "secret linked procedure") || !strings.Contains(messages[1].Content, "context_expired") {
+		t.Fatalf("expired Skill page remained visible: %s", messages[1].Content)
 	}
 
 	messages[0].Content = `{"success":true,"work_unit_sequence":1,"instructions":"procedure"}`
@@ -52,6 +58,25 @@ func TestActiveSkillSequenceStaysDaemonSide(t *testing.T) {
 	clearActiveSkillWorkUnitSequence(runtimeCtx)
 	if got := activeSkillWorkUnitSequence(runtimeCtx); got != 0 {
 		t.Fatalf("cleared sequence=%d, want 0", got)
+	}
+}
+
+func TestDirectContinuationExpiresOnlyUnretainedSkill(t *testing.T) {
+	ctx := withActiveSkillRuntimeState(context.Background())
+	setActiveSkillWorkUnitSequence(ctx, 1)
+	for _, tc := range []struct {
+		content string
+		expire  bool
+	}{
+		{`{"status":"committed","commit_mode":"direct","active_skill_retained":false}`, true},
+		{`{"status":"committed","commit_mode":"direct","active_skill_retained":true}`, false},
+		{`{"status":"proposed","action":"resume"}`, false},
+		{`{"status":"committed","commit_mode":"transfer"}`, false},
+	} {
+		result := toolExecutionResult{toolName: "work_select", success: true, msg: llm.Message{Content: tc.content}}
+		if got := shouldExpireActiveSkillContext(ctx, nil, []toolExecutionResult{result}); got != tc.expire {
+			t.Fatalf("continuation %s expired=%t want=%t", tc.content, got, tc.expire)
+		}
 	}
 }
 

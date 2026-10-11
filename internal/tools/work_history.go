@@ -213,14 +213,15 @@ func NewWorkInspectTool(store *control.Store) *WorkInspectTool {
 func (t *WorkInspectTool) Name() string { return "work_inspect" }
 
 func (t *WorkInspectTool) Description() string {
-	return "Inspect one exact prior run for the current person. Returns bounded status, plan, handoff, event summaries, and artifact references without raw transcripts. Inspection does not attach the current turn; call work_select next when the request continues or asks about this run."
+	return "Inspect one exact prior run for the current person. Returns bounded status, paged plan and source-check references, handoff, event summaries, and artifacts without raw transcripts. Use plan_offset for omitted steps; the current Run is already selected. Inspection does not attach the current turn; call work_select next when the request continues or asks about this run."
 }
 
 func (t *WorkInspectTool) Schema() ToolSchema {
 	return ToolSchema{
 		Type: "object",
 		Properties: map[string]PropertyDef{
-			"run_id": {Type: "string", Description: "Exact server-issued run_id returned by work_search or a structured work hint."},
+			"run_id":      {Type: "string", Description: "Exact server-issued run_id returned by work_search or a structured work hint."},
+			"plan_offset": {Type: "integer", Description: "Zero-based Plan step offset, default 0; returns up to 12 steps with their exact source-check references. Use the returned next_offset to read omitted steps."},
 		},
 		Required: []string{"run_id"},
 	}
@@ -300,19 +301,8 @@ func (t *WorkInspectTool) Execute(args map[string]interface{}) (string, error) {
 	if run.FinishedAt != nil {
 		result["finished_at"] = run.FinishedAt.UTC().Format(time.RFC3339)
 	}
-	if plan, err := t.store.LatestRunPlan(ctx, scope.ControlTenantID, run.ID); err != nil {
+	if err := t.inspectPlanPage(ctx, scope.ControlTenantID, run, intArg(args, "plan_offset", 0), result); err != nil {
 		return "", err
-	} else if plan != nil {
-		planCopy := *plan
-		planCopy.Explanation = workBound(planCopy.Explanation, 400)
-		if len(planCopy.Steps) > 12 {
-			planCopy.Steps = planCopy.Steps[:12]
-		}
-		for i := range planCopy.Steps {
-			planCopy.Steps[i].Step = workBound(planCopy.Steps[i].Step, 300)
-			planCopy.Steps[i].SuccessCriteria = workBound(planCopy.Steps[i].SuccessCriteria, 300)
-		}
-		result["plan"] = planCopy
 	}
 	if handoff, err := t.store.RunHandoff(ctx, scope.ControlTenantID, scope.PersonID, run.ID); err != nil {
 		return "", err

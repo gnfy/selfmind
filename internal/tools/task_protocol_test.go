@@ -12,9 +12,13 @@ type durablePlanProjectionTest struct {
 	plan          PlanState
 	version       int
 	completionErr error
+	projectErr    error
 }
 
 func (p *durablePlanProjectionTest) Project(_ context.Context, state PlanState) (PlanProjectionResult, error) {
+	if p.projectErr != nil {
+		return PlanProjectionResult{}, p.projectErr
+	}
 	p.version++
 	for i := range state.Plan {
 		if state.Plan[i].StepID == "" {
@@ -23,6 +27,31 @@ func (p *durablePlanProjectionTest) Project(_ context.Context, state PlanState) 
 	}
 	p.plan = state
 	return PlanProjectionResult{Plan: state, Version: p.version, Changed: true}, nil
+}
+
+type verificationPreconditionTestError struct{}
+
+func (verificationPreconditionTestError) Error() string                      { return "check missing; prior reuse offered" }
+func (verificationPreconditionTestError) PlanVerificationPrecondition() bool { return true }
+
+func TestPlanVerificationRecoveryPreservesExplicitAdoption(t *testing.T) {
+	projection := &durablePlanProjectionTest{projectErr: verificationPreconditionTestError{}}
+	ctx := WithRunPlanProjection(context.Background(), projection)
+	_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+		"plan": []interface{}{map[string]interface{}{"step_id": "owned-step", "status": "completed"}}, "_context": ctx,
+	})
+	var recovery interface{ ToolRecoveryHint() string }
+	if !errors.As(err, &recovery) {
+		t.Fatalf("missing structured recovery: %v", err)
+	}
+	for _, want := range []string{"step_id without a Plan transition", "reuse_prior_verification=true", "reuse_reason", "explanation alone is not adoption"} {
+		if !strings.Contains(recovery.ToolRecoveryHint(), want) {
+			t.Fatalf("recovery lost %q: %s", want, recovery.ToolRecoveryHint())
+		}
+	}
+	if projection.version != 0 {
+		t.Fatal("recovery changed the rejected Plan")
+	}
 }
 
 func (p *durablePlanProjectionTest) ValidateCompletion(context.Context) error {
@@ -383,5 +412,29 @@ func TestPlanToolSuppressesIdenticalVisibleSnapshots(t *testing.T) {
 	}
 	if secondResult.Changed {
 		t.Fatal("identical steps and statuses must not repaint the plan")
+	}
+}
+
+// The schema is the model's contract for cancellation evidence. It must match
+// what the runtime accepts: a step planned without success_criteria has no
+// original criterion to preserve, and a whole short instruction is a quote.
+func TestUpdatePlanSchemaStatesTheCancellationEvidenceRules(t *testing.T) {
+	step := NewUpdatePlanTool().Schema().Properties["plan"].Items.Properties
+	replacement := step["replacement_step_id"].Description
+	for _, want := range []string{"established success_criteria", "planned without success_criteria", "states its own"} {
+		if !strings.Contains(replacement, want) {
+			t.Errorf("replacement_step_id lacks %q: %s", want, replacement)
+		}
+	}
+	if strings.Contains(replacement, "Preserve that original criterion") {
+		t.Errorf("replacement_step_id demands a criterion a criteria-less step lacks: %s", replacement)
+	}
+	for _, field := range []string{"scope_change_quote", "user_takeover_quote"} {
+		description := step[field].Description
+		for _, want := range []string{"whole user message", "whole sentence", "at least two words", "any part of a question"} {
+			if !strings.Contains(description, want) {
+				t.Errorf("%s lacks %q: %s", field, want, description)
+			}
+		}
 	}
 }

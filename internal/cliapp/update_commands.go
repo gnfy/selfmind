@@ -194,7 +194,7 @@ func (a *App) verifyRestartedDaemonVersion(wantVersion string) error {
 	var lastHealthErr error
 	for time.Now().Before(deadline) {
 		ctx, cancel := contextWithTimeout(a.ctx, 2*time.Second)
-		data, status, err := gatewayrt.RequestStatus(ctx, a.gatewayURL())
+		data, status, err := a.requestGatewayStatus(ctx)
 		cancel()
 		if err == nil && status < 400 {
 			var resp api.GatewayStatusResponse

@@ -3,43 +3,52 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Now"
-    },
-    {
-      "reasoning_content": " inspect"
-    },
-    {
-      "reasoning_content": " value"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " bytes"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I am reading value.txt to inspect its exact content."
     },
     {
       "usage": {
-        "input_tokens": 10794,
-        "output_tokens": 68,
-        "cache_read_input_tokens": 10368,
-        "cache_miss_input_tokens": 426,
+        "input_tokens": 12072,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 6,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 18,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 486,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_So6uNQVYUFmNFJwvbhX85594",
-          "Function": "terminal",
-          "Args": "{\"command\": \"ls -la \u0026\u0026 (test -f value.txt \u0026\u0026 hexdump -C value.txt || echo \\\"value.txt NOT FOUND\\\")\"}"
+          "ID": "call_2212379",
+          "Function": "read_file",
+          "Args": "{\"path\":\"value.txt\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "Eo4NCosNAWkUfRPdLnulBl5WbH/FkuqxEx/t6MlsIVQdvzGJh5TrMu/Ul8yh8SRgvKJTHrhM5/4UVyIusa1aah4pFBeWLGBIO2L6H+CbjoB39YNMRuGkTJBoJKwrjoJmBQlDxEq1x+OuRsW/76XR1wCQWB/3A3ylUnNOL1t/0rSowA0z8Vv3hSOAt2sXanV6Z6KMmdILmkN5YZFn9ZJLtRMTvfW89996dMY0we9S28V83uysxLvT7zCIObybwiGHnghhDK1spauvclIhdwTbFjq0GcWItH0WV4IV2ILOPw9oc5UZL4EuKbVug3vN1LEX6+8GEquJvtidwv1oi1F9302lRpsYoWaHs3JG8jLkpwsYIL/WeVfxUWreVf7b0LA9NRO4xIuny8okmWMth3T7Q7NoMzQbIzBxnB/cDcEwTBdfCCOPms2Zg7V9FfkDXJacsgC7XmpxponfxSeCHsXUTh6/uuD7bBjxvGLBSungCUU9aZEOcoHo5JXZW1i6GbWtNo+9Wq5csth07/S9g9p3MDKuzRkVviYNU7uIisoLiuzafLIJkP34V6jXmXKw+M4uLd/wjYIZ9q/eUd603tHLLZjUJlsZdUBWfiFAlpmh6jp9Aw32DlQqwtJyLHROxFTtchyBXGe6iA6ZKmUqCZfpaU9GiLERsQKHGZcLBu47g2ExXNQWua3wNOx5hlEGPVGspcFNiLwGwlG7A9+KoNojRL5DanYVCA2rjysg3oaDpG8Zu4Jj4WN02c8OVv+NyNQgD+tl3dBDn64Qya+tqvTol9d8HnhzU+mwUPuijHwxwOrI6UGvPIx5p1EAOPdogkVUyaxdGk5OT63700E2nkoUcx3MjEE3IjMhR1hl+kM1sdhAXo1w/Cfo97PC8XkurcrSMSPabFGAE8QFFaMVb/fs5hsKQVoRiiDFckowS7IWO5CzZ2eyhgoyfQuMK+sRe3hYdV79+GSWf/IcyDGBnqm/2mdhH4atmXFmfsIoLbFsiwafb21RnJdgMi2PLN4YhJ+g0XSdDqVTta1Ze8q54+6jf495U/j26hY+qIQxvfICDdxa179y+t1VxpkXHqJOyZXwrQqxVBFnBkIMEJZ6Gp9TPboDg1kVDSFeJZ735m5NLOTnNJUaclNCB4JixTRxVaQeZBxKnXipOGceaMqzKmcfc2GGySdmgvggg2HgR7RBzxJtXqQMSo4ASt6TCznfQZ9ZdlpZ8N55xZ2Y0sbVY2VSZ8oa6pQxfNLSChy/sE9hfsp8e8ZVEpRuzWWDD1J7laMMbfUofx47ilcsmI2URSrPaAkdGIQO8PU+lkXr8bvsqp/hKCPDe2AjxJy6/YmKYiLFjQMIw/CHuUgtaFub7pqJkCfe0bnmKXW/IKNYTCD5jnGFyMCtp2ksyeP45c87m+volFRTczNhBVtaxkC+gobfacr3IIP52euJsNJ/39u6nCdOzmLSJClYJ4AeKL/wytXYFA45uCSrre0jNUg0XHV0C/spc/CtJq4MO5Nx8fs5nhRoU2FsRqYmhNAvguSxJpQmU7fGms+I+fXFAroKHLGTOgZwaNvMavPzEXv66wBiPHgOTjfoWp4gUhp1LxXlHxvBhxAkKxVGpJB/CcEcYdd/rshTXZjGsxR0KgjN/EklXp/DblU7HfzPB9Da/jZGIBGrNLWY9mehduX0SL4/hkHimlWKFDpUo24ycycj1B37TIW4Hcu1UJgfAN9DaRl9TtP/FdQhLm2gsHbA9TmThFqAi3ga7bB5xo9c8BAqGd2f11ZGX0izvUJ+fDPRzSms5bocJoHtDMYXAS01kQVK9a32esKgIexfPSKDR6SPBAWh8VjGc+aTkSyBkIOCGzNp0TCHBoOQLNiF/iTUuyaCTiHQoFV7358bSHMw9ua48FUuuIpUB5qoouD6C+xPbUHmOlQi7reqQ2K//z0sF41UhqTvnLQ3Pmrwe20XZOuO84cbCHPxTzq1MOJ28R+KUaSy8Fj/m+JO6wCGUL1TaUC7tZlZx/GbdkAThxVl5BuNNOeDBBm75vMST08jrDQNwG2MMZnd2Wl45K3H1n8TCzEg5S9O8EHayjA4NNUrFys9oJBIU7eYv8SnVVMH/bOJaC1iAjujeF1HCJF0xPMceXKc2EZqye6zpAeF+onjzLpWOx8UjR3ZnKz/U6qX4YJCggAmX7bWpjkjXCWT4mhy9tLBLFkxelbNR2Kvb7ZOoP9XNBWjWqSEKhB6r4kKIw34Mbr8tWaevw=="
+            }
+          }
         }
       ]
     }

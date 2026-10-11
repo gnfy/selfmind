@@ -4,6 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+
+	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel"
 )
 
 type renderedPlanStep struct {
@@ -11,6 +15,9 @@ type renderedPlanStep struct {
 	Status                  string `json:"status"`
 	CancellationDisposition string `json:"cancellation_disposition"`
 	CancellationReason      string `json:"cancellation_reason"`
+	// CancellationAuthorizedBy names the input a cancellation's quote came
+	// from; the recorded source id itself is never rendered.
+	CancellationAuthorizedBy *kernel.PlanQuoteOrigin `json:"cancellation_authorized_by"`
 }
 
 // renderPlanCell renders update_plan as a Codex-style checklist (the "hybrid"
@@ -68,11 +75,7 @@ func renderPlanCellNoted(content string, duration float64, width int, styles tra
 			break
 		}
 		block = append(block, planStepLinesWithStyles(strings.TrimSpace(s.Step), s.Status, width-4, styles)...)
-		if label := planCancellationLabel(s); label != "" {
-			detail := label
-			if reason := strings.TrimSpace(sanitizeTerminalText(s.CancellationReason)); reason != "" {
-				detail += ": " + reason
-			}
+		if detail := api.PlanCancellationDetail(s.Status, s.CancellationDisposition, sanitizeTerminalText(s.CancellationReason), s.CancellationAuthorizedBy, time.Now()); detail != "" {
 			for _, line := range strings.Split(wrapText(detail, width-6), "\n") {
 				block = append(block, "  "+styles.planExplain.Render(line))
 			}
@@ -147,21 +150,4 @@ func planStepLinesWithStyles(text, status string, contentWidth int, styles trans
 		}
 	}
 	return out
-}
-
-func planCancellationLabel(step renderedPlanStep) string {
-	if step.Status == "pending" && step.CancellationDisposition == "unfinished" {
-		return "Unfinished"
-	}
-	if step.Status != "cancelled" {
-		return ""
-	}
-	switch step.CancellationDisposition {
-	case "not_required":
-		return "Cancelled · not required"
-	case "user_takeover":
-		return "Cancelled · user takeover"
-	default:
-		return "Cancelled"
-	}
 }

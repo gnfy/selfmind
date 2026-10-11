@@ -21,6 +21,9 @@ type ToolExecutionMetadata struct {
 	// It answers "could this call have changed anything?" and never widens
 	// replay, approval, or recovery authority, which keep the retry class.
 	ObservationOnly bool
+	// BookkeepingOnly is built-in runtime attribution, not execution of the
+	// task's procedure. Retry and authorization remain separately classified.
+	BookkeepingOnly bool
 }
 
 // ToolExecutionMetadataProvider is optional so test and compatibility backends

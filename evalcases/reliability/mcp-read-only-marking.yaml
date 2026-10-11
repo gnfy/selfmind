@@ -1,0 +1,45 @@
+id: reliability_mcp_read_only_marking
+title: "A person marks one exact MCP tool read-only with a model-free control and withdraws it"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+
+# The /tools readonly control against the stdio MCP stub of
+# internal/tools/mcptest. Only the person's explicit word marks a tool: the
+# name must be the exact name of a tool the connected server exposes, so a
+# pattern is refused, and the stub's record tool, whose annotations claim
+# readOnlyHint, stays unmarked. Unmarking withdraws the person's marking.
+requires:
+  commands: [go]
+
+runtime:
+  mcp_stubs:
+    - name: stub
+
+turns:
+  - input: "/tools readonly stub/echo on"
+  - input: "/tools readonly stub/ech* on"
+  - input: "/tools readonly"
+  - input: "/tools readonly stub/echo off"
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 120
+  contains:
+    - "Marked stub/echo read-only for you"
+    - "MCP server stub does not expose a tool named ech*"
+    - "stub (connected)"
+    - "- echo: you, marked"
+    - "Unmarked stub/echo"
+  must_not_contain:
+    - "record: operator"
+    - "record: you"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

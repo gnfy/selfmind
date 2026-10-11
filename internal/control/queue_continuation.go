@@ -11,6 +11,22 @@ import (
 	"selfmind/internal/executionenv"
 )
 
+// QueuedContinuationObsolete means a daemon wakeup can no longer claim its
+// exact parent. It is a terminal scheduling decision, never new authority for
+// the child that already continued the work.
+type QueuedContinuationObsolete struct {
+	ParentRunID string
+	ChildRunID  string
+	Status      string
+}
+
+func (e *QueuedContinuationObsolete) Error() string {
+	if e.ChildRunID != "" {
+		return fmt.Sprintf("exact parent %s was already continued by %s", e.ParentRunID, e.ChildRunID)
+	}
+	return fmt.Sprintf("exact parent %s is no longer resumable (%s)", e.ParentRunID, e.Status)
+}
+
 // ResolveQueuedContinuation follows the one-child Run lineage of an exact
 // queued reply. A recovery or watcher may claim its original parent while the
 // reply waits. The reply remains on the same person's work and waits for a
@@ -32,8 +48,12 @@ func (s *Store) ResolveQueuedContinuation(ctx context.Context, q QueuedTask) (re
 	// Only person-authored replies may follow a claimed lineage.
 	systemExact := q.Class == QueueClassFinalization || q.Class == QueueClassRecovery ||
 		strings.HasPrefix(q.IdempotencyKey, "external-watch:") ||
+		strings.HasPrefix(q.IdempotencyKey, "external-resource:") ||
+		strings.HasPrefix(q.IdempotencyKey, "provider-wait:") ||
+		strings.HasPrefix(q.IdempotencyKey, "execution-lane:") ||
 		strings.HasPrefix(q.IdempotencyKey, "run-recovery:") ||
-		strings.HasPrefix(q.IdempotencyKey, "approval-resume:")
+		strings.HasPrefix(q.IdempotencyKey, "approval-resume:") ||
+		strings.HasPrefix(q.IdempotencyKey, "clarify-resume:")
 	for depth := 0; depth < 64; depth++ {
 		var personID, taskID, status, legacyChild, workspaceID, rootsJSON string
 		err := s.db.QueryRowContext(ctx, `SELECT person_id, thread_id, status, COALESCE(resumed_by_run_id, ''),
@@ -65,7 +85,7 @@ func (s *Store) ResolveQueuedContinuation(ctx context.Context, q QueuedTask) (re
 		}
 		if childID != "" {
 			if systemExact {
-				return q, false, nil
+				return q, false, &QueuedContinuationObsolete{ParentRunID: current, ChildRunID: childID, Status: status}
 			}
 			if childID == current {
 				return q, false, fmt.Errorf("queued continuation cycle at %s", current)
@@ -97,8 +117,8 @@ func (s *Store) ResolveQueuedContinuation(ctx context.Context, q QueuedTask) (re
 			}
 			var providerQueueID string
 			err = s.db.QueryRowContext(ctx, `SELECT id FROM task_queue WHERE tenant_id=? AND person_id=?
-				AND reply_to_run_id=? AND idempotency_key=? AND status IN ('queued','started')`,
-				tenantID, q.PersonID, current, "provider-wait:"+current).Scan(&providerQueueID)
+				AND reply_to_run_id=? AND idempotency_key IN (?,?) AND status IN ('queued','started')`,
+				tenantID, q.PersonID, current, "provider-wait:"+current, "execution-lane:"+current).Scan(&providerQueueID)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return q, false, err
 			}
@@ -112,7 +132,7 @@ func (s *Store) ResolveQueuedContinuation(ctx context.Context, q QueuedTask) (re
 			return q, false, nil
 		default:
 			if systemExact {
-				return q, false, nil
+				return q, false, &QueuedContinuationObsolete{ParentRunID: current, Status: status}
 			}
 			q.ReplyToRunID = ""
 			return q, false, nil

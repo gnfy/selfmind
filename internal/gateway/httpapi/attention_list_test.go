@@ -199,9 +199,9 @@ func TestBareResumeListsAttentionAndPinsTheExactRun(t *testing.T) {
 	if !strings.Contains(selected, "Selected run "+shortRunID(run.ID)) {
 		t.Fatalf("ordinal did not select exact run: %s", selected)
 	}
-	pinned, err := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey)
-	if err != nil || pinned != run.ID {
-		t.Fatalf("resume run pin=%q err=%v, want %s", pinned, err, run.ID)
+	pinned, err := store.SessionResumeSelection(ctx, identity.TenantID, identity.PersonID, resumeSelectionEndpoint(identity, "cli"))
+	if err != nil || pinned == nil || pinned.RunID != run.ID {
+		t.Fatalf("resume selection=%+v err=%v, want %s", pinned, err, run.ID)
 	}
 }
 

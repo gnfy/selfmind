@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -120,8 +122,16 @@ func (d *Server) handleIMWebhook(w http.ResponseWriter, r *http.Request) {
 	// Save the signed input before calling the gateway. A first-seen marker
 	// alone loses the message if the process exits before admission; an input
 	// already dispatching may have caused effects and must not be called twice.
+	// Input refused before admission answers 503 with its receipt pending, so
+	// the platform's redelivery is dispatched once.
 	msgID := imMessageID(platform, payload)
 	req := messageRequestFromIM(platform, payload)
+	if cliClaim(req.Platform) {
+		// The CLI platform is the person's own terminal on the local control
+		// socket; no webhook speaks for it.
+		http.Error(w, "IM ingress cannot claim the CLI platform", http.StatusForbidden)
+		return
+	}
 	if msgID == "" {
 		if strings.TrimSpace(req.Content) == "" && len(req.Attachments) == 0 {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ignored"})
@@ -133,48 +143,119 @@ func (d *Server) handleIMWebhook(w http.ResponseWriter, r *http.Request) {
 	if boolFromMap(payload, "async") || (os.Getenv("SELF_IM_ASYNC") == "1" && !isControlCommand(req.Content)) {
 		req.Async = true
 	}
-	if msgID != "" && d.Control != nil {
-		identity, err := d.Control.ResolveOrCreateAccount(r.Context(), d.tenantID(req.TenantID), req.Platform, req.PlatformUserID, req.DisplayName)
-		if err != nil {
-			http.Error(w, "inbound identity unavailable; retry delivery", http.StatusServiceUnavailable)
-			return
-		}
-		state, err := d.Control.BeginInbound(r.Context(), platform, msgID, body, control.InboundOwner{
-			TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: req.Content,
-		})
-		if err != nil {
-			log.Warn("im webhook receipt failed", "platform", platform, "message_id", msgID, "error", err)
-			http.Error(w, "inbound storage unavailable; retry delivery", http.StatusServiceUnavailable)
-			return
-		}
-		if state == control.InboundAccepted {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
-			return
-		}
-		if state != control.InboundPending {
-			log.Error("im webhook processing outcome uncertain; inspect inbound receipt before retry", "platform", platform, "message_id", msgID)
-			http.Error(w, "inbound processing outcome uncertain; inspect receipt", http.StatusServiceUnavailable)
-			return
-		}
-		claimed, err := d.Control.ClaimInbound(r.Context(), platform, msgID)
-		if err != nil || !claimed {
-			http.Error(w, "inbound claim unavailable; retry delivery", http.StatusServiceUnavailable)
-			return
-		}
+	if d.Control == nil {
+		http.Error(w, "inbound storage unavailable; retry delivery", http.StatusServiceUnavailable)
+		return
 	}
-
-	resp, status := d.ProcessMessage(r.Context(), req)
-	if msgID != "" && d.Control != nil {
-		if status >= http.StatusInternalServerError {
-			_ = d.Control.NoteInboundFailure(r.Context(), platform, msgID, fmt.Errorf("gateway returned HTTP %d", status))
-			log.Error("im webhook processing outcome uncertain; inspect inbound receipt before retry", "platform", platform, "message_id", msgID, "status", status)
-		} else if err := d.Control.AcceptInbound(r.Context(), platform, msgID); err != nil {
-			log.Error("im webhook acceptance could not be saved; inspect inbound receipt", "platform", platform, "message_id", msgID, "error", err)
-			http.Error(w, "inbound acceptance unavailable; inspect receipt", http.StatusServiceUnavailable)
+	identity, err := d.resolveRequestIdentity(r, d.tenantID(req.TenantID), req.Platform, req.PlatformUserID, req.DisplayName)
+	if err != nil {
+		resp, status, _ := refuseInbound(nil, platform, msgID, refusalIdentity, err)
+		writeJSON(w, status, resp)
+		return
+	}
+	beginCtx, cancelBegin := d.settleContext(r.Context())
+	state, err := d.Control.BeginInboundMatching(beginCtx, platform, msgID, body, control.InboundOwner{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Preview: req.Content,
+	}, webhookEssential(platform))
+	cancelBegin()
+	if errors.Is(err, control.ErrInboundConflict) {
+		resp, status, _ := rejectInbound(identity, platform, msgID, err)
+		writeJSON(w, status, resp)
+		return
+	}
+	if err != nil {
+		resp, status, _ := refuseInbound(identity, platform, msgID, refusalSave, err)
+		writeJSON(w, status, resp)
+		return
+	}
+	if state == control.InboundAccepted {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
+		return
+	}
+	if state != control.InboundPending {
+		log.Error("im webhook processing outcome uncertain; inspect inbound receipt before retry", "platform", platform, "message_id", msgID)
+		http.Error(w, "inbound processing outcome uncertain; inspect receipt", http.StatusServiceUnavailable)
+		return
+	}
+	if chat := imDirectChat(platform, payload, req); chat != "" {
+		d.recordDirectChat(r.Context(), identity, chat)
+	}
+	resp, status, err := d.dispatchInboundReceipt(r.Context(), identity, platform, msgID, req)
+	switch {
+	case errors.Is(err, api.ErrInboundNotDispatched):
+		log.Warn("im webhook refused before admission; receipt kept for redelivery", "platform", platform, "message_id", msgID, "error", err)
+	case errors.Is(err, api.ErrInboundUncertain):
+		log.Error("im webhook processing outcome uncertain; inspect inbound receipt before retry", "platform", platform, "message_id", msgID, "status", status, "error", err)
+		if resp.Identity == nil && resp.Content == "" && resp.Error == "" {
+			http.Error(w, "inbound processing outcome uncertain; inspect receipt", http.StatusServiceUnavailable)
 			return
 		}
 	}
 	writeJSON(w, status, resp)
+}
+
+// imDirectChat is the chat of a message the platform itself marks as sent in
+// the sender's direct chat with SelfMind, on platforms whose chat id is not the
+// user id: Feishu and Lark mark it chat_type p2p, and a QQ C2C event is one by
+// its type. Empty for every other message.
+func imDirectChat(platform string, payload map[string]interface{}, req api.MessageRequest) string {
+	switch strings.ToLower(platform) {
+	case "feishu", "lark":
+		if event := nestedMap(payload, "event"); event != nil {
+			if msg := nestedMap(event, "message"); msg != nil && strings.EqualFold(mapString(msg, "chat_type"), "p2p") {
+				return mapString(msg, "chat_id")
+			}
+		}
+	case "qq":
+		if strings.Contains(strings.ToUpper(mapString(payload, "t")), "C2C") && req.Channel == "c2c:"+req.PlatformUserID {
+			return req.Channel
+		}
+	}
+	return ""
+}
+
+// recordDirectChat remembers an account's direct chat, so a schedule or a
+// notice for that account reaches the person there. It writes only when the
+// chat changed.
+func (d *Server) recordDirectChat(ctx context.Context, identity *control.IdentityContext, chat string) {
+	key := directChatKey(identity.AccountID)
+	if current, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, key); err == nil && current == chat {
+		return
+	}
+	if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, key, chat); err != nil {
+		log.Warn("im direct chat was not recorded", "platform", identity.Platform, "error", err)
+	}
+}
+
+// webhookEssential identifies a webhook message by what the gateway reads from
+// its body: platform message id, sender, chat, text, each attachment's kind,
+// name, and path or URL, and the tenant, task, workspace, and reply target it
+// routes to. Timestamps, retry counters, and display names may change between
+// deliveries of the same message.
+func webhookEssential(platform string) control.InboundEssential {
+	return func(raw []byte) ([]byte, error) {
+		var payload map[string]interface{}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			return nil, err
+		}
+		req := messageRequestFromIM(platform, payload)
+		attachments := make([]string, 0, len(req.Attachments))
+		for _, attachment := range req.Attachments {
+			attachments = append(attachments, attachment.Kind+":"+attachment.Name+":"+attachment.Path)
+		}
+		return json.Marshal(struct {
+			ID          string   `json:"id"`
+			Sender      string   `json:"sender"`
+			Chat        string   `json:"chat"`
+			Text        string   `json:"text"`
+			Attachments []string `json:"attachments"`
+			Tenant      string   `json:"tenant"`
+			Task        string   `json:"task"`
+			Workspace   string   `json:"workspace"`
+			ReplyTo     string   `json:"reply_to"`
+		}{imMessageID(platform, payload), req.PlatformUserID, req.Channel, req.Content, attachments,
+			req.TenantID, req.TaskID, req.WorkspaceID, req.NativeReplyMessageID})
+	}
 }
 
 // imMessageID extracts the platform's own message/event id from a webhook
@@ -217,6 +298,11 @@ func (d *Server) handleAccountBind(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Binding gives a platform account the person's whole identity, so it is
+	// the person's own act, like any other CLI-identity authority.
+	if !d.requireLocalCLI(w, r, "binding an account to a person") {
 		return
 	}
 	var req api.BindAccountRequest

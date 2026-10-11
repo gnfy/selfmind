@@ -81,6 +81,11 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 	}
 	if run != nil {
 		selected.RunID = run.ID
+		if lineage, err := c.srv.Control.ResumeChainRunIDs(ctx, task.TenantID, run.ID); err == nil && len(lineage) > 0 {
+			selected.SpineLineageRunIDs = lineage
+			selected.SpineChainID = lineage[len(lineage)-1]
+		}
+		selected.ExternalEffects = c.externalEffectContext(ctx, task.TenantID, task.PersonID, run.ID)
 		fingerprint := buildinfo.Current().Fingerprint
 		if c.srv.RuntimeStatusFunc != nil {
 			if running := c.srv.RuntimeStatusFunc(); running.BuildFingerprint != "" {
@@ -106,7 +111,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 		if requirements, err := c.srv.Control.RunSteeringRequirements(ctx, task.TenantID, parent.ID, 10); err == nil {
 			for _, requirement := range requirements {
 				if requirement.PersonID == task.PersonID {
-					selected.UserRequirements = append(selected.UserRequirements, textutil.Truncate(requirement.Content, 600))
+					selected.UserRequirements = append(selected.UserRequirements, requirement.Content)
 				}
 			}
 		}
@@ -114,6 +119,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 		// IDs must not be offered to update_plan as current execution state.
 		if run != nil {
 			if plan, err := c.srv.Control.LatestRunPlan(ctx, task.TenantID, run.ID); err == nil && plan != nil {
+				selected.PlanVersion = plan.Version
 				for _, step := range plan.Steps {
 					selected.Plan = append(selected.Plan, kernel.PlanItem{
 						StepID: step.StepID, Step: step.Step, Status: step.Status,
@@ -131,6 +137,8 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 						SourceCriterion: item.SourceCriterion, CriterionChanged: item.CriterionChanged,
 						PriorVerification: item.PriorVerification, LatestCheck: item.LatestCheck,
 						Target: item.Target, CheckedAt: item.CheckedAt,
+						ReuseBlockedReason: item.ReuseBlockedReason,
+						ObservedCriterion:  item.ObservedCriterion,
 					}
 					if !item.CheckedAt.IsZero() && selectedAt.After(item.CheckedAt) {
 						evidence.Age = selectedAt.Sub(item.CheckedAt)

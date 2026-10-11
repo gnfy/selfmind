@@ -416,7 +416,7 @@ func TestFirstPlanKeepsPrematureVerifiedCompletionOpen(t *testing.T) {
 	if len(projection.VerificationDeferred) != 2 || projection.Plan.Steps[1].Status != "in_progress" || projection.Plan.Steps[2].Status != "pending" {
 		t.Fatalf("first snapshot did not expose one executable verification obligation: %+v", projection)
 	}
-	binding, err := store.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{Criterion: "output is exact", Target: "output.txt"}, "/workspace")
+	binding, err := store.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{StepID: projection.Plan.Steps[1].StepID, Criterion: "output is exact", Target: "output.txt"}, "/workspace")
 	if err != nil || binding == nil || binding.StepID != projection.Plan.Steps[1].StepID {
 		t.Fatalf("verification was not bound to normalized step: binding=%+v err=%v", binding, err)
 	}

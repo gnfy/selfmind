@@ -35,6 +35,29 @@ type ExternalEffectClaim struct {
 	TargetKey      string
 	State          string
 	ObservationRef string
+	CreatedAt      time.Time
+	// Sequence orders the claim among claims, watchers, and events (see
+	// nextEffectSequenceTx). Every target of one atomic claim shares it. Zero
+	// means the claim was recorded before schema v26: it precedes every
+	// sequenced row, and two zero rows have no recorded order.
+	Sequence int64
+	// The fields below are derived when the claim is read, never stored.
+	// Disposition is in flight, watched, or left uncertain for an unobserved
+	// claim (see external_effect_lifecycle.go). Summary and ToolName come from
+	// the dispatch record; Outcome says how the call returned without proving
+	// success. SameChain is set only in a blocker view: the claim belongs to the
+	// requesting Run's exact chain.
+	Disposition string
+	Summary     string
+	ToolName    string
+	Outcome     string
+	SameChain   bool
+	// Background: the call started a background process, whose exit the
+	// daemon that started it observes.
+	Background bool
+	// DispatchRecorded reports a decoded lifecycle record, not whether a
+	// historical action did or did not happen. Absence never releases a claim.
+	DispatchRecorded bool
 }
 
 type ExternalEffectClaimRequest struct {
@@ -43,15 +66,36 @@ type ExternalEffectClaimRequest struct {
 	RunID      string
 	EffectID   string
 	TargetKeys []string
+	// ToleratedClaimIDs are other Runs' left-uncertain claims the person
+	// approved this exact call to pass once. They are never stored as grants
+	// and leave those claims unresolved.
+	ToleratedClaimIDs []string
+	// DeferWait asks for the decision without writing the durable resource
+	// wait while the caller waits in place for an in-flight claim.
+	DeferWait bool
 }
 
 type ExternalEffectClaimDecision struct {
-	Claims           []ExternalEffectClaim
-	Granted          bool
-	AlreadyKnown     bool
-	BlockedByRun     string
+	Claims       []ExternalEffectClaim
+	Granted      bool
+	AlreadyKnown bool
+	BlockedByRun string
+	// NeedsObservation: the requesting Run's own chain holds an unresolved
+	// claim. Only an observation that chain binds to the claim, or the person's
+	// settlement, can release it; nothing is waited for.
 	NeedsObservation bool
-	BlockingClaims   []ExternalEffectClaim
+	// NeedsApproval: another Run left these claims uncertain. The call may pass
+	// once with the person's approval or this Run's later bound observation.
+	NeedsApproval  bool
+	ApprovalClaims []ExternalEffectClaim
+	// BlockingClaims lists every conflicting claim with its derived facts. When
+	// neither flag above is set, the call waits for the claims in flight or
+	// watched.
+	BlockingClaims []ExternalEffectClaim
+	// DecideAfterWait lists, for a call that waits, other Runs' left-uncertain
+	// claims it has not passed: once the wait ends they still need the
+	// person's decision, so the wait alone does not let the work continue.
+	DecideAfterWait []ExternalEffectClaim
 }
 
 type ExternalResourceWait struct {
@@ -70,72 +114,77 @@ func (s *Store) ListUnresolvedExternalEffects(ctx context.Context, tenantID, per
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tenant_id, person_id, run_id, effect_id, target_key, state, observation_ref
-		FROM external_effect_claims WHERE tenant_id = ? AND person_id = ? AND state <> 'observed'
-		ORDER BY created_at, id LIMIT ?`, normalizeTenant(tenantID), personID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var claims []ExternalEffectClaim
-	for rows.Next() {
-		var claim ExternalEffectClaim
-		if err := rows.Scan(&claim.ID, &claim.TenantID, &claim.PersonID, &claim.RunID,
-			&claim.EffectID, &claim.TargetKey, &claim.State, &claim.ObservationRef); err != nil {
-			return nil, err
-		}
-		claims = append(claims, claim)
-	}
-	return claims, rows.Err()
+	return queryExternalEffectClaims(ctx, s.db, s.instance, `WHERE c.tenant_id = ? AND c.person_id = ? AND c.state <> 'observed'
+		ORDER BY c.created_at, c.id LIMIT ?`, normalizeTenant(tenantID), personID, limit)
+}
+
+// ExternalEffectRef names one effect group: the Run that dispatched it and its
+// effect id.
+type ExternalEffectRef struct {
+	RunID, EffectID string
 }
 
 // FindUnresolvedExternalEffectForTargets binds an owner-reviewed observation
-// to an effect that has already crossed dispatch. It returns no identity when
-// zero or multiple exact groups match; a watcher cannot infer causal ownership
-// from a target name alone.
-func (s *Store) FindUnresolvedExternalEffectForTargets(ctx context.Context, tenantID, personID, runID string, targets []string) (string, error) {
+// to an effect that has already crossed dispatch in the observing Run or an
+// earlier Run of its exact chain. It returns no identity when zero or multiple
+// exact groups match; a watcher cannot infer causal ownership from a target
+// name alone.
+func (s *Store) FindUnresolvedExternalEffectForTargets(ctx context.Context, tenantID, personID, runID string, targets []string) (ExternalEffectRef, error) {
 	if s == nil || s.db == nil || personID == "" || runID == "" || len(targets) == 0 {
-		return "", nil
+		return ExternalEffectRef{}, nil
+	}
+	tenantID = normalizeTenant(tenantID)
+	lineage, err := runLineage(ctx, s.db, tenantID, personID, runID)
+	if err != nil {
+		return ExternalEffectRef{}, err
 	}
 	want := append([]string(nil), targets...)
 	slices.Sort(want)
-	rows, err := s.db.QueryContext(ctx, `SELECT effect_id, target_key, state FROM external_effect_claims
-		WHERE tenant_id = ? AND person_id = ? AND run_id = ? ORDER BY effect_id, target_key`,
-		normalizeTenant(tenantID), personID, runID)
+	args := []any{tenantID, personID}
+	for id := range lineage {
+		args = append(args, id)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT run_id, effect_id, target_key, state FROM external_effect_claims
+		WHERE tenant_id = ? AND person_id = ? AND run_id IN (`+placeholders(len(lineage))+`) ORDER BY run_id, effect_id, target_key`,
+		args...)
 	if err != nil {
-		return "", err
+		return ExternalEffectRef{}, err
 	}
 	defer rows.Close()
 	type group struct {
 		targets      []string
 		allUncertain bool
 	}
-	groups := map[string]*group{}
+	groups := map[ExternalEffectRef]*group{}
 	for rows.Next() {
-		var effectID, target, state string
-		if err := rows.Scan(&effectID, &target, &state); err != nil {
-			return "", err
+		var ref ExternalEffectRef
+		var target, state string
+		if err := rows.Scan(&ref.RunID, &ref.EffectID, &target, &state); err != nil {
+			return ExternalEffectRef{}, err
 		}
-		g := groups[effectID]
+		if !lineage[ref.RunID] {
+			continue
+		}
+		g := groups[ref]
 		if g == nil {
 			g = &group{allUncertain: true}
-			groups[effectID] = g
+			groups[ref] = g
 		}
 		g.targets = append(g.targets, target)
 		g.allUncertain = g.allUncertain && state == ExternalClaimUncertain
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return ExternalEffectRef{}, err
 	}
-	matched := ""
-	for id, g := range groups {
+	var matched ExternalEffectRef
+	for ref, g := range groups {
 		if !g.allUncertain || !slices.Equal(g.targets, want) {
 			continue
 		}
-		if matched != "" {
-			return "", nil
+		if matched.EffectID != "" {
+			return ExternalEffectRef{}, nil
 		}
-		matched = id
+		matched = ref
 	}
 	return matched, nil
 }
@@ -156,10 +205,11 @@ func (s *Store) ObserveEffectClaimsForWatch(ctx context.Context, tenantID, watch
 	defer func() { _ = tx.Rollback() }()
 	var personID, workspaceID, runID, status, adapter, command, output, receiptJSON string
 	var revision int
+	var watchSequence, watchCreated int64
 	err = tx.QueryRowContext(ctx, `SELECT person_id, COALESCE(workspace_id,''), run_id, status,
 		COALESCE(observation_adapter,''), command, COALESCE(last_output,''), verdict_revision,
-		COALESCE(preflight_receipt_json,'{}') FROM external_watches WHERE tenant_id=? AND id=?`, tenantID, watchID).
-		Scan(&personID, &workspaceID, &runID, &status, &adapter, &command, &output, &revision, &receiptJSON)
+		COALESCE(preflight_receipt_json,'{}'), sequence, created_at FROM external_watches WHERE tenant_id=? AND id=?`, tenantID, watchID).
+		Scan(&personID, &workspaceID, &runID, &status, &adapter, &command, &output, &revision, &receiptJSON, &watchSequence, &watchCreated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -240,7 +290,19 @@ func (s *Store) ObserveEffectClaimsForWatch(ctx context.Context, tenantID, watch
 	if trust != "trusted" {
 		return false, nil
 	}
-	claims, err := loadExternalEffectClaimsTx(ctx, tx, tenantID, runID, receipt.EffectID)
+	// The effect may belong to an earlier Run of the watcher's exact chain.
+	effectRun := runID
+	if receipt.EffectRunID != "" && receipt.EffectRunID != runID {
+		lineage, err := runLineage(ctx, tx, tenantID, personID, runID)
+		if err != nil {
+			return false, err
+		}
+		if !lineage[receipt.EffectRunID] {
+			return false, nil
+		}
+		effectRun = receipt.EffectRunID
+	}
+	claims, err := loadExternalEffectClaimsTx(ctx, tx, tenantID, effectRun, receipt.EffectID)
 	if err != nil {
 		return false, err
 	}
@@ -252,10 +314,14 @@ func (s *Store) ObserveEffectClaimsForWatch(ctx context.Context, tenantID, watch
 			return false, nil
 		}
 	}
+	follows, err := watchFollowsEffectTx(ctx, tx, tenantID, effectRun, receipt.EffectID, watchSequence, watchCreated)
+	if err != nil || !follows {
+		return false, err
+	}
 	ref := fmt.Sprintf("watch:%s:r%d:owner-bound", watchID, revision)
 	if _, err := tx.ExecContext(ctx, `UPDATE external_effect_claims SET state='observed', observation_ref=?, updated_at=?
 		WHERE tenant_id=? AND person_id=? AND run_id=? AND effect_id=? AND state='uncertain'`,
-		ref, time.Now().Unix(), tenantID, personID, runID, receipt.EffectID); err != nil {
+		ref, time.Now().Unix(), tenantID, personID, effectRun, receipt.EffectID); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -281,22 +347,21 @@ func (s *Store) ObserveExternalEffectWithWatch(ctx context.Context, tenantID, pe
 	}
 	defer func() { _ = tx.Rollback() }()
 	var claim ExternalEffectClaim
-	var claimedAt int64
-	err = tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, run_id, effect_id, target_key, state, observation_ref, created_at
+	err = tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, run_id, effect_id, target_key, state, observation_ref, sequence
 		FROM external_effect_claims WHERE tenant_id = ? AND person_id = ? AND id = ?`,
 		tenantID, personID, claimID).Scan(&claim.ID, &claim.TenantID, &claim.PersonID, &claim.RunID,
-		&claim.EffectID, &claim.TargetKey, &claim.State, &claim.ObservationRef, &claimedAt)
+		&claim.EffectID, &claim.TargetKey, &claim.State, &claim.ObservationRef, &claim.Sequence)
 	if err != nil {
 		return ExternalEffectClaim{}, fmt.Errorf("external effect claim not found for this person: %w", err)
 	}
 	var watchRun, watchStatus, receiptJSON, command string
 	var watchFinalized int
-	var watchCreated int64
+	var watchCreated, watchSequence int64
 	var revision int
 	err = tx.QueryRowContext(ctx, `SELECT run_id, status, finalized, created_at, verdict_revision,
-		COALESCE(preflight_receipt_json, '{}'), command FROM external_watches
+		COALESCE(preflight_receipt_json, '{}'), command, sequence FROM external_watches
 		WHERE tenant_id = ? AND person_id = ? AND id = ?`, tenantID, personID, watchID).
-		Scan(&watchRun, &watchStatus, &watchFinalized, &watchCreated, &revision, &receiptJSON, &command)
+		Scan(&watchRun, &watchStatus, &watchFinalized, &watchCreated, &revision, &receiptJSON, &command, &watchSequence)
 	if err != nil {
 		return ExternalEffectClaim{}, fmt.Errorf("watcher not found for this person: %w", err)
 	}
@@ -315,7 +380,11 @@ func (s *Store) ObserveExternalEffectWithWatch(ctx context.Context, tenantID, pe
 	if receipt.RecoveryClaimID != "" && receipt.RecoveryClaimID != claim.ID {
 		return ExternalEffectClaim{}, fmt.Errorf("watcher is bound to another effect claim")
 	}
-	if watchCreated < claimedAt || watchStatus != ExternalWatchSucceeded ||
+	follows, err := watchFollowsEffectTx(ctx, tx, tenantID, claim.RunID, claim.EffectID, watchSequence, watchCreated)
+	if err != nil {
+		return ExternalEffectClaim{}, err
+	}
+	if !follows || watchStatus != ExternalWatchSucceeded ||
 		watchFinalized == 0 || receipt.Version < ExternalWatchContinuationReceiptVersion ||
 		receipt.CommandHash != fmt.Sprintf("%x", sha256.Sum256([]byte(command))) {
 		return ExternalEffectClaim{}, fmt.Errorf("watcher is not a finalized trusted observation of this exact run after the effect")
@@ -413,18 +482,35 @@ func (s *Store) claimExternalEffectsOnce(ctx context.Context, request ExternalEf
 		}
 		return ExternalEffectClaimDecision{Claims: existing, AlreadyKnown: true}, nil
 	}
-	blockers, needsObservation, err := externalResourceBlockers(ctx, tx, request.TenantID, request.PersonID, request.RunID, targets)
+	conflicts, err := classifyExternalBlockers(ctx, tx, s.instance, request.TenantID, request.PersonID, request.RunID, targets)
 	if err != nil {
 		return ExternalEffectClaimDecision{}, err
 	}
-	blockedBy := ""
-	if len(blockers) > 0 {
-		blockedBy = blockers[0].RunID
-		if needsObservation {
-			return ExternalEffectClaimDecision{BlockedByRun: blockedBy, NeedsObservation: true, BlockingClaims: blockers}, nil
+	// The Run's own chain must observe or have the person settle its effect;
+	// waiting on itself could never end.
+	if len(conflicts.Own) > 0 {
+		return ExternalEffectClaimDecision{BlockedByRun: conflicts.Own[0].RunID, NeedsObservation: true, BlockingClaims: conflicts.All}, nil
+	}
+	// Another Run's left-uncertain effect passes once: by the person's approval
+	// of this exact call, or by this Run's own later observation bound to it.
+	// Neither releases that claim.
+	tolerated := map[string]bool{}
+	for _, id := range request.ToleratedClaimIDs {
+		tolerated[strings.TrimSpace(id)] = true
+	}
+	var unpassed []ExternalEffectClaim
+	for _, blocker := range conflicts.Foreign {
+		if !tolerated[blocker.ID] {
+			unpassed = append(unpassed, blocker)
 		}
 	}
-	if blockedBy != "" {
+	// An in-flight or watched claim can still settle without a decision; an
+	// unpassed left-uncertain claim is decided after the wait.
+	if len(conflicts.Waiting) > 0 {
+		blockedBy := conflicts.Waiting[0].RunID
+		if request.DeferWait {
+			return ExternalEffectClaimDecision{BlockedByRun: blockedBy, BlockingClaims: conflicts.All, DecideAfterWait: unpassed}, nil
+		}
 		encoded, err := json.Marshal(targets)
 		if err != nil {
 			return ExternalEffectClaimDecision{}, err
@@ -440,18 +526,29 @@ func (s *Store) claimExternalEffectsOnce(ctx context.Context, request ExternalEf
 		if err := tx.Commit(); err != nil {
 			return ExternalEffectClaimDecision{}, err
 		}
-		return ExternalEffectClaimDecision{BlockedByRun: blockedBy, BlockingClaims: blockers}, nil
+		return ExternalEffectClaimDecision{BlockedByRun: blockedBy, BlockingClaims: conflicts.All, DecideAfterWait: unpassed}, nil
+	}
+	if len(unpassed) > 0 {
+		return ExternalEffectClaimDecision{BlockedByRun: unpassed[0].RunID, NeedsApproval: true,
+			ApprovalClaims: unpassed, BlockingClaims: conflicts.All}, nil
+	}
+	if err := spendExternalEffectAcknowledgmentsTx(ctx, tx, request, conflicts, tolerated); err != nil {
+		return ExternalEffectClaimDecision{}, err
 	}
 	now := time.Now().Unix()
+	sequence, err := nextEffectSequenceTx(ctx, tx)
+	if err != nil {
+		return ExternalEffectClaimDecision{}, err
+	}
 	claims := make([]ExternalEffectClaim, 0, len(targets))
 	for _, target := range targets {
 		claim := ExternalEffectClaim{ID: "effectclaim_" + uuid.NewString(), TenantID: request.TenantID,
 			PersonID: request.PersonID, RunID: request.RunID, EffectID: request.EffectID,
-			TargetKey: target, State: ExternalClaimReserved}
+			TargetKey: target, State: ExternalClaimReserved, Sequence: sequence}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO external_effect_claims
-			(id, tenant_id, person_id, run_id, effect_id, target_key, state, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, claim.ID, claim.TenantID, claim.PersonID,
-			claim.RunID, claim.EffectID, claim.TargetKey, claim.State, now, now); err != nil {
+			(id, tenant_id, person_id, run_id, effect_id, target_key, state, sequence, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, claim.ID, claim.TenantID, claim.PersonID,
+			claim.RunID, claim.EffectID, claim.TargetKey, claim.State, claim.Sequence, now, now); err != nil {
 			return ExternalEffectClaimDecision{}, err
 		}
 		claims = append(claims, claim)
@@ -462,8 +559,36 @@ func (s *Store) claimExternalEffectsOnce(ctx context.Context, request ExternalEf
 	return ExternalEffectClaimDecision{Claims: claims, Granted: true}, nil
 }
 
+// spendExternalEffectAcknowledgmentsTx records, in the claim's transaction,
+// that this call used each observation that let it pass another Run's claim,
+// so one observation passes one call.
+func spendExternalEffectAcknowledgmentsTx(ctx context.Context, tx *sql.Tx, request ExternalEffectClaimRequest,
+	conflicts ExternalEffectConflicts, tolerated map[string]bool) error {
+	spent := map[string]bool{}
+	for _, blocker := range conflicts.Acknowledged {
+		ack := conflicts.acks[blocker.ID]
+		if tolerated[blocker.ID] || spent[ack.EventID] {
+			continue
+		}
+		spent[ack.EventID] = true
+		payload, err := json.Marshal(map[string]string{"observation_event_id": ack.EventID, "effect_id": request.EffectID})
+		if err != nil {
+			return err
+		}
+		inserted, _, err := insertEffectEventTx(ctx, tx, request.TenantID, request.RunID, ExternalEffectObservationSpent,
+			payload, "external-effect-observation-consumed:"+ack.EventID)
+		if err != nil {
+			return err
+		}
+		if !inserted {
+			return fmt.Errorf("external effect observation was already used")
+		}
+	}
+	return nil
+}
+
 func loadExternalEffectClaimsTx(ctx context.Context, tx *sql.Tx, tenantID, runID, effectID string) ([]ExternalEffectClaim, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT id, tenant_id, person_id, run_id, effect_id, target_key, state, observation_ref
+	rows, err := tx.QueryContext(ctx, `SELECT id, tenant_id, person_id, run_id, effect_id, target_key, state, observation_ref, sequence
 		FROM external_effect_claims WHERE tenant_id = ? AND run_id = ? AND effect_id = ? ORDER BY target_key`, tenantID, runID, effectID)
 	if err != nil {
 		return nil, err
@@ -473,12 +598,27 @@ func loadExternalEffectClaimsTx(ctx context.Context, tx *sql.Tx, tenantID, runID
 	for rows.Next() {
 		var claim ExternalEffectClaim
 		if err := rows.Scan(&claim.ID, &claim.TenantID, &claim.PersonID, &claim.RunID, &claim.EffectID,
-			&claim.TargetKey, &claim.State, &claim.ObservationRef); err != nil {
+			&claim.TargetKey, &claim.State, &claim.ObservationRef, &claim.Sequence); err != nil {
 			return nil, err
 		}
 		claims = append(claims, claim)
 	}
 	return claims, rows.Err()
+}
+
+// nextEffectSequenceTx takes the next value of the daemon-wide append counter
+// that also stamps event cursors (AppendEvent). Claims, watchers, and events
+// therefore share one order. SQLite admits one writer at a time and a rolled
+// back transaction returns its value, so a larger committed value was
+// committed later.
+func nextEffectSequenceTx(ctx context.Context, tx *sql.Tx) (int64, error) {
+	var next int64
+	if err := tx.QueryRowContext(ctx,
+		`UPDATE event_sequence SET next_cursor = next_cursor + 1 WHERE id = 1 RETURNING next_cursor`,
+	).Scan(&next); err != nil {
+		return 0, fmt.Errorf("allocate effect sequence: %w", err)
+	}
+	return next, nil
 }
 
 func validExternalTargetKey(target string) bool {

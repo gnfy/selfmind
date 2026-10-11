@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "requested.txt unrelated.txt verification_required update_plan finish_run"
+}

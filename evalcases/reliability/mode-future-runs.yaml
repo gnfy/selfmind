@@ -19,7 +19,8 @@ expect:
   max_duration_seconds: 30
   contains:
     - "for new Runs"
-    - "Existing Runs and pending approvals keep their admitted mode"
+    - "Tightening applies to queued and parked work; loosening does not"
+    - "already running keeps its mode"
 
 checks:
   no_mojibake: true

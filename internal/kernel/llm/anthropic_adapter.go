@@ -173,27 +173,29 @@ func (a *AnthropicAdapter) decodeAnthropicResponseWithMeta(body io.Reader, reque
 		}
 	}
 	if strings.TrimSpace(content) == "" && len(toolCalls) == 0 {
-		return nil, a.emptyResponseError(requestID, anthropicResp.StopReason, UsageStats{
-			InputTokens:              anthropicResp.Usage.InputTokens,
-			OutputTokens:             anthropicResp.Usage.OutputTokens,
-			CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
-			CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
-			CacheCreationReported:    true,
-		}, "HTTP 200 response contained no text or tool use")
+		return nil, a.emptyResponseError(requestID, anthropicResp.StopReason,
+			anthropicUsageStats(anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens,
+				anthropicResp.Usage.CacheReadInputTokens, anthropicResp.Usage.CacheCreationInputTokens),
+			"HTTP 200 response contained no text or tool use")
 	}
 
 	return &ChatResponse{
 		Content:      content,
 		ToolCalls:    toolCalls,
 		FinishReason: anthropicResp.StopReason,
-		Usage: UsageStats{
-			InputTokens:              anthropicResp.Usage.InputTokens,
-			OutputTokens:             anthropicResp.Usage.OutputTokens,
-			CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
-			CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
-			CacheCreationReported:    true,
-		},
+		Usage: anthropicUsageStats(anthropicResp.Usage.InputTokens, anthropicResp.Usage.OutputTokens,
+			anthropicResp.Usage.CacheReadInputTokens, anthropicResp.Usage.CacheCreationInputTokens),
 	}, nil
+}
+
+// Anthropic's input_tokens excludes both cache buckets. Normalize once at the
+// adapter boundary to UsageStats' logical total, retaining the native split.
+func anthropicUsageStats(input, output, cacheRead, cacheWrite int) UsageStats {
+	return UsageStats{
+		InputTokens: input + cacheRead + cacheWrite, OutputTokens: output,
+		CacheMissInputTokens: input, CacheReadInputTokens: cacheRead,
+		CacheCreationInputTokens: cacheWrite, CacheCreationReported: true,
+	}
 }
 
 func decodeAnthropicContent(raw json.RawMessage) ([]anthropicContentBlock, string, error) {
@@ -374,12 +376,9 @@ func anthropicStreamEventsForProvider(resp *http.Response, provider string) <-ch
 				startUsage := chunk.Message.Usage
 				if !inputTokensSent && (startUsage.InputTokens > 0 || startUsage.CacheReadInputTokens > 0 || startUsage.CacheCreationInputTokens > 0) {
 					inputTokensSent = true
-					ch <- StreamEvent{Usage: &UsageStats{
-						InputTokens:              startUsage.InputTokens,
-						CacheReadInputTokens:     startUsage.CacheReadInputTokens,
-						CacheCreationInputTokens: startUsage.CacheCreationInputTokens,
-						CacheCreationReported:    true,
-					}}
+					usage := anthropicUsageStats(startUsage.InputTokens, 0,
+						startUsage.CacheReadInputTokens, startUsage.CacheCreationInputTokens)
+					ch <- StreamEvent{Usage: &usage}
 				}
 			case "message_delta":
 				if chunk.Delta.StopReason != "" {

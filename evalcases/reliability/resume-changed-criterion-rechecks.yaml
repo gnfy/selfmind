@@ -37,6 +37,9 @@ expect:
   max_duration_seconds: 300
 assert_state:
   - on: events
+    type: strategy.plan_guidance_escalated
+    count_lte: 0
+  - on: events
     type: work.selection_committed
     count_gte: 1
   - on: events

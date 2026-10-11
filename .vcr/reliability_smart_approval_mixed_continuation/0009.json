@@ -3,136 +3,81 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Now"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": "-only"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": " via"
-    },
-    {
-      "reasoning_content": " terminal"
-    },
-    {
-      "reasoning_content": " cat"
-    },
-    {
-      "reasoning_content": " prerequisite"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Then"
-    },
-    {
-      "reasoning_content": " register"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " two"
-    },
-    {
-      "reasoning_content": " wat"
-    },
-    {
-      "reasoning_content": "chers"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " run"
-    },
-    {
-      "reasoning_content": " terminal"
-    },
-    {
-      "reasoning_content": " cat"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "content": "现在"
-    },
-    {
-      "content": "做"
-    },
-    {
-      "content": "只"
-    },
-    {
-      "content": "读"
-    },
-    {
-      "content": "核对"
-    },
-    {
-      "content": "，"
-    },
-    {
-      "content": "确认"
-    },
-    {
-      "content": "前置"
-    },
-    {
-      "content": "文件"
-    },
-    {
-      "content": "当前"
-    },
-    {
-      "content": "内容"
-    },
-    {
-      "content": "。"
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "正在同一批调用中登记两个外部观察"
     },
     {
       "usage": {
-        "input_tokens": 19996,
-        "output_tokens": 130,
-        "cache_read_input_tokens": 19456,
-        "cache_miss_input_tokens": 540,
+        "input_tokens": 14974,
+        "output_tokens": 9,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 25,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "者以实现后台交接。"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 7,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 80,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 90,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2570,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 12167,
+        "cache_miss_input_tokens": 5377,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_nB7fJb07G3twXScy9KW65240",
-          "Function": "terminal",
-          "Args": "{\"command\": \"cat prerequisite.txt\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\"}"
+          "ID": "call_611855",
+          "Function": "watch_external",
+          "Args": "{\"timeout_seconds\":60,\"description\":\"检查 prerequisite.txt 为 READY\",\"command\":\"cat prerequisite.txt\",\"wait_group\":\"receipt-handoff\",\"wait_group_mode\":\"all\",\"wait_group_size\":2,\"interval_seconds\":5,\"success_pattern\":\"READY\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
+        },
+        {
+          "ID": "call_611867",
+          "Function": "watch_external",
+          "Args": "{\"description\":\"检查 second-prerequisite.txt 为 READY_B\",\"wait_group\":\"receipt-handoff\",\"timeout_seconds\":60,\"success_pattern\":\"READY_B\",\"interval_seconds\":5,\"command\":\"cat second-prerequisite.txt\",\"wait_group_size\":2,\"wait_group_mode\":\"all\"}"
         }
       ]
     }

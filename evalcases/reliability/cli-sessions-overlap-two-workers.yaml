@@ -1,0 +1,69 @@
+id: reliability_cli_sessions_overlap_two_workers
+title: "Two CLI sessions hold two agent workers at once and each stops its own Run"
+suite: reliability
+workspace: isolated
+model_required: false
+
+# Capacity two with two workers, built through app.InitGateway. Each session
+# works in its own directory, so the Runs do not share a write lock. A held Run
+# keeps its worker without a model call until its session stops it.
+runtime:
+  max_active_work_runs: 2
+  workers: 2
+
+turns:
+  - input: "Draft the release notes for the parser"
+    platform: cli
+    channel: session-a
+    cwd: parser
+    hold_worker: true
+  - input: "Draft the release notes for the renderer"
+    platform: cli
+    channel: session-b
+    cwd: renderer
+    hold_worker: true
+    assert_state:
+      - on: worker_overlap
+        count_gte: 2
+      - on: runs
+        status: running
+        count_gte: 2
+  - input: "/status"
+    platform: cli
+    channel: session-a
+  - input: "/stop"
+    platform: cli
+    channel: session-a
+    turn_run_ordinal: 1
+  - input: "/stop"
+    platform: cli
+    channel: session-b
+    turn_run_ordinal: 2
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_tool_errors: 0
+  max_duration_seconds: 60
+  contains:
+    - "2 runs active:"
+    - "Stopping run"
+
+assert_state:
+  - on: worker_leases
+    count_gte: 2
+    count_lte: 2
+  - on: leased_workers
+    count_gte: 2
+  - on: worker_overlap
+    count_gte: 2
+  - on: runs
+    status: cancelled
+    count_gte: 2
+    count_lte: 2
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

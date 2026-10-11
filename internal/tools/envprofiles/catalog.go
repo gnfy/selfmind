@@ -183,6 +183,8 @@ var Catalog = []EnvProfile{
 			{
 				Key: "aws/sso-cache",
 				At:  StateSource{HomeRelPath: ".aws/sso/cache"},
+				// The CLI keeps one JSON file per token here and nothing else.
+				Flat: true,
 				Seed: &CopyIn{
 					From:     StateSource{HomeRelPath: ".aws/sso/cache"},
 					Include:  []string{"*.json"},
@@ -194,8 +196,9 @@ var Catalog = []EnvProfile{
 			{
 				// The CLI cache holds STS/assume-role results and is written on
 				// every profile that uses them.
-				Key: "aws/cli-cache",
-				At:  StateSource{HomeRelPath: ".aws/cli/cache"},
+				Key:  "aws/cli-cache",
+				At:   StateSource{HomeRelPath: ".aws/cli/cache"},
+				Flat: true,
 				Seed: &CopyIn{
 					From:     StateSource{HomeRelPath: ".aws/cli/cache"},
 					Include:  []string{"*.json"},

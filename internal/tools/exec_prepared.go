@@ -40,11 +40,12 @@ func preparedProfilesKey(stateDir string, profiles []*envprofiles.EnvProfile, ct
 			ids = append(ids, fmt.Sprintf("%s:%d:%d", profile.ID, len(profile.MapRWAt), len(profile.SynthesizeDir)))
 		}
 	}
-	return fmt.Sprintf("%s|%s|%s|%v|%s",
+	return fmt.Sprintf("%s|%s|%s|%v|%v|%s",
 		strings.TrimSpace(stateDir),
 		strings.Join(ids, ","),
 		strings.TrimSpace(ctx.Trust),
 		ctx.HasCredentialRead,
+		ctx.InPlaceState,
 		shortHash(ctx.Home+"\x00"+ctx.ToolchainRoot))
 }
 

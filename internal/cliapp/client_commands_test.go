@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +42,7 @@ func TestGatewayURLFallsBackToDaemonEnv(t *testing.T) {
 func newSendTestApp(t *testing.T, args []string) (*App, *api.MessageRequest, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	recorded := &api.MessageRequest{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newFakeGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/message" {
 			http.NotFound(w, r)
 			return

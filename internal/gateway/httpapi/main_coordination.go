@@ -34,9 +34,15 @@ func (d *Server) mainCoordinationSelection(ctx context.Context, identity *contro
 	}
 	coordCtx, cancel := context.WithTimeout(ctx, mainCoordinationTimeout)
 	defer cancel()
+	admission, admissionErr := coordinationAdmission(d.coordinator(), identity, req)
+	if admissionErr != nil {
+		// No guessed mode: the choice stays for the human to answer.
+		return mainCoordinationDecision{}
+	}
 	run, err := d.Control.StartRunForOwner(coordCtx,
 		control.RunOwner{TenantID: identity.TenantID, PersonID: identity.PersonID},
-		req.Channel, "Route an IM message among active work", control.StartRunOptions{ExecutionClass: "coordination"})
+		req.Channel, "Route an IM message among active work", control.StartRunOptions{ExecutionClass: "coordination",
+			Admission: admission})
 	if err != nil {
 		// One coordination Run per person. A second inbound message keeps its
 		// own pending choice rather than waiting for a model slot or guessing.

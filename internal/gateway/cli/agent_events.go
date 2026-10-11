@@ -58,6 +58,7 @@ func activityPhase(payload map[string]interface{}) string {
 }
 
 func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
+	previousRunID := m.daemonRunID
 	return func() tea.Msg {
 		if m.messageProcessor != nil {
 			var full strings.Builder
@@ -105,21 +106,21 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 				usage = resp.Usage
 			}
 			if resp.Error != "" {
-				return MsgAgentDone{Response: full.String(), Usage: usage, Err: fmt.Errorf("%s", resp.Error), Input: input, Turn: resp.Turn}
+				return MsgAgentDone{PreviousRunID: previousRunID, Response: full.String(), Usage: usage, Err: fmt.Errorf("%s", resp.Error), Input: input, Turn: resp.Turn}
 			}
 			if status >= http.StatusBadRequest {
-				return MsgAgentDone{Response: full.String(), Usage: usage, Err: fmt.Errorf("gateway returned HTTP %d", status), Input: input, Turn: resp.Turn}
+				return MsgAgentDone{PreviousRunID: previousRunID, Response: full.String(), Usage: usage, Err: fmt.Errorf("gateway returned HTTP %d", status), Input: input, Turn: resp.Turn}
 			}
 			content := resp.Content
 			if strings.TrimSpace(content) == "" {
 				content = full.String()
 			}
-			return MsgAgentDone{Response: content, Usage: usage, Input: input, Turn: resp.Turn}
+			return MsgAgentDone{PreviousRunID: previousRunID, Response: content, Usage: usage, Input: input, Turn: resp.Turn}
 		}
 
 		// The TUI is a daemon client with no in-process fallback: without a
 		// connected message processor there is nothing to run against.
-		return MsgAgentDone{Err: fmt.Errorf("gateway daemon is not connected")}
+		return MsgAgentDone{PreviousRunID: previousRunID, Input: input, Err: fmt.Errorf("gateway daemon is not connected")}
 	}
 }
 
@@ -359,6 +360,10 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 			}
 		}
 		m.program.Send(MsgClarifyRequest{ID: id, Question: event.Content, Choices: clarifyChoicesFromPayload(event.Payload), Channel: ref.Channel})
+	case "clarify.expired":
+		if id, _ := event.Payload["clarify_id"].(string); strings.TrimSpace(id) != "" {
+			m.program.Send(MsgClarifyResolved{ID: strings.TrimSpace(id), Event: ref})
+		}
 	}
 }
 

@@ -32,7 +32,12 @@ expect:
   verification_state: passed
   max_tool_errors: 0
   max_duration_seconds: 300
+# A committed continuation already owns its imported Plan; the loop must
+# reconcile that state rather than claim that no plan was supplied.
 assert_state:
+  - on: events
+    type: strategy.plan_guidance_escalated
+    count_lte: 0
   - on: events
     type: evidence.recorded
     payload_contains: '"kind":"verification"'

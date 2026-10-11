@@ -40,7 +40,7 @@ func TestSplitMessageNeverSplitsACharacter(t *testing.T) {
 // exactly once.
 func TestNoDoubleDispatch(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestNoDoubleDispatch(t *testing.T) {
 
 func TestResolvedApprovalDeliveryIsSupersededBeforeSend(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func (r *receiptSender) SendWithReceipt(ctx context.Context, msg Message) (bool,
 // risk duplicates) yet distinguishable from 'sent' for digest surfacing.
 func TestUnconfirmedDeliveryIsTerminalButDistinct(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestUnconfirmedDeliveryIsTerminalButDistinct(t *testing.T) {
 
 func TestEnqueueConfirmedDoesNotConfuseAcceptedWithDelivered(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestEnqueueConfirmedDoesNotConfuseAcceptedWithDelivered(t *testing.T) {
 
 func TestLogicalDeliveryReplayReusesDurableOutboxRow(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}

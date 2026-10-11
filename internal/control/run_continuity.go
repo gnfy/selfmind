@@ -80,9 +80,9 @@ func validateResumeClaimTx(ctx context.Context, tx *sql.Tx, child *Run, queueID 
 		var providerQueueID string
 		err := tx.QueryRowContext(ctx, `SELECT id FROM task_queue
 			WHERE tenant_id=? AND person_id=? AND reply_to_run_id=?
-			AND idempotency_key=? AND status IN ('queued','started')`,
+			AND idempotency_key IN (?,?) AND status IN ('queued','started')`,
 			child.TenantID, child.PersonID, child.ResumesRunID,
-			"provider-wait:"+child.ResumesRunID).Scan(&providerQueueID)
+			"provider-wait:"+child.ResumesRunID, "execution-lane:"+child.ResumesRunID).Scan(&providerQueueID)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}

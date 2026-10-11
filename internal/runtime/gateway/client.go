@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/httpapi"
 )
 
 type StartResult struct {
@@ -76,13 +77,18 @@ var ErrShutdownDeferred = errors.New("gateway shutdown was deferred to preserve 
 // SpawnRestartHelper launches the ordinary CLI restart path in a detached
 // helper. This preserves launchd/systemd ownership when a daemon-originated
 // model transaction needs to restart the process that is currently serving it.
-func SpawnRestartHelper(configPath, dataDir, changeID string) error {
+//
+// A helper the daemon starts is a descendant of the daemon, so the daemon never
+// takes it for the person's own CLI. capability is the secret that lets it stop
+// the daemon for this model change and nothing else; it travels in the helper's
+// environment only, never its arguments. The person's own CLI passes none.
+func SpawnRestartHelper(configPath, dataDir, changeID, capability string) error {
 	exe, err := resolveDaemonExecutable("")
 	if err != nil {
 		return err
 	}
 	paths := ResolvePaths(dataDir)
-	if err := os.MkdirAll(paths.RuntimeDir, 0755); err != nil {
+	if err := os.MkdirAll(paths.RuntimeDir, 0o700); err != nil {
 		return err
 	}
 	logFile, err := os.OpenFile(paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -90,6 +96,21 @@ func SpawnRestartHelper(configPath, dataDir, changeID string) error {
 		return err
 	}
 	defer logFile.Close()
+	cmd := restartHelperCommand(exe, configPath, changeID, capability)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	configureDetachedCommand(&cmd.SysProcAttr)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
+}
+
+// restartCapabilityEnv names the helper's environment variable that carries its
+// capability. The SELF_ prefix keeps it out of every tool's environment.
+const restartCapabilityEnv = "SELF_GATEWAY_RESTART_CAPABILITY"
+
+func restartHelperCommand(exe, configPath, changeID, capability string) *exec.Cmd {
 	args := []string{"gateway", "restart", "--drain"}
 	if strings.TrimSpace(configPath) != "" {
 		args = append([]string{"--config", configPath}, args...)
@@ -99,13 +120,10 @@ func SpawnRestartHelper(configPath, dataDir, changeID string) error {
 		"SELF_GATEWAY_RESTART_REASON=model_change:"+strings.TrimSpace(changeID),
 		"SELF_GATEWAY_RESTART_DELAY_MS=1500",
 	)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	configureDetachedCommand(&cmd.SysProcAttr)
-	if err := cmd.Start(); err != nil {
-		return err
+	if capability = strings.TrimSpace(capability); capability != "" {
+		cmd.Env = append(cmd.Env, restartCapabilityEnv+"="+capability)
 	}
-	return cmd.Process.Release()
+	return cmd
 }
 
 func StartDetached(opts StartOptions) (StartResult, error) {
@@ -135,7 +153,7 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 			return StartResult{}, fmt.Errorf("replace running gateway: %w", err)
 		}
 	}
-	if err := os.MkdirAll(manager.Paths.RuntimeDir, 0755); err != nil {
+	if err := os.MkdirAll(manager.Paths.RuntimeDir, 0o700); err != nil {
 		return StartResult{}, err
 	}
 	logFile, err := os.OpenFile(manager.Paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
@@ -300,13 +318,23 @@ func pickDaemonExecutable(override, current string, currentErr error) (string, e
 	return fromPath, nil
 }
 
+// RequestStatus asks a daemon over TCP. Without the gateway token it answers
+// only that it is up; use RequestStatusFor to read its detail as the person.
 func RequestStatus(ctx context.Context, url string) ([]byte, int, error) {
+	return RequestStatusFor(ctx, url, "")
+}
+
+// RequestStatusFor asks the daemon at url for its status. With the data
+// directory of a daemon on this host the request goes to its local control
+// socket, where the daemon recognizes the person's own CLI and answers in full;
+// without one, or for a remote daemon, it goes over TCP.
+func RequestStatusFor(ctx context.Context, url, dataDir string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ResolveURL(url)+"/v1/gateway/status", nil)
 	if err != nil {
 		return nil, 0, err
 	}
 	attachAuth(req)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doAdminRequest(req, dataDir)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -315,9 +343,43 @@ func RequestStatus(ctx context.Context, url string) ([]byte, int, error) {
 	return data, resp.StatusCode, nil
 }
 
+// useLocalControl reports whether a request for the daemon of dataDir goes to
+// its local control socket: the daemon is on this host, where the kernel tells
+// it who is calling. A remote daemon cannot know the caller and is reached over
+// TCP with the gateway token. An empty host (":8765") binds every interface but
+// still serves this host.
+func useLocalControl(rawURL, dataDir string) bool {
+	if strings.TrimSpace(dataDir) == "" {
+		return false
+	}
+	return LocalGatewayURL(ResolveURL(rawURL))
+}
+
+// doAdminRequest sends a request that stops or inspects the daemon of dataDir.
+// A daemon on this host is asked on its control socket; only when there is no
+// socket (a daemon that predates it) does the request fall back to TCP, where a
+// current daemon answers only a holder of the gateway token. A socket that
+// answers is never second-guessed: a refusal there is the daemon's decision.
+func doAdminRequest(req *http.Request, dataDir string) (*http.Response, error) {
+	if !useLocalControl(req.URL.String(), dataDir) {
+		return http.DefaultClient.Do(req)
+	}
+	retry := req.Clone(req.Context())
+	if req.GetBody != nil {
+		if body, err := req.GetBody(); err == nil {
+			retry.Body = body
+		}
+	}
+	resp, err := LocalControlClient(dataDir).Do(req)
+	if err != nil && errors.Is(err, ErrLocalControlUnavailable) {
+		return http.DefaultClient.Do(retry)
+	}
+	return resp, err
+}
+
 // RequestToolCatalogProbe invokes the daemon-owned primary provider with its
-// real effective tool catalogue. The local-control credential prevents remote
-// callers from spending quota through this diagnostic endpoint.
+// real effective tool catalogue. Only the person's own CLI on the local
+// control socket may spend quota through this diagnostic endpoint.
 func RequestToolCatalogProbe(ctx context.Context, url, dataDir string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ResolveURL(url)+"/v1/gateway/tool-catalog/probe", bytes.NewReader([]byte(`{}`)))
 	if err != nil {
@@ -325,10 +387,7 @@ func RequestToolCatalogProbe(ctx context.Context, url, dataDir string) ([]byte, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	attachAuth(req)
-	if token, tokenErr := ReadLocalControlToken(dataDir); tokenErr == nil {
-		req.Header.Set("X-SelfMind-Local-Control-Token", token)
-	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := LocalControlClient(dataDir).Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -369,6 +428,9 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	attachAuth(req)
+	if capability := strings.TrimSpace(os.Getenv(restartCapabilityEnv)); capability != "" && modelChangeReason(reason) {
+		req.Header.Set(httpapi.RestartCapabilityHeader, capability)
+	}
 	var requestWritten atomic.Bool
 	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
 		WroteRequest: func(info httptrace.WroteRequestInfo) {
@@ -377,7 +439,7 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 			}
 		},
 	}))
-	resp, requestErr := http.DefaultClient.Do(req)
+	resp, requestErr := doAdminRequest(req, opts.DataDir)
 	if requestErr != nil {
 		if opts.DataDir != "" {
 			manager := NewManager(opts.DataDir, "")
@@ -403,7 +465,13 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 			if opts.Force {
 				return forceStopFromDataDir(opts.DataDir)
 			}
-			return fmt.Errorf("%s: %s", resp.Status, string(data))
+			// The daemon does not tell a refused caller where its socket is; the path
+			// is this client's own to derive and to show the person.
+			hint := ""
+			if resp.StatusCode == http.StatusForbidden && opts.DataDir != "" {
+				hint = " (this daemon's local control socket is " + LocalControlSocketPath(opts.DataDir) + ")"
+			}
+			return fmt.Errorf("%s: %s%s", resp.Status, string(data), hint)
 		}
 		// Release the shutdown request's keep-alive connection before waiting for
 		// the daemon PID to disappear. Holding the response body open makes
@@ -421,7 +489,7 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 		}
 		gatewayReachable := false
 		if serviceReconcile {
-			if statusData, statusCode, statusErr := RequestStatus(ctx, opts.URL); statusErr == nil && statusCode < http.StatusBadRequest {
+			if statusData, statusCode, statusErr := RequestStatusFor(ctx, opts.URL, opts.DataDir); statusErr == nil && statusCode < http.StatusBadRequest {
 				var status api.GatewayStatusResponse
 				if json.Unmarshal(statusData, &status) == nil {
 					gatewayReachable = true
@@ -452,6 +520,14 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 		return requestErr
 	}
 	return nil
+}
+
+// modelChangeReason reports whether a shutdown reason names a model change, the
+// one reason the restart helper's capability is good for.
+func modelChangeReason(reason string) bool {
+	const prefix = "model_change:"
+	reason = strings.TrimSpace(reason)
+	return strings.HasPrefix(strings.ToLower(reason), prefix) && strings.TrimSpace(reason[len(prefix):]) != ""
 }
 
 func forceStopFromDataDir(dataDir string) error {

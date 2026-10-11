@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -379,7 +380,17 @@ func (p *recordingLLMProvider) StreamChat(ctx context.Context, req llm.ChatReque
 type planningBackend struct{}
 
 func (b *planningBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
+	if name == "update_plan" {
+		return acceptedPlanResult(args), nil
+	}
 	return "ok", nil
+}
+
+// acceptedPlanResult answers update_plan as the tool does without a durable
+// projection: the accepted snapshot is the requested one.
+func acceptedPlanResult(args map[string]interface{}) string {
+	data, _ := json.Marshal(map[string]interface{}{"plan": args["plan"], "changed": true})
+	return string(data)
 }
 
 type planReconciliationProvider struct {
@@ -516,7 +527,7 @@ func (b *budgetClosureBackend) Dispatch(name string, args map[string]interface{}
 	case "read_file":
 		return "read evidence", nil
 	case "update_plan":
-		return `{"changed":true}`, nil
+		return acceptedPlanResult(args), nil
 	case "finish_run":
 		return `{"status":"done","summary":"implemented and verified"}`, nil
 	default:
@@ -657,7 +668,7 @@ func (b *planEscalationBackend) Dispatch(name string, args map[string]interface{
 	case "read_file":
 		return "file content", nil
 	case "update_plan":
-		return `{"changed":true}`, nil
+		return acceptedPlanResult(args), nil
 	default:
 		return "", fmt.Errorf("unexpected tool %s", name)
 	}

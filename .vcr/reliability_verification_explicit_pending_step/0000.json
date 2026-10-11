@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "first.txt second.txt update_plan verify finish_run"
+}

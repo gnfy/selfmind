@@ -1,0 +1,152 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Skill"
+    },
+    {
+      "reasoning_content": " activated. Now find"
+    },
+    {
+      "reasoning_content": " the waiting \""
+    },
+    {
+      "reasoning_content": "Prepared version inspection"
+    },
+    {
+      "reasoning_content": "\" Run. The"
+    },
+    {
+      "reasoning_content": " hints"
+    },
+    {
+      "reasoning_content": " already give run_id"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "run_af6db"
+    },
+    {
+      "reasoning_content": "6c2"
+    },
+    {
+      "reasoning_content": "-05d"
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": "-43ee"
+    },
+    {
+      "reasoning_content": "-98"
+    },
+    {
+      "reasoning_content": "b2-6"
+    },
+    {
+      "reasoning_content": "3957"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "bf5aed status"
+    },
+    {
+      "reasoning_content": "=waiting_user."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me work_inspect"
+    },
+    {
+      "reasoning_content": " it to"
+    },
+    {
+      "reasoning_content": " confirm, then work"
+    },
+    {
+      "reasoning_content": "_select(resume)."
+    },
+    {
+      "reasoning_content": "\n\nThe guidance says"
+    },
+    {
+      "reasoning_content": " work"
+    },
+    {
+      "reasoning_content": "_inspect is needed"
+    },
+    {
+      "reasoning_content": " only to tell"
+    },
+    {
+      "reasoning_content": " candidates apart; but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " instruction says \"find"
+    },
+    {
+      "reasoning_content": " and inspect the waiting"
+    },
+    {
+      "reasoning_content": " Prepared version inspection Run"
+    },
+    {
+      "reasoning_content": "\". Let me do"
+    },
+    {
+      "reasoning_content": " work_search then work"
+    },
+    {
+      "reasoning_content": "_ins"
+    },
+    {
+      "reasoning_content": "pect."
+    },
+    {
+      "content": "Skill loaded."
+    },
+    {
+      "content": " Now locating"
+    },
+    {
+      "content": " the waiting run."
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12539,
+        "output_tokens": 164,
+        "cache_read_input_tokens": 11264,
+        "cache_miss_input_tokens": 1275,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 113,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "work_search",
+          "Args": "{\"limit\": 5, \"mode\": \"attention\"}"
+        }
+      ]
+    }
+  ]
+}

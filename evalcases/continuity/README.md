@@ -19,8 +19,6 @@ What each case proves today:
   covered by `timeline/timeline-confirm-after-waiting-run.yaml` and Go tests.
 - `continuity-stranger.yaml` (cassette-backed): a different `platform_user_id`
   asking `/status` sees `No active task.` and never the first user's marker.
-- `continuity-task-attach.yaml` (cassette-backed): two unrelated tool-free
-  turns complete cleanly; grouping semantics are pinned by Go tests.
 - `recall-cross-task.yaml`, `memory-pinned-recall.yaml`, and
   `memory-canonical-query-recall.yaml` (cassette-backed): prior work and saved
   preferences reach a later turn through recall (`context.recall` state
@@ -55,7 +53,6 @@ Cassettes land in `.vcr/<case-id>/` (one numbered JSON file per model call):
 - `.vcr/continuity_resume/`
 - `.vcr/continuity_start_execution/`
 - `.vcr/continuity_stranger/`
-- `.vcr/continuity_task_attach/`
 - `.vcr/recall_cross_task/`
 - `.vcr/memory_pinned_recall/`
 - `.vcr/memory_canonical_query_recall/`

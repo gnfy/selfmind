@@ -12,7 +12,12 @@
 #   3) for the baseline, set gateway.max_active_work_runs: 1 and start with SELFMIND_WORKERS=1
 #      and compare total wall-time.
 #
-# Env: ADDR (default 127.0.0.1:8765), N (default 4), PROMPT, TIMEOUT (default 180s).
+# Env: ADDR (default 127.0.0.1:8765), N (default 4), PROMPT, TIMEOUT (default 180s),
+# TOKEN (the gateway bearer token, when the daemon was started with one).
+#
+# The requests are HTTP-integration identities, not CLI ones: the daemon grants
+# CLI identity only to the person's own terminal on its local control socket,
+# so a script talking TCP can never act as `cli`.
 set -u
 ADDR="${ADDR:-127.0.0.1:8765}"
 N="${N:-4}"
@@ -27,7 +32,8 @@ pids=()
 for i in $(seq 1 "$N"); do
   curl -sS -m "$TIMEOUT" -X POST "http://$ADDR/v1/message" \
     -H 'Content-Type: application/json' \
-    -d "{\"platform\":\"cli\",\"platform_user_id\":\"soak-$i\",\"channel\":\"soak-$i\",\"content\":\"$PROMPT\"}" \
+    ${TOKEN:+-H "Authorization: Bearer $TOKEN"} \
+    -d "{\"platform\":\"http\",\"platform_user_id\":\"soak-$i\",\"channel\":\"soak-$i\",\"content\":\"$PROMPT\"}" \
     -o "/tmp/soak-$i.json" \
     -w "  req $i: http=%{http_code} time=%{time_total}s" >/tmp/soak-$i.timing 2>&1 &
   pids+=($!)

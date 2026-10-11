@@ -46,6 +46,11 @@ assert_state:
     type: plan.updated
     payload_contains: '"cancellation_disposition":"user_takeover"'
     count_gte: 1
+  # The takeover quote comes from this turn's own request, and the plan says so.
+  - on: events
+    type: plan.updated
+    payload_contains: '"cancellation_authorized_by":{"input":"request"'
+    count_gte: 1
   - on: file
     path: draft.txt
     contains: Draft ready

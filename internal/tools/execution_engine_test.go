@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"selfmind/internal/kernel"
+	"selfmind/internal/tools/sandbox"
 )
 
 // A plan may be logged, stored, or one day sent to another execution node.
@@ -428,7 +429,7 @@ func TestExecuteAcceptsEveryRequestShape(t *testing.T) {
 		t.Fatalf("argv request did not produce its output\n%s", describeExecution(argv, err))
 	}
 
-	durable, err := Execute(context.Background(), ExecutionRequest{
+	durable, err := Execute(WithExecutionRuntime(context.Background(), NewExecutionRuntime("durable-shape", t.TempDir(), sandbox.PrivateState{}, nil)), ExecutionRequest{
 		ToolName: "watch_external", Payload: "printf durable-shape", Shell: true,
 		CWD: workspace, WorkspaceRoots: []string{workspace}, Sandbox: SandboxAuto,
 		Durable:     &DurableExecutionScope{TenantID: "t", PersonID: "p"},

@@ -2,8 +2,6 @@ package gateway
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +38,10 @@ import (
 // a finished run's intermediate files stay inspectable for a while instead of
 // vanishing the moment it ends.
 const runScratchTTL = 24 * time.Hour
+
+// hostStateRepairShutdownWait bounds how long shutdown waits for interrupted
+// commands to finish repairing the credential caches they wrote in place.
+const hostStateRepairShutdownWait = 15 * time.Second
 
 type Options struct {
 	Addr         string
@@ -141,6 +143,15 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		manager.Cleanup(exitReason)
 	}()
 
+	// One agent worker per admitted Run unless SELFMIND_WORKERS says
+	// otherwise. Resolve it before any model, storage or worker setup so an
+	// invalid override fails fast, is recorded as this start's exit reason,
+	// and is never attributed to a pending model change.
+	workerCount, err := app.ResolveWorkerCount(cfg.Gateway.MaxActiveWorkRuns)
+	if err != nil {
+		return err
+	}
+
 	// Model transitions are reconciled only after this process owns
 	// gateway.lock. launchd/systemd may briefly start competing processes; they
 	// must not each increment attempts or mutate the same candidate transaction.
@@ -191,10 +202,15 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			_ = mem.Close()
 		}
 	}()
-	localControlToken, err := EnsureLocalControlToken(dataDir)
-	if err != nil {
-		return fmt.Errorf("initialize local control token: %w", err)
+	// The person's CLI is verified from kernel peer credentials on the local
+	// control socket. The shared token earlier releases kept beside the state
+	// file was readable by any tool running as this user; drop any copy left.
+	if err := removeLegacyLocalControlToken(dataDir); err != nil {
+		return fmt.Errorf("remove retired local control token: %w", err)
 	}
+	localControl := startLocalControl(ctx, dataDir, cfg, addr)
+	defer localControl.stop()
+	ctx = tools.WithExecutionRuntime(ctx, localControl.execution)
 	prompts, promptStatus := app.InspectRuntimePromptSnapshot(cfg, dataDir)
 	if promptStatus.Source != app.PromptSourceActive {
 		log.Warn("gateway: invalid prompt workspace; continuing with safe fallback",
@@ -247,6 +263,12 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	} else if removed > 0 {
 		log.Info("gateway: removed expired run scratch", "count", removed, "ttl", runScratchTTL)
 	}
+	// A command a crash or kill interrupted never reached its own repair of
+	// the credential caches it wrote in place: stop what it left running and
+	// repair only their recorded cache paths before any new command starts. Daemons whose data
+	// directories sit side by side share the runtime root; each acts only on
+	// its own commands' records.
+	localControl.execution.SweepHostStateAtStartup()
 
 	controlStore, err := control.OpenStore(dataDir)
 	if err != nil {
@@ -298,6 +320,13 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	} else if interrupted > 0 {
 		log.Warn("gateway: recovered interrupted runs/tasks from previous daemon", "count", interrupted)
 	}
+	// A background effect the previous daemon started can no longer have its
+	// exit observed: record it as returned with an unknown exit, uncertain.
+	if abandoned, err := controlStore.RecordAbandonedBackgroundEffects(context.Background()); err != nil {
+		log.Warn("gateway: background effect boot sweep failed", "error", err)
+	} else if abandoned > 0 {
+		log.Warn("gateway: recorded background effects of a previous daemon as uncertain", "count", abandoned)
+	}
 	// Boot-time approval-grant review: remembered classes minted before the
 	// current eligibility floor may authorise far more than the human intended
 	// (a key naming a shell prologue, or a host grant with no workspace/command
@@ -309,51 +338,30 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		log.Warn("gateway: withdrew over-broad approval grants", "revoked", revoked, "remaining", len(kept))
 	}
 
-	agent, err := app.InitAgent(mem, cfg, defaultTenantID, prompts, controlStore, requestGate)
+	// Every worker gets the full tool catalogue (including cron and the shared
+	// MCP connections) and the durable review queue from this one call, which
+	// refuses to start workers whose catalogues differ.
+	gwDeps, err := app.InitGateway(app.GatewayOptions{
+		DataDir: dataDir, Memory: mem, Config: cfg, TenantID: defaultTenantID, Prompts: prompts,
+		Control: controlStore, Workers: workerCount, RequestGate: requestGate,
+	})
 	if err != nil {
-		return fmt.Errorf("app.InitAgent failed: %w", err)
+		return fmt.Errorf("initialize agent workers: %w", err)
 	}
-
-	disp, err := app.InitTools(mem, cfg, agent, defaultTenantID, prompts, controlStore, requestGate)
-	if err != nil {
-		return fmt.Errorf("app.InitTools failed: %w", err)
-	}
-	agent.SetBackend(disp)
-
-	gwDeps, err := app.InitGateway(dataDir, mem, agent, cfg)
-	if err != nil {
-		return fmt.Errorf("app.InitGateway failed: %w", err)
-	}
-	// Two independent workers by default; explicit SELFMIND_WORKERS=1 keeps
-	// the single-agent path. Admission capacity is checked against this count.
-	workerCount := 1
-	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, defaultTenantID, prompts, controlStore, requestGate); werr != nil {
-		if cfg.Gateway.MaxActiveWorkRuns > 1 {
-			return fmt.Errorf("initialize parallel agent workers: %w", werr)
-		}
-		log.Warn("worker pool partially enabled", "workers", workers, "error", werr)
-	} else if workers > 1 {
-		workerCount = workers
-		log.Info("agent worker pool enabled", "workers", workers)
-	}
-	defer app.StopCron(gwDeps.CronScheduler)
-	app.RegisterCronTool(disp, gwDeps.CronScheduler)
-	if err := disp.ValidateInternalToolSchemas(); err != nil {
-		return fmt.Errorf("validate registered tool schemas: %w", err)
+	defer gwDeps.Close()
+	agent, disp := gwDeps.Workers[0].Agent, gwDeps.Workers[0].Dispatcher
+	if workerCount > 1 {
+		log.Info("agent worker pool enabled", "workers", workerCount)
 	}
 	skillStorage, err := app.ResolveSkillStorage(cfg)
 	if err != nil {
 		return fmt.Errorf("resolve skill storage: %w", err)
 	}
-	mcpManager := app.InitMCP(disp, cfg)
 	var mcpHealthFunc func() tools.MCPHealthSnapshot
-	if mcpManager != nil {
-		mcpHealthFunc = mcpManager.Health
-		defer func() {
-			if err := mcpManager.Close(); err != nil {
-				log.Warn("gateway: MCP shutdown failed", "error", err)
-			}
-		}()
+	var mcpServersFunc func() []tools.MCPServerStatus
+	if gwDeps.MCP != nil {
+		mcpHealthFunc = gwDeps.MCP.Health
+		mcpServersFunc = gwDeps.MCP.Servers
 	}
 	semanticExpander := app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts, requestGate)
 	semanticReadiness := modelStatus.RouteReadiness(modelchange.RouteSemanticRecall)
@@ -394,7 +402,13 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		},
 	})
 
+	restartCapability := newRestartCapability()
 	gatewayAPI := &httpapi.Server{
+		ExecutionRuntime: localControl.execution,
+		// The restart helper this daemon starts for a model change proves itself
+		// with a secret only the two share: it is never the verified local CLI.
+		// The server learns where it listens from the listener (listenTCP).
+		RestartCapability:      restartCapability,
 		Control:                controlStore,
 		Gateway:                gwDeps.Gateway,
 		MainRoutingProvider:    agent.Provider(),
@@ -430,12 +444,14 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		},
 		ModelChanges: modelChanges,
 		ModelRestartFunc: func(changeID string) error {
-			return SpawnRestartHelper(cfg.Path, dataDir, changeID)
+			return SpawnRestartHelper(cfg.Path, dataDir, changeID, restartCapability)
 		},
-		MCPHealthFunc:     mcpHealthFunc,
-		SkillStorage:      skillStorage,
-		DrainTimeout:      drainTimeout,
-		LocalControlToken: localControlToken,
+		MCPHealthFunc:  mcpHealthFunc,
+		MCPServersFunc: mcpServersFunc,
+		SkillStorage:   skillStorage,
+		DrainTimeout:   drainTimeout,
+		// The local command line adopts an unclaimed schedule through it.
+		Schedules: gwDeps.CronScheduler,
 		// Pending-approval/clarify escrow threshold (Fix 2); "0" disables.
 		PendingNotifyAfter: cfg.Gateway.PendingNotifyAfterDuration(),
 		// How long a run may park on an unanswered approval. The unattended
@@ -483,7 +499,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// joins the run's scope so tools can read them (httpapi/attachments.go).
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
-	if err := gatewayAPI.ConfigureWorkRunCapacity(cfg.Gateway.MaxActiveWorkRuns, workerCount); err != nil {
+	if err := gatewayAPI.ConfigureWorkRunCapacity(cfg.Gateway.MaxActiveWorkRuns, len(gwDeps.Workers)); err != nil {
 		return err
 	}
 	if err := gatewayAPI.RecoverQueuedAtBoot(ctx); err != nil {
@@ -504,23 +520,25 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run
 	// registry are always excluded, so this only catches runs whose executor
 	// died without finalizing.
-	// Durable background review (W7): review requests enqueue as idempotent
-	// maintenance jobs (payload-hash key) and execute in the maintenance
-	// worker with bounded retries; a daemon crash no longer loses them.
+	// Durable background review (W7): every worker enqueues review requests
+	// as idempotent maintenance jobs (payload-hash key, wired by InitGateway);
+	// the maintenance worker executes them through the primary agent's engine
+	// with bounded retries, so a daemon crash no longer loses them.
 	if agent.ReviewEngine != nil {
 		gatewayAPI.SkillReviewer = agent.ReviewEngine
-		agent.ReviewEngine.SetEnqueue(func(_ string, payloadJSON string) bool {
-			digest := sha256.Sum256([]byte(payloadJSON))
-			key := "skillreview_" + hex.EncodeToString(digest[:12])
-			inserted, err := controlStore.EnqueueMaintenanceJob(context.Background(), defaultTenantID, key, httpapi.SkillReviewJobVersion, payloadJSON)
-			return err == nil && inserted
-		})
 	}
-	listener, err := net.Listen("tcp", addr)
+	listener, err := listenTCP(addr, gatewayAPI)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", addr, err)
+		return err
 	}
 	defer listener.Close()
+	// The CLI has no other channel, so a daemon that cannot open its local
+	// control socket fails to start rather than serving IM alone.
+	controlListener, err := listenLocalControl(localControl.socketPath)
+	if err != nil {
+		return err
+	}
+	defer controlListener.Close()
 	stopTaskGovernanceSweeper := gatewayAPI.StartTaskGovernanceSweeper(ctx)
 	defer stopTaskGovernanceSweeper()
 	var weixinAdapter *weixin.Adapter
@@ -559,6 +577,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			PID:                   os.Getpid(),
 			InstanceID:            record.InstanceID,
 			Addr:                  addr,
+			LocalControlSocket:    localControl.socketPath,
 			DataDir:               dataDir,
 			RuntimeDir:            manager.Paths.RuntimeDir,
 			State:                 gatewayAPI.GatewayState(),
@@ -578,12 +597,19 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		Addr:              addr,
 		Handler:           gatewayAPI.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
+		// One verdict per connection, from the kernel's record of who
+		// connected; TCP connections carry none.
+		ConnContext: localControl.connContext,
 	}
 
-	errCh := make(chan error, 1)
+	errCh := make(chan error, 2)
 	go func() {
 		fmt.Printf("SelfMind gateway listening on http://%s\n", addr)
 		errCh <- httpServer.Serve(listener)
+	}()
+	go func() {
+		fmt.Printf("SelfMind local control socket: %s\n", localControl.socketPath)
+		errCh <- httpServer.Serve(controlListener)
 	}()
 	if err := manager.WriteStatus("running", defaultTenantID, ""); err != nil {
 		return err
@@ -667,10 +693,21 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			exitReason = err.Error()
+			if !localControl.execution.WaitForHostStateRepairs(hostStateRepairShutdownWait) {
+				log.Warn("gateway: exiting before every in-place credential cache repair finished; the next start sweeps them",
+					"waited", hostStateRepairShutdownWait)
+			}
 			return err
 		}
 	}
 
+	// Interrupted runs were cancelled, not awaited: a command that wrote
+	// credential caches in place must finish its repair before the process
+	// exits, or its leftovers outlive the daemon.
+	if !localControl.execution.WaitForHostStateRepairs(hostStateRepairShutdownWait) {
+		log.Warn("gateway: exiting before every in-place credential cache repair finished; the next start sweeps them",
+			"waited", hostStateRepairShutdownWait)
+	}
 	if gatewayAPI.ActiveRunCount() == 0 {
 		// Safe-boundary shutdown has no foreground work left. Close persistent
 		// SSE observers immediately so they do not hold Server.Shutdown open for

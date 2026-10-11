@@ -3,316 +3,65 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Ver"
-    },
-    {
-      "reasoning_content": "ification"
-    },
-    {
-      "reasoning_content": " passed"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Now"
-    },
-    {
-      "reasoning_content": " mark"
-    },
-    {
-      "reasoning_content": " step"
-    },
-    {
-      "reasoning_content": " "
-    },
-    {
-      "reasoning_content": "2"
-    },
-    {
-      "reasoning_content": " completed"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " step"
-    },
-    {
-      "reasoning_content": " "
-    },
-    {
-      "reasoning_content": "3"
-    },
-    {
-      "reasoning_content": " pending"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " finish"
-    },
-    {
-      "reasoning_content": "_run"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " waiting"
-    },
-    {
-      "reasoning_content": "_user"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Do"
-    },
-    {
-      "reasoning_content": " not"
-    },
-    {
-      "reasoning_content": " report"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " result"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Note"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": " passed"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " I"
-    },
-    {
-      "reasoning_content": " should"
-    },
-    {
-      "reasoning_content": " not"
-    },
-    {
-      "reasoning_content": " report"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " result"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " The"
-    },
-    {
-      "reasoning_content": " user"
-    },
-    {
-      "reasoning_content": " said"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "Then"
-    },
-    {
-      "reasoning_content": " stop"
-    },
-    {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " wait"
-    },
-    {
-      "reasoning_content": " for"
-    },
-    {
-      "reasoning_content": " my"
-    },
-    {
-      "reasoning_content": " confirmation"
-    },
-    {
-      "reasoning_content": " before"
-    },
-    {
-      "reasoning_content": " reporting"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " result"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " keep"
-    },
-    {
-      "reasoning_content": " a"
-    },
-    {
-      "reasoning_content": " distinct"
-    },
-    {
-      "reasoning_content": " pending"
-    },
-    {
-      "reasoning_content": " reporting"
-    },
-    {
-      "reasoning_content": " step"
-    },
-    {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " record"
-    },
-    {
-      "reasoning_content": " waiting"
-    },
-    {
-      "reasoning_content": "_user"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " finish"
-    },
-    {
-      "reasoning_content": "_run"
-    },
-    {
-      "reasoning_content": ".\"\n\n"
-    },
-    {
-      "reasoning_content": "So"
-    },
-    {
-      "reasoning_content": " I"
-    },
-    {
-      "reasoning_content": " should"
-    },
-    {
-      "reasoning_content": " give"
-    },
-    {
-      "reasoning_content": " a"
-    },
-    {
-      "reasoning_content": " minimal"
-    },
-    {
-      "reasoning_content": " message"
-    },
-    {
-      "reasoning_content": " that"
-    },
-    {
-      "reasoning_content": " doesn"
-    },
-    {
-      "reasoning_content": "'t"
-    },
-    {
-      "reasoning_content": " reveal"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " result"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Update"
-    },
-    {
-      "reasoning_content": " plan"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": " ("
-    },
-    {
-      "reasoning_content": "alone"
-    },
-    {
-      "reasoning_content": "),"
-    },
-    {
-      "reasoning_content": " then"
-    },
-    {
-      "reasoning_content": " finish"
-    },
-    {
-      "reasoning_content": "_run"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I am recording the task"
     },
     {
       "usage": {
-        "input_tokens": 12133,
-        "output_tokens": 371,
-        "cache_read_input_tokens": 11904,
-        "cache_miss_input_tokens": 229,
+        "input_tokens": 12809,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 97,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " outcome as waiting_user pending your confirmation to report the result."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 13,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 90,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2434,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_DOpn2hPPYwW7Shk2iG8w2236",
-          "Function": "update_plan",
-          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Read value.txt bytes to determine exact content\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\", \"success_criteria\": \"Exact byte content of value.txt is known without modifying it\"}, {\"status\": \"completed\", \"step\": \"Verify acceptance condition: value.txt contains exactly READY followed by a newline\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\", \"success_criteria\": \"A recorded verify check exits 0 only if value.txt is exactly b'READY\\\\n'\", \"verification_required\": true}, {\"status\": \"pending\", \"step\": \"Report result to user (blocked until user confirms)\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\", \"success_criteria\": \"User has confirmed, then the verification result is reported\"}]}"
+          "ID": "call_1562386",
+          "Function": "finish_run",
+          "Args": "{\"next_steps\":[\"Report verification results upon user confirmation\"],\"summary\":\"Verification has completed. Awaiting user confirmation before reporting the result.\",\"done\":[\"Verified whether value.txt contains exactly READY followed by a newline\"],\"files\":[\"value.txt\"],\"status\":\"waiting_user\",\"tests\":[\"Verification check call_612405 passed\"]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EuMICuAIAWkUfRPuFHf5BXaWhYrSkhWIFqd9ZbcsmrLPsJtzgM/BtURihAedi2ClXp6OWoTN1ByoSk3OlQkAbhlx8eamyMRGBiYOVDlxPuGZ5jtvYgbK2is7Dy7rreMVtw94eqYmdLC5s0OJMOfifGwA1tLPwIOIepqJBr/isFEzlxjxv+XbwWYbv7SnmRhPJB7r3G4TkIrv6jyU7rv1UTg2KK2LNak5I20Jm0PErnXrMe3BtxR1EmJJpiMSyNhO6jjxGyIRNMj/EZkCaAT1HQ3r5yk+0u6Y1kxG4rKdVKyycq948wvNKlJNQuVoic1zm1AvVYPE3w3jCLExlVsl81eX5jAXWOmMGNFzS5WENt/LwlDCMCSzgb0IvEaoht0k9ke7QG8co2r6ToAn6CohyOfAOsuet/bYrYPQIV4JWXYI13DqcwQMdPNCJbU+XLypVBvy9bbbISo2isIww0GF0tKCU+SWaEGHStLMucnIoJKLju02UlUpK55hb3AqsziZU9iQT2GfoKFFghe2yeybz5iHn7OFfsEegWCOnVnPxoxeBtlEkdwFnkvu4lTX31gKO0EYYJNcNYoRmTKSH+4DspTTY1CfrRUz4VBMpdLcGspB6PRRjjEo8OIzHz7eF/0mVU/xWx08y6OiYUkZMWtn7j0W0X4dT8f4zwJDZEPb1qKg0Zc9Ln+cLaWitZO9JU+lgeVhlidL0/HlmqjgUX6+TnbPbHMbGUmsXU2R6xS2lx74scQ21ObZpeV1vLSCB1a8mWlsyYGG0Dw5kaQgeegxuSG6qWXe3nBS1W/h9Y1liyrIJL10s5nWYg1iL/eVtKQOQLPc7sW657okM9Sp6aBmlSjjQLJ37t5Owg4BMxiz3NwjKyPXyYQweea4/KC6gKr16Z2xQlUzVSnWfForHyrlJGoqUTRy1VxgVimvgfOyOrtW8rdGQuwIsuFBZl0lXqSzHqo20oQebD1Vjos9jXqic635S3K61Wq0/f4LrK6gcoKuw5JpOuKi7et0kL3sbKfKUgko2BJ8TMWlv8ti8dqo3hwBfFoYP2HyxEBnuqvodfyL9M2Ph7hMHUyIptGFtSM7lqEXrkBTdWpu5Qeu4xsma+FTk+S/TYbxmBGbtwHtE8yrP3J+bCKxWHF+a/BMJzzQlGu9iFVW9KpS+mhAEkLmbKbk9lmAF9G4B0eR2xurgiAEINGpJzjTnnVmDizawo1Qtp0ffIm2+e2U32SVSiYj+naTUHH2DOG8ohjW11fWMf8e8VM7PgVxT7aTCh2L6hFaToggjtIHa2uTqYsNfIW2qylur9k3LbJMQflVcniSktOenQWZ6Kn2jEGJa6hy/uUTLlloV3o9JbTo9m6IMh7hv7dT+lBJuO6PbrHQA5KDiUN1avIU3luvW6ZkKibQG9UhtJCPEbqwrtXOxIguMZlbgR72PciObA5I38n+NMJGSrnpcjkBuAqeDCaSfaEJbJtCJkAL0/fXGhMWJIO5pPQNKu23DUzWbQ=="
+            }
+          }
         }
       ]
     }

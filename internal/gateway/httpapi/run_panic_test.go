@@ -72,7 +72,7 @@ func TestAsyncRunPanicIsRecovered(t *testing.T) {
 
 	// The active-run registry slot is freed, so the person is not wedged.
 	waitUntil(t, 5*time.Second, func() bool {
-		return daemon.coordinator().currentActive(identity.PersonID) == nil
+		return daemon.coordinator().activeCount(identity.PersonID) == 0
 	}, "person slot never freed after a panic")
 
 	// The Run parks interrupted and becomes exact Attention; no aggregate
@@ -99,6 +99,6 @@ func TestAsyncRunPanicIsRecovered(t *testing.T) {
 	}
 	// Let the second (also panicking) run finalize before teardown.
 	waitUntil(t, 5*time.Second, func() bool {
-		return daemon.coordinator().currentActive(identity.PersonID) == nil
+		return daemon.coordinator().activeCount(identity.PersonID) == 0
 	}, "second run slot never freed")
 }

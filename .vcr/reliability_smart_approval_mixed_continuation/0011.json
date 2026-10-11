@@ -1,5 +1,59 @@
 {
   "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "wait group receipt-handoff (all) waitgroup receipt-handoff receipt handoff durable external observation"
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will check the prior"
+    },
+    {
+      "usage": {
+        "input_tokens": 14283,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " plan and task status."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 53,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2194768",
+          "Function": "work_inspect",
+          "Args": "{\"run_id\":\"{{SELFMIND_VCR_RUN_1}}\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EogGCoUGAWkUfRML7rWpSLw0I/WJPBQYcKX1PxvpFH8UAWodjNIIyS5r0yHMyHA9DYqcpbbXjcnsE9J/vMFV+HdXceCqLVuLiRxMyQAKuvLNQRT/2yg441FHsC9qhmfLe9rLMzmhryg9st3xu9hWl+9NiCwAUN7fxMl2YpdsxMSvwbrAUVvH32i0MCI3AqkRdjhnjKaxpdGjSW+CF/P6/dY8izJyllvKQwtIoekg/NLTWdvsmx3FKI0ulWZv5JFNkLmr+kMuq6+G9MTbcUnc3KCwmBcKIC4An5ULSjhS93YRsmDlf7IapbsuizVK3nbtbpacs7kBrCHOKb7phW36lp2XvifE0VHs6TPNB9xwwhkInvqsCSkC+UIFiq1M/Buf3RM1UkL93Ra6zO1oeI4xehybU6uEKi3EmWfa8tWGmrr6Iq65QNOoGH35/PKYBK7m5uJey5JOBGkOksKoS4Dpc2hJ9yRkmyc5UeeCtj4dAzBB4ZdUKF8dQywQtpX2DkPje4cfztxSA0GcvViA3YX6HfvJnOXNpRt7jHWvmyCWv+WU68iPZpM0NOxaf6Df0aB6u872jemOmmy5w/ui3tMRg/LuTDS27x/S1vH90HclJqPnqw0qVYZhyDHvX50FBSuZt/OkNP6XPHYxsCuZxA+x2ZQ7pEs1mX/D4AbFBMYVglf8+blAkd0JiFu1chkxyYz+sr+PDqGfEz0B2aiKH24nhr3O7JON89oI+o6NkEoK/muZZ+xUKH+4WIX4biX2Nmm92xgvncltZHwSyC0NHyVbdPgQXA+f/dnVU7iGr5p0OpgERFyf91kBG5rH81qg7nVDb2gyJEpvcvln5kviQK6lWCQPwjg3Xl4MpaAprljsDIh8dstBAdqRQw0Ngf/6Z/sj+bvsodifqP8Joobkje2hSSQgHP+1HVOpORTogRH/4eEijn/QouMCxltdOgCv7iK/uA9V7lhq5c+/AvLcwqt29B/gOp1WRwihxOud+ZkX5K93vxPkkO2fkS3y/htvvgeCfGZo9mDYgkgU4pw="
+            }
+          }
+        }
+      ]
+    }
+  ]
 }

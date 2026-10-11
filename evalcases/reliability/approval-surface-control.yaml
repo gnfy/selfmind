@@ -5,10 +5,12 @@ workspace: isolated
 channel: cli
 model_required: false
 
-# This pins the production model-free approval control path. Focused TUI tests
-# own the active-region layout, lossless target wrapping, and keyboard priority.
+# This pins the production model-free approval controls advertised at startup.
+# Focused TUI tests own startup hydration, nonduplicated pending notices,
+# active-region layout, lossless target wrapping, and keyboard priority.
 
 turns:
+  - input: "/approvals"
   - input: "/notify phone-first"
   - input: "/notify"
 

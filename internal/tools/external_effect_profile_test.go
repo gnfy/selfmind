@@ -15,6 +15,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel"
+	"selfmind/internal/tools/sandbox"
 )
 
 func TestReviewedEffectScriptsDispatchIndependentRemoteTargets(t *testing.T) {
@@ -61,6 +62,7 @@ func TestReviewedEffectScriptsDispatchIndependentRemoteTargets(t *testing.T) {
 	registry.UseResultMiddleware(ExternalEffectClaimMiddleware(store))
 	registry.Register(NewExecuteCommandTool())
 	var runs []*control.Run
+	runtime := NewExecutionRuntime("profile-effects", t.TempDir(), sandbox.PrivateState{}, nil)
 	for _, name := range []string{"east", "west", "duplicate-east"} {
 		task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID,
 			PersonID: owner.PersonID, Title: name, Channel: name})
@@ -75,7 +77,7 @@ func TestReviewedEffectScriptsDispatchIndependentRemoteTargets(t *testing.T) {
 		cleanup := SetExecutionScope(ExecutionScopeKeyForRun(run.ID), ExecutionScope{TenantID: owner.TenantID,
 			PersonID: owner.PersonID, RunID: run.ID, WorkspaceID: "ws-1", WorkspaceRoot: root,
 			AllowedRoots: []string{root}, TrustLevel: executionenv.TrustTrusted,
-			StandingGrants: InteractiveStandingGrants(), ParallelWork: true})
+			StandingGrants: InteractiveStandingGrants(), ParallelWork: true, Runtime: runtime})
 		t.Cleanup(cleanup)
 	}
 	dispatch := func(run *control.Run, target string) error {
@@ -140,8 +142,10 @@ func TestExactEffectScriptProfilesSeparateTargetsAndFailClosedOnDrift(t *testing
 	if targets, ok := registeredEffectScriptTargets(args, store); !ok || len(targets) != 1 || targets[0] != "cluster:east" {
 		t.Fatalf("east target = %v, %t", targets, ok)
 	}
-	if targets, complete := externalEffectTargets(args, store); complete || len(targets) != 1 || targets[0] != "cluster:east" {
-		t.Fatalf("claim target = %v, complete=%t", targets, complete)
+	// A profile without an observation command describes a foreground script:
+	// exit 0 settles it like any other command.
+	if targets, settleOnSuccess := externalEffectTargets(args, store); !settleOnSuccess || len(targets) != 1 || targets[0] != "cluster:east" {
+		t.Fatalf("claim target = %v, settleOnSuccess=%t", targets, settleOnSuccess)
 	}
 	args["command"] = "./deploy.sh west"
 	if targets, ok := registeredEffectScriptTargets(args, store); !ok || len(targets) != 1 || targets[0] != "cluster:west" {
@@ -218,6 +222,7 @@ func TestRegisteredEffectScriptsClaimIndependentTargetsAcrossRuns(t *testing.T) 
 		metadata: ToolMetadata{Category: "network", OperationClasses: []OperationClass{OpClassNetwork}},
 		handler:  func(map[string]interface{}) (string, error) { return "dispatched", nil }})
 	var runs []*control.Run
+	runtime := NewExecutionRuntime("profile-effects", t.TempDir(), sandbox.PrivateState{}, nil)
 	for _, name := range []string{"east", "west", "duplicate"} {
 		task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID,
 			PersonID: owner.PersonID, Title: name, Channel: name})
@@ -232,7 +237,7 @@ func TestRegisteredEffectScriptsClaimIndependentTargetsAcrossRuns(t *testing.T) 
 		cleanup := SetExecutionScope(ExecutionScopeKeyForRun(run.ID), ExecutionScope{TenantID: owner.TenantID,
 			PersonID: owner.PersonID, RunID: run.ID, WorkspaceID: "ws-1", WorkspaceRoot: root,
 			AllowedRoots: []string{root}, TrustLevel: executionenv.TrustTrusted,
-			StandingGrants: InteractiveStandingGrants(), ParallelWork: true})
+			StandingGrants: InteractiveStandingGrants(), ParallelWork: true, Runtime: runtime})
 		t.Cleanup(cleanup)
 	}
 	dispatch := func(run *control.Run, target string) error {
@@ -294,6 +299,13 @@ func TestEffectObservationBindingRequiresExactOwnerReviewedCommand(t *testing.T)
 	bound, ok := RegisteredEffectObservation(args, store)
 	if !ok || len(bound.TargetKeys) != 1 || bound.TargetKeys[0] != "cluster:east" || bound.ScriptDigest == "" {
 		t.Fatalf("exact observation binding = %+v, %t", bound, ok)
+	}
+	// Naming an observation command is the owner's assertion that the script's
+	// effect completes later: its exit 0 keeps the claim for that observation.
+	effectArgs := map[string]interface{}{"_tenant_id": "person-1", "_tool_name": "terminal", "cwd": root,
+		"command": "./deploy.sh east", "_network_shared": true, toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}
+	if targets, settleOnSuccess := externalEffectTargets(effectArgs, store); settleOnSuccess || len(targets) != 1 || targets[0] != "cluster:east" {
+		t.Fatalf("observed profile target = %v, settleOnSuccess=%t", targets, settleOnSuccess)
 	}
 	for _, command := range []string{"./state.sh west", "./state.sh east; echo extra", "sh state.sh east"} {
 		args["command"] = command

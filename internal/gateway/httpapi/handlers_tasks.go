@@ -2,10 +2,8 @@ package httpapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,7 +26,7 @@ func (d *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	limit := queryInt(r, "limit", 50)
@@ -82,7 +80,7 @@ func (d *Server) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	// An event poll is a liveness beat: the TUI polls this endpoint mid-turn,
@@ -138,7 +136,7 @@ func (d *Server) handleTaskEventsStream(w http.ResponseWriter, r *http.Request) 
 	}
 	identity, task, err := d.taskFromEventsRequest(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	if task == nil {
@@ -199,7 +197,7 @@ func (d *Server) handleTaskArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, task, err := d.taskFromEventsRequest(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	if task == nil {
@@ -224,13 +222,14 @@ func (d *Server) subjectThreadID(ctx context.Context, identity *control.Identity
 	if d == nil || d.Control == nil || identity == nil {
 		return "", nil
 	}
-	if d.coordinator().activeCount(identity.PersonID) > 1 {
+	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
+	if len(activeRuns) > 1 {
 		// A subject-less request is a presentation convenience, not permission
 		// to choose one of several live Threads by recency.
 		return "", nil
 	}
-	if active := d.coordinator().currentActive(identity.PersonID); active != nil && strings.TrimSpace(active.TaskID) != "" {
-		return active.TaskID, nil
+	if len(activeRuns) == 1 && strings.TrimSpace(activeRuns[0].TaskID) != "" {
+		return activeRuns[0].TaskID, nil
 	}
 	task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 	if err != nil {
@@ -299,7 +298,7 @@ func (d *Server) handleCurrentTask(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	activeRuns := d.coordinator().activeRunsForPerson(identity.PersonID)
@@ -326,13 +325,17 @@ func (d *Server) handleCurrentTask(w http.ResponseWriter, r *http.Request) {
 		recovery = d.latestRecoveryHandoffForTask(r.Context(), identity, task.ID)
 		artifacts, _ = d.Control.ListTaskArtifacts(r.Context(), task.ID, 100)
 	}
+	var activeStatus *api.ActiveRunStatus
+	if len(activeRuns) == 1 {
+		activeStatus = formatActiveRunStatus(activeRuns[0])
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"identity":   identity,
 		"task":       task,
 		"handoff":    handoff,
 		"recovery":   recovery,
 		"artifacts":  artifacts,
-		"active_run": formatActiveRunStatus(d.coordinator().currentActive(identity.PersonID)),
+		"active_run": activeStatus,
 	})
 }
 
@@ -350,9 +353,9 @@ func (d *Server) handleWorkspaceRegister(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	identity, err := d.Control.ResolveOrCreateAccount(r.Context(), d.tenantID(req.TenantID), fallback(req.Platform, "cli"), fallback(req.PlatformUserID, "local"), req.DisplayName)
+	identity, err := d.resolveRequestIdentity(r, d.tenantID(req.TenantID), fallback(req.Platform, "cli"), fallback(req.PlatformUserID, "local"), req.DisplayName)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	workspace := control.Workspace{
@@ -398,15 +401,14 @@ func (d *Server) handleWorkspaceTrust(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "workspace trust can only be changed by the authenticated local CLI", http.StatusForbidden)
 		return
 	}
-	identity, err := d.Control.ResolveOrCreateAccount(
-		r.Context(),
+	identity, err := d.resolveRequestIdentity(r,
 		d.tenantID(req.TenantID),
 		"cli",
 		fallback(req.PlatformUserID, "local"),
 		"",
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	workspaceID := strings.TrimSpace(req.WorkspaceID)
@@ -462,15 +464,14 @@ func (d *Server) handleWorkspaceCapabilities(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "workspace capabilities can only be managed by the authenticated local CLI", http.StatusForbidden)
 		return
 	}
-	identity, err := d.Control.ResolveOrCreateAccount(
-		r.Context(),
+	identity, err := d.resolveRequestIdentity(r,
 		d.tenantID(req.TenantID),
 		"cli",
 		fallback(req.PlatformUserID, "local"),
 		"",
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	workspaceID := strings.TrimSpace(req.WorkspaceID)
@@ -533,11 +534,11 @@ func (d *Server) handleWorkspaceObservationProfiles(w http.ResponseWriter, r *ht
 		http.Error(w, "observation profiles can only be granted by the authenticated local CLI", http.StatusForbidden)
 		return
 	}
-	identity, err := d.Control.ResolveOrCreateAccount(
-		r.Context(), d.tenantID(req.TenantID), "cli", fallback(req.PlatformUserID, "local"), "",
+	identity, err := d.resolveRequestIdentity(r,
+		d.tenantID(req.TenantID), "cli", fallback(req.PlatformUserID, "local"), "",
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	workspaceID := strings.TrimSpace(req.WorkspaceID)
@@ -599,11 +600,11 @@ func (d *Server) handleWorkspaceEffectProfiles(w http.ResponseWriter, r *http.Re
 		http.Error(w, "effect profiles can only be granted by the authenticated local CLI", http.StatusForbidden)
 		return
 	}
-	identity, err := d.Control.ResolveOrCreateAccount(
-		r.Context(), d.tenantID(req.TenantID), "cli", fallback(req.PlatformUserID, "local"), "",
+	identity, err := d.resolveRequestIdentity(r,
+		d.tenantID(req.TenantID), "cli", fallback(req.PlatformUserID, "local"), "",
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	workspaceID := strings.TrimSpace(req.WorkspaceID)
@@ -629,6 +630,7 @@ func (d *Server) handleWorkspaceEffectProfiles(w http.ResponseWriter, r *http.Re
 		WorkspaceID: workspace.ID, ScriptPath: req.ScriptPath, Argv: req.Argv,
 		TargetKeys: req.TargetKeys, AllowNetwork: req.AllowNetwork, AllowCredentials: req.AllowCredentials,
 		ObservationCommand: req.ObservationCommand,
+		Cwd:                req.Cwd, Env: req.Env, StdinText: req.StdinText, StdinFile: req.StdinFile,
 	}, workspace.LocalPath)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -648,28 +650,6 @@ func (d *Server) handleWorkspaceEffectProfiles(w http.ResponseWriter, r *http.Re
 	})
 }
 
-func (d *Server) localCLIRequest(r *http.Request, platform string) bool {
-	if r == nil || !strings.EqualFold(strings.TrimSpace(platform), "cli") {
-		return false
-	}
-	expected := strings.TrimSpace(d.LocalControlToken)
-	provided := strings.TrimSpace(r.Header.Get(api.LocalControlTokenHeader))
-	if expected == "" || len(expected) != len(provided) ||
-		subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) != 1 {
-		return false
-	}
-	host := strings.TrimSpace(r.RemoteAddr)
-	if parsed, _, err := net.SplitHostPort(host); err == nil {
-		host = parsed
-	}
-	host = strings.Trim(host, "[]")
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
-}
-
 func (d *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	if !d.authorized(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -681,7 +661,7 @@ func (d *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	// Same display-ordered fetch as /workspaces so API consumers see the list

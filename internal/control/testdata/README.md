@@ -20,3 +20,31 @@ current store, and verifies row counts, parent edges, visibility and kind
 mapping, referential integrity, and an idempotent second open. Regenerate it
 only from a backup whose ledger stops at version 10, and grep the result for
 `INSERT` before committing.
+
+The `*-rows.sql` fixtures are complete `sqlite3 .dump` outputs of databases
+that an older tree created with its own `OpenStore` and then seeded through its
+own store API with synthetic rows: persons, accounts, Threads, Runs (finished,
+interrupted, parked, resumed, waiting on watchers, another person's), queue rows
+of every continuation key shape, watchers, a parked approval with the loop
+checkpoint that asked it, a pending clarification, a multi-step Plan, and
+inbound message receipts (first-seen rows at schema v17; pending, uncertain,
+accepted, and another person's uncertain receipt from schema v22). From
+schema v23 they also hold external effect claims (uncertain, observed,
+reserved) and a pending resource wait; from schema v24 the Plan has a later
+version whose cancelled steps carry that release's dispositions and quotes.
+
+- `control-v17-beta.27-rows.sql`: released `v0.1.0-beta.27`, commit
+  `d90f4ff2c4f6`, schema v17.
+- `control-v24-beta.28-rows.sql`: released `v0.1.0-beta.28`, commit
+  `5e4be677d30b`, schema v24 (the same release as `control-v24-schema.sql`,
+  which keeps an operator database's migrated physical shape instead).
+- `control-v25-rows.sql`: the unreleased integration branch at commit
+  `33b5d601d352`, schema v25.
+
+They were generated from `git archive` exports of those commits in a scratch
+directory, never from an operator data directory. The v26 upgrade tests load
+each dump, migrate it with the current store, and verify that every row is
+preserved and that no historical row gains an admission snapshot, an effect
+sequence, a settlement, a human-wait binding, a cancellation quote source, or
+an inbound claim generation. Regenerate a fixture only from the same commit,
+and check the dump for paths and names before committing.

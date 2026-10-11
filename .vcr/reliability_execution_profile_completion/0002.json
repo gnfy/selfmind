@@ -3,24 +3,11 @@
   "method": "stream",
   "events": [
     {
-      "content": "I will"
+      "content": "I am checking the bash version and verifying syntax of collector.sh using isolated execution."
     },
     {
       "usage": {
-        "input_tokens": 11262,
-        "output_tokens": 2,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "content": " inspect the Bash version and validate the syntax of collector.sh in the isolated environment."
-    },
-    {
-      "usage": {
-        "input_tokens": 0,
+        "input_tokens": 12101,
         "output_tokens": 17,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
@@ -43,7 +30,7 @@
     },
     {
       "usage": {
-        "input_tokens": 431,
+        "input_tokens": 267,
         "output_tokens": 0,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
@@ -54,12 +41,12 @@
     {
       "tool_calls": [
         {
-          "ID": "call_43354",
+          "ID": "call_2210575",
           "Function": "terminal",
           "Args": "{\"sandbox\":\"isolated\",\"command\":\"bash --version \u0026\u0026 bash -n collector.sh\"}",
           "replay_metadata": {
             "google": {
-              "thought_signature": "EoAGCv0FAWkUfRMmRrOTeZNI7nlfIKHpRWqiZUNbOzyrlf7/ruGOA/o0ETlbN6KSY26vQc5zE1TqLmLosAkKlwdJEMUXDJsjWI0oAao4jkqoenumdCY8eQdvG5j4FFeClQtZtIOgahCb/fZSUUg3hT3BulTbU5bU0bQMHhQ31nDr/FEAYLWQ5ltk4XgyJu8vcFqjnIOG7Amq7lgHyQi3zygb/hRyk1DyWl66xyUZL9806fDx9N3Ck6pWmKsUxCksVL9Pxt2SzcwxqAFssuQaeqrr5WehJjas6lTHylLGp1jJMjm21R04In27Fi5aOhx80YUZFNZSDtRkgZGVx5eZ7P3GQz0+z5TSti2RZCcGpOqNHXjAfjmW3kJIpqg5irJRk2iGqFzeOevS40KtZU7G0nCEZfez1Ni4gFmZZbbuh0iFfmYZyOL+LU2DAvebgq3ckth7hmjMskzqQ6XdYqbivacR16rsCgHS9H05ZeUxmhzA3Bmf4XJ5un+M8o4O3bFdKo1qPRVRU1kPchhh4XAyXQ+v118IM4fcOh2vnZ4Vrqrf7xNC0JMtIxkb9STRnXY7iLeY5bydzfpkTbLuTKYyc0ILrdzn8MFeA3lBtCr4hy1e4HXS84ZN5vFYS3zYLOVd2D/TwtehTjNFaHo0fmoQwQrKKKMdvvmAq71usmO1oQwC6CdJjI+A2Rsh0xOfwTPaAaESw55bxdqEEImRv0g6hPaG5Zez5vgwGAsNLdwGq5SZDXjtJTSnv5hcpncjYTgZYE7LjpNOargIHTU7K2rK/Gd3suRdH8Y1Ur6kIN+DA67JvC4F/UExQbnih+GNyDGAdIvOM5LWOXORvgldU/1Ht61NAvSp2jksio3OBc9wQ8KoKwcO472bnK0TX5emiMYfPUzDuixr0x4zNaGlN3YOZXc96sxTtzsDhF+TX4csRWWsic4fGwEpsW/6bnjzjB0gbfCkwj0tmKB9aRKDzDT/r6I7baBe6B4BkARPu9sfJRHZNku/eqi7vgxEcnkf5p172f8W"
+              "thought_signature": "Er0DCroDAWkUfRPi2vGBtjuRoP3odlcWr8FykCDey2CHiWZvVngrjDMS2YWvwyyV7FjfZiEMNP6jHVW2UQzjAqP5kIRKwtqK+PyOuqSVMUAk7z3uRW1icnZRz2Y6eAqqxpI4OWZmumlJjMrpRfM1i8RI3ugFHxY9OvCptiX2PyBUYyRzVIU+eCvXmkFtaclRbM4YYnHHkCa3FwV6pS1Z1IMC1SVOhN5t6ZCCJT+XEbGW/Z6HL4n6xd4yuW/dGWTarTP58XA6whipv1hZ1LlnM710y7bvOuF6aROSKZEuCyg+wYQtlKwfoHlkk9ahpFS+LqTeWU0volMib/V7QLaYLCmjq2rlOwvPO8VRIMXkzh920lzxYFAiAdBePz14vMkghiG3kZZqwng4QVCe83m9aWgPNFL5xsbv54XvOYa8R5Z1h+kM7c6s7/DiN3Q6cSOE1l4OCEdro+osNzRnDMVjmAvS1kj6YxBaoxpheSZvGqlU1RvW1xeQg+MrSXPqUCCcsjb1KcveA9a7WPNLO6gdDPBRz4vZvhiI0kqy0Q+n7ITlBU3OTZOK4nr0L/GKkvfl/wgBJYM4x9Ubj+tzmqfCwQ=="
             }
           }
         }

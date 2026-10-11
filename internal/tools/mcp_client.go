@@ -36,6 +36,9 @@ type MCPServerConfig struct {
 	Headers   map[string]string `json:"headers,omitempty"`
 	Auth      map[string]string `json:"auth,omitempty"`
 	EnvFilter []string          `json:"env_filter,omitempty"`
+	// ReadOnlyTools are the exact remote tool names the operator marks
+	// read-only for everyone using this server identity.
+	ReadOnlyTools []string `json:"read_only_tools,omitempty"`
 }
 
 // MCPToolDef is the provider-neutral subset of an SDK tool definition used by

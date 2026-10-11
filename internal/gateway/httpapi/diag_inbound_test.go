@@ -25,8 +25,8 @@ func TestInboundDiagnosticIsPersonScopedAndDoesNotReplay(t *testing.T) {
 		control.InboundOwner{TenantID: alice.TenantID, PersonID: alice.PersonID, Preview: "Alice secret"}); err != nil {
 		t.Fatal(err)
 	}
-	if claimed, err := store.ClaimInbound(ctx, "telegram", "alice-msg"); err != nil || !claimed {
-		t.Fatalf("claim = %t, %v", claimed, err)
+	if claim, err := store.ClaimInbound(ctx, "telegram", "alice-msg"); err != nil || claim == 0 {
+		t.Fatalf("claim = %d, %v", claim, err)
 	}
 	daemon := &Server{Control: store}
 	visible, err := daemon.inboundDiagReply(ctx, alice)

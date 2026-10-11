@@ -66,6 +66,14 @@ func TestClaimInteractionContinuationRollsBackWhenPlanImportFails(t *testing.T) 
 	_ = store.FinishRun(ctx, identity.TenantID, parent.ID, "waiting_user")
 	childTask, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: "workspace", Title: "continue", Channel: "cli"})
 	child, _ := store.StartRun(ctx, childTask, "cli", "continue")
+	activation, err := store.ActivateSkill(ctx, ActivateSkillInput{
+		IdentityTenantID: identity.TenantID, ControlTenantID: identity.TenantID,
+		PersonID: identity.PersonID, RunID: child.ID, SkillKey: "inspect-key",
+		SkillName: "inspection", VersionHash: "pinned-version",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.db.ExecContext(ctx, `CREATE TRIGGER fail_plan_import BEFORE INSERT ON run_plan_versions
 		WHEN NEW.run_id = '`+child.ID+`' BEGIN SELECT RAISE(ABORT, 'injected plan import failure'); END`); err != nil {
 		t.Fatal(err)
@@ -76,6 +84,10 @@ func TestClaimInteractionContinuationRollsBackWhenPlanImportFails(t *testing.T) 
 	unchanged, err := store.GetRun(ctx, identity.TenantID, child.ID)
 	if err != nil || unchanged.TaskID != childTask.ID || unchanged.ResumesRunID != "" {
 		t.Fatalf("failed import exposed a partial claim: run=%+v err=%v", unchanged, err)
+	}
+	active, err := store.ActiveSkillActivation(ctx, identity.TenantID, child.ID, activation.WorkUnitID, "main")
+	if err != nil || active == nil || active.ID != activation.ID || active.PrimaryTaskID != childTask.ID {
+		t.Fatalf("failed import lost or reattributed the Skill: %+v err=%v", active, err)
 	}
 }
 

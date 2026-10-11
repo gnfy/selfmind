@@ -155,13 +155,19 @@ func (s *Store) MarkSteeringClaimed(ctx context.Context, tenantID, id string) er
 }
 
 // MarkSteeringExpired terminates a row that must never replay (back-pressure
-// rejection, or staleness at boot). Reason is audit only.
-func (s *Store) MarkSteeringExpired(ctx context.Context, tenantID, id string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE steering_mailbox
+// rejection, or staleness at boot). It reports whether it expired a live row;
+// false means the row was already consumed, deferred to the queue, or
+// expired.
+func (s *Store) MarkSteeringExpired(ctx context.Context, tenantID, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE steering_mailbox
 		SET status = ?, updated_at = ? WHERE tenant_id = ? AND id = ? AND status IN (?, ?)`,
 		SteeringExpired, time.Now().Unix(), normalizeTenant(tenantID), id,
 		SteeringAccepted, SteeringClaimed)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // ConsumeSteeringByHash marks the OLDEST live row matching (run, content
@@ -330,7 +336,7 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 		taskID = run.TaskID
 		workspaceID = run.WorkspaceID
 		executionRoots = executionenv.CloneRootBindings(run.ExecutionRoots)
-		if continuityRunResumableForQueue(run.Status) {
+		if RunAcceptsQueuedContinuation(run.Status) {
 			replyToRunID = run.ID
 		}
 	}

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +34,7 @@ func newDigestTestServer(t *testing.T) (*Server, *control.Store, *control.Identi
 
 func fetchDigest(t *testing.T, daemon *Server) api.DigestResponse {
 	t.Helper()
-	srv := httptest.NewServer(daemon.Handler())
+	srv := newLocalCLIServer(daemon.Handler())
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/digest?platform=cli&platform_user_id=local")
 	if err != nil {
@@ -181,6 +180,56 @@ func TestDigestEmptyWorldStaysEmpty(t *testing.T) {
 	digest := fetchDigest(t, daemon)
 	if !digest.Empty() {
 		t.Fatalf("fresh world must produce an empty digest: %+v", digest)
+	}
+}
+
+func TestDigestResumableCountIsUncappedAndPersonScoped(t *testing.T) {
+	daemon, store, identity := newDigestTestServer(t)
+	ctx := context.Background()
+	seed := func(owner *control.IdentityContext, title, status string) (*control.Task, *control.Run) {
+		t.Helper()
+		task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: title})
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := store.StartRun(ctx, task, "earlier-session", title)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status != "running" {
+			if err := store.FinishRun(ctx, owner.TenantID, run.ID, status); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return task, run
+	}
+	for i := 0; i < 12; i++ {
+		seed(identity, fmt.Sprintf("Unfinished work %d", i), "waiting_user")
+	}
+	task, run := seed(identity, "Wait for an explicit decision", "waiting_user")
+	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		RequestedChannel: "earlier-session", ActionType: "tool_call", Payload: []byte(`{"tool":"terminal","args":{"command":"git push"}}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	seed(identity, "Finished work", "done")
+	seed(identity, "Currently executing work", "running")
+	other, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "another-person", "Another Person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed(other, "Private unfinished work", "waiting_user")
+	task, run = seed(identity, "Dismissed work", "waiting_user")
+	if _, err := control.NewWorkTimeline(store).DismissAttentionRun(ctx, identity.TenantID, identity.PersonID, task.ID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	digest := fetchDigest(t, daemon)
+	if digest.ResumableRunCount == nil || *digest.ResumableRunCount != 12 {
+		t.Fatalf("full resumable count = %v; expected 12, excluding pending waits, dismissed work, active work and another person", digest.ResumableRunCount)
+	}
+	if len(digest.UnresolvedTasks) != maxDigestTasks || len(digest.PendingApprovals) != 1 {
+		t.Fatalf("bounded legacy page or separate approval lost: history=%d approvals=%d", len(digest.UnresolvedTasks), len(digest.PendingApprovals))
 	}
 }
 

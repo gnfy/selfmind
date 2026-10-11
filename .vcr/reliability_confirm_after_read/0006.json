@@ -3,169 +3,42 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "The"
-    },
-    {
-      "reasoning_content": " instructions"
-    },
-    {
-      "reasoning_content": " confirm"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " result"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " must"
-    },
-    {
-      "reasoning_content": " contain"
-    },
-    {
-      "reasoning_content": " exactly"
-    },
-    {
-      "reasoning_content": " `"
-    },
-    {
-      "reasoning_content": "READ"
-    },
-    {
-      "reasoning_content": "Y"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "`."
-    },
-    {
-      "reasoning_content": " Now"
-    },
-    {
-      "reasoning_content": " resume"
-    },
-    {
-      "reasoning_content": " this"
-    },
-    {
-      "reasoning_content": " run"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " work"
-    },
-    {
-      "reasoning_content": "_select"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "content": "Instructions"
-    },
-    {
-      "content": " confirm"
-    },
-    {
-      "content": ":"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "result"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " must"
-    },
-    {
-      "content": " contain"
-    },
-    {
-      "content": " exactly"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "READ"
-    },
-    {
-      "content": "Y"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " plus"
-    },
-    {
-      "content": " a"
-    },
-    {
-      "content": " new"
-    },
-    {
-      "content": "line"
-    },
-    {
-      "content": "."
-    },
-    {
-      "content": " Res"
-    },
-    {
-      "content": "uming"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " waiting"
-    },
-    {
-      "content": " run"
-    },
-    {
-      "content": " now"
-    },
-    {
-      "content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I will read instructions.txt using batch_read to review the requirements."
     },
     {
       "usage": {
-        "input_tokens": 12029,
-        "output_tokens": 129,
-        "cache_read_input_tokens": 10496,
-        "cache_miss_input_tokens": 1533,
+        "input_tokens": 12496,
+        "output_tokens": 15,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 22,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
       }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 29,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_bnBkjzGZwUriFEtlKjaW6036",
-          "Function": "work_select",
-          "Args": "{\"action\": \"resume\", \"run_id\": \"{{SELFMIND_VCR_RUN_2}}\"}"
+          "ID": "call_574749",
+          "Function": "batch_read",
+          "Args": "{\"operations\":[{\"path\":\"instructions.txt\",\"tool\":\"read_file\"}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EuYKCuMKAWkUfRNlxdHNFeHh8wJ5jI2mTVas79j6A8oWhJh3PBrezu0v5VyQBAltf88z1eYqUg5tj0vSsbiqvV2MKwO2xFJj9UT1RMigQnT2e6FxFx9rkag+r2gRaNIK3/44O2OK0q+8gX+Gs1zTZK8gA+LdPbPngXHPkJVrnJ3/Xeh7wW3ReHqd7E/Aa9s1vFd79seW9xYY0Es+F1BlGvZ8wk1PYrhwh+Gqc9U+w+h/vvpRSepYeekBpiEFfs4c385glMNJ0RcyEYu6CwBJr4x0VTFCCHB5oAPmEWMEZy/b2CoIANifEKOMrpH8OyWWueeyz+aYRtSzzZLSQEzjv7zlGNwX463kdeTyJ5VxHUT6kQPJrltJFKe5+0flyE+Gs8vX8rNyQZnyKGUtBhsm6LAYd42mi11aIR2UY1kMrAxNTEuU1C9an0jDJHNTEEDRamuYsB014lQAL6MyeTTEVWdH6m9M0O2cURmfU7jpHnPpXuifsLguGIeP9tX4ot9z90aYgLjQw69HuUHhu9bCHwarn199rKpxEX6iwsISDxrafUS0n5efnm8QygF19PfVuuz3OvI9uUiDA1p10FAHMyvUfj7ECASSyhd5UDAT+zT3MrXJ6wWNGrV9+61+oS95s2wL7FV0xixntX8rjtMjcpU6hMow8Nkv0H/0Mh6HAcpQbiCKL4h/JfK/VhVDcP/a1GIa3I+Vvj9jVlVrM+qKMjGxzXMxc3jOnciJPKHxLxJzespV/6XURYFkhbv58M935g0AiDySuRC4ySior4Qi2a9Gg86/AeLVDe+Fp5yEjIBkSW7WC7n/QcXmdZpUJ4NnEdFY4V/GPl7zm5fzJdhYJDwF8D/BrTJNJaXW2G3BB9BJeYucBhh6M+60my7yOF0RuMZFkvigESAJoYinC476vpkF4gHdR/u2avIFP8DR58gHGvBeByXPu5cmV2Staycp9HbNLUyJbzMqkoh8qM03Yj3y+bkm6Ds8rQupztUhhQd23L0uObE3duk01lp9gXGeUSgQlkD502N0czk3fDLqeB0KS1uZdVQn3q0NpCHdkpa2D873+grjjq/JYQepaULRCjY7Z4kpD14uaNeKcEmfeZvFM4YVzJg9+v/nb+ZlMOolezAC3gZLVRY5wcyKa3Yx3DupEO3dp88E/72cVw3H6Rt0uqixbgDj484tROxB9n+tJrsn6o9qABM4xFqWc1V+3XHjDqc2oSdnZYPMRPgV8mCIgR04uAsB1gzi/rnCEvJ1GvIAy/TwLmcW1fF6cOpRTCb44R9l89INSEF7v4punFu3knpKWDMyJGx6vHs4z9UCVveFMzf5G6ZKetMx90c0c9ZuzeKceuOUT498qCICo5vPoUhWU8S68nwkZi3ut4RDXfXNFatSaMrjxrI2F8nWSiA0bemPCwv2U2ZCxi3mRiTC/1+hvb2HIOv6lTEvo8KG4MdqXCdIO+wiUJQcqynFZvykhp9yJQsaYIndv3gc4opwUDjPmo3xKHvb2Ze0O/p3f4Mvw1E+xBMXI0ok14boI4meLVRS+siOke9V2UjEAbApTLxqOLcA11fHCEiWHqJYeTEKKvZX9PTV/kr0FSNgIEhgy5XBjQbgSyDJTbXhmZpcig4C/hV4/QICUNyy3gv5/k2Wo3LMEJYaUJBxDhb4ipTwKsnVVVwdMjsHRREUxjQ81AIfZLf6zxDGB4zguR2lu3kH9B2iEN4tVP2LBDGHsqnaTtzpWM4cTVBmF48NgB/FdWN+JCX9fAvWdk/D5+J/8XaXQuZ2HB63yIncOdLsqhzQTbO4U03CFt33XFAnzOra9uG+VfwY7xp9RAeHf5uIy60gSWXkK4I="
+            }
+          }
         }
       ]
     }

@@ -7,12 +7,29 @@ import (
 )
 
 type contextInputKey struct{}
+type contextSystemSectionsKey struct{}
+
+func withContextSystemSections(ctx context.Context, sections []PromptSection) context.Context {
+	return context.WithValue(ctx, contextSystemSectionsKey{}, sections)
+}
 
 // The gateway-decorated current input is known before the spine is composed.
 // Match that exact input, not the oldest historical user message, as the start
 // of this Run's instructions. All subsequent user guidance remains protected.
 func withContextInput(ctx context.Context, input string) context.Context {
 	return context.WithValue(ctx, contextInputKey{}, input)
+}
+
+func isUserContextInstruction(message llm.Message) bool {
+	if message.Role != "user" {
+		return false
+	}
+	switch message.ContextOrigin {
+	case llm.MessageOriginRuntimeControl, llm.MessageOriginWorkSpine, llm.MessageOriginCompaction:
+		return false
+	default:
+		return true // Unknown checkpoint provenance cannot downgrade user input.
+	}
 }
 
 func protectedContextMessages(ctx context.Context, messages []llm.Message) []bool {
@@ -34,7 +51,7 @@ func protectedContextMessages(ctx context.Context, messages []llm.Message) []boo
 	protected := make([]bool, len(messages))
 	firstUser, lastUser := -1, -1
 	for i, message := range messages {
-		if message.Role == "user" && !isCompactionSummary(message) {
+		if isUserContextInstruction(message) {
 			if firstUser < 0 {
 				firstUser = i
 			}
@@ -43,7 +60,7 @@ func protectedContextMessages(ctx context.Context, messages []llm.Message) []boo
 	}
 	for i, message := range messages {
 		protected[i] = message.Role == "system" ||
-			(message.Role == "user" && !isCompactionSummary(message) &&
+			(isUserContextInstruction(message) &&
 				((scoped && i >= start) || (!scoped && (i == firstUser || i == lastUser))))
 	}
 	return protected

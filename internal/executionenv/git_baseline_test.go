@@ -13,7 +13,18 @@ import (
 func baselineGit(t *testing.T, root string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
-	cmd.Env = cleanGitProbeEnv(os.Environ())
+	// Production blocks every transport (cleanGitProbeEnv sets an empty
+	// GIT_ALLOW_PROTOCOL). Fixture builders are trusted local setup and some
+	// need the file transport, for example `submodule add` from a local path,
+	// so the helper re-enables it without weakening the production default.
+	env := cleanGitProbeEnv(os.Environ())
+	kept := env[:0:0]
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "GIT_ALLOW_PROTOCOL=") {
+			kept = append(kept, entry)
+		}
+	}
+	cmd.Env = append(kept, "GIT_ALLOW_PROTOCOL=file:git:ssh:https")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)

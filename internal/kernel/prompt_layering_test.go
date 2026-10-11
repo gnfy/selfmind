@@ -2,6 +2,8 @@ package kernel
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,7 +12,7 @@ import (
 
 // TestPromptStablePrefixOrdering pins P1-3: static behavior stays before the
 // volatile suffix, while capability/strategy-derived tool guidance joins the
-// suffix instead of being mislabeled as cache-stable.
+// suffix before selected Run state without being mislabeled as cache-stable.
 func TestPromptStablePrefixOrdering(t *testing.T) {
 	mem := memory.NewMemoryManager(nil)
 	agent := NewAgent(mem, promptToolBackend{}, &textOnlyProvider{}, "You are SelfMind.", 1, 1, nil)
@@ -34,8 +36,52 @@ func TestPromptStablePrefixOrdering(t *testing.T) {
 	if progressIdx > runtimeIdx {
 		t.Fatalf("stable progress block (%d) must precede volatile runtime context (%d)", progressIdx, runtimeIdx)
 	}
-	if toolIdx < runtimeIdx {
-		t.Fatalf("capability-derived tool block (%d) must stay in the volatile suffix after runtime context (%d)", toolIdx, runtimeIdx)
+	if toolIdx > runtimeIdx {
+		t.Fatalf("capability-derived tool block (%d) must precede changing runtime context (%d)", toolIdx, runtimeIdx)
+	}
+}
+
+// A fresh Run changes selected state, not the tool contract or repository
+// instructions. Pin the real system-prompt prefix used by the loop.
+func TestRunStateDoesNotPrecedeReusablePromptContent(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "AGENTS.md")
+	if err := os.WriteFile(path, []byte("PROJECT-CONVENTION: keep generated files intact"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	agent := NewAgent(memory.NewMemoryManager(nil), promptToolBackend{}, &textOnlyProvider{}, "You are SelfMind.", 1, 1, nil)
+	agent.contextScanner = NewContextScanner()
+	build := func(runID, correction string) string {
+		ctx := WithWorkspaceContext(context.Background(), WorkspaceContext{ID: "workspace", Root: root})
+		runtime := TaskRuntimeContext{RunID: runID, Title: "Inspect the same project", UserRequirements: []string{correction}}
+		ctx = WithRuntimeContextBundle(WithTaskRuntimeContext(ctx, runtime), RuntimeContextBundle{Task: &runtime, Budget: DefaultRuntimeContextBudget()})
+		prompt, _, err := agent.buildSystemPrompt(ctx, "tenant", DefaultTaskStrategy(), "inspect")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return prompt
+	}
+	first := build("run-first", "Do not publish")
+	second := build("run-second", "Do not change credentials")
+	cut := strings.Index(first, "# SELECTED RUNTIME CONTEXT")
+	if cut < 0 {
+		t.Fatal("selected context missing")
+	}
+	for _, marker := range []string{"# TOOL USE INSTRUCTIONS", "PROJECT-CONVENTION"} {
+		if index := strings.Index(first, marker); index < 0 || index > cut {
+			t.Fatalf("reusable %q is missing or after changing Run state", marker)
+		}
+	}
+	if !strings.HasPrefix(second, first[:cut]) || !strings.Contains(second, "Do not change credentials") || strings.Contains(second, "run-first") {
+		t.Fatal("changing Run state rewrote the reusable prefix or retained stale state")
+	}
+	t.Logf("unchanged system prefix before selected Run state: %d bytes", cut)
+	if err := os.WriteFile(path, []byte("PROJECT-CONVENTION: require review before publishing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	changed := build("run-third", "Do not publish")
+	if strings.HasPrefix(changed, first[:cut]) || !strings.Contains(changed, "require review before publishing") {
+		t.Fatal("changed project instructions reused stale context")
 	}
 }
 

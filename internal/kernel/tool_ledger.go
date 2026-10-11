@@ -170,9 +170,16 @@ func ToolExecutionStrategy(name string, retryClass ToolRetryClass) string {
 // the work list should treat as work.
 const ToolEffectObservation = "observation"
 
+// ToolEffectBookkeeping preserves internal writes without treating them as
+// actions against the work's targets. Legacy unspecified effects stay guarded.
+const ToolEffectBookkeeping = "run_bookkeeping"
+
 // ToolEffectClass records what a call could have changed, separately from
 // whether it is safe to replay.
 func ToolEffectClass(retryClass ToolRetryClass, metadata ...ToolExecutionMetadata) string {
+	if len(metadata) > 0 && metadata[0].Origin == "builtin" && metadata[0].BookkeepingOnly {
+		return ToolEffectBookkeeping
+	}
 	if len(metadata) > 0 && metadata[0].ObservationOnly {
 		return ToolEffectObservation
 	}

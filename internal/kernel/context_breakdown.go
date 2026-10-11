@@ -200,19 +200,7 @@ func ProviderCallContextBreakdown(sections []PromptSection, messages []llm.Messa
 }
 
 func estimateSingleMessageTokens(msg llm.Message) int {
-	total := estimateTokens(msg.Content)
-	for _, part := range msg.MultiContent {
-		total += estimateTokens(part.Text)
-		if part.ImageURL != "" || part.Data != "" {
-			// Images are provider-priced differently; record a conservative
-			// placeholder so their presence is not silently invisible.
-			total += 256
-		}
-	}
-	for _, call := range msg.ToolCalls {
-		total += estimateTokens(call.Function) + estimateTokens(call.Args)
-	}
-	return total
+	return messageTokenCount(msg, estimateTokens)
 }
 
 // StableVolatileTokens sums the accounted sections by mutability — the

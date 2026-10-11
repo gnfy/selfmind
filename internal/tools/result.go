@@ -32,6 +32,7 @@ func adaptMiddleware(middleware Middleware) ResultMiddleware {
 
 func (r *Registry) wrapResult(t Tool, middleware []ResultMiddleware) ResultExecutor {
 	exec := func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
+		kernel.MarkToolInvocationStarted(ContextFromArgs(args))
 		var result kernel.ToolDispatchResult
 		var err error
 		if typed, ok := t.(ResultTool); ok {
@@ -58,7 +59,7 @@ func (r *Registry) wrapResult(t Tool, middleware []ResultMiddleware) ResultExecu
 		}
 		args["_tool_name"] = t.Name()
 		args["_registry"] = r
-		args[toolExecutionPolicyArg] = executionPolicyForTool(t)
+		args[toolExecutionPolicyArg] = executionPolicyForCall(t, args)
 		if clarify := r.ClarifyHandler(); clarify != nil {
 			args["_clarify_fn"] = clarify
 		}
@@ -92,6 +93,7 @@ func processToolResult(result ExecutionResult) kernel.ToolDispatchResult {
 	process := &kernel.ToolProcessResult{
 		Started: result.Started, SandboxMode: string(result.Plan.Mode), RecoveryOutcome: result.RecoveryOutcome,
 		NetworkMode: result.Plan.NetworkMode, ProxyMode: result.Plan.ProxyMode,
+		NetworkDecision: result.NetworkDecision, NetworkPermission: result.NetworkPermission,
 		RequestedProxyRemovals: result.RequestedProxyRemovals,
 	}
 	if result.ExitCodeKnown {

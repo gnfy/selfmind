@@ -2,12 +2,15 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
+	"selfmind/internal/runpool"
+	"selfmind/internal/tools"
 )
 
 func (d *Server) ownedGitViewRoot(ctx context.Context, identity *control.IdentityContext, runID string) (*control.Run, executionenv.RootBinding, error) {
@@ -48,6 +51,88 @@ func (d *Server) ownedGitView(ctx context.Context, identity *control.IdentityCon
 	return run, root, nil
 }
 
+// gitViewWriter names what may still change a view: the owning Run, another
+// durable running Run bound to it, or an admission that registered it and has
+// not finished. Host-side Git never reads that checkout meanwhile.
+func (d *Server) gitViewWriter(ctx context.Context, identity *control.IdentityContext, run *control.Run, path string) (string, error) {
+	if run.Status == "running" {
+		return "the run is still writing its execution view", nil
+	}
+	active, err := d.Control.ListRunningRuns(ctx, identity.TenantID, []string{identity.PersonID})
+	if err != nil {
+		return "", err
+	}
+	for _, other := range active {
+		for _, binding := range other.ExecutionRoots {
+			if filepath.Clean(binding.Path) == filepath.Clean(path) {
+				return "another active run is still writing this execution view", nil
+			}
+		}
+	}
+	if d.coordinator().executionViewAdmitted(path) {
+		return "a Run is starting in this execution view", nil
+	}
+	return "", nil
+}
+
+// gitSourceWriter names what may still change the admitted source checkout
+// while /apply or /views prune works in it: a Run being admitted or running
+// with write access to it, a parked Run that can resume there, or a background
+// process such a Run started that is still alive. Ref creation itself reads no
+// source configuration, but delivery and prune still read the checkout's refs
+// and objects; a writer must not change them mid-operation, so the person is
+// told which Run or process to wait for. A child that escaped a sandboxed
+// command without being registered is not visible here.
+func (d *Server) gitSourceWriter(ctx context.Context, identity *control.IdentityContext, baseline executionenv.GitBaseline) (string, error) {
+	targets := []string{baseline.Root, baseline.CommonDir}
+	writes := func(roots []executionenv.RootBinding) bool {
+		return runpool.PathsConflict(targets, writableRootPaths(roots))
+	}
+	for _, active := range d.coordinator().activeRunsForPerson(identity.PersonID) {
+		if !writes(active.ExecutionRoots) {
+			continue
+		}
+		if active.RunID == "" {
+			return fmt.Sprintf("a Run is starting with write access to the source checkout %s", baseline.Root), nil
+		}
+		return fmt.Sprintf("Run %s is running with write access to the source checkout %s", active.RunID, baseline.Root), nil
+	}
+	unfinished, err := d.Control.ListUnfinishedRunRoots(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return "", err
+	}
+	for _, run := range unfinished {
+		if writes(run.Roots) {
+			return fmt.Sprintf("Run %s (%s) can still write the source checkout %s", run.RunID, run.Status, baseline.Root), nil
+		}
+	}
+	for _, process := range tools.LiveBackgroundProcesses(ctx, identity.PersonID) {
+		runID := process.RunID
+		if runID == "" && process.LeaseID != "" {
+			if lease, err := d.Control.GetExecutionLease(ctx, identity.TenantID, process.LeaseID); err == nil && lease != nil {
+				runID = lease.RunID
+			}
+		}
+		if runID == "" {
+			// Recorded by an earlier daemon: only the working directory remains.
+			if process.CWD != "" && runpool.PathsConflict(targets, []string{process.CWD}) {
+				return fmt.Sprintf("background process %s (%s) is still running in the source checkout %s",
+					process.ID, truncate(process.Command, 80), baseline.Root), nil
+			}
+			continue
+		}
+		run, err := d.Control.GetRun(ctx, identity.TenantID, runID)
+		if err != nil {
+			return "", err
+		}
+		if run != nil && run.PersonID == identity.PersonID && writes(run.ExecutionRoots) {
+			return fmt.Sprintf("background process %s (%s) started by Run %s is still running with write access to the source checkout %s",
+				process.ID, truncate(process.Command, 80), runID, baseline.Root), nil
+		}
+	}
+	return "", nil
+}
+
 func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityContext, runID string) (string, error) {
 	if strings.TrimSpace(runID) != "" {
 		run, root, err := d.ownedGitViewRoot(ctx, identity, runID)
@@ -67,13 +152,28 @@ func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityCo
 			viewsDir = filepath.Join(viewsDir, ".retired")
 			retired = true
 		}
-		info, err := executionenv.InspectGitViewDelivery(ctx, viewsDir, filepath.Base(root.Path), *root.GitBaseline)
+		writer, err := d.gitViewWriter(ctx, identity, run, root.Path)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Execution view for run %s\nPath: %s\nSource: %s\nCommitted files: %d\nUncommitted changes: %d\nUntracked files: %d\nIgnored files: %d\nDelivered branch: %s\nRetired: %t\nUse /apply %s to deliver a clean committed view as a separate branch (restore it first if retired). /views archive and restore preserve all files. /views prune permanently removes only a proven-safe archived checkout while retaining its commit in the source repository.",
-			run.ID, info.Path, info.SourceRoot, info.CommittedFiles, info.Uncommitted,
-			info.Untracked, info.Ignored, fallback(info.DeliveredBranch, "none"), retired, run.ID), nil
+		inspect := executionenv.InspectGitViewDelivery
+		if writer != "" {
+			inspect = executionenv.InspectGitViewCommits
+		}
+		info, err := inspect(ctx, viewsDir, filepath.Base(root.Path), *root.GitBaseline)
+		if err != nil {
+			return "", err
+		}
+		checkout := "Checkout: not inspected while a Run may still write this view\n"
+		if info.WorktreeInspected {
+			checkout = fmt.Sprintf("Uncommitted changes: %d\nUntracked files: %d\nIgnored files: %d\n", info.Uncommitted, info.Untracked, info.Ignored)
+			if hidden := hiddenGitViewState(info); hidden != "" {
+				checkout += "Hidden from git status: " + hidden + "\n"
+			}
+		}
+		return fmt.Sprintf("Execution view for run %s\nPath: %s\nSource: %s\nCommitted files: %d\n%sDelivered branch: %s\nRetired: %t\nUse /apply %s to deliver a clean committed view as a separate branch (restore it first if retired). /views archive and restore preserve all files. /views prune permanently removes only a proven-safe archived checkout while retaining its commit in the source repository.",
+			run.ID, info.Path, info.SourceRoot, info.CommittedFiles, checkout,
+			fallback(info.DeliveredBranch, "none"), retired, run.ID), nil
 	}
 	recent, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 100)
 	if err != nil {
@@ -102,6 +202,36 @@ func (d *Server) gitViewsReply(ctx context.Context, identity *control.IdentityCo
 	return "Execution views:\n" + strings.Join(lines, "\n") + "\nOpen: /views <run_id>", nil
 }
 
+func hiddenGitViewState(info executionenv.GitViewDelivery) string {
+	var parts []string
+	if info.HiddenIndexEntries != 0 {
+		parts = append(parts, fmt.Sprintf("%d skip-worktree, assume-unchanged, or unmerged index entries", info.HiddenIndexEntries))
+	}
+	if info.LinkedWorktrees != 0 {
+		parts = append(parts, fmt.Sprintf("%d linked worktrees", info.LinkedWorktrees))
+	}
+	if info.Submodules != 0 {
+		parts = append(parts, fmt.Sprintf("%d submodule repositories", info.Submodules))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// retainableGitView is the first, cheap half of a retention check. The move
+// guard repeats it atomically with the rename after the slow inspection.
+func (d *Server) retainableGitView(ctx context.Context, identity *control.IdentityContext, path string) (control.ExecutionViewUsage, error) {
+	usage, err := d.Control.ExecutionViewUsage(ctx, identity.TenantID, identity.PersonID, path)
+	if err != nil {
+		return control.ExecutionViewUsage{}, err
+	}
+	if usage.Pending {
+		return control.ExecutionViewUsage{}, errExecutionViewPending
+	}
+	if d.coordinator().executionViewAdmitted(path) {
+		return control.ExecutionViewUsage{}, errExecutionViewAdmitting
+	}
+	return usage, nil
+}
+
 func (d *Server) pruneGitViewReply(ctx context.Context, identity *control.IdentityContext, runID string) (string, error) {
 	run, root, err := d.ownedGitViewRoot(ctx, identity, runID)
 	if err != nil {
@@ -110,14 +240,17 @@ func (d *Server) pruneGitViewReply(ctx context.Context, identity *control.Identi
 	if run.Status != "done" {
 		return "", fmt.Errorf("only a completed Run's archived view can be pruned")
 	}
-	busy, err := d.Control.ExecutionViewReferencedByPendingWork(ctx, identity.TenantID, identity.PersonID, root.Path)
+	usage, err := d.retainableGitView(ctx, identity, root.Path)
 	if err != nil {
 		return "", err
 	}
-	if busy {
-		return "", fmt.Errorf("another unfinished Run or queued item still refers to this view")
+	if blocker, err := d.gitSourceWriter(ctx, identity, *root.GitBaseline); err != nil {
+		return "", err
+	} else if blocker != "" {
+		return "", fmt.Errorf("%s; /views prune waits for it to end because pruning writes a protected ref in that checkout", blocker)
 	}
-	pruned, err := executionenv.PruneRetiredGitView(ctx, d.Control.ExecutionViewsDir(), filepath.Base(root.Path), *root.GitBaseline)
+	pruned, err := executionenv.PruneRetiredGitView(ctx, d.Control.ExecutionViewsDir(), filepath.Base(root.Path), *root.GitBaseline,
+		d.coordinator().executionViewMoveGuard(ctx, identity, root.Path, usage))
 	if err != nil {
 		return "", err
 	}
@@ -130,25 +263,26 @@ func (d *Server) archiveGitViewReply(ctx context.Context, identity *control.Iden
 	if err != nil {
 		return "", err
 	}
-	if run.Status != "done" {
-		return "", fmt.Errorf("only a completed Run's view can be retired or restored")
-	}
-	busy, err := d.Control.ExecutionViewReferencedByPendingWork(ctx, identity.TenantID, identity.PersonID, root.Path)
-	if err != nil {
-		return "", err
-	}
-	if busy {
-		return "", fmt.Errorf("another unfinished Run or queued item still refers to this view")
-	}
 	viewID := filepath.Base(root.Path)
 	if restore {
+		// Restoring puts the same bytes back on the path its Runs expect. A
+		// parked or queued Run that refers to the view is exactly the work
+		// that needs it, so neither its status nor its references block this.
 		view, err := executionenv.RestoreGitView(ctx, d.Control.ExecutionViewsDir(), viewID, *root.GitBaseline)
 		if err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Restored execution view for run %s at %s. No work was discarded.", run.ID, view.Path), nil
 	}
-	view, err := executionenv.RetireGitView(ctx, d.Control.ExecutionViewsDir(), viewID, *root.GitBaseline)
+	if run.Status != "done" {
+		return "", fmt.Errorf("only a completed Run's view can be retired")
+	}
+	usage, err := d.retainableGitView(ctx, identity, root.Path)
+	if err != nil {
+		return "", err
+	}
+	view, err := executionenv.RetireGitView(ctx, d.Control.ExecutionViewsDir(), viewID, *root.GitBaseline,
+		d.coordinator().executionViewMoveGuard(ctx, identity, root.Path, usage))
 	if err != nil {
 		return "", err
 	}
@@ -161,19 +295,17 @@ func (d *Server) applyGitViewReply(ctx context.Context, identity *control.Identi
 	if err != nil {
 		return "", err
 	}
-	if run.Status == "running" {
-		return "", fmt.Errorf("the run is still writing its execution view")
-	}
-	active, err := d.Control.ListRunningRuns(ctx, identity.TenantID, []string{identity.PersonID})
+	writer, err := d.gitViewWriter(ctx, identity, run, root.Path)
 	if err != nil {
 		return "", err
 	}
-	for _, other := range active {
-		for _, binding := range other.ExecutionRoots {
-			if binding.Path == root.Path {
-				return "", fmt.Errorf("another active run is still writing this execution view")
-			}
-		}
+	if writer != "" {
+		return "", errors.New(writer)
+	}
+	if blocker, err := d.gitSourceWriter(ctx, identity, *root.GitBaseline); err != nil {
+		return "", err
+	} else if blocker != "" {
+		return "", fmt.Errorf("%s; /apply waits for it to end because delivery writes a branch in that checkout", blocker)
 	}
 	info, err := executionenv.DeliverGitViewBranch(ctx, d.Control.ExecutionViewsDir(), filepath.Base(root.Path), *root.GitBaseline)
 	if err != nil {

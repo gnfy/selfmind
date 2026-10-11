@@ -236,11 +236,15 @@ func TestWorkSelectLifecycleCapAllowsOneAuditedCorrection(t *testing.T) {
 	}
 }
 
-func TestUnresolvedPlanStepsFromToolCall(t *testing.T) {
-	call := llm.ToolCall{Function: "update_plan", Args: `{"plan":[{"step":"inspect","status":"completed"},{"step":"verify","status":"in_progress"},{"step":"optional cleanup","status":"cancelled"}]}`}
-	got, ok := unresolvedPlanStepsFromToolCall(call)
+func TestUnresolvedPlanStepsFromResult(t *testing.T) {
+	call := llm.ToolCall{Function: "update_plan", Args: `{"plan":[{"step":"inspect","status":"completed"},{"step":"verify","status":"cancelled"}]}`}
+	accepted := toolExecutionResult{rawResult: `{"plan":[{"step":"inspect","status":"completed"},{"step":"verify","status":"pending"},{"step":"optional cleanup","status":"cancelled"}]}`}
+	got, ok := unresolvedPlanStepsFromResult(call, accepted)
 	if !ok || len(got) != 1 || got[0] != "verify" {
-		t.Fatalf("unresolved plan = %v, ok=%v; want [verify], true", got, ok)
+		t.Fatalf("unresolved plan = %v, ok=%v; want the accepted [verify], true", got, ok)
+	}
+	if got, ok := unresolvedPlanStepsFromResult(call, toolExecutionResult{rawResult: "ok"}); ok || got != nil {
+		t.Fatalf("an unreadable result was read as a plan: %v, %v", got, ok)
 	}
 }
 

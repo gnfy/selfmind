@@ -97,6 +97,9 @@ func (c *RunCoordinator) commitWorkSelection(ctx context.Context, identity *cont
 		queued, err := c.srv.Control.EnqueueSelectedContinuation(ctx, identity.TenantID, identity.PersonID, run.ID, target.ID, control.QueuedTask{
 			Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
 			Content: req.Content, ApprovalMode: req.ApprovalMode,
+			// The transfer carries the person's request on, under the
+			// authority that request was admitted with.
+			Admission: req.Admission,
 		})
 		if err != nil {
 			return nil, err

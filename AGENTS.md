@@ -148,9 +148,9 @@ runtime Skills.
 - Explicit controls such as `/status`, `/resume`, `/search`, `/workspace`,
   `/approve`, and `/stop` remain model-free. Other natural language is
   agent-first; do not add greeting or keyword bypasses.
-- Keep one active run per person until an active plan explicitly changes the
-  concurrency contract. New work queues durably; a continuation steers the
-  active run and is never queued.
+- A person runs at most `gateway.max_active_work_runs` (default 2) top-level
+  work Runs and one foreground Run per CLI session; other new work queues
+  durably. A continuation steers its exact Run and is never queued.
 - Run events use the per-run channel installed with `kernel.WithEventChannel`.
   Never swap a shared Agent event channel.
 - Derive user-visible state from Runs, pending control objects, handoffs, and
@@ -273,12 +273,16 @@ runtime Skills.
 - The safety hard floor runs before modes and grants and cannot be bypassed by
   full-auto or an LLM judge. Distinguish forbidden operations from actions a
   human may approve.
-- Rejection is a user decision and must not cause retry. An unanswered approval
-  parks work. Smart triage is cheap-role-only, structured, and fail-closed;
+- Rejection is a user decision and must not cause retry. A human wait releases
+  its worker only after an exact checkpoint and durable park commit; failure
+  retains cancellable occupancy. Smart triage is cheap-role-only and structured;
   missing judge, timeout, parse error, or provider failure asks the human.
-- Arbitrary code runs unprompted in smart mode only when enforced isolation
-  proves writes confined to scope and no network or credential escape. Host,
-  uncontained, networked, privileged, or unknown execution asks.
+- Confined execution with enforced isolation and no network or credential
+  escape may bypass model review.
+  Other execution follows the current mode and normal capability boundaries;
+  smart host calls receive fresh cheap-role judgment without reusable authority.
+  Host execution excludes the person's other terminal and file mutations.
+  Explicit isolation requirements and approved boundaries remain fail-closed.
 - The daemon defines approval choices. Clients render them and never invent
   authority. Stored grants must be narrower than the action and cover every
   target.

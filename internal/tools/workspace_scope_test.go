@@ -115,9 +115,15 @@ func TestIsolatedViewRejectsUnclaimedExternalTools(t *testing.T) {
 		toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin, ReadOnly: true}}); err != nil || calls != 1 {
 		t.Fatalf("local read blocked: calls=%d err=%v", calls, err)
 	}
+	// An external tool its person marked read-only has no target to claim.
+	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "remote_lookup",
+		toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginExternal, ReadOnly: true,
+			ReadOnlyMarkedBy: ReadOnlyMarkedByPerson}}); err != nil || calls != 2 {
+		t.Fatalf("marked read-only external tool blocked: calls=%d err=%v", calls, err)
+	}
 }
 
-func TestParallelWorkRejectsHostEscapeBeforeEffectClaim(t *testing.T) {
+func TestParallelWorkLeavesHostAuthorizationToTheApprovalAndEffectGates(t *testing.T) {
 	root := t.TempDir()
 	person := "parallel-host"
 	cleanup := SetExecutionScope(person, ExecutionScope{PersonID: person, RunID: "parallel-run",
@@ -129,8 +135,8 @@ func TestParallelWorkRejectsHostEscapeBeforeEffectClaim(t *testing.T) {
 		return "ok", nil
 	})
 	if _, err := execute(map[string]interface{}{"_tenant_id": person, "_tool_name": "terminal",
-		"sandbox": "host", toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}); err == nil || called {
-		t.Fatalf("parallel Run escaped to host before the resource gate: called=%v err=%v", called, err)
+		"sandbox": "host", toolExecutionPolicyArg: toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}}); err != nil || !called {
+		t.Fatalf("parallel capacity refused host before the approval and effect gates: called=%v err=%v", called, err)
 	}
 }
 

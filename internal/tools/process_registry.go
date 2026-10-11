@@ -18,6 +18,7 @@ import (
 type ProcessInfo struct {
 	ID        string
 	Command   string
+	CWD       string
 	Cmd       *exec.Cmd
 	Output    *synchronizedBuffer
 	StartedAt time.Time
@@ -123,6 +124,20 @@ func (r *ProcessRegistry) Init(mem *memory.MemoryManager, tenantID string) {
 // its background gcloud fail — same run, same command, different environment.
 // Passing nil keeps the previous behaviour for callers with no request context.
 func (r *ProcessRegistry) StartProcess(command string, cwd string, env []string, ceiling time.Duration) (string, error) {
+	return r.StartObservedProcess(command, cwd, env, ceiling, nil)
+}
+
+// StartObservedProcess is StartProcess with an exit callback. onExit runs once,
+// after the process is reaped, with the exit code (-1 when no exit status was
+// observed) and the wait error; it never runs if the start fails.
+func (r *ProcessRegistry) StartObservedProcess(command string, cwd string, env []string, ceiling time.Duration,
+	onExit func(processID string, exitCode int, waitErr error)) (string, error) {
+	return r.StartObservedProcessInContext(context.Background(), command, cwd, env, ceiling, onExit)
+}
+
+// StartObservedProcessInContext binds the process receipt to its owning runtime.
+func (r *ProcessRegistry) StartObservedProcessInContext(ctx context.Context, command string, cwd string, env []string, ceiling time.Duration,
+	onExit func(processID string, exitCode int, waitErr error)) (string, error) {
 	id := uuid.New().String()
 	cmd := shellCommand(command)
 	cmd.Dir = cwd
@@ -133,14 +148,20 @@ func (r *ProcessRegistry) StartProcess(command string, cwd string, env []string,
 	output := &synchronizedBuffer{}
 	cmd.Stdout = output
 	cmd.Stderr = output
+	// A background command leads its own process group, like a foreground one,
+	// so the daemon can still recognise anything it leaves behind after it is
+	// reparented away from the daemon.
+	applySandboxLimits(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
+	recordSpawnedGroup(ctx, cmd)
 
 	info := &ProcessInfo{
 		ID:        id,
 		Command:   command,
+		CWD:       cwd,
 		Cmd:       cmd,
 		Output:    output,
 		StartedAt: time.Now(),
@@ -208,9 +229,83 @@ func (r *ProcessRegistry) StartProcess(command string, cwd string, env []string,
 		if r.mem != nil {
 			r.mem.UpdateProcessStatus(context.Background(), r.tenantID, id, status, exitCode)
 		}
+		if onExit != nil {
+			onExit(id, exitCode, err)
+		}
 	}()
 
 	return id, nil
+}
+
+// LiveBackgroundProcess is a detached command that is still running. RunID
+// or LeaseID names the Run scope that started it when this daemon did; one
+// recorded by an earlier daemon carries only its working directory.
+type LiveBackgroundProcess struct {
+	ID      string
+	Command string
+	CWD     string
+	RunID   string
+	LeaseID string
+}
+
+// LiveBackgroundProcesses lists one person's detached commands that are still
+// running, so a caller can refuse to act while one may still write a root.
+// Background commands are scoped per Run or lease and persisted per person;
+// a command an earlier daemon started survives only in that persisted record.
+func LiveBackgroundProcesses(ctx context.Context, personID string) []LiveBackgroundProcess {
+	personID = strings.TrimSpace(personID)
+	if personID == "" {
+		return nil
+	}
+	var live []LiveBackgroundProcess
+	seen := make(map[string]bool)
+	processRegistries.Range(func(key, value any) bool {
+		registry := value.(*ProcessRegistry)
+		registry.mu.RLock()
+		owner := registry.tenantID
+		processes := make([]*ProcessInfo, 0, len(registry.processes))
+		for _, process := range registry.processes {
+			processes = append(processes, process)
+		}
+		registry.mu.RUnlock()
+		if owner != personID {
+			return true
+		}
+		scope, _ := key.(string)
+		for _, process := range processes {
+			process.mu.Lock()
+			running := process.status == "running"
+			process.mu.Unlock()
+			if !running {
+				continue
+			}
+			item := LiveBackgroundProcess{ID: process.ID, Command: process.Command, CWD: process.CWD}
+			if runID, ok := strings.CutPrefix(scope, "run:"); ok {
+				item.RunID = runID
+			} else if leaseID, ok := strings.CutPrefix(scope, "lease:"); ok {
+				item.LeaseID = leaseID
+			}
+			seen[process.ID] = true
+			live = append(live, item)
+		}
+		return true
+	})
+	processRegistryRuntime.RLock()
+	mem := processRegistryRuntime.mem
+	processRegistryRuntime.RUnlock()
+	if mem == nil {
+		return live
+	}
+	records, err := mem.ListProcesses(ctx, personID)
+	if err != nil {
+		return live
+	}
+	for _, record := range records {
+		if record.Status == "running" && !seen[record.ID] && processAlive(record.PID) {
+			live = append(live, LiveBackgroundProcess{ID: record.ID, Command: record.Command, CWD: record.CWD})
+		}
+	}
+	return live
 }
 
 func (r *ProcessRegistry) Recover() {

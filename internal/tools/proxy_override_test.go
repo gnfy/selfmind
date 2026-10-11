@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -92,6 +93,12 @@ func TestToolChildKeepsReachableProxyAndHonorsExplicitRemoval(t *testing.T) {
 	if err == nil || requests.Load() != 1 || len(result.Process.RequestedProxyRemovals) != 1 || result.Process.RequestedProxyRemovals[0] != "http_proxy" {
 		t.Fatalf("explicit removal was rewritten or misreported: result=%+v requests=%d err=%v", result, requests.Load(), err)
 	}
+	// A path-qualified wrapper performs the same removal and reports it.
+	args["command"] = "/usr/bin/env -u http_proxy curl --silent --show-error --max-time 2 http://proxy-only.invalid/fixture"
+	result, err = tool.ExecuteResult(args)
+	if err == nil || requests.Load() != 1 || !reflect.DeepEqual(result.Process.RequestedProxyRemovals, []string{"http_proxy"}) {
+		t.Fatalf("path-qualified removal was misreported: result=%+v requests=%d err=%v", result, requests.Load(), err)
+	}
 	// This is per-child: explicit removal cannot mutate the frozen environment
 	// used by the next command, or the operator's original proxy settings.
 	args["command"] = "curl --silent --show-error --max-time 2 http://proxy-only.invalid/again"
@@ -129,6 +136,144 @@ func TestProxyRemovalPreservesObservationProof(t *testing.T) {
 		if provenReadOnlyWithCredentials(t, command) {
 			t.Errorf("unproven command must remain gated: %s", command)
 		}
+	}
+}
+
+// A case-insensitive filesystem runs `Env`, `BASH` and `/usr/bin/ENV` as the
+// ordinary programs, and the observation prover already reads them that way.
+// Detection must normalize the same way or the removal escapes its review.
+func TestProxyRemovalDetectionNormalizesProgramsLikeTheProver(t *testing.T) {
+	for _, tc := range []struct {
+		command string
+		want    []string
+	}{
+		{"Env -u HTTPS_PROXY gh pr view 19 --json state", []string{"HTTPS_PROXY"}},
+		{"BASH -c 'unset HTTPS_PROXY; gh pr view 19 --json state'", []string{"HTTPS_PROXY"}},
+		{"/usr/bin/env -u HTTPS_PROXY gh pr view 19 --json state", []string{"HTTPS_PROXY"}},
+		{"/usr/bin/ENV --unset=https_proxy gcloud builds describe build-2", []string{"https_proxy"}},
+		{"/bin/Zsh -c 'unset -v all_proxy; aws sts get-caller-identity'", []string{"all_proxy"}},
+		{"COMMAND Env -u HTTP_PROXY gh api repos/owner/repo/pulls/7", []string{"HTTP_PROXY"}},
+		{"TIMEOUT 30 ENV -u HTTPS_PROXY gh pr view 19", []string{"HTTPS_PROXY"}},
+		{"UNSET HTTPS_PROXY; gh pr view 19", []string{"HTTPS_PROXY"}},
+		// Only the route variables are removals; other names stay out.
+		{"Env -u PATH gh pr view 19", nil},
+		{"BASH -c 'gh pr view 19'", nil},
+	} {
+		if got := proxyRemovalVariables(tc.command); !reflect.DeepEqual(got, tc.want) && (len(got) != 0 || len(tc.want) != 0) {
+			t.Errorf("%q removals=%v, want %v", tc.command, got, tc.want)
+		}
+	}
+}
+
+func TestConfiguredProxyRemovalVariantsAreReviewedAndReported(t *testing.T) {
+	if !ExecSandboxAvailable() {
+		t.Skip("requires an enforcing sandbox")
+	}
+	withExecSandboxPolicy(t, true, true, true)
+	previous := executionenv.DefaultRegistry()
+	registry := executionenv.NewRegistry()
+	executionenv.SetDefaultRegistry(registry)
+	t.Cleanup(func() { executionenv.SetDefaultRegistry(previous) })
+	snapshot := registry.Install([]string{"PATH=/usr/bin", "HTTPS_PROXY=http://proxy.example.test:8080"}, "test", "person", nil)
+	for _, command := range []string{
+		"Env -u HTTPS_PROXY gh pr view 19 --json state",
+		"BASH -c 'unset HTTPS_PROXY; gh pr view 19 --json state'",
+		"/usr/bin/ENV -u HTTPS_PROXY gh pr view 19 --json state",
+	} {
+		t.Run(command, func(t *testing.T) {
+			judge := &fakeJudge{reply: "DENY"}
+			cleanup := SetExecutionScope(command, ExecutionScope{
+				TenantID: "default", PersonID: command, RunID: command,
+				EnvironmentSnapshotID: snapshot.ID, ApprovalMode: ApprovalSmart, Judge: judge,
+			})
+			defer cleanup()
+			ran := false
+			execute := SmartApprovalMiddleware("")(func(map[string]interface{}) (string, error) { ran = true; return "observed", nil })
+			_, err := execute(map[string]interface{}{
+				"_tenant_id": command, "_tool_name": "terminal", "command": command,
+				"_effective_sandbox_mode": string(SandboxIsolated), "_network_shared": true, credentialReadArgKey: true,
+			})
+			if err == nil || ran || judge.calls != 1 || !strings.Contains(judge.lastArg, "configured proxy variables (HTTPS_PROXY)") {
+				t.Fatalf("route override escaped review: ran=%v calls=%d err=%v prompt=%s", ran, judge.calls, err, judge.lastArg)
+			}
+		})
+	}
+}
+
+// The route change is one more review fact. It must not replace what made the
+// operation dangerous in either the judge prompt or the person's request.
+func TestProxyReviewAppendsToTheDangerousReason(t *testing.T) {
+	if !ExecSandboxAvailable() {
+		t.Skip("requires an enforcing sandbox")
+	}
+	withExecSandboxPolicy(t, true, true, true)
+	previous := executionenv.DefaultRegistry()
+	registry := executionenv.NewRegistry()
+	executionenv.SetDefaultRegistry(registry)
+	t.Cleanup(func() { executionenv.SetDefaultRegistry(previous) })
+	snapshot := registry.Install([]string{"PATH=/usr/bin", "HTTPS_PROXY=http://proxy.example.test:8080"}, "test", "person", nil)
+	const proxyFact = "removes configured proxy variables (HTTPS_PROXY)"
+	for _, tc := range []struct {
+		name, command string
+		parallel      bool
+		deny          bool
+		want, absent  []string
+	}{
+		{name: "egress", command: "unset HTTPS_PROXY; curl -X DELETE https://api.example.test/items/1", want: []string{"network egress command: curl", proxyFact}},
+		{name: "destructive", command: "unset HTTPS_PROXY; rm -rf build; gh pr view 19 --json state", want: []string{"invokes dangerous command: rm", proxyFact}},
+		{name: "wrapper variant", command: "env -u HTTPS_PROXY wget -q -O- https://api.example.test/export", want: []string{"network egress command: wget", proxyFact}},
+		// A parallel Run is reviewed on the same facts as a single Run (D7).
+		{name: "parallel run", command: "unset HTTPS_PROXY; curl -X DELETE https://api.example.test/items/1", parallel: true, want: []string{"network egress command: curl", proxyFact}, absent: []string{"parallel"}},
+		{name: "explicit deny", command: "unset HTTPS_PROXY; rm -rf build; gh pr view 19 --json state", deny: true, want: []string{"explicit deny", "invokes dangerous command: rm", proxyFact}},
+		// Facts that do not apply are not claimed.
+		{name: "no route change", command: "curl -X DELETE https://api.example.test/items/1", want: []string{"network egress command: curl"}, absent: []string{"configured proxy"}},
+		{name: "parallel only", command: "gh pr merge 19", parallel: true, want: []string{"requires approval in smart mode"}, absent: []string{"configured proxy", "parallel"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			judge := &fakeJudge{reply: `{"outcome":"escalate","risk_level":"high","user_authorization":"unknown","rationale":"The deletion target is not authorized."}`}
+			var asked []string
+			scope := ExecutionScope{
+				TenantID: "default", PersonID: tc.name, RunID: tc.name, ParallelWork: tc.parallel,
+				EnvironmentSnapshotID: snapshot.ID, ApprovalMode: ApprovalSmart, Judge: judge,
+				Approval: func(_ context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
+					asked = append(asked, req.Reason)
+					return ToolApprovalDecision{Outcome: ApprovalOutcomeTimedOut}, nil
+				},
+			}
+			if tc.deny {
+				scope.IntentSnapshot = func() RunIntentSnapshot {
+					return RunIntentSnapshot{ModelAuthorization: true, ExplicitDeny: []string{"do not delete anything"}}
+				}
+			}
+			cleanup := SetExecutionScope(tc.name, scope)
+			defer cleanup()
+			execute := SmartApprovalMiddleware("")(func(map[string]interface{}) (string, error) { return "ran", nil })
+			if _, err := execute(map[string]interface{}{
+				"_tenant_id": tc.name, "_tool_name": "terminal", "command": tc.command,
+				"_effective_sandbox_mode": string(SandboxIsolated), "_network_shared": true,
+			}); err == nil {
+				t.Fatal("an unanswered review dispatched")
+			}
+			if len(asked) != 1 {
+				t.Fatalf("person was asked %d times", len(asked))
+			}
+			surfaces := map[string]string{"request": asked[0]}
+			if judge.calls > 0 {
+				surfaces["judge"] = judge.lastArg
+			}
+			for surface, text := range surfaces {
+				for _, want := range tc.want {
+					if !strings.Contains(text, want) {
+						t.Errorf("%s lost %q: %s", surface, want, text)
+					}
+				}
+				for _, absent := range tc.absent {
+					if strings.Contains(text, absent) {
+						t.Errorf("%s claimed %q: %s", surface, absent, text)
+					}
+				}
+			}
+		})
 	}
 }
 

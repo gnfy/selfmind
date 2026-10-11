@@ -72,7 +72,7 @@ func (m *uiModel) otherSessionRunFinished(msg MsgDaemonRunFinished) tea.Cmd {
 	}
 	title := m.otherRunTitle
 	m.otherRunID, m.otherRunTitle = "", ""
-	m.otherClarify = ""
+	m.otherClarify, m.otherClarifyID = "", ""
 	if len(m.otherApprovals) > 0 {
 		m.refreshOtherSessionNotice()
 		return nil
@@ -118,8 +118,9 @@ func (m *uiModel) otherSessionApprovalResolved(id string) bool {
 // otherSessionClarify records a question another session's run waits on.
 // While that terminal is open it takes the answer; a plain message typed here
 // stays this session's own input.
-func (m *uiModel) otherSessionClarify(question string) {
-	m.otherClarify = textutil.Truncate(strings.TrimSpace(question), 80)
+func (m *uiModel) otherSessionClarify(msg MsgClarifyRequest) {
+	m.otherClarify = textutil.Truncate(strings.TrimSpace(msg.Question), 80)
+	m.otherClarifyID = strings.TrimSpace(msg.ID)
 	m.refreshOtherSessionNotice()
 }
 
@@ -133,16 +134,12 @@ func (m *uiModel) refreshOtherSessionNotice() {
 	var kind noticeKind
 	var text string
 	switch {
-	case len(m.otherApprovals) == 1:
-		for _, target := range m.otherApprovals {
-			kind, text = noticeWarning, "Other session: approval waiting for "+target+" — /approvals lists it, /approve answers it here."
-		}
-	case len(m.otherApprovals) > 1:
-		kind, text = noticeWarning, "Other session: approvals waiting — /approvals lists them, /approve answers them here."
+	case len(m.otherApprovals) > 0:
+		kind, text = noticeWarning, "Pending: "+countNoun(len(m.otherApprovals), "approval")+" from another session — /approvals · /approve <n|id> to continue."
 	case m.otherClarify != "":
 		kind, text = noticeWarning, "Other session: question waiting — “"+m.otherClarify+"”. Answer it in that session."
 	case m.otherRunID != "":
-		kind, text = noticeInfo, "Other session: working on “"+m.otherRunTitle+"” — /attach to watch it here."
+		kind, text = noticeInfo, "Other session: working on “"+m.otherRunTitle+"” — /resume to view it here."
 	}
 	if text == "" {
 		if m.otherNoticeID != 0 && m.statusNoticeID == m.otherNoticeID {
@@ -172,12 +169,20 @@ func otherSessionTitle(input string) string {
 // session's running task, and what happens to it there.
 func otherSessionReceipt(title string) string {
 	title = otherSessionTitle(title)
-	return "Sent to “" + title + "”, which is running in another session. It will use your message at its next safe step or queue it as separate work; that task's progress stays in its own session (/attach to watch it here)."
+	return "Sent to “" + title + "”, which is running in another session. It will use your message at its next safe step or queue it as separate work; that task's progress stays in its own session (/resume to view it here)."
 }
 
 // handleAttach watches another session's running task in this terminal. It
 // only observes: the run keeps its session, which still receives its answer.
 func (m *uiModel) handleAttach(args []string) tea.Cmd {
+	m.runViewResumeActions = false // compatibility alias remains view-only
+	if m.runViewer != nil {
+		ref := ""
+		if len(args) > 0 {
+			ref = strings.TrimSpace(args[0])
+		}
+		return m.loadRunView(ref)
+	}
 	runID, title := m.otherRunID, m.otherRunTitle
 	if len(args) > 0 {
 		if runID = strings.TrimSpace(args[0]); runID != m.otherRunID {

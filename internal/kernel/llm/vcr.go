@@ -91,7 +91,7 @@ var vcrCounters sync.Map // session -> *atomic.Int64
 // at the start of EVERY case execution: the counter is process-global and was
 // never reset, so a case re-run in the same process continued numbering where
 // the previous run stopped — recording cassettes with a 0001+ hole (observed
-// live: .vcr/continuity_task_attach/ held 0001-0003 and no 0000) and failing
+// live: a multi-turn cassette held 0001-0003 and no 0000) and failing
 // replays that probe indices past the recorded range.
 func ResetVCRSession(session string) {
 	if strings.TrimSpace(session) == "" {
@@ -285,6 +285,9 @@ func (v *vcrProvider) load(ctx context.Context, path string, messages []Message)
 	for i, id := range vcrOpaqueIDs(messages, vcrArtifactIDPattern) {
 		c = rewriteCassette(c, vcrArtifactPlaceholder(i), id)
 	}
+	for i, id := range vcrOpaqueIDs(messages, vcrEffectClaimIDPattern) {
+		c = rewriteCassette(c, vcrEffectClaimPlaceholder(i), id)
+	}
 	return &c, nil
 }
 
@@ -338,6 +341,9 @@ func (v *vcrProvider) save(ctx context.Context, path string, c cassette, message
 	}
 	for i, id := range vcrOpaqueIDs(messages, vcrArtifactIDPattern) {
 		c = rewriteCassette(c, id, vcrArtifactPlaceholder(i))
+	}
+	for i, id := range vcrOpaqueIDs(messages, vcrEffectClaimIDPattern) {
+		c = rewriteCassette(c, id, vcrEffectClaimPlaceholder(i))
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {

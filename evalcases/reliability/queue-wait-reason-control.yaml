@@ -1,0 +1,33 @@
+id: reliability_queue_wait_reason_control
+title: "Queued exact continuations report their wait without inventing a running task"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+
+setup:
+  task:
+    title: "Independent review waiting for provider capacity"
+    parked_runs:
+      - input: "Review the changes"
+        status: waiting_external
+        wait_reason: capacity
+
+turns:
+  - input: "/queue"
+
+expect:
+  status: completed
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "Queued tasks:"
+    - "Waiting"
+  must_not_contain:
+    - "behind the running task"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

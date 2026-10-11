@@ -112,7 +112,9 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
    ingress model. Ordinary acceptances and continuation phrases go to Main,
    without a language-specific shortcut selecting the execution parent. Approval and
    clarification answers retain priority over a bare numbered continuity
-   choice. Daemon-originated work never uses text to steer another run.
+   choice, and a message carrying a reply, approval, or clarification edge
+   never consults the bare-number lookup. Daemon-originated work never uses
+   text to steer another run.
 2. **Structured return edges identify exact work.** A daemon-originated approval
    continuation binds the parked approval's origin run; platform reply
    metadata (`reply_to_run_id`, durable across the queue) binds the exact run
@@ -161,19 +163,24 @@ Code: `internal/gateway/httpapi/continuity_resolver.go`,
    pending choices key on `person_id`, not an open CLI process or current
    channel. A CLI-created task can be observed or continued from a bound IM,
    after closing/reopening the CLI, and after daemon restart. Raw transcripts
-   remain local. A bare number claims a choice only when one person-wide choice
-   was created within 30 minutes; `/choose <choice_id> <number>` or platform
-   choice metadata remains exact for 24 hours.
+   remain local. A bare number claims a choice only when exactly one choice
+   was shown on the same account and channel within 30 minutes; from another
+   CLI window or chat the number is that endpoint's own input.
+   `/choose <choice_id> <number>` or platform choice metadata remains exact
+   from any of the person's endpoints for 24 hours.
 6. **Messages resolved as NEW own a fresh root task** (simplification P2,
    2026-08-31 — supersedes the 2026-07-06 pre-label guess). A message with no
    prior-work match, structured edge, explicit task id, or resume pin creates
    its own task; async dispatches,
    queued-task drains, and cron turns follow the same rule, and
-   daemon-originated text never steers the active run via cues. Grouping is
+   daemon-originated text never steers the active run via cues or acts as a
+   command, an answer, a choice, or a continuity control. Grouping is
    display-only (labels never gate context), the bare `/resume` attention
    listing ranks by derived display priority, and there is no post-run
    relabeling. An explicit `/resume <task_id>` is continuation evidence for
-   exactly the NEXT agent-bound message (a one-shot pin, consumed on use) and
+   exactly the selecting endpoint's NEXT user agent input (a one-shot
+   selection, captured before admission; scheduled turns and other sessions
+   neither consume nor follow it) and
    is the only way to reopen an archived label
    (`internal/gateway/httpapi` `resolveTask`).
 
@@ -204,8 +211,60 @@ explicit delivery override are the current default:
 
 No adapter may infer these decisions independently of the gateway.
 
-Account binding: `POST /v1/accounts/bind` attaches a platform account to an
-existing person. `/id` shows the current tenant/person/account resolution.
+## CLI identity is the person's own terminal
+
+Explicit controls — `/approve`, `/mode`, `/stop`, workspace trust, `--add-dir` —
+are the person's own input, and the gateway accepts them as the `cli` platform
+only from the person's own CLI. That CLI reaches a local daemon over a Unix
+domain socket in a `0700` directory, and the daemon verifies each connection
+from the kernel's record of who connected: the process must run as the daemon's
+user and must not be the daemon or a process it started for a tool. The TCP
+listener carries IM, webhook, and HTTP integrations. They keep their own
+authentication and act as the non-CLI identity they name; a request that claims
+`platform:"cli"` over TCP, or from a refused socket peer, is rejected with no
+fallback. A configured gateway token authenticates a remote integration and
+never grants CLI identity, so a CLI pointed at a remote gateway cannot act as
+its person there. Account binding (`POST /v1/accounts/bind`) is one of these
+CLI-only acts. `/id` shows the current tenant/person/account resolution.
+
+Stopping the daemon and reading what it is running are the person's controls
+too. Without a configured gateway token they answer only the person's own CLI on
+the socket: over TCP, stop is refused with a message naming the socket and status
+shrinks to liveness, while `/health` stays open. A configured token opens both to
+a remote operator who holds it. A daemon that listens on loopback also refuses a
+TCP request whose `Host` is not a loopback name, so a web page cannot reach it by
+rebinding its own domain.
+
+What this guarantees, and where it stops (the mechanism is in
+`docs/tool-safety.md`):
+
+- A sandboxed tool, the default for agent commands, cannot forge the person's
+  CLI input. On macOS it can reach neither the socket nor the TCP listener, and
+  cannot read the daemon's runtime directory, control store, configuration
+  (with its backups), credentials file, or chat account credentials, nor move
+  the directories that hold them to reach them by another name. On Linux it
+  cannot reach the socket or those files; while the network is shared it can
+  still reach the TCP listener, and while no `gateway.token` is set it can name
+  an IM account already bound to the person and be served as them (start work,
+  answer pending approvals, change the approval mode: `/mode full-auto` sent
+  that way succeeds, which is the original exploit; only the CLI-reserved
+  controls stay refused). A gateway token placed in a readable dotfile, shell rc,
+  or repository, instead of the private configuration or the daemon's own
+  environment, gives a confined command the identity back. The
+  original exploit is therefore NOT closed on Linux with a shared network, nor
+  for an approved host-mode tool anywhere; it is closed by a gateway token, or
+  by the planned work package that makes a token-less listener refuse non-CLI
+  identities (WP-L2). It cannot stop the daemon or read its status beyond
+  liveness there.
+- An approved host-mode tool, and every process it leaves in the daemon's
+  process tree or process group, is refused. On Linux the daemon is a child
+  subreaper, so that includes double-forked tools. On macOS a host command that
+  double-forks and calls `setsid` before connecting was observed to be accepted.
+  On any platform a host command can ask a service manager to start a process
+  outside the tree. Approving a host command approves the person's user
+  authority.
+- The Linux behavior is implemented and unit-tested; it was not exercised on a
+  Linux host in this change.
 
 ## Runtime attachment model (endpoints as watchers)
 
@@ -224,7 +283,8 @@ Routing has two independent layers (owner decision, 2026-07-04):
 **Conversation layer — replies follow the ORIGIN endpoint, never broadcast.**
 Results, approval prompts, and questions are conversation messages; they
 belong to the surface where the task was dispatched (this includes scheduled
-jobs, which deliver to the channel that created them). Priority:
+jobs, which run as the bound account that created them and deliver to its
+direct chat, never to another person or a shared chat). Priority:
 
 1. The task explicitly names a reply endpoint ("结果发到 Telegram") — honored
    only if it is one of the person's OWN bound accounts (never an arbitrary
@@ -256,7 +316,7 @@ an implicit detach identical to a graceful close.
 **Session audience — a terminal shows its own session** (owner decision,
 2026-09-28). Each terminal process is a session, named by its channel id. A
 run's text, tools, plan, and usage reach only the session that started it and
-a client that explicitly attached to the run (`/attach`); every other session
+a client that explicitly views the run through `/resume`; every other session
 receives the person-wide facts only — run lifecycle, approvals, questions,
 watcher and background notices — and reports another session's work in one
 status line. Live delivery and reconnect replay apply the same audience, and a
@@ -268,9 +328,10 @@ what waits. While the asking terminal is open, only it answers with plain text
 stays its own input. With the asking terminal closed, or for an IM question,
 any endpoint answers with plain text as before. A message typed while another
 session's run is active queues for this session, unless it has an exact reply
-edge to the active Run. The current one-Run-per-person limit means the queued
-instruction starts after the active execution ends.
-Watching another session's run is explicit: `/attach`, or resuming that
+edge to the active Run. Resource and person-capacity limits determine when
+queued work can start.
+Watching another session's run is explicit: the `/resume` viewer (with
+`/attach` retained as read-only compatibility), or resuming that
 session with `selfmind --resume <session>`. A parked approval answered from a
 terminal continues in the source run's session.
 
@@ -316,7 +377,7 @@ it does not shorten the seven-day answer lifetime. A live CLI still selects the
 full wait regardless of the latest IM delivery state.
 
 Lifecycle: `CLI attach → work → detach (close/handoff) → IM takeover → …
-→ CLI re-attach (digest; `/attach` or `--resume <session>` takes back over)`. Crash of a terminal is an
+→ CLI re-attach (digest; the `/resume` viewer or `--resume <session>` takes back over)`. Crash of a terminal is an
 implicit detach (heartbeat expiry), identical to a graceful close.
 
 Quitting with a run active is an explicit choice, not an accident: the TUI

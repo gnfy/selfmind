@@ -2,12 +2,16 @@ package httpapi
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"selfmind/internal/control"
 	"selfmind/internal/control/controltest"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/tools"
 )
 
 func TestExecutionDiagIsRedactedAndShowsWorkspace(t *testing.T) {
@@ -48,6 +52,89 @@ func TestExecutionDiagIsRedactedAndShowsWorkspace(t *testing.T) {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("reply missing %q:\n%s", want, reply)
 		}
+	}
+}
+
+// /diag execution states, per credential profile on this host, whether the
+// platform's sandbox can run it and which host paths a sandboxed run writes —
+// paths only, never what the configuration holds.
+func TestExecutionDiagShowsCredentialProfileBoundaries(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".aws"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	config := "[profile sso-dev]\nsso_session=dev\n[sso-session dev]\nsso_start_url=https://example.awsapps.com/start\n"
+	if err := os.WriteFile(filepath.Join(home, ".aws", "config"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registry := executionenv.NewRegistry()
+	previous := executionenv.DefaultRegistry()
+	executionenv.SetDefaultRegistry(registry)
+	t.Cleanup(func() { executionenv.SetDefaultRegistry(previous) })
+	registry.Install([]string{"PATH=/usr/bin:/bin", "HOME=" + home}, "inherited", "principal-diag", nil)
+	enabled, required, _ := tools.ExecSandboxStatus()
+	network := tools.ExecSandboxAllowsNetwork()
+	tools.SetExecSandbox(true, false, network)
+	t.Cleanup(func() { tools.SetExecSandbox(enabled, required, network) })
+
+	store := controltest.NewStore(t)
+	identity := &control.IdentityContext{TenantID: "tenant-profile-diag", PersonID: "person-profile-diag", Platform: "cli"}
+	server := &Server{Control: store}
+	handled, reply, _, err := server.tryHandleControlCommand(context.Background(), identity, api.MessageRequest{
+		Channel: "cli:person-profile-diag", Content: "/diag execution",
+	})
+	if err != nil || !handled {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(reply, "Credential profiles on this host") {
+		t.Fatalf("reply lacks the per-profile boundary section:\n%s", reply)
+	}
+	var awsLine string
+	for _, line := range strings.Split(reply, "\n") {
+		if strings.HasPrefix(line, "- aws: ") {
+			awsLine = line
+		}
+	}
+	if awsLine == "" {
+		t.Fatalf("the host's AWS profile is not reported:\n%s", reply)
+	}
+	root, _ := filepath.EvalSymlinks(filepath.Join(home, ".aws"))
+	backend := tools.SandboxBackendName(tools.SandboxIsolated)
+	if !tools.ExecSandboxAvailable() {
+		backend = "none"
+		if !strings.Contains(awsLine, "not sandbox-runnable") {
+			t.Fatalf("without an isolation backend the profile cannot be sandbox-runnable: %q", awsLine)
+		}
+	}
+	switch backend {
+	case "seatbelt":
+		if !strings.Contains(awsLine, "in place") || !strings.Contains(awsLine, filepath.Join(root, "sso", "cache")) ||
+			!strings.Contains(awsLine, filepath.Join(root, "cli", "cache")) {
+			t.Fatalf("seatbelt must name the in-place subpaths: %q", awsLine)
+		}
+	case "bubblewrap":
+		if !strings.Contains(awsLine, "overlay") {
+			t.Fatalf("bubblewrap must name its private overlays: %q", awsLine)
+		}
+	}
+	if !strings.Contains(reply, "- gh: no state on this host") {
+		t.Fatalf("a profile without host state must say so:\n%s", reply)
+	}
+	if strings.Contains(reply, "awsapps") || strings.Contains(reply, "sso_session") {
+		t.Fatalf("configuration content leaked into diagnostics:\n%s", reply)
+	}
+
+	// With exec_sandbox disabled, commands run on the host: nothing may be
+	// reported as sandbox-runnable.
+	tools.SetExecSandbox(false, false, network)
+	_, reply, _, err = server.tryHandleControlCommand(context.Background(), identity, api.MessageRequest{
+		Channel: "cli:person-profile-diag", Content: "/diag execution",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(reply, ": sandbox-runnable") || !strings.Contains(reply, "- aws: not sandbox-runnable: ") {
+		t.Fatalf("a disabled sandbox must not be reported as runnable:\n%s", reply)
 	}
 }
 

@@ -514,33 +514,39 @@ func (s *Store) EnqueueRecoveredApprovalContinuation(ctx context.Context, approv
 		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var status string
+	var status, parkedAdmission string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT status
+		`SELECT status, COALESCE((SELECT r.admission_json FROM runs r
+		   WHERE r.tenant_id = a.tenant_id AND r.id = a.run_id AND r.person_id = a.person_id), '')
 		 FROM approval_requests a WHERE a.tenant_id = ? AND a.id = ? AND a.person_id = ? AND a.thread_id = ?
 		   AND COALESCE(a.resume_queue_id, '') = '' AND a.status IN ('approved', 'rejected')
 		   AND COALESCE(a.decision_recorded_at, 0) > 0
 		   AND COALESCE(a.waiter_state, 'live') = 'live' AND COALESCE(a.decision_claimed_at, 0) = 0
 		   AND EXISTS (SELECT 1 FROM runs r WHERE r.id = a.run_id AND r.status = 'interrupted')`,
-		q.TenantID, approvalID, q.PersonID, q.TaskID).Scan(&status); err != nil {
+		q.TenantID, approvalID, q.PersonID, q.TaskID).Scan(&status, &parkedAdmission); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
+	admissionJSON, err := parkedRunAdmissionJSON(q.Admission, parkedAdmission)
+	if err != nil {
+		return nil, false, err
+	}
 	notBefore := int64(0)
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, idempotency_key, class, priority, not_before, status, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, idempotency_key, class, priority, not_before, status, created_at, admission_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
-		q.WorkspaceID, rootsJSON, q.TaskID, q.ApprovalID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.WorkspaceID, rootsJSON, q.TaskID, q.ApprovalID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix(), admissionJSON)
 	if err != nil {
 		return nil, false, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM task_queue WHERE tenant_id = ? AND idempotency_key = ?`, q.TenantID, q.IdempotencyKey).Scan(&q.ID); err != nil {
 		return nil, false, err
 	}
+	q.setStoredAdmission(admissionJSON)
 	authState, authExpires := "", int64(0)
 	if status == "approved" {
 		authState = "available"
@@ -803,32 +809,43 @@ func (s *Store) RespondParkedApprovalAndEnqueue(ctx context.Context, tenantID, p
 		return nil, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var waiterState, currentStatus, owner, taskID string
+	var waiterState, currentStatus, owner, taskID, runID, parkedAdmission string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(waiter_state, 'live'), status, person_id, COALESCE(thread_id, '')
+		`SELECT COALESCE(waiter_state, 'live'), status, person_id, COALESCE(thread_id, ''), COALESCE(run_id,''),
+		        COALESCE((SELECT r.admission_json FROM runs r WHERE r.tenant_id = approval_requests.tenant_id
+		          AND r.id = approval_requests.run_id AND r.person_id = approval_requests.person_id), '')
 		 FROM approval_requests WHERE tenant_id = ? AND id = ?`, tenantID, approvalID,
-	).Scan(&waiterState, &currentStatus, &owner, &taskID); err != nil {
+	).Scan(&waiterState, &currentStatus, &owner, &taskID, &runID, &parkedAdmission); err != nil {
 		return nil, nil, err
 	}
 	if owner != personID || currentStatus != "pending" || waiterState != "parked" || taskID != q.TaskID {
 		return nil, nil, fmt.Errorf("approval request %s is not an answerable parked request", approvalID)
+	}
+	if q.ReplyToRunID != "" && q.ReplyToRunID != runID {
+		return nil, nil, fmt.Errorf("approval continuation cannot name a different Run")
+	}
+	q.ReplyToRunID = runID
+	admissionJSON, err := parkedRunAdmissionJSON(q.Admission, parkedAdmission)
+	if err != nil {
+		return nil, nil, err
 	}
 	notBefore := q.NotBefore.Unix()
 	if q.NotBefore.IsZero() {
 		notBefore = 0
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, idempotency_key, class, priority, not_before, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, reply_to_run_id, idempotency_key, class, priority, not_before, status, created_at, admission_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
-		q.WorkspaceID, rootsJSON, q.TaskID, q.ApprovalID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.WorkspaceID, rootsJSON, q.TaskID, q.ApprovalID, q.ReplyToRunID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix(), admissionJSON)
 	if err != nil {
 		return nil, nil, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM task_queue WHERE tenant_id = ? AND idempotency_key = ?`, tenantID, q.IdempotencyKey).Scan(&q.ID); err != nil {
 		return nil, nil, err
 	}
+	q.setStoredAdmission(admissionJSON)
 	now := time.Now().Unix()
 	authorizationState, authorizationExpiry := "", int64(0)
 	if status == "approved" {

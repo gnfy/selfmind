@@ -153,7 +153,7 @@ func (m *uiModel) hasApprovalRequest(id string) bool {
 
 func (m *uiModel) markApprovalParked(id string) {
 	id = strings.TrimSpace(id)
-	if id == "" {
+	if !m.hasApprovalRequest(id) {
 		return
 	}
 	if m.pendingApprovalID == id && m.approvalPrompt != nil {

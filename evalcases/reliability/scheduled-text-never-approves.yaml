@@ -1,0 +1,56 @@
+id: reliability_scheduled_text_never_approves
+title: "A scheduled /approve is refused and the person's parked approval stays theirs to answer"
+suite: reliability
+workspace: isolated
+model_required: false
+
+# A schedule's prompt is stored text, often the model's own words through the
+# cron tool. When it fires, the cron executor sends it into the gateway as a
+# daemon-originated turn: it may never run a command or answer the person's
+# approval, so the model cannot approve its own action by scheduling the words.
+
+setup:
+  task:
+    title: "Deploy the service"
+    parked_runs:
+      - input: "Deploy the service to staging"
+        status: waiting_user
+  approvals:
+    - parked_run: 1
+      command: "rm -rf build"
+
+turns:
+  - input: "/approve"
+    scheduled: true
+    assert_state:
+      - on: approval
+        status: pending
+        count_gte: 1
+  - input: "/APPROVE all"
+    scheduled: true
+  - input: "/approvals"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "Pending approvals:"
+    - "rm -rf build"
+  must_not_contain:
+    - "No pending approvals"
+
+assert_state:
+  - on: approval
+    status: pending
+    count_gte: 1
+  - on: runs
+    count_lte: 1
+  - on: queued
+    count_lte: 0
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

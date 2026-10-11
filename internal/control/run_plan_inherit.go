@@ -84,6 +84,9 @@ func (s *Store) inheritRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, childR
 	if err != nil {
 		return nil, err
 	}
+	if err := saveInheritedEvidenceReferencesTx(ctx, tx, tenant, childRunID, parentRunID); err != nil {
+		return nil, err
+	}
 	return &projection, nil
 }
 

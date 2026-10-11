@@ -64,7 +64,7 @@ func TestBuildDoctorReportRendersSectionsAndRedacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := buildDoctorReport(ctx, store, identity, dataDir, "not running", "", "", 50)
+	report := buildDoctorReport(ctx, store, identity, dataDir, "not running", "", "", "", 50)
 
 	for _, section := range []string{
 		"== Gateway ==", "== Workspace trust ==", "== Recent runs ==", "== Pending approvals ==",

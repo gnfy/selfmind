@@ -3,63 +3,82 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Read"
-    },
-    {
-      "reasoning_content": "-back"
-    },
-    {
-      "reasoning_content": " matches"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Now"
-    },
-    {
-      "reasoning_content": " final"
-    },
-    {
-      "reasoning_content": "ize"
-    },
-    {
-      "reasoning_content": " plan"
-    },
-    {
-      "reasoning_content": " and"
-    },
-    {
-      "reasoning_content": " finish"
-    },
-    {
-      "reasoning_content": "_run"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "Both deliverables are"
     },
     {
       "usage": {
-        "input_tokens": 13011,
-        "output_tokens": 150,
-        "cache_read_input_tokens": 12800,
-        "cache_miss_input_tokens": 211,
+        "input_tokens": 5890,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 12,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
       }
     },
     {
-      "tool_calls": [
-        {
-          "ID": "call_00_U2uDbs6ccOWaSaZOzoui7692",
-          "Function": "update_plan",
-          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Create source.txt containing exactly '7' plus newline\"}, {\"status\": \"completed\", \"step\": \"Verify source.txt exactly once (criterion 'source value equals 7', target 'source.txt', local_dependencies ['source.txt'])\"}, {\"status\": \"completed\", \"step\": \"Create result.md explaining the verified value\"}, {\"status\": \"completed\", \"step\": \"Read result.md to confirm the written explanation\"}]}"
-        }
-      ]
+      "content": " complete:\n\n- Created `source.txt` containing exactly `7\\n`.\n- Verified its contents once with"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " `verify` bound to criterion `\"source value equals 7\"`, target `\"source.txt\"`, and local dependencies "
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 24,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "`[\"source.txt\"]`.\n- Created `result.md` explaining the verified value and confirmed its contents by reading"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 25,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " the file."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 3,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 5276,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
     }
   ]
 }

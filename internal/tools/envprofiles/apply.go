@@ -39,6 +39,12 @@ type ApplyContext struct {
 	ProgramArguments     map[string][][]string
 	OpaquePrograms       bool
 	EnvironmentOverrides map[string]bool
+	// InPlaceState is set when the backend that will enforce the command cannot
+	// mount. Apply then materializes no SynthesizeDir or MapRWAt state — no
+	// synthesized root, no overlay, no private cache or seeded copy — and
+	// PlanHostStateWrites expresses those requirements as in-place writes on
+	// the declared subpaths instead.
+	InPlaceState bool
 }
 
 // Result is the material a set of profiles contributes to one command.
@@ -157,8 +163,9 @@ func Apply(profiles []*EnvProfile, ctx ApplyContext) (Result, error) {
 
 		// Synthesized roots are emitted before this profile's overlays: an
 		// overlay target inside one of them is only mountable once its writable
-		// parent exists.
-		for _, spec := range profile.SynthesizeDir {
+		// parent exists. A backend that cannot mount receives neither; its
+		// in-place form comes from PlanHostStateWrites.
+		for _, spec := range mountStateSpecs(profile.SynthesizeDir, ctx.InPlaceState) {
 			target := ctx.resolveSource(spec.At)
 			if target == "" {
 				continue
@@ -184,7 +191,7 @@ func Apply(profiles []*EnvProfile, ctx ApplyContext) (Result, error) {
 				SynthesizedDir{Target: target, ReadOnlyChildren: children})
 		}
 
-		for _, mapping := range profile.MapRWAt {
+		for _, mapping := range mountStateSpecs(profile.MapRWAt, ctx.InPlaceState) {
 			target := ctx.resolveSource(mapping.At)
 			if target == "" {
 				continue
@@ -322,6 +329,11 @@ func Resolve(profiles []*EnvProfile, ctx ApplyContext) []*EnvProfile {
 	}
 	return ctx.resolveMountState(ctx.expandConditionalRequires(profiles))
 }
+
+// OperatorCredentialsAllowed reports whether Apply hands operator-credential
+// profiles their state under this context. Callers that describe a call before
+// it is prepared ask this instead of restating the trust decision.
+func (c ApplyContext) OperatorCredentialsAllowed() bool { return credentialAccessAllowed(c) }
 
 // credentialAccessAllowed is the trust decision. A trusted workspace may use the
 // operator's credential state; an untrusted one needs an explicit capability.

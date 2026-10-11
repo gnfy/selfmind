@@ -2,9 +2,6 @@ package cliapp
 
 import (
 	"fmt"
-	"net"
-	"net/url"
-	"strings"
 
 	gatewayrt "selfmind/internal/runtime/gateway"
 )
@@ -41,38 +38,11 @@ func (a *App) ensureLocalGateway() {
 	}
 }
 
-// gatewayTargetIsLocal reports whether the resolved gateway endpoint is a
-// loopback address we may auto-start. A non-loopback host (a remote daemon) is
-// left alone.
+// gatewayTargetIsLocal reports whether the resolved gateway endpoint is a daemon
+// on this host: loopback, localhost, or a wildcard address the daemon binds on
+// every interface. Such a daemon is reached on its local control socket, and may
+// be auto-started. A remote daemon is left alone. The runtime answers the same
+// question with the same predicate, so the two never disagree.
 func (a *App) gatewayTargetIsLocal() bool {
-	host := hostFromGatewayURL(a.gatewayURL())
-	if host == "" {
-		// Empty host (":8765") binds all interfaces but still serves loopback;
-		// auto-start is reasonable.
-		return true
-	}
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
-
-func hostFromGatewayURL(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	if u, err := url.Parse(raw); err == nil && u.Host != "" {
-		if h := u.Hostname(); h != "" {
-			return h
-		}
-	}
-	// Fall back to host:port parsing for bare addresses.
-	if h, _, err := net.SplitHostPort(raw); err == nil {
-		return h
-	}
-	return raw
+	return gatewayrt.LocalGatewayURL(a.gatewayURL())
 }

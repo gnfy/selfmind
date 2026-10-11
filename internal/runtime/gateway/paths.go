@@ -3,6 +3,7 @@ package gateway
 import (
 	"fmt"
 	"net"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,26 +16,59 @@ const (
 )
 
 type Paths struct {
-	DataDir               string
-	RuntimeDir            string
-	PIDPath               string
-	StatePath             string
-	LockPath              string
-	LogPath               string
-	LocalControlTokenPath string
+	DataDir    string
+	RuntimeDir string
+	PIDPath    string
+	StatePath  string
+	LockPath   string
+	LogPath    string
+	// LocalControlSocket is where the person's own CLI reaches the daemon.
+	LocalControlSocket string
 }
 
 func ResolvePaths(dataDir string) Paths {
 	runtimeDir := filepath.Join(dataDir, "gateway")
 	return Paths{
-		DataDir:               dataDir,
-		RuntimeDir:            runtimeDir,
-		PIDPath:               filepath.Join(runtimeDir, "gateway.pid"),
-		StatePath:             filepath.Join(runtimeDir, "gateway_state.json"),
-		LockPath:              filepath.Join(runtimeDir, "gateway.lock"),
-		LogPath:               filepath.Join(runtimeDir, "gateway.log"),
-		LocalControlTokenPath: filepath.Join(runtimeDir, "local_control.token"),
+		DataDir:            dataDir,
+		RuntimeDir:         runtimeDir,
+		PIDPath:            filepath.Join(runtimeDir, "gateway.pid"),
+		StatePath:          filepath.Join(runtimeDir, "gateway_state.json"),
+		LockPath:           filepath.Join(runtimeDir, "gateway.lock"),
+		LogPath:            filepath.Join(runtimeDir, "gateway.log"),
+		LocalControlSocket: LocalControlSocketPath(dataDir),
 	}
+}
+
+// LocalGatewayURL reports whether a gateway address or URL names a daemon on
+// this host, the one decision the CLI and the runtime both make: such a daemon
+// is reached on its local control socket, where it can tell the person's own
+// terminal from everyone else. localhost and the loopback addresses are local,
+// and so is a wildcard: a daemon bound to ":8765", "0.0.0.0:8765" or "[::]:8765"
+// serves every interface, this host's loopback included, and is this machine's
+// daemon. Anything else is a remote gateway, which cannot know who is calling.
+func LocalGatewayURL(raw string) bool {
+	host := gatewayHost(raw)
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+}
+
+// gatewayHost is the host of a URL ("http://[::]:8765") or of a bare address
+// ("0.0.0.0:8765", ":8765", "gateway.example"); empty when none is named.
+func gatewayHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.Contains(raw, "://") {
+		if parsed, err := neturl.Parse(raw); err == nil {
+			return parsed.Hostname()
+		}
+		return raw
+	}
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		return host
+	}
+	return strings.Trim(raw, "[]")
 }
 
 func ResolveAddr(explicit string) string {

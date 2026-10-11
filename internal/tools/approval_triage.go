@@ -90,7 +90,11 @@ func triageApprovalWithIntent(ctx context.Context, judge ApprovalJudge, toolName
 	if len(strings.TrimSpace(subject)) > triageMaxSubjectBytes {
 		return TriageEscalate, TriageAssessment{}, &ApprovalResponseError{Class: "incomplete_action"}
 	}
-	prompt := buildTriagePromptWithIntent(toolName, subject, reason, intent, containment...)
+	parallelPrompt, err := parallelApprovalPrompt(ctx)
+	if err != nil {
+		return TriageEscalate, TriageAssessment{}, err
+	}
+	prompt := buildTriagePromptWithIntent(toolName, subject, reason, intent, containment...) + parallelPrompt
 
 	// Bound the wait independently of the judge honoring ctx: run the call on a
 	// goroutine and race it against a timeout. A judge that hangs must not hang

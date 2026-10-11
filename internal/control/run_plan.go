@@ -51,6 +51,12 @@ type RunPlanStep struct {
 	Sequence          int    `json:"sequence"`
 	SourceStepID      string `json:"source_step_id,omitempty"`
 	SourcePlanVersion int    `json:"source_plan_version,omitempty"`
+	// CancellationQuoteSource is the durable identity of the person input the
+	// step's validated quote matched: steering:<mailbox id>, run_started:<run
+	// id>, or run_input:<run id>. Only the runtime records it, when it
+	// validates the quote, so no snapshot input can carry one; empty records
+	// none.
+	CancellationQuoteSource string `json:"cancellation_quote_source,omitempty"`
 }
 
 type RunPlan struct {
@@ -74,8 +80,8 @@ type RunPlanProjection struct {
 	// with the right content" to "a PR is created with the right content" while
 	// the step was still pending, completed it snapshots later, and nothing
 	// recorded that the bar had moved.
-	CancellationDeferred []RunPlanStep           `json:"cancellation_deferred,omitempty"`
-	CriteriaRestated     []RunPlanCriteriaChange `json:"criteria_restated,omitempty"`
+	CancellationDeferred []RunPlanCancellationDeferral `json:"cancellation_deferred,omitempty"`
+	CriteriaRestated     []RunPlanCriteriaChange       `json:"criteria_restated,omitempty"`
 }
 
 // RunPlanCriteriaChange is one step's acceptance bar before and after.
@@ -133,18 +139,20 @@ type StalePlanStepReferenceError struct {
 }
 
 type planVerificationBlock struct {
-	step, criterion, state, blockers string
+	stepID, step, criterion, state, blockers string
 	// checks counts the plan-bound checks for this step in its work unit, or
 	// is -1 when the evidence could not be read.
 	checks int
+	// A legal option, not an adoption: Main must still assess sufficiency and
+	// submit the explicit judgment through the normal provenance validator.
+	priorReuseAvailable bool
 }
 
 type planVerificationPreconditionError struct{ blocked []planVerificationBlock }
 
 // Error names the next action for each blocked step from the evidence
-// projection. A check binds to the step that was in_progress when it ran, so a
-// step with no bound check needs to become in_progress first, while a bound
-// check that is stale or failed keeps its step through replaces.
+// projection. Main can bind a missing check directly to any owned step, while
+// a stale or failed check retains its obligation through an explicit replacement.
 func (e *planVerificationPreconditionError) Error() string {
 	var lines []string
 	for i, block := range e.blocked {
@@ -155,7 +163,10 @@ func (e *planVerificationPreconditionError) Error() string {
 		line := fmt.Sprintf("step %q: criterion %q; ", block.step, boundedPlanErrorText(block.criterion, 240))
 		switch {
 		case block.checks == 0:
-			line += "no check is bound to this step; next: make it the in_progress step with update_plan, then run verify"
+			line += "no check is bound to this step; next: run verify with step_id=" + block.stepID + "; no Plan transition is needed"
+			if block.priorReuseAvailable {
+				line += "; alternatively assess the unchanged prior observation and submit this completed step with reuse_prior_verification=true and reuse_reason; explanation alone does not adopt evidence"
+			}
 		case block.checks > 0:
 			state := block.state
 			if state == "not_run" {
@@ -275,9 +286,11 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 	}
 	verificationDeferred := normalizeFirstPlanVerification(steps, verificationPrevious)
 	cancellationDeferred, err := assessRunPlanCancellationsTx(ctx, tx, tenant, runID, contractVersion, steps)
-	cancellationDeferred = append(cancellationDeferred, retained...)
 	if err != nil {
 		return RunPlanProjection{}, err
+	}
+	for _, step := range retained {
+		cancellationDeferred = append(cancellationDeferred, RunPlanCancellationDeferral{Step: step, Reason: CancellationDeferredOmitted})
 	}
 	for i := range steps {
 		if !steps[i].ReusePriorVerification {
@@ -335,7 +348,15 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 			if unit.ID == stepWorkUnits[i] && unit.Status == WorkUnitCompleted {
 				state, _, blockers, checks := workUnitEvidenceProjectionTx(ctx, tx, runID, unit.StartedCursor, unit.FinishedCursor, step.StepID)
 				if state != "passed" && !(step.ReusePriorVerification && state == "not_applicable") {
-					blockedChecks = append(blockedChecks, planVerificationBlock{step: step.Step, criterion: step.SuccessCriteria, state: state, blockers: blockers, checks: checks})
+					block := planVerificationBlock{stepID: step.StepID, step: step.Step, criterion: step.SuccessCriteria, state: state, blockers: blockers, checks: checks}
+					if checks == 0 && step.SourceStepID != "" {
+						candidate := step
+						// Read-only eligibility probe. This reason is never persisted
+						// and never substitutes for Main's explicit reuse judgment.
+						candidate.ReuseReason = "Eligibility probe only; Main must assess the prior observation."
+						block.priorReuseAvailable = validatePriorVerificationReuseTx(ctx, tx, tenant, runID, candidate) == nil
+					}
+					blockedChecks = append(blockedChecks, block)
 				}
 			}
 		}
@@ -383,6 +404,15 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		return RunPlanProjection{}, err
 	}
 	restated := restatedCompletedCriteria(original, previous, steps)
+	// A step's recorded quote source comes from its own previous record: the
+	// imported parent step on a continuation, else this Run's previous plan.
+	recorded := identityPrevious
+	if inherited != nil {
+		recorded = inherited
+	}
+	if err := keepCancellationQuoteSources(steps, recorded); err != nil {
+		return RunPlanProjection{}, err
+	}
 	hash := hashRunPlanSteps(steps, stepWorkUnits)
 	if previous != nil && previous.ContentHash == hash {
 		if err := promoteThreadForRunTx(ctx, tx, tenant, runID); err != nil {
@@ -404,11 +434,13 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		if _, err := tx.ExecContext(ctx, `INSERT INTO run_plan_steps
 			(run_id, tenant_id, plan_version, step_id, sequence, step_text, status, success_criteria,
 			 verification_required, related_task_id, work_unit_id, work_unit_boundary, source_step_id, source_plan_version,
-			 prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote, replacement_step_id, scope_change_quote, created_at)
-			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
+			 prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote, replacement_step_id, scope_change_quote,
+			 cancellation_quote_source, created_at)
+			 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, runID, tenant, version, step.StepID, i+1,
 			step.Step, step.Status, step.SuccessCriteria, boolInt(step.VerificationRequired), step.RelatedTaskID, stepWorkUnits[i],
 			boolInt(isRunPlanBoundary(steps, i)), step.SourceStepID, step.SourcePlanVersion,
-			boolInt(step.ReusePriorVerification), step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.ReplacementStepID, step.ScopeChangeQuote, now.Unix()); err != nil {
+			boolInt(step.ReusePriorVerification), step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.ReplacementStepID, step.ScopeChangeQuote,
+			step.CancellationQuoteSource, now.Unix()); err != nil {
 			return RunPlanProjection{}, err
 		}
 	}
@@ -464,6 +496,16 @@ func normalizeFirstPlanVerification(steps []RunPlanStep, previous *RunPlan) []Ru
 // step was still pending and completed it several snapshots later, so a
 // version-to-version diff saw a status change and nothing else.
 func originalPlanCriteriaTx(ctx context.Context, tx *sql.Tx, tenant, runID string) (map[string]string, error) {
+	return firstPlanCriteriaTx(ctx, tx, tenant, runID, false)
+}
+
+// establishedPlanCriteriaTx is each step's first non-empty acceptance bar. A
+// step planned without one establishes none until a snapshot declares it.
+func establishedPlanCriteriaTx(ctx context.Context, tx *sql.Tx, tenant, runID string) (map[string]string, error) {
+	return firstPlanCriteriaTx(ctx, tx, tenant, runID, true)
+}
+
+func firstPlanCriteriaTx(ctx context.Context, tx *sql.Tx, tenant, runID string, declaredOnly bool) (map[string]string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT step_id, success_criteria FROM run_plan_steps
 		 WHERE tenant_id=? AND run_id=? ORDER BY plan_version ASC, sequence ASC`, tenant, runID)
@@ -471,17 +513,20 @@ func originalPlanCriteriaTx(ctx context.Context, tx *sql.Tx, tenant, runID strin
 		return nil, err
 	}
 	defer rows.Close()
-	original := map[string]string{}
+	first := map[string]string{}
 	for rows.Next() {
 		var stepID, criteria string
 		if err := rows.Scan(&stepID, &criteria); err != nil {
 			return nil, err
 		}
-		if _, seen := original[stepID]; !seen {
-			original[stepID] = criteria
+		if declaredOnly && strings.TrimSpace(criteria) == "" {
+			continue
+		}
+		if _, seen := first[stepID]; !seen {
+			first[stepID] = criteria
 		}
 	}
-	return original, rows.Err()
+	return first, rows.Err()
 }
 
 // restatedCompletedCriteria reports steps that arrive completed under a
@@ -758,6 +803,9 @@ func hashRunPlanSteps(steps []RunPlanStep, workUnitIDs []string) string {
 	type hashStep struct {
 		StepID, Step, Status, SuccessCriteria, RelatedTaskID, WorkUnitID, ReuseReason, CancellationDisposition, CancellationReason, UserTakeoverQuote, ReplacementStepID, ScopeChangeQuote string
 		VerificationRequired, WorkUnit, ReusePriorVerification                                                                                                                             bool
+		// Omitted while empty, so a step without a source hashes as it did
+		// before the field existed and a repeated snapshot stays unchanged.
+		CancellationQuoteSource string `json:",omitempty"`
 	}
 	canonical := make([]hashStep, 0, len(steps))
 	for i, step := range steps {
@@ -766,7 +814,8 @@ func hashRunPlanSteps(steps []RunPlanStep, workUnitIDs []string) string {
 			workUnitID = workUnitIDs[i]
 		}
 		canonical = append(canonical, hashStep{step.StepID, step.Step, step.Status, step.SuccessCriteria, step.RelatedTaskID, workUnitID,
-			step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.ReplacementStepID, step.ScopeChangeQuote, step.VerificationRequired, step.WorkUnit, step.ReusePriorVerification})
+			step.ReuseReason, step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.ReplacementStepID, step.ScopeChangeQuote, step.VerificationRequired, step.WorkUnit, step.ReusePriorVerification,
+			step.CancellationQuoteSource})
 	}
 	data, _ := json.Marshal(canonical)
 	sum := sha256.Sum256(data)
@@ -788,7 +837,8 @@ func latestRunPlanTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (*
 	plan.CreatedAt = time.Unix(created, 0)
 	rows, err := tx.QueryContext(ctx, `SELECT step_id, sequence, step_text, status, success_criteria, verification_required,
 		related_task_id, work_unit_id, work_unit_boundary, source_step_id, source_plan_version,
-		prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote, replacement_step_id, scope_change_quote FROM run_plan_steps
+		prior_verification_reused, reuse_reason, cancellation_disposition, cancellation_reason, user_takeover_quote, replacement_step_id, scope_change_quote,
+		cancellation_quote_source FROM run_plan_steps
 		WHERE tenant_id=? AND run_id=? AND plan_version=? ORDER BY sequence`, tenantID, runID, plan.Version)
 	if err != nil {
 		return nil, err
@@ -800,7 +850,8 @@ func latestRunPlanTx(ctx context.Context, tx *sql.Tx, tenantID, runID string) (*
 		var verificationRequired, boundary, reused int
 		if err := rows.Scan(&step.StepID, &step.Sequence, &step.Step, &step.Status, &step.SuccessCriteria, &verificationRequired,
 			&step.RelatedTaskID, &workUnitID, &boundary, &step.SourceStepID, &step.SourcePlanVersion,
-			&reused, &step.ReuseReason, &step.CancellationDisposition, &step.CancellationReason, &step.UserTakeoverQuote, &step.ReplacementStepID, &step.ScopeChangeQuote); err != nil {
+			&reused, &step.ReuseReason, &step.CancellationDisposition, &step.CancellationReason, &step.UserTakeoverQuote, &step.ReplacementStepID, &step.ScopeChangeQuote,
+			&step.CancellationQuoteSource); err != nil {
 			return nil, err
 		}
 		step.VerificationRequired = verificationRequired != 0

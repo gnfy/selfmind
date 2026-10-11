@@ -11,22 +11,33 @@ import (
 )
 
 func TestAnthropicAdapterParsesCacheUsageNonStream(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("content-type", "application/json")
-		fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":3,"cache_read_input_tokens":900,"cache_creation_input_tokens":40}}`)
-	}))
-	defer server.Close()
-
-	adapter := NewAnthropicAdapter("test-key")
-	adapter.BaseURL = server.URL
-
-	resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
-	if err != nil {
-		t.Fatalf("Chat failed: %v", err)
-	}
-	want := UsageStats{InputTokens: 12, OutputTokens: 3, CacheReadInputTokens: 900, CacheCreationInputTokens: 40, CacheCreationReported: true}
-	if resp.Usage != want {
-		t.Fatalf("usage = %+v, want %+v", resp.Usage, want)
+	for _, tc := range []struct {
+		name, usage string
+		want        UsageStats
+	}{
+		{"mixed", `{"input_tokens":12,"output_tokens":3,"cache_read_input_tokens":900,"cache_creation_input_tokens":40}`,
+			UsageStats{InputTokens: 952, OutputTokens: 3, CacheReadInputTokens: 900, CacheMissInputTokens: 12, CacheCreationInputTokens: 40, CacheCreationReported: true}},
+		{"fully cached", `{"input_tokens":0,"cache_read_input_tokens":900}`,
+			UsageStats{InputTokens: 900, CacheReadInputTokens: 900, CacheCreationReported: true}},
+		{"uncached", `{"input_tokens":12}`,
+			UsageStats{InputTokens: 12, CacheMissInputTokens: 12, CacheCreationReported: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("content-type", "application/json")
+				fmt.Fprintf(w, `{"content":[{"type":"text","text":"ok"}],"usage":%s}`, tc.usage)
+			}))
+			defer server.Close()
+			adapter := NewAnthropicAdapter("test-key")
+			adapter.BaseURL = server.URL
+			resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+			if err != nil {
+				t.Fatalf("Chat failed: %v", err)
+			}
+			if resp.Usage != tc.want {
+				t.Fatalf("usage = %+v, want %+v", resp.Usage, tc.want)
+			}
+		})
 	}
 }
 
@@ -74,11 +85,12 @@ func TestAnthropicAdapterParsesCacheUsageFromMessageStart(t *testing.T) {
 			usage.InputTokens += event.Usage.InputTokens
 			usage.OutputTokens += event.Usage.OutputTokens
 			usage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
+			usage.CacheMissInputTokens += event.Usage.CacheMissInputTokens
 			usage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
 			usage.CacheCreationReported = usage.CacheCreationReported || event.Usage.CacheCreationReported
 		}
 	}
-	want := UsageStats{InputTokens: 7, OutputTokens: 2, CacheReadInputTokens: 500, CacheCreationInputTokens: 20, CacheCreationReported: true}
+	want := UsageStats{InputTokens: 527, OutputTokens: 2, CacheReadInputTokens: 500, CacheMissInputTokens: 7, CacheCreationInputTokens: 20, CacheCreationReported: true}
 	if usage != want {
 		t.Fatalf("usage = %+v, want %+v", usage, want)
 	}

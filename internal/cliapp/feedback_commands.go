@@ -20,7 +20,6 @@ import (
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/crashreport"
 	"selfmind/internal/platform/config"
-	gatewayrt "selfmind/internal/runtime/gateway"
 	"selfmind/internal/tools"
 )
 
@@ -277,7 +276,7 @@ func (a *App) buildFeedbackReport(cfg *config.Config, message string, includeCra
 	}
 	ctx, cancel := contextWithTimeout(a.ctx, 2*time.Second)
 	defer cancel()
-	if data, code, err := gatewayrt.RequestStatus(ctx, a.gatewayURL()); err == nil && code < 400 {
+	if data, code, err := a.requestGatewayStatus(ctx); err == nil && code < 400 {
 		var status map[string]interface{}
 		if json.Unmarshal(data, &status) == nil {
 			report.Gateway = sanitizeGatewayStatus(status)

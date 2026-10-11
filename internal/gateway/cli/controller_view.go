@@ -325,6 +325,12 @@ func (m *uiModel) statusLine() string {
 	case m.runStatus == "interrupted":
 		state = "needs attention"
 		stateStyle = st.Status.Warning
+	case m.runStatus == "waiting_user":
+		state = "waiting for you"
+		stateStyle = st.Status.Warning
+	case m.runStatus == "waiting_external":
+		state = "waiting external"
+		stateStyle = st.Status.Warning
 	}
 	parts = append(parts, stateStyle.Render(state))
 

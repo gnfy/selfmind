@@ -28,6 +28,7 @@ import (
 	"github.com/skip2/go-qrcode"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/platform/atomicfile"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
@@ -699,11 +700,8 @@ func SaveCredentials(homeDir string, cred *Credentials) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// The bot token: a fresh exclusive temporary file, never `<path>.tmp`.
+	return atomicfile.Write(path, data, 0600)
 }
 
 func LoadCredentials(homeDir, accountID string) (*Credentials, error) {
@@ -729,6 +727,12 @@ func SyncBufFilePath(homeDir, accountID string) string {
 
 func accountFile(homeDir, accountID string) string {
 	return filepath.Join(accountDir(homeDir), safeFileName(accountID)+".json")
+}
+
+// AccountDir is the directory that holds every account's credentials, sync
+// cursor and context tokens under homeDir.
+func AccountDir(homeDir string) string {
+	return accountDir(homeDir)
 }
 
 func accountDir(homeDir string) string {
@@ -843,10 +847,7 @@ func (s *ContextTokenStore) persistLocked(accountID string) {
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	_ = os.MkdirAll(s.root, 0700)
 	path := filepath.Join(s.root, safeFileName(accountID)+".context-tokens.json")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err == nil {
-		_ = os.Rename(tmp, path)
-	}
+	_ = atomicfile.Write(path, data, 0600)
 }
 
 // pushSessionFreshWindow is how young a peer's context_token must be for a

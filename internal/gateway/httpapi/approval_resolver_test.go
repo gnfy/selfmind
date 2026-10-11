@@ -144,7 +144,7 @@ func newApprovalTestServer(t *testing.T) (*Server, *control.Store, *control.Iden
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Server{Control: store, DefaultTenantID: "default"}, store, identity, task, approval
+	return &Server{Control: store, DefaultTenantID: "default", ExecutionRuntime: newTestExecutionRuntime(t)}, store, identity, task, approval
 }
 
 func TestApproveByOrdinalControlCommand(t *testing.T) {
@@ -293,6 +293,8 @@ func TestApprovalRespondEndpointAcceptsOrdinal(t *testing.T) {
 		Channel:        "cli",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/approvals/respond", strings.NewReader(string(body)))
+	req.Header.Set("Content-Type", "application/json")
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

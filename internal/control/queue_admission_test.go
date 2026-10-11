@@ -9,6 +9,29 @@ import (
 	"selfmind/internal/executionenv"
 )
 
+func TestFailUnboundQueueClaimPreservesItsInputAndOwner(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	row, err := store.EnqueueQueued(ctx, QueuedTask{TenantID: "default", PersonID: "person", Content: "exact saved input", ReplyToRunID: "parent", ApprovalID: "decision"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, claimed, err := store.ClaimQueued(ctx, row.TenantID, row.ID, time.Minute)
+	if err != nil || !claimed {
+		t.Fatalf("claim: %v, %v", claimed, err)
+	}
+	if changed, err := store.FailUnboundQueued(ctx, "another-tenant", row.ID, token); err != nil || changed {
+		t.Fatalf("foreign tenant settled the claim: %v, %v", changed, err)
+	}
+	if changed, err := store.FailUnboundQueued(ctx, row.TenantID, row.ID, token); err != nil || !changed {
+		t.Fatalf("retirement: %v, %v", changed, err)
+	}
+	saved, err := store.GetQueued(ctx, row.TenantID, row.ID)
+	if err != nil || saved.Status != QueueStatusFailed || saved.Content != row.Content || saved.ReplyToRunID != row.ReplyToRunID || saved.ApprovalID != row.ApprovalID || saved.RunID != "" {
+		t.Fatalf("retirement changed input or authority: %+v, %v", saved, err)
+	}
+}
+
 func TestClaimedQueueRunCreationBindsAtomically(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
@@ -170,12 +193,18 @@ func TestStaleQueueClaimCreatesNoRunAndCannotSettleNewOwner(t *testing.T) {
 	if changed, err := store.RequeueUnboundClaim(ctx, identity.TenantID, queued.ID, oldToken); err != nil || changed {
 		t.Fatalf("old claimant requeued new owner: changed=%v err=%v", changed, err)
 	}
+	if changed, err := store.FailUnboundQueued(ctx, identity.TenantID, queued.ID, oldToken); err != nil || changed {
+		t.Fatalf("old claimant failed new owner: changed=%v err=%v", changed, err)
+	}
 	run, err := store.StartRunWithOptions(ctx, task, "session-a", "new attempt", StartRunOptions{QueueID: queued.ID, QueueClaimToken: newToken})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if changed, err := store.FinishQueuedClaim(ctx, identity.TenantID, queued.ID, oldToken, QueueStatusDone); err != nil || changed {
 		t.Fatalf("old claimant settled new owner: changed=%v err=%v", changed, err)
+	}
+	if changed, err := store.FailUnboundQueued(ctx, identity.TenantID, queued.ID, newToken); err != nil || changed {
+		t.Fatalf("bound Run was failed by retirement: changed=%v err=%v", changed, err)
 	}
 	row, err := store.GetQueued(ctx, identity.TenantID, queued.ID)
 	if err != nil || row == nil || row.Status != QueueStatusStarted || row.RunID != run.ID {

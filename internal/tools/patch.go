@@ -676,6 +676,14 @@ func (t *PatchTool) ExecuteContext(ctx context.Context, args map[string]interfac
 		mode = "apply"
 	}
 
+	if mode != "validate" {
+		managed, release, err := acquireManagedExecution(ctx, args, nil, false)
+		if err != nil {
+			return "", err
+		}
+		defer release()
+		ctx = managed
+	}
 	ops, err := parseV4APatch(patchContent)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse patch: %w", err)

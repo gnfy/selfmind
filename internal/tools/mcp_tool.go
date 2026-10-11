@@ -8,6 +8,11 @@ type MCPTool struct {
 	toolName    string
 	inputSchema map[string]interface{}
 	client      *MCPClient
+	readOnly    *mcpReadOnlyPolicy
+}
+
+func (t *MCPTool) readOnlyMarking(args map[string]interface{}) string {
+	return t.readOnly.marking(t.toolName, args)
 }
 
 // RawToolSchema preserves the MCP server's complete inputSchema for the
@@ -24,6 +29,8 @@ func (c *MCPClient) WrapTool(def MCPToolDef) *MCPTool {
 	return c.WrapToolNamed(def, def.Name)
 }
 
+// WrapToolNamed returns an immutable adapter. The MCP manager registers one
+// instance in every agent worker's dispatcher.
 func (c *MCPClient) WrapToolNamed(def MCPToolDef, localName string) *MCPTool {
 	return &MCPTool{
 		BaseTool: BaseTool{
@@ -32,6 +39,7 @@ func (c *MCPClient) WrapToolNamed(def MCPToolDef, localName string) *MCPTool {
 			schema:      convertJSONSchema(def.InputSchema),
 			metadata: ToolMetadata{
 				Category:  "mcp",
+				Exposure:  ToolExposureDirect,
 				RiskLevel: ToolRiskMedium,
 				SearchText: fmt.Sprintf(
 					"mcp server %s tool %s %s",

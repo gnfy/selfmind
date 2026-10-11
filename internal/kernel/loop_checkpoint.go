@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"sync/atomic"
 
 	"selfmind/internal/kernel/llm"
 )
@@ -11,10 +12,13 @@ import (
 // resume after the last completed transition without replaying a side effect
 // or asking a handoff summary to reconstruct tool-call pairing.
 type LoopCheckpoint struct {
-	Iteration int
-	Outcome   StepOutcome
-	Detail    string
-	Messages  []llm.Message
+	Iteration      int
+	Outcome        StepOutcome
+	Detail         string
+	Messages       []llm.Message
+	WaitKind       string
+	WaitRef        string
+	WaitToolCallID string
 }
 
 // LoopCheckpointSink persists one overwrite-only checkpoint per run.
@@ -32,6 +36,7 @@ func WithLoopCheckpointSink(ctx context.Context, sink LoopCheckpointSink) contex
 	if ctx == nil || sink == nil {
 		return ctx
 	}
+	ctx = context.WithValue(ctx, humanWaitParkedKey{}, new(atomic.Bool))
 	return context.WithValue(ctx, loopCheckpointSinkKey{}, sink)
 }
 
@@ -41,6 +46,12 @@ func loopCheckpointSinkFromContext(ctx context.Context) LoopCheckpointSink {
 	}
 	sink, _ := ctx.Value(loopCheckpointSinkKey{}).(LoopCheckpointSink)
 	return sink
+}
+
+// HasLoopCheckpointSink distinguishes an executing agent loop from legacy
+// control callbacks that have no checkpoint contract.
+func HasLoopCheckpointSink(ctx context.Context) bool {
+	return loopCheckpointSinkFromContext(ctx) != nil
 }
 
 // WithLoopResumeMessages installs the exact stable message ledger recovered

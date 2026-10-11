@@ -3,8 +3,11 @@ package cron
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
+
+	"selfmind/internal/kernel"
 
 	_ "modernc.org/sqlite"
 )
@@ -150,23 +153,156 @@ func TestOneTimeJobRecordsRunAndDisablesItself(t *testing.T) {
 	}
 }
 
-func TestCronToolNormalizesProactiveRecipient(t *testing.T) {
+// fakeAuthority binds every job to one fixed endpoint and owns the jobs that
+// deliver to that endpoint, standing in for the gateway's identity store.
+type fakeAuthority struct {
+	endpoint JobEndpoint
+	owner    string
+	bound    []JobRequest
+}
+
+func (a *fakeAuthority) Bind(_ context.Context, scope kernel.ToolInvocationScope, request JobRequest) (JobEndpoint, error) {
+	a.bound = append(a.bound, request)
+	if scope.PersonID != a.owner {
+		return JobEndpoint{}, errors.New("not your endpoint")
+	}
+	return a.endpoint, nil
+}
+
+func (a *fakeAuthority) Standing(_ context.Context, scope kernel.ToolInvocationScope, job CronJob) (JobStanding, error) {
+	standing := JobStanding{Owned: scope.PersonID == a.owner && job.DeliverTo == a.endpoint.DeliverTo}
+	if standing.Owned && job.Channel != a.endpoint.Channel {
+		standing.Blocked = "it would post to chat " + job.Channel
+	}
+	return standing, nil
+}
+
+func runAs(person string, args map[string]interface{}) map[string]interface{} {
+	args["_invocation_scope"] = kernel.ToolInvocationScope{ControlTenantID: "default", PersonID: person, RunID: "run-" + person}
+	return args
+}
+
+// The tool stores the endpoint its authority binds, never the fields the model
+// sent, and acts only inside the calling Run's tenant.
+func TestCronToolStoresTheBoundEndpoint(t *testing.T) {
 	s := newTestScheduler(t)
-	tool := NewCronTool(s)
-	_, err := tool.Execute(context.Background(), map[string]interface{}{
+	authority := &fakeAuthority{owner: "person-a",
+		endpoint: JobEndpoint{TenantID: "default", Platform: "weixin", DeliverTo: "wxid_abc", Channel: "wxid_abc"}}
+	tool := &ToolAdapter{CronTool: NewCronTool(s, authority)}
+	if _, err := tool.Execute(runAs("person-a", map[string]interface{}{
 		"action": "add", "name": "notify", "cron": "1 2 3 4 *", "prompt": "hello",
-		"tenantID": "default", "channel": "weixin", "platform": "weixin",
-		"deliver_to": "wxid_abc", "once": true,
-	})
-	if err != nil {
+		"channel": "weixin", "platform": "weixin", "deliver_to": "wxid_abc", "once": true,
+	})); err != nil {
 		t.Fatal(err)
+	}
+	if len(authority.bound) != 1 || authority.bound[0] != (JobRequest{Platform: "weixin", DeliverTo: "wxid_abc", Channel: "weixin", Prompt: "hello"}) {
+		t.Fatalf("authority saw %+v", authority.bound)
 	}
 	jobs, err := s.ListJobs(context.Background(), "default")
 	if err != nil || len(jobs) != 1 {
 		t.Fatalf("jobs=%+v err=%v", jobs, err)
 	}
-	if jobs[0].Channel != "wxid_abc" || !jobs[0].Once {
-		t.Fatalf("proactive job not normalized: %+v", jobs[0])
+	if jobs[0].Channel != "wxid_abc" || jobs[0].Platform != "weixin" || jobs[0].DeliverTo != "wxid_abc" || !jobs[0].Once {
+		t.Fatalf("job not stored with its bound endpoint: %+v", jobs[0])
+	}
+
+	for name, args := range map[string]map[string]interface{}{
+		"no run scope":   {"action": "add", "name": "x", "cron": "1 2 3 4 *", "prompt": "hello"},
+		"other tenant":   runAs("person-a", map[string]interface{}{"action": "add", "name": "x", "cron": "1 2 3 4 *", "prompt": "hello", "tenantID": "other"}),
+		"other person":   runAs("person-b", map[string]interface{}{"action": "add", "name": "x", "cron": "1 2 3 4 *", "prompt": "hello"}),
+		"list elsewhere": runAs("person-a", map[string]interface{}{"action": "list", "tenantID": "other"}),
+	} {
+		if _, err := tool.Execute(args); err == nil {
+			t.Fatalf("%s: the cron tool accepted the call", name)
+		}
+	}
+	if _, err := (&ToolAdapter{CronTool: NewCronTool(s, nil)}).Execute(runAs("person-a", map[string]interface{}{"action": "list"})); err == nil {
+		t.Fatal("a cron tool without an authority must refuse")
+	}
+	if jobs, _ := s.ListJobs(context.Background(), "default"); len(jobs) != 1 {
+		t.Fatalf("refused calls stored jobs: %+v", jobs)
+	}
+	if jobs, _ := s.ListJobs(context.Background(), "other"); len(jobs) != 0 {
+		t.Fatalf("a job was stored in another tenant: %+v", jobs)
+	}
+}
+
+// list, remove, and enable reach only the calling person's jobs. Another
+// person's job reads as not found, whether or not it exists.
+func TestCronToolReachesOnlyOwnJobs(t *testing.T) {
+	s := newTestScheduler(t)
+	ctx := context.Background()
+	own, err := s.AddJob(ctx, &CronJob{Name: "mine", CronExpr: "0 8 * * *", Prompt: "p", TenantID: "default",
+		Platform: "weixin", DeliverTo: "wxid_abc", Channel: "wxid_abc", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := s.AddJob(ctx, &CronJob{Name: "theirs", CronExpr: "0 9 * * *", Prompt: "private plan", TenantID: "default",
+		Platform: "telegram", DeliverTo: "900", Channel: "900", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := &ToolAdapter{CronTool: NewCronTool(s, &fakeAuthority{owner: "person-a",
+		endpoint: JobEndpoint{TenantID: "default", Platform: "weixin", DeliverTo: "wxid_abc", Channel: "wxid_abc"}})}
+	listed, err := tool.Execute(runAs("person-a", map[string]interface{}{"action": "list"}))
+	if err != nil || !strings.Contains(listed, "mine") || strings.Contains(listed, "theirs") {
+		t.Fatalf("list = %q, %v", listed, err)
+	}
+	for _, action := range []map[string]interface{}{
+		{"action": "remove", "job_id": float64(theirs)},
+		{"action": "enable", "job_id": theirs, "enabled": false},
+	} {
+		if _, err := tool.Execute(runAs("person-a", action)); err == nil || !strings.Contains(err.Error(), "not found") {
+			t.Fatalf("%v on another person's job: %v", action["action"], err)
+		}
+	}
+	if _, err := tool.Execute(runAs("person-a", map[string]interface{}{"action": "enable", "job_id": int(own), "enabled": false})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(runAs("person-a", map[string]interface{}{"action": "remove", "job_id": float64(own)})); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := s.ListJobs(ctx, "default")
+	if err != nil || len(jobs) != 1 || jobs[0].ID != theirs || !jobs[0].Enabled {
+		t.Fatalf("another person's job changed: %+v %v", jobs, err)
+	}
+}
+
+// A job of the person's own that does not run is listed with the reason, so
+// the person can remove it or add it again instead of finding it silent.
+func TestCronToolListsWhyAnOwnJobDoesNotRun(t *testing.T) {
+	s := newTestScheduler(t)
+	ctx := context.Background()
+	if _, err := s.AddJob(ctx, &CronJob{Name: "daily", CronExpr: "0 8 * * *", Prompt: "p", TenantID: "default",
+		Platform: "weixin", DeliverTo: "wxid_abc", Channel: "wxid_abc", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	stuck, err := s.AddJob(ctx, &CronJob{Name: "team digest", CronExpr: "0 9 * * *", Prompt: "p", TenantID: "default",
+		Platform: "weixin", DeliverTo: "wxid_abc", Channel: "team@chatroom", Enabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := &ToolAdapter{CronTool: NewCronTool(s, &fakeAuthority{owner: "person-a",
+		endpoint: JobEndpoint{TenantID: "default", Platform: "weixin", DeliverTo: "wxid_abc", Channel: "wxid_abc"}})}
+	listed, err := tool.Execute(runAs("person-a", map[string]interface{}{"action": "list"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var daily, digest string
+	for _, line := range strings.Split(listed, "\n") {
+		switch {
+		case strings.Contains(line, "daily"):
+			daily = line
+		case strings.Contains(line, "team digest"):
+			digest = line
+		}
+	}
+	if strings.Contains(daily, "does not run") || !strings.Contains(digest, "does not run: it would post to chat team@chatroom") ||
+		!strings.Contains(listed, "remove it") {
+		t.Fatalf("list = %q", listed)
+	}
+	if _, err := tool.Execute(runAs("person-a", map[string]interface{}{"action": "remove", "job_id": float64(stuck)})); err != nil {
+		t.Fatalf("the person cannot remove their own job that does not run: %v", err)
 	}
 }
 

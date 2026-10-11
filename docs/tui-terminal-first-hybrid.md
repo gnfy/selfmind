@@ -365,18 +365,21 @@ substrate). Document results in this file.
   latest `plan.updated` snapshot replaces the previous snapshot in memory.
 - A terminal renders only its own session's runs. Every daemon event names
   its session; another session's run leaves this terminal's run state, plan,
-  and tool cells untouched and appears as one `Other session:` status line,
+  and tool cells untouched and appears as one live status notice,
   which names the most pressing of a waiting approval, a waiting question, and
   running work. The reducer drops and counts another session's detail event
   that reaches it anyway; the presence heartbeat reports the count, which the
-  daily report shows. `/attach` is the only way to render another session's
+  daily report shows. The `/resume` work viewer is the way to render another session's
   progress here.
 - The pinned plan's heading says how many of its run's tool actions ago it
   last changed (`· updated N actions ago`), so a plan that stopped moving reads
   as possibly stale rather than as the current state.
-- Cancelled steps use `×` and name their disposition and reason; pending steps
-  remain empty checkboxes. An unsupported cancellation shows `Unfinished` with
-  its reason. The heading counts completed and cancelled steps separately, and
+- Cancelled steps use `×` and name their disposition and reason, and the
+  person input whose quote authorized the cancellation when the runtime
+  recorded one (`authorized by your guidance at 14:02`, `authorized by your
+  request that started this run`), never its id or text; pending steps remain
+  empty checkboxes. An unsupported cancellation shows `Unfinished` with its
+  reason. The heading counts completed and cancelled steps separately, and
   wraps at terminal width. Step order is Main's planned order, not an enforced
   execution sequence: independent work may advance while an earlier obligation
   remains open.
@@ -473,16 +476,41 @@ mistaken for one request exceeding the displayed context capacity.
   with Run finalization. The originating session receives the complete answer;
   other sessions retain lifecycle summaries. A late parent HTTP response never
   finalizes the child's stream or clears its active plan.
+- Bare `/resume` opens a transient, read-only chooser of person-scoped Attention
+  and recent Runs. Arrow keys select an exact Run, Enter shows its status,
+  accepted Plan and pending human input, `r` refreshes details, and Esc/q
+  restores the originating terminal. Where continuation is available, `c`
+  selects that exact Run for this session's next message. Viewing alone never
+  resumes, claims or answers work, nor copies another channel's transcript.
+  `/attach [run_id]` remains a read-only compatibility entry. An active selection streams
+  passively only when this terminal has no executing foreground Run; a parked
+  selection remains a status page. The watcher probes both singular and
+  multiple-active-Run responses by exact id and reads durable state when the
+  Run leaves the registry. Waiting stays waiting; loss of observation never
+  means completion. Control acknowledgements and late parent replies cannot
+  overwrite an executing child's status, tools or Plan. `/queue` and acceptance receipts
+  identify execution-root/session/capacity blockers rather than describing
+  every queue as waiting behind a running task.
 - The active-run digest carries the daemon run id. A reconnecting TUI watches
   that exact run instead of every event associated with the person.
 - Startup digest headings distinguish event time from current state: terminal
   runs completed after the last presence appear under `While you were away`,
-  while older Runs that still derive Attention appear under
-  `Still needs attention`.
+  while `History` shows the full resumable Attention count, independently of
+  the bounded legacy task list. An older daemon without that count shows a
+  count-free history hint. Pending human waits are separate from resumability.
+  Another session's approval appears once as a live `Pending` notice, including
+  `/approvals` and `/approve <n|id>`; closing its terminal does not revoke it.
+  Only the requesting session restores the interactive panel. Startup hydration
+  still records foreign approvals when there is no transcript digest to print,
+  transient notice expiry restores pending human waits, and resolution withdraws
+  the live notice. Stored titles are flattened to one
+  line; context-window rendering in the footer is unchanged.
   Maintenance-only task-card updates never re-date a terminal run.
 - Every forwarded event retains its durable event id/cursor, live sequence,
   task id, and run id. The reducer deduplicates replayed events and accepts
   watcher events only while their run is still the run being watched.
+  Durable queue-retirement notices use the same identity-based deduplication;
+  another Run's notice never changes the terminal's executing Run or Plan.
 - Queue acknowledgements and `run.started` share an opaque `queue_id`. The TUI
   uses that exact correlation to own a drained or transferred Run's spinner;
   equal or truncated input text is never treated as ownership evidence.

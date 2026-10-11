@@ -32,7 +32,7 @@ func NewSkillSelectTool(store *control.Store) *SkillSelectTool {
 				},
 				Required: []string{"reason"},
 			},
-			metadata: ToolMetadata{Category: "task", RiskLevel: ToolRiskLow},
+			metadata: ToolMetadata{Category: "task", RiskLevel: ToolRiskLow, BookkeepingOnly: true},
 		},
 		store: store,
 	}
@@ -270,7 +270,7 @@ func NewSkillFallbackTool(store *control.Store) *SkillFallbackTool {
 				},
 				Required: []string{"reason"},
 			},
-			metadata: ToolMetadata{Category: "task", RiskLevel: ToolRiskLow},
+			metadata: ToolMetadata{Category: "task", RiskLevel: ToolRiskLow, BookkeepingOnly: true},
 		},
 		store: store,
 	}

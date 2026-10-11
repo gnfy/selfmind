@@ -3,12 +3,25 @@
   "method": "stream",
   "events": [
     {
-      "content": "I am resuming the waiting run to continue the planned reporting step."
+      "content": "I will resume the waiting run to access its plan and verification"
     },
     {
       "usage": {
-        "input_tokens": 12120,
-        "output_tokens": 13,
+        "input_tokens": 12362,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " evidence."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 2,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -18,7 +31,7 @@
     {
       "usage": {
         "input_tokens": 0,
-        "output_tokens": 56,
+        "output_tokens": 60,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -29,24 +42,14 @@
       "finish_reason": "stop"
     },
     {
-      "usage": {
-        "input_tokens": 552,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
       "tool_calls": [
         {
-          "ID": "call_318189",
+          "ID": "call_2281152",
           "Function": "work_select",
           "Args": "{\"run_id\":\"{{SELFMIND_VCR_RUN_2}}\",\"action\":\"resume\"}",
           "replay_metadata": {
             "google": {
-              "thought_signature": "EugBCuUBAWkUfRMg8gcPDo7HdmW7iL6gFhVzpPC/IFuOSqpp71ILzCtoiePMz9ZodUvm9dHaLvSnuWbSb6fuTOMBNM3aC8FAvyiGDP/zSFsZym1Z09DGeZgkAsyIDDMMV6t3Xyu/1sCdq5m7XXXMaTdIpwPa/OFbKGoFHimam8pN8ec3JSfobA8kCDo5/yzbYjWHPL7fG7NNWkJn22WGq/RuQSed5ijKW2jiNxdTQMIUaDVjLipcromYcWS5qFX/yE0diyVOa40u4L7N4BHeUd9tniQ58zyfJXtuceJBrBUGoSW1a4X2t6AFcw=="
+              "thought_signature": "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"
             }
           }
         }

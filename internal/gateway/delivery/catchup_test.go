@@ -39,7 +39,7 @@ func (e refreshRequiredError) SessionRefreshRequired() bool { return true }
 // second catch-up re-pushes NOTHING (at-most-once).
 func TestCatchUpUnconfirmedRepushesOnceBounded(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestCatchUpUnconfirmedRepushesOnceBounded(t *testing.T) {
 // next inbound (the failure mode would be an infinite duplicate drip).
 func TestCatchUpStillUnconfirmedNeverLoops(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestCatchUpStillUnconfirmedNeverLoops(t *testing.T) {
 
 func TestRecoverStaleFinalResultsSendsOneConfirmedRecap(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestRecoverStaleFinalResultsSendsOneConfirmedRecap(t *testing.T) {
 
 func TestRecoverStaleFinalResultsKeepsRowsUntilRecapConfirmed(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestRecoverStaleFinalResultsKeepsRowsUntilRecapConfirmed(t *testing.T) {
 
 func TestStaleFinalRecoveryIsScopedToExactPlatformAccount(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestLogicalDeliveryIdempotencyIncludesPlatformAccount(t *testing.T) {
 
 func TestDismissRecappedFinalResultsUsesExactIDs(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,7 +278,7 @@ func TestBoundedRecoveryPreviewPreservesUTF8(t *testing.T) {
 
 func TestCriticalPrepareFailureWaitsForFreshInboundThenRecovers(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestCriticalPrepareFailureWaitsForFreshInboundThenRecovers(t *testing.T) {
 
 func TestCatchUpDropsApprovalResolvedWhileSessionWasStale(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,7 +357,7 @@ func TestCatchUpDropsApprovalResolvedWhileSessionWasStale(t *testing.T) {
 
 func TestManualPendingSessionRetryIsPeerScoped(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +397,7 @@ func TestManualPendingSessionRetryIsPeerScoped(t *testing.T) {
 
 func TestManualPendingSessionDismissIsPeerScopedAndDoesNotSend(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +434,7 @@ func TestManualPendingSessionDismissIsPeerScopedAndDoesNotSend(t *testing.T) {
 
 func TestCatchUpPermanentFailureLeavesNoFakePendingRow(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}

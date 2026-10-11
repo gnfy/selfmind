@@ -14,6 +14,9 @@ type ToolDispatchResult struct {
 	Invoked  *bool
 	Process  *ToolProcessResult
 	Evidence []RunEvidence
+	// RedactionUnparseable reports that masking a credential had to leave a
+	// JSON result unparseable rather than reveal a masked value.
+	RedactionUnparseable bool
 }
 
 // ToolProcessResult describes the observed process, not the tool's success.
@@ -24,7 +27,14 @@ type ToolProcessResult struct {
 	SandboxMode     string `json:"sandbox_mode,omitempty"`
 	RecoveryOutcome string `json:"recovery_outcome,omitempty"`
 	NetworkMode     string `json:"network_mode,omitempty"`
-	ProxyMode       string `json:"proxy_mode,omitempty"`
+	// NetworkDecision is the runtime's decision about sharing the daemon's
+	// network with this call, with its reason when it was withheld: `shared` or
+	// `withheld: <reason>`. NetworkPermission says what permitted network for the
+	// workspace at the time (`trust`, `grant` or `approval`), empty when nothing
+	// did. A permission is not a use: a call under a grant may still run offline.
+	NetworkDecision   string `json:"network_decision,omitempty"`
+	NetworkPermission string `json:"network_permission,omitempty"`
+	ProxyMode         string `json:"proxy_mode,omitempty"`
 	// These are literal removals requested by the command, not proof of the
 	// route used by an arbitrary program. No environment values are exposed.
 	RequestedProxyRemovals []string `json:"requested_proxy_removals,omitempty"`
@@ -73,5 +83,8 @@ func applyDispatchFacts(envelope *ToolResultEnvelope, result ToolDispatchResult)
 		if evidence.ToolCallID != "" {
 			envelope.EvidenceRefs = append(envelope.EvidenceRefs, evidence.ToolCallID)
 		}
+	}
+	if result.RedactionUnparseable {
+		envelope.ModelContent = "Redaction: masking a credential left this JSON result unparseable; read it as text.\n" + envelope.ModelContent
 	}
 }

@@ -13,7 +13,7 @@ func TestIsGatewayControlCoversPreviouslyOmittedCommands(t *testing.T) {
 		"/queue", "/diag", "/mode", "/notify", "/help", "/model",
 		"/status", "/watchers", "/events", "/approvals", "/approve 1",
 		"/reject 2", "/stop", "/cancel", "/id", "/new title", "/resume tsk_1",
-		"/ws ws_1", "/search aurora",
+		"/ws ws_1", "/search aurora", "/tools readonly github/get_issue on",
 		"/QUEUE", "/Mode smart", // case-insensitive
 	}
 	for _, c := range control {
@@ -113,7 +113,7 @@ func TestLocalCommandsNotGatewayRoutable(t *testing.T) {
 func TestKnownMatchesGatewayContract(t *testing.T) {
 	want := []string{
 		"/help", "/model", "/id", "/status", "/views", "/apply", "/queue", "/watchers", "/effects", "/diag",
-		"/report", "/events", "/approvals", "/approve", "/reject", "/mode", "/stop",
+		"/report", "/events", "/approvals", "/approve", "/reject", "/mode", "/tools", "/stop",
 		"/cancel", "/notify", "/new", "/choose", "/resume", "/ws",
 		"/remember", "/forget", "/search",
 	}

@@ -1,0 +1,212 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Done"
+    },
+    {
+      "reasoning_content": ". Report"
+    },
+    {
+      "reasoning_content": " the outcome"
+    },
+    {
+      "reasoning_content": " conc"
+    },
+    {
+      "reasoning_content": "isely.\n"
+    },
+    {
+      "content": "Prepared"
+    },
+    {
+      "content": " version: **R"
+    },
+    {
+      "content": "42**"
+    },
+    {
+      "content": "\n\n`version.txt"
+    },
+    {
+      "content": "` in the"
+    },
+    {
+      "content": " workspace root contains exactly"
+    },
+    {
+      "content": " `version=R4"
+    },
+    {
+      "content": "2`.\n\nSequence"
+    },
+    {
+      "content": " followed: activated the"
+    },
+    {
+      "content": " `prepared-ins"
+    },
+    {
+      "content": "pection` skill via"
+    },
+    {
+      "content": " `skref_d"
+    },
+    {
+      "content": "8b9d"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "af326"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "5433"
+    },
+    {
+      "content": "` ("
+    },
+    {
+      "content": "instruction loading only),"
+    },
+    {
+      "content": " located the waiting run"
+    },
+    {
+      "content": " `run"
+    },
+    {
+      "content": "_af6db6"
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": "2-05"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "6-43"
+    },
+    {
+      "content": "ee"
+    },
+    {
+      "content": "-98b"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "-639"
+    },
+    {
+      "content": "572bf"
+    },
+    {
+      "content": "5aed` ("
+    },
+    {
+      "content": "task `task_"
+    },
+    {
+      "content": "18d5"
+    },
+    {
+      "content": "4da5-"
+    },
+    {
+      "content": "3eea-4"
+    },
+    {
+      "content": "3ba"
+    },
+    {
+      "content": "-811"
+    },
+    {
+      "content": "1-"
+    },
+    {
+      "content": "0659"
+    },
+    {
+      "content": "39"
+    },
+    {
+      "content": "80cb0"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "`), claimed it"
+    },
+    {
+      "content": " with `work"
+    },
+    {
+      "content": "_select(resume)`"
+    },
+    {
+      "content": " in direct commit mode"
+    },
+    {
+      "content": ", then read the"
+    },
+    {
+      "content": " file."
+    },
+    {
+      "content": " That run recorded no"
+    },
+    {
+      "content": " plan events or"
+    },
+    {
+      "content": " artifacts, so there"
+    },
+    {
+      "content": " was no inherited plan"
+    },
+    {
+      "content": " step to resolve."
+    },
+    {
+      "content": " No files were written"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " no shell or network"
+    },
+    {
+      "content": " calls"
+    },
+    {
+      "content": " were used."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 7101,
+        "output_tokens": 201,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 7101,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 9,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

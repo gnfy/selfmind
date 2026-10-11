@@ -2,8 +2,12 @@ package cliapp
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +20,8 @@ import (
 	"selfmind/internal/doccheck"
 	selfeval "selfmind/internal/eval"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/scratchhome"
 )
 
 type selfcheckOutcome int
@@ -176,6 +182,35 @@ func (a *App) selfcheckGo() selfcheckOutcome {
 		fmt.Fprintln(a.stdout, "  UNAVAILABLE go.mod not found from cwd upward")
 		return selfcheckUnavailable
 	}
+	return a.selfcheckGoIn(goBin, root)
+}
+
+// selfcheckGoIn builds and tests the module at root. The children run against
+// a throwaway HOME so that no test can write the operator's per-user state;
+// afterwards any SelfMind state they left there fails the gate.
+func (a *App) selfcheckGoIn(goBin, root string) selfcheckOutcome {
+	// Go's caches and settings are resolved for the original environment
+	// before HOME moves, so nothing is rebuilt or re-downloaded.
+	goDirs, err := scratchhome.GoDirs(a.ctx, goBin, os.Environ())
+	if err != nil {
+		fmt.Fprintf(a.stdout, "  UNAVAILABLE cannot resolve Go cache locations: %v\n", err)
+		return selfcheckUnavailable
+	}
+	claim, err := scratchhome.Fresh(selfcheckGoHomeName(root))
+	if err != nil {
+		fmt.Fprintf(a.stdout, "  UNAVAILABLE cannot create a throwaway HOME for build and test: %v\n", err)
+		return selfcheckUnavailable
+	}
+	defer func() { _ = claim.Release() }()
+	switch {
+	case claim.Busy:
+		fmt.Fprintln(a.stdout, "  note: another selfcheck is running for this checkout; this run uses a HOME of its own, so Go's test cache will not recognize unchanged packages")
+	case claim.Fallback != "":
+		fmt.Fprintf(a.stdout, "  note: the stable throwaway HOME is unavailable (%s); this run uses a HOME of its own, so Go's test cache will not recognize unchanged packages\n", claim.Fallback)
+	}
+	home := claim.Home
+	env := selfcheckGoEnv(os.Environ(), home, goDirs)
+
 	ok := true
 	for _, step := range []struct {
 		label string
@@ -187,7 +222,7 @@ func (a *App) selfcheckGo() selfcheckOutcome {
 		start := time.Now()
 		c := exec.CommandContext(a.ctx, goBin, step.cmd...)
 		c.Dir = root
-		c.Env = selfcheckGoEnv(os.Environ())
+		c.Env = env
 		out, runErr := c.CombinedOutput()
 		if runErr != nil {
 			ok = false
@@ -198,37 +233,101 @@ func (a *App) selfcheckGo() selfcheckOutcome {
 		}
 		fmt.Fprintf(a.stdout, "  ok   %s (%s)\n", step.label, time.Since(start).Round(time.Millisecond))
 	}
+	if leaked := selfcheckHomeWrites(home); len(leaked) > 0 {
+		ok = false
+		fmt.Fprintln(a.stdout, "  FAIL tests left SelfMind state in their throwaway HOME (paths relative to it):")
+		for i, path := range leaked {
+			if i == selfcheckHomeWriteLimit {
+				fmt.Fprintf(a.stdout, "    ... and %d more\n", len(leaked)-i)
+				break
+			}
+			fmt.Fprintf(a.stdout, "    %s\n", path)
+		}
+		fmt.Fprintln(a.stdout, "    With the real HOME these writes reach the operator's own state. Isolate the writing")
+		fmt.Fprintln(a.stdout, "    package's test binary: func TestMain(m *testing.M) { testhome.Main(m) } (internal/testutil/testhome).")
+	}
 	if !ok {
 		return selfcheckFailed
 	}
 	return selfcheckPassed
 }
 
-// selfcheckGoEnv keeps ordinary build and unit-test processes independent from
-// the eval/flight wrappers that may be enabled in the caller's interactive
-// shell. The eval phase enables replay explicitly in selfcheckEval.
-func selfcheckGoEnv(environ []string) []string {
-	blocked := map[string]struct{}{
+// selfcheckGoHomeName names the build-and-test HOME after the checkout and
+// the user. The path stays the same from run to run because Go's test cache
+// records HOME whenever a test reads it; a new path each run would re-run
+// every such package.
+func selfcheckGoHomeName(root string) string {
+	sum := sha256.Sum256([]byte(root))
+	return fmt.Sprintf("selfmind-selfcheck-%d-%s", os.Getuid(), hex.EncodeToString(sum[:6]))
+}
+
+// selfcheckHomeWriteLimit bounds the paths a guard failure prints.
+const selfcheckHomeWriteLimit = 20
+
+// selfcheckHomeWrites lists, relative to home, the SelfMind state that build
+// and test children left there: each ".selfmind*" tree and SelfMind's
+// per-user cache directory (macOS Library/Caches, or the XDG cache that
+// selfcheckGoEnv places below HOME), with the entries directly inside them.
+func selfcheckHomeWrites(home string) []string {
+	var roots []string
+	if entries, err := os.ReadDir(home); err == nil {
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), ".selfmind") {
+				roots = append(roots, entry.Name())
+			}
+		}
+	}
+	for _, cache := range []string{filepath.Join("Library", "Caches", "selfmind"), filepath.Join(".cache", "selfmind")} {
+		if _, err := os.Lstat(filepath.Join(home, cache)); err == nil {
+			roots = append(roots, cache)
+		}
+	}
+	sort.Strings(roots)
+	var paths []string
+	for _, root := range roots {
+		paths = append(paths, filepath.ToSlash(root))
+		entries, _ := os.ReadDir(filepath.Join(home, root))
+		for _, entry := range entries {
+			paths = append(paths, filepath.ToSlash(filepath.Join(root, entry.Name())))
+		}
+	}
+	return paths
+}
+
+// selfcheckGoEnv builds the environment of selfcheck's build and test
+// children. It drops the eval/flight wrappers an interactive shell may enable
+// (the eval phase enables replay explicitly in selfcheckEval), forces
+// GOWORK=off, and roots every per-user location — HOME, the XDG directories,
+// the SELF_CONFIG file — in the throwaway home, while goDirs keeps Go's own
+// caches and settings where `go env` found them for the original
+// environment. GOFLAGS passes through unchanged.
+func selfcheckGoEnv(environ []string, home string, goDirs []string) []string {
+	assignments := append(scratchhome.Env(home), goDirs...)
+	assignments = append(assignments, "GOWORK=off")
+	replaced := map[string]struct{}{
 		"SELFMIND_EVAL_VCR":        {},
 		"SELFMIND_EVAL_OFFLINE":    {},
 		"SELFMIND_EVAL_VCR_DIR":    {},
 		"SELFMIND_FLIGHT_RECORDER": {},
 		"SELFMIND_FLIGHT_DIR":      {},
 		"SELFMIND_FLIGHT_KEEP":     {},
-		"GOWORK":                   {},
 	}
-	out := make([]string, 0, len(environ)+1)
+	for _, assignment := range assignments {
+		key, _, _ := strings.Cut(assignment, "=")
+		replaced[key] = struct{}{}
+	}
+	out := make([]string, 0, len(environ)+len(assignments))
 	for _, entry := range environ {
 		key, _, ok := strings.Cut(entry, "=")
 		if !ok {
 			continue
 		}
-		if _, skip := blocked[strings.ToUpper(strings.TrimSpace(key))]; skip {
+		if _, skip := replaced[strings.ToUpper(strings.TrimSpace(key))]; skip {
 			continue
 		}
 		out = append(out, entry)
 	}
-	return append(out, "GOWORK=off")
+	return append(out, assignments...)
 }
 
 type selfcheckEvalCase struct {
@@ -257,6 +356,8 @@ func (a *App) selfcheckEval(root string, profile selfcheckProfile) selfcheckOutc
 	}
 	fmt.Fprintf(a.stdout, "== provider-offline eval (%s; profile=%s; platform=%s) ==\n", resolvedRoot, profile, runtime.GOOS)
 	fmt.Fprintln(a.stdout, "  prompt snapshot: embedded defaults; overrides=none (forced)")
+	configPath, configNote := a.selfcheckEvalConfig()
+	fmt.Fprintf(a.stdout, "  config: %s\n", configNote)
 
 	files, err := selfeval.ListCaseFiles(resolvedRoot)
 	if err != nil {
@@ -351,13 +452,35 @@ func (a *App) selfcheckEval(root string, profile selfcheckProfile) selfcheckOutc
 		runnable = append(runnable, item)
 	}
 
-	evalPath := selfcheckEvalPath(os.Getenv("PATH"))
-	restore := setEnvScoped(map[string]string{
-		"PATH":                  evalPath,
+	// Replay runs the product in this process, and replayed tool calls run on
+	// the host: both get a throwaway HOME so that neither first-run state nor a
+	// tool's own files reach the operator's per-user directories. Go's caches
+	// and settings are resolved for the real environment first, as for the
+	// build and test children.
+	home, err := scratchhome.New("selfmind-selfcheck-eval-")
+	if err != nil {
+		fmt.Fprintf(a.stdout, "  UNAVAILABLE cannot create a throwaway HOME for replay: %v\n", err)
+		return selfcheckUnavailable
+	}
+	defer func() { _ = scratchhome.Remove(home) }()
+	var goDirs []string
+	if goBin, lookErr := exec.LookPath("go"); lookErr == nil {
+		if goDirs, err = scratchhome.GoDirs(a.ctx, goBin, os.Environ()); err != nil {
+			fmt.Fprintf(a.stdout, "  UNAVAILABLE cannot resolve Go cache locations: %v\n", err)
+			return selfcheckUnavailable
+		}
+	}
+	scoped := map[string]string{
+		"PATH":                  selfcheckEvalPath(os.Getenv("PATH")),
 		"SELFMIND_EVAL_VCR":     "replay",
 		"SELFMIND_EVAL_OFFLINE": "1",
 		"SELFMIND_EVAL_VCR_DIR": vcrDir,
-	})
+	}
+	for _, assignment := range append(scratchhome.Env(home), goDirs...) {
+		key, value, _ := strings.Cut(assignment, "=")
+		scoped[key] = value
+	}
+	restore := setEnvScoped(scoped)
 	defer restore()
 
 	if runtime.GOOS == "linux" && isWSL() {
@@ -374,14 +497,27 @@ func (a *App) selfcheckEval(root string, profile selfcheckProfile) selfcheckOutc
 		return selfcheckUnavailable
 	}
 
-	passed, executed := 0, 0
+	passed, executed, missingRequirements := 0, 0, 0
 	for _, item := range runnable {
 		c := item.caseDef
 		if profile == selfcheckCI {
 			fmt.Fprintf(a.stdout, "  run  %s (ci:%s)\n", c.ID, c.CI.Reason)
 		}
+		result, runErr := selfeval.RunCaseFile(a.ctx, item.file, selfeval.RunOptions{ConfigPath: configPath})
+		if errors.Is(runErr, selfeval.ErrRequirementUnavailable) {
+			// The environment could not provide what the case needs, as with a
+			// missing tool: nothing about the product was verified or refuted.
+			if profile != selfcheckCI && c.RequiredOnCI(runtime.GOOS) {
+				deferred++
+				suites[selfcheckCaseSuite(c, item.file)].deferred++
+				fmt.Fprintf(a.stdout, "  CI-DEFERRED %s (%v; owner=ci:%s)\n", c.ID, runErr, c.CI.Reason)
+				continue
+			}
+			missingRequirements++
+			fmt.Fprintf(a.stdout, "  UNAVAILABLE %s (%v)\n", c.ID, runErr)
+			continue
+		}
 		executed++
-		result, runErr := selfeval.RunCaseFile(a.ctx, item.file, selfeval.RunOptions{ConfigPath: a.configPath})
 		if runErr != nil {
 			failed++
 			fmt.Fprintf(a.stdout, "  FAIL %s (%v)\n", c.ID, runErr)
@@ -395,7 +531,11 @@ func (a *App) selfcheckEval(root string, profile selfcheckProfile) selfcheckOutc
 			fmt.Fprintf(a.stdout, "  FAIL %s (%s)\n", c.ID, result.Status)
 		}
 	}
-	fmt.Fprintf(a.stdout, "  summary: %d passed, %d failed, %d executed, %d delegated to CI, %d excluded by profile\n", passed, failed, executed, deferred, profileSkipped)
+	summary := fmt.Sprintf("  summary: %d passed, %d failed, %d executed, %d delegated to CI, %d excluded by profile", passed, failed, executed, deferred, profileSkipped)
+	if missingRequirements > 0 {
+		summary += fmt.Sprintf(", %d unavailable", missingRequirements)
+	}
+	fmt.Fprintln(a.stdout, summary)
 	if deferred > 0 {
 		fmt.Fprintln(a.stdout, "  note: CI-DEFERRED cases are not locally verified; release requires the matching GitHub Actions jobs to pass")
 	}
@@ -416,6 +556,9 @@ func (a *App) selfcheckEval(root string, profile selfcheckProfile) selfcheckOutc
 			return selfcheckFailed
 		}
 	}
+	if missingRequirements > 0 {
+		return selfcheckUnavailable
+	}
 	if executed == 0 && failed == 0 {
 		fmt.Fprintln(a.stdout, "  UNAVAILABLE selected profile executed no cases")
 		return selfcheckUnavailable
@@ -424,6 +567,19 @@ func (a *App) selfcheckEval(root string, profile selfcheckProfile) selfcheckOutc
 		return selfcheckFailed
 	}
 	return selfcheckPassed
+}
+
+// selfcheckEvalConfig picks the configuration replay runs with, resolved
+// against the real environment before replay moves HOME: the explicit or
+// default config file when it exists. When it does not, replay runs on the
+// built-in defaults that a first run writes inside the throwaway HOME, so
+// selfcheck never creates the person's config.
+func (a *App) selfcheckEvalConfig() (path, note string) {
+	resolved, _ := config.ResolveConfigPath(a.configPath)
+	if _, err := os.Stat(resolved); errors.Is(err, fs.ErrNotExist) {
+		return "", "built-in defaults (no file at " + resolved + ")"
+	}
+	return resolved, resolved
 }
 
 func selfcheckCaseSuite(c *selfeval.Case, file string) string {

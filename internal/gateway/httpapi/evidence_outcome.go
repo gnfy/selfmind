@@ -10,8 +10,10 @@ import (
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
+	"selfmind/internal/tools"
 	"selfmind/internal/verification"
 )
 
@@ -135,6 +137,15 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 		if item.Process != nil {
 			started := item.Process.Started
 			check.ProcessStarted = &started
+			// What the runtime recorded about the network for this check's
+			// process, so a pass cannot hide that it ran offline.
+			check.NetworkDecision, check.NetworkPermission = item.Process.NetworkDecision, item.Process.NetworkPermission
+			// The offline notice is for a command that can fetch dependencies;
+			// derived from the recorded command, so earlier evidence reads the
+			// same way.
+			if executionenv.NetworkOfflineDespiteGrant(check.NetworkDecision, check.NetworkPermission) {
+				check.NetworkMayFetch = tools.CommandMayFetchDependencies(check.Command)
+			}
 			if !started || item.Process.ExitCode == nil {
 				check.Status = "blocked"
 			}
@@ -400,13 +411,25 @@ func withVerificationNotice(content string, verification *api.VerificationOutcom
 	return content + "\n\n" + line
 }
 
+// offlineVerificationNotice states what a pass did not cover. A check that ran
+// without network although the workspace's network grant permits it is still a
+// pass; the person is told, because "passed" would otherwise read as coverage
+// of anything that needs a remote service. A bare pass adds nothing.
+func offlineVerificationNotice(outcome *api.VerificationOutcome) string {
+	offline := verification.OfflineDespiteGrant(outcome.Checks)
+	if offline == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Verification passed without network: %d check(s) ran offline although this workspace's network grant permits it, so coverage that needs remote data was not exercised. Ask for a re-run with network access (network: true) if it matters.", offline)
+}
+
 func conciseVerificationNotice(verification *api.VerificationOutcome) string {
 	if verification == nil {
 		return ""
 	}
 	switch verification.State {
 	case "passed":
-		return ""
+		return offlineVerificationNotice(verification)
 	case "not_run":
 		return "Verification incomplete: no structured check evidence after file changes; use verify for the relevant check."
 	case "stale":

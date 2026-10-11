@@ -3,250 +3,65 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Now"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " run"
-    },
-    {
-      "reasoning_content": " is"
-    },
-    {
-      "reasoning_content": " committed"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Write"
-    },
-    {
-      "reasoning_content": " result"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " exactly"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "READ"
-    },
-    {
-      "reasoning_content": "Y"
-    },
-    {
-      "reasoning_content": "\\n"
-    },
-    {
-      "reasoning_content": "\"."
-    },
-    {
-      "reasoning_content": " Then"
-    },
-    {
-      "reasoning_content": " verify"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Plan"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " update"
-    },
-    {
-      "reasoning_content": "_"
-    },
-    {
-      "reasoning_content": "plan"
-    },
-    {
-      "reasoning_content": " with"
-    },
-    {
-      "reasoning_content": " steps"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": " instructions"
-    },
-    {
-      "reasoning_content": " ("
-    },
-    {
-      "reasoning_content": "completed"
-    },
-    {
-      "reasoning_content": "),"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": " result"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " ("
-    },
-    {
-      "reasoning_content": "in"
-    },
-    {
-      "reasoning_content": " progress"
-    },
-    {
-      "reasoning_content": "),"
-    },
-    {
-      "reasoning_content": " verify"
-    },
-    {
-      "reasoning_content": " byte"
-    },
-    {
-      "reasoning_content": "-ex"
-    },
-    {
-      "reasoning_content": "act"
-    },
-    {
-      "reasoning_content": " ("
-    },
-    {
-      "reasoning_content": "pending"
-    },
-    {
-      "reasoning_content": ").\n\n"
-    },
-    {
-      "reasoning_content": "Then"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": " file"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " then"
-    },
-    {
-      "reasoning_content": " verify"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " create"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " plan"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": " ("
-    },
-    {
-      "reasoning_content": "as"
-    },
-    {
-      "reasoning_content": " required"
-    },
-    {
-      "reasoning_content": ":"
-    },
-    {
-      "reasoning_content": " call"
-    },
-    {
-      "reasoning_content": " update"
-    },
-    {
-      "reasoning_content": "_"
-    },
-    {
-      "reasoning_content": "plan"
-    },
-    {
-      "reasoning_content": " by"
-    },
-    {
-      "reasoning_content": " itself"
-    },
-    {
-      "reasoning_content": " before"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " first"
-    },
-    {
-      "reasoning_content": " action"
-    },
-    {
-      "reasoning_content": " tool"
-    },
-    {
-      "reasoning_content": ")."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I am inspecting the waiting run to retrieve"
     },
     {
       "usage": {
-        "input_tokens": 12552,
-        "output_tokens": 260,
-        "cache_read_input_tokens": 12032,
-        "cache_miss_input_tokens": 520,
+        "input_tokens": 12677,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 75,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " its plan and status before resuming it."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 54,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 296,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_FeRmlwkUq3UO0IA1lgxY7400",
-          "Function": "update_plan",
-          "Args": "{\"plan\": [{\"status\": \"completed\", \"step\": \"Read instructions.txt and confirm the required result.txt content\", \"success_criteria\": \"Requirement recorded: result.txt contains exactly `READY` followed by a newline\"}, {\"status\": \"in_progress\", \"step\": \"Write result.txt with exactly `READY\\\\n`\", \"success_criteria\": \"result.txt exists in the workspace root with content READY + newline\"}, {\"status\": \"pending\", \"step\": \"Verify byte-exact content of result.txt\", \"success_criteria\": \"Byte count is 6 and hex/content matches 52 45 41 44 59 0a\", \"verification_required\": true}]}"
+          "ID": "call_580575",
+          "Function": "work_inspect",
+          "Args": "{\"run_id\":\"{{SELFMIND_VCR_RUN_2}}\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "Ev0DCvoDAWkUfROGSsyBSRPPEyxqGiBi4b9XIhqIIi84S1wnDGqcNRlRXAqfZ78E2Z4iSVDzb0/HL5+cBWgToZyrVsyOkpBCxZVlaPzskaXLIomuO5Sz47EMAkl45AFyiLY+BNnLkkdRXtIwjnAZYhRTVX6Ym8+O/o73FL1X39/nDleJhhC7EbxGwwVG9MI+wgwQqD8k+4lDZPyTb1GDNVCANkNy12RReLZEbNdWLSndbUC694cEAtcWZdNNh1kX4AEzcjZaYj6Bbdn3hSaMIs9E2XpC54DMPGUTHLid8JHr8VhBybyQ5DcJC55mL9+VF0pXHxOakIuJltak+2bEt1APqjxXvwgCfzCmQkEMrVjPgF0WYxv2zb4wxbNlYtNYDwaqL5vRrZU+12hCtrQ+QFASn79Tuo+RjLgWLzhePfh0Bt8IcL5ViaSHSGLYJZ8wb8n8rWPj7wy7QBw6srK+Uf562uEdf+YauIqHoHsguAw9gsI5qeA593OxF7Q9sSNbRAuj8OE/KrH6s6OLBH8LatjQYPn4oFYY6nbhlujzfBdLP2JfvlU2HMxaJiyKasA0FzSybcdlTgBmoP9pMs3yYClihe0+XZq5MpoeMexIZZ3zI/GYer60QHwOJx70ZRkNeggN5EYVFJyjBxt8cPKlnLm6t9P0BmKDjo5EQ8pScdA="
+            }
+          }
         }
       ]
     }

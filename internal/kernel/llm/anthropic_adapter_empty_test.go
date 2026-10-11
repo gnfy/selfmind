@@ -27,7 +27,7 @@ func TestAnthropicEmptyResponsePreservesStopReasonAndUsage(t *testing.T) {
 	if info.Class != ProviderErrorEmptyResponse || info.StopReason != "max_tokens" {
 		t.Fatalf("provider error = %+v", info)
 	}
-	if info.Usage.InputTokens != 1234 || info.Usage.OutputTokens != 3072 ||
+	if info.Usage.InputTokens != 1367 || info.Usage.CacheMissInputTokens != 1234 || info.Usage.OutputTokens != 3072 ||
 		info.Usage.CacheReadInputTokens != 111 || info.Usage.CacheCreationInputTokens != 22 {
 		t.Fatalf("usage = %+v", info.Usage)
 	}

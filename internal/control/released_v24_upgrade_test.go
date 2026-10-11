@@ -45,15 +45,18 @@ func TestReleasedV24CancellationUpgradePreservesHistoryAndAuthority(t *testing.T
 	}
 	defer store.Close()
 	status := store.SchemaStatus()
-	if status.Version != 25 || status.MigrationBackup == "" {
+	if status.Version != CurrentControlSchemaVersion || status.MigrationBackup == "" {
 		t.Fatalf("unverified migration: %+v", status)
 	}
 	old, err := store.GetRun(ctx, "default", "old-run")
 	if err != nil || old.RecoveryContractVersion != 2 || old.Status != "blocked" {
 		t.Fatalf("migration rewrote Run authority: %+v err=%v", old, err)
 	}
+	if admission, err := store.RunAdmissionSnapshot(ctx, "default", "old-run"); err != nil || !admission.IsZero() {
+		t.Fatalf("migration invented an admission snapshot: %+v err=%v", admission, err)
+	}
 	plan, err := store.LatestRunPlan(ctx, "default", "old-run")
-	if err != nil || plan.Version != 1 || plan.ContentHash != "old-hash" || plan.Steps[0].Status != "cancelled" || plan.Steps[0].ReplacementStepID != "" || plan.Steps[0].ScopeChangeQuote != "" {
+	if err != nil || plan.Version != 1 || plan.ContentHash != "old-hash" || plan.Steps[0].Status != "cancelled" || plan.Steps[0].ReplacementStepID != "" || plan.Steps[0].ScopeChangeQuote != "" || plan.Steps[0].CancellationQuoteSource != "" {
 		t.Fatalf("migration invented evidence: %+v err=%v", plan, err)
 	}
 	if err = store.ValidateRunCompletion(ctx, "default", "old-run"); err != nil {

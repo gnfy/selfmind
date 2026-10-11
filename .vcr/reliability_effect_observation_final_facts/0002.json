@@ -1,0 +1,69 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am"
+    },
+    {
+      "usage": {
+        "input_tokens": 12288,
+        "output_tokens": 2,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " recording the task outcome with the observed state."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 9,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 98,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 333,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_575725",
+          "Function": "finish_run",
+          "Args": "{\"tests\":[\"cat observed.state\"],\"summary\":\"Read observed.state which reported READY; foreign-chain effect claim remains unresolved.\",\"done\":[\"Read observed.state bound to foreign effect claim {{SELFMIND_VCR_EFFECT_CLAIM_1}}\"],\"status\":\"done\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

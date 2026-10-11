@@ -3,8 +3,6 @@ package tools
 import (
 	"sort"
 	"strings"
-
-	"mvdan.cc/sh/v3/syntax"
 )
 
 // Only literal standard route variables qualify. Removing PATH, a credential,
@@ -65,65 +63,22 @@ func proxyEnvCommand(args []string) (inner, removed []string, ok bool) {
 	return nil, nil, false
 }
 
+// proxyRemovalVariables names the standard route variables a payload removes,
+// through the same identification as the safety floor: behind any known
+// wrapper (`exec env -u`, `nohup env -u`), inside -c scripts, by `unset`, by
+// `env -u`, or by assigning a variable empty (`HTTPS_PROXY= gh ...`). Unlike
+// proof, detection also reads a path-qualified wrapper by its name: reporting
+// a removal the file might not perform only asks for review.
 func proxyRemovalVariables(payload string) []string {
 	seen := map[string]bool{}
-	var inspect func(string, int)
-	var inspectArgv func([]string, int)
-	inspectArgv = func(argv []string, depth int) {
-		if depth > maxObservationShellDepth || len(argv) == 0 {
-			return
-		}
-		var removed []string
-		switch argv[0] {
-		case "unset":
-			removed, _ = proxyUnsetNames(argv[1:])
-		case "env":
-			inner, names, valid := proxyEnvCommand(argv[1:])
-			removed = names
-			if valid {
-				inspectArgv(inner, depth+1)
+	commands, _ := shellCommands(payload, 0)
+	for _, read := range commands {
+		for _, name := range commandRemovedVariables(read) {
+			if standardProxyVariable(name) {
+				seen[name] = true
 			}
-		case "command", "timeout":
-			if inner, valid := observationWrappedCommand(argv[0], argv[1:]); valid {
-				inspectArgv(inner, depth+1)
-			}
-		default:
-			if _, shell := shellDashCWrappers[argv[0]]; shell {
-				if script, valid := exactDashCScript(argv[1:]); valid {
-					inspect(script, depth+1)
-				}
-			}
-		}
-		for _, name := range removed {
-			seen[name] = true
 		}
 	}
-	inspect = func(command string, depth int) {
-		if depth > maxObservationShellDepth {
-			return
-		}
-		file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader(command), "")
-		if err != nil {
-			return
-		}
-		syntax.Walk(file, func(node syntax.Node) bool {
-			call, ok := node.(*syntax.CallExpr)
-			if !ok || len(call.Args) == 0 {
-				return true
-			}
-			var argv []string
-			for _, word := range call.Args {
-				value, static := staticObservationWord(word)
-				if !static {
-					return true
-				}
-				argv = append(argv, value)
-			}
-			inspectArgv(argv, depth)
-			return true
-		})
-	}
-	inspect(payload, 0)
 	names := make([]string, 0, len(seen))
 	for name := range seen {
 		names = append(names, name)
@@ -132,8 +87,57 @@ func proxyRemovalVariables(payload string) []string {
 	return names
 }
 
+// commandRemovedVariables lists the variables one command removes. A value
+// expanded at run time is not known to be empty, so it is not a removal.
+func commandRemovedVariables(read readCommand) []string {
+	var names []string
+	for _, assignment := range read.id.assignments() {
+		if name, value, _ := strings.Cut(assignment, "="); value == "" && !strings.HasSuffix(name, "+") {
+			names = append(names, name)
+		}
+	}
+	for _, layer := range read.id.Layers {
+		if layer.Name == "env" {
+			names = append(names, envUnsetVariables(layer)...)
+		}
+	}
+	if program := read.id.program(); program.Name == "unset" {
+		names = append(names, unsetVariables(program.Args)...)
+	}
+	return names
+}
+
+// envUnsetVariables reads env's own -u/--unset options, never the command's,
+// with the same option grammar identification uses (`env -iu NAME`,
+// `env --uns NAME`, `env -S '-u NAME'`).
+func envUnsetVariables(layer commandLayer) []string {
+	var names []string
+	for _, option := range prefixWrappers["env"].wrapperOptions(layer.Args).options {
+		if (option.name == "-u" || option.name == "--unset") && option.hasValue {
+			names = append(names, option.value)
+		}
+	}
+	return names
+}
+
+// unsetVariables lists the variables `unset` removes; `unset -f` removes
+// functions instead.
+func unsetVariables(args []string) []string {
+	var names []string
+	for _, arg := range args {
+		switch {
+		case arg == "-f":
+			return nil
+		case strings.HasPrefix(arg, "-"):
+		default:
+			names = append(names, arg)
+		}
+	}
+	return names
+}
+
 func configuredProxyOverrideReason(toolName string, args map[string]interface{}) string {
-	if !isExecTool(toolName) || !commandPlausiblyNeedsEgress(toolName, args) {
+	if !isExecTool(toolName) || !commandWantsNetwork(toolName, args) {
 		return ""
 	}
 	removed := proxyRemovalVariables(execCommandPayload(toolName, args))

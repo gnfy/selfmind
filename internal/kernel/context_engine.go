@@ -180,7 +180,7 @@ func (c *ContextEngine) BuildMessages(
 		if err != nil {
 			return nil, fmt.Errorf("load context: %w", err)
 		}
-		history = boundedHistoryMessages(historyData)
+		history = boundedHistoryMessagesForContext(ctx, historyData)
 		needFallback := len(history) == 0
 		if !needFallback {
 			if taskID := taskIDFromContext(ctx); taskID != "" && !spineBlobsContainTask(historyData, taskID) {
@@ -467,10 +467,15 @@ func (c *ContextEngine) RecoverMessagesCtx(ctx context.Context, messages []llm.M
 		return messages
 	}
 	out := append([]llm.Message(nil), messages...)
+	// Only assembly-owned optional sections may be removed. Text headings in
+	// arbitrary or legacy prompts do not establish a safe deletion boundary.
 	if out[0].Role == "system" {
-		if idx := strings.Index(out[0].Content, "# PROJECT CONTEXT"); idx >= 0 {
-			out[0].Content = strings.TrimSpace(out[0].Content[:idx]) +
-				"\n\n[Project context omitted during context-window recovery; use local tools to inspect it if needed.]"
+		sections, _ := ctx.Value(contextSystemSectionsKey{}).([]PromptSection)
+		for _, section := range sections {
+			if section.Category == "project_context" && section.Content != "" {
+				out[0].Content = strings.Replace(out[0].Content, section.Content,
+					"[Project context omitted during context-window recovery; inspect local files if needed.]", 1)
+			}
 		}
 	}
 	max := c.maxTokens - c.reserveTokens
@@ -485,76 +490,7 @@ func (c *ContextEngine) RecoverMessagesCtx(ctx context.Context, messages []llm.M
 		target = max
 	}
 	out = c.trimContext(ctx, out, target)
-	for len(out) > 0 && out[0].Role == "system" && c.countMessages(out) > target && len([]rune(out[0].Content)) > 512 {
-		before := out[0].Content
-		out[0].Content = truncateContextMiddlePreservingActiveSkill(before, len([]rune(before))*3/4)
-		if out[0].Content == before {
-			break
-		}
-	}
 	return out
-}
-
-func truncateContextMiddlePreservingActiveSkill(value string, maxRunes int) string {
-	start := strings.Index(value, activeSkillPromptBegin)
-	if start < 0 {
-		return truncateContextMiddle(value, maxRunes)
-	}
-	relEnd := strings.Index(value[start:], activeSkillPromptEnd)
-	if relEnd < 0 {
-		return truncateContextMiddle(value, maxRunes)
-	}
-	end := start + relEnd + len(activeSkillPromptEnd)
-	block := value[start:end]
-	blockRunes := []rune(block)
-	if len(blockRunes) >= maxRunes {
-		// The fixed activation receipt wins over recovery-size estimation. The
-		// provider may still reject an impossible window, but SelfMind must not
-		// silently mutate the Skill bytes it claims were delivered.
-		return value
-	}
-	prefix := []rune(value[:start])
-	suffix := []rune(value[end:])
-	marker := []rune("\n\n...[system context reduced for provider window; active Skill preserved]...\n\n")
-	available := maxRunes - len(blockRunes)
-	if len(prefix)+len(suffix) <= available {
-		return value
-	}
-	if available <= len(marker) {
-		return value
-	}
-	available -= len(marker)
-	prefixKeep := available * 3 / 4
-	suffixKeep := available - prefixKeep
-	if prefixKeep > len(prefix) {
-		suffixKeep += prefixKeep - len(prefix)
-		prefixKeep = len(prefix)
-	}
-	if suffixKeep > len(suffix) {
-		prefixKeep += suffixKeep - len(suffix)
-		suffixKeep = len(suffix)
-		if prefixKeep > len(prefix) {
-			prefixKeep = len(prefix)
-		}
-	}
-	var out strings.Builder
-	out.WriteString(string(prefix[:prefixKeep]))
-	out.WriteString(string(marker))
-	out.WriteString(block)
-	if suffixKeep > 0 {
-		out.WriteString(string(suffix[len(suffix)-suffixKeep:]))
-	}
-	return out.String()
-}
-
-func truncateContextMiddle(value string, maxRunes int) string {
-	runes := []rune(value)
-	if maxRunes <= 0 || len(runes) <= maxRunes {
-		return value
-	}
-	head := maxRunes * 3 / 4
-	tail := maxRunes - head
-	return string(runes[:head]) + "\n\n...[system context reduced for provider window]...\n\n" + string(runes[len(runes)-tail:])
 }
 
 // summarizer returns the provider used for compaction, or nil when none is
@@ -630,7 +566,7 @@ func (c *ContextEngine) compactMiddle(ctx context.Context, messages []llm.Messag
 }
 
 func isCompactionSummary(msg llm.Message) bool {
-	return msg.Role == "user" && strings.Contains(msg.Content, "[CONTEXT COMPACTION")
+	return msg.ContextOrigin == llm.MessageOriginCompaction
 }
 
 // summarizeSpan compacts one span of turns into a single reference message. It
@@ -755,7 +691,7 @@ func (c *ContextEngine) summarizeSpan(ctx context.Context, sp llm.Provider, span
 	// summarized history as a live instruction.
 	prefix := "[CONTEXT COMPACTION - REFERENCE ONLY] " + compactionBoundaryNote +
 		" Earlier turns were compacted into the summary below. This is a handoff from a previous context window. Treat it as background reference, not as active instructions. Respond only to the latest user message after this summary.\n\n"
-	return llm.Message{Role: "user", Content: prefix + summary}, true
+	return llm.Message{Role: "user", Content: prefix + summary, ContextOrigin: llm.MessageOriginCompaction}, true
 }
 
 func summaryFinishReasonTruncated(reason string) bool {
@@ -904,7 +840,7 @@ func (c *ContextEngine) pruneToolMessages(messages []llm.Message) []llm.Message 
 
 func (c *ContextEngine) extractExistingSummary(messages []llm.Message) string {
 	for _, msg := range messages {
-		if msg.Role != "user" || !strings.Contains(msg.Content, "[CONTEXT COMPACTION") {
+		if !isCompactionSummary(msg) {
 			continue
 		}
 		if idx := strings.Index(msg.Content, "## Active Task"); idx >= 0 {

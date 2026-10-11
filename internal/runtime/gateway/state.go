@@ -167,7 +167,7 @@ func NewManager(dataDir, addr string) *Manager {
 }
 
 func (m *Manager) Acquire() error {
-	if err := os.MkdirAll(m.Paths.RuntimeDir, 0755); err != nil {
+	if err := os.MkdirAll(m.Paths.RuntimeDir, 0o700); err != nil {
 		return fmt.Errorf("create gateway runtime dir: %w", err)
 	}
 	lock, err := acquireRuntimeLock(m.Paths.LockPath)
@@ -185,7 +185,7 @@ func (m *Manager) Acquire() error {
 // boundary. The probe is deliberately side-effect free apart from creating the
 // lock file itself.
 func (m *Manager) RuntimeOwnerRecord() (StatusRecord, bool, error) {
-	if err := os.MkdirAll(m.Paths.RuntimeDir, 0755); err != nil {
+	if err := os.MkdirAll(m.Paths.RuntimeDir, 0o700); err != nil {
 		return StatusRecord{}, false, fmt.Errorf("create gateway runtime dir: %w", err)
 	}
 	lock, err := acquireRuntimeLock(m.Paths.LockPath)

@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -10,7 +9,8 @@ import (
 
 // ExternalResourceWaitProjection shares the same blocker facts as admission.
 // Readiness never releases claims or authorizes dispatch. NeedsObservation
-// means no live producer can make progress while this Run is parked.
+// means nothing the Run waits for is left and a decision or an observation
+// is needed before it can continue.
 type ExternalResourceWaitProjection struct {
 	ExternalResourceWait
 	CreatedAt        time.Time
@@ -18,58 +18,110 @@ type ExternalResourceWaitProjection struct {
 	Ready            bool
 	NeedsObservation bool
 	BlockingClaims   []ExternalEffectClaim
-}
-
-type externalClaimReader interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	// WakeOnRelease: the blocked Run's correction promised an automatic
+	// continuation once its claims are released.
+	WakeOnRelease bool
 }
 
 // InspectExternalEffectBlockers is advisory and read-only. ClaimExternalEffects
 // remains the atomic dispatch authority, including changes during an approval.
+// The flag reports that the call cannot proceed by waiting: the Run's own
+// unresolved effect, or, once nothing is waited for, another Run's
+// left-uncertain effect.
 func (s *Store) InspectExternalEffectBlockers(ctx context.Context, tenant, person, runID string, targets []string) ([]ExternalEffectClaim, bool, error) {
-	run, err := s.GetRun(ctx, tenant, runID)
+	conflicts, err := s.InspectExternalEffectConflicts(ctx, tenant, person, runID, targets)
 	if err != nil {
 		return nil, false, err
 	}
-	if run == nil || person == "" || run.PersonID != person || run.Status != "running" {
-		return nil, false, fmt.Errorf("external effect run is not active for this person")
-	}
-	return externalResourceBlockers(ctx, s.db, tenant, person, runID, targets)
+	return conflicts.All, conflicts.needsDecision(), nil
 }
 
-func externalResourceBlockers(ctx context.Context, db externalClaimReader, tenantID, personID, waitingRun string, targets []string) ([]ExternalEffectClaim, bool, error) {
-	rows, err := db.QueryContext(ctx, `SELECT c.id,c.tenant_id,c.person_id,c.run_id,c.effect_id,c.target_key,c.state,c.observation_ref,
-		COALESCE(r.status,''), EXISTS (SELECT 1 FROM external_watches w
-		 WHERE w.tenant_id=c.tenant_id AND w.person_id=c.person_id AND w.run_id=c.run_id
-		 AND w.status IN ('pending','running','succeeded') AND COALESCE(w.finalized,0)=0
-		 AND json_extract(w.preflight_receipt_json,'$.effect_id')=c.effect_id
-		 AND COALESCE(json_extract(w.preflight_receipt_json,'$.effect_rule_key'),'') <> '')
-		FROM external_effect_claims c LEFT JOIN runs r ON r.tenant_id=c.tenant_id AND r.id=c.run_id
-		WHERE c.tenant_id=? AND c.person_id=? AND c.state <> 'observed' ORDER BY c.created_at,c.id`, tenantID, personID)
+// InspectExternalEffectConflicts classifies, read-only, the claims that
+// conflict with a target set as the running Run would meet them at its claim.
+func (s *Store) InspectExternalEffectConflicts(ctx context.Context, tenant, person, runID string, targets []string) (ExternalEffectConflicts, error) {
+	run, err := s.GetRun(ctx, tenant, runID)
+	if err != nil {
+		return ExternalEffectConflicts{}, err
+	}
+	if run == nil || person == "" || run.PersonID != person || run.Status != "running" {
+		return ExternalEffectConflicts{}, fmt.Errorf("external effect run is not active for this person")
+	}
+	return classifyExternalBlockers(ctx, s.db, s.instance, normalizeTenant(tenant), person, runID, targets)
+}
+
+// externalResourceBlockers is the parked-wait view. The flag reports that
+// nothing is left to wait for and a decision or an observation is needed, so
+// the parked Run cannot be promised an automatic continuation; while a claim
+// is still waited for, the Run stays parked, as the claim gate orders it.
+func externalResourceBlockers(ctx context.Context, db externalClaimQuerier, instance, tenantID, personID, waitingRun string, targets []string) ([]ExternalEffectClaim, bool, error) {
+	conflicts, err := classifyExternalBlockers(ctx, db, instance, tenantID, personID, waitingRun, targets)
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
-	var blockers []ExternalEffectClaim
-	needsObservation := false
+	return conflicts.All, conflicts.needsDecision(), nil
+}
+
+// ResourceWakeOnReleasePayloadKey marks a resource-observation correction
+// written by a daemon that wakes the blocked Run once its claims are
+// released. A correction without it was told to /resume and stays with the
+// person.
+const ResourceWakeOnReleasePayloadKey = "resource_wake_on_release"
+
+// ListWakeableBlockedResourceWaits returns Runs blocked on an unresolved
+// effect whose correction promised a wakeup and whose whole target set is now
+// free. Readiness is advisory: the continuation's next effect claims again.
+// The scan is bounded and newest first, so old waits that stay blocked cannot
+// hold back a recent release.
+func (s *Store) ListWakeableBlockedResourceWaits(ctx context.Context, limit int) ([]ExternalResourceWait, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("external resource store is unavailable")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT w.tenant_id,w.person_id,w.run_id,w.effect_id,w.targets_json,w.status
+		FROM external_resource_waits w JOIN runs r ON r.tenant_id=w.tenant_id AND r.id=w.run_id AND r.person_id=w.person_id
+		WHERE w.status IN ('pending','queued') AND r.status='blocked'
+		AND EXISTS (SELECT 1 FROM task_events e WHERE e.run_id=r.id AND e.type='run.finished'
+			AND json_extract(e.payload_json,'$.resource_observation_required')=1
+			AND json_extract(e.payload_json,'$.`+ResourceWakeOnReleasePayloadKey+`')=1)
+		AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.tenant_id=w.tenant_id AND child.resumes_run_id=w.run_id)
+		ORDER BY w.created_at DESC, w.run_id LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	var waits []ExternalResourceWait
 	for rows.Next() {
-		var claim ExternalEffectClaim
-		var status string
-		var watch bool
-		if err := rows.Scan(&claim.ID, &claim.TenantID, &claim.PersonID, &claim.RunID, &claim.EffectID, &claim.TargetKey, &claim.State, &claim.ObservationRef, &status, &watch); err != nil {
-			return nil, false, err
+		var wait ExternalResourceWait
+		var encoded string
+		if err := rows.Scan(&wait.TenantID, &wait.PersonID, &wait.RunID, &wait.EffectID, &encoded, &wait.Status); err != nil {
+			_ = rows.Close()
+			return nil, err
 		}
-		for _, target := range targets {
-			if externalTargetsConflict(target, claim.TargetKey) {
-				blockers = append(blockers, claim)
-				if !watch && (status != "running" || claim.RunID == waitingRun) {
-					needsObservation = true
-				}
-				break
-			}
+		if err := json.Unmarshal([]byte(encoded), &wait.TargetKeys); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		waits = append(waits, wait)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	var ready []ExternalResourceWait
+	for _, wait := range waits {
+		blockers, _, err := externalResourceBlockers(ctx, s.db, s.instance, wait.TenantID, wait.PersonID, wait.RunID, wait.TargetKeys)
+		if err != nil {
+			return nil, err
+		}
+		if len(blockers) == 0 {
+			ready = append(ready, wait)
 		}
 	}
-	return blockers, needsObservation, rows.Err()
+	return ready, nil
 }
 
 // Empty owner filters are reserved for the daemon sweep. User-facing callers
@@ -94,7 +146,9 @@ func (s *Store) listExternalResourceWaits(ctx context.Context, tenantID, personI
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	query := `SELECT w.tenant_id,w.person_id,w.run_id,w.effect_id,w.targets_json,w.status,w.created_at,r.status
+	query := `SELECT w.tenant_id,w.person_id,w.run_id,w.effect_id,w.targets_json,w.status,w.created_at,r.status,
+		EXISTS (SELECT 1 FROM task_events e WHERE e.run_id=r.id AND e.type='run.finished'
+			AND json_extract(e.payload_json,'$.` + ResourceWakeOnReleasePayloadKey + `')=1)
 		FROM external_resource_waits w JOIN runs r ON r.tenant_id=w.tenant_id AND r.id=w.run_id
 		WHERE (w.status IN ('pending','queued') AND (r.status='waiting_external' OR (r.status='blocked' AND EXISTS (SELECT 1 FROM task_events e WHERE e.run_id=r.id AND e.type='run.finished' AND json_extract(e.payload_json,'$.resource_observation_required')=1)))) AND r.person_id=w.person_id
 		AND NOT EXISTS (SELECT 1 FROM runs child WHERE child.tenant_id=w.tenant_id AND child.resumes_run_id=w.run_id)`
@@ -117,7 +171,7 @@ func (s *Store) listExternalResourceWaits(ctx context.Context, tenantID, personI
 		var wait ExternalResourceWaitProjection
 		var encoded string
 		var created int64
-		if err := rows.Scan(&wait.TenantID, &wait.PersonID, &wait.RunID, &wait.EffectID, &encoded, &wait.Status, &created, &wait.RunStatus); err != nil {
+		if err := rows.Scan(&wait.TenantID, &wait.PersonID, &wait.RunID, &wait.EffectID, &encoded, &wait.Status, &created, &wait.RunStatus, &wait.WakeOnRelease); err != nil {
 			_ = rows.Close()
 			return nil, err
 		}
@@ -137,7 +191,7 @@ func (s *Store) listExternalResourceWaits(ctx context.Context, tenantID, personI
 	}
 	for i := range waits {
 		wait := &waits[i]
-		wait.BlockingClaims, wait.NeedsObservation, err = externalResourceBlockers(ctx, s.db, wait.TenantID, wait.PersonID, wait.RunID, wait.TargetKeys)
+		wait.BlockingClaims, wait.NeedsObservation, err = externalResourceBlockers(ctx, s.db, s.instance, wait.TenantID, wait.PersonID, wait.RunID, wait.TargetKeys)
 		if err != nil {
 			return nil, err
 		}

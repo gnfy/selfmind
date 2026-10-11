@@ -1,12 +1,43 @@
 package eval
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"selfmind/internal/kernel/llm"
 )
+
+// Recorded turns and tool events are evidence that outlives the run. Every
+// preview, the input and output ones included, is masked, and masked before
+// it is cut, so a cut cannot leave the start of a credential that is no
+// longer recognizable as one.
+func TestRecorderMasksEveryPreviewBeforeCuttingIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.jsonl")
+	recorder, err := NewRecorder(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder.StartCase(&Case{ID: "redaction", Title: "redaction"}, "test", "test", t.TempDir())
+	const token = "ghp_R7k2Qx9LmN4pT8vW1yZ3aB6cD0eF5gH2jK7s"
+	recorder.StartTurn(0, "use API_TOKEN=r13input7d102e please", "cli")
+	recorder.ObserveStreamEvent(llm.StreamEvent{EventType: "tool.started", ToolName: "terminal", ToolArgs: strings.Repeat("a", 290) + " " + token})
+	recorder.ObserveStreamEvent(llm.StreamEvent{EventType: "tool.completed", ToolName: "terminal", ToolResult: strings.Repeat("r", 490) + " " + token})
+	recorder.ObserveStreamEvent(llm.StreamEvent{EventType: "tool.output", ToolName: "terminal", Content: strings.Repeat("o", 490) + " " + token})
+	recorder.FinishTurn(0, 200, strings.Repeat("f", 390)+" "+token+" and password=r13output7d102e", "", 1, 1, time.Now())
+	recorder.Close()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leaked := range []string{"R7k2Q", "r13input7d102e", "r13output7d102e"} {
+		if strings.Contains(string(data), leaked) {
+			t.Fatalf("the recording leaked %q: %s", leaked, data)
+		}
+	}
+}
 
 func TestRecorderCountsVisibleAssistantProgressBeforeTool(t *testing.T) {
 	recorder, err := NewRecorder(filepath.Join(t.TempDir(), "run.jsonl"), false)

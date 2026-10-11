@@ -24,7 +24,13 @@ expect:
     - "Execution diagnostics"
     - "Sandbox backend:"
     - "Workspace trust:"
+    - "Sandbox network:"
+    - "remote service or set network: true"
+    - "network:shared grant or approval"
     - "External effects unresolved:"
+    # Per credential profile: sandbox-runnable here, and which host paths a
+    # sandboxed run writes — paths only.
+    - "Credential profiles on this host"
     - "Credential values: hidden"
   must_not_contain:
     - "API_KEY"

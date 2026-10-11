@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"path/filepath"
 	"strings"
 )
 
@@ -19,6 +18,11 @@ type observationRule struct {
 	// expressible as a leading subcommand plus a list of forbidden substrings.
 	// It runs after reject and before prefix matching, and it must fail closed.
 	verify func(args []string) bool
+	// readsState reports whether this invocation can read anything beyond its
+	// own literal arguments, the environment, and the clock. Nil means it
+	// always can: a file, a repository, or a service is its purpose. Only an
+	// observation that reads state can be bound to an effect claim.
+	readsState func(args []string) bool
 }
 
 var observationRules = []observationRule{
@@ -47,47 +51,48 @@ var observationRules = []observationRule{
 	// `set` and `export` are deliberately NOT here although they carry no file
 	// access: with no operands both print the whole variable environment, which
 	// is exactly the emission this flag is meant to exclude.
-	{program: "cd", anyArgs: true, credentialSafe: true}, {program: "set", anyArgs: true},
-	{program: "export", anyArgs: true}, {program: "umask", anyArgs: true, credentialSafe: true},
-	{program: "true", anyArgs: true, credentialSafe: true}, {program: "false", anyArgs: true, credentialSafe: true},
-	{program: "test", anyArgs: true, credentialSafe: true}, {program: "[", anyArgs: true, credentialSafe: true},
-	{program: ":", anyArgs: true, credentialSafe: true},
-	{program: "which", anyArgs: true, credentialSafe: true},
-	{program: "unset", anyArgs: true, credentialSafe: true, verify: func(args []string) bool { _, ok := proxyUnsetNames(args); return ok }},
+	{program: "cd", anyArgs: true, credentialSafe: true, readsState: readsNoState}, {program: "set", anyArgs: true, readsState: readsNoState},
+	{program: "export", anyArgs: true, readsState: readsNoState}, {program: "umask", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "true", anyArgs: true, credentialSafe: true, readsState: readsNoState}, {program: "false", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "test", anyArgs: true, credentialSafe: true, readsState: testReadsFiles}, {program: "[", anyArgs: true, credentialSafe: true, readsState: bracketReadsFiles},
+	{program: ":", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "which", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "unset", anyArgs: true, credentialSafe: true, readsState: readsNoState, verify: func(args []string) bool { _, ok := proxyUnsetNames(args); return ok }},
 	// Ordinary read-only filters. They dominate the middle of a pipeline, and
 	// without them a single `| head` disqualified an otherwise provable command.
 	// Each one that CAN write names the flag that does so in reject.
 	{program: "tr", anyArgs: true}, {program: "cut", anyArgs: true},
-	{program: "nl", anyArgs: true}, {program: "seq", anyArgs: true, credentialSafe: true},
-	{program: "paste", anyArgs: true}, {program: "comm", anyArgs: true},
+	{program: "nl", anyArgs: true}, {program: "seq", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "paste", anyArgs: true, readsState: pasteReadsFile}, {program: "comm", anyArgs: true},
 	{program: "column", anyArgs: true}, {program: "diff", anyArgs: true},
 	{program: "od", anyArgs: true},
 	{program: "shasum", anyArgs: true}, {program: "sha256sum", anyArgs: true},
 	{program: "md5", anyArgs: true}, {program: "md5sum", anyArgs: true},
 	{program: "sort", anyArgs: true, reject: []string{"-o", "--output"}},
 	{program: "base64", anyArgs: true, reject: []string{"-o", "--output"}},
-	{program: "date", anyArgs: true, reject: []string{"-s", "--set"}},
+	{program: "date", anyArgs: true, reject: []string{"-s", "--set"}, readsState: readsNoState},
 	// `uniq`, `tee` and `xxd` are deliberately absent: uniq and xxd write to a
 	// second positional argument and tee writes to every one, and the rule shape
 	// here cannot express "no positional output". `xxd in out` and especially
 	// `xxd -r dump.hex out.bin` write an arbitrary file with no flag to reject,
 	// and this catalog also decides what a durable watcher may re-run unattended.
 	// `od` stays because every operand it takes is an input.
-	{program: "ls", anyArgs: true}, {program: "pwd", anyArgs: true},
-	{program: "printf", anyArgs: true, credentialSafe: true}, {program: "echo", anyArgs: true, credentialSafe: true}, {program: "sleep", anyArgs: true, credentialSafe: true},
+	{program: "ls", anyArgs: true}, {program: "pwd", anyArgs: true, readsState: readsNoState},
+	{program: "printf", anyArgs: true, credentialSafe: true, readsState: readsNoState}, {program: "echo", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "sleep", anyArgs: true, credentialSafe: true, readsState: readsNoState},
 	{program: "cat", anyArgs: true}, {program: "head", anyArgs: true},
 	{program: "tail", anyArgs: true}, {program: "wc", anyArgs: true},
 	{program: "stat", anyArgs: true}, {program: "file", anyArgs: true},
 	{program: "readlink", anyArgs: true}, {program: "realpath", anyArgs: true},
-	{program: "basename", anyArgs: true, credentialSafe: true}, {program: "dirname", anyArgs: true, credentialSafe: true},
+	{program: "basename", anyArgs: true, credentialSafe: true, readsState: readsNoState}, {program: "dirname", anyArgs: true, credentialSafe: true, readsState: readsNoState},
 	{program: "grep", anyArgs: true}, {program: "rg", anyArgs: true, reject: []string{"--pre", "--pre-glob"}},
-	{program: "jq", anyArgs: true, credentialSafe: true, reject: []string{"-i", "--in-place"}},
-	{program: "yq", anyArgs: true, reject: []string{"-i", "--inplace"}},
+	{program: "jq", anyArgs: true, credentialSafe: true, reject: []string{"-i", "--in-place"}, readsState: jqReadsFile},
+	{program: "yq", anyArgs: true, reject: []string{"-i", "--inplace"}, readsState: yqReadsFile},
 	{program: "git", prefixes: [][]string{{"status"}, {"diff"}, {"log"}, {"show"}, {"rev-parse"}, {"merge-base"}, {"ls-files"}, {"ls-tree"}, {"cat-file"}, {"describe"}, {"remote", "get-url"}, {"ls-remote"}}},
 	{program: "gcloud", external: true, credentialSafe: true, prefixes: [][]string{{"auth", "list"}, {"builds", "list"}, {"builds", "describe"}, {"builds", "triggers", "list"}, {"builds", "triggers", "describe"}, {"run", "services", "list"}, {"run", "services", "describe"}, {"container", "clusters", "list"}, {"container", "clusters", "describe"}, {"projects", "list"}, {"projects", "describe"}, {"projects", "get-iam-policy"}, {"config", "list"}, {"config", "get-value"}, {"artifacts", "repositories", "list"}, {"artifacts", "docker", "images", "list"}, {"artifacts", "docker", "tags", "list"}, {"artifacts", "docker", "versions", "list"}}},
 	{program: "aws", external: true, credentialSafe: true, prefixes: [][]string{{"sts", "get-caller-identity"}, {"codebuild", "batch-get-builds"}, {"codebuild", "batch-get-projects"}, {"codebuild", "list-builds"}, {"codebuild", "list-builds-for-project"}, {"codepipeline", "get-pipeline-execution"}, {"codepipeline", "list-pipeline-executions"}, {"iam", "get-role"}, {"iam", "get-role-policy"}, {"iam", "get-policy"}, {"iam", "get-policy-version"}, {"iam", "list-roles"}, {"iam", "list-policies"}, {"iam", "list-role-policies"}, {"iam", "list-attached-role-policies"}, {"iam", "simulate-principal-policy"}, {"kms", "describe-key"}, {"kms", "get-key-policy"}, {"kms", "list-keys"}, {"kms", "list-aliases"}, {"ssm", "describe-parameters"}, {"logs", "get-log-events"}}},
-	{program: "kubectl", external: true, credentialSafe: true, prefixes: [][]string{{"get"}, {"describe"}, {"diff"}, {"logs"}, {"version"}, {"cluster-info"}, {"auth", "can-i"}}, reject: []string{"secret", "secrets", "--raw"}},
-	{program: "helm", external: true, credentialSafe: true, prefixes: [][]string{{"list"}, {"status"}, {"history"}, {"show"}, {"search"}, {"template"}, {"lint"}, {"env"}, {"version"}}},
+	{program: "kubectl", external: true, credentialSafe: true, prefixes: [][]string{{"get"}, {"describe"}, {"diff"}, {"logs"}, {"version"}, {"cluster-info"}, {"auth", "can-i"}}, reject: []string{"secret", "secrets", "--raw"}, readsState: kubectlReadsState},
+	{program: "helm", external: true, credentialSafe: true, prefixes: [][]string{{"list"}, {"status"}, {"history"}, {"show"}, {"search"}, {"template"}, {"lint"}, {"env"}, {"version"}}, readsState: helmReadsState},
 	// `gh api` defaults to GET but can perform every method through the same
 	// subcommand, so the verb decides whether this is an observation. A
 	// substring reject list is not enough to decide that: it read `-X=DELETE`
@@ -95,7 +100,7 @@ var observationRules = []observationRule{
 	// function the class derivation uses. A request body still disqualifies the
 	// call outright, whatever its verb.
 	{program: "gh", external: true, credentialSafe: true, verify: ghObservationSafe, reject: []string{"--input", "--field", "-f ", "-f=", "--raw-field", "-f'"}, prefixes: [][]string{{"pr", "view"}, {"pr", "list"}, {"pr", "status"}, {"run", "view"}, {"run", "list"}, {"repo", "view"}, {"release", "view"}, {"release", "list"}, {"status"}, {"api"}}},
-	{program: "argocd", external: true, credentialSafe: true, prefixes: [][]string{{"app", "get"}, {"app", "list"}, {"app", "diff"}, {"app", "manifests"}, {"version"}, {"account", "get-user-info"}}},
+	{program: "argocd", external: true, credentialSafe: true, prefixes: [][]string{{"app", "get"}, {"app", "list"}, {"app", "diff"}, {"app", "manifests"}, {"version"}, {"account", "get-user-info"}}, readsState: argocdReadsState},
 }
 
 var observationRuleByProgram = func() map[string]observationRule {
@@ -126,13 +131,12 @@ func deterministicObservationExec(toolName string, args map[string]interface{}) 
 	}
 	credentialed, _ := args[credentialReadArgKey].(bool)
 	for _, fields := range commands {
-		// The catalog vouches for the tool a bare name resolves to, not for
-		// whatever file sits at a path: `./cat` or `bin/git` may be a workspace
-		// script that only borrows a catalogued basename.
-		if strings.Contains(fields[0], "/") {
-			return false
-		}
-		program := strings.ToLower(filepath.Base(fields[0]))
+		// The catalog vouches for the tool its exact name resolves to, not for
+		// whatever file sits at a path — `./cat` or `bin/git` may be a
+		// workspace script that only borrows a catalogued basename — nor for
+		// another spelling a case-sensitive filesystem may resolve elsewhere
+		// (`LS`). The deny side folds case; proof does not.
+		program := fields[0]
 		rule, ok := observationRuleByProgram[program]
 		// credentialSafe is per program; filterReadsOnlyStdin judges the
 		// invocation, releasing a filter that provably opened no file. It only
@@ -153,16 +157,18 @@ func deterministicObservationExec(toolName string, args map[string]interface{}) 
 
 // ghObservationSafe rejects a `gh api` call that is not provably a read. Every
 // other gh subcommand in the catalog names its own read-only operation, so only
-// `api` needs the check. An unresolvable verb is a mutation.
+// `api` needs the check. gh's own grammar decides (ghAPIRequest): an
+// unresolvable verb or option is a mutation, a request body disqualifies the
+// call whatever its verb, and another host may receive an enterprise token.
 func ghObservationSafe(args []string) bool {
 	if len(args) == 0 || strings.ToLower(strings.Trim(strings.TrimSpace(args[0]), `"'`)) != "api" {
 		return true
 	}
-	method, ok := apiMethodFromArgs(args)
-	if !ok {
+	call, ok := ghAPIRequest(args[1:])
+	if !ok || call.body || call.host {
 		return false
 	}
-	_, read := apiReadMethods[method]
+	_, read := apiReadMethods[call.method]
 	return read
 }
 
@@ -220,7 +226,7 @@ var observationGlobalValueFlags = map[string]map[string]struct{}{
 		"--kubeconfig": {}, "--namespace": {}, "--registry-config": {},
 		"--repository-cache": {}, "--repository-config": {}, "-n": {},
 	},
-	"gh":     {"--hostname": {}, "-R": {}, "--repo": {}},
+	"gh":     {"-R": {}, "--repo": {}},
 	"argocd": {"--config": {}, "--controller-name": {}, "--grpc-web-root-path": {}, "--server": {}},
 }
 

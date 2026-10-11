@@ -3,136 +3,66 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Both"
-    },
-    {
-      "reasoning_content": " prerequisites"
-    },
-    {
-      "reasoning_content": " satisfied"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " receipt"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " not"
-    },
-    {
-      "reasoning_content": " present"
-    },
-    {
-      "reasoning_content": " yet"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Write"
-    },
-    {
-      "reasoning_content": " it"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "content": "两个"
-    },
-    {
-      "content": "前置"
-    },
-    {
-      "content": "条件"
-    },
-    {
-      "content": "仍"
-    },
-    {
-      "content": "为"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "READ"
-    },
-    {
-      "content": "Y"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": " /"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "READ"
-    },
-    {
-      "content": "Y"
-    },
-    {
-      "content": "_B"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": "，"
-    },
-    {
-      "content": "现在"
-    },
-    {
-      "content": "写入"
-    },
-    {
-      "content": " `"
-    },
-    {
-      "content": "rece"
-    },
-    {
-      "content": "ipt"
-    },
-    {
-      "content": ".txt"
-    },
-    {
-      "content": "`"
-    },
-    {
-      "content": "。"
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I will check the"
     },
     {
       "usage": {
-        "input_tokens": 14059,
-        "output_tokens": 134,
-        "cache_read_input_tokens": 13824,
-        "cache_miss_input_tokens": 235,
+        "input_tokens": 17909,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 13,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " current todo list."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 240,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 14783,
+        "cache_miss_input_tokens": 3366,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_sifDiq6LdXb36AQzYchy4636",
-          "Function": "write_file",
-          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/receipt.txt\", \"content\": \"VERIFIED\\n\"}"
+          "ID": "call_2076765",
+          "Function": "todo",
+          "Args": "{}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EpwGCpkGAWkUfRO22CwgbFcBgcjWNj5Hq8pWl39gC9uMPcQ3MoLgJFkqZvQFLmHtyn4ztjFV3aIEqANsAbyho/6A8+YPctytDIGVutpl6EMeO582hdcmwzV1L1m0ui6pig/fcm4bqnmRu/1+zX9+QQp0alvY4PM4AtIpx12GFoJmyrb2BMwDTKzOKwBkKijd8fJpwNCfeu8rYvCMBOaJk6FjG5lf12GGZiZZJIt3+m9dm6sy8VlgrPCI2Z4X/4Fdk3AUO9VkYfIO48o3oWRbhuYnOuD4e8Bu1HwKt7mKUSwOXzh/clbyLMDa3GX6uzvZOV4eQfiIteF0Mbwxcns5ucSBqDeYBcHLM3svbrT73HnGJlqEiQ0RoDUbrg0Bh/oANKbk6xXNYqoYcF06WbIAWcIVNrI2MY7PBY4EGilro35seJs7L3j4zZuE8dipy6anl7hMjs/Cy+QxLbJxo7itwJTtHmM/NF9yc1UqC7Z3e6wRksbq/fqWqQse5ekfVkTz/CNTBjhiKiRI8mGz1nmXizDqF/3vrmYAf3y0g3Q8Bok3EBuT59tvonUac5F/lOKZpJERM0acDeXXlW4Fzl/OKxw5TrMhXz0KkGIN/6BoMXFU72/XrE2kSXEBcce7v2CaYDLkgnLwcxY+MQZF+qFOHNbEiBeOGT9KPBh83q+i+JWXqPD/CFdd1etJTlwFHKI6lrtZGZ89hW5KXBLaBZ4od8PSXjpyGYRj+2cfxIHR9aDH/aHKbDf4BLlrscm19fZi/vvCR+uNAw5vmH4FpFIE2MmF6QS7I7f4fZS2EfoCdxugJMsF+Z9Bt/qoBluUsvnX37AjI6k/OpQpLJrxcZAVx1mUNMP4YvZK8Xe5uefkLPzUh/oDa1eAORRxL6qkKEe6ARD+hj3OF15TKGHwhQDoTh3KOWrIY54hztet0lMJiSsE6S8/VNC+53HltNWyoa/GeBY2B9hvOJLQF/vstJ/ez004ccB79UKnJEZ8yyyR+TD329T4xdKbegggoZGtpG2JqdBdk5S1gVQMeTIuGT3WUcFn+15fwuY4afHes7e3Sg=="
+            }
+          }
         }
       ]
     }

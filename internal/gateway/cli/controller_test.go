@@ -1425,7 +1425,7 @@ func TestClientModeSteerForwardsToDaemon(t *testing.T) {
 	model.channel = "session-a"
 	model.steerCh = make(chan string, 1) // local channel must stay untouched
 	var got, gotRunID, gotChannel string
-	model.steerFn = func(runID, channel, text string) error {
+	model.steerFn = func(runID, channel, text, approvalMode string) error {
 		got = text
 		gotRunID, gotChannel = runID, channel
 		return nil
@@ -1459,7 +1459,7 @@ func TestClientModeSteerErrorShowsHonestNotice(t *testing.T) {
 	model.thinking = true
 	model.daemonRunID = "run-a"
 	model.channel = "session-a"
-	model.steerFn = func(runID, channel, text string) error {
+	model.steerFn = func(runID, channel, text, approvalMode string) error {
 		return errors.New("no active run to steer")
 	}
 	model.editor.SetValue("hurry up please")
@@ -1486,7 +1486,7 @@ func TestClientModeSteerWaitsForAnExactRunWithoutLosingInput(t *testing.T) {
 	model.localRequestActive = true
 	model.editor.SetValue("add the missing scenario")
 	called := false
-	model.steerFn = func(runID, channel, text string) error {
+	model.steerFn = func(runID, channel, text, approvalMode string) error {
 		called = true
 		return nil
 	}

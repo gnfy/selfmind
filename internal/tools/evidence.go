@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel"
 	"selfmind/internal/verification"
 )
@@ -91,6 +92,16 @@ func EvidenceMiddleware() ResultMiddleware {
 			}
 			result.Evidence = append(result.Evidence, evidence)
 			emitEvidence(args, evidence)
+			if toolName == "verify" && err == nil && result.Process != nil &&
+				executionenv.NetworkOfflineDespiteGrant(result.Process.NetworkDecision, result.Process.NetworkPermission) &&
+				CommandMayFetchDependencies(stringArg(args, "command")) {
+				// A pass is evidence of what the check exercised. This one ran
+				// without the network its workspace's grant permits, and its
+				// command can fetch dependencies, so say so where the model reads
+				// the result, before it relies on the pass. A check that cannot
+				// fetch anything (vet, lint, formatting) has no coverage to lose.
+				result.Output += "\nThis check ran without network although this workspace's network grant permits it. If its criterion depends on a remote service or on downloaded dependencies, re-run it with network: true."
+			}
 			if evidence.Command != nil && evidence.Command.Binding != nil {
 				result.Output += "\nVerification evidence: " + evidence.ToolCallID
 				if err != nil && strings.TrimSpace(binding.StepID) != "" {

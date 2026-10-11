@@ -76,6 +76,7 @@ func (d *Server) startExternalWatchWorker(ctx context.Context, interval time.Dur
 }
 
 func (d *Server) runExternalWatchPass(ctx context.Context) {
+	d.drainQueuedWhenReady(ctx)
 	defer func() {
 		// A crash or a failed write after the idempotent finalization enqueue
 		// can leave a terminal watch unmarked while its child Run succeeds.
@@ -327,6 +328,11 @@ func terminalWatchPhases(watch control.ExternalWatch, status string) (string, st
 // config without writing it). The scratch key is the watch id, so the state
 // overlay is materialized once and reused by every poll.
 func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.ExternalWatch) (tools.ExecutionResult, error) {
+	ctx = tools.WithExecutionRuntime(ctx, d.ExecutionRuntime)
+	ctx = tools.WithExecutionLaneRefresh(ctx, func(checkCtx context.Context) error {
+		_, err := d.refreshExecutionWaits(checkCtx, watch.TenantID, watch.PersonID)
+		return err
+	})
 	binding := watch.ExecutionBinding
 	capabilities := []string(nil)
 	networkShared := true // grandfathered rows predate explicit capability binding
@@ -342,6 +348,10 @@ func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.Exte
 				fmt.Errorf("external watch execution binding does not include network:shared")
 		}
 	}
+	// The binding carries what the poll may do: the registering Run's frozen
+	// sandbox policy, which a configuration change after registration may
+	// narrow but never widen, and the in-place credential writes the
+	// registration's approval covered.
 	durable := tools.DurableExecutionScope{
 		ScratchKey:   watch.ID,
 		TenantID:     watch.TenantID,
@@ -736,6 +746,15 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 			}
 		}
 	}
+	// A watcher the model bound to a claim of its own chain releases that
+	// claim once its success is durable; the resource wait pass then wakes
+	// the work that was waiting on it.
+	if status == control.ExternalWatchSucceeded && watch.PreflightReceipt.RecoveryClaimID != "" {
+		if _, _, err := d.Control.ReleaseExternalEffectForWatch(ctx, watch.TenantID, watch.ID); err != nil {
+			log.Warn("bound effect observation failed", "watch_id", watch.ID, "error", err)
+			return
+		}
+	}
 	if marked, err := d.Control.MarkExternalWatchFinalized(ctx, watch.TenantID, watch.ID); err != nil {
 		log.Warn("external watch finalized mark failed", "watch_id", watch.ID, "error", err)
 		return
@@ -846,7 +865,7 @@ func (d *Server) externalWatchOriginIdentity(ctx context.Context, watch control.
 // watcher, so the drained finalization becomes that Run's exact child.
 func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch control.ExternalWatch, origin *control.IdentityContext, summary string) error {
 	content := externalWatchFinalizationContent(watch, summary)
-	_, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
+	row := control.QueuedTask{
 		TenantID:       watch.TenantID,
 		PersonID:       watch.PersonID,
 		Channel:        watch.Channel,
@@ -859,7 +878,11 @@ func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch con
 		// Stable per-verdict key: a crash-recovery replay of the SAME verdict
 		// is one row; a revised verdict earns one fresh finalization run.
 		IdempotencyKey: externalWatchFinalizationKey(watch),
-	})
+	}
+	// The registering Run's authority plus this watch, never one derived
+	// from the finalization text (whose description may name a lookup).
+	row.Admission = d.enqueueContinuationAdmission(ctx, row)
+	_, err := d.Control.EnqueueQueued(ctx, row)
 	if err != nil {
 		return err
 	}

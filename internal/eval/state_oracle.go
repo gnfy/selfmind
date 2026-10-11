@@ -30,6 +30,9 @@ type WorldState struct {
 	WorkspaceRoot       string
 	subjectTaskID       string
 	subjectRunID        string
+	// runtime holds the multi-Run facts; the harness fills it only when a
+	// predicate reads them.
+	runtime *runtimeFacts
 }
 
 // CollectWorldState pulls the post-run state once so predicates evaluate
@@ -111,6 +114,13 @@ func evalPredicate(p StatePredicate, w WorldState) CheckResult {
 		name += ":" + p.Path
 	} else if p.Type != "" {
 		name += ":" + p.Type
+	} else if runtimePredicateTargets[strings.ToLower(strings.TrimSpace(p.On))] {
+		if p.Target != "" {
+			name += ":" + p.Target
+		}
+		if p.Status != "" {
+			name += ":" + p.Status
+		}
 	}
 	ok, msg := dispatchPredicate(p, w)
 	score := 0.0
@@ -121,6 +131,9 @@ func evalPredicate(p StatePredicate, w WorldState) CheckResult {
 }
 
 func dispatchPredicate(p StatePredicate, w WorldState) (bool, string) {
+	if handled, ok, message := evalRuntimePredicate(p, w.runtime); handled {
+		return ok, message
+	}
 	switch strings.ToLower(strings.TrimSpace(p.On)) {
 	case "task":
 		if w.Task == nil {

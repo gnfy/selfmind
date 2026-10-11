@@ -27,8 +27,10 @@ type ContextTool interface {
 }
 
 // ToolArgumentNormalizer is a compatibility boundary that translates a
-// previously published argument shape into the tool's current public schema.
-// It runs before coercion and validation; unknown fields still fail closed.
+// previously published argument shape into the tool's current public schema,
+// or drops a field only the runtime writes that a model may echo from a
+// result. It runs before coercion and validation; other unknown fields still
+// fail closed.
 type ToolArgumentNormalizer interface {
 	NormalizeArguments(map[string]interface{}) (map[string]interface{}, error)
 }
@@ -70,6 +72,11 @@ type ToolMetadata struct {
 	OperationClasses []OperationClass `json:"operation_classes,omitempty"`
 	TimeoutSeconds   int              `json:"timeout_seconds,omitempty"`
 	SearchText       string           `json:"search_text,omitempty"`
+	// BookkeepingOnly is a trusted built-in contract: the call may record
+	// runtime attribution but cannot execute the procedure, change its targets,
+	// grant authority, or create human/external waits. It grants no replay or
+	// parallel-execution permission and is never accepted from external tools.
+	BookkeepingOnly bool `json:"-"`
 }
 
 type MetadataProvider interface {
@@ -87,7 +94,11 @@ type toolExecutionPolicy struct {
 	Category         string
 	Risk             ToolRiskLevel
 	ReadOnly         bool
+	BookkeepingOnly  bool
 	OperationClasses []OperationClass
+	// ReadOnlyMarkedBy names the operator or person marking that made an
+	// external tool read-only for this call (see executionPolicyForCall).
+	ReadOnlyMarkedBy string
 }
 
 func executionPolicyForTool(t Tool) toolExecutionPolicy {
@@ -101,16 +112,19 @@ func executionPolicyForTool(t Tool) toolExecutionPolicy {
 	policy.Category = metadata.Category
 	policy.Risk = metadata.RiskLevel
 	policy.ReadOnly = metadata.ReadOnly
+	policy.BookkeepingOnly = policy.Origin == ToolSchemaOriginBuiltin && metadata.BookkeepingOnly
 	policy.OperationClasses = append([]OperationClass(nil), metadata.OperationClasses...)
 	return policy
 }
 
+// unclassifiedExternalToolCall reports an external tool that no operator or
+// person explicitly marked read-only. Its own metadata cannot classify it.
 func unclassifiedExternalToolCall(args map[string]interface{}) bool {
 	if args == nil {
 		return false
 	}
 	policy, ok := args[toolExecutionPolicyArg].(toolExecutionPolicy)
-	return ok && policy.Origin == ToolSchemaOriginExternal && !policy.ReadOnly
+	return ok && policy.Origin == ToolSchemaOriginExternal && policy.ReadOnlyMarkedBy == ""
 }
 
 // publicToolArgs returns the model-visible payload only. Top-level underscore
@@ -163,14 +177,19 @@ type BaseTool struct {
 func (b *BaseTool) Name() string        { return b.name }
 func (b *BaseTool) Description() string { return b.description }
 func (b *BaseTool) Schema() ToolSchema  { return b.schema }
+
+// Metadata returns the declared metadata with defaults filled into the copy.
+// It never writes: one tool instance can be registered in every agent
+// worker's dispatcher, and the workers read it concurrently.
 func (b *BaseTool) Metadata() ToolMetadata {
-	if b.metadata.Exposure == "" {
-		b.metadata.Exposure = ToolExposureDirect
+	metadata := b.metadata
+	if metadata.Exposure == "" {
+		metadata.Exposure = ToolExposureDirect
 	}
-	if b.metadata.RiskLevel == "" {
-		b.metadata.RiskLevel = ToolRiskMedium
+	if metadata.RiskLevel == "" {
+		metadata.RiskLevel = ToolRiskMedium
 	}
-	return b.metadata
+	return metadata
 }
 
 func (b *BaseTool) Execute(args map[string]interface{}) (string, error) {

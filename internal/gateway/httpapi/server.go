@@ -23,6 +23,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/kernel/task/cron"
 	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
@@ -33,6 +34,7 @@ type Server struct {
 	// BackgroundRunContext is an optional embedding-owned lifetime/telemetry root
 	// for detached work. It must be installed before serving and never come from
 	// a client request. Nil preserves the standalone daemon background lifetime.
+	ExecutionRuntime     *tools.ExecutionRuntime
 	BackgroundRunContext context.Context
 	Control              *control.Store
 	Gateway              *router.Gateway
@@ -76,16 +78,38 @@ type Server struct {
 	// transaction is committed. The helper, rather than the daemon itself,
 	// preserves launchd/systemd ownership and on-demand restart behavior.
 	ModelRestartFunc func(string) error
+	// RestartCapability is a secret only this daemon and the restart helper it
+	// starts know. It lets that helper, which is a descendant of the daemon and so
+	// never the verified local CLI, stop the daemon for the model change that
+	// started it, and for nothing else. Empty accepts no capability.
+	RestartCapability string
+	// ListenAddr is the TCP address the daemon accepts requests on. A loopback
+	// address makes every TCP request name a loopback Host, so a page that
+	// rebinds its own name to 127.0.0.1 reaches nothing. Empty, or an address
+	// beyond loopback, leaves the Host unchecked: the names a remote client
+	// reaches the daemon by are not known.
+	ListenAddr string
+	// refusals limits the warnings written for refused peers, so a process that
+	// keeps asking cannot fill the daemon's log.
+	refusals refusalLog
 	// MCPHealthFunc exposes connection/catalog failures without credentials or
 	// raw schemas so status and doctor do not depend on daemon log inspection.
 	MCPHealthFunc func() tools.MCPHealthSnapshot
+	// MCPServersFunc lists the configured MCP servers, with the identity a
+	// person's read-only marking is bound to, for /tools readonly. Nil means
+	// no server is configured.
+	MCPServersFunc func() []tools.MCPServerStatus
 	// SkillStorage is the daemon-resolved immutable asset base. Direct selector
 	// and management paths use the same root as dispatcher middleware instead
 	// of consulting the daemon process HOME independently.
 	SkillStorage *tools.SkillStorage
-	// LocalControlToken authenticates privileged loopback-only operations such
-	// as granting workspace trust. It is not the public gateway bearer token.
-	LocalControlToken string
+	// Schedules is the cron store, read when the local command line adopts a
+	// schedule no one can be shown to own. Nil without a scheduler.
+	Schedules *cron.Scheduler
+	// CronJobs answers whether the schedule a queued scheduled fire came from
+	// still exists and is enabled. Nil reads Schedules; with neither the check
+	// is skipped, as without a scheduler there is nothing to ask.
+	CronJobs CronJobLookup
 	// PendingNotifyAfter is the escrow threshold (Fix 2): an unanswered
 	// approval/clarify older than this, whose person has detached from the CLI and
 	// which was never notified, is re-pushed to the preferred IM by the periodic
@@ -100,6 +124,10 @@ type Server struct {
 	// unanswered approval parks the work, it is never a rejection.
 	ApprovalWait           time.Duration
 	ApprovalWaitUnattended time.Duration
+	// HumanWaitGrace is a short in-place grace before a checkpointed human wait
+	// releases its worker. Zero uses the default; injected by focused tests.
+	HumanWaitGrace     time.Duration
+	ExecutionWaitGrace time.Duration
 	// ApprovalJudge is the optional cheap-model judge for smart-mode LLM approval
 	// triage (H2). Installed on every execution scope so a dangerous
 	// (non-hardline) op in smart mode is triaged before the human ask. Nil (e.g.
@@ -188,6 +216,10 @@ type Server struct {
 	// events still live in control.db; assistant deltas remain ephemeral.
 	eventBroker     *runEventBroker
 	eventBrokerOnce sync.Once
+
+	// inboundSettleTimeout bounds each durable inbound receipt transition;
+	// zero uses the default.
+	inboundSettleTimeout time.Duration
 }
 
 type activeRun struct {
@@ -242,6 +274,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/tasks/current", d.handleCurrentTask)
 	mux.HandleFunc("/v1/workspaces/register", d.handleWorkspaceRegister)
 	mux.HandleFunc("/v1/workspaces/trust", d.handleWorkspaceTrust)
+	mux.HandleFunc("/v1/schedules/adopt", d.handleScheduleAdopt)
 	mux.HandleFunc("/v1/workspaces/capabilities", d.handleWorkspaceCapabilities)
 	mux.HandleFunc("/v1/workspaces/observation-profiles", d.handleWorkspaceObservationProfiles)
 	mux.HandleFunc("/v1/workspaces/effect-profiles", d.handleWorkspaceEffectProfiles)
@@ -253,7 +286,8 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/gateway/shutdown", d.handleGatewayShutdown)
 	mux.HandleFunc("/v1/presence/ping", d.handlePresencePing)
 	mux.HandleFunc("/v1/digest", d.handleDigest)
-	return mux
+	mux.HandleFunc("/v1/runs/view", d.handleRunView)
+	return d.requireLoopbackHost(rejectBrowserRequests(mux))
 }
 
 // presenceTracker lazily builds the per-Server presence registry.
@@ -299,7 +333,7 @@ func (d *Server) handlePresencePing(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	if presenceClaimed(r) {
@@ -332,7 +366,11 @@ func (d *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if d.localCLIRequest(r, req.Platform) {
+	if cliClaim(req.Platform) {
+		if !requestLocalPeer(r).Verified {
+			writeError(w, http.StatusForbidden, d.newLocalControlRefusal(r, "CLI identity"))
+			return
+		}
 		ctx = withLocalFilesystemAuthority(ctx)
 	}
 	resp, status := d.ProcessMessage(ctx, req)
@@ -340,6 +378,85 @@ func (d *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
+	resp, status, _ := d.processMessage(ctx, req)
+	return resp, status
+}
+
+// notDispatched explains a refusal that happened before anything acted on the
+// input: no command ran, and no choice, steer, queue row, or Run exists for
+// it. Only such a refusal lets a durable inbound receipt return to pending; any
+// later failure, including a 5xx, may follow a real effect. The reason is a
+// short class a chat may show; the cause stays in logs.
+type notDispatched struct {
+	reason string
+	cause  error
+	// consumedChoice marks a refusal that came after the input claimed a
+	// continuity choice. The claim cleared the choice's saved request, so a
+	// redelivered answer could not replay it and the receipt is held instead.
+	consumedChoice bool
+}
+
+// afterChoiceClaim marks a refusal of input that already claimed a continuity
+// choice; see notDispatched.consumedChoice.
+func afterChoiceClaim(req api.MessageRequest, refusal *notDispatched) *notDispatched {
+	if refusal == nil || strings.TrimSpace(req.ContinuityAction) == "" {
+		return refusal
+	}
+	held := *refusal
+	held.consumedChoice = true
+	return &held
+}
+
+// exactWrite is the context for a store write whose error must mean nothing
+// was written, such as one a refusal reports as failed. The SQLite driver
+// reports an ended context even after its statement committed, so such a
+// write sees neither the caller's cancellation nor a deadline; the store's
+// busy timeout still bounds lock waits.
+func exactWrite(ctx context.Context) context.Context {
+	return context.WithoutCancel(ctx)
+}
+
+// Refusal reasons shown to senders. Internal errors never reach a chat.
+const (
+	refusalShutdown = "SelfMind is shutting down"
+	refusalIdentity = "SelfMind could not identify the sender"
+	refusalRecords  = "SelfMind could not read its records"
+	refusalSave     = "SelfMind could not save the message"
+)
+
+// shuttingDown reports a process drain that refuses new input. A model-change
+// drain is different: it still queues input for the restarted daemon.
+func (d *Server) shuttingDown() bool {
+	return d.IsDraining() && !d.isModelChangeDrain()
+}
+
+func shutdownRefusal(identity *control.IdentityContext) (api.MessageResponse, int, *notDispatched) {
+	return api.MessageResponse{
+		Identity: identity,
+		Error:    "gateway is shutting down; try again after restart",
+		Accepted: false,
+		Turn:     messageTurn("failed", "", "draining", "", "", "gateway is shutting down"),
+	}, http.StatusServiceUnavailable, &notDispatched{reason: refusalShutdown}
+}
+
+// readRefusal reports a store read that failed before anything was claimed.
+func readRefusal(identity *control.IdentityContext, err error) (api.MessageResponse, *notDispatched) {
+	return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error())},
+		&notDispatched{reason: refusalRecords, cause: err}
+}
+
+// processMessage is ProcessMessage plus the typed refusal a durable inbound
+// boundary needs to tell "nothing ran" from an uncertain failure.
+func (d *Server) processMessage(ctx context.Context, req api.MessageRequest) (resp api.MessageResponse, status int, refusal *notDispatched) {
+	defer func() {
+		if err := d.enqueueTurnChoiceNotice(ctx, req, &resp); err != nil {
+			// The choice already holds the input. Never call this not-dispatched
+			// or accept an inbound receipt without its actionable notification.
+			resp.Error = fmt.Sprintf("Your request is saved as choice %s, but its notice could not be saved.\n%s", resp.Choice.ID, resp.Content)
+			log.Warn("choice notice could not be saved; inbound held", "choice", resp.Choice.ID, "error", err)
+			status = http.StatusServiceUnavailable
+		}
+	}()
 	req.TenantID = d.tenantID(req.TenantID)
 	req.Platform = fallback(req.Platform, "cli")
 	req.PlatformUserID = fallback(req.PlatformUserID, "local")
@@ -347,19 +464,27 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	req.Content = strings.TrimSpace(req.Content)
 	if len(req.ClientAdditionalRoots) > 0 && !hasLocalFilesystemAuthority(ctx) {
 		msg := "--add-dir is available only to an authenticated local CLI connected to a loopback gateway"
-		return api.MessageResponse{Error: msg, Turn: messageTurn("failed", "", "", "", "", msg)}, http.StatusForbidden
+		return api.MessageResponse{Error: msg, Turn: messageTurn("failed", "", "", "", "", msg)}, http.StatusForbidden, nil
 	}
 	if req.Content == "" {
-		return api.MessageResponse{Error: "content is required", Turn: messageTurn("failed", "", "", "", "", "content is required")}, http.StatusBadRequest
+		return api.MessageResponse{Error: "content is required", Turn: messageTurn("failed", "", "", "", "", "content is required")}, http.StatusBadRequest, nil
 	}
 	if containsUnresolvedPasteToken(req.Content) {
 		msg := "The pasted content was not expanded by the client. Paste it again and retry."
-		return api.MessageResponse{Error: msg, Turn: messageTurn("failed", "", "", "", "", msg)}, http.StatusBadRequest
+		return api.MessageResponse{Error: msg, Turn: messageTurn("failed", "", "", "", "", msg)}, http.StatusBadRequest, nil
+	}
+	// Only the person's own input is authority. Everything below up to
+	// admission — first contact, presence, IM catch-up, continuity controls,
+	// choice and question answers, commands — belongs to a person at an
+	// endpoint; a turn the daemon started takes none of it.
+	if !isUserOriginTurn(ctx, req) {
+		return d.processDaemonTurn(ctx, req)
 	}
 
 	identity, err := d.Control.ResolveOrCreateAccount(ctx, req.TenantID, req.Platform, req.PlatformUserID, req.DisplayName)
 	if err != nil {
-		return api.MessageResponse{Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
+		return api.MessageResponse{Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError,
+			&notDispatched{reason: refusalIdentity, cause: err}
 	}
 	if req.NativeReplyMessageID != "" && !command.LooksLikeCommand(req.Content) {
 		edge, lookupErr := d.Control.NativeIMReplyTarget(ctx, identity.TenantID, identity.PersonID,
@@ -367,9 +492,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		if lookupErr != nil || edge == nil || (edge.RunID == "" && edge.ApprovalID == "" && edge.ClarifyID == "") {
 			content := "That replied-to message is not linked to your work here. Use /status and an exact run or request ID."
 			if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
-				return api.MessageResponse{Identity: identity, Error: lookupErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", lookupErr.Error())}, http.StatusInternalServerError
+				resp, refusal := readRefusal(identity, lookupErr)
+				return resp, http.StatusInternalServerError, refusal
 			}
-			return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, http.StatusOK
+			return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("waiting_user", "", "idle", "", "", content)}, http.StatusOK, nil
 		}
 		req.ReplyToRunID, req.ApprovalID, req.ClarifyID = edge.RunID, edge.ApprovalID, edge.ClarifyID
 	}
@@ -393,31 +519,46 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// /new <request> becomes a forced root turn, while /choose (or platform
 	// choice metadata) restores the original pre-run request and exact target.
 	// Identity is resolved again on this endpoint; stored prose is never parsed.
-	if rewritten, handled, response := d.rewriteExplicitContinuityControl(ctx, identity, req); handled {
-		return *response, statusForMessageResponse(*response)
+	if rewritten, handled, response, refusal := d.rewriteExplicitContinuityControl(ctx, identity, req); refusal != nil {
+		return *response, http.StatusServiceUnavailable, refusal
+	} else if handled {
+		return *response, statusForMessageResponse(*response), nil
 	} else {
 		req = rewritten
 	}
-	if response := d.claimedTurnChoiceResponse(ctx, identity, req); response != nil {
-		return *response, statusForMessageResponse(*response)
+	if response, refusal := d.claimedTurnChoiceResponse(ctx, identity, req); refusal != nil {
+		return *response, http.StatusServiceUnavailable, afterChoiceClaim(req, refusal)
+	} else if response != nil {
+		return *response, statusForMessageResponse(*response), nil
 	}
 
-	if handled, content, workspace, err := d.tryHandleControlCommand(ctx, identity, req); handled {
-		if err != nil {
-			return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
+	// A request restored from a claimed choice already carries the target the
+	// person chose. Its saved text is not read again as a command, an answer,
+	// or another choice: an approval or question that arrived after it was
+	// written is not what it answers.
+	if strings.TrimSpace(req.ContinuityAction) == "" {
+		if handled, content, workspace, err := d.tryHandleControlCommand(ctx, identity, req); handled {
+			if err != nil {
+				return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError, nil
+			}
+			return api.MessageResponse{Identity: identity, Content: content, Workspace: workspace, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK, nil
 		}
-		return api.MessageResponse{Identity: identity, Content: content, Workspace: workspace, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
-	}
-	// A bare number is a continuity answer only when exactly one recent
-	// person-wide choice is pending. Approval and run-clarification answers ran
-	// first above and retain their existing priority.
-	if rewritten, handled, response := d.rewriteBareTurnChoice(ctx, identity, req); handled {
-		return *response, statusForMessageResponse(*response)
-	} else {
-		req = rewritten
-	}
-	if response := d.claimedTurnChoiceResponse(ctx, identity, req); response != nil {
-		return *response, statusForMessageResponse(*response)
+		// A bare number is a continuity answer only to the one recent choice
+		// shown on this account and channel, and never when a reply, approval,
+		// or clarification edge already names the target. Approval and
+		// run-clarification answers ran first above and retain their priority.
+		if rewritten, handled, response, refusal := d.rewriteBareTurnChoice(ctx, identity, req); refusal != nil {
+			return *response, http.StatusServiceUnavailable, refusal
+		} else if handled {
+			return *response, statusForMessageResponse(*response), nil
+		} else {
+			req = rewritten
+		}
+		if response, refusal := d.claimedTurnChoiceResponse(ctx, identity, req); refusal != nil {
+			return *response, http.StatusServiceUnavailable, afterChoiceClaim(req, refusal)
+		} else if response != nil {
+			return *response, statusForMessageResponse(*response), nil
+		}
 	}
 	// A command-SHAPED message that no control command claimed is a mistyped
 	// COMMAND, not conversation or new work. Reject it here so it can never be
@@ -432,10 +573,42 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		if suggestion := suggestControlCommand(strings.ToLower(strings.TrimSpace(req.Content))); suggestion != "" {
 			msg = "Unknown command " + strings.Fields(strings.TrimSpace(req.Content))[0] + " — did you mean " + suggestion + "? Send /help for the full list."
 		}
-		return api.MessageResponse{Identity: identity, Content: msg, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Content: msg, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK, nil
 	}
-	if response, handled := d.ambiguousActiveInput(ctx, identity, req); handled {
-		return response, statusForMessageResponse(response)
+	// Freeze an explicit selection into this input before admission/queueing.
+	// An older queued request and another endpoint must never consume it later.
+	if isUserOriginTurn(ctx, req) {
+		selection, err := d.Control.TakeSessionResumeSelection(ctx, identity.TenantID, identity.PersonID, resumeSelectionEndpoint(identity, req.Channel))
+		if err != nil {
+			response, refusal := readRefusal(identity, err)
+			return response, http.StatusServiceUnavailable, refusal
+		}
+		if selection != nil && !req.ForceNew && req.TaskID == "" && req.ReplyToRunID == "" && req.ApprovalID == "" && req.ClarifyID == "" && req.ContinuityAction == "" {
+			req.ReplyToRunID = selection.RunID
+		}
+	}
+	if response, handled, refusal := d.ambiguousActiveInput(ctx, identity, req); refusal != nil {
+		return response, http.StatusServiceUnavailable, refusal
+	} else if handled {
+		return response, statusForMessageResponse(response), nil
+	}
+	return d.admitTurn(ctx, identity, req)
+}
+
+// admitTurn is where every source's turn meets the drain and admission: a
+// model-change drain still queues work for the restarted daemon, a shutdown
+// refuses it, and otherwise the turn is admitted.
+func (d *Server) admitTurn(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, int, *notDispatched) {
+	// The mode a new admission freezes is read before anything is accepted: a
+	// preference that cannot be read refuses the turn here, retryably, instead
+	// of after it was told it was accepted or under a guessed mode.
+	if !d.IsDraining() || d.isModelChangeDrain() {
+		frozen, err := d.freezeAdmissionMode(ctx, identity, req)
+		if err != nil {
+			resp, status, refusal := modeRefusal(identity, err)
+			return resp, status, afterChoiceClaim(req, refusal)
+		}
+		req = frozen
 	}
 	if d.IsDraining() {
 		if d.isModelChangeDrain() {
@@ -446,26 +619,32 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			coord := d.coordinator()
 			workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
 			if workspaceErr != nil {
-				return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", workspaceErr.Error())}, http.StatusBadRequest
+				return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", workspaceErr.Error())}, http.StatusBadRequest, afterChoiceClaim(req, &notDispatched{reason: refusalRecords, cause: workspaceErr})
 			}
 			if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
-				return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", rootsErr.Error())}, http.StatusBadRequest
+				return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", rootsErr.Error())}, http.StatusBadRequest, afterChoiceClaim(req, &notDispatched{reason: refusalRecords, cause: rootsErr})
 			}
 			if running := coord.activeForIncoming(identity.PersonID, req); running != nil && (d.shouldSteerActiveNaturalInput(ctx, identity, req, running) || requestTargetsActiveRun(req, intent, running)) {
 				if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
-					return resp, http.StatusOK
+					return resp, http.StatusOK, nil
 				}
 			}
-			return d.enqueueDuringModelChange(ctx, identity, req), http.StatusOK
+			resp, refusal := d.enqueueDuringModelChange(ctx, identity, req)
+			return resp, http.StatusOK, afterChoiceClaim(req, refusal)
 		}
-		return api.MessageResponse{
-			Identity: identity,
-			Error:    "gateway is shutting down; try again after restart",
-			Accepted: false,
-			Turn:     messageTurn("failed", "", "draining", "", "", "gateway is shutting down"),
-		}, http.StatusServiceUnavailable
+		// Choice answers are refused before their claim while shutting down;
+		// only a claim that raced the start of the drain reaches here claimed.
+		resp, status, refusal := shutdownRefusal(identity)
+		return resp, status, afterChoiceClaim(req, refusal)
 	}
+	resp, status, refusal := d.dispatchAdmitted(ctx, identity, req)
+	return resp, status, afterChoiceClaim(req, refusal)
+}
 
+// dispatchAdmitted handles input that passed every refusal that precedes
+// admission. From here on a failure may follow a real effect; the one refusal
+// left is a failed queue write, which leaves nothing behind for the input.
+func (d *Server) dispatchAdmitted(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, int, *notDispatched) {
 	// Control commands above remain reachable so /model can repair the sole
 	// route authority. A continuation must still steer the already-frozen
 	// active run so that a safe model restart can reach its boundary; genuinely
@@ -480,14 +659,14 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		// and the model-change drain path beside this one already resolves first.
 		workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
 		if workspaceErr != nil {
-			return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", workspaceErr.Error())}, http.StatusBadRequest
+			return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", workspaceErr.Error())}, http.StatusBadRequest, &notDispatched{reason: refusalRecords, cause: workspaceErr}
 		}
 		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
-			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
+			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest, &notDispatched{reason: refusalRecords, cause: rootsErr}
 		}
 		running := coord.activeForIncoming(identity.PersonID, req)
 		if running == nil {
-			return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
+			return admitted(d.enqueueUntilModelReady(ctx, identity, req))
 		}
 		intent := d.classifyIntent(ctx, req.Content, req.Channel)
 		if req.ForceNew {
@@ -495,14 +674,14 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}
 		if (d.shouldSteerActiveNaturalInput(ctx, identity, req, running) || requestTargetsActiveRun(req, intent, running)) && isUserOriginTurn(ctx, req) {
 			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
-				return resp, http.StatusOK
+				return resp, http.StatusOK, nil
 			}
 			return api.MessageResponse{
 				Identity: identity, Content: formatBusyRun(running), Accepted: false,
 				Turn: messageTurn("busy", "running", "running", running.TaskID, running.RunID, running.Summary),
-			}, http.StatusOK
+			}, http.StatusOK, nil
 		}
-		return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
+		return admitted(d.enqueueUntilModelReady(ctx, identity, req))
 	}
 
 	// Active user work is Main-owned. Persist ordinary natural-language input
@@ -516,10 +695,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		coord := d.coordinator()
 		workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
 		if workspaceErr != nil {
-			return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "running", running.TaskID, running.RunID, workspaceErr.Error())}, http.StatusBadRequest
+			return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "running", running.TaskID, running.RunID, workspaceErr.Error())}, http.StatusBadRequest, &notDispatched{reason: refusalRecords, cause: workspaceErr}
 		}
 		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
-			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "running", running.TaskID, running.RunID, rootsErr.Error())}, http.StatusBadRequest
+			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "running", running.TaskID, running.RunID, rootsErr.Error())}, http.StatusBadRequest, &notDispatched{reason: refusalRecords, cause: rootsErr}
 		}
 		if req.AdditionalRootsRequested && !sameCLIAdditionalRoots(req.ExecutionRoots, running.ExecutionRoots) {
 			message := "Cannot change --add-dir roots while a run is active. Start a new run after the current run finishes."
@@ -528,15 +707,15 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 				Content:  message,
 				Accepted: false,
 				Turn:     messageTurn("failed", "running", "running", running.TaskID, running.RunID, message),
-			}, http.StatusConflict
+			}, http.StatusConflict, nil
 		}
 		if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
-			return resp, http.StatusOK
+			return resp, http.StatusOK, nil
 		}
 		// Persistence or live-channel back-pressure prevented immediate delivery.
 		// The durable foreground queue is the lossless fallback; never acknowledge
 		// input that exists only in memory.
-		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
+		return admitted(d.enqueueBehindActive(ctx, identity, req))
 	}
 
 	intent := d.classifyIntent(ctx, req.Content, req.Channel)
@@ -544,21 +723,24 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		intent = forcedNewIntent()
 	}
 	if handled, resp := d.tryHandleIntentClarification(identity, intent); handled {
-		return resp, http.StatusOK
+		return resp, http.StatusOK, nil
 	}
 	if handled, resp := d.tryHandleDirectIntent(ctx, identity, req, intent); handled {
-		return resp, http.StatusOK
+		return resp, http.StatusOK, nil
 	}
 
 	coord := d.coordinator()
 	workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
 	if workspaceErr != nil {
-		return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", workspaceErr.Error())}, http.StatusBadRequest
+		return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", workspaceErr.Error())}, http.StatusBadRequest, &notDispatched{reason: refusalRecords, cause: workspaceErr}
 	}
 	if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
-		return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
+		return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest, &notDispatched{reason: refusalRecords, cause: rootsErr}
 	}
-	if running := coord.activeForIncoming(identity.PersonID, req); running != nil {
+	// Declared new work and daemon-originated work can use an independent
+	// slot. A CLI foreground lane still serializes its own new turns.
+	if running := coord.activeForIncoming(identity.PersonID, req); running != nil &&
+		(req.Platform == "cli" || (!req.ForceNew && req.ContinuityAction != "new" && isUserOriginTurn(ctx, req))) {
 		// A continuation targets the ACTIVE task, so it is not new work and must
 		// never be queued. Historically this returned a bare "busy" reply, which
 		// left the cross-endpoint takeover story broken: a continuation arriving
@@ -577,10 +759,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 					Content:  message,
 					Accepted: false,
 					Turn:     messageTurn("failed", "running", "running", running.TaskID, running.RunID, message),
-				}, http.StatusConflict
+				}, http.StatusConflict, nil
 			}
 			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
-				return resp, http.StatusOK
+				return resp, http.StatusOK, nil
 			}
 			// Steering unavailable (no live channel) or the buffer is full
 			// (guidance arriving faster than the loop drains): report back-
@@ -590,12 +772,12 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 				Content:  formatBusyRun(running),
 				Accepted: false,
 				Turn:     messageTurn("busy", "running", "running", running.TaskID, running.RunID, running.Summary),
-			}, http.StatusOK
+			}, http.StatusOK, nil
 		}
-		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
+		return admitted(d.enqueueBehindActive(ctx, identity, req))
 	}
 	if !coord.hasCapacity(identity.PersonID) {
-		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
+		return admitted(d.enqueueBehindActive(ctx, identity, req))
 	}
 
 	if req.Async {
@@ -603,7 +785,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		// authenticated local authority is still available; the worker only
 		// receives managed references and must not inherit filesystem authority.
 		req.Attachments = coord.importAttachments(ctx, identity, nil, req.Attachments)
-		return coord.startAsyncRun(identity, req, intent), http.StatusOK
+		return admitted(coord.startAsyncRun(identity, req, intent))
 	}
 	// Run lifetime is daemon-owned; endpoints detach, never cancel
 	// (docs/identity-continuity.md "Runtime attachment model"). The run ctx is
@@ -647,8 +829,8 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		Interrupt:      cancelCause,
 		Steer:          steerCh,
 	}
-	if ok := coord.beginActive(identity.PersonID, active); !ok {
-		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
+	if ok, response, refusal := coord.admitActive(ctx, identity, req, active); !ok {
+		return admitted(response, refusal)
 	}
 	// Durably transfer guidance that lost the final-model-call race while the
 	// per-person slot is still held, then free the slot and drain. This ordering
@@ -672,7 +854,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	if ctx.Err() != nil && context.Cause(ctx) == context.Canceled && !turnCancelled(resp) {
 		coord.deliverAsyncResult(context.Background(), identity, req, resp)
 	}
-	return resp, status
+	return resp, status, nil
 }
 
 // shouldSteerActiveNaturalInput separates deterministic ownership from
@@ -698,11 +880,6 @@ func (d *Server) shouldSteerActiveNaturalInput(ctx context.Context, identity *co
 	}
 	switch strings.TrimSpace(req.ContinuityAction) {
 	case string(ContinuityResume), "new":
-		return false
-	}
-	// /resume pins the next agent-bound message. Do not let the generic active
-	// path steal that deterministic instruction; resolve/queue it exactly.
-	if pin, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey); err != nil || strings.TrimSpace(pin) != "" {
 		return false
 	}
 	return true
@@ -947,6 +1124,11 @@ func (a taskAttach) selectsPriorRun() bool {
 }
 
 func (a taskAttach) allowsTaskSkillBinding() bool {
+	// Exact runtime-owned continuations preserve the already accepted binding.
+	// A new interaction or a history reference alone cannot activate it.
+	if a.resumesRunID != "" && a.claimsPriorRuns() {
+		return true
+	}
 	switch a.reason {
 	case taskAttachExplicitTaskID, taskAttachContinuation, taskAttachResumePin, taskAttachReferenceContinue:
 		return true
@@ -1121,8 +1303,7 @@ func clarifySummaryLine(clarify control.ClarifyRequest) string {
 
 func (d *Server) identityFromQuery(r *http.Request) (*control.IdentityContext, error) {
 	q := r.URL.Query()
-	return d.Control.ResolveOrCreateAccount(
-		r.Context(),
+	return d.resolveRequestIdentity(r,
 		d.tenantID(q.Get("tenant_id")),
 		fallback(q.Get("platform"), "cli"),
 		fallback(q.Get("platform_user_id"), "local"),

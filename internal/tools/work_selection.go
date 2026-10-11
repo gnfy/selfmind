@@ -222,6 +222,9 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 	// transaction. Render and return its current-Run identities, not a parent
 	// display snapshot whose ids cannot be used by update_plan.
 	var plan []planStepView
+	var currentPlan []planStepView
+	var planVersion int
+	var shown interface{}
 	if current, err := t.store.LatestRunPlan(ctx, tenantID, claimed.ID); err != nil {
 		return "", err
 	} else if current != nil {
@@ -230,18 +233,23 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 			plan = append(plan, planStepView{StepID: step.StepID, Step: step.Step, Status: step.Status,
 				SuccessCriteria: step.SuccessCriteria, VerificationRequired: step.VerificationRequired})
 		}
+		currentPlan, planVersion = plan, current.Version
+		// The client shows what an explicit resume shows: each cancellation's
+		// disposition, reason, and the input that authorized it.
+		shown = DisplayedPlanSteps(ctx, t.store, tenantID, claimed.ID, current.Steps)
 	} else {
 		// Historical Runs may have only a display event and no durable Plan.
 		plan, err = t.inheritedPlanSteps(ctx, tenantID, personID, claimed.TaskID, targetRunID)
 		if err != nil {
 			return "", err
 		}
+		shown = plan
 	}
 	if len(plan) > 0 {
 		if _, err := t.store.AppendEvent(ctx, control.Event{
 			TaskID: claimed.TaskID, RunID: claimed.ID, Type: "plan.updated", Visibility: "task",
 			Channel: claimed.Channel, Payload: mustToolJSON(map[string]interface{}{
-				"plan": plan, "explanation": "Plan inherited from the continued run",
+				"plan": shown, "explanation": "Plan inherited from the continued run",
 				"source": "resumed_run", "resumes_run_id": targetRunID,
 			}),
 			IdempotencyKey: "plan.inherited:" + claimed.ID + ":" + targetRunID,
@@ -253,11 +261,28 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 	if err != nil {
 		return "", err
 	}
+	// Plan import can replace the interaction's transient Work Unit. Retain
+	// instructions only when its activation still belongs to the current unit;
+	// historical affinity never silently activates a different package here.
+	retainedSkill := false
+	unit, err := t.store.CurrentRunWorkUnit(ctx, tenantID, claimed.ID)
+	if err != nil {
+		return "", err
+	}
+	if unit != nil {
+		active, err := t.store.ActiveSkillActivation(ctx, tenantID, claimed.ID, unit.ID, "main")
+		if err != nil {
+			return "", err
+		}
+		retainedSkill = active != nil
+	}
 	encoded, _ := json.Marshal(map[string]interface{}{
 		"status": "committed", "commit_mode": "direct", "action": "resume", "run_id": targetRunID,
 		"thread_id":      claimed.TaskID,
 		"resume_context": resume,
-		"message":        "This turn now continues the selected run in the same execution scope. Use the resume context, do the remaining work here, keep the completed steps when you call update_plan, and finish with the real result rather than an acknowledgement.",
+		"plan":           currentPlan, "plan_version": planVersion,
+		"active_skill_retained": retainedSkill,
+		"message":               "This turn now continues the selected run in the same execution scope. Use the resume context, do the remaining work here, keep the completed steps when you call update_plan, and finish with the real result rather than an acknowledgement.",
 	})
 	return string(encoded), nil
 }

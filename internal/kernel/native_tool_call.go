@@ -27,8 +27,7 @@ type toolExecutionResult struct {
 	effectState  string
 	retryClass   ToolRetryClass
 	effectClass  string
-	// These facts are set by the loop/dispatcher, never by tool output.
-	invoked            *bool
+	// Set by the loop, never by tool output.
 	heldBeforeDispatch bool
 }
 
@@ -753,7 +752,6 @@ func (a *Agent) executeToolCall(ctx context.Context, tenantID string, eventCh ch
 		}
 		return toolExecutionResult{
 			pause:        pause,
-			invoked:      dispatch.Invoked,
 			index:        idx,
 			step:         packaged.ModelContent,
 			toolName:     name,
@@ -789,7 +787,6 @@ func (a *Agent) executeToolCall(ctx context.Context, tenantID string, eventCh ch
 
 	return toolExecutionResult{
 		index:       idx,
-		invoked:     dispatch.Invoked,
 		step:        toolHistoryStep(name, packaged),
 		toolName:    name,
 		signature:   signature,
@@ -911,7 +908,6 @@ func (a *Agent) toolDispatchRefused(eventCh chan string, idx int, call llm.ToolC
 	}
 	return toolExecutionResult{
 		index: idx, step: packaged.ModelContent, toolName: call.Function, signature: signature,
-		invoked:   &invoked,
 		errorCode: packaged.ErrorCode, failurePhase: packaged.FailurePhase,
 		retryability: packaged.Retryability, effectState: packaged.EffectState,
 		msg: llm.Message{Role: "tool", Content: packaged.ModelContent, Name: call.Function, ToolCallID: call.ID},

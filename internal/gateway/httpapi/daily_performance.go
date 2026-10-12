@@ -21,10 +21,46 @@ type dailyPerformance struct {
 	HeldCalls, UnreportedToolSteps int
 }
 
+// dailyToolStep is the tool calls one Run's own loop made between two of its
+// model calls. The live agent.step event is never stored, so a step is rebuilt
+// from durable tool.completed facts: the dispatcher's invoked flag, and the
+// loop's plan_boundary_held refusal for a call it never dispatched.
+type dailyToolStep struct {
+	held       int
+	invoked    []string
+	unreported bool
+}
+
+func (s *dailyToolStep) addTo(stats *dailyPerformance) {
+	stats.HeldCalls += s.held
+	if s.unreported {
+		stats.UnreportedToolSteps++
+		return
+	}
+	if len(s.invoked) == 0 {
+		return
+	}
+	for _, name := range s.invoked {
+		if name != "update_plan" && name != "finish_run" {
+			return
+		}
+	}
+	stats.BookkeepingSteps++
+}
+
 // Measurements remain separate: tool durations can include human/model waits,
 // and absent historical markers cannot be inferred from an iteration number.
+// Sub-agent (delegated) and batch_read child (nested) events interleave with the
+// Run's own calls but are not its steps, and an event without a Run has no step.
 func collectDailyPerformance(events []control.Event) dailyPerformance {
 	stats := dailyPerformance{ExpansionStatuses: map[string]int{}}
+	open := map[string]*dailyToolStep{}
+	closeStep := func(runID string) {
+		if step := open[runID]; step != nil {
+			step.addTo(&stats)
+			delete(open, runID)
+		}
+	}
 	for _, event := range events {
 		switch event.Type {
 		case "run.prepared":
@@ -54,8 +90,15 @@ func collectDailyPerformance(events []control.Event) dailyPerformance {
 				Reported   bool   `json:"cache_usage_reported"`
 				Dispatched *bool  `json:"provider_dispatched"`
 				Status     string `json:"status"`
+				Delegated  bool   `json:"delegated"`
 			}
-			if json.Unmarshal(event.Payload, &p) != nil || p.First == nil || p.Status == "deferred" && p.Dispatched != nil && !*p.Dispatched {
+			if json.Unmarshal(event.Payload, &p) != nil {
+				continue
+			}
+			if !p.Delegated {
+				closeStep(event.RunID)
+			}
+			if p.First == nil || p.Status == "deferred" && p.Dispatched != nil && !*p.Dispatched {
 				continue
 			}
 			sample := &stats.Later
@@ -69,33 +112,35 @@ func collectDailyPerformance(events []control.Event) dailyPerformance {
 			sample.Calls++
 			sample.Input += p.Input
 			sample.Read += p.Read
-		case "agent.step":
+		case "tool.completed":
 			var p struct {
-				Outcome, Detail string
-				InvokedTools    []string `json:"invoked_tools"`
-				HeldTools       []string `json:"held_tools"`
+				Tool      string `json:"tool"`
+				ErrorCode string `json:"error_code"`
+				Invoked   *bool  `json:"invoked"`
+				Delegated bool   `json:"delegated"`
+				Nested    bool   `json:"nested"`
 			}
-			if json.Unmarshal(event.Payload, &p) != nil || p.Outcome != "execute_tools" || p.Detail == "" {
+			if event.RunID == "" || json.Unmarshal(event.Payload, &p) != nil || p.Delegated || p.Nested {
 				continue
 			}
-			stats.HeldCalls += len(p.HeldTools)
-			if p.InvokedTools == nil {
-				stats.UnreportedToolSteps++
-				continue
+			step := open[event.RunID]
+			if step == nil {
+				step = &dailyToolStep{}
+				open[event.RunID] = step
 			}
-			if len(p.InvokedTools) == 0 {
-				continue
+			if p.ErrorCode == "plan_boundary_held" {
+				step.held++
 			}
-			bookkeeping := true
-			for _, name := range p.InvokedTools {
-				if name != "update_plan" && name != "finish_run" {
-					bookkeeping = false
-				}
-			}
-			if bookkeeping {
-				stats.BookkeepingSteps++
+			switch {
+			case p.Invoked == nil:
+				step.unreported = true
+			case *p.Invoked:
+				step.invoked = append(step.invoked, p.Tool)
 			}
 		}
+	}
+	for runID := range open {
+		closeStep(runID)
 	}
 	return stats
 }

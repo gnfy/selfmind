@@ -77,6 +77,87 @@ func TestHeldPlanFinishDoesNotConsumeAttempt(t *testing.T) {
 	}
 }
 
+// A held finish_run is lifecycle work: it was never charged as an action, so
+// releasing it must not hand the action budget a free unit.
+func TestHeldPlanFinishDoesNotRefundAnActionCharge(t *testing.T) {
+	provider := &boundaryProvider{responses: []llm.ChatResponse{
+		{FinishReason: "tool_calls", ToolCalls: []llm.ToolCall{{ID: "p1", Function: "update_plan", Args: `{}`}}},
+		{FinishReason: "tool_calls", ToolCalls: []llm.ToolCall{
+			{ID: "p2", Function: "update_plan", Args: `{}`},
+			{ID: "bad", Function: "read_file", Args: `{"path":"bad.txt"}`},
+			{ID: "f1", Function: "finish_run", Args: `{"status":"done","summary":"checked"}`},
+		}},
+		{FinishReason: "tool_calls", ToolCalls: []llm.ToolCall{{ID: "next", Function: "read_file", Args: `{"path":"a.txt"}`}}},
+	}}
+	backend := &validBudgetProbeBackend{failBad: true}
+	agent := NewAgent(memory.NewMemoryManager(&mockStorage{}), backend, provider, "test", 8, 1, nil)
+	strategy := DefaultTaskStrategy()
+	strategy.MaxActionTools, strategy.ActionToolBudgetLimit, strategy.ActionToolBudgetStep = 1, 1, 1
+	if _, _, err := agent.RunConversation(WithTaskStrategy(context.Background(), strategy), "person", "cli", "inspect sources"); err != nil {
+		t.Fatal(err)
+	}
+	if backend.reads != 1 {
+		t.Fatalf("a held finish_run refunded an action unit; read attempts=%d want 1 (the failed attempt only)", backend.reads)
+	}
+}
+
+func TestHeldLifecycleCallReleasesItsAttemptButNoActionUnit(t *testing.T) {
+	counts := map[string]int{"finish_run": 1}
+	got := releaseHeldToolReservations([]llm.ToolCall{{Function: "finish_run"}}, []toolExecutionResult{{heldBeforeDispatch: true}}, counts)
+	if got != 0 || counts["finish_run"] != 0 {
+		t.Fatalf("released actions=%d counts=%v; the lifecycle attempt returns, the action budget does not", got, counts)
+	}
+}
+
+// Calls the loop held were never dispatched, so they are not work since the last
+// Plan update. The same number of executed calls does age it.
+func TestHeldPlanCallsDoNotAgeTheStalePlanReminder(t *testing.T) {
+	for _, tc := range []struct {
+		name                     string
+		args                     string
+		reads, heldCalls, remind int
+	}{
+		{"held by a changed boundary", `{"changed":true}`, 0, planStaleReminderThreshold, 0},
+		{"executed under an unchanged boundary", `{}`, planStaleReminderThreshold, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			batch := []llm.ToolCall{{ID: "p2", Function: "update_plan", Args: tc.args}}
+			for i := 0; i < planStaleReminderThreshold; i++ {
+				batch = append(batch, llm.ToolCall{ID: fmt.Sprintf("r%d", i), Function: "read_file", Args: fmt.Sprintf(`{"path":"a%d.txt"}`, i)})
+			}
+			provider := &boundaryProvider{responses: []llm.ChatResponse{
+				{FinishReason: "tool_calls", ToolCalls: []llm.ToolCall{{ID: "p1", Function: "update_plan", Args: `{}`}}},
+				{FinishReason: "tool_calls", ToolCalls: batch},
+			}}
+			backend := &validBudgetProbeBackend{}
+			agent := NewAgent(memory.NewMemoryManager(&mockStorage{}), backend, provider, "test", 8, 1, nil)
+			strategy := DefaultTaskStrategy()
+			room := planStaleReminderThreshold + 2 // spending the whole budget would suppress the reminder
+			strategy.MaxActionTools, strategy.ActionToolBudgetLimit, strategy.ActionToolBudgetStep = room, room, 1
+			events := make(chan string, 1024)
+			ctx := WithTaskStrategy(WithEventChannel(context.Background(), events), strategy)
+			if _, _, err := agent.RunConversation(ctx, "person", "cli", "inspect sources"); err != nil {
+				t.Fatal(err)
+			}
+			close(events)
+			reminders, held := 0, 0
+			for raw := range events {
+				event, ok := DecodeAgentEvent(raw)
+				switch {
+				case !ok:
+				case event.Type == "strategy.plan_stale_reminder":
+					reminders++
+				case event.Type == "tool.completed" && event.Payload["error_code"] == "plan_boundary_held":
+					held++
+				}
+			}
+			if backend.reads != tc.reads || held != tc.heldCalls || reminders != tc.remind {
+				t.Fatalf("reads=%d held=%d stale reminders=%d; want %d, %d, %d", backend.reads, held, reminders, tc.reads, tc.heldCalls, tc.remind)
+			}
+		})
+	}
+}
+
 func TestHeldPlanReservationsDoNotRefundExecutionFailures(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

@@ -76,9 +76,10 @@ Every accepted Plan update in the batch rechecks the original dispatch boundary,
 including a second update. Calls held by this loop-owned boundary cancel their
 reserved action budget and lifecycle attempt, and do not age the Plan reminder;
 paired refusal evidence remains visible. Failed attempted execution and unknown
-effects retain their charges and recovery limits. Step telemetry distinguishes
-invoked tools from held calls; reports exclude historical missing dispatch facts
-instead of inferring progress from the requested batch.
+effects retain their charges and recovery limits. Reports rebuild each model
+step's invoked and held calls from durable tool results, because the live step
+event is not stored; a step missing a dispatch fact is counted apart instead of
+inferring progress from the requested batch.
 The final answer is not a plan step,
 and `finish_run` may follow the final `update_plan` in the same response.
 Prose in a response whose only calls are `update_plan` or `finish_run` stays

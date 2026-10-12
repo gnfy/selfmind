@@ -1291,29 +1291,14 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	// … → complete_turn) rather than a wall of bare continues, and the seam the
 	// P0-C CompactContext state plugs into. recordStep is the single transition
 	// point.
-	recordStep := func(iteration int, outcome StepOutcome, detail string, results ...[]toolExecutionResult) {
-		payload := map[string]interface{}{"iteration": iteration, "outcome": string(outcome), "detail": detail}
-		if len(results) == 1 {
-			invoked, held := []string{}, []string{}
-			known := true
-			for _, result := range results[0] {
-				if result.invoked == nil {
-					known = false
-				} else if *result.invoked {
-					invoked = append(invoked, result.toolName)
-				}
-				if result.heldBeforeDispatch {
-					held = append(held, result.toolName)
-				}
-			}
-			payload["held_tools"] = held
-			if known {
-				payload["invoked_tools"] = invoked
-			}
-		}
+	recordStep := func(iteration int, outcome StepOutcome, detail string) {
 		EmitAgentEvent(eventCh, AgentEvent{
-			Type:    "agent.step",
-			Payload: payload,
+			Type: "agent.step",
+			Payload: map[string]interface{}{
+				"iteration": iteration,
+				"outcome":   string(outcome),
+				"detail":    detail,
+			},
 		})
 		if sink := loopCheckpointSinkFromContext(ctx); sink != nil && !humanWaitParked(ctx) {
 			checkpoint := LoopCheckpoint{
@@ -1984,7 +1969,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				continuedAnswer.Reset()
 			}
 			handoff, handoffReady := lifecycleHandoffFromToolResults(results)
-			recordStep(i, StepExecuteTools, toolNamesForTrace(calls), results)
+			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
 			if handoffReady {
 				return completeHandoff(i, handoff), totalUsage, nil
 			}

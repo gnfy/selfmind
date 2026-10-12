@@ -1,0 +1,43 @@
+id: submitted_final_response
+title: "An accepted explicit final body is delivered without regenerating it"
+suite: quality
+workspace: isolated
+channel: cli
+require_cassette: true
+setup:
+  files:
+    source.txt: "READY\n"
+turns:
+  - input: >-
+      Read source.txt once. This is one inspection, so it needs no Plan or
+      executable verification. Report its exact content. Use finish_run with
+      status done, a brief summary, and final_response containing the complete
+      final reply: "The source contains READY.\n\nThe inspection is complete."
+      The final_response field is an explicit submission, not commentary.
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  max_tool_errors: 0
+  max_tool_calls: 2
+  contains:
+    - "The source contains READY."
+    - "The inspection is complete."
+assert_state:
+  - on: events
+    type: provider.call.usage
+    count_gte: 2
+    count_lte: 2
+  - on: events
+    type: tool.started
+    payload_contains: '"tool":"finish_run"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: run.outcome
+    payload_contains: final_response
+    count_gte: 1
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_mojibake: true

@@ -76,11 +76,14 @@ type ApprovalBacklogStats struct {
 // describe automatic policy stages; this separate stock/flow view prevents
 // comparing escalations and approvals as if they shared one denominator.
 type ApprovalDecisionFunnel struct {
-	Requested         int
-	Statuses          map[string]int
-	DecisionChoices   map[string]int
-	Tools             map[string]int
-	AverageResponseMS int64
+	Requested           int
+	Statuses            map[string]int
+	DecisionChoices     map[string]int
+	Tools               map[string]int
+	AverageResponseMS   int64
+	MeasuredResponses   int64
+	ResponseMS          int64
+	ResponseUnavailable int
 }
 
 func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, personID string, since time.Time) (ApprovalDecisionFunnel, error) {
@@ -89,7 +92,7 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT status, COALESCE(decision_id, ''),
 		COALESCE(CASE WHEN json_valid(COALESCE(payload_json, '')) THEN json_extract(payload_json, '$.tool') ELSE '' END, ''),
-		created_at, updated_at
+		created_at, COALESCE(decision_recorded_at, 0)
 		FROM approval_requests
 		WHERE tenant_id = ? AND person_id = ? AND created_at >= ?`,
 		normalizeTenant(tenantID), strings.TrimSpace(personID), since.Unix())
@@ -101,8 +104,8 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 	var responseCount int64
 	for rows.Next() {
 		var status, decision, tool string
-		var created, updated int64
-		if err := rows.Scan(&status, &decision, &tool, &created, &updated); err != nil {
+		var created, decided int64
+		if err := rows.Scan(&status, &decision, &tool, &created, &decided); err != nil {
 			return funnel, err
 		}
 		funnel.Requested++
@@ -114,9 +117,13 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 			tool = "unknown"
 		}
 		funnel.Tools[tool]++
-		if status != "pending" && updated >= created {
-			responseTotal += (updated - created) * 1000
-			responseCount++
+		if status == "approved" || status == "rejected" {
+			if decided > 0 && decided >= created {
+				responseTotal += (decided - created) * 1000
+				responseCount++
+			} else {
+				funnel.ResponseUnavailable++
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -125,6 +132,7 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 	if responseCount > 0 {
 		funnel.AverageResponseMS = responseTotal / responseCount
 	}
+	funnel.MeasuredResponses, funnel.ResponseMS = responseCount, responseTotal
 	return funnel, nil
 }
 

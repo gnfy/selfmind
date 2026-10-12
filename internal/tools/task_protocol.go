@@ -492,6 +492,10 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 						Type:        "string",
 						Description: "Short user-facing summary.",
 					},
+					"final_response": {
+						Type:        "string",
+						Description: "Optional complete final reply to the person, preserving paragraphs, evidence and remaining work. When supplied and this outcome is accepted, it is saved and shown without another model generation. This text never proves completion or grants permission.",
+					},
 					"done": {
 						Type:        "array",
 						Description: "Completed items.",
@@ -582,6 +586,9 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 		"tests":        taskStringSliceArg(args, "tests"),
 		"risks":        taskStringSliceArg(args, "risks"),
 		"need_approve": taskBoolArg(args, "need_approve"),
+	}
+	if response := strings.TrimSpace(taskStringArg(args, "final_response")); response != "" {
+		out["final_response"] = response
 	}
 	if reason := finishRunCompletionReason(status); reason != "" {
 		out["completion_reason"] = reason

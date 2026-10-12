@@ -924,6 +924,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			},
 		})
 	}
+	firstProviderCall := true
 	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats, finishReason string, callErr error) {
 		route := llm.DescribeProviderRoute(a.activeLLM())
 		tokenBaseline.observed(status, usage)
@@ -934,6 +935,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			status = "deferred"
 			providerDispatched = &wait.Dispatched
 		}
+		firstCall := firstProviderCall && (providerDispatched == nil || *providerDispatched)
+		if firstCall {
+			firstProviderCall = false
+		}
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type: "provider.call.usage",
 			Payload: map[string]interface{}{
@@ -941,6 +946,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"model":                       route.Model,
 				"role":                        string(llm.RoleCodingAgent),
 				"iteration":                   iteration,
+				"first_call":                  firstCall,
 				"transport":                   transport,
 				"status":                      status,
 				"provider_dispatched":         providerDispatched,
@@ -1936,9 +1942,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}
 			toolCtx, nestedToolsUsed := WithNestedActionToolBudget(ctx, remainingNestedBudget)
 			toolCtx = withHumanWaitBatch(toolCtx, LoopCheckpoint{Iteration: i, Outcome: StepExecuteTools, Messages: cloneLoopMessages(messages)})
-			results := a.executeToolCalls(toolCtx, tenantID, eventCh, calls)
+			results := a.executePlanAwareToolCalls(toolCtx, tenantID, eventCh, calls, messages, consumeToolResults)
 			actionToolsUsed += nestedToolsUsed()
-			consumeToolResults(calls, results)
 			// Safety valve only: a tool result's bytes were already decided when
 			// it was packaged, and rewriting a sent result breaks the request
 			// prefix. This fires for a runaway run; a zero return means every
@@ -1967,13 +1972,20 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if handoffReady {
 				return completeHandoff(i, handoff), totalUsage, nil
 			}
-			// Only an explicit, complete final-answer phase beside accepted
-			// bookkeeping can avoid the tool-free closing call. Commentary,
-			// unknown phases, refusals and partial transport recovery still ask.
-			if successfulFinishStatus != "" && finalProseOnly && !legacyMarkupPresent && streamErr == nil &&
+			// An explicit body in an accepted finish receipt, or a native final
+			// phase beside accepted bookkeeping, avoids another generation.
+			// Refusals and incomplete output never take this shortcut.
+			declaredAnswer := acceptedFinishResponse(calls, results)
+			if successfulFinishStatus != "" && !legacyMarkupPresent && streamErr == nil &&
 				len(refused) == 0 && droppedForBudget == 0 && deferredAcrossWorkUnitBoundary == 0 && deferredAcrossWatchHandoff == 0 &&
-				acceptedFinishAnswer(calls, results, resp) {
-				return completeAnswer(i, answerCarry.String(), false), totalUsage, nil
+				(finalProseOnly && acceptedFinishAnswer(calls, results, resp) || declaredAnswer != "") {
+				answer := answerCarry.String()
+				if declaredAnswer != "" {
+					answer = declaredAnswer
+					messages = append(messages, llm.Message{Role: "assistant", Content: answer})
+					history.Steps = append(history.Steps, answer)
+				}
+				return completeAnswer(i, answer, false), totalUsage, nil
 			}
 			if deferredAcrossWorkUnitBoundary > 0 {
 				messages = append(messages, runtimeControlMessage("SelfMind applied the work-unit boundary before later tool calls. Re-issue only the calls still needed for the new in-progress work unit.", "notice"))

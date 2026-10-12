@@ -376,6 +376,7 @@ func activeRunCopy(active *activeRun) *activeRun {
 // assemble runtime context, drive the agent with events, then persist the
 // structured outcome, handoff, artifacts, and finishing event.
 func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, int) {
+	preparationStarted := time.Now()
 	// Install the watchdog before installExecutionScope captures ctx for
 	// approval and clarify callbacks. Previously the router created it later,
 	// so a clarify wait paused a different context and the real watchdog killed
@@ -781,12 +782,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if sink := c.newLoopCheckpointSink(identity, task, run); sink != nil {
 		ctx = kernel.WithLoopCheckpointSink(ctx, sink)
 	}
-	runtimeContext := c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode, parent)
-	if isUserOriginTurn(ctx, req) && !req.ForceNew && attach.reason == taskAttachNewLabel &&
-		strings.TrimSpace(req.ReplyToRunID) == "" && strings.TrimSpace(req.ApprovalID) == "" && strings.TrimSpace(req.ClarifyID) == "" {
-		runtimeContext.WorkContinuityHints = c.workContinuityHints(ctx, identity, run, req.Channel, 3)
-	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, runtimeContext)
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, parent, intent)
 	if strings.HasPrefix(req.EffectKey, "provider-wait:") {
 		if parent == nil || req.EffectKey != "provider-wait:"+parent.ID || !kernel.HasLoopResumeMessages(ctx) {
@@ -808,6 +803,15 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary)}, http.StatusOK
 		}
 	}
+	// Restore and validate the exact checkpoint before recall. Human/provider
+	// recovery then skips only semantic expansion, retaining current scope,
+	// lexical references and the normal foreground context for ordinary input.
+	runtimeContext := c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode, parent)
+	if isUserOriginTurn(ctx, req) && !req.ForceNew && attach.reason == taskAttachNewLabel &&
+		strings.TrimSpace(req.ReplyToRunID) == "" && strings.TrimSpace(req.ApprovalID) == "" && strings.TrimSpace(req.ClarifyID) == "" {
+		runtimeContext.WorkContinuityHints = c.workContinuityHints(ctx, identity, run, req.Channel, 3)
+	}
+	ctx = kernel.WithTaskRuntimeContext(ctx, runtimeContext)
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.ExecutionRoots, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, parent, intent, attach.claimsPriorRuns(), agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
@@ -845,6 +849,8 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "failed", "idle", task.ID, run.ID, err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 
+	_, _ = d.Control.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: run.ID, Type: "run.prepared", Visibility: "task", Channel: req.Channel,
+		Payload: mustJSON(map[string]interface{}{"duration_ms": time.Since(preparationStarted).Milliseconds(), "exact_checkpoint_replay": kernel.HasExactLoopReplay(ctx)})})
 	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
 		var providerWait *llm.ProviderWait
@@ -1004,6 +1010,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: errorText, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}, http.StatusOK
 	}
 	recordFinalizeErr("materialize run finalization", finalizeErr)
+	if finalizeErr != nil {
+		outcome := c.finalizeErroredRun(finCtx, identity, task, run, req.Channel, fmt.Errorf("%w: %v", errRunResultCommit, finalizeErr), replay)
+		// This request already executed. Return its structured unresolved
+		// outcome, as for other post-start failures, rather than invite an HTTP
+		// retry that could repeat effects.
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: outcome.Summary + " " + strings.Join(outcome.NextSteps, " "), Usage: usage,
+			Error: outcome.Summary, Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}, http.StatusOK
+	}
 	if selection != nil && !selection.Rejected && !selection.Direct {
 		recordFinalizeErr("project work interaction", d.Control.ProjectInteractionTask(finCtx, identity.TenantID, identity.PersonID, task.ID, run.ID))
 	}

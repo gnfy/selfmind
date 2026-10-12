@@ -307,7 +307,8 @@ func isLifecycleToolName(name string) bool {
 // isolateWorkUnitBoundaryCall makes control-plane work boundaries exclusive.
 // queue_user_input wins over update_plan so independent work cannot mutate the
 // current plan or execute a sibling tool before it is durably separated.
-// update_plan keeps its existing work-unit boundary semantics.
+// A leading update_plan is executed and accounted for before its siblings;
+// executePlanAwareToolCalls decides whether they still belong to that boundary.
 func isolateWorkUnitBoundaryCall(calls []llm.ToolCall) ([]llm.ToolCall, int) {
 	if len(calls) < 2 {
 		return calls, 0
@@ -325,6 +326,9 @@ func isolateWorkUnitBoundaryCall(calls []llm.ToolCall) ([]llm.ToolCall, int) {
 	for i, call := range calls {
 		if strings.TrimSpace(call.Function) != "update_plan" {
 			continue
+		}
+		if i == 0 {
+			return calls, 0
 		}
 		kept := []llm.ToolCall{call}
 		// A finish_run after the plan update closes the run; it is not work in

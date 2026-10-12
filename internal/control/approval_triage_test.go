@@ -83,6 +83,36 @@ func TestApprovalDecisionFunnelKeepsHumanRequestsSeparateFromTriage(t *testing.T
 	}
 }
 
+func TestApprovalTimingUsesHumanDecisionNotLaterWaiterUpdates(t *testing.T) {
+	ctx := context.Background()
+	store := newTestStore(t)
+	owner, err := store.ResolveOrCreateAccount(ctx, "tenant", "cli", "timing", "User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := time.Now().Add(-time.Hour).Unix()
+	for _, decision := range []int64{created + 600, 0} {
+		request, err := store.CreateApprovalRequest(ctx, ApprovalRequest{TenantID: owner.TenantID, PersonID: owner.PersonID, ActionType: "tool_call"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE approval_requests SET status='approved',created_at=?,decision_recorded_at=?,updated_at=? WHERE id=?`, created, decision, created+3600, request.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	funnel, err := store.ApprovalDecisionFunnelSince(ctx, owner.TenantID, owner.PersonID, time.Unix(created-1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if funnel.ResponseMS != 600000 || funnel.AverageResponseMS != 600000 || funnel.MeasuredResponses != 1 || funnel.ResponseUnavailable != 1 {
+		t.Fatalf("timing clipped or inferred from waiter update: %+v", funnel)
+	}
+	other, err := store.ApprovalDecisionFunnelSince(ctx, owner.TenantID, "another-person", time.Unix(created-1, 0))
+	if err != nil || other.Requested != 0 {
+		t.Fatalf("person boundary: %+v %v", other, err)
+	}
+}
+
 func TestApprovalTriageAuditPersistsStructuredEvidenceWithoutCommandText(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().Truncate(time.Second)

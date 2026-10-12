@@ -279,16 +279,21 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 		// turns emit too — "recall found nothing" and "recall never ran" are
 		// different diagnoses (W2).
 		payload := map[string]interface{}{
-			"candidates": stats.Candidates,
-			"sources":    stats.Sources,
-			"refs":       stats.Refs,
-			"expanded":   stats.Expanded,
-			"terms":      stats.Terms,
-			"slices":     len(slices),
-			"elapsed_ms": stats.ElapsedMS,
+			"candidates":       stats.Candidates,
+			"sources":          stats.Sources,
+			"refs":             stats.Refs,
+			"expanded":         stats.Expanded,
+			"terms":            stats.Terms,
+			"slices":           len(slices),
+			"elapsed_ms":       stats.ElapsedMS,
+			"expansion_status": stats.ExpansionStatus,
+			"expansion_ms":     stats.ExpansionMS,
 		}
 		if stats.Skipped != "" {
 			payload["skipped"] = stats.Skipped
+		}
+		if stats.ExpansionSkipped != "" {
+			payload["expansion_skipped"] = stats.ExpansionSkipped
 		}
 		_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
 			TaskID:     task.ID,

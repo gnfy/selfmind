@@ -23,6 +23,7 @@ import (
 
 var errProviderWaitLimit = errors.New("provider wait continuation limit reached")
 var errProviderWaitCheckpoint = errors.New("provider wait checkpoint is unavailable")
+var errRunResultCommit = errors.New("run result could not be committed")
 
 // finalizeErroredRun is the single terminal path for provider, transport, and
 // cancellation failures after a run has started. It writes the same structured
@@ -51,6 +52,11 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		outcome.Summary = "The run stopped after execution made no progress within the watchdog window."
 		outcome.NextSteps = []string{"Reply \"continue\" to resume from the durable run history."}
 		outcome.Risks = []string{"An execution step stopped responding and was cancelled by the watchdog."}
+	} else if errors.Is(runErr, errRunResultCommit) {
+		outcome.Status = "blocked"
+		outcome.CompletionReason = "finalization_failed"
+		outcome.Summary = "The final result was not saved; this work has not been closed."
+		outcome.NextSteps = []string{"Inspect this Run's durable tool results and restore storage before closing it. Do not repeat completed effects."}
 	} else if errors.Is(runErr, errProviderWaitLimit) {
 		outcome.Status = "blocked"
 		outcome.CompletionReason = "provider_wait_limit"

@@ -51,7 +51,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 			}
 		}
 		if names["finish_run"] {
-			sb.WriteString("For non-trivial tool-using work that creates durable task state, call finish_run with the structured outcome after the work and plan are resolved. A successful finish is final. If completion preconditions reject it, correct the plan or verification before one bounded retry. Skip it for direct answers and ordinary explanations.\n")
+			sb.WriteString("For non-trivial tool-using work that creates durable task state, call finish_run with the structured outcome after the work and plan are resolved. Include the complete final reply in final_response when ready; an accepted submission is shown without another generation. A successful finish is final. If completion preconditions reject it, correct the plan or verification before one bounded retry. Skip it for direct answers and ordinary explanations.\n")
 		}
 		if names["tool_search"] {
 			sb.WriteString("Use tool_search when you need a registered capability that is not currently active. A result activates matching deferred tools for later calls in this run.\n")
@@ -117,7 +117,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 }
 
 func planToolGuidance(strategy TaskStrategy) string {
-	const boundary = "Call update_plan by itself; do not batch it with reads or other tools because it changes the work-unit boundary. Only finish_run may follow the final snapshot in the same response. "
+	const boundary = "Put update_plan first when batching progress updates with later tools. The runtime saves its accepted snapshot before sequentially checking those calls; a changed or unproven work boundary holds later actions for a new decision. Only finish_run may follow a final snapshot with no active work. Keep work_select and queue_user_input separate from other tools. "
 	const planStepDiscipline = "Every call replaces the prior plan, so send the complete snapshot. Update it at meaningful progress or scope changes, not around every tool call. Report the actual state of each step and resolve every step before a done outcome. Existing step IDs preserve execution attribution; work-unit IDs need not be repeated.\n"
 	// planTriggers replaces an abstract test the model had to interpret with
 	// the concrete situations that call for a plan.
@@ -154,5 +154,5 @@ func planStaleReminder(actionsSinceUpdate int, openSteps []string) string {
 	if len(openSteps) > 0 {
 		first = strings.TrimSpace(openSteps[0])
 	}
-	return fmt.Sprintf("SelfMind: the visible plan was last updated %d tool action(s) ago and still has %d open step(s), starting with %q. If the work has moved on, send a complete update_plan snapshot with the real progress in the same response as your next action; if the plan is still accurate, just continue. Do not do extra tool work for the plan.\n", actionsSinceUpdate, len(openSteps), first)
+	return fmt.Sprintf("SelfMind: the visible plan was last updated %d tool action(s) ago and still has %d open step(s), starting with %q. If the work has moved on, send a complete update_plan snapshot with the real progress using the Plan tool's ordering contract; if the plan is still accurate, just continue. Do not do extra tool work for the plan.\n", actionsSinceUpdate, len(openSteps), first)
 }

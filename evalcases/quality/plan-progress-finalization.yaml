@@ -8,9 +8,15 @@ require_cassette: true
 turns:
   - input: >-
       Create plan-progress.txt containing exactly PLAN-COMPLETE. Maintain a
-      visible three-step plan for inspect, write, and verify. Update the plan
-      after each meaningful transition, use the verify tool to check the exact
-      file contents, and finish only after every plan step is completed.
+      visible three-step plan for inspect, write, and verify. Submit the initial
+      Plan by itself so you can read its accepted identities. Update the plan
+      after each meaningful transition, use verify with
+      `test "$(cat plan-progress.txt)" = PLAN-COMPLETE` to check the exact
+      contents (a trailing newline is allowed), and finish only after every plan step is completed. Put
+      update_plan first if batching it with later calls; if the runtime holds
+      a call at a changed boundary, re-issue only the still necessary call.
+      Submit the complete final reply using finish_run.final_response after
+      the final Plan snapshot is accepted.
 
 expect:
   status: completed
@@ -20,13 +26,33 @@ expect:
   require_tool_events: true
   min_tool_calls: 2
   min_progress_updates: 1
-  max_tool_errors: 0
+  # Both held calls are explicit policy redirects; no execution failure is allowed.
+  max_tool_errors: 2
 
 assert_state:
   - on: file
     path: plan-progress.txt
     exists: true
     matches: "^PLAN-COMPLETE\\n?$"
+  - on: events
+    type: run.outcome
+    payload_contains: final_response
+    count_gte: 1
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_code":"plan_boundary_held"'
+    count_gte: 2
+    count_lte: 2
+  - on: events
+    type: tool.started
+    payload_contains: '"tool":"write_file"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: tool.started
+    payload_contains: '"tool":"verify"'
+    count_gte: 1
+    count_lte: 1
 
 checks:
   no_mojibake: true

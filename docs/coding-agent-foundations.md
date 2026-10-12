@@ -64,14 +64,29 @@ reworded step keeps the id of the open step at its position when the snapshot
 keeps the plan's length, so rewording cannot silently replace unfinished steps.
 A plan with open steps that has not changed for 12 tool actions gets a one-line
 reminder at the tail of the next model call, again only after another 12; the
-model decides whether it is still true. The final answer is not a plan step,
+model decides whether it is still true. A leading progress snapshot can share
+a response with later tools: the runtime consumes its durable accepted result
+before sequential dispatch, with fresh exposure and middleware checks. The
+current work-unit identity, active step identities, goal and acceptance bars
+must remain unchanged. Failure, unreadable state or a changed boundary holds
+the tail with a paired `plan_boundary_held` non-dispatch result; Main decides
+which calls to reissue. Initial Plans and transitions therefore normally stand
+alone. Historical selection and independent-input controls remain exclusive.
+The final answer is not a plan step,
 and `finish_run` may follow the final `update_plan` in the same response.
 Prose in a response whose only calls are `update_plan` or `finish_run` stays
 part of the final answer rather than narration. A complete native reply
 explicitly marked `final_answer` can close without another model request only
-after every bookkeeping call, including `finish_run`, is accepted. Missing or
-commentary phases, action calls, refusals and partial transport recovery keep
-the tool-free closing request; no model or provider name selects this path.
+after every bookkeeping call, including `finish_run`, is accepted. Protocols
+without phase labels may instead submit the complete body in the optional
+`finish_run.final_response` field. Only the accepted receipt supplies that body;
+it preserves paragraphs and skips regeneration without relaxing completion
+checks. A missing body and missing/commentary phase, action calls, refusals or
+incomplete output keep the closing request. Neither path selects a model or
+provider name. Run state, assistant content, handoff and terminal event commit
+through the existing atomic finalizer. A failed commit produces a blocked,
+recoverable result rather than a successful completion; tool evidence remains
+available and completed effects must not be repeated.
 An answer written beside
 `finish_run` survives a closing line after it; a final answer the plan gate
 sends back is not kept. An answer continued across an output limit is

@@ -104,6 +104,27 @@ func TestPlanToolsUseDurableProjectionAsCompletionAuthority(t *testing.T) {
 	}
 }
 
+func TestFinishBodyPreservesParagraphsButCannotOverrideCompletionAuthority(t *testing.T) {
+	projection := &durablePlanProjectionTest{}
+	ctx := WithRunPlanProjection(context.Background(), projection)
+	tool := NewFinishRunTool()
+	args := map[string]interface{}{"status": "done", "summary": "checked", "final_response": "First paragraph.\n\nSecond paragraph.", "_context": ctx}
+	raw, err := tool.Execute(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		FinalResponse string `json:"final_response"`
+	}
+	if json.Unmarshal([]byte(raw), &out) != nil || out.FinalResponse != args["final_response"] {
+		t.Fatalf("body=%q", raw)
+	}
+	projection.completionErr = errors.New("required check is unresolved")
+	if raw, err := tool.Execute(args); err == nil || raw != "" {
+		t.Fatalf("prose overrode durable completion: %q %v", raw, err)
+	}
+}
+
 func TestPlanStepParserPreservesOmittedTextForExactIDInheritance(t *testing.T) {
 	steps, err := planStepsFromArgs([]interface{}{map[string]interface{}{
 		"step_id": "step-issued", "status": "completed",

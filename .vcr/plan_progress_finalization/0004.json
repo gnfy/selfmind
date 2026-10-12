@@ -1,59 +1,117 @@
 {
+  "plan_binding_version": 1,
   "method": "stream",
   "events": [
     {
-      "content": "Writing"
+      "reasoning_content": "The"
     },
     {
-      "content": " plan"
+      "reasoning_content": " write_file was held"
     },
     {
-      "content": "-pro"
+      "reasoning_content": " at a"
     },
     {
-      "content": "gress"
+      "reasoning_content": " changed boundary."
     },
     {
-      "content": ".txt"
+      "reasoning_content": " The guidance: \""
     },
     {
-      "content": " with"
+      "reasoning_content": "if"
     },
     {
-      "content": " the"
+      "reasoning_content": " the runtime holds a"
     },
     {
-      "content": " exact"
+      "reasoning_content": " call"
     },
     {
-      "content": " required"
+      "reasoning_content": " at a changed boundary"
     },
     {
-      "content": " content"
+      "reasoning_content": ", re-issue only"
     },
     {
-      "content": "."
+      "reasoning_content": " the still"
+    },
+    {
+      "reasoning_content": " necessary call.\" So"
+    },
+    {
+      "reasoning_content": " re-issue write_file"
+    },
+    {
+      "reasoning_content": " only.\n\n"
+    },
+    {
+      "reasoning_content": "Note it says the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " boundary changed or could"
+    },
+    {
+      "reasoning_content": " not be proven unchanged"
+    },
+    {
+      "reasoning_content": ". The work unit"
+    },
+    {
+      "reasoning_content": " attribution: write step"
+    },
+    {
+      "reasoning_content": " is not in a"
+    },
+    {
+      "reasoning_content": " new work unit"
+    },
+    {
+      "reasoning_content": ". Let me re"
+    },
+    {
+      "reasoning_content": "-issue write_file."
+    },
+    {
+      "content": "The write was"
+    },
+    {
+      "content": " held at"
+    },
+    {
+      "content": " the plan boundary;"
+    },
+    {
+      "content": " re"
+    },
+    {
+      "content": "-issuing just"
+    },
+    {
+      "content": " that call.\n\n"
     },
     {
       "finish_reason": "tool_calls"
     },
     {
       "usage": {
-        "input_tokens": 8967,
-        "output_tokens": 110,
-        "cache_read_input_tokens": 8832,
-        "cache_miss_input_tokens": 135,
+        "input_tokens": 13965,
+        "output_tokens": 140,
+        "cache_read_input_tokens": 12544,
+        "cache_miss_input_tokens": 1421,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0,
+        "reasoning_output_tokens": 77,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_ET_QWmBRabIvjA2nsoIRGwt2855",
+          "ID": "",
           "Function": "write_file",
-          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/plan-progress.txt\", \"content\": \"PLAN-COMPLETE\"}"
+          "Args": "{\"content\": \"PLAN-COMPLETE\", \"path\": \"plan-progress.txt\"}"
         }
       ]
     }

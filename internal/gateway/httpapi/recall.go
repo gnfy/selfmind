@@ -213,12 +213,15 @@ type recallSelectionObserver interface {
 type RecallStats struct {
 	// Candidates counts eligible source hits before cross-source dedupe and the
 	// final prompt budget. Sources counts the slices that actually survived.
-	Candidates map[string]int
-	Sources    map[string]int
-	Refs       []string
-	Expanded   bool
-	Terms      int
-	Skipped    string // non-empty when recall was skipped ("control_command", "short_message")
+	Candidates       map[string]int
+	Sources          map[string]int
+	Refs             []string
+	Expanded         bool
+	ExpansionSkipped string
+	ExpansionStatus  string
+	ExpansionMS      int64
+	Terms            int
+	Skipped          string // non-empty when recall was skipped ("control_command", "short_message")
 	// ElapsedMS is the wall-clock cost of the whole Select call (expansion
 	// included) — the number /diag context reports per turn.
 	ElapsedMS int64
@@ -370,9 +373,18 @@ func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, wor
 
 	rawTerms := recallTerms(trimmed)
 	var expansionTerms []string
-	if expansion, ok := e.expand(ctx, trimmed); ok {
-		stats.Expanded = true
-		expansionTerms = recallTerms(expansion)
+	if kernel.HasExactLoopReplay(ctx) {
+		stats.ExpansionSkipped = "exact_checkpoint_replay"
+		stats.ExpansionStatus = "skipped_exact_replay"
+	} else {
+		started := time.Now()
+		expansion, status := e.expand(ctx, trimmed)
+		stats.ExpansionMS = time.Since(started).Milliseconds()
+		stats.ExpansionStatus = status
+		if status == "expanded" {
+			stats.Expanded = true
+			expansionTerms = recallTerms(expansion)
+		}
 	}
 	terms, rawCount := boundedRecallTerms(rawTerms, expansionTerms, recallMaxTerms)
 	if len(terms) == 0 {
@@ -479,9 +491,9 @@ func (e *RecallEngine) notifySelected(ctx context.Context, query RecallQuery, se
 // is trusted to degrade on provider errors (it returns the raw query); the
 // goroutine+timer guards against a misbehaving/blocking implementation so the
 // turn is never held hostage by recall.
-func (e *RecallEngine) expand(ctx context.Context, message string) (string, bool) {
+func (e *RecallEngine) expand(ctx context.Context, message string) (string, string) {
 	if e.expander == nil {
-		return "", false
+		return "", "disabled"
 	}
 	timeout := e.expandTimeout
 	if timeout <= 0 {
@@ -495,11 +507,16 @@ func (e *RecallEngine) expand(ctx context.Context, message string) (string, bool
 	case expanded := <-done:
 		expanded = strings.TrimSpace(expanded)
 		if expanded == "" || expanded == strings.TrimSpace(message) {
-			return "", false
+			// The adapter degrades provider failures to the raw query. This
+			// observation cannot distinguish those from a deliberate no-op.
+			return "", "unchanged"
 		}
-		return expanded, true
+		return expanded, "expanded"
 	case <-tctx.Done():
-		return "", false
+		if ctx.Err() != nil {
+			return "", "canceled"
+		}
+		return "", "timeout"
 	}
 }
 

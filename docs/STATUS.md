@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-10-11
+**Snapshot:** 2026-10-12
 
 Local WP9–WP14 integration provides atomic admission, physical-root conflict
 checks, exact wait continuations, fair host execution and session-owned streams
@@ -48,12 +48,12 @@ remain inert for cross-Run recovery. Real remote authentication variants and
 post-rollout daily-driver effectiveness remain evidence gates.
 
 Verification selects pending Plan steps directly; named independent checks and retries stay standalone.
-Continuations retain exact frozen-window checks with explicit Main adoption and dependency/scope checks, even before Plan close-out. Reuse is checked again on updates and completion; reopened obligations get fresh Work Units while closed evidence windows remain available. Exact Run views read durable Plans; unrelated session completions preserve pending questions. Explicit final-answer phases with accepted finish receipts can avoid the extra closing model call.
+Continuations retain exact frozen-window checks with explicit Main adoption and dependency/scope checks, even before Plan close-out. Reuse is checked again on updates and completion; reopened obligations get fresh Work Units while closed evidence windows remain available. Exact Run views read durable Plans; unrelated session completions preserve pending questions. Accepted finish bodies or explicit final-answer phases avoid extra generation; result-commit failures remain blocked. Exact checkpoint recovery skips semantic expansion, retaining lexical recall and fresh constraints. Leading progress updates consume accepted Plan state before sequential sibling checks; changed boundaries hold actions. Usage reports preparation, expansion outcomes, first/later cache, bookkeeping steps, unclipped human response time and unresolved-effect age; sustained performance remains unproven.
 Bounded context separates blockers; final replies report unresolved runtime claims. Schema, capacity, model and settlement authority are unchanged.
 
 ## Release Health
 
-- Full selfcheck: 116 offline cases passed; model-backed cases use committed
+- Full selfcheck: 117 offline cases passed; model-backed cases use committed
   cassettes and deterministic cases declare `model_required: false`. All Go
   tests, build and the documentation contract passed on the local integration.
 - Pull requests into `main` or `develop` run the fast offline corpus and core Linux/macOS checks. Main

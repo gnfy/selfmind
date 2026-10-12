@@ -148,6 +148,11 @@ func TestUpdatePlanIsolatesMixedToolCallBatch(t *testing.T) {
 	if len(got) != len(plain) || deferred != 0 {
 		t.Fatalf("ordinary batch changed: %+v deferred=%d", got, deferred)
 	}
+	leading := []llm.ToolCall{{ID: "plan", Function: "update_plan"}, {ID: "read", Function: "read_file"}}
+	got, deferred = isolateWorkUnitBoundaryCall(leading)
+	if len(got) != 2 || deferred != 0 {
+		t.Fatalf("leading Plan must reach sequential boundary validation: %+v, %d", got, deferred)
+	}
 	independent := []llm.ToolCall{
 		{ID: "plan", Function: "update_plan"},
 		{ID: "queue", Function: "queue_user_input"},

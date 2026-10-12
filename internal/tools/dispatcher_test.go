@@ -737,7 +737,7 @@ func TestArgumentRefusalsSayWhatIsExpected(t *testing.T) {
 		{"finish_run", map[string]interface{}{"summary": "Released."},
 			[]string{"missing required parameter: status", "expected a string, one of done", "waiting_user"}},
 		{"finish_run", map[string]interface{}{"status": "done", "summary": "Released.", "result": "ok"},
-			[]string{"unknown parameter: result", "accepts only done, files, need_approve, next_steps, risks, status, summary, tests"}},
+			[]string{"unknown parameter: result", "accepts only done, files, final_response, need_approve, next_steps, risks, status, summary, tests"}},
 		{"update_plan", map[string]interface{}{"plan": []interface{}{map[string]interface{}{"step": "publish"}}},
 			[]string{"missing required parameter: plan[0].status", "expected a string, one of pending, in_progress, completed"}},
 	} {

@@ -102,15 +102,24 @@ func (t *ExecuteCodeTool) ExecuteResult(args map[string]interface{}) (kernel.Too
 	if home == "" {
 		home = "."
 	}
-	tmpDir, err := filepath.Abs(filepath.Join(home, ".selfmind", "code_sandbox"))
+	sandboxRoot, err := filepath.Abs(filepath.Join(home, ".selfmind", "code_sandbox"))
 	if err != nil {
 		return kernel.ToolDispatchResult{}, fmt.Errorf("resolve sandbox dir: %w", err)
 	}
-	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+	if err := os.MkdirAll(sandboxRoot, 0o700); err != nil {
 		return kernel.ToolDispatchResult{}, fmt.Errorf("create sandbox dir: %w", err)
 	}
+	// Each call gets its own private directory, and only that directory is a
+	// writable root. The shared parent is just a container: as a root it let a
+	// concurrent Run's sandboxed code replace this call's script between the write
+	// and python opening it, running that code inside this Run's boundary.
+	tmpDir, err := os.MkdirTemp(sandboxRoot, "call-")
+	if err != nil {
+		return kernel.ToolDispatchResult{}, fmt.Errorf("create sandbox dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
 
-	scriptPath := filepath.Join(tmpDir, fmt.Sprintf("script_%d.py", time.Now().UnixNano()))
+	scriptPath := filepath.Join(tmpDir, "script.py")
 
 	// Write the user code verbatim to a script file and run it directly. Do NOT
 	// wrap it in exec('''...''') string interpolation: that allowed code
@@ -120,7 +129,6 @@ func (t *ExecuteCodeTool) ExecuteResult(args map[string]interface{}) (kernel.Too
 	if err := os.WriteFile(scriptPath, []byte(code), 0o600); err != nil {
 		return kernel.ToolDispatchResult{}, fmt.Errorf("write script: %w", err)
 	}
-	defer os.Remove(scriptPath)
 
 	ctx, cancel := context.WithTimeout(contextFromArgs(args), profile.Timeout)
 	defer cancel()

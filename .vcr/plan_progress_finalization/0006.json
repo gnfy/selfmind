@@ -3,70 +3,115 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Now"
+      "reasoning_content": "Verify"
     },
     {
-      "reasoning_content": " run"
+      "reasoning_content": " passed. od"
     },
     {
-      "reasoning_content": " verify"
+      "reasoning_content": " shows"
     },
     {
-      "reasoning_content": " bound"
+      "reasoning_content": " 13"
     },
     {
-      "reasoning_content": " to step_8"
+      "reasoning_content": " bytes \"PLAN-C"
     },
     {
-      "reasoning_content": "c854"
+      "reasoning_content": "OMPLETE"
     },
     {
-      "reasoning_content": "e"
+      "reasoning_content": "\" with no trailing"
     },
     {
-      "reasoning_content": "79.\n\n"
+      "reasoning_content": " newline. Now final"
     },
     {
-      "reasoning_content": "I batched update"
+      "reasoning_content": " plan update: all"
     },
     {
-      "reasoning_content": "_plan alone"
+      "reasoning_content": " steps"
     },
     {
-      "reasoning_content": " since previous held call"
+      "reasoning_content": " completed, then finish"
     },
     {
-      "reasoning_content": ". Actually I could"
+      "reasoning_content": "_run.\n\nI"
     },
     {
-      "reasoning_content": " have"
+      "reasoning_content": " can batch the final"
     },
     {
-      "reasoning_content": " batched verify with"
+      "reasoning_content": " update_plan and"
     },
     {
-      "reasoning_content": " update"
+      "reasoning_content": " finish_run in the"
     },
     {
-      "reasoning_content": "_plan. It's"
+      "reasoning_content": " same response (\""
     },
     {
-      "reasoning_content": " fine."
+      "reasoning_content": "finish_run may follow"
     },
     {
-      "reasoning_content": " Now verify.\n"
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " final snapshot with no"
+    },
+    {
+      "reasoning_content": " active work\")."
+    },
+    {
+      "reasoning_content": " The runtime saves each"
+    },
+    {
+      "reasoning_content": " accepted"
+    },
+    {
+      "reasoning_content": " snapshot before sequentially checking"
+    },
+    {
+      "reasoning_content": " later calls. Let"
+    },
+    {
+      "reasoning_content": " me do both in"
+    },
+    {
+      "reasoning_content": " one block."
+    },
+    {
+      "content": "校验"
+    },
+    {
+      "content": "通过：13"
+    },
+    {
+      "content": " 字节，"
+    },
+    {
+      "content": "无多余字符。"
+    },
+    {
+      "content": "现在"
+    },
+    {
+      "content": "关闭最后一步并"
+    },
+    {
+      "content": "结束任务。\n\n"
     },
     {
       "finish_reason": "tool_calls"
     },
     {
       "usage": {
-        "input_tokens": 14848,
-        "output_tokens": 232,
+        "input_tokens": 14630,
+        "output_tokens": 287,
         "cache_read_input_tokens": 13312,
-        "cache_miss_input_tokens": 1536,
+        "cache_miss_input_tokens": 1318,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 46,
+        "reasoning_output_tokens": 81,
         "cache_usage_reported": true
       }
     },
@@ -74,8 +119,8 @@
       "tool_calls": [
         {
           "ID": "",
-          "Function": "verify",
-          "Args": "{\"command\": \"test \\\"$(cat plan-progress.txt)\\\" = PLAN-COMPLETE\", \"criterion\": \"plan-progress.txt at the workspace root contains exactly PLAN-COMPLETE (trailing newline allowed).\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"kind\": \"test\", \"local_dependencies\": \n[\"plan-progress.txt\"]\n\n, \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}"
+          "Function": "update_plan",
+          "Args": "{\"explanation\": \"校验通过，三步全部完成\", \"plan\": \n[{\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}, {\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\"}]\n\n}"
         }
       ]
     }

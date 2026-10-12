@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,5 +57,38 @@ func TestRecorderCountsVisibleAssistantProgressBeforeTool(t *testing.T) {
 
 	if got := recorder.Snapshot().ProgressUpdates; got != 1 {
 		t.Fatalf("progress updates=%d, want 1", got)
+	}
+}
+
+func TestRecorderSeparatesProvenNonDispatchFromFailedOrUnknownAttempts(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload map[string]interface{}
+		want    int
+	}{
+		{"held", map[string]interface{}{"invoked": false, "effect_state": "not_dispatched", "error_category": "policy_redirect"}, 0},
+		{"invalid arguments", map[string]interface{}{"invoked": false, "effect_state": "not_dispatched", "error_category": "invalid_input"}, 0},
+		{"attempted", map[string]interface{}{"invoked": true, "effect_state": "not_dispatched"}, 1},
+		{"unknown effect", map[string]interface{}{"invoked": false, "effect_state": "unknown"}, 1},
+		{"historical missing facts", nil, 1},
+		{"untyped false", map[string]interface{}{"invoked": "false", "effect_state": "not_dispatched"}, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := NewRecorder(filepath.Join(t.TempDir(), "run.jsonl"), false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Close()
+			r.StartCase(&Case{ID: "facts"}, "test", "test", t.TempDir())
+			r.ObserveStreamEvent(llm.StreamEvent{EventType: "tool.completed", ToolName: "read_file", Err: errors.New("fixture"), Payload: tc.payload})
+			snap := r.Snapshot()
+			if snap.ToolErrors != 1 || snap.InvokedToolErrors != tc.want {
+				t.Fatalf("snapshot=%+v", snap)
+			}
+			r.StartCase(&Case{ID: "next"}, "test", "test", t.TempDir())
+			if r.Snapshot().InvokedToolErrors != 0 {
+				t.Fatal("counter leaked across cases")
+			}
+		})
 	}
 }

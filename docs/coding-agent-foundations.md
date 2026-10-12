@@ -72,6 +72,13 @@ must remain unchanged. Failure, unreadable state or a changed boundary holds
 the tail with a paired `plan_boundary_held` non-dispatch result; Main decides
 which calls to reissue. Initial Plans and transitions therefore normally stand
 alone. Historical selection and independent-input controls remain exclusive.
+Every accepted Plan update in the batch rechecks the original dispatch boundary,
+including a second update. Calls held by this loop-owned boundary cancel their
+reserved action budget and lifecycle attempt, and do not age the Plan reminder;
+paired refusal evidence remains visible. Failed attempted execution and unknown
+effects retain their charges and recovery limits. Step telemetry distinguishes
+invoked tools from held calls; reports exclude historical missing dispatch facts
+instead of inferring progress from the requested batch.
 The final answer is not a plan step,
 and `finish_run` may follow the final `update_plan` in the same response.
 Prose in a response whose only calls are `update_plan` or `finish_run` stays

@@ -13,6 +13,9 @@ type finishCorrection struct {
 
 func (f *finishCorrection) observe(results []toolExecutionResult, counts map[string]int) {
 	for _, result := range results {
+		if result.heldBeforeDispatch {
+			continue
+		}
 		if result.toolName == "finish_run" {
 			// A preparation failure with a proven not-dispatched effect did not
 			// consume the lifecycle action. Permit one corrected call. The

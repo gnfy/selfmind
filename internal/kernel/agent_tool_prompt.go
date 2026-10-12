@@ -117,7 +117,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 }
 
 func planToolGuidance(strategy TaskStrategy) string {
-	const boundary = "Put update_plan first when batching progress updates with later tools. The runtime saves its accepted snapshot before sequentially checking those calls; a changed or unproven work boundary holds later actions for a new decision. Only finish_run may follow a final snapshot with no active work. Keep work_select and queue_user_input separate from other tools. "
+	const boundary = "Submit the initial Plan and work-boundary transitions separately so you can read the accepted identities before choosing actions. Batch only progress updates that keep the current work unit, active steps, goal and acceptance criteria unchanged. Put update_plan first in those batches. The runtime saves each accepted snapshot before sequentially checking later calls; a changed or unproven work boundary holds later actions for a new decision. Only finish_run may follow a final snapshot with no active work. Keep work_select and queue_user_input separate from other tools. "
 	const planStepDiscipline = "Every call replaces the prior plan, so send the complete snapshot. Update it at meaningful progress or scope changes, not around every tool call. Report the actual state of each step and resolve every step before a done outcome. Existing step IDs preserve execution attribution; work-unit IDs need not be repeated.\n"
 	// planTriggers replaces an abstract test the model had to interpret with
 	// the concrete situations that call for a plan.

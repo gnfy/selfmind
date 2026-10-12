@@ -45,6 +45,13 @@ version their plan-ID binding and prefer the newest plan evidence, keeping
 old tool-result aging from shifting current step IDs. Existing cassettes retain
 their original binding contract.
 
+Tool-error limits keep all failures and refusals visible. A case may additionally
+set `max_invoked_tool_errors: 0` to reject failed or uncertain tool attempts while
+allowing bounded preparation recovery under `max_tool_errors`. Only runtime facts
+with both `invoked: false` and `effect_state: not_dispatched` qualify as proven
+non-dispatch; missing, untyped or unknown-effect facts remain failures. No error
+message, model name or scenario-specific code grants an exception.
+
 ## Data Isolation (default)
 
 Every eval run — record and replay alike — uses a **throwaway temp data dir**

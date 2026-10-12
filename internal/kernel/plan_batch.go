@@ -91,12 +91,13 @@ func (a *Agent) executePlanAwareToolCalls(ctx context.Context, tenantID string, 
 			result = a.toolDispatchRefused(eventCh, i, call, call.Function+"\x00"+call.Args,
 				newPreparationPolicyError("plan_boundary_held", "policy_redirect", "after_state_change", "not_dispatched",
 					"Plan boundary changed or could not be proven unchanged; this call was not executed. Re-issue only the actions needed under the accepted Plan", []string{"reassess_accepted_plan", "reissue_needed_calls"}))
+			result.heldBeforeDispatch = true
 		} else {
 			result = a.executeToolCalls(ctx, tenantID, eventCh, calls[i:i+1])[0]
 		}
 		results = append(results, result)
 		consume(calls[i:i+1], []toolExecutionResult{result})
-		if i == 0 {
+		if call.Function == "update_plan" && !result.heldBeforeDispatch {
 			after, readable := dispatchBoundaryFromPlan(result.rawResult)
 			unchanged = known && readable && before == after
 		}

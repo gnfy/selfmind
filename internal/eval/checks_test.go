@@ -248,3 +248,23 @@ func TestEvaluateCaseNoRunAllowsReturningSeededHistoricalRun(t *testing.T) {
 		t.Fatalf("historical run returned by a read-only interaction is not newly created: %+v", checks)
 	}
 }
+
+func TestEvaluateCaseStillRejectsExecutionFailuresAndTooManyRefusals(t *testing.T) {
+	zero, two := 0, 2
+	c := &Case{Expect: Expectations{MaxToolErrors: &two, MaxInvokedToolErrors: &zero}}
+	for _, tc := range []struct {
+		name           string
+		total, invoked int
+		want           bool
+	}{
+		{"bounded non-dispatch", 2, 0, true},
+		{"execution failed", 1, 1, false},
+		{"too many refusals", 3, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ChecksPassed(EvaluateCase(c, RunSnapshot{ToolErrors: tc.total, InvokedToolErrors: tc.invoked})); got != tc.want {
+				t.Fatalf("passed=%v want %v", got, tc.want)
+			}
+		})
+	}
+}

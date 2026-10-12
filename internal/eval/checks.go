@@ -16,6 +16,7 @@ type RunSnapshot struct {
 	ActionToolCalls   int
 	ProgressUpdates   int
 	ToolErrors        int
+	InvokedToolErrors int
 	Errors            []string
 	ErrorCategories   map[string]int
 	TaskIDs           []string
@@ -81,6 +82,9 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	}
 	if c.Expect.MaxToolErrors != nil && *c.Expect.MaxToolErrors >= 0 {
 		add("max_tool_errors", snap.ToolErrors <= *c.Expect.MaxToolErrors, "too many tool errors")
+	}
+	if c.Expect.MaxInvokedToolErrors != nil && *c.Expect.MaxInvokedToolErrors >= 0 {
+		add("max_invoked_tool_errors", snap.InvokedToolErrors <= *c.Expect.MaxInvokedToolErrors, "too many attempted or uncertain tool failures")
 	}
 	if c.Expect.MaxDurationSeconds > 0 {
 		add("max_duration_seconds", snap.DurationSeconds <= float64(c.Expect.MaxDurationSeconds), "case exceeded duration budget")

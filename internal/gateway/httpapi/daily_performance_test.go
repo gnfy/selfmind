@@ -17,8 +17,10 @@ func TestPerformanceReportUsesActualFirstCallsAndDeclaredCacheUsage(t *testing.T
 		{Type: "context.recall", Payload: []byte(`{"elapsed_ms":3010,"expansion_ms":3000,"expansion_status":"timeout"}`)},
 		{Type: "context.recall", Payload: []byte(`{"elapsed_ms":10,"expansion_ms":0,"expansion_status":"skipped_exact_replay"}`)},
 		{Type: "run.prepared", Payload: []byte(`{"duration_ms":3050}`)},
+		{Type: "agent.step", Payload: []byte(`{"outcome":"execute_tools","detail":"update_plan,read_file","invoked_tools":["update_plan"],"held_tools":["read_file"]}`)},
+		{Type: "agent.step", Payload: []byte(`{"outcome":"execute_tools","detail":"skill_view","invoked_tools":["skill_view"],"held_tools":[]}`)},
+		{Type: "agent.step", Payload: []byte(`{"outcome":"execute_tools","detail":"read_file","invoked_tools":[],"held_tools":["read_file"]}`)},
 		{Type: "agent.step", Payload: []byte(`{"outcome":"execute_tools","detail":"update_plan,finish_run"}`)},
-		{Type: "agent.step", Payload: []byte(`{"outcome":"execute_tools","detail":"skill_view"}`)},
 	}
 	p := collectDailyPerformance(events)
 	if p.First.Calls != 1 || p.First.Read != 20 || p.First.Unavailable != 1 || p.Later.Read != 90 || p.BookkeepingSteps != 1 || p.ExpansionMS != 3000 || p.RecallMS != 3020 || p.PreparationMS != 3050 {
@@ -28,5 +30,8 @@ func TestPerformanceReportUsesActualFirstCallsAndDeclaredCacheUsage(t *testing.T
 		if !strings.Contains(p.render(), want) {
 			t.Fatalf("missing %q in %s", want, p.render())
 		}
+	}
+	if p.HeldCalls != 2 || p.UnreportedToolSteps != 1 {
+		t.Fatalf("held or historical dispatch facts were misclassified: %+v", p)
 	}
 }

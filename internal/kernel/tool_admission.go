@@ -1,10 +1,32 @@
 package kernel
 
-import "selfmind/internal/kernel/llm"
+import (
+	"strings"
+
+	"selfmind/internal/kernel/llm"
+)
 
 type refusedToolCall struct {
 	call llm.ToolCall
 	err  toolAdmissionError
+}
+
+// Batch admission reserves calls before dispatch, including nested-tool room.
+// A loop-owned boundary hold cancels that reservation; an attempted failure or
+// uncertain effect does not. Lifecycle correction keeps its separate limits.
+func releaseHeldToolReservations(calls []llm.ToolCall, results []toolExecutionResult, counts map[string]int) int {
+	actions := 0
+	for i, result := range results {
+		if !result.heldBeforeDispatch || i >= len(calls) {
+			continue
+		}
+		name := strings.TrimSpace(calls[i].Function)
+		counts[name] = max(0, counts[name]-1)
+		if !isLifecycleToolName(name) {
+			actions++
+		}
+	}
+	return actions
 }
 
 // Admission changes dispatch, never the fact that the model requested a call.

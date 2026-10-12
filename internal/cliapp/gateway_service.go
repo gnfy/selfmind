@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,6 +28,64 @@ type gatewayServiceInstallReceipt struct {
 	Path       string
 	Manager    string
 	Generation string
+}
+
+// serviceHomeEnv names the one HOME, besides the account's own, from which the
+// personal service may be changed: a deliberate non-default layout. It is an
+// operator setting for the process that manages the service, never something a
+// test, soak or scratch HOME should set.
+const serviceHomeEnv = "SELFMIND_SERVICE_HOME"
+
+// requireServiceHome refuses to change the personal service from a HOME that is
+// not the account's own. The launchd label and the systemd unit exist once per
+// account, wherever HOME points, so an isolated HOME that installs, replaces or
+// stops the service replaces or stops the real one. The account's home comes from
+// the account database, never from HOME. Install and preflight ask first; the
+// other operations ask once a service file exists under HOME, because a HOME
+// with no service never touches the service manager and its on-demand daemon
+// must keep working.
+func requireServiceHome(action string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve user home: %w", err)
+	}
+	return checkServiceHome(action, home, accountHomeDir, os.Getenv(serviceHomeEnv))
+}
+
+func accountHomeDir() (string, error) {
+	account, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(account.HomeDir) == "" {
+		return "", errors.New("the account database has no home directory")
+	}
+	return account.HomeDir, nil
+}
+
+func checkServiceHome(action, home string, account func() (string, error), allowed string) error {
+	if allowed = strings.TrimSpace(allowed); allowed != "" && sameDirectory(home, allowed) {
+		return nil
+	}
+	accountHome, err := account()
+	if err != nil {
+		return fmt.Errorf("refusing to %s: cannot confirm that HOME %s is this account's home: %w", action, home, err)
+	}
+	if sameDirectory(home, accountHome) {
+		return nil
+	}
+	return fmt.Errorf("refusing to %s: HOME is %s but this account's home is %s. The background service is registered once per account, so changing it from another HOME would replace the real one; run this from the account's own HOME", action, home, accountHome)
+}
+
+// sameDirectory compares by identity, so a HOME reached through a symbolic link
+// or a case-insensitive spelling still matches.
+func sameDirectory(a, b string) bool {
+	left, leftErr := os.Stat(a)
+	right, rightErr := os.Stat(b)
+	if leftErr == nil && rightErr == nil {
+		return os.SameFile(left, right)
+	}
+	return filepath.Clean(a) == filepath.Clean(b)
 }
 
 func newGatewayServiceGeneration() (string, error) {

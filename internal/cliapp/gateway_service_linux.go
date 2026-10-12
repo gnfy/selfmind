@@ -17,6 +17,9 @@ import (
 )
 
 func gatewayServiceInstall(configPath string, previousPID int, parent []string) (gatewayServiceInstallReceipt, error) {
+	if err := requireServiceHome("install the background service"); err != nil {
+		return gatewayServiceInstallReceipt{}, err
+	}
 	if !gatewayServiceSupported() {
 		return gatewayServiceInstallReceipt{}, fmt.Errorf("systemd user services are unavailable")
 	}
@@ -138,6 +141,9 @@ func gatewayServiceUninstall() (bool, string, error) {
 	} else if err != nil {
 		return false, "", err
 	}
+	if err := requireServiceHome("remove the background service"); err != nil {
+		return true, "", err
+	}
 	_ = runSystemctl("disable", "--now", gatewaySystemdUnit)
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return true, "", err
@@ -153,6 +159,9 @@ func gatewayServiceStartIfInstalled(string) (bool, string, error) {
 	if err != nil || !installed {
 		return installed, "", err
 	}
+	if err := requireServiceHome("start the background service"); err != nil {
+		return true, "", err
+	}
 	if err := runSystemctl("start", gatewaySystemdUnit); err != nil {
 		return true, "", err
 	}
@@ -164,6 +173,9 @@ func gatewayServiceRestartIfInstalled(string) (bool, string, error) {
 	if err != nil || !installed {
 		return installed, "", err
 	}
+	if err := requireServiceHome("restart the background service"); err != nil {
+		return true, "", err
+	}
 	if err := runSystemctl("restart", gatewaySystemdUnit); err != nil {
 		return true, "", err
 	}
@@ -174,6 +186,9 @@ func gatewayServiceStopIfInstalled() (bool, string, error) {
 	installed, _, err := gatewayServiceStatus()
 	if err != nil || !installed {
 		return installed, "", err
+	}
+	if err := requireServiceHome("stop the background service"); err != nil {
+		return true, "", err
 	}
 	if err := runSystemctl("stop", gatewaySystemdUnit); err != nil {
 		return true, "", err
@@ -191,6 +206,9 @@ func gatewayServiceSupported() bool {
 }
 
 func gatewayServicePreflight() error {
+	if err := requireServiceHome("change the background service"); err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := exec.CommandContext(ctx, "systemctl", "is-active", "--quiet", "selfmind.service").Run(); err == nil {

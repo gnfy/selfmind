@@ -300,7 +300,10 @@ selfmind weixin status
   到达安全边界，再由服务重新拉起 daemon。两者都不需要管理员权限。Linux 上若已有
   系统级 `selfmind.service` 正在运行，个人设置会明确报告冲突，不会停止或替换它。
   把启动权交给 launchd/systemd 后，安装流程只等待该受管进程，绝不会再启动 detached
-  fallback 来掩盖服务 job 的失败。
+  fallback 来掩盖服务 job 的失败。launchd 标签和 systemd unit 每个账户只有一份，
+  因此从不是该账户自身主目录的 HOME（临时或测试用 HOME）发起的变更，会在停止任何
+  东西之前被拒绝，并写明两个路径；没有安装服务的 HOME 不受影响。刻意使用非默认 HOME
+  时，用 `SELFMIND_SERVICE_HOME=<路径>` 指明该 HOME。
 - 如果微信 iLink 会话过期，重新运行 `selfmind weixin login`。正在运行的
   gateway 会监听账号凭据文件，在新凭据保存后自动恢复轮询，不需要重启
   daemon。

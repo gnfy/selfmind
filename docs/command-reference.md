@@ -378,7 +378,12 @@ selfmind weixin status
   Linux `selfmind.service` is reported as a conflict instead of being stopped
   or replaced by personal setup. After handing startup to launchd/systemd,
   installation waits for that managed process and never starts a detached
-  fallback that could mask a failed service job.
+  fallback that could mask a failed service job. The launchd label and systemd
+  unit exist once per account, so a change made from a HOME that is not the
+  account's own (a scratch or test HOME) is refused before anything is stopped,
+  naming both paths; a HOME with no installed service is unaffected.
+  `SELFMIND_SERVICE_HOME=<path>` names a deliberately non-default HOME that may
+  change the service.
 - If Weixin reports an expired iLink session, run `selfmind weixin login`
   again. The running gateway watches the account credential file and resumes
   polling after the refreshed credentials are saved; no daemon restart is

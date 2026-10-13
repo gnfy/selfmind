@@ -62,6 +62,15 @@ step IDs preserve work-unit attribution without asking the model to repeat it.
 A snapshot that omits ids keeps each step's id by unchanged wording, and a
 reworded step keeps the id of the open step at its position when the snapshot
 keeps the plan's length, so rewording cannot silently replace unfinished steps.
+The update contract asks for every step on every update but only `step_id` and
+`status` for a step that has not changed: the runtime keeps its stored text,
+acceptance criterion, verification flag and work-unit attribution, and the
+receipt still returns the complete plan, which the dispatch boundary below
+reads, so compact input never changes a boundary decision. A refused stale
+`step_id` names the offending entry and maps each current id to its status and a
+bounded title. An argument name lexically close to a declared one is refused
+with a "did you mean" question and is never renamed for the model, because near
+names can differ in meaning.
 A plan with open steps that has not changed for 12 tool actions gets a one-line
 reminder at the tail of the next model call, again only after another 12; the
 model decides whether it is still true. A leading progress snapshot can share

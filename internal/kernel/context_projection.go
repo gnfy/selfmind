@@ -28,7 +28,7 @@ func (r TaskRuntimeContext) requiredPrompt() string {
 		if r.PlanVersion > 0 {
 			fmt.Fprintf(&b, "plan_version: %d\n", r.PlanVersion)
 		}
-		b.WriteString("\n## Current Run Plan\nCurrent Run step IDs. Preserve criteria and independent unfinished work; update_plan takes a complete snapshot. Bind verify to step_id. Explicitly justify cancellations or replacements.\n")
+		b.WriteString("\n## Current Run Plan\nCurrent Run step IDs. Preserve criteria and independent unfinished work; update_plan takes a complete snapshot that lists every step_id with its status and sends text or success_criteria only when changed. Bind verify to step_id. Explicitly justify cancellations or replacements.\n")
 		for _, step := range r.Plan {
 			fmt.Fprintf(&b, "- step_id=%s [%s] %s; success_criteria=%q verification_required=%t\n", step.StepID, step.Status, step.Step, step.SuccessCriteria, step.VerificationRequired)
 			if step.CancellationDisposition != "" {

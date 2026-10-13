@@ -346,7 +346,7 @@ func validateObject(path string, value map[string]interface{}, properties map[st
 		def, ok := properties[name]
 		if !ok {
 			if additional != nil && !*additional {
-				return fmt.Errorf("unknown parameter: %s — this object accepts only %s", joinParameterPath(path, name), acceptedParameters(properties))
+				return unknownParameterError(path, name, properties)
 			}
 			continue
 		}
@@ -492,7 +492,7 @@ func coerceObject(path string, args map[string]interface{}, properties map[strin
 		def, ok := properties[name]
 		if !ok {
 			if additional != nil && !*additional {
-				return nil, fmt.Errorf("unknown parameter: %s — this object accepts only %s", joinParameterPath(path, name), acceptedParameters(properties))
+				return nil, unknownParameterError(path, name, properties)
 			}
 			// Open schemas preserve fields instead of silently discarding them.
 			coerced[name] = value

@@ -136,7 +136,20 @@ type StalePlanStepReferenceError struct {
 	StepID  string
 	RunID   string
 	Current []string
+	// Index is the position of the offending entry in the submitted snapshot.
+	Index int
+	// Steps describes the Run's current steps in plan order, so the receipt
+	// can say which legal id belongs to which step.
+	Steps []StalePlanStepRef
 }
+
+// StalePlanStepRef is one current step as a stale-id receipt shows it.
+type StalePlanStepRef struct{ StepID, Status, Step string }
+
+const (
+	staleStepListLimit  = 12
+	staleStepTitleRunes = 60
+)
 
 type planVerificationBlock struct {
 	stepID, step, criterion, state, blockers string
@@ -202,6 +215,27 @@ func (e *StalePlanStepReferenceError) Error() string {
 
 func (e *StalePlanStepReferenceError) CurrentPlanStepIDs() []string {
 	return append([]string(nil), e.Current...)
+}
+
+// StalePlanEntry names the offending snapshot entry and the id it carried.
+func (e *StalePlanStepReferenceError) StalePlanEntry() (int, string) {
+	return e.Index, boundedPlanErrorText(e.StepID, 64)
+}
+
+// CurrentPlanStepListing pairs each legal id with its status and a short
+// title, bounded in count and length, so a model that lost track of an id can
+// pick the right one by what the step is rather than guess among opaque ids.
+func (e *StalePlanStepReferenceError) CurrentPlanStepListing() string {
+	parts := make([]string, 0, len(e.Steps))
+	for i, step := range e.Steps {
+		if i >= staleStepListLimit {
+			parts = append(parts, fmt.Sprintf("… and %d more", len(e.Steps)-i))
+			break
+		}
+		title := boundedPlanErrorText(strings.Join(strings.Fields(step.Step), " "), staleStepTitleRunes)
+		parts = append(parts, fmt.Sprintf("%s [%s] %q", step.StepID, step.Status, title))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // SyncRunPlan owns the durable complete-snapshot contract for one Run. It
@@ -554,10 +588,12 @@ func restatedCompletedCriteria(original map[string]string, previous *RunPlan, st
 func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPlan) ([]RunPlanStep, error) {
 	byID := map[string]RunPlanStep{}
 	currentIDs := make([]string, 0)
+	var currentSteps []StalePlanStepRef
 	if previous != nil {
 		for _, step := range previous.Steps {
 			byID[step.StepID] = step
 			currentIDs = append(currentIDs, step.StepID)
+			currentSteps = append(currentSteps, StalePlanStepRef{StepID: step.StepID, Status: step.Status, Step: step.Step})
 		}
 	}
 	// Identity first, for the whole snapshot: an explicit id, then unchanged
@@ -596,7 +632,7 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 				staleID := item.StepID
 				item.StepID = uniqueRunPlanStepMatch(previous.Steps, item, claimed, i == 0)
 				if item.StepID == "" {
-					return nil, &StalePlanStepReferenceError{StepID: staleID, RunID: runID, Current: currentIDs}
+					return nil, &StalePlanStepReferenceError{StepID: staleID, RunID: runID, Current: currentIDs, Index: i, Steps: currentSteps}
 				}
 			}
 		} else if previous != nil {

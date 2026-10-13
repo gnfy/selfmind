@@ -130,7 +130,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 	return &PlanTool{
 		BaseTool: BaseTool{
 			name:        "update_plan",
-			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work. Keep outcome milestones, not Skill reads, approval waits, diagnostic attempts or a final-answer step. Preserve existing step IDs and conditions across continuations; do not duplicate a step just to retry or verify it. Include every step on every update, keep exactly one step in_progress while work is active, and resolve all necessary steps before finishing successfully. Main judges scope changes and keeps independent unfinished work accountable through existing history and cancellation evidence.",
+			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work. Keep outcome milestones, not Skill reads, approval waits, diagnostic attempts or a final-answer step. Preserve existing step IDs and conditions across continuations; do not duplicate a step just to retry or verify it. List every step on every update, keep exactly one step in_progress while work is active, and resolve all necessary steps before finishing successfully. An unchanged step needs only its step_id and status: the runtime keeps its stored step text, success_criteria and verification_required, and the result returns the full plan. Send those fields only for a new step or when they change; after finishing the first of three steps, for example, send three entries carrying step_id and status alone. Main judges scope changes and keeps independent unfinished work accountable through existing history and cancellation evidence.",
 			schema: ToolSchema{
 				Type:                 "object",
 				AdditionalProperties: rejectAdditionalProperties(),
@@ -141,7 +141,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 					},
 					"plan": {
 						Type:        "array",
-						Description: "The complete ordered plan snapshot, including unchanged and completed steps. This replaces the previous snapshot; it is not a partial patch.",
+						Description: "The complete ordered plan snapshot, including unchanged and completed steps. This replaces the previous snapshot; it is not a partial patch. List every step; an unchanged existing step needs only step_id and status.",
 						Items: &PropertyDef{
 							Type:                 "object",
 							AdditionalProperties: rejectAdditionalProperties(),
@@ -152,7 +152,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"step": {
 									Type:        "string",
-									Description: "A concise task step. Required for a new step; omission with an exact server-issued step_id preserves the existing text.",
+									Description: "A concise task step. Required for a new step. For an existing step_id omit it unless the wording changes; omission with an exact server-issued step_id preserves the stored text.",
 								},
 								"cancellation_disposition": {Type: "string", Enum: []string{"not_required", "user_takeover", "unfinished"}, Description: "Main's assessment against the original goal and user corrections. Cancel only work no longer necessary (not_required), or explicitly taken over by the user (user_takeover). A blocked necessary step is unfinished and remains pending, not resolved. Omission also keeps a cancelled obligation pending."},
 								"cancellation_reason":      {Type: "string", Description: "Why this step is no longer necessary or within the user's explicit takeover scope. Suggesting the user do the work is not a takeover."},
@@ -166,7 +166,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								},
 								"success_criteria": {
 									Type:        "string",
-									Description: "Observable condition that proves this step is complete. State what would be true, not what you will do. Omission preserves this step's existing criterion. Judge completion against the original condition; explain a user-authorized scope change instead of weakening it to fit the result.",
+									Description: "Observable condition that proves this step is complete. State what would be true, not what you will do. For an existing step omit it unless the criterion changes; omission preserves the stored criterion. Judge completion against the original condition; explain a user-authorized scope change instead of weakening it to fit the result.",
 								},
 								// The wording used to be "True ONLY when this step
 								// cannot be considered complete without executable
@@ -184,7 +184,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								// the step.
 								"verification_required": {
 									Type:        "boolean",
-									Description: "True only on the single plan step that owns a distinct acceptance condition requiring successful verify evidence. Keep that same step in_progress across failed attempts and replacements. Leave false on diagnostic attempts and on separate retry or recheck steps for the same condition; different conditions may each set true.",
+									Description: "True only on the single plan step that owns a distinct acceptance condition requiring successful verify evidence. Keep that same step in_progress across failed attempts and replacements. Leave false on diagnostic attempts and on separate retry or recheck steps for the same condition; different conditions may each set true. On an existing step omit it to keep the stored value.",
 									Default:     false,
 								},
 								"reuse_prior_verification": {
@@ -270,13 +270,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			}
 			var staleStep interface{ CurrentPlanStepIDs() []string }
 			if errors.As(err, &staleStep) {
-				current := staleStep.CurrentPlanStepIDs()
-				safeMessage := "The supplied step_id is stale for the current run."
-				if len(current) > 0 {
-					safeMessage += " Current step_id values: " + strings.Join(current, ", ") + "."
-				} else {
-					safeMessage += " Omit step_id so this run can create its first durable plan snapshot."
-				}
+				safeMessage := staleStepReceipt(err, staleStep.CurrentPlanStepIDs())
 				return "", newStableToolError(err, "stale_plan_step", "stale_precondition", safeMessage,
 					"Replace the stale id with the matching server-issued id, or omit it only for a genuinely new step.")
 			}
@@ -401,6 +395,29 @@ func samePlanSteps(a, b []PlanStep) bool {
 		}
 	}
 	return true
+}
+
+// staleStepReceipt words the refusal for a step_id this Run never issued. With
+// the Run's step listing it says which legal id belongs to which step, so the
+// model maps by what a step is rather than guessing among opaque ids; an error
+// that carries only ids falls back to listing them.
+func staleStepReceipt(err error, current []string) string {
+	message := "The supplied step_id is stale for the current run."
+	var located interface{ StalePlanEntry() (int, string) }
+	if errors.As(err, &located) {
+		index, supplied := located.StalePlanEntry()
+		message = fmt.Sprintf("plan[%d].step_id %q is stale for the current run.", index, supplied)
+	}
+	if len(current) == 0 {
+		return message + " Omit step_id so this run can create its first durable plan snapshot."
+	}
+	var described interface{ CurrentPlanStepListing() string }
+	if errors.As(err, &described) {
+		if listing := described.CurrentPlanStepListing(); listing != "" {
+			return message + " Current steps (step_id [status] step): " + listing + "."
+		}
+	}
+	return message + " Current step_id values: " + strings.Join(current, ", ") + "."
 }
 
 func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {

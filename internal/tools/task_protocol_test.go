@@ -204,6 +204,109 @@ func TestUpdatePlanToolReturnsSynchronousWorkUnitIdentities(t *testing.T) {
 	}
 }
 
+// The model-facing contract asks for the compact form the runtime already
+// accepts: every step listed, an unchanged step carried by id and status alone.
+// Restating saved text on every update costs output tokens and buys nothing,
+// because the receipt returns the full plan.
+func TestUpdatePlanContractAsksForCompactUnchangedSteps(t *testing.T) {
+	tool := NewUpdatePlanTool()
+	schema := tool.Schema().Properties
+	item := schema["plan"].Items.Properties
+	for name, text := range map[string]string{
+		"tool description":      tool.Description(),
+		"plan":                  schema["plan"].Description,
+		"step":                  item["step"].Description,
+		"success_criteria":      item["success_criteria"].Description,
+		"verification_required": item["verification_required"].Description,
+	} {
+		if !strings.Contains(text, "omit") && !strings.Contains(text, "only") && !strings.Contains(text, "alone") {
+			t.Errorf("%s does not say what an unchanged step may leave out: %s", name, text)
+		}
+	}
+	if !strings.Contains(tool.Description(), "An unchanged step needs only its step_id and status") ||
+		!strings.Contains(tool.Description(), "returns the full plan") {
+		t.Errorf("tool description lost the compact-update contract: %s", tool.Description())
+	}
+	// The snapshot is still complete: list every step, nothing is a patch.
+	for _, want := range []string{"List every step", "not a partial patch"} {
+		if !strings.Contains(tool.Description()+schema["plan"].Description, want) {
+			t.Errorf("complete-snapshot contract lost %q", want)
+		}
+	}
+	// What the wording promises must be what the runtime does without a Run
+	// store: an entry carrying only an id is still refused there, because
+	// nothing can supply its text.
+	if _, err := tool.Execute(map[string]interface{}{"plan": []interface{}{
+		map[string]interface{}{"step_id": "step_a", "status": "completed"},
+	}}); err == nil || !strings.Contains(err.Error(), "plan[0].step is required") {
+		t.Fatalf("a bare id without a durable plan must still be refused: %v", err)
+	}
+}
+
+type stalePlanStepTestError struct {
+	index    int
+	supplied string
+	ids      []string
+	listing  string
+}
+
+func (stalePlanStepTestError) Error() string                    { return "plan step does not belong to the run" }
+func (e stalePlanStepTestError) CurrentPlanStepIDs() []string   { return e.ids }
+func (e stalePlanStepTestError) StalePlanEntry() (int, string)  { return e.index, e.supplied }
+func (e stalePlanStepTestError) CurrentPlanStepListing() string { return e.listing }
+
+type staleIdsOnlyTestError struct{ ids []string }
+
+func (staleIdsOnlyTestError) Error() string                  { return "plan step does not belong to the run" }
+func (e staleIdsOnlyTestError) CurrentPlanStepIDs() []string { return e.ids }
+
+func TestUpdatePlanStaleStepReceiptMapsIdsToStepsAndLocatesTheEntry(t *testing.T) {
+	run := func(t *testing.T, failure error) (string, string) {
+		t.Helper()
+		ctx := WithPlanProjectionSink(context.Background(), func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error) {
+			return nil, failure
+		})
+		_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+			"plan":     []interface{}{map[string]interface{}{"step_id": "step_made_up", "step": "Edit", "status": "in_progress"}},
+			"_context": ctx,
+		})
+		stable, ok := err.(interface {
+			ToolErrorCode() string
+			ToolErrorCategory() string
+			ModelSafeMessage() string
+		})
+		if !ok || stable.ToolErrorCode() != "stale_plan_step" || stable.ToolErrorCategory() != "stale_precondition" {
+			t.Fatalf("stale step recovery = %T %v", err, err)
+		}
+		return stable.ModelSafeMessage(), err.Error()
+	}
+
+	message, _ := run(t, stalePlanStepTestError{
+		index: 2, supplied: "step_made_up", ids: []string{"step_a", "step_b"},
+		listing: `step_a [completed] "Inspect"; step_b [in_progress] "Edit the parser"`,
+	})
+	for _, want := range []string{
+		`plan[2].step_id "step_made_up" is stale for the current run.`,
+		`Current steps (step_id [status] step): step_a [completed] "Inspect"; step_b [in_progress] "Edit the parser".`,
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("receipt lacks %q:\n%s", want, message)
+		}
+	}
+
+	// An error that knows only the ids keeps the plain listing.
+	message, _ = run(t, staleIdsOnlyTestError{ids: []string{"step_a", "step_b"}})
+	if want := "The supplied step_id is stale for the current run. Current step_id values: step_a, step_b."; !strings.Contains(message, want) {
+		t.Errorf("ids-only receipt = %q, want it to contain %q", message, want)
+	}
+
+	// Nothing to list: the first snapshot may omit ids; none are invented.
+	message, _ = run(t, stalePlanStepTestError{index: 0, supplied: "step_made_up"})
+	if !strings.Contains(message, "Omit step_id so this run can create its first durable plan snapshot.") || strings.Contains(message, "Current steps") {
+		t.Errorf("empty-plan receipt = %q", message)
+	}
+}
+
 type staleWorkUnitTestError struct{}
 
 func (staleWorkUnitTestError) Error() string {

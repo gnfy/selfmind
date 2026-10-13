@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"selfmind/internal/verification"
 	"strings"
 	"testing"
@@ -298,6 +299,66 @@ func TestRunPlanRejectsForeignStepID(t *testing.T) {
 	var stale *StalePlanStepReferenceError
 	if !errors.As(err, &stale) || len(stale.CurrentPlanStepIDs()) != 1 || stale.CurrentPlanStepIDs()[0] != first.Plan.Steps[0].StepID {
 		t.Fatalf("foreign step id error=%T %+v", err, err)
+	}
+}
+
+// A model that lost track of an id needs to know which legal id is which step:
+// opaque ids alone leave it guessing, and a guess is another failed call.
+func TestRunPlanStaleStepErrorMapsLegalIdsToSteps(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	input := make([]RunPlanStepInput, 0, 14)
+	for i := 0; i < 14; i++ {
+		status := "pending"
+		switch i {
+		case 0:
+			status = "completed"
+		case 1:
+			status = "in_progress"
+		}
+		title := fmt.Sprintf("Step %02d of the plan", i)
+		if i == 1 {
+			title = "Edit the parser\n  and keep   the tests green " + strings.Repeat("long ", 30)
+		}
+		input = append(input, RunPlanStepInput{Step: title, Status: status})
+	}
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An invented id can be arbitrarily long; the receipt echoes at most 64 runes of it.
+	madeUp := "step_" + strings.Repeat("x", 100)
+	_, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Status: "completed"},
+		{StepID: madeUp, Status: "in_progress"},
+	})
+	var stale *StalePlanStepReferenceError
+	if !errors.As(err, &stale) {
+		t.Fatalf("foreign step id error=%T %v", err, err)
+	}
+	if index, supplied := stale.StalePlanEntry(); index != 1 || supplied != madeUp[:64]+"…" {
+		t.Fatalf("stale entry = %d %q, want plan[1] and the id cut at 64 characters", index, supplied)
+	}
+	if len(stale.CurrentPlanStepIDs()) != 14 {
+		t.Fatalf("legal ids must stay complete: %v", stale.CurrentPlanStepIDs())
+	}
+	listing := stale.CurrentPlanStepListing()
+	for i := 0; i < 12; i++ {
+		if !strings.Contains(listing, first.Plan.Steps[i].StepID+" ["+first.Plan.Steps[i].Status+"]") {
+			t.Fatalf("step %d missing from the listing:\n%s", i, listing)
+		}
+	}
+	if strings.Contains(listing, first.Plan.Steps[12].StepID) || !strings.HasSuffix(listing, "… and 2 more") {
+		t.Fatalf("listing is not bounded to 12 steps with a remainder:\n%s", listing)
+	}
+	collapsed := strings.Join(strings.Fields(input[1].Step), " ")
+	bounded := string([]rune(collapsed)[:60]) + "…"
+	if strings.Contains(listing, "\\n") || strings.Contains(listing, "  ") || !strings.Contains(listing, `"`+bounded+`"`) {
+		t.Fatalf("a long multi-line title must be one bounded line %q:\n%s", bounded, listing)
+	}
+	// A Run with no durable plan has nothing to list; ids are not invented.
+	if empty := (&StalePlanStepReferenceError{StepID: "x"}); empty.CurrentPlanStepListing() != "" {
+		t.Fatalf("empty listing = %q", empty.CurrentPlanStepListing())
 	}
 }
 

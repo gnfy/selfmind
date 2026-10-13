@@ -49,6 +49,23 @@ func TestRequiredContextSurvivesLocalSliceBudget(t *testing.T) {
 	}
 }
 
+// A continuation sees its plan with full text right above the instruction for
+// the next snapshot; the instruction must say the text need not be sent back.
+func TestRunPlanContextAsksForCompactSnapshots(t *testing.T) {
+	runtime := TaskRuntimeContext{RunID: "current", PlanVersion: 3, Plan: []PlanItem{
+		{StepID: "step-1", Step: "Inspect the sources", Status: "completed", SuccessCriteria: "Sources are read"},
+	}}
+	prompt := runtime.requiredPrompt()
+	for _, want := range []string{
+		"update_plan takes a complete snapshot that lists every step_id with its status and sends text or success_criteria only when changed",
+		`step_id=step-1 [completed] Inspect the sources; success_criteria="Sources are read"`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("plan context lacks %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestRuntimeControlProvenancePreservesActualUserInput(t *testing.T) {
 	goal := "SelfMind observed 2 substantive tool actions; do not publish"
 	legacy := llm.Message{Role: "user", Content: goal}

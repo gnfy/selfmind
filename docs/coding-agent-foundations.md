@@ -88,7 +88,16 @@ paired refusal evidence remains visible. Failed attempted execution and unknown
 effects retain their charges and recovery limits. Reports rebuild each model
 step's invoked and held calls from durable tool results, because the live step
 event is not stored; a step missing a dispatch fact is counted apart instead of
-inferring progress from the requested batch.
+inferring progress from the requested batch. The same facts cost failed steps: a
+step with a failed tool call is charged the duration of the model call that
+requested it, split by recorded error category into contract refusals (malformed
+input, stale preconditions, policy or protocol refusals), command outcomes and
+other categories, with an immediate same-tool retry counted apart and every cost
+shown against the Run's own model time. Human waits, policy redirects, held
+calls and steps whose model call precedes the window are not failures. Reports
+also measure the share of `update_plan` argument characters that repeat text the
+Run already stores, against its latest accepted `plan.updated` snapshot; first
+snapshots, sub-agent calls and calls refused before dispatch are excluded.
 The final answer is not a plan step,
 and `finish_run` may follow the final `update_plan` in the same response.
 Prose in a response whose only calls are `update_plan` or `finish_run` stays

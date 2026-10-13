@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/control/controltest"
@@ -211,11 +212,21 @@ func TestCompactPlanInputKeepsTheCompleteReceiptAndBoundaryOfARealRun(t *testing
 			t.Fatalf("what the model left out was not preserved: %+v", step)
 		}
 	}
+	// And the report sees what the contract asks for: two compact updates, none restated.
+	report, err := flow.daemon.dailyQualityReport(context.Background(), flow.owner, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(report, "across 2 updates; 1 first snapshots and 0 unreadable inputs excluded") || !strings.Contains(report, "Plan input restating stored fields: 0% of plan argument characters") {
+		t.Fatalf("report does not show compact input:\n%s", report)
+	}
 }
 
 // Two refused update_plan calls and the correction that follows, as a real run
-// records them: each refusal tells the model what to fix.
-func TestRefusedPlanCallsTellTheModelWhatToFixInARealRun(t *testing.T) {
+// records them: the refusals tell the model what to fix, and the daily report
+// reads the same events as failed steps, an immediate same-tool retry, and the
+// share of plan input that only repeated stored text.
+func TestRefusedPlanCallsReachTheModelAndTheDailyReportOfARealRun(t *testing.T) {
 	provider := &receiptScriptedProvider{}
 	provider.script = func(n int32, receipt []map[string]interface{}) []llm.ToolCall {
 		var a, b string
@@ -266,5 +277,31 @@ func TestRefusedPlanCallsTellTheModelWhatToFixInARealRun(t *testing.T) {
 		if !strings.Contains(stale, want) {
 			t.Errorf("the stale-id refusal lacks %q:\n%s", want, stale)
 		}
+	}
+
+	report, err := flow.daemon.dailyQualityReport(context.Background(), flow.owner, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Failed model steps: 2 (",
+		"contract 2 (",
+		"retried with the same tool at once: 1 more steps (",
+		"Failed steps by tool: update_plan 2 (contract 2; retried 1; ",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("daily report lacks %q:\n%s", want, report)
+		}
+	}
+	// The refused-before-dispatch call has no start event; the stale-id call, the
+	// repeated step text and the repeated criterion do.
+	characters := len(a) + len("in_progress") + len("step_made_up") + len("pending") + // call 3
+		len(a) + len("in_progress") + len("Inspect sources") + len(b) + len("pending") + // call 4
+		len(a) + len("completed") + len(b) + len("completed") + len("Scope is understood") // call 5
+	restated := len("Inspect sources") + len("Scope is understood")
+	want := fmt.Sprintf("Plan input restating stored fields: %d%% of plan argument characters (%d of %d; 2 of 6 entries) across 3 updates; 1 first snapshots and 0 unreadable inputs excluded",
+		restated*100/characters, restated, characters)
+	if !strings.Contains(report, want) {
+		t.Errorf("plan input line: want %q in:\n%s", want, report)
 	}
 }

@@ -19,6 +19,11 @@ type dailyPerformance struct {
 	First, Later                   dailyCacheSample
 	BookkeepingSteps               int
 	HeldCalls, UnreportedToolSteps int
+	// ModelMS is the Run's own model-call time: the denominator for what its
+	// failed steps cost.
+	ModelMS      int64
+	StepFailures dailyStepFailures
+	PlanInput    dailyPlanInput
 }
 
 // dailyToolStep is the tool calls one Run's own loop made between two of its
@@ -29,6 +34,11 @@ type dailyToolStep struct {
 	held       int
 	invoked    []string
 	unreported bool
+	// What the step cost and which of its calls failed (daily_step_failures.go).
+	seq      int
+	modelMS  int64
+	calls    []string
+	failures []dailyStepFailure
 }
 
 func (s *dailyToolStep) addTo(stats *dailyPerformance) {
@@ -55,9 +65,11 @@ func (s *dailyToolStep) addTo(stats *dailyPerformance) {
 func collectDailyPerformance(events []control.Event) dailyPerformance {
 	stats := dailyPerformance{ExpansionStatuses: map[string]int{}}
 	open := map[string]*dailyToolStep{}
+	failures, planInput := newDailyStepFailureTracker(), newDailyPlanInputTracker()
 	closeStep := func(runID string) {
 		if step := open[runID]; step != nil {
 			step.addTo(&stats)
+			failures.finish(runID, step)
 			delete(open, runID)
 		}
 	}
@@ -91,14 +103,21 @@ func collectDailyPerformance(events []control.Event) dailyPerformance {
 				Dispatched *bool  `json:"provider_dispatched"`
 				Status     string `json:"status"`
 				Delegated  bool   `json:"delegated"`
+				DurationMS int64  `json:"duration_ms"`
 			}
 			if json.Unmarshal(event.Payload, &p) != nil {
 				continue
 			}
+			// A typed local deferral made no provider request: it is no model call.
+			deferred := p.Status == "deferred" && p.Dispatched != nil && !*p.Dispatched
 			if !p.Delegated {
 				closeStep(event.RunID)
+				if event.RunID != "" && !deferred {
+					failures.modelCall(event.RunID, p.DurationMS)
+					stats.ModelMS += p.DurationMS
+				}
 			}
-			if p.First == nil || p.Status == "deferred" && p.Dispatched != nil && !*p.Dispatched {
+			if p.First == nil || deferred {
 				continue
 			}
 			sample := &stats.Later
@@ -114,11 +133,13 @@ func collectDailyPerformance(events []control.Event) dailyPerformance {
 			sample.Read += p.Read
 		case "tool.completed":
 			var p struct {
-				Tool      string `json:"tool"`
-				ErrorCode string `json:"error_code"`
-				Invoked   *bool  `json:"invoked"`
-				Delegated bool   `json:"delegated"`
-				Nested    bool   `json:"nested"`
+				Tool          string `json:"tool"`
+				ErrorCode     string `json:"error_code"`
+				Error         string `json:"error"`
+				ErrorCategory string `json:"error_category"`
+				Invoked       *bool  `json:"invoked"`
+				Delegated     bool   `json:"delegated"`
+				Nested        bool   `json:"nested"`
 			}
 			if event.RunID == "" || json.Unmarshal(event.Payload, &p) != nil || p.Delegated || p.Nested {
 				continue
@@ -126,7 +147,12 @@ func collectDailyPerformance(events []control.Event) dailyPerformance {
 			step := open[event.RunID]
 			if step == nil {
 				step = &dailyToolStep{}
+				failures.open(event.RunID, step)
 				open[event.RunID] = step
+			}
+			step.calls = append(step.calls, p.Tool)
+			if failure, failed := dailyCallFailure(p.Tool, p.Error, p.ErrorCategory, p.ErrorCode); failed {
+				step.failures = append(step.failures, failure)
 			}
 			if p.ErrorCode == "plan_boundary_held" {
 				step.held++
@@ -138,10 +164,12 @@ func collectDailyPerformance(events []control.Event) dailyPerformance {
 				step.invoked = append(step.invoked, p.Tool)
 			}
 		}
+		planInput.observe(event)
 	}
 	for runID := range open {
 		closeStep(runID)
 	}
+	stats.StepFailures, stats.PlanInput = failures.dailyStepFailures, planInput.dailyPlanInput
 	return stats
 }
 
@@ -153,6 +181,7 @@ func formatCacheSample(sample dailyCacheSample) string {
 }
 
 func (p dailyPerformance) render() string {
-	return fmt.Sprintf("Preparation: %d measured runs, total %dms (excludes queued time); recall %dms including expansion %dms (%s)\nCache by actual request position: first %s; later %s (historical missing markers excluded)\nBookkeeping-only model steps: %d (invoked update_plan/finish_run; Skill reads are not bookkeeping); held calls: %d; dispatch metadata missing: %d steps\n",
+	base := fmt.Sprintf("Preparation: %d measured runs, total %dms (excludes queued time); recall %dms including expansion %dms (%s)\nCache by actual request position: first %s; later %s (historical missing markers excluded)\nBookkeeping-only model steps: %d (invoked update_plan/finish_run; Skill reads are not bookkeeping); held calls: %d; dispatch metadata missing: %d steps\n",
 		p.PreparationSamples, p.PreparationMS, p.RecallMS, p.ExpansionMS, formatCountMap(p.ExpansionStatuses), formatCacheSample(p.First), formatCacheSample(p.Later), p.BookkeepingSteps, p.HeldCalls, p.UnreportedToolSteps)
+	return base + p.StepFailures.render(p.ModelMS) + p.PlanInput.render()
 }

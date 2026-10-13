@@ -87,7 +87,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: 097b6a54dd884c95
+    source_hash: eeadcfc6df76cc9d
   - path: docs/command-reference.md
     title: Command Reference
     class: guide

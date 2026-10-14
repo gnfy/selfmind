@@ -649,6 +649,15 @@ type DigestApproval struct {
 type DigestClarify struct {
 	ID   string `json:"id"`
 	Line string `json:"line"`
+	// Channel is the session that asked; that session answers with plain text.
+	Channel string `json:"channel,omitempty"`
+	// AskedAgoSeconds is how long the question had waited when the digest was built.
+	AskedAgoSeconds int64 `json:"asked_ago_seconds,omitempty"`
+	// NumberedReplyOnly reports that a plain reply from any other session no
+	// longer answers the question, because its asking terminal is still open or
+	// it has waited too long with the asker gone; the reply takes the form
+	// "N: answer", and anything else is new work.
+	NumberedReplyOnly bool `json:"numbered_reply_only,omitempty"`
 }
 
 type DigestPush struct {

@@ -311,3 +311,54 @@ func TestStartupDigestRendersActiveRunProgress(t *testing.T) {
 		t.Fatalf("empty digest must render nothing, got %q", got)
 	}
 }
+
+// A waiting question says what a plain message typed here would do to it, how
+// long it has waited, and what else is possible. A reply that no longer answers
+// it (another session's open question, or one that has waited too long with its
+// asker gone) is told to take the named form, instead of being invited to type
+// a reply that would start new work. On 2026-10-14 the banner read "just reply
+// with your answer" and a new release request, pasted into a fresh terminal,
+// became the answer to a question asked two and a half hours earlier.
+func TestPendingQuestionLineSaysWhatAPlainReplyDoes(t *testing.T) {
+	question := api.DigestClarify{ID: "clr_1", Line: "Which one did you mean?\n(it is irreversible)", Channel: "old-session"}
+
+	fresh := pendingClarifyLine(question, "this-session")
+	for _, want := range []string{"1 question waiting: Which one did you mean? (it is irreversible)", "just reply with your answer", "/new --run <request> to start something else"} {
+		if !strings.Contains(fresh, want) {
+			t.Fatalf("fresh question line lacks %q: %s", want, fresh)
+		}
+	}
+	if strings.Contains(fresh, "asked") || strings.Contains(fresh, "1: <your answer>") {
+		t.Fatalf("a question that just arrived has no age and takes a plain reply: %s", fresh)
+	}
+
+	question.AskedAgoSeconds = 720
+	if line := pendingClarifyLine(question, "this-session"); !strings.Contains(line, "(asked 12m ago)") || !strings.Contains(line, "just reply with your answer") {
+		t.Fatalf("a twelve-minute-old question still takes a plain reply and says how old it is: %s", line)
+	}
+
+	question.AskedAgoSeconds, question.NumberedReplyOnly = 2*3600+35*60, true
+	stale := pendingClarifyLine(question, "this-session")
+	for _, want := range []string{"(asked 2h35m ago)", `answer it as "1: <your answer>"`, "anything else you type starts new work"} {
+		if !strings.Contains(stale, want) {
+			t.Fatalf("stale question line lacks %q: %s", want, stale)
+		}
+	}
+	if strings.Contains(stale, "just reply with your answer") {
+		t.Fatalf("a question a plain reply no longer answers must not invite one: %s", stale)
+	}
+
+	// The session that asked still answers with plain text, however long ago.
+	if own := pendingClarifyLine(question, "old-session"); !strings.Contains(own, "just reply with your answer") || strings.Contains(own, "1: <your answer>") {
+		t.Fatalf("the asking session answers with plain text: %s", own)
+	}
+
+	digest := &api.DigestResponse{PendingClarifies: []api.DigestClarify{question}}
+	if text := formatStartupDigest(digest, "this-session"); !strings.Contains(text, stale) {
+		t.Fatalf("the startup digest does not carry the question line:\n%s", text)
+	}
+	digest.PendingClarifies = append(digest.PendingClarifies, api.DigestClarify{ID: "clr_2", Line: "Another"})
+	if text := formatStartupDigest(digest, "this-session"); !strings.Contains(text, "⚠ 2 questions waiting — see /status") {
+		t.Fatalf("several questions keep their summary line:\n%s", text)
+	}
+}

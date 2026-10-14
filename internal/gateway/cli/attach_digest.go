@@ -234,6 +234,23 @@ func (m *uiModel) detachWatchedRunForNewTurn() {
 	}
 }
 
+// pendingClarifyLine says what a plain message typed in this session would do to
+// the one waiting question, how long it has waited, and what else is possible. A
+// question another session asked, or one that has waited too long with its
+// asker gone, takes only the named form; the line says so instead of inviting a
+// reply that would start new work.
+func pendingClarifyLine(clarify api.DigestClarify, session string) string {
+	line := strings.Join(strings.Fields(clarify.Line), " ")
+	age := ""
+	if clarify.AskedAgoSeconds >= 60 {
+		age = " (asked " + formatElapsedShort(clarify.AskedAgoSeconds) + " ago)"
+	}
+	if clarify.NumberedReplyOnly && strings.TrimSpace(clarify.Channel) != strings.TrimSpace(session) {
+		return fmt.Sprintf("⚠ 1 question waiting%s: %s — answer it as \"1: <your answer>\"; anything else you type starts new work", age, line)
+	}
+	return fmt.Sprintf("⚠ 1 question waiting%s: %s — just reply with your answer, or /new --run <request> to start something else", age, line)
+}
+
 // formatStartupDigest renders the digest as compact event/state sections for
 // the terminal of one session. Ids are deliberately absent: approvals resolve
 // by ordinal via /approvals on the gateway, tasks resume via /resume — UUID
@@ -280,7 +297,7 @@ func formatStartupDigest(digest *api.DigestResponse, session string) string {
 	// here leaves stale transcript warnings after another endpoint answers.
 	switch n := len(digest.PendingClarifies); {
 	case n == 1:
-		attention = append(attention, fmt.Sprintf("⚠ 1 question waiting: %s — just reply with your answer", strings.Join(strings.Fields(digest.PendingClarifies[0].Line), " ")))
+		attention = append(attention, pendingClarifyLine(digest.PendingClarifies[0], session))
 	case n > 1:
 		attention = append(attention, fmt.Sprintf("⚠ %d questions waiting — see /status", n))
 	}

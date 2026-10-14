@@ -326,7 +326,12 @@ what waits. While the asking terminal is open, only it answers with plain text
 (a question's answer, a bare y/n); another terminal answers an approval with
 `/approve` or a question with the named form `N: answer`, and its plain message
 stays its own input. With the asking terminal closed, or for an IM question,
-any endpoint answers with plain text as before. A message typed while another
+any endpoint answers with plain text, until the question has waited 30 minutes:
+then a plain reply from any other session is new work, and the answer takes the
+named form `N: answer`, as it does while the asking terminal is open. The asking
+session itself always answers with plain text. The startup banner and the
+acknowledgement say which question a reply answers and how long it had waited;
+`/new --run <request>` starts unrelated work while a question waits. A message typed while another
 session's run is active queues for this session, unless it has an exact reply
 edge to the active Run. Resource and person-capacity limits determine when
 queued work can start.

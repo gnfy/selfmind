@@ -204,10 +204,15 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 	if err != nil {
 		return out, err
 	}
+	now := time.Now()
 	for _, clarify := range clarifies {
 		out.PendingClarifies = append(out.PendingClarifies, api.DigestClarify{
-			ID:   clarify.ID,
-			Line: clarifySummaryLine(clarify),
+			ID:              clarify.ID,
+			Line:            clarifySummaryLine(clarify),
+			Channel:         clarify.Channel,
+			AskedAgoSeconds: max(0, int64(now.Sub(clarify.CreatedAt).Seconds())),
+			// An empty reply channel asks what any OTHER session may do.
+			NumberedReplyOnly: !d.clarifyAnswersImplicitly(identity, "", clarify, now),
 		})
 	}
 

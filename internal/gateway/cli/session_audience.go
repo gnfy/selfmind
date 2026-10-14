@@ -207,6 +207,7 @@ func otherSessionReceipt(title string) string {
 // only observes: the run keeps its session, which still receives its answer.
 func (m *uiModel) handleAttach(args []string) tea.Cmd {
 	m.runViewResumeActions = false // compatibility alias remains view-only
+	m.runViewFromChooser = false
 	if m.runViewer != nil {
 		ref := ""
 		if len(args) > 0 {

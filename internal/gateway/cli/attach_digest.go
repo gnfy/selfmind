@@ -195,7 +195,7 @@ func (m *uiModel) attachToActiveRun() tea.Cmd {
 	if name == "" {
 		name = "the running task"
 	}
-	m.setStatusNotice(noticeInfo, "Watching "+name+" — close the work page for live progress; new input is separate unless you select continuation.")
+	m.setStatusNotice(noticeInfo, "Watching "+name+" — view only. /resume, then c, sends your next message to it; other input starts separate work.")
 	ctx, cancel := context.WithCancel(context.Background())
 	m.watchCancel = cancel
 	watcher := m.runWatcher

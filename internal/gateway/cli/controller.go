@@ -284,6 +284,14 @@ type uiModel struct {
 	runViewLoading       bool
 	runViewResumeActions bool
 	runViewCanContinue   bool
+	// runViewChooser is the chooser last shown, runViewChooserIndex the row
+	// selected when a detail page was opened from it, and runViewFromChooser
+	// says the open detail page came from there: Esc/b returns to the chooser
+	// instead of closing the whole viewer. A detail page opened directly has
+	// nowhere to go back to.
+	runViewChooser      *api.RunView
+	runViewChooserIndex int
+	runViewFromChooser  bool
 	// watchingRun is PASSIVE spectator mode for a pre-existing daemon run
 	// (no local turn owns it, the composer is NOT captured). Distinct from
 	// m.thinking, which means "a local turn is executing".

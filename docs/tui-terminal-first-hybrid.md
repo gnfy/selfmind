@@ -370,7 +370,11 @@ substrate). Document results in this file.
   running work. The reducer drops and counts another session's detail event
   that reaches it anyway; the presence heartbeat reports the count, which the
   daily report shows. The `/resume` work viewer is the way to render another session's
-  progress here.
+  progress here. Its chooser lists Runs (arrows, Enter to view); a Run's page is
+  view-only and its fixed footer names the choice: `c` selects the Run for the
+  next message, Esc/`b` returns to the chooser on the opened row, `r` refreshes,
+  `q` closes. Keys listed inside a scrolling page would scroll out of sight, so
+  the footer, not the page, carries them.
 - The pinned plan's heading says how many of its run's tool actions ago it
   last changed (`· updated N actions ago`), so a plan that stopped moving reads
   as possibly stale rather than as the current state.

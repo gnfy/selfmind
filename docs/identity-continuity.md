@@ -336,7 +336,8 @@ session's run is active queues for this session, unless it has an exact reply
 edge to the active Run. Resource and person-capacity limits determine when
 queued work can start.
 Watching another session's run is explicit: the `/resume` viewer (with
-`/attach` retained as read-only compatibility), or resuming that
+`/attach` retained as read-only compatibility; its footer names the keys of the
+page it shows), or resuming that
 session with `selfmind --resume <session>`. A parked approval answered from a
 terminal continues in the source run's session.
 

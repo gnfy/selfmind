@@ -45,41 +45,21 @@ func (m *uiModel) showRunView(msg MsgRunViewLoaded) tea.Cmd {
 		m.setStatusNotice(noticeError, msg.Err.Error())
 		return nil
 	}
-	m.runViewOptions = msg.View.Options
+	if len(msg.View.Options) > 0 {
+		m.showRunViewChooser(msg.View, 0)
+		return nil
+	}
+	m.runViewOptions = nil
 	m.runViewIndex = 0
 	m.runViewID = msg.View.RunID
 	m.runViewCanContinue = msg.View.CanContinue
-	if len(msg.View.Options) > 0 {
-		m.pager = components.NewPager(m.common, m.width, m.height, func(width int) string {
-			var text strings.Builder
-			text.WriteString("Work · view only\n\n")
-			text.WriteString(msg.View.Content + "\n\n")
-			// Keep the selected row visible even in a short terminal. The
-			// chooser is a bounded window, while detail pages scroll normally.
-			count := min(8, max(1, (m.height-10)/2))
-			start := max(0, m.runViewIndex-count+1)
-			end := min(len(m.runViewOptions), start+count)
-			for i := start; i < end; i++ {
-				option := m.runViewOptions[i]
-				marker := "  "
-				if i == m.runViewIndex {
-					marker = "› "
-				}
-				id := truncateToWidth(option.RunID, 16)
-				label := truncateToWidth(option.Status+" · "+option.Title+" ("+id+")", max(1, width-6))
-				fmt.Fprintf(&text, "- %s%s\n", marker, label)
-			}
-			fmt.Fprintf(&text, "\n%d/%d selected", m.runViewIndex+1, len(m.runViewOptions))
-			text.WriteString("\n↑/↓ choose · Enter view · q/Esc close · /queue lists requests not started")
-			return renderMarkdown(text.String(), width)
-		})
-		return nil
-	}
-	content := strings.ReplaceAll(msg.View.Content, "\n", "  \n") + "\n\nr refresh · q/Esc close"
-	if m.runViewResumeActions && msg.View.CanContinue {
-		content += " · c select for your next message"
-	}
-	m.pager = components.NewPager(m.common, m.width, m.height, func(width int) string { return renderMarkdown(content, width) })
+	// The actions live in the fixed footer: keys listed inside the page scroll
+	// away on a long Plan, which left a page that read as nothing to do but quit.
+	canSelect := m.runViewResumeActions && msg.View.CanContinue
+	m.pager = components.NewPager(m.common, m.width, m.height, func(width int) string {
+		return renderMarkdown(strings.ReplaceAll(msg.View.Content, "\n", "  \n"), width)
+	})
+	m.pager.SetHint(runViewDetailHint(canSelect, m.runViewFromChooser && m.runViewChooser != nil))
 	if m.watchingRun && m.watchedRunID != msg.View.RunID && !m.thinking && !m.daemonRunActive {
 		m.detachWatchedRunForNewTurn()
 	}
@@ -99,6 +79,57 @@ func (m *uiModel) showRunView(msg MsgRunViewLoaded) tea.Cmd {
 	return nil
 }
 
+// showRunViewChooser renders the chooser with row `index` selected.
+func (m *uiModel) showRunViewChooser(view api.RunView, index int) {
+	m.runViewChooser = &view
+	m.runViewOptions = view.Options
+	m.runViewIndex = index
+	m.runViewID = ""
+	m.runViewCanContinue = false
+	m.pager = components.NewPager(m.common, m.width, m.height, func(width int) string {
+		var text strings.Builder
+		text.WriteString("Work · view only\n\n")
+		text.WriteString(view.Content + "\n\n")
+		// Keep the selected row visible even in a short terminal. The
+		// chooser is a bounded window, while detail pages scroll normally.
+		count := min(8, max(1, (m.height-10)/2))
+		start := max(0, m.runViewIndex-count+1)
+		end := min(len(m.runViewOptions), start+count)
+		for i := start; i < end; i++ {
+			option := m.runViewOptions[i]
+			marker := "  "
+			if i == m.runViewIndex {
+				marker = "› "
+			}
+			id := truncateToWidth(option.RunID, 16)
+			label := truncateToWidth(option.Status+" · "+option.Title+" ("+id+")", max(1, width-6))
+			fmt.Fprintf(&text, "- %s%s\n", marker, label)
+		}
+		fmt.Fprintf(&text, "\n%d/%d selected", m.runViewIndex+1, len(m.runViewOptions))
+		text.WriteString("\n/queue lists requests not started")
+		return renderMarkdown(text.String(), width)
+	})
+	m.pager.SetHint("↑/↓ choose · Enter view · q/Esc close")
+}
+
+// runViewDetailHint names the keys of a Run's detail page. Selecting is an
+// explicit choice, separate from viewing: `c` makes the next message go to this
+// Run, and Esc/b leaves without choosing.
+func runViewDetailHint(canSelect, fromChooser bool) string {
+	var keys []string
+	if canSelect {
+		keys = append(keys, "c select for your next message")
+	} else {
+		keys = append(keys, "view only")
+	}
+	if fromChooser {
+		keys = append(keys, "Esc/b back", "r refresh", "q close")
+	} else {
+		keys = append(keys, "r refresh", "q/Esc close")
+	}
+	return strings.Join(keys, " · ")
+}
+
 func (m *uiModel) runViewKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 	if msg.String() == "c" && m.runViewResumeActions && m.runViewCanContinue && m.runViewID != "" {
 		id := m.runViewID
@@ -114,16 +145,24 @@ func (m *uiModel) runViewKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 			m.runViewIndex = min(len(m.runViewOptions)-1, m.runViewIndex+1)
 			return true, nil
 		case "enter":
+			// Remember the row, so Esc/b on the detail page comes back to the same place.
+			m.runViewFromChooser = true
+			m.runViewChooserIndex = m.runViewIndex
 			return true, m.loadRunView(m.runViewOptions[m.runViewIndex].RunID)
 		}
 	}
 	if msg.String() == "r" && m.runViewID != "" && m.runViewer != nil {
 		return true, m.loadRunView(m.runViewID)
 	}
-	if msg.String() == "q" || msg.String() == "esc" || msg.String() == "ctrl+c" {
-		m.runViewOptions, m.runViewID = nil, ""
+	if (msg.String() == "esc" || msg.String() == "b") && m.runViewID != "" && m.runViewFromChooser && m.runViewChooser != nil {
+		// Back to the chooser without choosing: drop a late detail load or refresh.
 		m.runViewRequest++
 		m.runViewLoading = false
+		m.showRunViewChooser(*m.runViewChooser, m.runViewChooserIndex)
+		return true, nil
+	}
+	if msg.String() == "q" || msg.String() == "esc" || msg.String() == "ctrl+c" {
+		m.closeRunViewState()
 	}
 	return false, nil
 }
@@ -131,11 +170,18 @@ func (m *uiModel) runViewKey(msg tea.KeyMsg) (bool, tea.Cmd) {
 // Human waits from this session take precedence over a transient work view.
 func (m *uiModel) closeRunViewForHumanWait() {
 	if m.runViewID != "" || len(m.runViewOptions) > 0 || m.runViewLoading {
-		m.runViewOptions, m.runViewID = nil, ""
-		m.runViewRequest++
-		m.runViewLoading = false
+		m.closeRunViewState()
 		m.pager = nil
 	}
+}
+
+// closeRunViewState forgets the open work page, its chooser, and any load still
+// on its way.
+func (m *uiModel) closeRunViewState() {
+	m.runViewOptions, m.runViewID = nil, ""
+	m.runViewChooser, m.runViewFromChooser = nil, false
+	m.runViewRequest++
+	m.runViewLoading = false
 }
 
 // Only a committed exact resume edge transfers an explicit observation.

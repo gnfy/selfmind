@@ -518,7 +518,8 @@ before normal agent dispatch.
   and an approval panel opens only in the session whose run asks.
   Bare `/resume` opens a chooser of waiting, running and recent Runs. Use
   arrow keys and Enter to view an exact Run's status, Plan and pending human
-  input; `r` refreshes details and Esc/q returns. Viewing does not execute or
+  input. The page footer names its keys: `r` refreshes, Esc or `b` returns to
+  the chooser on the row that was opened, `q` closes. Viewing does not execute or
   answer work. Where continuation is available, `c` selects that exact Run
   for this session's next message. `/attach [run_id]` remains a read-only
   compatibility entry. An active selection may stream here when this terminal

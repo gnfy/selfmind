@@ -26,6 +26,28 @@ func TestAssistantPhaseControlsFinalGutter(t *testing.T) {
 	}
 }
 
+// A final answer on 2026-10-14 listed three commands on consecutive lines with
+// no code fence, and every one of them ran into the same paragraph: single
+// newlines were folded into spaces. Rendered as Codex renders it, a soft break
+// is a line break and each command keeps its own row.
+func TestAssistantReplyKeepsTheCommandsAModelWroteOnePerLine(t *testing.T) {
+	reply := "Preflight is done; say go and I will start segment 1.\n\n" +
+		"Equivalent commands:\n" +
+		"aws codebuild start-build --project-name service-one --source-version v20261014162520\n" +
+		"aws codebuild start-build --project-name service-two --source-version v20261014162544\n" +
+		"aws codebuild start-build --project-name service-three --source-version v20261014165212\n\n" +
+		"Nothing was started; production is unchanged."
+	want := "• Preflight is done; say go and I will start segment 1.\n\n" +
+		"  Equivalent commands:\n" +
+		"  aws codebuild start-build --project-name service-one --source-version v20261014162520\n" +
+		"  aws codebuild start-build --project-name service-two --source-version v20261014162544\n" +
+		"  aws codebuild start-build --project-name service-three --source-version v20261014165212\n\n" +
+		"  Nothing was started; production is unchanged."
+	if got := strings.TrimSpace(ansi.Strip(renderAssistantMessage(reply, 100))); got != want {
+		t.Fatalf("reply rendered as\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestCommentaryNarrationIsReadableAcrossScripts(t *testing.T) {
 	tests := []string{
 		"I will inspect the trigger mapping.",

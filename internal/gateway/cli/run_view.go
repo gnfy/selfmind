@@ -57,7 +57,7 @@ func (m *uiModel) showRunView(msg MsgRunViewLoaded) tea.Cmd {
 	// away on a long Plan, which left a page that read as nothing to do but quit.
 	canSelect := m.runViewResumeActions && msg.View.CanContinue
 	m.pager = components.NewPager(m.common, m.width, m.height, func(width int) string {
-		return renderMarkdown(strings.ReplaceAll(msg.View.Content, "\n", "  \n"), width)
+		return renderMarkdown(msg.View.Content, width)
 	})
 	m.pager.SetHint(runViewDetailHint(canSelect, m.runViewFromChooser && m.runViewChooser != nil))
 	if m.watchingRun && m.watchedRunID != msg.View.RunID && !m.thinking && !m.daemonRunActive {

@@ -78,7 +78,13 @@ stays canonical.
   line regexes. Headings, inline emphasis/code, hanging-indent lists,
   blockquotes, fenced code, links, local file references, strikethrough, task
   lists, and tables share one semantic renderer. Tables use a grid when it fits
-  and key/value records on narrow terminals. Typed
+  and key/value records on narrow terminals. Where a terminal differs from
+  CommonMark's HTML rules, line-level behavior follows Codex's renderer rather
+  than a design of our own: a single newline is a line break, so commands a
+  model wrote one per line stay one per row instead of running into one
+  paragraph; code lines wrap at words under their own indentation, never at a
+  fixed column; a hyphen ends a row only between two alphanumerics, so a flag is
+  never cut into `--` and its name; and every row of a quote carries the bar. Typed
   `commentary` and `final_answer` metadata travels through the provider,
   kernel, daemon event, client, and TUI seams when available; deterministic
   tool/final boundaries cover providers that omit it. The immutable semantic

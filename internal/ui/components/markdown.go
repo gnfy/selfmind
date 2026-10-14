@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 
 	uitheme "selfmind/internal/ui/theme"
 
@@ -48,7 +49,10 @@ func NewMarkdownRenderer(t uitheme.Theme) MarkdownRenderer {
 // RenderMarkdown turns CommonMark/GFM source into terminal-safe semantic
 // lines. It deliberately owns layout rather than HTML generation so callers
 // retain correct terminal-cell wrapping, hanging indents, and narrow-table
-// fallbacks. ANSI/control sanitization remains the caller's trust boundary.
+// fallbacks. Where CommonMark's HTML rules and a terminal differ, line-level
+// behavior follows Codex's renderer (a soft break is a line break; code lines
+// wrap at words under their own indentation) rather than a design of our own.
+// ANSI/control sanitization remains the caller's trust boundary.
 func RenderMarkdown(source string, width int) string {
 	return NewMarkdownRenderer(uitheme.Default()).Render(source, width)
 }
@@ -107,7 +111,10 @@ func (r terminalMarkdownRenderer) renderBlock(node ast.Node, width int) string {
 		}
 	case *ast.Blockquote:
 		inner := strings.Join(r.renderBlockChildren(typed, max(4, width-2)), "\n\n")
-		return prefixMarkdownLines(inner, r.styles.quote.Render("│ "), r.styles.quote.Render("│"))
+		// Every line carries the bar and a space, as Codex prints "> " on each;
+		// the space sits outside the style so a blank line can drop it.
+		bar := r.styles.quote.Render("│") + " "
+		return prefixMarkdownLines(inner, bar, bar)
 	case *ast.List:
 		return r.renderList(typed, width, "")
 	case *ast.FencedCodeBlock:
@@ -204,12 +211,31 @@ func (r terminalMarkdownRenderer) renderCodeLines(segments *gmtext.Segments, wid
 	for i := 0; i < segments.Len(); i++ {
 		segment := segments.At(i)
 		line := strings.TrimSuffix(string(segment.Value(r.source)), "\n")
-		wrapped := ansi.Hardwrap(line, max(1, width-2), false)
-		for _, physical := range strings.Split(wrapped, "\n") {
+		for _, physical := range wrapCodeLine(line, max(1, width-2)) {
 			lines = append(lines, "  "+r.styles.code.Render(physical))
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// wrapCodeLine word-wraps one code line to width cells and continues each
+// wrapped row under the line's own indentation, as Codex pre-wraps history
+// lines. A cut at a fixed column splits a flag such as `--confirm` across two
+// rows and leaves a command nobody can read back as written; a token wider than
+// the row is still broken, because a row must not overflow. An indentation wider
+// than half the row is not carried, so a deeply indented line in a narrow
+// terminal still makes progress.
+func wrapCodeLine(line string, width int) []string {
+	body := strings.TrimLeft(line, " \t")
+	indent := line[:len(line)-len(body)]
+	if ansi.StringWidth(indent) > width/2 {
+		indent, body = "", line
+	}
+	rows := strings.Split(wrapMarkdownWords(body, max(1, width-ansi.StringWidth(indent))), "\n")
+	for i := range rows {
+		rows[i] = indent + rows[i]
+	}
+	return rows
 }
 
 func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
@@ -218,19 +244,20 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 		switch typed := node.(type) {
 		case *ast.Text:
 			out.Write(typed.Segment.Value(r.source))
-			if typed.HardLineBreak() {
+			// A soft break stays a line break, as in Codex's renderer. CommonMark
+			// folds it into a space, which runs together the commands or items a
+			// model wrote one per line. A table cell folds it back (tableCells).
+			if typed.HardLineBreak() || typed.SoftLineBreak() {
 				out.WriteByte('\n')
-			} else if typed.SoftLineBreak() {
-				out.WriteByte(' ')
 			}
 		case *ast.String:
 			out.Write(typed.Value)
 		case *ast.Emphasis:
 			content := r.renderInlines(typed)
 			if typed.Level >= 2 {
-				out.WriteString(lipgloss.NewStyle().Bold(true).Render(content))
+				out.WriteString(styleLines(lipgloss.NewStyle().Bold(true), content))
 			} else {
-				out.WriteString(lipgloss.NewStyle().Italic(true).Render(content))
+				out.WriteString(styleLines(lipgloss.NewStyle().Italic(true), content))
 			}
 		case *ast.CodeSpan:
 			content := strings.ReplaceAll(r.renderInlines(typed), "\n", " ")
@@ -241,7 +268,7 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 			if strings.TrimSpace(label) == "" {
 				label = destination
 			}
-			out.WriteString(r.styles.link.Render(label))
+			out.WriteString(styleLines(r.styles.link, label))
 			if destination != "" && strings.TrimSpace(ansi.Strip(label)) != destination {
 				out.WriteString(r.styles.muted.Render(" (" + destination + ")"))
 			}
@@ -257,7 +284,7 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 				out.WriteString(r.styles.muted.Render(" (" + destination + ")"))
 			}
 		case *extast.Strikethrough:
-			out.WriteString(r.styles.strike.Render(r.renderInlines(typed)))
+			out.WriteString(styleLines(r.styles.strike, r.renderInlines(typed)))
 		case *extast.TaskCheckBox:
 			if typed.IsChecked {
 				out.WriteString("[x] ")
@@ -379,13 +406,48 @@ func renderMarkdownTableRecords(headers []string, rows [][]string, width int) st
 }
 
 func wrapMarkdownText(value string, width int) string {
-	return strings.TrimRight(ansi.Wrap(strings.TrimSpace(value), max(1, width), ""), "\n")
+	return strings.TrimRight(wrapMarkdownWords(strings.TrimSpace(value), max(1, width)), "\n")
+}
+
+// unbreakableHyphen stands in for a hyphen that must not end a row while text
+// is wrapped. U+2011 is one cell wide and does not occur in ordinary text.
+const unbreakableHyphen = '\u2011'
+
+// wrapMarkdownWords wraps at spaces, and after a hyphen only between two
+// alphanumerics, as the wrapper Codex uses does (textwrap's HyphenSplitter): a
+// flag such as `--result` is never cut into `--` and `result`, while
+// `source-version` may still split after `source-`. ansi.Wrap alone breaks after
+// every hyphen. A word wider than the row is still broken.
+func wrapMarkdownWords(value string, width int) string {
+	if strings.ContainsRune(value, unbreakableHyphen) {
+		return ansi.Wrap(value, width, "")
+	}
+	runes := []rune(value)
+	for i, r := range runes {
+		if r == '-' && !(i > 0 && i+1 < len(runes) && isWordRune(runes[i-1]) && isWordRune(runes[i+1])) {
+			runes[i] = unbreakableHyphen
+		}
+	}
+	return strings.ReplaceAll(ansi.Wrap(string(runes), width, ""), string(unbreakableHyphen), "-")
+}
+
+func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
+
+// styleLines applies style to each line separately. lipgloss pads the shorter
+// lines of a multi-line string to the widest, which would underline or strike
+// through the blanks after a span that crosses a line break.
+func styleLines(style lipgloss.Style, value string) string {
+	lines := strings.Split(value, "\n")
+	for i, line := range lines {
+		lines[i] = style.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func wrapMarkdownWithPrefixes(value string, width int, firstPrefix, continuation string) string {
 	prefixWidth := max(markdownCellWidth(firstPrefix), markdownCellWidth(continuation))
 	available := max(1, width-prefixWidth)
-	wrapped := ansi.Wrap(strings.TrimSpace(value), available, "")
+	wrapped := wrapMarkdownWords(strings.TrimSpace(value), available)
 	lines := strings.Split(wrapped, "\n")
 	for i := range lines {
 		if i == 0 {

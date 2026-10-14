@@ -345,6 +345,27 @@ func TestRunViewClosingForgetsTheChooser(t *testing.T) {
 	}
 }
 
+// The page text comes from the daemon one fact per line and is shown as written:
+// the renderer keeps a single newline as a line break, so the page no longer
+// forces one with trailing double spaces.
+func TestRunViewDetailShowsOneFactPerRow(t *testing.T) {
+	m, _ := newApprovalTestModel()
+	m.width, m.height = 100, 24
+	m.runViewer = func(_ context.Context, id string) (api.RunView, error) {
+		return api.RunView{RunID: id, Title: id, Status: "waiting_user", Content: "Status: waiting\nPlan: 3/7\nNext: answer the question"}, nil
+	}
+	m.Update(m.loadRunView("run_x")())
+	rows := map[string]bool{}
+	for _, row := range strings.Split(stripANSI(m.pager.View()), "\n") {
+		rows[strings.TrimSpace(row)] = true
+	}
+	for _, want := range []string{"Status: waiting", "Plan: 3/7", "Next: answer the question"} {
+		if !rows[want] {
+			t.Fatalf("the page does not show %q on a row of its own: %v", want, rows)
+		}
+	}
+}
+
 // The notice shown while another session's run is watched says what the page and
 // the footer now make plain: this is a view, and the next message goes to that
 // Run only after it is selected.

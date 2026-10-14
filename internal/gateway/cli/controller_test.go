@@ -669,7 +669,7 @@ func TestStatusLineAlwaysShowsEffectiveApprovalMode(t *testing.T) {
 }
 
 func TestAssistantMessageRendersWithFinalGutter(t *testing.T) {
-	rendered := stripANSI(renderAssistantMessage("hello\nworld", 80))
+	rendered := stripANSI(renderAssistantMessage("hello world", 80))
 
 	if !strings.Contains(rendered, "• hello world") {
 		t.Fatalf("assistant final should use the stable bullet gutter: %q", rendered)

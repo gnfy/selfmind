@@ -57,38 +57,182 @@ docs (https://example.com/docs).
 	}
 }
 
-func TestRenderMarkdownTableAdaptsToWidth(t *testing.T) {
-	source := strings.TrimSpace(`
-| Name | Status |
-| --- | --- |
-| api | ready |
-| background-worker | blocked |
-`)
+// renderPlain is the rendering without styling and without any trimming: a table
+// starts with the padding its other rows share.
+func renderPlain(source string, width int) string { return ansi.Strip(RenderMarkdown(source, width)) }
 
-	wide := plainMarkdown(RenderMarkdown(source, 48))
-	wantWide := strings.TrimSpace(`
-Name              │ Status
-──────────────────┼────────
-api               │ ready
-background-worker │ blocked
-`)
-	if wide != wantWide {
-		t.Fatalf("wide table mismatch\n--- got ---\n%s\n--- want ---\n%s", wide, wantWide)
+// The tables below follow Codex's renderer. The expected text of the first, the
+// fourth and the fifth is Codex's own snapshot (markdown_render_tests.rs:
+// table_renders_app_style_rows_with_themed_bold_header,
+// table_keeps_grid_when_only_one_compact_record_fragments_snapshot,
+// table_renders_key_value_records_when_compact_fragmentation_is_systemic_snapshot).
+func TestRenderMarkdownTablesMatchCodex(t *testing.T) {
+	tests := []struct {
+		name, source string
+		width        int
+		want         string
+	}{
+		{
+			"rows with a heavy rule under the header",
+			"| A | B |\n|---|---|\n| 1 | 2 |\n", 80,
+			" A      B\n━━━━━  ━━━━━\n 1      2",
+		},
+		{
+			"a column wider than the screen shrinks and wraps, a row rule between rows",
+			"| Key | Date | State |\n| --- | --- | --- |\n| short | 2025-01-01 | Ready |\n| verylongidentifier | 2025-02-02 | Ready |\n| final | 2025-03-03 | Done |\n", 40,
+			" Key                Date          State\n" +
+				"━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━  ━━━━━━━\n" +
+				" short              2025-01-01    Ready\n" +
+				"─────────────────  ────────────  ───────\n" +
+				" verylongidentif    2025-02-02    Ready\n" +
+				" ier\n" +
+				"─────────────────  ────────────  ───────\n" +
+				" final              2025-03-03    Done",
+		},
+		{
+			"key/value records when fragmentation is systemic",
+			"| Key | Notes |\n| --- | --- |\n| firstlongid | A readable explanatory sentence for this row. |\n| secondlongid | Another readable explanatory sentence for this row. |\n| short | A final readable explanatory sentence for this row. |\n", 17,
+			" Key\n  firstlongid\n Notes\n  A readable\n  explanatory\n  sentence for\n  this row.\n" +
+				"─────────────────\n" +
+				" Key\n  secondlongid\n Notes\n  Another\n  readable\n  explanatory\n  sentence for\n  this row.\n" +
+				"─────────────────\n" +
+				" Key\n  short\n Notes\n  A final\n  readable\n  explanatory\n  sentence for\n  this row.",
+		},
 	}
-
-	narrow := plainMarkdown(RenderMarkdown(source, 20))
-	wantNarrow := strings.TrimSpace(`
-Name: api
-Status: ready
-
-Name:
-  background-worker
-Status: blocked
-`)
-	if narrow != wantNarrow {
-		t.Fatalf("narrow table mismatch\n--- got ---\n%s\n--- want ---\n%s", narrow, wantNarrow)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := renderPlain(tc.source, tc.width)
+			if got != tc.want {
+				t.Fatalf("table at %d =\n%s\nwant\n%s", tc.width, got, tc.want)
+			}
+			assertMarkdownWidth(t, got, tc.width)
+		})
 	}
-	assertMarkdownWidth(t, narrow, 20)
+}
+
+// Codex's table_alignment_respects_markers.
+func TestRenderMarkdownTableAlignmentMarkers(t *testing.T) {
+	lines := strings.Split(renderPlain("| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |\n", 80), "\n")
+	if lines[0] != " Left    Center    Right" || lines[2] != " a         b           c" {
+		t.Fatalf("alignment rows = %q", lines)
+	}
+}
+
+// Codex's table_separates_logical_rows_after_wrapped_content: a rule follows the
+// header and sits between rows, and none follows the last row.
+func TestRenderMarkdownTableSeparatesRowsAfterWrappedContent(t *testing.T) {
+	source := "| Key | Description |\n| --- | --- |\n| -v | Enable very verbose logging output for debugging |\n| -q | Quiet output |\n"
+	got := renderPlain(source, 30)
+	assertMarkdownWidth(t, got, 30)
+	lines := strings.Split(got, "\n")
+	rules, wrappedEnd := []int{}, -1
+	for i, line := range lines {
+		if strings.ContainsAny(line, "━─") && strings.Trim(line, "━─ ") == "" {
+			rules = append(rules, i)
+		}
+		if strings.Contains(line, "debugging") {
+			wrappedEnd = i
+		}
+	}
+	if len(rules) != 2 || rules[1] < wrappedEnd {
+		t.Fatalf("rules at %v, the wrapped row ends at %d:\n%s", rules, wrappedEnd, got)
+	}
+	if last := lines[len(lines)-1]; strings.ContainsAny(last, "━─") {
+		t.Fatalf("a rule follows the last row: %q", last)
+	}
+}
+
+// Codex's table_falls_back_to_key_value_records_if_grid_cannot_fit.
+func TestRenderMarkdownTableFallsBackToRecordsWhenTheGridCannotFit(t *testing.T) {
+	source := "| c1 | c2 | c3 | c4 | c5 | c6 | c7 | c8 | c9 | c10 |\n|---|---|---|---|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |\n"
+	got := renderPlain(source, 20)
+	lines := strings.Split(got, "\n")
+	if !strings.Contains(lines[0], "c1") {
+		t.Fatalf("first line = %q", lines[0])
+	}
+	found := false
+	for _, line := range lines {
+		found = found || (strings.Contains(line, "c10") && strings.Contains(line, "10"))
+		if strings.HasPrefix(line, "|") || strings.ContainsAny(line, "━─") {
+			t.Fatalf("records were expected, found %q in\n%s", line, got)
+		}
+	}
+	if !found {
+		t.Fatalf("no c10 record line in\n%s", got)
+	}
+	assertMarkdownWidth(t, got, 20)
+}
+
+// Codex's table_inside_blockquote_has_quote_prefix and
+// escaped_pipes_render_in_table_cells.
+func TestRenderMarkdownTableInsideAQuoteAndEscapedPipes(t *testing.T) {
+	quoted := strings.Split(renderPlain("> | A | B |\n> |---|---|\n> | 1 | 2 |\n", 40), "\n")
+	rule := false
+	for _, line := range quoted {
+		if !strings.HasPrefix(line, "│ ") {
+			t.Fatalf("a table row lost the quote bar: %q", line)
+		}
+		rule = rule || strings.Contains(line, "━━━━━  ━━━━━")
+	}
+	if !rule {
+		t.Fatalf("no header rule in %q", quoted)
+	}
+	if got := renderPlain("| Col |\n| --- |\n| a \\| b |\n", 80); !strings.Contains(got, "a | b") || strings.Contains(got, "\\") {
+		t.Fatalf("escaped pipe = %q", got)
+	}
+}
+
+// A line that follows a table with no blank line is taken by the parser for a
+// row. It is prose and is shown after the grid, as Codex shows its "spillover"
+// rows; a real row with a pipe, or one with its own cells, stays in the table.
+func TestRenderMarkdownTableSpilloverLineIsProseAfterTheGrid(t *testing.T) {
+	got := renderPlain("| a | b |\n|---|---|\n| 1 | 2 |\nNote: the grid is above.\n", 60)
+	want := " a      b\n━━━━━  ━━━━━\n 1      2\nNote: the grid is above."
+	if got != want {
+		t.Fatalf("spillover =\n%s\nwant\n%s", got, want)
+	}
+	rows := renderPlain("| a | b |\n|---|---|\n| 1 |\n| 3 | 4 |\n", 60)
+	if want := " a      b\n━━━━━  ━━━━━\n 1\n─────  ─────\n 3      4"; rows != want {
+		t.Fatalf("a short row =\n%s\nwant\n%s", rows, want)
+	}
+	if piped := renderPlain("| a | b |\n|---|---|\n| 1 | 2 |\n| only first | |\n", 60); !strings.Contains(piped, "only first") || strings.Contains(piped, "\n\n") {
+		t.Fatalf("a piped row left the table:\n%s", piped)
+	}
+}
+
+// A table with no rows that cannot fit is shown as its pipe lines, with the
+// alignment markers kept.
+func TestRenderMarkdownHeaderOnlyTablePipeFallback(t *testing.T) {
+	source := "| a \\| z | b | c | d | e | f | g | h | i | j |\n|:--|--:|:-:|---|---|---|---|---|---|---|\n"
+	got := renderPlain(source, 20)
+	want := "| a \\| z | b | c | d | e | f | g | h | i | j |\n|:---|---:|:---:|---|---|---|---|---|---|---|"
+	if got != want {
+		t.Fatalf("pipe fallback =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Text is shown as written: a backslash before punctuation and character
+// references stand for the character, as in Codex's parser output; a code span
+// keeps them literal.
+func TestRenderMarkdownDecodesEscapesAndEntitiesOutsideCode(t *testing.T) {
+	got := plainMarkdown(RenderMarkdown("Hello \\*world\\* &amp; &lt;b&gt; &#35; `code \\* &amp; kept` and AT&T and a\\b", 80))
+	want := "Hello *world* & <b> # code \\* &amp; kept and AT&T and a\\b"
+	if got != want {
+		t.Fatalf("text = %q, want %q", got, want)
+	}
+	// A backslash before a letter is a backslash, also where a run of text begins
+	// with it; one before punctuation is not, also at the end of the text.
+	if got := plainMarkdown(RenderMarkdown("\\q first and C:\\dir\\file ends with \\!", 80)); got != "\\q first and C:\\dir\\file ends with !" {
+		t.Fatalf("backslashes = %q", got)
+	}
+}
+
+// The first row of a table or a code block keeps the padding or gutter its other
+// rows share: trimming the whole document used to eat it.
+func TestRenderMarkdownKeepsTheFirstRowsPadding(t *testing.T) {
+	if got := renderPlain("```\nfirst\nsecond\n```", 40); got != "  first\n  second" {
+		t.Fatalf("code first = %q", got)
+	}
 }
 
 func TestRenderMarkdownKeepsListContinuationIndented(t *testing.T) {

@@ -77,14 +77,21 @@ stays canonical.
   CommonMark/GFM and rendered as width-aware terminal blocks rather than by
   line regexes. Headings, inline emphasis/code, hanging-indent lists,
   blockquotes, fenced code, links, local file references, strikethrough, task
-  lists, and tables share one semantic renderer. Tables use a grid when it fits
-  and key/value records on narrow terminals. Where a terminal differs from
-  CommonMark's HTML rules, line-level behavior follows Codex's renderer rather
-  than a design of our own: a single newline is a line break, so commands a
-  model wrote one per line stay one per row instead of running into one
-  paragraph; code lines wrap at words under their own indentation, never at a
-  fixed column; a hyphen ends a row only between two alphanumerics, so a flag is
-  never cut into `--` and its name; and every row of a quote carries the bar. Typed
+  lists, and tables share one semantic renderer. Where a terminal differs from
+  CommonMark's HTML rules, layout follows Codex's renderer rather than a design of
+  our own: a single newline is a line break, so commands a model wrote one per
+  line stay one per row instead of running into one paragraph; code lines wrap at
+  words under their own indentation, never at a fixed column; a hyphen ends a row
+  only between two alphanumerics, so a flag is never cut into `--` and its name;
+  backslash escapes and character references are decoded outside code spans; and
+  every row of a quote carries the bar. Tables are aligned columns with a heavy
+  rule under the header and a light rule between rows, cells wrapped inside their
+  columns (token-heavy columns give up width before prose and compact ones last);
+  when values would shatter or prose columns are starved they become key/value
+  records, aligned beside the names when there is room and stacked under them when
+  there is not, and a header-only table that cannot fit is shown as its pipe
+  lines. A line that follows a table with no blank line is prose and is shown
+  after the grid. Typed
   `commentary` and `final_answer` metadata travels through the provider,
   kernel, daemon event, client, and TUI seams when available; deterministic
   tool/final boundaries cover providers that omit it. The immutable semantic

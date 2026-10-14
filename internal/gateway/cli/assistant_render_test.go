@@ -48,6 +48,24 @@ func TestAssistantReplyKeepsTheCommandsAModelWroteOnePerLine(t *testing.T) {
 	}
 }
 
+// A table is aligned columns under the answer's gutter, with its header row
+// starting where the other rows do (the first line of a reply used to lose its
+// padding), and a heavy rule under the header.
+func TestAssistantReplyRendersATableAsAlignedColumns(t *testing.T) {
+	reply := "| 项 | 实测值 |\n|---|:--:|\n| 构建 | SUCCEEDED |\n| deploy PR | OPEN |"
+	sp := func(n int) string { return strings.Repeat(" ", n) }
+	// Both columns are 9 cells wide; the second is centred. A cell is followed by its
+	// padding, the 2-cell gap and the next column's padding.
+	want := "•  项" + sp(12) + "实测值\n" +
+		"  " + strings.Repeat("━", 11) + "  " + strings.Repeat("━", 11) + "\n" +
+		"   构建" + sp(9) + "SUCCEEDED\n" +
+		"  " + strings.Repeat("─", 11) + "  " + strings.Repeat("─", 11) + "\n" +
+		"   deploy PR" + sp(6) + "OPEN"
+	if got := strings.TrimRight(ansi.Strip(renderAssistantMessage(reply, 80)), "\n"); got != "\n"+want {
+		t.Fatalf("table rendered as\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestCommentaryNarrationIsReadableAcrossScripts(t *testing.T) {
 	tests := []string{
 		"I will inspect the trigger mapping.",

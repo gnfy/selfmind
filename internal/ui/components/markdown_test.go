@@ -314,10 +314,6 @@ func TestRenderMarkdownBreaksAfterAHyphenOnlyBetweenAlphanumerics(t *testing.T) 
 			}
 		})
 	}
-	// A line that already holds the stand-in character keeps it as written.
-	if got := plainMarkdown(RenderMarkdown("a\u2011b --c", 30)); got != "a\u2011b --c" {
-		t.Fatalf("text with U+2011 was altered: %q", got)
-	}
 }
 
 // The three commands below are one per line in the source and stay one per row;

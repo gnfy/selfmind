@@ -3,7 +3,6 @@ package components
 import (
 	"strconv"
 	"strings"
-	"unicode"
 
 	uitheme "selfmind/internal/ui/theme"
 
@@ -331,30 +330,6 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 func wrapMarkdownText(value string, width int) string {
 	return strings.TrimRight(wrapMarkdownWords(strings.TrimSpace(value), max(1, width)), "\n")
 }
-
-// unbreakableHyphen stands in for a hyphen that must not end a row while text
-// is wrapped. U+2011 is one cell wide and does not occur in ordinary text.
-const unbreakableHyphen = '\u2011'
-
-// wrapMarkdownWords wraps at spaces, and after a hyphen only between two
-// alphanumerics, as the wrapper Codex uses does (textwrap's HyphenSplitter): a
-// flag such as `--result` is never cut into `--` and `result`, while
-// `source-version` may still split after `source-`. ansi.Wrap alone breaks after
-// every hyphen. A word wider than the row is still broken.
-func wrapMarkdownWords(value string, width int) string {
-	if strings.ContainsRune(value, unbreakableHyphen) {
-		return ansi.Wrap(value, width, "")
-	}
-	runes := []rune(value)
-	for i, r := range runes {
-		if r == '-' && !(i > 0 && i+1 < len(runes) && isWordRune(runes[i-1]) && isWordRune(runes[i+1])) {
-			runes[i] = unbreakableHyphen
-		}
-	}
-	return strings.ReplaceAll(ansi.Wrap(string(runes), width, ""), string(unbreakableHyphen), "-")
-}
-
-func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
 
 // styleLines applies style to each line separately. lipgloss pads the shorter
 // lines of a multi-line string to the widest, which would underline or strike

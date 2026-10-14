@@ -223,9 +223,28 @@ func TestUpdatePlanContractAsksForCompactUnchangedSteps(t *testing.T) {
 			t.Errorf("%s does not say what an unchanged step may leave out: %s", name, text)
 		}
 	}
-	if !strings.Contains(tool.Description(), "An unchanged step needs only its step_id and status") ||
+	if !strings.Contains(tool.Description(), "a step that has not changed needs only its step_id and status") ||
 		!strings.Contains(tool.Description(), "returns the full plan") {
 		t.Errorf("tool description lost the compact-update contract: %s", tool.Description())
+	}
+	// The compact form needs ids a result issued, which a first plan cannot
+	// have: asking for it unconditionally made models send id-only entries
+	// where no step is stored (3 of the 4 first plans after it was introduced
+	// were refused for lacking step text, against 2 of 201 before).
+	for name, want := range map[string]struct{ text, phrase string }{
+		"tool description (first plan has no ids)":    {tool.Description(), "The first plan of a run has no step ids: give every step its text and leave step_id out"},
+		"tool description (compact needs issued ids)": {tool.Description(), "Once a result has issued ids"},
+		"tool description (nothing to cancel)":        {tool.Description(), "A first plan has nothing to cancel"},
+		"plan (text needed in the first plan)":        {schema["plan"].Description, "in the first plan every step needs its text"},
+		"step_id (leave it out in a first plan)":      {item["step_id"].Description, "The first plan has none: leave it out"},
+		"step (required in the first plan)":           {item["step"].Description, "Required for every step of the first plan"},
+	} {
+		if !strings.Contains(want.text, want.phrase) {
+			t.Errorf("%s lacks %q: %s", name, want.phrase, want.text)
+		}
+	}
+	if strings.Contains(tool.Description(), "An unchanged step needs only its step_id and status") {
+		t.Errorf("the compact form must stay conditional on issued ids: %s", tool.Description())
 	}
 	// The snapshot is still complete: list every step, nothing is a patch.
 	for _, want := range []string{"List every step", "not a partial patch"} {
@@ -240,6 +259,81 @@ func TestUpdatePlanContractAsksForCompactUnchangedSteps(t *testing.T) {
 		map[string]interface{}{"step_id": "step_a", "status": "completed"},
 	}}); err == nil || !strings.Contains(err.Error(), "plan[0].step is required") {
 		t.Fatalf("a bare id without a durable plan must still be refused: %v", err)
+	}
+}
+
+type textRequiredTestError struct {
+	index     int
+	firstPlan bool
+}
+
+func (textRequiredTestError) Error() string { return "plan step needs text" }
+func (e textRequiredTestError) PlanStepTextRequired() (int, bool) {
+	return e.index, e.firstPlan
+}
+
+// An entry without text is refused with the repair that fits where it happened:
+// in a first plan no id can have kept text, so the whole plan goes again with
+// every step's text; later it is a new step that needs its own text. The code is
+// stable and a contract refusal, not an unclassified failure.
+func TestUpdatePlanTextlessEntryIsRefusedWithTheRepairForWhereItHappened(t *testing.T) {
+	run := func(failure error) (code, category, message, hint string) {
+		ctx := WithPlanProjectionSink(context.Background(), func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error) {
+			return nil, failure
+		})
+		// The entry has an id and no text, exactly what the runtime has to judge.
+		_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+			"plan":     []interface{}{map[string]interface{}{"step_id": "s1", "status": "completed"}},
+			"_context": ctx,
+		})
+		stable, ok := err.(interface {
+			ToolErrorCode() string
+			ToolErrorCategory() string
+			ModelSafeMessage() string
+			ToolRecoveryHint() string
+		})
+		if !ok {
+			t.Fatalf("text-required refusal = %T %v", err, err)
+		}
+		return stable.ToolErrorCode(), stable.ToolErrorCategory(), stable.ModelSafeMessage(), stable.ToolRecoveryHint()
+	}
+
+	code, category, message, hint := run(textRequiredTestError{index: 2, firstPlan: true})
+	if code != "plan_step_text_required" || category != "invalid_input" {
+		t.Errorf("first-plan refusal classified %s/%s", code, category)
+	}
+	for _, want := range []string{"plan[2].step is required", "this run has no plan yet", "ids are ignored in a first plan"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("first-plan message lacks %q: %s", want, message)
+		}
+	}
+	if !strings.Contains(hint, "Send the complete plan again: every step with its text, and without step_id.") {
+		t.Errorf("first-plan hint = %q", hint)
+	}
+
+	code, category, message, hint = run(textRequiredTestError{index: 0})
+	if code != "plan_step_text_required" || category != "invalid_input" {
+		t.Errorf("later refusal classified %s/%s", code, category)
+	}
+	if !strings.Contains(message, "plan[0].step is required: with no step_id the entry is a new step") || strings.Contains(message, "no plan yet") {
+		t.Errorf("later message = %s", message)
+	}
+	if !strings.Contains(hint, "echo the exact step_id an earlier update_plan result issued") {
+		t.Errorf("later hint = %q", hint)
+	}
+
+	// With a durable plan the runtime decides, even for an entry that has neither
+	// id nor text: the same typed refusal, not a bare string.
+	ctx := WithPlanProjectionSink(context.Background(), func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error) {
+		return nil, textRequiredTestError{index: 1, firstPlan: true}
+	})
+	_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+		"plan":     []interface{}{map[string]interface{}{"step": "Edit", "status": "pending"}, map[string]interface{}{"status": "pending"}},
+		"_context": ctx,
+	})
+	var typed interface{ ToolErrorCode() string }
+	if !errors.As(err, &typed) || typed.ToolErrorCode() != "plan_step_text_required" {
+		t.Fatalf("an entry with no id and no text under a durable plan = %T %v", err, err)
 	}
 }
 

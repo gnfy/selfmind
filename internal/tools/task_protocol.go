@@ -130,7 +130,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 	return &PlanTool{
 		BaseTool: BaseTool{
 			name:        "update_plan",
-			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work. Keep outcome milestones, not Skill reads, approval waits, diagnostic attempts or a final-answer step. Preserve existing step IDs and conditions across continuations; do not duplicate a step just to retry or verify it. List every step on every update, keep exactly one step in_progress while work is active, and resolve all necessary steps before finishing successfully. An unchanged step needs only its step_id and status: the runtime keeps its stored step text, success_criteria and verification_required, and the result returns the full plan. Send those fields only for a new step or when they change; after finishing the first of three steps, for example, send three entries carrying step_id and status alone. Main judges scope changes and keeps independent unfinished work accountable through existing history and cancellation evidence.",
+			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work. Keep outcome milestones, not Skill reads, approval waits, diagnostic attempts or a final-answer step. Preserve existing step IDs and conditions across continuations; do not duplicate a step just to retry or verify it. List every step on every update, keep exactly one step in_progress while work is active, and resolve all necessary steps before finishing successfully. The first plan of a run has no step ids: give every step its text and leave step_id out. Once a result has issued ids, a step that has not changed needs only its step_id and status: the runtime keeps its stored step text, success_criteria and verification_required, and the result returns the full plan. Send those fields only for a new step or when they change; for example, after finishing the first of three steps, send three entries carrying step_id and status alone. A first plan has nothing to cancel: list only work that is done or still needed and explain anything dropped in explanation. Main judges scope changes and keeps independent unfinished work accountable through existing history and cancellation evidence.",
 			schema: ToolSchema{
 				Type:                 "object",
 				AdditionalProperties: rejectAdditionalProperties(),
@@ -141,18 +141,18 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 					},
 					"plan": {
 						Type:        "array",
-						Description: "The complete ordered plan snapshot, including unchanged and completed steps. This replaces the previous snapshot; it is not a partial patch. List every step; an unchanged existing step needs only step_id and status.",
+						Description: "The complete ordered plan snapshot, including unchanged and completed steps. This replaces the previous snapshot; it is not a partial patch. List every step. Only a step whose step_id an earlier update_plan result issued may omit its text; in the first plan every step needs its text.",
 						Items: &PropertyDef{
 							Type:                 "object",
 							AdditionalProperties: rejectAdditionalProperties(),
 							Properties: map[string]PropertyDef{
 								"step_id": {
 									Type:        "string",
-									Description: "Stable step id returned by an earlier update_plan result. Echo it when updating or reordering that step; never invent one.",
+									Description: "Stable step id returned by an earlier update_plan result. Echo it when updating or reordering that step; never invent one. The first plan has none: leave it out (ids sent in a first plan are ignored).",
 								},
 								"step": {
 									Type:        "string",
-									Description: "A concise task step. Required for a new step. For an existing step_id omit it unless the wording changes; omission with an exact server-issued step_id preserves the stored text.",
+									Description: "A concise task step. Required for every step of the first plan and for any new step. Omit it only when echoing a step_id that an earlier update_plan result issued and the wording is unchanged; omission then preserves the stored text.",
 								},
 								"cancellation_disposition": {Type: "string", Enum: []string{"not_required", "user_takeover", "unfinished"}, Description: "Main's assessment against the original goal and user corrections. Cancel only work no longer necessary (not_required), or explicitly taken over by the user (user_takeover). A blocked necessary step is unfinished and remains pending, not resolved. Omission also keeps a cancelled obligation pending."},
 								"cancellation_reason":      {Type: "string", Description: "Why this step is no longer necessary or within the user's explicit takeover scope. Suggesting the user do the work is not a takeover."},
@@ -231,7 +231,9 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	for i := range steps {
 		steps[i].Step = strings.TrimSpace(steps[i].Step)
 		steps[i].Status = strings.TrimSpace(steps[i].Status)
-		if steps[i].Step == "" && (steps[i].StepID == "" || projection == nil) {
+		// With a durable plan the runtime decides: only it knows whether a step
+		// id can keep this entry's text, so it names the repair (see below).
+		if steps[i].Step == "" && projection == nil {
 			return "", fmt.Errorf("plan[%d].step is required", i)
 		}
 		switch steps[i].Status {
@@ -267,6 +269,11 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			if errors.As(err, &verification) && verification.PlanVerificationPrecondition() {
 				return "", newStableToolError(err, "plan_verification_required", "stale_precondition", err.Error(),
 					"Keep the current work unit open and follow each step's next action. verify can bind directly to an owned step_id without a Plan transition. When prior reuse is offered, Main must assess sufficiency and submit reuse_prior_verification=true with reuse_reason on that completed step; explanation alone is not adoption. For a replacement, preserve criterion and target, cite the evidence id in replaces and explain the method correction in reason. Then submit the complete plan snapshot.")
+			}
+			var textRequired interface{ PlanStepTextRequired() (int, bool) }
+			if errors.As(err, &textRequired) {
+				index, firstPlan := textRequired.PlanStepTextRequired()
+				return "", planStepTextRequiredError(err, index, firstPlan)
 			}
 			var staleStep interface{ CurrentPlanStepIDs() []string }
 			if errors.As(err, &staleStep) {
@@ -395,6 +402,21 @@ func samePlanSteps(a, b []PlanStep) bool {
 		}
 	}
 	return true
+}
+
+// planStepTextRequiredError words the refusal of an entry that has no text. In a
+// Run's first plan no step_id can refer to a stored step (the runtime ignores
+// the ids it was sent), so the repair is the whole plan with every step's text;
+// later, an entry without a step_id is a new step and has no stored text to keep.
+func planStepTextRequiredError(err error, index int, firstPlan bool) error {
+	if firstPlan {
+		return newStableToolError(err, "plan_step_text_required", "invalid_input",
+			fmt.Sprintf("plan[%d].step is required: this run has no plan yet, so a step_id cannot refer to a stored step (ids are ignored in a first plan).", index),
+			"Send the complete plan again: every step with its text, and without step_id.")
+	}
+	return newStableToolError(err, "plan_step_text_required", "invalid_input",
+		fmt.Sprintf("plan[%d].step is required: with no step_id the entry is a new step and has no stored text to keep.", index),
+		"Give a new step its text, or echo the exact step_id an earlier update_plan result issued for an existing step.")
 }
 
 // staleStepReceipt words the refusal for a step_id this Run never issued. With

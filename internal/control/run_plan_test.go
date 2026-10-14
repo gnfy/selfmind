@@ -362,6 +362,62 @@ func TestRunPlanStaleStepErrorMapsLegalIdsToSteps(t *testing.T) {
 	}
 }
 
+// An entry with no text is refused as a typed error that knows whether the Run
+// had a plan: in a first plan no id exists and the ids sent are ignored, so an
+// id alone has nothing to keep; later, an id the Run issued keeps its text and
+// an invented one is the stale-id refusal, not this one.
+func TestRunPlanTextlessEntryIsATypedRefusalThatKnowsWhetherThereWasAPlan(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+
+	_, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{Step: "Inspect", Status: "in_progress"},
+		{StepID: "s2", Status: "pending"},
+	})
+	var textRequired *PlanStepTextRequiredError
+	if !errors.As(err, &textRequired) {
+		t.Fatalf("an id with no text in a first plan = %T %v", err, err)
+	}
+	if index, firstPlan := textRequired.PlanStepTextRequired(); index != 1 || !firstPlan {
+		t.Fatalf("first-plan refusal = entry %d firstPlan %v", index, firstPlan)
+	}
+	if !strings.Contains(err.Error(), "plan[1].step is required for a new or unmatched step") {
+		t.Fatalf("the refusal text changed: %v", err)
+	}
+
+	// The refused attempt stored nothing: the next plan is still the first one.
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{Step: "Inspect", Status: "in_progress"}, {Step: "Edit", Status: "pending"},
+	})
+	if err != nil || first.Plan.Version != 1 {
+		t.Fatalf("first plan after a refusal: version %d err %v", first.Plan.Version, err)
+	}
+
+	// With a plan, an entry that has neither id nor text is a new step without text.
+	_, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Status: "completed"}, {Status: "pending"},
+	})
+	if !errors.As(err, &textRequired) {
+		t.Fatalf("an entry with no id and no text under a plan = %T %v", err, err)
+	}
+	if index, firstPlan := textRequired.PlanStepTextRequired(); index != 1 || firstPlan {
+		t.Fatalf("later refusal = entry %d firstPlan %v", index, firstPlan)
+	}
+
+	// An id the Run issued keeps its text; an invented one is the stale-id refusal.
+	if _, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Status: "completed"}, {StepID: first.Plan.Steps[1].StepID, Status: "in_progress"},
+	}); err != nil {
+		t.Fatalf("issued ids must keep their text: %v", err)
+	}
+	var stale *StalePlanStepReferenceError
+	if _, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Status: "completed"}, {StepID: "s9", Status: "pending"},
+	}); !errors.As(err, &stale) {
+		t.Fatalf("an invented id under a plan = %T %v", err, err)
+	}
+}
+
 func TestRunPlanRecoversStaleAliasOnlyFromUniqueExactStep(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)

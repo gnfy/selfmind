@@ -305,3 +305,81 @@ func TestRefusedPlanCallsReachTheModelAndTheDailyReportOfARealRun(t *testing.T) 
 		t.Errorf("plan input line: want %q in:\n%s", want, report)
 	}
 }
+
+// A model that answers a first plan with id-only entries, as the compact-update
+// wording once led it to, gets one refusal that says what is true (the run has
+// no plan, so ids are ignored) and what to send, and the correction goes through.
+// The refusal is a contract failure in the daily report, not an unclassified one.
+func TestFirstPlanWithoutStepTextIsRefusedWithItsRepairInARealRun(t *testing.T) {
+	provider := &receiptScriptedProvider{}
+	provider.script = func(n int32, receipt []map[string]interface{}) []llm.ToolCall {
+		switch n {
+		case 1: // ids the model made up, and no text for the first two steps
+			return []llm.ToolCall{planCall(n,
+				map[string]interface{}{"step_id": "s1", "status": "completed"},
+				map[string]interface{}{"step_id": "s2", "status": "in_progress", "success_criteria": "Source was read"},
+				map[string]interface{}{"step": "Review the scope", "status": "pending", "success_criteria": "Scope is understood"})}
+		case 2:
+			return []llm.ToolCall{firstSnapshot(n)}
+		default: // ids now exist: compact updates are what the contract asks for
+			a, b := receipt[0]["step_id"].(string), receipt[1]["step_id"].(string)
+			return []llm.ToolCall{
+				planCall(n, map[string]interface{}{"step_id": a, "status": "completed"}, map[string]interface{}{"step_id": b, "status": "completed"}),
+				finishCall(),
+			}
+		}
+	}
+	flow := newPlanFlowDaemon(t, provider)
+	response := flow.run(t)
+	if provider.calls.Load() != 3 {
+		t.Fatalf("model calls = %d, want 3", provider.calls.Load())
+	}
+	if len(provider.received) < 1 {
+		t.Fatal("the model was never shown the refusal")
+	}
+	for _, want := range []string{
+		"plan[0].step is required: this run has no plan yet",
+		"ids are ignored in a first plan",
+		"error_code: plan_step_text_required",
+		"error_class: invalid_input",
+		"Send the complete plan again: every step with its text, and without step_id.",
+	} {
+		if !strings.Contains(provider.received[0], want) {
+			t.Errorf("the refusal the model saw lacks %q:\n%s", want, provider.received[0])
+		}
+	}
+	events, err := flow.store.ListTaskEvents(context.Background(), response.Task.ID, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := 0
+	for _, event := range events {
+		if event.Type == "tool.completed" && strings.Contains(string(event.Payload), `"error_code":"plan_step_text_required"`) {
+			refused++
+			if !strings.Contains(string(event.Payload), `"error_category":"invalid_input"`) {
+				t.Errorf("the refusal is not recorded as invalid_input: %s", event.Payload)
+			}
+		}
+	}
+	if refused != 1 {
+		t.Fatalf("recorded refusals = %d, want 1", refused)
+	}
+	plan, err := flow.store.LatestRunPlan(context.Background(), flow.owner.TenantID, response.Run.ID)
+	if err != nil || len(plan.Steps) != 2 || plan.Steps[0].Step != "Inspect sources" || plan.Steps[1].Status != "completed" {
+		t.Fatalf("the corrected plan was not stored and completed: %+v %v", plan, err)
+	}
+	report, err := flow.daemon.dailyQualityReport(context.Background(), flow.owner, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Failed model steps: 1 (",
+		"contract 1 (",
+		"retried with the same tool at once: 1 more steps (",
+		"Failed steps by tool: update_plan 1 (contract 1; retried 1;",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("daily report lacks %q:\n%s", want, report)
+		}
+	}
+}

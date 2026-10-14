@@ -146,6 +146,25 @@ type StalePlanStepReferenceError struct {
 // StalePlanStepRef is one current step as a stale-id receipt shows it.
 type StalePlanStepRef struct{ StepID, Status, Step string }
 
+// PlanStepTextRequiredError refuses an entry that carries no step text where the
+// runtime has none stored to keep: a new step, or any step of a Run's first
+// plan, where no step id exists yet and the ids a model sends are ignored.
+type PlanStepTextRequiredError struct {
+	// Index is the position of the offending entry in the submitted snapshot.
+	Index int
+	// FirstPlan reports that the Run had no plan, so no id could have kept text.
+	FirstPlan bool
+}
+
+func (e *PlanStepTextRequiredError) Error() string {
+	return fmt.Sprintf("plan[%d].step is required for a new or unmatched step", e.Index)
+}
+
+// PlanStepTextRequired names the entry and whether it was the Run's first plan.
+func (e *PlanStepTextRequiredError) PlanStepTextRequired() (int, bool) {
+	return e.Index, e.FirstPlan
+}
+
 const (
 	staleStepListLimit  = 12
 	staleStepTitleRunes = 60
@@ -677,7 +696,7 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 			item.Step = old.Step
 		}
 		if item.Step == "" {
-			return nil, fmt.Errorf("plan[%d].step is required for a new or unmatched step", i)
+			return nil, &PlanStepTextRequiredError{Index: i, FirstPlan: previous == nil}
 		}
 		// Progress snapshots preserve the established acceptance obligation.
 		// Omission is not a user decision to remove verification or erase criteria.

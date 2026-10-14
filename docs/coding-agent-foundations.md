@@ -62,11 +62,15 @@ step IDs preserve work-unit attribution without asking the model to repeat it.
 A snapshot that omits ids keeps each step's id by unchanged wording, and a
 reworded step keeps the id of the open step at its position when the snapshot
 keeps the plan's length, so rewording cannot silently replace unfinished steps.
-The update contract asks for every step on every update but only `step_id` and
-`status` for a step that has not changed: the runtime keeps its stored text,
-acceptance criterion, verification flag and work-unit attribution, and the
-receipt still returns the complete plan, which the dispatch boundary below
-reads, so compact input never changes a boundary decision. A refused stale
+The update contract asks for every step on every update. Once a result has
+issued step ids, a step that has not changed needs only its `step_id` and
+`status`: the runtime keeps its stored text, acceptance criterion, verification
+flag and work-unit attribution, and the receipt still returns the complete plan,
+which the dispatch boundary below reads, so compact input never changes a
+boundary decision. A Run's first plan has no ids (the runtime ignores any it is
+sent), so every step carries its text and nothing is listed only to be cancelled;
+an entry without text is refused with the stable `plan_step_text_required`
+contract error, which says whether the Run had a plan and what to resend. A refused stale
 `step_id` names the offending entry and maps each current id to its status and a
 bounded title. An argument name lexically close to a declared one is refused
 with a "did you mean" question and is never renamed for the model, because near

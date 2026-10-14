@@ -385,7 +385,8 @@ func TestPlanGuidanceCarriesStepDisciplineUnderBothPolicies(t *testing.T) {
 			"not around every tool call",
 			"work-unit IDs need not be repeated",
 			"resolve every step before a done outcome",
-			"list every step, with only its step_id and status when it is unchanged",
+			"The first plan has no step ids, so give every step its text",
+			"once a result has issued ids, an unchanged step needs only its step_id and status",
 		} {
 			if !strings.Contains(guidance, want) {
 				t.Fatalf("%s guidance is missing %q:\n%s", name, want, guidance)

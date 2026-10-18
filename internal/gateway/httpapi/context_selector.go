@@ -101,6 +101,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 			selected.WorkspaceID = run.WorkspaceID
 		}
 	}
+	c.selectCurrentRunPlan(ctx, task, run, includeFull && parent != nil, &selected)
 	// Backward-compat read key: the channel of the parent run this turn
 	// continues. A task created before working history became task-keyed stored
 	// its transcript channel-keyed; without this the first task-keyed
@@ -115,20 +116,9 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 				}
 			}
 		}
-		// The inherited child plan has server-issued IDs for this Run. Parent
-		// IDs must not be offered to update_plan as current execution state.
+		// Historical observations remain parent-gated. They are not
+		// automatically citeable current-Run evidence.
 		if run != nil {
-			if plan, err := c.srv.Control.LatestRunPlan(ctx, task.TenantID, run.ID); err == nil && plan != nil {
-				selected.PlanVersion = plan.Version
-				for _, step := range plan.Steps {
-					selected.Plan = append(selected.Plan, kernel.PlanItem{
-						StepID: step.StepID, Step: step.Step, Status: step.Status,
-						SuccessCriteria: step.SuccessCriteria, VerificationRequired: step.VerificationRequired,
-						CancellationDisposition: step.CancellationDisposition, CancellationReason: step.CancellationReason, UserTakeoverQuote: step.UserTakeoverQuote,
-						ReplacementStepID: step.ReplacementStepID, ScopeChangeQuote: step.ScopeChangeQuote,
-					})
-				}
-			}
 			if prior, err := c.srv.Control.ListInheritedPlanEvidence(ctx, task.TenantID, run.ID); err == nil {
 				selectedAt := time.Now()
 				for _, item := range prior {
@@ -139,6 +129,10 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 						Target: item.Target, CheckedAt: item.CheckedAt,
 						ReuseBlockedReason: item.ReuseBlockedReason,
 						ObservedCriterion:  item.ObservedCriterion,
+					}
+					if item.PriorCondition != nil {
+						evidence.PriorConditionResult = item.PriorCondition.Result
+						evidence.PriorConditionReason = truncate(item.PriorCondition.Reason, 240)
 					}
 					if !item.CheckedAt.IsZero() && selectedAt.After(item.CheckedAt) {
 						evidence.Age = selectedAt.Sub(item.CheckedAt)
@@ -279,15 +273,16 @@ func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context,
 		// turns emit too — "recall found nothing" and "recall never ran" are
 		// different diagnoses (W2).
 		payload := map[string]interface{}{
-			"candidates":       stats.Candidates,
-			"sources":          stats.Sources,
-			"refs":             stats.Refs,
-			"expanded":         stats.Expanded,
-			"terms":            stats.Terms,
-			"slices":           len(slices),
-			"elapsed_ms":       stats.ElapsedMS,
-			"expansion_status": stats.ExpansionStatus,
-			"expansion_ms":     stats.ExpansionMS,
+			"candidates":           stats.Candidates,
+			"sources":              stats.Sources,
+			"refs":                 stats.Refs,
+			"expanded":             stats.Expanded,
+			"terms":                stats.Terms,
+			"slices":               len(slices),
+			"elapsed_ms":           stats.ElapsedMS,
+			"expansion_status":     stats.ExpansionStatus,
+			"expansion_ms":         stats.ExpansionMS,
+			"expansion_overlapped": stats.ExpansionOverlapped,
 		}
 		if stats.Skipped != "" {
 			payload["skipped"] = stats.Skipped
@@ -340,7 +335,8 @@ func (c *RunCoordinator) workContinuityHints(ctx context.Context, identity *cont
 			RunID: card.RunID, TaskID: card.TaskID, Title: card.Title, RunStatus: card.RunStatus,
 			Channel: card.Channel, Workspace: card.Workspace, InputSummary: card.InputSummary,
 			HandoffSummary: card.HandoffSummary, CurrentStep: card.CurrentStep,
-			NextSteps: append([]string(nil), card.NextSteps...),
+			NextSteps:    append([]string(nil), card.NextSteps...),
+			ChangedFiles: append([]string(nil), card.ChangedFiles...), Risks: append([]string(nil), card.Risks...),
 		})
 		if len(hints) == limit {
 			break

@@ -7,10 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
+	"selfmind/internal/verification"
 )
 
 const RunRecoveryContractVersion = 1
@@ -18,7 +19,8 @@ const RunRecoveryContractVersion = 1
 // Historical Runs retain their declared recovery authority.
 const assessedPlanCancellationContractVersion = 2
 const scopeEvidencePlanContractVersion = 3
-const CurrentRunRecoveryContractVersion = scopeEvidencePlanContractVersion
+const independentPlanProgressContractVersion = 4
+const CurrentRunRecoveryContractVersion = independentPlanProgressContractVersion
 
 // completionPreconditionError distinguishes a correctable verdict from a
 // storage failure. No completion state was committed when this is returned.
@@ -44,13 +46,17 @@ type RunPlanStepInput struct {
 	RelatedTaskID          string `json:"related_task_id,omitempty"`
 	WorkUnitID             string `json:"work_unit_id,omitempty"`
 	WorkUnit               bool   `json:"work_unit,omitempty"`
+
+	implicitPriorReuse bool
 }
 
 type RunPlanStep struct {
 	RunPlanStepInput
-	Sequence          int    `json:"sequence"`
-	SourceStepID      string `json:"source_step_id,omitempty"`
-	SourcePlanVersion int    `json:"source_plan_version,omitempty"`
+	// Projection-only explanation; never persisted or accepted as Plan input.
+	verificationDeferralReason string
+	Sequence                   int    `json:"sequence"`
+	SourceStepID               string `json:"source_step_id,omitempty"`
+	SourcePlanVersion          int    `json:"source_plan_version,omitempty"`
 	// CancellationQuoteSource is the durable identity of the person input the
 	// step's validated quote matched: steering:<mailbox id>, run_started:<run
 	// id>, or run_input:<run id>. Only the runtime records it, when it
@@ -273,7 +279,7 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 		return RunPlanProjection{}, err
 	}
 	defer tx.Rollback()
-	projection, err := s.syncRunPlanTx(ctx, tx, tenant, runID, explanation, input, nil, false)
+	projection, err := s.syncRunPlanTx(ctx, tx, tenant, runID, explanation, input, nil, false, false)
 	if err != nil {
 		return RunPlanProjection{}, err
 	}
@@ -286,7 +292,7 @@ func (s *Store) SyncRunPlan(ctx context.Context, tenantID, runID, explanation st
 // syncRunPlanTx is shared by ordinary complete snapshots and exact-parent
 // imports. Importing inside the continuation claim keeps the parent edge,
 // child plan, and source step identities in one transaction.
-func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, explanation string, input []RunPlanStepInput, inherited *RunPlan, replace bool) (RunPlanProjection, error) {
+func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, explanation string, input []RunPlanStepInput, inherited *RunPlan, replace, carry bool) (RunPlanProjection, error) {
 	var contractVersion int
 	if err := tx.QueryRowContext(ctx, `SELECT recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).Scan(&contractVersion); err != nil {
 		return RunPlanProjection{}, err
@@ -309,7 +315,11 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 			return RunPlanProjection{}, err
 		}
 	}
-	steps, err := resolveRunPlanSteps(runID, input, identityPrevious)
+	reservedIDs, err := runPlanStepIDsTx(ctx, tx, tenant, runID)
+	if err != nil {
+		return RunPlanProjection{}, err
+	}
+	steps, err := resolveRunPlanSteps(runID, input, identityPrevious, reservedIDs)
 	if err != nil {
 		return RunPlanProjection{}, err
 	}
@@ -337,7 +347,12 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 	if verificationPrevious != nil && len(verificationPrevious.Steps) == 0 {
 		verificationPrevious = nil
 	}
-	verificationDeferred := normalizeFirstPlanVerification(steps, verificationPrevious)
+	var verificationDeferred []RunPlanStep
+	if inherited != nil && carry {
+		verificationDeferred = carryInheritedVerificationTx(ctx, tx, tenant, runID, steps)
+	} else {
+		verificationDeferred = normalizeFirstPlanVerification(steps, verificationPrevious, inherited == nil && contractVersion >= independentPlanProgressContractVersion)
+	}
 	cancellationDeferred, err := assessRunPlanCancellationsTx(ctx, tx, tenant, runID, contractVersion, steps)
 	if err != nil {
 		return RunPlanProjection{}, err
@@ -345,15 +360,49 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 	for _, step := range retained {
 		cancellationDeferred = append(cancellationDeferred, RunPlanCancellationDeferral{Step: step, Reason: CancellationDeferredOmitted})
 	}
+	firstReopened := -1
 	for i := range steps {
+		if steps[i].ReusePriorVerification {
+			// A step whose check this Run has since made stands on that current
+			// check; the saved plan stops claiming the older observation.
+			checked, err := runStepHasCheckTx(ctx, tx, runID, steps[i].StepID)
+			if err != nil {
+				return RunPlanProjection{}, err
+			}
+			if checked {
+				steps[i].ReusePriorVerification, steps[i].ReuseReason = false, ""
+			}
+		}
 		if !steps[i].ReusePriorVerification {
 			continue
 		}
 		if steps[i].Status != "completed" || !steps[i].VerificationRequired || strings.TrimSpace(steps[i].ReuseReason) == "" {
-			return RunPlanProjection{}, fmt.Errorf("plan[%d] can reuse prior verification only for a completed required check with a reason", i)
+			return RunPlanProjection{}, fmt.Errorf("plan[%d] (%s) can reuse prior verification only for a completed required check with a reason", i, steps[i].StepID)
 		}
 		if err := validatePriorVerificationReuseTx(ctx, tx, tenant, runID, steps[i]); err != nil {
-			return RunPlanProjection{}, fmt.Errorf("plan[%d] cannot reuse prior verification: %w", i, err)
+			if steps[i].ReuseReason == carriedVerificationReason || steps[i].implicitPriorReuse {
+				steps[i].verificationDeferralReason = err.Error()
+				steps[i].Status = "pending"
+				steps[i].ReusePriorVerification, steps[i].ReuseReason = false, ""
+				verificationDeferred = append(verificationDeferred, steps[i])
+				if firstReopened < 0 {
+					firstReopened = i
+				}
+				continue
+			}
+			return RunPlanProjection{}, fmt.Errorf("plan[%d] (%s) cannot reuse prior verification: %w", i, steps[i].StepID, err)
+		}
+	}
+	if firstReopened >= 0 {
+		hasActive := false
+		for i := range steps {
+			if steps[i].Status == "in_progress" {
+				hasActive = true
+				break
+			}
+		}
+		if !hasActive {
+			steps[firstReopened].Status = "in_progress"
 		}
 	}
 	workInput, boundaries := projectRunPlanWorkUnits(steps)
@@ -386,9 +435,11 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 		for _, unit := range units {
 			if unit.ID == stepWorkUnits[i] && unit.Status == WorkUnitCompleted {
 				state, _, blockers, checks := workUnitEvidenceProjectionTx(ctx, tx, runID, unit.StartedCursor, unit.FinishedCursor, step.StepID)
-				if state != "passed" && !(step.ReusePriorVerification && state == "not_applicable") {
+				// Reuse was validated above against the exact source and declared
+				// inputs. No current check is different from a failed current check.
+				if state != "passed" && !(step.ReusePriorVerification && checks == 0) {
 					block := planVerificationBlock{stepID: step.StepID, step: step.Step, criterion: step.SuccessCriteria, state: state, blockers: blockers, checks: checks}
-					if checks == 0 && step.SourceStepID != "" {
+					if checks == 0 && step.SourceStepID != "" && !step.ReusePriorVerification {
 						candidate := step
 						// Read-only eligibility probe. This reason is never persisted
 						// and never substitutes for Main's explicit reuse judgment.
@@ -423,8 +474,16 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 			}
 			refs = append(refs, fmt.Sprintf("inherited:%s:%d", step.SourceStepID, step.SourcePlanVersion))
 		}
-		if len(refs) == 0 || unit.VerificationState != "not_applicable" {
+		if len(refs) == 0 || (unit.VerificationState != "not_applicable" && unit.VerificationState != "not_run") {
 			continue
+		}
+		if unit.VerificationState == "not_run" {
+			// This state also represents stale current observations. Historical
+			// adoption may fill an empty window, never erase a current check.
+			_, _, _, checks := workUnitEvidenceProjectionTx(ctx, tx, runID, unit.StartedCursor, unit.FinishedCursor)
+			if checks != 0 { // Includes unreadable evidence (-1).
+				continue
+			}
 		}
 		encoded, err := json.Marshal(refs)
 		if err != nil {
@@ -497,12 +556,66 @@ func (s *Store) syncRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, runID, ex
 	return RunPlanProjection{Plan: plan, Changed: true, WorkUnits: units, VerificationDeferred: verificationDeferred, CriteriaRestated: restated, CancellationDeferred: cancellationDeferred}, nil
 }
 
+// carriedVerificationReason is the reason recorded on a step the runtime carried
+// across an exact continuation. It is the runtime's statement that the source
+// observation still validates, not a new judgment by Main.
+const carriedVerificationReason = "Carried across an exact continuation; the source observation still validates."
+
+// carryInheritedVerificationTx keeps an exact continuation's Plan as the parent
+// left it. An approval or clarification answer, a watcher result and a recovery
+// wake-up are the same work resuming, so progress must not move backwards: a
+// completed step that required verification stays completed, adopted from its
+// source, when the runtime's own provenance and freshness validation passes for
+// it. Only a step whose source no longer validates (its check failed, was only
+// partly conclusive, or its inputs changed) is reopened, alone, and listed. The
+// parent's in-progress step is kept; with none, the earliest reopened step
+// becomes the active one so the Plan never has nothing to do while steps remain.
+//
+// Nothing here grants completion: finish_run still validates every adopted step
+// again. A validation that cannot be carried (including a storage error) reopens
+// the step, which is the conservative outcome the import had for every step.
+func carryInheritedVerificationTx(ctx context.Context, tx *sql.Tx, tenant, runID string, steps []RunPlanStep) []RunPlanStep {
+	active := false
+	for i := range steps {
+		if steps[i].Status == "in_progress" {
+			active = true
+			break
+		}
+	}
+	var reopened []RunPlanStep
+	firstReopened := -1
+	for i := range steps {
+		step := &steps[i]
+		if step.Status != "completed" || !step.VerificationRequired {
+			continue
+		}
+		candidate := *step
+		candidate.ReusePriorVerification = true
+		candidate.ReuseReason = carriedVerificationReason
+		if err := validatePriorVerificationReuseTx(ctx, tx, tenant, runID, candidate); err == nil {
+			step.ReusePriorVerification, step.ReuseReason = true, carriedVerificationReason
+			continue
+		}
+		reopened = append(reopened, *step)
+		step.Status = "pending"
+		if firstReopened < 0 {
+			firstReopened = i
+		}
+	}
+	if !active && firstReopened >= 0 {
+		steps[firstReopened].Status = "in_progress"
+	}
+	return reopened
+}
+
 // normalizeFirstPlanVerification turns an impossible first snapshot into an
 // executable one. A completed verification_required step has no server-issued
 // identity yet, so earlier evidence cannot have been associated with it. Keep
-// the earliest such obligation active and park later work. This never grants
-// completion; it gives Main the durable id needed to verify once and resubmit.
-func normalizeFirstPlanVerification(steps []RunPlanStep, previous *RunPlan) []RunPlanStep {
+// unproven obligations open. New contracts preserve Main's independent active
+// work; historical imports retain their conservative ordering. This never
+// grants completion; it gives Main the durable id needed to verify or associate
+// a supported observation.
+func normalizeFirstPlanVerification(steps []RunPlanStep, previous *RunPlan, independent bool) []RunPlanStep {
 	if previous != nil {
 		return nil
 	}
@@ -515,6 +628,23 @@ func normalizeFirstPlanVerification(steps []RunPlanStep, previous *RunPlan) []Ru
 	}
 	if selected < 0 {
 		return nil
+	}
+	if independent {
+		active := false
+		var deferred []RunPlanStep
+		for i := range steps {
+			if steps[i].Status == "in_progress" {
+				active = true
+			}
+			if steps[i].Status == "completed" && steps[i].VerificationRequired {
+				deferred = append(deferred, steps[i])
+				steps[i].Status = "pending"
+			}
+		}
+		if !active {
+			steps[selected].Status = "in_progress"
+		}
+		return deferred
 	}
 	deferred := []RunPlanStep{}
 	for i := range steps {
@@ -604,12 +734,16 @@ func restatedCompletedCriteria(original map[string]string, previous *RunPlan, st
 	return changed
 }
 
-func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPlan) ([]RunPlanStep, error) {
+func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPlan, reservedIDs map[string]bool) ([]RunPlanStep, error) {
+	if reservedIDs == nil {
+		reservedIDs = map[string]bool{}
+	}
 	byID := map[string]RunPlanStep{}
 	currentIDs := make([]string, 0)
 	var currentSteps []StalePlanStepRef
 	if previous != nil {
 		for _, step := range previous.Steps {
+			reservedIDs[step.StepID] = true
 			byID[step.StepID] = step
 			currentIDs = append(currentIDs, step.StepID)
 			currentSteps = append(currentSteps, StalePlanStepRef{StepID: step.StepID, Status: step.Status, Step: step.Step})
@@ -686,11 +820,35 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 		items[i].StepID = candidate.StepID
 		claimed[candidate.StepID] = true
 	}
+	hasStepChange := previous != nil && len(previous.Steps) != len(items)
+	if previous != nil && !hasStepChange {
+		for _, it := range items {
+			old, ok := byID[it.StepID]
+			if !ok || old.Status != it.Status {
+				hasStepChange = true
+				break
+			}
+		}
+	}
 	used := map[string]bool{}
+	nextID := int64(1)
+	namespace := sha256.Sum256([]byte(runID))
+	idPrefix := "step_" + hex.EncodeToString(namespace[:8]) + "_"
 	out := make([]RunPlanStep, 0, len(items))
 	for i, item := range items {
 		if item.StepID == "" {
-			item.StepID = "step_" + uuid.NewString()
+			// Identities are scoped by Run, not by snapshot position. Reserve
+			// every historical id so deleting/replacing a step never retargets
+			// an old evidence reference to a new obligation.
+			for {
+				id := idPrefix + strconv.FormatInt(nextID, 10)
+				nextID++
+				if !reservedIDs[id] {
+					item.StepID = id
+					reservedIDs[id] = true
+					break
+				}
+			}
 		}
 		if old, ok := byID[item.StepID]; ok && item.Step == "" {
 			item.Step = old.Step
@@ -716,10 +874,17 @@ func resolveRunPlanSteps(runID string, input []RunPlanStepInput, previous *RunPl
 			item.WorkUnitID = old.WorkUnitID
 			item.WorkUnit = item.WorkUnit || old.WorkUnit
 		}
-		if old, ok := byID[item.StepID]; ok && old.ReusePriorVerification && !item.ReusePriorVerification &&
+		if old, ok := byID[item.StepID]; ok && old.ReusePriorVerification &&
 			item.Status == "completed" && normalizeRunPlanText(item.SuccessCriteria) == normalizeRunPlanText(old.SuccessCriteria) {
-			item.ReusePriorVerification = true
-			item.ReuseReason = old.ReuseReason
+			if !item.ReusePriorVerification {
+				item.ReusePriorVerification = true
+				item.ReuseReason = old.ReuseReason
+				if old.Status == "completed" && hasStepChange {
+					item.implicitPriorReuse = true
+				}
+			} else if old.Status == "completed" && hasStepChange && normalizeRunPlanText(item.ReuseReason) == normalizeRunPlanText(old.ReuseReason) {
+				item.implicitPriorReuse = true
+			}
 		}
 		if item.VerificationRequired && item.SuccessCriteria == "" {
 			return nil, fmt.Errorf("plan[%d].success_criteria is required when verification_required is true", i)
@@ -926,6 +1091,12 @@ func (s *Store) LatestRunPlan(ctx context.Context, tenantID, runID string) (*Run
 }
 
 func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID string) error {
+	return s.ValidateRunCompletionWithAssessments(ctx, tenantID, runID, nil)
+}
+
+// Tentative judgments are checked in the completion snapshot without a separate
+// write. The accepted finish result persists them with its durable outcome.
+func (s *Store) ValidateRunCompletionWithAssessments(ctx context.Context, tenantID, runID string, assessments []verification.Assessment) error {
 	if s == nil || s.db == nil || strings.TrimSpace(runID) == "" {
 		return nil
 	}
@@ -934,7 +1105,13 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 		return err
 	}
 	defer tx.Rollback()
-	tenant := normalizeTenant(tenantID)
+	if err := validateRunCompletionTx(ctx, tx, normalizeTenant(tenantID), runID, assessments); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func validateRunCompletionTx(ctx context.Context, tx *sql.Tx, tenant, runID string, assessments []verification.Assessment) error {
 	var contractVersion int
 	if err := tx.QueryRowContext(ctx, `SELECT recovery_contract_version FROM runs WHERE tenant_id=? AND id=?`, tenant, runID).Scan(&contractVersion); err != nil {
 		return err
@@ -990,6 +1167,13 @@ func (s *Store) ValidateRunCompletion(ctx context.Context, tenantID, runID strin
 	}
 	if uncertain > 0 {
 		return &completionPreconditionError{fmt.Sprintf("successful run still has %d uncertain side effect(s); verify their current state before finishing", uncertain)}
+	}
+	condition, err := resolveConditionAssessmentsTx(ctx, tx, tenant, runID, assessments)
+	if err != nil {
+		return err
+	}
+	if len(condition.Blockers) > 0 {
+		return &completionPreconditionError{strings.Join(condition.Blockers, " ")}
 	}
 	return nil
 }

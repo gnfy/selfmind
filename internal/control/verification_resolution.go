@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -24,7 +25,13 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 		var raw string
 		err := s.db.QueryRowContext(ctx, `SELECT payload_json FROM task_events WHERE run_id=? AND type='evidence.recorded' AND json_extract(payload_json,'$.evidence.tool_call_id')=? ORDER BY cursor DESC LIMIT 1`, runID, b.Replaces).Scan(&raw)
 		if err != nil {
-			return nil, fmt.Errorf("verification reference %q is unavailable in this Run", b.Replaces)
+			message := fmt.Sprintf("verification reference %q is unavailable in this Run: replaces names a check made in this Run, and call ids restart in every Run.", b.Replaces)
+			if note := s.earlierRunEvidenceNote(ctx, tenant, runID, b.Replaces); note != "" {
+				message += " " + note
+			} else {
+				message += " To check a Plan step again, bind verify to its step_id."
+			}
+			return nil, errors.New(message)
 		}
 		var p struct {
 			Evidence workUnitEvidence `json:"evidence"`
@@ -39,6 +46,7 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 		if b.Target == "" {
 			b.Target = old.Target
 		}
+		explicitStep := b.StepID != ""
 		if b.StepID == "" {
 			b.StepID = old.StepID
 		}
@@ -57,11 +65,16 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 		}
 		if plan != nil {
 			oldStepFound := false
+			oldStepCancelled := false
 			oldWorkUnitClosed := false
+			hasOpenStep := false
 			for _, step := range plan.Steps {
+				if step.Status == "in_progress" || step.Status == "pending" {
+					hasOpenStep = true
+				}
 				if step.StepID == old.StepID {
 					oldStepFound = true
-					break
+					oldStepCancelled = step.Status == "cancelled"
 				}
 			}
 			if oldStepFound {
@@ -87,7 +100,7 @@ func (s *Store) ResolveVerificationBinding(ctx context.Context, tenant, runID st
 					return nil, fmt.Errorf("verification step %q does not belong to the current Run plan", b.StepID)
 				}
 				b.Version = 3
-			} else if old.StepID != "" && (!oldStepFound || oldWorkUnitClosed) {
+			} else if old.StepID != "" && (!oldStepFound || oldStepCancelled || (oldWorkUnitClosed && hasOpenStep && !explicitStep)) {
 				return nil, fmt.Errorf("the original verification obligation is closed or unavailable; select the current step_id explicitly for this recheck")
 			}
 		}

@@ -1,5 +1,0 @@
-{
-  "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "{{SELFMIND_VCR_EFFECT_CLAIM_1}} effect_claim_id observed.state /effects/settle finish_run"
-}

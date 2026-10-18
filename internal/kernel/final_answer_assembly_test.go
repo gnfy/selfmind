@@ -77,7 +77,7 @@ func TestFinalAnswerWithRefusalsKeepsTheirResults(t *testing.T) {
 				for _, id := range tc.refused {
 					if message.Role == "tool" && message.ToolCallID == id {
 						refusals++
-						if strings.Contains(message.Content, tc.want) || !strings.Contains(message.Content, "not_dispatched") {
+						if strings.Contains(message.Content, tc.want) || !strings.Contains(message.Content, "Not executed.") {
 							t.Errorf("refusal %s was overwritten: %q", id, message.Content)
 						}
 					}

@@ -146,7 +146,7 @@ var prefixWrappers = map[string]prefixWrapper{
 		valueFlags: wordSet("-i", "--input", "-o", "--output", "-e", "--error"),
 		longFlags:  wordSet("--help", "--version"),
 	},
-	"command": {},
+	"command": {targetFlags: wordSet("-v", "-V")},
 	"builtin": {bareRunsNothing: true},
 	"exec":    {valueFlags: wordSet("-a"), bareRunsNothing: true},
 	"time": {

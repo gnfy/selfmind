@@ -337,8 +337,13 @@ func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			_, _ = fmt.Fprint(w, ": keep-alive\n\n")
+			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
+			if presenceClaimed(r) {
+				d.touchPresence(r.Context(), identity)
+			}
 		case event := <-sub.ch:
 			if sub.gap.Swap(false) {
 				writeRunEventSSE(w, api.RunEvent{Type: "stream.gap", Durability: api.EventEphemeral, PersonID: identity.PersonID, CreatedAt: time.Now()})
@@ -354,6 +359,9 @@ func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 			}
 			writeRunEventSSE(w, event)
 			flusher.Flush()
+			if presenceClaimed(r) {
+				d.touchPresence(r.Context(), identity)
+			}
 		}
 	}
 }

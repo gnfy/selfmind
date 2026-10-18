@@ -15,6 +15,7 @@ type dailyPerformance struct {
 	PreparationSamples             int
 	PreparationMS                  int64
 	RecallMS, ExpansionMS          int64
+	ExpansionOverlapped            int
 	ExpansionStatuses              map[string]int
 	First, Later                   dailyCacheSample
 	BookkeepingSteps               int
@@ -85,13 +86,17 @@ func collectDailyPerformance(events []control.Event) dailyPerformance {
 			}
 		case "context.recall":
 			var p struct {
-				Duration    int64  `json:"elapsed_ms"`
-				ExpansionMS int64  `json:"expansion_ms"`
-				Status      string `json:"expansion_status"`
+				Duration            int64  `json:"elapsed_ms"`
+				ExpansionMS         int64  `json:"expansion_ms"`
+				ExpansionOverlapped bool   `json:"expansion_overlapped"`
+				Status              string `json:"expansion_status"`
 			}
 			if json.Unmarshal(event.Payload, &p) == nil {
 				stats.RecallMS += p.Duration
 				stats.ExpansionMS += p.ExpansionMS
+				if p.ExpansionOverlapped {
+					stats.ExpansionOverlapped++
+				}
 				stats.ExpansionStatuses[fallback(p.Status, "unreported")]++
 			}
 		case "provider.call.usage":
@@ -183,5 +188,8 @@ func formatCacheSample(sample dailyCacheSample) string {
 func (p dailyPerformance) render() string {
 	base := fmt.Sprintf("Preparation: %d measured runs, total %dms (excludes queued time); recall %dms including expansion %dms (%s)\nCache by actual request position: first %s; later %s (historical missing markers excluded)\nBookkeeping-only model steps: %d (invoked update_plan/finish_run; Skill reads are not bookkeeping); held calls: %d; dispatch metadata missing: %d steps\n",
 		p.PreparationSamples, p.PreparationMS, p.RecallMS, p.ExpansionMS, formatCountMap(p.ExpansionStatuses), formatCacheSample(p.First), formatCacheSample(p.Later), p.BookkeepingSteps, p.HeldCalls, p.UnreportedToolSteps)
+	if p.ExpansionOverlapped > 0 {
+		base += fmt.Sprintf("Recall expansion overlapped lexical selection in %d run(s); expansion time is work, not additional foreground wait.\n", p.ExpansionOverlapped)
+	}
 	return base + p.StepFailures.render(p.ModelMS) + p.PlanInput.render()
 }

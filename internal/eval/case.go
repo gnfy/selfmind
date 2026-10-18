@@ -12,6 +12,9 @@ import (
 )
 
 type Case struct {
+	// Captured drafts have no reconstructed world yet. Review and seed that
+	// world before removing this guard; replay really executes tools.
+	CaptureReviewRequired bool `yaml:"capture_review_required,omitempty" json:"capture_review_required,omitempty"`
 	// Smart cases exercise the production judge; existing cases retain full-auto.
 	ApprovalMode  string `yaml:"approval_mode,omitempty" json:"approval_mode,omitempty"`
 	ID            string `yaml:"id" json:"id"`
@@ -201,6 +204,7 @@ type Expectations struct {
 	CompletionReason     string   `yaml:"completion_reason" json:"completion_reason,omitempty"`
 	Resumable            *bool    `yaml:"resumable" json:"resumable,omitempty"`
 	VerificationState    string   `yaml:"verification_state" json:"verification_state,omitempty"`
+	ConditionState       string   `yaml:"condition_state" json:"condition_state,omitempty"`
 	Contains             []string `yaml:"contains" json:"contains,omitempty"`
 	MustNotContain       []string `yaml:"must_not_contain" json:"must_not_contain,omitempty"`
 	MaxDurationSeconds   int      `yaml:"max_duration_seconds" json:"max_duration_seconds,omitempty"`

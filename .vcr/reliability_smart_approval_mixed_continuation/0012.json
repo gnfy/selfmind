@@ -1,69 +1,19 @@
 {
   "plan_binding_version": 1,
-  "method": "stream",
-  "events": [
-    {
-      "content": "I"
+  "method": "chat",
+  "chat": {
+    "Content": "{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"User explicitly authorized writing 'VERIFIED' to receipt.txt in the workspace once resumed from external handoff.\"}",
+    "ReasoningContent": "",
+    "Phase": "",
+    "ToolCalls": [],
+    "Usage": {
+      "input_tokens": 2575,
+      "output_tokens": 43,
+      "cache_read_input_tokens": 0,
+      "cache_miss_input_tokens": 0,
+      "cache_creation_input_tokens": 0,
+      "reasoning_output_tokens": 0
     },
-    {
-      "usage": {
-        "input_tokens": 15256,
-        "output_tokens": 1,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "content": " will inspect the parent run to check the plan and context."
-    },
-    {
-      "usage": {
-        "input_tokens": 0,
-        "output_tokens": 12,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "usage": {
-        "input_tokens": 0,
-        "output_tokens": 53,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "finish_reason": "stop"
-    },
-    {
-      "usage": {
-        "input_tokens": 147,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "tool_calls": [
-        {
-          "ID": "call_2416645",
-          "Function": "work_inspect",
-          "Args": "{\"run_id\":\"{{SELFMIND_VCR_RUN_2}}\"}",
-          "replay_metadata": {
-            "google": {
-              "thought_signature": "EtoBCtcBAWkUfRMn7CjBZ73X+9LWgDnsimeRJ3bWF+ieQbbJY0NSA74acuRJkbP6KnXyprGBDcXLwqtGdu5jbOPzZQWq1FDItYlzQQ49soDp8f9ydFGHU/Lh+RZZC5s13Ibzzn/v9QuqsTxecGKjvrypmuC4hIe/+lg8RReo9iUb/29zyJZfCUx7NBt6dN85RWCQy6eWb0jEGr0np0sZT2co4YYD8x3TBs5vaRv5tAxvk6FbM6gCnaMWuGfSCyRzxUW7xwitGEuUz86je1sYVEfc2ckUUz/rTS2t9mI="
-            }
-          }
-        }
-      ]
-    }
-  ]
+    "FinishReason": "stop"
+  }
 }

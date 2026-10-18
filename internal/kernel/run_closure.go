@@ -2,13 +2,15 @@ package kernel
 
 import "encoding/json"
 
-// A failed precondition is not a successful finish. Permit one correction,
-// only after the runtime actually applied a changed plan or a check succeeded.
+const maxFinishStateRecoveries = 3
+
+// A failed precondition is not a successful finish. Each bounded correction
+// needs a subsequent accepted Plan change or successful check; a previous
+// correction cannot permanently exclude a later valid completion.
 // Other failures (including rejection and unknown effects) never unlock it.
 type finishCorrection struct {
-	pending           bool
-	used              bool
-	argumentRetryUsed bool
+	pending    bool
+	recoveries int
 }
 
 func (f *finishCorrection) observe(results []toolExecutionResult, counts map[string]int) {
@@ -17,23 +19,28 @@ func (f *finishCorrection) observe(results []toolExecutionResult, counts map[str
 			continue
 		}
 		if result.toolName == "finish_run" {
+			if !result.success && result.errorCode == "completion_context_changed" && result.effectState == "not_dispatched" {
+				counts["finish_run"] = max(0, counts["finish_run"]-1)
+				f.pending = false
+				continue
+			}
 			// A preparation failure with a proven not-dispatched effect did not
-			// consume the lifecycle action. Permit one corrected call. The
-			// recovery policy still rejects an identical retry, and the bounded
-			// flag prevents malformed output from opening an unbounded loop.
-			if !result.success && !f.argumentRetryUsed &&
+			// consume a committed lifecycle action. Input repair is bounded by
+			// the Run's iteration budget and unchanged-input recovery policy,
+			// independently of evidence-based completion recovery below.
+			if !result.success &&
 				result.failurePhase == "preparation" &&
 				result.retryability == "corrected_input" &&
 				result.effectState == "not_dispatched" {
 				counts["finish_run"] = max(0, counts["finish_run"]-1)
-				f.argumentRetryUsed = true
 				f.pending = false
 				continue
 			}
-			f.pending = !result.success && result.errorCode == "completion_precondition"
+			f.pending = !result.success && result.effectState == "not_dispatched" &&
+				(result.errorCode == "completion_precondition" || result.errorCode == "condition_assessment_invalid")
 			continue
 		}
-		if !f.pending || f.used || !result.success {
+		if !f.pending || f.recoveries >= maxFinishStateRecoveries || !result.success {
 			continue
 		}
 		changed := result.toolName == "verify"
@@ -45,7 +52,8 @@ func (f *finishCorrection) observe(results []toolExecutionResult, counts map[str
 		}
 		if changed {
 			counts["finish_run"] = max(0, counts["finish_run"]-1)
-			f.used, f.pending = true, false
+			f.recoveries++
+			f.pending = false
 		}
 	}
 }

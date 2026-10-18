@@ -182,11 +182,11 @@ func TestHeldFinishDoesNotChangePendingCompletionCorrection(t *testing.T) {
 	correction := finishCorrection{pending: true}
 	counts := map[string]int{"finish_run": 1}
 	correction.observe([]toolExecutionResult{{toolName: "finish_run", heldBeforeDispatch: true}}, counts)
-	if !correction.pending || correction.argumentRetryUsed || correction.used || counts["finish_run"] != 1 {
+	if !correction.pending || correction.recoveries != 0 || counts["finish_run"] != 1 {
 		t.Fatalf("held result changed correction: %+v counts=%v", correction, counts)
 	}
 	correction.observe([]toolExecutionResult{{toolName: "update_plan", success: true, rawResult: `{"changed":true}`}}, counts)
-	if !correction.used || counts["finish_run"] != 0 {
+	if correction.recoveries == 0 || counts["finish_run"] != 0 {
 		t.Fatalf("real correction was lost: %+v counts=%v", correction, counts)
 	}
 }

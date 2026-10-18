@@ -125,7 +125,7 @@ func TestRemovingHumanContinuationLeavesStartedChildAndPendingSiblingAlone(t *te
 				if err := store.SaveLoopCheckpoint(ctx, awaitCheckpoint(owner, siblingTask, sibling, LoopCheckpointWaitClarification, question.ID, "sibling-call")); err != nil {
 					t.Fatal(err)
 				}
-				if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, sibling.ID, LoopCheckpointWaitClarification, question.ID); err != nil || !parked {
+				if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, sibling.ID, LoopCheckpointWaitClarification, question.ID, HumanWaitParkGrace); err != nil || !parked {
 					t.Fatalf("sibling park=%v %v", parked, err)
 				}
 				q := answerHumanCancelFixture(t, store, owner, task, kind, ref)

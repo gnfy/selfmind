@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"selfmind/internal/kernel"
-	"selfmind/internal/platform/textutil"
 )
 
 const (
@@ -34,17 +33,25 @@ type batchReadOperation struct {
 	MaxBytes     int    `json:"max_bytes,omitempty"`
 	MaxFileBytes int    `json:"max_file_bytes,omitempty"`
 	Timeout      int    `json:"timeout,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	LineNumbers  bool   `json:"line_numbers,omitempty"`
+	MatchMode    string `json:"match_mode,omitempty"`
+	OutputMode   string `json:"output_mode,omitempty"`
 }
 
 type batchReadItemResult struct {
-	Index     int    `json:"index"`
-	Tool      string `json:"tool"`
-	Success   bool   `json:"success"`
-	Output    string `json:"output,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Bytes     int    `json:"bytes"`
-	Hash      string `json:"sha256,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
+	Index            int    `json:"index"`
+	Tool             string `json:"tool"`
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	Success          bool   `json:"success"`
+	Output           string `json:"output,omitempty"`
+	Error            string `json:"error,omitempty"`
+	Bytes            int    `json:"bytes"`
+	Hash             string `json:"sha256,omitempty"`
+	Truncated        bool   `json:"truncated,omitempty"`
+	ArtifactID       string `json:"artifact_id,omitempty"`
+	CaptureTruncated bool   `json:"capture_truncated,omitempty"`
+	OutputWarning    string `json:"output_warning,omitempty"`
 }
 
 func NewBatchReadTool(dispatch func(string, map[string]interface{}) (string, error), metadata ...func(string, map[string]interface{}) kernel.ToolExecutionMetadata) *BatchReadTool {
@@ -72,6 +79,10 @@ func NewBatchReadTool(dispatch func(string, map[string]interface{}) (string, err
 								"tool":           {Type: "string", Enum: []string{"read_file", "search_files", "ls_r"}},
 								"path":           {Type: "string"},
 								"pattern":        {Type: "string"},
+								"offset":         {Type: "integer"},
+								"line_numbers":   {Type: "boolean"},
+								"match_mode":     {Type: "string", Enum: []string{"literal", "regex"}},
+								"output_mode":    {Type: "string", Enum: []string{"files", "content"}},
 								"file_glob":      {Type: "string"},
 								"recursive":      {Type: "boolean"},
 								"limit":          {Type: "integer"},
@@ -138,6 +149,7 @@ func (t *BatchReadTool) ExecuteContext(ctx context.Context, args map[string]inte
 			break
 		}
 		childArgs := batchReadChildArgs(operation, args, index)
+		childArgs["_context"] = ctx
 		childCallID := batchReadParentCallID(childArgs)
 		parentCallID := batchReadParentCallID(args)
 		eventArgs, _ := json.Marshal(batchReadPublicArgs(childArgs))
@@ -166,13 +178,16 @@ func (t *BatchReadTool) ExecuteContext(ctx context.Context, args map[string]inte
 		output, err := t.dispatch(operation.Tool, childArgs)
 		duration := time.Since(startedAt).Seconds()
 		item := batchReadItemResult{Index: index + 1, Tool: operation.Tool, Success: err == nil, Bytes: len(output)}
+		if len(childCallID) <= 256 && !strings.ContainsAny(childCallID, "\r\n") {
+			item.ToolCallID = childCallID
+		}
 		digest := sha256.Sum256([]byte(output))
 		item.Hash = fmt.Sprintf("%x", digest[:])
-		if len(output) > batchReadItemBytes {
-			item.Output = textutil.HeadTail(output, batchReadItemBytes/2, "\n... [batch item truncated] ...\n")
-			item.Truncated = true
-		} else {
-			item.Output = output
+		bounded := kernel.BoundToolOutput(ctx, operation.Tool, output, batchReadItemBytes)
+		item.Output, item.Truncated = bounded.ModelContent, bounded.Truncated
+		item.ArtifactID, item.CaptureTruncated = bounded.ArtifactID, bounded.CaptureTruncated
+		if item.Truncated && item.ArtifactID == "" {
+			item.OutputWarning = "Full output could not be saved for read-back; use a narrower file window. The read itself was not retried."
 		}
 		if err != nil {
 			failures++
@@ -210,6 +225,7 @@ func (t *BatchReadTool) ExecuteContext(ctx context.Context, args map[string]inte
 	payload := map[string]interface{}{
 		"success": failures == 0, "candidate_id": candidateID, "operations": len(results),
 		"failures": failures, "fallback_required": failures > 0, "items": results,
+		"reference_notice": "Each item's tool_call_id identifies that exact attempt. Cite successful file observations by item ID, not the batch wrapper; success alone is not a completion judgment.",
 	}
 	data, _ := json.Marshal(payload)
 	return string(data), nil
@@ -259,6 +275,18 @@ func batchReadChildArgs(operation batchReadOperation, parent map[string]interfac
 	}
 	if operation.Pattern != "" {
 		args["pattern"] = operation.Pattern
+	}
+	if operation.Offset != 0 {
+		args["offset"] = operation.Offset
+	}
+	if operation.LineNumbers {
+		args["line_numbers"] = true
+	}
+	if operation.MatchMode != "" {
+		args["match_mode"] = operation.MatchMode
+	}
+	if operation.OutputMode != "" {
+		args["output_mode"] = operation.OutputMode
 	}
 	if operation.FileGlob != "" {
 		args["file_glob"] = operation.FileGlob

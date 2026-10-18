@@ -22,6 +22,8 @@ selfmind selfcheck                 # docs + build + test + offline-replay eval g
 selfmind selfcheck --skip-go --skip-eval # documentation-only release gate
 selfmind eval repair [case-or-dir] # re-run failures, print a repair brief (apply stays manual)
 selfmind eval scorecard [dir]      # per-scenario daily-driver readiness report
+selfmind eval compare before.md.json after.md.json # advisory cost/quality comparison
+selfmind eval canary init /tmp/my-new-canary # create private synthetic live fixtures; no calls
 selfmind eval capture [latest]     # promote the last recorded turn into an eval case
 selfmind eval clean [--yes]        # remove historic eval residue (control.db rows + on-disk eval-* dirs)
 ```
@@ -52,7 +54,86 @@ with both `invoked: false` and `effect_state: not_dispatched` qualify as proven
 non-dispatch; missing, untyped or unknown-effect facts remain failures. No error
 message, model name or scenario-specific code grants an exception.
 
+Optional requests deliberately canceled by their caller record `caller_canceled`
+and replay a cancellation, never a successful response. The marker requires both
+a canceled caller context and a cancellation error; unrelated provider errors,
+including timeouts, remain failures. Conflicting output/error markers are invalid.
+This keeps overlapped recall recordable without weakening the provider-failure gate.
+
+Natural-task efficiency checks use the same input, fixture and route before and
+after a change, without instructing the model which tool sequence to use.
+Report task correctness, verification, tool failures, Main calls and elapsed time
+separately; count refusals and retain failed provider samples. An isolated summary
+checks recorded success, a human wait and stale local evidence without mutation.
+A small live sample establishes protocol coverage, not sustained speed or parity.
+
+## Efficiency evidence and live canaries
+
+Scorecards keep every repeat sample, including startup errors. Repeated record mode keeps separate `<case>-sN`
+sessions in the configured VCR directory; no attempt overwrites its predecessor.
+Select an intact sample explicitly when promoting a canonical release cassette.
+Aggregate
+`RunResult` counters and duration are totals; sample medians are calculated from
+`samples`, never from the last successful run. Markdown has a private JSON
+sidecar (`<report.md>.json`) with each sample's checks and evidence path.
+`eval report` and scorecards use the same efficiency projection. Lifecycle means
+`update_plan` and `finish_run`; `verify` is reported separately. Main usage counts
+include failed provider requests, exclude proven local deferrals, and separate
+other/unknown roles. Missing historical usage stays unknown.
+
+Finish first-pass measures the first tool receipt for each identified Run that
+attempts finish, not successful durable delivery or task correctness. Closing
+model cost starts with that first attempt's generating call and includes later
+recovery on the same Run; it is not a claim that all closing work is waste.
+Missing Run identity or timing is not inferred from the last three calls. Judge
+latency is not added again to enclosing tool intervals.
+
+`eval compare <before> <after>` reads JSON sidecars, raw JSONL, or directories of
+JSONL (not both originals and sidecars). It retains incomplete and unmatched
+samples. Sidecars also retain failures before a JSONL log could be created; use
+them for sampled experiments. Live latency deltas require equal sample counts and matching fixture hashes, route, reasoning,
+model/sandbox policy and execution mode; build identities may differ. Unknown
+provenance and replay show no live speed claim. This is advisory output, not a
+new selfcheck or release gate. Policy hashes cover model selections and sandbox
+configuration, not every host/environment difference: hold those constant too.
+
+`eval canary init <new-directory>` writes five synthetic, isolated fixtures:
+cross-project history, a code repair with existing tests, a negative investigation,
+a tool-free answer, and a confirmation/continuation with a pre-confirmation
+no-write assertion. Each requests three samples on the configured route in
+smart mode; task assertions determine quality and tool errors remain separate
+friction metrics rather than being hidden by the final success; no tool sequence or minimum round count is taught. Generation makes
+no provider call. Explicit `scorecard <directory> --live --out before.md` incurs
+provider usage; run both builds against the identical fixture directory and
+configuration, alternating order when collecting repeated comparisons. Three
+samples are smoke evidence, not a tail-latency or sustained-quality estimate.
+These starter fixtures do not yet prove long Git histories, real IM, or recovery
+under sustained load. Keep them outside the committed replay corpus.
+
+Replay reports distinguish its configured route from the actual recording
+sources; a playback configured for Qwen never makes a legacy tape a Qwen sample.
+New recordings carry advisory `recorded_with` metadata: time, resolved model/role,
+build and available schema/prefix hashes. Legacy provenance stays unknown; file
+mtime is not treated as a recording date. Fingerprint drift does not fail replay.
+Caller-canceled optional work retains cancellation semantics rather than being
+limited by a fixed allowed count. Actual provider failures remain forbidden in
+release recordings.
+
 ## Data Isolation (default)
+
+Each turn's outcome assertions read that turn's returned state. An absent
+verification verdict does not inherit a preceding turn's `passed` or `failed`.
+When a case waits for a watcher continuation, its final assertions use that
+child's actual outcome, including absence of verification. Adopted evidence
+cases also assert the source reference in the durable final outcome, so a
+historical verdict alone cannot satisfy the continuation gate.
+Plan-ID placeholders support legacy UUID and compact Run-namespaced identities
+in both directions; shortening references does not require re-recording unrelated
+cases. The adoption case also requires status plus a complete final body without
+duplicated summary arguments on both turns.
+The changed-criterion case allows a genuine negative check but separately
+rejects invalid-input and stale-reference errors in durable tool events; an
+expected failed check cannot hide a contract-repair loop.
 
 Every eval run — record and replay alike — uses a **throwaway temp data dir**
 (fresh `control.db` + memory) by default. Eval identities (`eval-<case-id>`
@@ -152,12 +233,16 @@ tests, for free.
    flight cassette containing a provider failure; rerun the turn successfully
    instead of promoting a timeout or transport error as fixed model behavior.
 
-3. **Edit the draft** to encode *what should have happened* — fill in
+3. **Review the isolated draft** before execution. Capture preserves private
+   directory/file permissions (0700/0600), refuses overwrites, and sets
+   `capture_review_required: true`. Reconstruct `setup` and its ground truth, then
+   clear that flag. Raw recordings do not restore files, remote state or approvals,
+   and replay really executes tools. Fill in
    `assert_state` (e.g. a file that must exist, a task that must continue) and/or
    `expect`. The recorded model output is the negative example; you pin the
    desired terminal state.
 
-4. **Promote it.** Replay the draft directly, then move the reviewed YAML into
+4. **Promote it.** Replay the reviewed draft, then move the reviewed YAML into
    the appropriate `evalcases/<suite>/` directory and its cassette directory
    into `.vcr/<case-id>/`. Only then does `selfmind selfcheck` treat it as
    release evidence. A model-backed promoted case without its cassette fails
@@ -235,6 +320,16 @@ setup:
 
 Use multi-turn cases to test `continue`, `可以`, and `按方案做` behavior:
 
+`expect.verification_state` checks the legacy execution/check projection.
+`expect.condition_state` checks Main's evidence-bound conclusion (`met`,
+`not_met`, `unknown`, or `unassessed`). These are not interchangeable: a
+zero-exit observation can establish a negative condition. Each final turn or
+watcher child owns both projections; an earlier turn's verdict cannot satisfy
+the later assertion. Pair condition assertions with durable Run/Plan state and
+unchanged-file checks. The investigation case completes with a negative finding;
+the changed-required-criterion case retains that negative condition and blocks
+completion. Failed methods and wrong references remain observable errors.
+
 ```yaml
 turns:
   - input: "先给方案，不要改代码。"
@@ -306,6 +401,12 @@ excluding the case. It does not make other model-backed cases optional.
 id: continuity_resume
 require_cassette: true
 ```
+
+Event assertions may use `payload_fields` to match exact string values by dotted
+JSON paths (for example `tool: update_plan` and `args.mode: patch`). JSON-encoded
+object strings are decoded while traversing, so whitespace/key order do not
+change a tool-argument assertion. Missing, malformed or non-string values do not
+match; all fields must match the same event. Count bounds still apply.
 
 ## Multi-Run Runtime And Endpoints
 

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -157,5 +158,114 @@ func TestWorkSelectSaysWhatToDoInsteadOfResumingSettledWork(t *testing.T) {
 				t.Errorf("resume %s: refusal %q, want %q", tc.target, text, want)
 			}
 		}
+	}
+}
+
+func TestWorkSelectDirectContinuationReportsPriorVerificationFacts(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unchanged", true: "changed dependency"}[changed], func(t *testing.T) {
+			ctx := context.Background()
+			store, err := control.OpenStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			person, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "alice", "Alice")
+			parentTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "check artifact", Channel: "cli"})
+			parentRun, _ := store.StartRun(ctx, parentTask, "cli", "check artifact")
+			first, err := store.SyncRunPlan(ctx, person.TenantID, parentRun.ID, "init", []control.RunPlanStepInput{
+				{Step: "Preflight Jira and git state", Status: "in_progress", SuccessCriteria: "Jira issue and tags confirmed", VerificationRequired: true},
+				{Step: "Prepare result", Status: "pending", SuccessCriteria: "result ready", VerificationRequired: true, WorkUnit: true},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			step1ID := first.Plan.Steps[0].StepID
+			step2ID := first.Plan.Steps[1].StepID
+			evidence, _ := json.Marshal(map[string]interface{}{"evidence": map[string]interface{}{
+				"tool_call_id": "verify-step1", "kind": "verification", "status": "succeeded", "started_at_unix_nano": 10, "finished_at_unix_nano": 11,
+				"command": map[string]interface{}{"command": "gh api repos/org/repo/tags", "kind": "command", "cwd": "/workspace", "binding": map[string]interface{}{
+					"version": 3, "step_id": step1ID, "criterion": "Jira issue and tags confirmed", "target": step1ID,
+				}},
+			}})
+			if _, err := store.AppendEvent(ctx, control.Event{TaskID: parentTask.ID, RunID: parentRun.ID, Type: "evidence.recorded", Payload: evidence}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.SyncRunPlan(ctx, person.TenantID, parentRun.ID, "step 1 done", []control.RunPlanStepInput{
+				{StepID: step1ID, Status: "completed", VerificationRequired: true},
+				{StepID: step2ID, Status: "in_progress", VerificationRequired: true, WorkUnit: true},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if changed {
+				mutation, _ := json.Marshal(map[string]interface{}{"evidence": map[string]interface{}{
+					"tool_call_id": "later-change", "kind": "mutation", "status": "succeeded", "started_at_unix_nano": 20, "finished_at_unix_nano": 21,
+					"files": []map[string]interface{}{{"path": "/workspace/state.json", "before_sha256": "before", "after_sha256": "after"}},
+				}})
+				if _, err := store.AppendEvent(ctx, control.Event{TaskID: parentTask.ID, RunID: parentRun.ID, Type: "evidence.recorded", Payload: mutation}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_ = store.FinishRun(ctx, person.TenantID, parentRun.ID, "interrupted")
+
+			childTask, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "continue", Channel: "cli"})
+			childRun, _ := store.StartRun(ctx, childTask, "cli", "continue checking artifact")
+			tool := NewWorkSelectTool(store)
+			raw, err := tool.Execute(map[string]interface{}{
+				"action": "resume", "run_id": parentRun.ID,
+				"_invocation_scope": kernel.ToolInvocationScope{
+					ControlTenantID: person.TenantID, PersonID: person.PersonID,
+					TaskID: childTask.ID, RunID: childRun.ID, ExecutionLane: "main",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var parsed struct {
+				Status        string         `json:"status"`
+				CommitMode    string         `json:"commit_mode"`
+				ResumeContext string         `json:"resume_context"`
+				Plan          []planStepView `json:"plan"`
+			}
+			if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+				t.Fatalf("unmarshal result: %v (%s)", err, raw)
+			}
+			if parsed.Status != "committed" || parsed.CommitMode != "direct" || len(parsed.Plan) != 2 {
+				t.Fatalf("unexpected direct continuation payload: %+v", parsed)
+			}
+			if strings.Contains(raw, "reuse_prior_verification_available") || strings.Contains(raw, "do not re-run verify unnecessarily") {
+				t.Fatal("resume must not offer a separate, weaker reuse verdict")
+			}
+			if !strings.Contains(parsed.ResumeContext, "prior_verification=passed") {
+				t.Fatalf("missing historical check fact: %s", parsed.ResumeContext)
+			}
+			prior, err := store.ListInheritedPlanEvidence(ctx, person.TenantID, childRun.ID)
+			if err != nil || len(prior) == 0 {
+				t.Fatalf("prior evidence=%+v err=%v", prior, err)
+			}
+			if changed {
+				if prior[0].ReuseBlockedReason == "" || !strings.Contains(parsed.ResumeContext, prior[0].ReuseBlockedReason) {
+					t.Fatalf("missing blocked reason: prior=%+v context=%s", prior, parsed.ResumeContext)
+				}
+			} else if strings.Contains(parsed.ResumeContext, "reuse_blocked_reason=") {
+				t.Fatalf("invented blocker: %s", parsed.ResumeContext)
+			}
+			for _, entry := range parsed.Plan {
+				encoded, _ := json.Marshal(entry)
+				if strings.Contains(string(encoded), "prior_verification") {
+					t.Fatalf("observation metadata leaked into plan input: %s", encoded)
+				}
+			}
+			_, adoptErr := store.SyncRunPlan(ctx, person.TenantID, childRun.ID, "assess inherited check", []control.RunPlanStepInput{
+				{StepID: parsed.Plan[0].StepID, Status: "completed", VerificationRequired: true, ReusePriorVerification: true, ReuseReason: "same target and criterion remain sufficient"},
+				{StepID: parsed.Plan[1].StepID, Status: "in_progress", VerificationRequired: true},
+			})
+			if changed && adoptErr == nil {
+				t.Fatal("changed input must still prevent adoption")
+			}
+			if !changed && adoptErr != nil {
+				t.Fatalf("valid explicit adoption refused: %v", adoptErr)
+			}
+		})
 	}
 }

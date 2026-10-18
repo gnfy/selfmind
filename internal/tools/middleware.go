@@ -678,17 +678,15 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			case externalUnknown:
 				// External unknown effects are deliberately once-only. Historical
 				// broad grants and live run grants cannot release them.
-			case isRunGranted(declaredEffectKey):
-				// A person approved this byte-identical command as part of a bounded
-				// phase. The hard floor and current deny already ran above; identity,
-				// workspace, environment and effective sandbox are part of the key.
-				recordScopeTriage(scope, toolName, declaredEffectKey, TriageOutcomeBundleHit, TriageAssessment{}, 0, nil)
-				return next(args)
 			case isRunGranted(decisionKey):
 				recordScopeTriage(scope, toolName, decisionKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
 			case semanticReview:
-				// An old capability grant cannot interpret a new human restriction.
+				// Broad grants cannot interpret today's restrictions. Only the exact
+				// decision key above includes the current intent snapshot.
+			case isRunGranted(declaredEffectKey):
+				recordScopeTriage(scope, toolName, declaredEffectKey, TriageOutcomeBundleHit, TriageAssessment{}, 0, nil)
+				return next(args)
 			case proxyOverride:
 				// An observation grant does not decide whether to discard the
 				// operator's route. Only an unchanged exact decision above can.
@@ -792,7 +790,7 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			// but adds no remote reach, since without a network route it reaches
 			// no target and sandbox reads already cover the host's credential
 			// files.
-			if semanticReview || externalUnknown || denyForcesHuman || hostOnce || hostWithoutClass || proxyOverride ||
+			if externalUnknown || denyForcesHuman || hostOnce || hostWithoutClass || proxyOverride ||
 				(credentialReadResolved(args) && !containment.ObservationOnly) {
 				decisionPolicy = ApprovalDecisionPolicyOnceOnly
 			}
@@ -822,9 +820,22 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 				default:
 					ctx := withParallelApprovalContext(contextFromArgs(args), scope)
 					triageStarted := time.Now()
-					verdict, assessment, terr := triageApprovalWithIntent(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intentSnapshot, containment)
+					readIntent := scope.IntentSnapshot
+					if readIntent == nil && scope.TriageIntent != nil {
+						readIntent = func() RunIntentSnapshot { return RunIntentSnapshot{RawUserText: scope.TriageIntent()} }
+					}
+					verdict, assessment, terr := triageApprovalWithCurrentIntent(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intentSnapshot, approvalIntentGuard(intentSnapshot, readIntent), containment)
 					assessment.Response.ToolCallID = stringArg(args, "_tool_call_id")
 					triageLatency := time.Since(triageStarted)
+					if ctx.Err() != nil {
+						return "", ctx.Err()
+					}
+					var responseErr *ApprovalResponseError
+					if errors.As(terr, &responseErr) && responseErr.Class == "intent_changed" {
+						recordScopeTriage(scope, toolName, patternKey, TriageOutcomeUnavailable, assessment, triageLatency, terr)
+						message := "User requirements changed during automatic review; no action was executed."
+						return "", newStableToolRecoveryError(fmt.Errorf("%s %w", message, terr), "approval_context_changed", "stale_precondition", message, "Review the latest user requirements before submitting another action.", "preparation", "corrected_input", "not_dispatched", false)
+					}
 					triageRationale = assessment.Rationale
 					triageRisk = assessment.Risk
 					triageAuthorization = assessment.Authorization
@@ -1546,8 +1557,42 @@ var dangerousBinaries = map[string]struct{}{
 }
 
 // destructiveSubstrings are raw patterns that are dangerous regardless of how
-// the command is tokenized (e.g. redirecting over a device node).
-var destructiveSubstrings = []string{"> /dev/", ":(){", "/dev/sd", "/dev/nvme"}
+// the command is tokenized (e.g. fork bomb or raw disk nodes).
+var destructiveSubstrings = []string{":(){", "/dev/sd", "/dev/nvme"}
+
+var benignDevRedirectTargets = []string{
+	"null", "zero", "full", "random", "urandom", "stdin", "stdout", "stderr", "fd/",
+}
+
+// hasDangerousDevRedirect reports whether cmd redirects output to a /dev/
+// target other than harmless pseudo-devices such as /dev/null.
+func hasDangerousDevRedirect(cmd string) bool {
+	s := strings.ToLower(cmd)
+	for {
+		idx := strings.Index(s, ">")
+		if idx < 0 {
+			return false
+		}
+		rest := s[idx+1:]
+		rest = strings.TrimLeft(rest, ">|& \t")
+		if afterDev, ok := strings.CutPrefix(rest, "/dev/"); ok {
+			benign := false
+			for _, safe := range benignDevRedirectTargets {
+				if strings.HasPrefix(afterDev, safe) {
+					tail := afterDev[len(safe):]
+					if strings.HasSuffix(safe, "/") || tail == "" || strings.ContainsAny(tail[:1], " \t\n;|&)'\"") {
+						benign = true
+						break
+					}
+				}
+			}
+			if !benign {
+				return true
+			}
+		}
+		s = s[idx+1:]
+	}
+}
 
 // egressBinaries are programs whose primary purpose is moving data across the
 // network. They are classified dangerous (approval-gated) not because they are
@@ -1632,6 +1677,9 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 	}
 	if isExecTool(toolName) {
 		cmd := execCommandPayload(toolName, args)
+		if hasDangerousDevRedirect(cmd) {
+			return true, "contains dangerous pattern: > /dev/"
+		}
 		for _, pattern := range destructiveSubstrings {
 			if strings.Contains(cmd, pattern) {
 				return true, fmt.Sprintf("contains dangerous pattern: %s", pattern)

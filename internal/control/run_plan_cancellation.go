@@ -241,7 +241,7 @@ func quotedInput(content, quote string, cut bool) bool {
 // closingPunctuation may surround a whole message or sentence, so "No need."
 // and "不用了……" quote as "No need" and "不用了". These are source-shape
 // rules; Main decides whether a polite question is an instruction.
-const closingPunctuation = ".!?;。！？；…~～"
+const closingPunctuation = ".!?;。！？；…~～\"'“”‘’「」『』"
 
 func trimClosing(text string) string {
 	return strings.TrimFunc(text, func(r rune) bool {

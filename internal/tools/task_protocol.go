@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"selfmind/internal/kernel"
+	"selfmind/internal/verification"
 )
 
 type planProjectionSinkContextKey struct{}
@@ -27,11 +28,12 @@ type PlanWorkUnitIdentity struct {
 }
 
 type PlanProjectionResult struct {
-	AcceptanceReview []string               `json:"acceptance_review,omitempty"`
-	Plan             PlanState              `json:"plan"`
-	Version          int                    `json:"version"`
-	Changed          bool                   `json:"changed"`
-	WorkUnits        []PlanWorkUnitIdentity `json:"work_units,omitempty"`
+	ClosureFacts     *verification.ClosureFacts `json:"closure_facts,omitempty"`
+	AcceptanceReview []string                   `json:"acceptance_review,omitempty"`
+	Plan             PlanState                  `json:"plan"`
+	Version          int                        `json:"version"`
+	Changed          bool                       `json:"changed"`
+	WorkUnits        []PlanWorkUnitIdentity     `json:"work_units,omitempty"`
 }
 
 // RunPlanProjection is the deep persistence seam for plan versioning,
@@ -47,6 +49,9 @@ type PlanProjectionSink func(context.Context, []PlanStep) ([]PlanWorkUnitIdentit
 type legacyPlanProjection struct{ sink PlanProjectionSink }
 
 func (l legacyPlanProjection) Project(ctx context.Context, state PlanState) (PlanProjectionResult, error) {
+	if state.Mode == "patch" {
+		return PlanProjectionResult{}, fmt.Errorf("patch mode requires the durable versioned Plan adapter")
+	}
 	units, err := l.sink(ctx, state.Plan)
 	return PlanProjectionResult{Plan: state, Changed: true, WorkUnits: units}, err
 }
@@ -88,6 +93,8 @@ type PlanStore struct {
 }
 
 type PlanState struct {
+	// Mode controls input expansion only; every receipt remains a full snapshot.
+	Mode        string     `json:"-"`
 	Explanation string     `json:"explanation,omitempty"`
 	Plan        []PlanStep `json:"plan"`
 }
@@ -130,18 +137,19 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 	return &PlanTool{
 		BaseTool: BaseTool{
 			name:        "update_plan",
-			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work. Keep outcome milestones, not Skill reads, approval waits, diagnostic attempts or a final-answer step. Preserve existing step IDs and conditions across continuations; do not duplicate a step just to retry or verify it. List every step on every update, keep exactly one step in_progress while work is active, and resolve all necessary steps before finishing successfully. The first plan of a run has no step ids: give every step its text and leave step_id out. Once a result has issued ids, a step that has not changed needs only its step_id and status: the runtime keeps its stored step text, success_criteria and verification_required, and the result returns the full plan. Send those fields only for a new step or when they change; for example, after finishing the first of three steps, send three entries carrying step_id and status alone. A first plan has nothing to cancel: list only work that is done or still needed and explain anything dropped in explanation. Main judges scope changes and keeps independent unfinished work accountable through existing history and cancellation evidence.",
+			description: "Maintain an outcome plan for multi-step work. Use mode=patch with changed step_id/status entries; omitted steps stay unchanged. First plans, adding or reordering steps use snapshot (compatible default). Submit the first snapshot alone and use server-issued ids. Receipts return the full accepted Plan. Main judges status, cancellation and evidence sufficiency; keep necessary work open. Use declared cancellation/reuse fields; resolve necessary work before done.",
 			schema: ToolSchema{
 				Type:                 "object",
 				AdditionalProperties: rejectAdditionalProperties(),
 				Properties: map[string]PropertyDef{
+					"mode": {Type: "string", Enum: []string{"snapshot", "patch"}, Description: "snapshot (default): list every step; patch: change named current steps and preserve the rest. Runtime checks the selected version."},
 					"explanation": {
 						Type:        "string",
 						Description: "Optional short reason for the plan update.",
 					},
 					"plan": {
 						Type:        "array",
-						Description: "The complete ordered plan snapshot, including unchanged and completed steps. This replaces the previous snapshot; it is not a partial patch. List every step. Only a step whose step_id an earlier update_plan result issued may omit its text; in the first plan every step needs its text.",
+						Description: "Snapshot mode: all steps in order. Patch mode: changed current steps only, each with step_id and explicit status; omission preserves other steps. First plans and new steps require text.",
 						Items: &PropertyDef{
 							Type:                 "object",
 							AdditionalProperties: rejectAdditionalProperties(),
@@ -184,7 +192,7 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								// the step.
 								"verification_required": {
 									Type:        "boolean",
-									Description: "True only on the single plan step that owns a distinct acceptance condition requiring successful verify evidence. Keep that same step in_progress across failed attempts and replacements. Leave false on diagnostic attempts and on separate retry or recheck steps for the same condition; different conditions may each set true. On an existing step omit it to keep the stored value.",
+									Description: "True only when this milestone requires a successful executed check. verify or an explicitly associated confirmed command observation can supply it. Static inspection/reporting uses false and may complete with a grounded negative finding. Do not drop a required repair gate or create a retry milestone to escape it. On an existing step omit this field to keep the stored requirement.",
 									Default:     false,
 								},
 								"reuse_prior_verification": {
@@ -222,11 +230,18 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 }
 
 func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
+	mode := taskStringArg(args, "mode")
+	if mode != "" && mode != "snapshot" && mode != "patch" {
+		return "", fmt.Errorf("mode must be snapshot or patch")
+	}
 	steps, err := planStepsFromArgs(args["plan"])
 	if err != nil {
 		return "", err
 	}
 	projection := runPlanProjectionFromArgs(args)
+	if mode == "patch" && projection == nil {
+		return "", fmt.Errorf("patch mode requires a durable current Run Plan")
+	}
 	inProgress := 0
 	for i := range steps {
 		steps[i].Step = strings.TrimSpace(steps[i].Step)
@@ -250,6 +265,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	}
 
 	state := PlanState{
+		Mode:        mode,
 		Explanation: taskStringArg(args, "explanation"),
 		Plan:        steps,
 	}
@@ -257,10 +273,15 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	planVersion := 0
 	var workUnits []PlanWorkUnitIdentity
 	var acceptanceReview []string
+	var closureFacts *verification.ClosureFacts
 	if projection != nil {
 		projected, projectionErr := projection.Project(ContextFromArgs(args), state)
 		err = projectionErr
 		if err != nil {
+			var version interface{ CurrentPlanVersion() int }
+			if errors.As(err, &version) {
+				return "", newStableToolError(err, "plan_version_changed", "stale_precondition", err.Error(), "Inspect the current Plan, then reconcile it with a complete snapshot. Version matching is runtime-owned.")
+			}
 			var cancellation interface{ PlanCancellationPrecondition() bool }
 			if errors.As(err, &cancellation) {
 				return "", newStableToolError(err, "plan_cancellation_unresolved", "stale_precondition", err.Error(), "Keep necessary unfinished work pending. For a legitimate cancellation supply Main's disposition and reason; user_takeover also requires an exact quote from the actual user's instruction.")
@@ -306,6 +327,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		planVersion = projected.Version
 		workUnits = projected.WorkUnits
 		acceptanceReview = projected.AcceptanceReview
+		closureFacts = projected.ClosureFacts
 		currentStepID := ""
 		for _, step := range steps {
 			if step.Status == "in_progress" {
@@ -338,7 +360,10 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		PlanVersion      int                    `json:"plan_version,omitempty"`
 		AcceptanceReview []string               `json:"acceptance_review,omitempty"`
 		WorkUnits        []PlanWorkUnitIdentity `json:"work_units,omitempty"`
-	}{PlanState: state, Changed: changed, PlanVersion: planVersion, WorkUnits: workUnits, AcceptanceReview: acceptanceReview})
+		// Append derived hints after the canonical Plan: legacy cassette
+		// identities are bound in first-occurrence order within this receipt.
+		ClosureFacts *verification.ClosureFacts `json:"closure_facts,omitempty"`
+	}{ClosureFacts: closureFacts, PlanState: state, Changed: changed, PlanVersion: planVersion, WorkUnits: workUnits, AcceptanceReview: acceptanceReview})
 	return string(data), nil
 }
 
@@ -490,7 +515,8 @@ func planKey(args map[string]interface{}) string {
 
 type FinishRunTool struct {
 	BaseTool
-	store *PlanStore
+	store        *PlanStore
+	legacySchema ToolSchema
 }
 
 var finishRunStatuses = []string{
@@ -511,10 +537,10 @@ func NewFinishRunTool() *FinishRunTool {
 }
 
 func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
-	return &FinishRunTool{
+	tool := &FinishRunTool{
 		BaseTool: BaseTool{
 			name:        "finish_run",
-			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, waiting on a registered external watch, prepared and waiting for the user's go-ahead (waiting_user), or needs approval. It may follow the final update_plan in the same response.",
+			description: "Finish after observing work results. Submit status and final_response once; include final changed steps in plan_patch instead of a separate final update_plan. Omit plan_patch if no steps change. assessments are Main's condition judgments; step_id with evidence_refs can associate existing observations. Static reads cannot prove executable gates. Unmet necessary work stays open. No new work in the finish batch.",
 			schema: ToolSchema{
 				Type:                 "object",
 				AdditionalProperties: rejectAdditionalProperties(),
@@ -529,11 +555,11 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 					},
 					"summary": {
 						Type:        "string",
-						Description: "Short user-facing summary.",
+						Description: "Short user-facing summary. Optional when final_response is supplied; otherwise required for legacy summary-only outcomes.",
 					},
 					"final_response": {
 						Type:        "string",
-						Description: "Optional complete final reply to the person, preserving paragraphs, evidence and remaining work. When supplied and this outcome is accepted, it is saved and shown without another model generation. This text never proves completion or grants permission.",
+						Description: "Complete final reply, saved and shown without another generation after acceptance. Optional for legacy summary-only outcomes. Text alone proves neither completion nor authorization.",
 					},
 					"done": {
 						Type:        "array",
@@ -564,8 +590,10 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 						Type:        "boolean",
 						Description: "Whether user approval is needed.",
 					},
+					"assessments": conditionAssessmentsProperty(),
+					"plan_patch":  finalPlanPatchProperty(),
 				},
-				Required: []string{"status", "summary"},
+				Required: []string{"status"},
 			},
 			metadata: ToolMetadata{
 				Category:  "task",
@@ -574,27 +602,60 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 		},
 		store: store,
 	}
+	tool.legacySchema = tool.schema
+	tool.schema = finishModelSchema(tool.schema)
+	return tool
 }
 
 func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 	status := strings.TrimSpace(taskStringArg(args, "status"))
 	if status == "" {
-		status = "done"
+		return "", finishInputError(fmt.Errorf("status is required; choose one of %s", strings.Join(finishRunStatuses, ", ")),
+			"tool_arguments_invalid", "Resend finish_run with an explicit status.")
 	}
 	if !validFinishRunStatus(status) {
-		return "", fmt.Errorf("status must be one of %s", strings.Join(finishRunStatuses, ", "))
+		return "", finishInputError(fmt.Errorf("status must be one of %s", strings.Join(finishRunStatuses, ", ")),
+			"tool_arguments_invalid", "Resend finish_run with one of the listed statuses.")
 	}
 	if status == "needs_approval" {
 		status = "blocked"
 		args["need_approve"] = true
 	}
 	summary := strings.TrimSpace(taskStringArg(args, "summary"))
+	response := strings.TrimSpace(taskStringArg(args, "final_response"))
 	if summary == "" {
-		return "", fmt.Errorf("summary is required")
+		if response == "" {
+			return "", finishInputError(fmt.Errorf("final_response or summary is required"),
+				"tool_arguments_invalid", "Resend finish_run with final_response (or a summary).")
+		}
+		// This is a display index, never completion evidence or a replacement
+		// for the full final response, whose paragraphs remain intact below.
+		summary = truncateRunes(toSingleLine(response), 240)
+	}
+	out := finishOutcomeFields(args, status, summary, response)
+	if handled, err := prepareAtomicFinish(args, out); handled || err != nil {
+		if err != nil {
+			return "", err
+		}
+		data, err := json.Marshal(out)
+		return string(data), err
 	}
 	key := planKey(args)
 	projection := runPlanProjectionFromArgs(args)
-	if status == "done" && projection != nil {
+	assessments, assessed, err := prepareOutcomeAssessments(args, status, projection)
+	if err != nil {
+		var inputError interface{ ConditionAssessmentInput() bool }
+		if errors.As(err, &inputError) && inputError.ConditionAssessmentInput() {
+			return "", finishInputError(err, "condition_assessment_invalid",
+				"Correct the finding or its evidence references and send finish_run again. Observe again only if the existing evidence is stale or unavailable.")
+		}
+		var precondition interface{ CompletionPrecondition() bool }
+		if errors.As(err, &precondition) && precondition.CompletionPrecondition() {
+			return "", completionPreconditionFailure(err)
+		}
+		return "", err
+	}
+	if status == "done" && projection != nil && !assessed {
 		if err := projection.ValidateCompletion(ContextFromArgs(args)); err != nil {
 			var precondition interface{ CompletionPrecondition() bool }
 			if errors.As(err, &precondition) && precondition.CompletionPrecondition() {
@@ -616,6 +677,20 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 			}
 		}
 	}
+	if len(assessments) > 0 {
+		out["assessments"] = assessments
+	}
+	if reason := finishRunCompletionReason(status); reason != "" {
+		out["completion_reason"] = reason
+	}
+	data, _ := json.Marshal(out)
+	if t.store != nil {
+		t.store.Purge(key)
+	}
+	return string(data), nil
+}
+
+func finishOutcomeFields(args map[string]interface{}, status, summary, response string) map[string]interface{} {
 	out := map[string]interface{}{
 		"status":       status,
 		"summary":      summary,
@@ -626,17 +701,20 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 		"risks":        taskStringSliceArg(args, "risks"),
 		"need_approve": taskBoolArg(args, "need_approve"),
 	}
-	if response := strings.TrimSpace(taskStringArg(args, "final_response")); response != "" {
+	if response != "" {
 		out["final_response"] = response
 	}
-	if reason := finishRunCompletionReason(status); reason != "" {
-		out["completion_reason"] = reason
-	}
-	data, _ := json.Marshal(out)
-	if t.store != nil {
-		t.store.Purge(key)
-	}
-	return string(data), nil
+	return out
+}
+
+// finishInputError reports a finish_run call refused before any effect because
+// its own arguments are wrong. finish_run is capped at one call per Run, so the
+// recovery contract (preparation, corrected_input, not_dispatched) is what lets
+// the kernel return the uncommitted attempt; without it a correctable mistake
+// would cost the Run its only way to close.
+func finishInputError(cause error, code, hint string) error {
+	return newStableToolRecoveryError(cause, code, "invalid_input", cause.Error(), hint,
+		"preparation", "corrected_input", "not_dispatched", false)
 }
 
 func completionPreconditionFailure(err error) error {

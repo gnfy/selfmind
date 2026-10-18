@@ -34,7 +34,7 @@ func TestParallelRemoteExecFollowsTheRunApprovalMode(t *testing.T) {
 	} {
 		for _, parallel := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s parallel=%v", tc.name, parallel), func(t *testing.T) {
-				judge := *tc.judge
+				judge := fakeJudge{reply: tc.judge.reply, err: tc.judge.err}
 				asks, ran := 0, 0
 				person := fmt.Sprintf("parallel-remote-%s-%v", strings.ReplaceAll(tc.name, " ", "-"), parallel)
 				cleanup := SetExecutionScope(person, ExecutionScope{

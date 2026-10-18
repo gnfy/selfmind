@@ -192,13 +192,22 @@ var grantAPISubcommands = map[string]string{"gh": "api"}
 // production service, so it is an operation and must contribute a class. Only
 // programs that would be meaningless to name in a permission belong here.
 var grantPlumbingPrograms = map[string]struct{}{
-	"cd": {}, "set": {}, "export": {}, "umask": {}, "true": {}, "false": {},
+	"cd": {}, "set": {}, "export": {}, "unset": {}, "umask": {}, "true": {}, "false": {},
 	"test": {}, "[": {}, ":": {}, "which": {}, "pwd": {}, "echo": {}, "printf": {}, "sleep": {},
 	"ls": {}, "cat": {}, "head": {}, "tail": {}, "wc": {}, "stat": {}, "file": {},
 	"readlink": {}, "realpath": {}, "basename": {}, "dirname": {},
 	"grep": {}, "rg": {}, "jq": {}, "yq": {}, "tr": {}, "cut": {}, "nl": {}, "seq": {},
 	"paste": {}, "comm": {}, "column": {}, "diff": {}, "od": {},
 	"shasum": {}, "sha256sum": {}, "md5": {}, "md5sum": {}, "sort": {}, "base64": {}, "date": {},
+}
+
+var benignDevNullRedirectPattern = regexp.MustCompile(`(?i)(?:^|\s)(?:[12]&?>|&>)\s*/dev/null(?:\s+2>&1)?(?:\s|$)|(?:^|\s)2>&1(?:\s|$)`)
+
+func stripBenignDevNullRedirects(payload string) string {
+	for benignDevNullRedirectPattern.MatchString(payload) {
+		payload = benignDevNullRedirectPattern.ReplaceAllString(payload, " ")
+	}
+	return strings.TrimSpace(payload)
 }
 
 // grantCommandPrefix derives the token prefix a reusable grant would key on, or
@@ -233,14 +242,14 @@ func grantCommandPrefix(toolName string, args map[string]interface{}) ([]string,
 		if _, neutral := shellNeutralWords[base]; neutral {
 			continue
 		}
-		if _, banned := bannedGrantPrograms[base]; banned {
-			return nil, false
-		}
 		// Plumbing is skipped only as the observation catalog proves it: by its
 		// exact name, never a path or another spelling that may be a different
 		// program (`./ls`, `LS`).
 		if _, plumbing := grantPlumbingPrograms[base]; plumbing && fields[progIdx] == base && segmentIsBaselineObservation(base, fields[progIdx:]) {
 			continue
+		}
+		if _, banned := bannedGrantPrograms[base]; banned {
+			return nil, false
 		}
 		candidate := grantSegmentPrefix(base, fields[progIdx+1:])
 		if len(candidate) == 0 {
@@ -276,6 +285,13 @@ func grantCommandPrefix(toolName string, args map[string]interface{}) ([]string,
 // changes what the run's environment holds, and no option selects another
 // configuration or credentials.
 func classSegments(payload string, env []string) ([][]string, bool) {
+	if hasDangerousDevRedirect(payload) {
+		return nil, false
+	}
+	payload = stripBenignDevNullRedirects(payload)
+	if payload == "" {
+		return nil, false
+	}
 	for _, marker := range grantComplexShellMarkers {
 		if strings.Contains(payload, marker) {
 			return nil, false

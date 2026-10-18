@@ -32,18 +32,20 @@ type Binding struct {
 }
 
 type Check struct {
-	ToolCallID     string   `json:"tool_call_id,omitempty"`
-	Kind           string   `json:"kind,omitempty"`
-	Command        string   `json:"command,omitempty"`
-	CWD            string   `json:"cwd,omitempty"`
-	Status         string   `json:"status"`
-	ExitCode       int      `json:"exit_code"`
-	StartedAt      int64    `json:"started_at_unix_nano,omitempty"`
-	FinishedAt     int64    `json:"finished_at_unix_nano,omitempty"`
-	Binding        *Binding `json:"binding,omitempty"`
-	ProcessStarted *bool    `json:"process_started,omitempty"`
-	Invoked        *bool    `json:"invoked,omitempty"`
-	EffectState    string   `json:"effect_state,omitempty"`
+	// Original observation kind remains visible after explicit Main adoption.
+	Observation    *Observation `json:"observation,omitempty"`
+	ToolCallID     string       `json:"tool_call_id,omitempty"`
+	Kind           string       `json:"kind,omitempty"`
+	Command        string       `json:"command,omitempty"`
+	CWD            string       `json:"cwd,omitempty"`
+	Status         string       `json:"status"`
+	ExitCode       int          `json:"exit_code"`
+	StartedAt      int64        `json:"started_at_unix_nano,omitempty"`
+	FinishedAt     int64        `json:"finished_at_unix_nano,omitempty"`
+	Binding        *Binding     `json:"binding,omitempty"`
+	ProcessStarted *bool        `json:"process_started,omitempty"`
+	Invoked        *bool        `json:"invoked,omitempty"`
+	EffectState    string       `json:"effect_state,omitempty"`
 	// NetworkDecision and NetworkPermission are what the runtime recorded about
 	// the network for this check's process (see executionenv.NetworkDecision*).
 	// Evidence written before they existed carries neither, and says nothing.
@@ -53,6 +55,37 @@ type Check struct {
 	// or a test, not a vet or a formatter). It is set only on a check that ran
 	// offline despite a grant, and says whether that is worth telling anyone.
 	NetworkMayFetch bool `json:"network_may_fetch,omitempty"`
+	// Source identifies an explicitly adopted prior observation. Its original
+	// call id and timestamps stay intact; it is not an execution in this Run.
+	Source *CheckSource `json:"source,omitempty"`
+}
+
+type CheckSource struct {
+	RunID       string `json:"run_id"`
+	StepID      string `json:"step_id"`
+	PlanVersion int    `json:"plan_version"`
+	Reason      string `json:"reason"`
+}
+
+// WithDispatchFacts preserves preparation refusals and unknown process exits
+// independently of the tool wrapper's reported status. Nil process facts keep
+// the historical compatibility rule, never inventing a new observed start.
+func WithDispatchFacts(check Check, processExit *int) Check {
+	if check.ProcessStarted != nil {
+		if !*check.ProcessStarted || processExit == nil {
+			check.Status = "blocked"
+		} else {
+			check.ExitCode = *processExit
+			if check.ExitCode != 0 {
+				check.Status = "failed"
+			}
+		}
+	}
+	if (check.Invoked != nil && !*check.Invoked) || check.EffectState == "not_dispatched" ||
+		(check.ProcessStarted == nil && (check.Invoked != nil || check.EffectState != "")) {
+		check.Status = "blocked"
+	}
+	return check
 }
 
 // offlineCoverageLost reports a passing attempt whose coverage the missing
@@ -139,18 +172,19 @@ func Latest(checks []Check) []Check {
 	byID := map[string]Check{}
 	for _, c := range ordered {
 		if c.Binding != nil && c.Binding.Replaces != "" {
-			if old, ok := byID[c.Binding.Replaces]; ok && CanReplace(old, c) {
-				replaced[old.ToolCallID] = true
+			if old, ok := byID[checkReference(c, c.Binding.Replaces)]; ok && CanReplace(old, c) {
+				replaced[checkReference(old, old.ToolCallID)] = true
 			}
 		}
 		if c.ToolCallID != "" {
-			byID[c.ToolCallID] = c
+			byID[checkReference(c, c.ToolCallID)] = c
 		}
 	}
 	latest := map[string]Check{}
+	seenKeys := map[string]bool{}
 	keys := []string{}
 	for _, c := range ordered {
-		if replaced[c.ToolCallID] {
+		if replaced[checkReference(c, c.ToolCallID)] {
 			continue
 		}
 		key := strings.TrimSpace(c.Kind) + "\x00" + strings.TrimSpace(c.Command) + "\x00" + strings.TrimSpace(c.CWD)
@@ -164,13 +198,32 @@ func Latest(checks []Check) []Check {
 				dependencies = strings.Join(*c.Binding.LocalDependencies, "\x1f")
 			}
 			key = fmt.Sprintf("plan-step\x00%s\x00%s\x00%s\x00%s\x00%s", c.Binding.StepID, c.Binding.Criterion, c.Binding.Target, strings.TrimSpace(c.CWD), dependencies)
+			if c.Status == "succeeded" {
+				for existingKey, existing := range latest {
+					existingDeps := "<all-local-inputs>"
+					if existing.Binding != nil && existing.Binding.LocalDependencies != nil {
+						existingDeps = strings.Join(*existing.Binding.LocalDependencies, "\x1f")
+					}
+					if existingKey != key &&
+						ValidBinding(existing.Binding) && existing.Binding.Version == 3 &&
+						(existing.Status != "succeeded" || (c.Binding.StepID != "" && existingDeps == dependencies)) &&
+						existing.Binding.StepID == c.Binding.StepID &&
+						existing.Binding.Criterion == c.Binding.Criterion &&
+						existing.Binding.Target == c.Binding.Target &&
+						sameAssessmentSource(existing.Source, c.Source) &&
+						existing.FinishedAt > 0 && existing.FinishedAt <= c.StartedAt {
+						delete(latest, existingKey)
+					}
+				}
+			}
 		} else if c.Binding != nil {
 			// Bound attempts only supersede by explicit reference. This also keeps an
 			// invalid/future binding from inheriting legacy command-based replacement.
 			key += fmt.Sprintf("\x00%d\x00%s\x00%s\x00%s\x00%d", c.Binding.Version, c.Binding.Criterion, c.Binding.Target, c.ToolCallID, c.StartedAt)
 		}
 		old, ok := latest[key]
-		if !ok {
+		if !seenKeys[key] {
+			seenKeys[key] = true
 			keys = append(keys, key)
 		}
 		if !ok || c.FinishedAt >= old.FinishedAt {
@@ -179,9 +232,18 @@ func Latest(checks []Check) []Check {
 	}
 	out := make([]Check, 0, len(keys))
 	for _, key := range keys {
-		out = append(out, latest[key])
+		if c, ok := latest[key]; ok {
+			out = append(out, c)
+		}
 	}
 	return out
+}
+
+func checkReference(check Check, id string) string {
+	if check.Source != nil {
+		return check.Source.RunID + "\x00" + id
+	}
+	return "\x00" + id
 }
 
 func State(latestMutation int64, checks []Check) (string, string) {

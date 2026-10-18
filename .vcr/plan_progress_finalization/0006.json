@@ -3,115 +3,490 @@
   "method": "stream",
   "events": [
     {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "3 bytes,"
+    },
+    {
+      "reasoning_content": " exactly \"PLAN-C"
+    },
+    {
+      "reasoning_content": "OMPLETE\" with"
+    },
+    {
+      "reasoning_content": " no trailing newline."
+    },
+    {
+      "reasoning_content": " Now mark write completed"
+    },
+    {
+      "reasoning_content": ", verify in_progress"
+    },
+    {
+      "reasoning_content": ", and"
+    },
+    {
+      "reasoning_content": " run the verify tool"
+    },
+    {
+      "reasoning_content": " bound to step "
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": ".\n\nI can"
+    },
+    {
+      "reasoning_content": " combine the"
+    },
+    {
+      "reasoning_content": " plan patch with the"
+    },
+    {
+      "reasoning_content": " verify call"
+    },
+    {
+      "reasoning_content": "? The guidance:"
+    },
+    {
+      "reasoning_content": " leading"
+    },
+    {
+      "reasoning_content": " update_plan may share"
+    },
+    {
+      "reasoning_content": " a response with work"
+    },
+    {
+      "reasoning_content": " when only"
+    },
+    {
+      "reasoning_content": " existing step statuses advance"
+    },
+    {
+      "reasoning_content": " within the same work"
+    },
+    {
+      "reasoning_content": " unit/goal/s"
+    },
+    {
+      "reasoning_content": "cope. Yes —"
+    },
+    {
+      "reasoning_content": " advancing step 2"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " completed and step "
+    },
+    {
+      "reasoning_content": "3 to in_progress"
+    },
+    {
+      "reasoning_content": ". But note \""
+    },
+    {
+      "reasoning_content": "Only finish_run may"
+    },
+    {
+      "reasoning_content": " follow a final Plan"
+    },
+    {
+      "reasoning_content": " with no active work"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " — fine, the"
+    },
+    {
+      "reasoning_content": " verify is active work"
+    },
+    {
+      "reasoning_content": ".\n\nLet me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " them together.\n\n"
+    },
+    {
       "reasoning_content": "Verify"
     },
     {
-      "reasoning_content": " passed. od"
+      "reasoning_content": " command: byte-ex"
     },
     {
-      "reasoning_content": " shows"
+      "reasoning_content": "act check"
     },
     {
-      "reasoning_content": " 13"
+      "reasoning_content": ". Use:\n"
     },
     {
-      "reasoning_content": " bytes \"PLAN-C"
+      "reasoning_content": "`cd"
     },
     {
-      "reasoning_content": "OMPLETE"
+      "reasoning_content": " ... \u0026\u0026 [ \"$("
     },
     {
-      "reasoning_content": "\" with no trailing"
+      "reasoning_content": "wc -c \u003c"
     },
     {
-      "reasoning_content": " newline. Now final"
+      "reasoning_content": " plan-progress.txt)\""
     },
     {
-      "reasoning_content": " plan update: all"
+      "reasoning_content": " = \"13"
     },
     {
-      "reasoning_content": " steps"
+      "reasoning_content": "\""
     },
     {
-      "reasoning_content": " completed, then finish"
+      "reasoning_content": " ] \u0026\u0026 cmp -"
     },
     {
-      "reasoning_content": "_run.\n\nI"
+      "reasoning_content": "s"
     },
     {
-      "reasoning_content": " can batch the final"
+      "reasoning_content": " plan-progress.txt \u003c"
     },
     {
-      "reasoning_content": " update_plan and"
+      "reasoning_content": "("
     },
     {
-      "reasoning_content": " finish_run in the"
+      "reasoning_content": "printf 'PLAN-C"
     },
     {
-      "reasoning_content": " same response (\""
+      "reasoning_content": "OMPLETE') \u0026\u0026"
     },
     {
-      "reasoning_content": "finish_run may follow"
+      "reasoning_content": " echo EXACT-M"
     },
     {
-      "reasoning_content": " the"
+      "reasoning_content": "ATCH`\n\nProcess"
     },
     {
-      "reasoning_content": " final snapshot with no"
+      "reasoning_content": " substitution `\u003c"
     },
     {
-      "reasoning_content": " active work\")."
+      "reasoning_content": "(...)` in bash"
     },
     {
-      "reasoning_content": " The runtime saves each"
+      "reasoning_content": " works."
     },
     {
-      "reasoning_content": " accepted"
+      "reasoning_content": " But sandbox may use"
     },
     {
-      "reasoning_content": " snapshot before sequentially checking"
+      "reasoning_content": " bash. Let me"
     },
     {
-      "reasoning_content": " later calls. Let"
+      "reasoning_content": " make it robust without"
     },
     {
-      "reasoning_content": " me do both in"
+      "reasoning_content": " process substitution:\n\n"
     },
     {
-      "reasoning_content": " one block."
+      "reasoning_content": "`printf 'PLAN"
     },
     {
-      "content": "校验"
+      "reasoning_content": "-COMPLETE'"
     },
     {
-      "content": "通过：13"
+      "reasoning_content": " \u003e \"$SELFM"
     },
     {
-      "content": " 字节，"
+      "reasoning_content": "IND_RUN"
     },
     {
-      "content": "无多余字符。"
+      "reasoning_content": "_TMP/expected.txt"
     },
     {
-      "content": "现在"
+      "reasoning_content": "\"`"
     },
     {
-      "content": "关闭最后一步并"
+      "reasoning_content": " — writing outside workspace"
     },
     {
-      "content": "结束任务。\n\n"
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but TMPDIR is"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " scratch, allowed."
+    },
+    {
+      "reasoning_content": " Simpler"
+    },
+    {
+      "reasoning_content": ": use a pure"
+    },
+    {
+      "reasoning_content": " shell test:\n\n"
+    },
+    {
+      "reasoning_content": "```"
+    },
+    {
+      "reasoning_content": "\ncd \u003cws"
+    },
+    {
+      "reasoning_content": "\u003e \u0026\u0026 bytes=$("
+    },
+    {
+      "reasoning_content": "wc -c"
+    },
+    {
+      "reasoning_content": " \u003c plan-progress.txt"
+    },
+    {
+      "reasoning_content": " | tr -"
+    },
+    {
+      "reasoning_content": "d ' ') \u0026\u0026"
+    },
+    {
+      "reasoning_content": " content=$(cat plan"
+    },
+    {
+      "reasoning_content": "-progress.txt) \u0026\u0026"
+    },
+    {
+      "reasoning_content": " [ \"$bytes\""
+    },
+    {
+      "reasoning_content": " = \"13"
+    },
+    {
+      "reasoning_content": "\" ] \u0026\u0026"
+    },
+    {
+      "reasoning_content": " [ \"$content\""
+    },
+    {
+      "reasoning_content": " = \"PLAN-C"
+    },
+    {
+      "reasoning_content": "OMPLETE\""
+    },
+    {
+      "reasoning_content": " ] \u0026\u0026 printf '"
+    },
+    {
+      "reasoning_content": "OK: %s"
+    },
+    {
+      "reasoning_content": " bytes,"
+    },
+    {
+      "reasoning_content": " content exact\\n'"
+    },
+    {
+      "reasoning_content": " \"$bytes\""
+    },
+    {
+      "reasoning_content": "\n```\n\nNote"
+    },
+    {
+      "reasoning_content": " $(cat ...) strips"
+    },
+    {
+      "reasoning_content": " trailing new"
+    },
+    {
+      "reasoning_content": "lines, so a"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": "-newline file would"
+    },
+    {
+      "reasoning_content": " also"
+    },
+    {
+      "reasoning_content": " pass the content test"
+    },
+    {
+      "reasoning_content": " — but the byte"
+    },
+    {
+      "reasoning_content": " count"
+    },
+    {
+      "reasoning_content": " 13 test"
+    },
+    {
+      "reasoning_content": " covers"
+    },
+    {
+      "reasoning_content": " it. Good:"
+    },
+    {
+      "reasoning_content": " both conditions together are"
+    },
+    {
+      "reasoning_content": " byte-exact for"
+    },
+    {
+      "reasoning_content": " this string (any"
+    },
+    {
+      "reasoning_content": " leading/trailing whitespace"
+    },
+    {
+      "reasoning_content": " changes the count or"
+    },
+    {
+      "reasoning_content": " the content string)."
+    },
+    {
+      "reasoning_content": "\n\nActually"
+    },
+    {
+      "reasoning_content": " if file were \""
+    },
+    {
+      "reasoning_content": " PLAN"
+    },
+    {
+      "reasoning_content": "-COMPLETE\\n"
+    },
+    {
+      "reasoning_content": "\" content would be"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": " PLAN-COMPLETE"
+    },
+    {
+      "reasoning_content": "\\n\" after $("
+    },
+    {
+      "reasoning_content": "cat) — wait"
+    },
+    {
+      "reasoning_content": ", $() strips"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " trailing newlines,"
+    },
+    {
+      "reasoning_content": " so content would contain"
+    },
+    {
+      "reasoning_content": " the leading space →"
+    },
+    {
+      "reasoning_content": " mismatch. Fine."
+    },
+    {
+      "reasoning_content": "\n\nDeclare local_dependencies"
+    },
+    {
+      "reasoning_content": ": [\""
+    },
+    {
+      "reasoning_content": "plan-progress.txt\"]."
+    },
+    {
+      "reasoning_content": " cwd workspace. kind"
+    },
+    {
+      "reasoning_content": ": custom or smoke"
+    },
+    {
+      "reasoning_content": ". Use kind \""
+    },
+    {
+      "reasoning_content": "custom\" — actually"
+    },
+    {
+      "reasoning_content": " maybe \"smoke"
+    },
+    {
+      "reasoning_content": "\"?"
+    },
+    {
+      "reasoning_content": " custom is fine."
+    },
+    {
+      "reasoning_content": "\n\n"
+    },
+    {
+      "reasoning_content": "Also note: verification"
+    },
+    {
+      "reasoning_content": " runs offline by default"
+    },
+    {
+      "reasoning_content": "; no"
+    },
+    {
+      "reasoning_content": " network needed.\n\n"
+    },
+    {
+      "reasoning_content": "Let me also print"
+    },
+    {
+      "reasoning_content": " od -c output"
+    },
+    {
+      "reasoning_content": " for evidence.\n"
+    },
+    {
+      "content": "Byte"
+    },
+    {
+      "content": " check confirms 1"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": " bytes, no trailing"
+    },
+    {
+      "content": " newline. Advancing"
+    },
+    {
+      "content": " the plan and"
+    },
+    {
+      "content": " running the formal verify"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "\n\n"
     },
     {
       "finish_reason": "tool_calls"
     },
     {
       "usage": {
-        "input_tokens": 14630,
-        "output_tokens": 287,
-        "cache_read_input_tokens": 13312,
-        "cache_miss_input_tokens": 1318,
+        "input_tokens": 15959,
+        "output_tokens": 640,
+        "cache_read_input_tokens": 15360,
+        "cache_miss_input_tokens": 599,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 81,
+        "reasoning_output_tokens": 490,
         "cache_usage_reported": true
       }
     },
@@ -120,7 +495,7 @@
         {
           "ID": "",
           "Function": "update_plan",
-          "Args": "{\"explanation\": \"校验通过，三步全部完成\", \"plan\": \n[{\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}, {\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\"}]\n\n}"
+          "Args": "{\"explanation\": \"Write step produced the exact 13-byte content; starting verification.\", \"mode\": \"patch\", \"plan\": \n[{\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}, {\"status\": \"in_progress\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}]\n\n}"
         }
       ]
     }

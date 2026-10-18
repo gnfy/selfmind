@@ -368,17 +368,51 @@ func (s *Store) ParkOrphanedApprovals(ctx context.Context) ([]ApprovalRequest, e
 // decision. Recovery uses the absence of this claim to find a decision that was
 // durably recorded just before the daemon died.
 func (s *Store) ClaimApprovalDecision(ctx context.Context, tenantID, approvalID, runID string) (*ApprovalRequest, bool, error) {
+	return s.ClaimApprovalDecisionReleasing(ctx, tenantID, approvalID, runID, nil)
+}
+
+// ClaimApprovalDecisionReleasing claims the decision and, in the same
+// transaction, puts back the loop checkpoint the live wait armed (see
+// WaitRelease). A crash therefore leaves either the unclaimed decision, which
+// recovery resumes from its exact pending-call checkpoint, or a claimed one
+// whose checkpoint no longer names a pending call. With a nil release it is the
+// plain claim.
+func (s *Store) ClaimApprovalDecisionReleasing(ctx context.Context, tenantID, approvalID, runID string, release *WaitRelease) (*ApprovalRequest, bool, error) {
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
-		`UPDATE approval_requests SET waiter_state = 'claimed', decision_claimed_at = ?, claimed_by_run_id = ?, updated_at = ?
+	tenantID, approvalID = normalizeTenant(tenantID), strings.TrimSpace(approvalID)
+	const claim = `UPDATE approval_requests SET waiter_state = 'claimed', decision_claimed_at = ?, claimed_by_run_id = ?, updated_at = ?
 		 WHERE tenant_id = ? AND id = ? AND status IN ('approved', 'rejected')
 		   AND COALESCE(waiter_state, 'live') = 'live' AND COALESCE(decision_claimed_at, 0) = 0
-		 RETURNING `+approvalSelectColumns,
-		now, strings.TrimSpace(runID), now, normalizeTenant(tenantID), strings.TrimSpace(approvalID))
-	item, err := scanApprovalRequest(row)
+		 RETURNING `
+	if release == nil {
+		row := s.db.QueryRowContext(ctx, claim+approvalSelectColumns, now, strings.TrimSpace(runID), now, tenantID, approvalID)
+		item, err := scanApprovalRequest(row)
+		if err == nil {
+			return &item, true, nil
+		}
+		if err != sql.ErrNoRows {
+			return nil, false, err
+		}
+		current, err := s.GetApprovalRequest(ctx, tenantID, approvalID)
+		return current, false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	item, err := scanApprovalRequest(tx.QueryRowContext(ctx, claim+approvalSelectColumns, now, strings.TrimSpace(runID), now, tenantID, approvalID))
 	if err == nil {
+		if err := releaseHumanWait(ctx, tx, item.TenantID, item.PersonID, item.RunID, LoopCheckpointWaitApproval, item.ID, *release); err != nil {
+			_ = tx.Rollback()
+			return nil, false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, false, err
+		}
 		return &item, true, nil
 	}
+	// control.db has one connection: end the transaction before reading again.
+	_ = tx.Rollback()
 	if err != sql.ErrNoRows {
 		return nil, false, err
 	}

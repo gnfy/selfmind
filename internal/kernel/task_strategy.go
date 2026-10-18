@@ -74,15 +74,6 @@ const (
 	PlanPolicyRequired PlanPolicy = "required"
 )
 
-// planGuidanceEscalationThreshold is how many distinct successful substantive
-// action tool calls one Run may perform with no durable plan before its plan
-// guidance is escalated from optional to required. It is deliberately in the
-// default initial budget. Two distinct actions are already direct evidence of
-// multi-step work; escalating before a third prevents the first visible plan
-// from becoming a retrospective checklist. This is in-run evidence, never a
-// classification of the user's input.
-const planGuidanceEscalationThreshold = 2
-
 // planStaleReminderThreshold is how many tool actions a Run may perform after
 // its last plan update, with steps still open, before the next model call is
 // reminded that the visible plan may be out of date. Plan updates stay the
@@ -98,52 +89,6 @@ func shouldRemindStalePlan(strategy TaskStrategy, openSteps, actionsSinceUpdate,
 		return false
 	}
 	return actionsSinceUpdate-actionsAtReminder >= planStaleReminderThreshold
-}
-
-// countsTowardPlanEvidence reports whether one completed tool call is evidence
-// that this Run is doing genuinely multi-step work. Lifecycle bookkeeping is
-// not work, and a provably read-only observation is not either: a turn that
-// only looks at state may still be a direct answer that needs no visible plan.
-// Everything else — mutation, commands, unknown tools — fails toward "this is
-// real work", using the same dispatch classification as the durable ledger.
-func countsTowardPlanEvidence(toolName string, retryClass ToolRetryClass, effectClasses ...string) bool {
-	if isLifecycleToolName(toolName) || (len(effectClasses) > 0 &&
-		(effectClasses[0] == ToolEffectBookkeeping || effectClasses[0] == ToolEffectObservation)) {
-		return false
-	}
-	return retryClass != ToolRetryReadOnly
-}
-
-// WithPlanRequired escalates plan guidance to PlanPolicyRequired. A turn the
-// strategy marked as a direct answer is never escalated: PlanPolicyDisabled
-// stays disabled and update_plan stays hidden. HiddenTools is intentionally not
-// recomputed, so an escalation cannot widen any other tool surface.
-func (s TaskStrategy) WithPlanRequired() TaskStrategy {
-	s = s.normalized()
-	if s.PlanPolicy == PlanPolicyDisabled {
-		return s
-	}
-	s.PlanPolicy = PlanPolicyRequired
-	return s
-}
-
-// shouldEscalatePlanGuidance decides whether this Run's plan guidance should
-// become the required wording for the next model call. It reads only in-run
-// evidence: how much substantive work already completed, and whether a durable
-// plan exists. Escalation is prompt guidance — it fabricates no plan, blocks no
-// completion, and adds no provider call.
-func shouldEscalatePlanGuidance(strategy TaskStrategy, planEvidenceTools int, planSeen bool) bool {
-	strategy = strategy.normalized()
-	if strategy.ToolMode == ToolModeNone || strategy.PlanPolicy != PlanPolicyOptional {
-		return false
-	}
-	if !strategy.AllowsTool("update_plan") {
-		return false
-	}
-	if planSeen {
-		return false
-	}
-	return planEvidenceTools >= planGuidanceEscalationThreshold
 }
 
 // WebPolicy controls web tools separately from local tools.

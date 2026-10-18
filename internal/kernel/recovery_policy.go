@@ -87,7 +87,7 @@ func (p *strategyRecoveryPolicy) BeforePreparation(attempt RecoveryAttempt) erro
 		return nil
 	}
 	if failure.FailureClass == "invalid_input" {
-		return newRecoveryPolicyError(
+		return newPreparationPolicyError(
 			"tool_arguments_repeated",
 			"blocked_model_protocol",
 			"corrected_input",
@@ -96,7 +96,7 @@ func (p *strategyRecoveryPolicy) BeforePreparation(attempt RecoveryAttempt) erro
 			appendRecoveryAlternatives(failure.Alternatives, "inspect_tool_schema", "correct_arguments", "report_actionable_blocker"),
 		)
 	}
-	return newRecoveryPolicyError(
+	return newPreparationPolicyError(
 		"tool_preparation_repeated",
 		"blocked_tool_capability",
 		"different_strategy",
@@ -289,9 +289,14 @@ func shellCommandTarget(command string) string {
 
 func shellCommandTargetFields(fields []string) string {
 	words := make([]string, 0, 3)
-	for _, field := range fields {
-		if len(words) == 0 && isShellEnvAssignment(field) {
-			continue
+	for i, field := range fields {
+		if len(words) == 0 {
+			if isShellEnvAssignment(field) {
+				continue
+			}
+			if strings.EqualFold(filepath.Base(field), "env") && i+1 < len(fields) {
+				continue
+			}
 		}
 		if strings.HasPrefix(field, "-") {
 			continue

@@ -44,7 +44,14 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 			WorkUnitID:             step.WorkUnitID, WorkUnit: step.WorkUnit,
 		})
 	}
-	projection, err := p.coordinator.srv.Control.SyncRunPlan(ctx, p.identity.TenantID, p.run.ID, state.Explanation, input)
+	var projection control.RunPlanProjection
+	var err error
+	if state.Mode == "patch" {
+		version, _ := kernel.CurrentRunExecutionPlan(ctx)
+		projection, err = p.coordinator.srv.Control.PatchRunPlan(ctx, p.identity.TenantID, p.run.ID, version, state.Explanation, input)
+	} else {
+		projection, err = p.coordinator.srv.Control.SyncRunPlan(ctx, p.identity.TenantID, p.run.ID, state.Explanation, input)
+	}
 	if err != nil {
 		return tools.PlanProjectionResult{}, err
 	}
@@ -79,8 +86,30 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 		if len(review) >= 8 {
 			break
 		}
+		if step.SourceStepID != "" {
+			status := step.Status
+			for _, current := range projection.Plan.Steps {
+				if current.StepID == step.StepID {
+					status = current.Status
+					break
+				}
+			}
+			reason := step.VerificationDeferralReason()
+			if reason == "" {
+				reason = "prior verification from an earlier Run no longer validates after changes in this Run"
+			}
+			review = append(review, fmt.Sprintf("Step %s was reopened (%s) because %s. Run verify with step_id=%s and mark it completed with the fresh evidence.", step.StepID, status, reason, step.StepID))
+			continue
+		}
 		if step.Status == "completed" && step.VerificationRequired {
-			review = append(review, fmt.Sprintf("Step %s remains in_progress because its first durable snapshot marked it completed before required verification could be associated. Run verify now; the runtime will bind that check to this server-issued step id, then resubmit the complete snapshot.", step.StepID))
+			status := "pending"
+			for _, accepted := range projection.Plan.Steps {
+				if accepted.StepID == step.StepID {
+					status = accepted.Status
+					break
+				}
+			}
+			review = append(review, fmt.Sprintf("Step %s remains %s because required verification is missing. Use verify with step_id=%s, or explicitly associate a supported executed observation at finish; submit only changed steps.", step.StepID, status, step.StepID))
 			continue
 		}
 		review = append(review, fmt.Sprintf("Step %s returned to pending while required verification for an earlier step remains open. Keep it pending until that check passes, then resubmit the complete snapshot.", step.StepID))
@@ -129,7 +158,13 @@ func (p *controlRunPlanProjection) Project(ctx context.Context, state tools.Plan
 		}
 		workUnits = append(workUnits, identity)
 	}
-	return tools.PlanProjectionResult{AcceptanceReview: review, Plan: plan, Version: projection.Plan.Version, Changed: projection.Changed, WorkUnits: workUnits}, nil
+	// The Plan is already committed. A failed auxiliary read must not turn that
+	// accepted mutation into a refusal or advertise an empty successful review.
+	facts, factsErr := p.coordinator.srv.Control.RunClosureFacts(ctx, p.identity.TenantID, p.run.ID)
+	if factsErr != nil || facts.PlanVersion != projection.Plan.Version {
+		facts = verification.ClosureFacts{Available: false}
+	}
+	return tools.PlanProjectionResult{ClosureFacts: &facts, AcceptanceReview: review, Plan: plan, Version: projection.Plan.Version, Changed: projection.Changed, WorkUnits: workUnits}, nil
 }
 
 func (p *controlRunPlanProjection) ValidateCompletion(ctx context.Context) error {

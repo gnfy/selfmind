@@ -23,16 +23,20 @@ func NewWorkSearchTool(store *control.Store) *WorkSearchTool {
 func (t *WorkSearchTool) Name() string { return "work_search" }
 
 func (t *WorkSearchTool) Description() string {
-	return "Search the current person's retained work history, or explicitly list current attention. Returns bounded thread and run cards, never raw channel transcripts."
+	return "Read person-scoped work history or attention. Returns bounded cards, never raw transcripts."
 }
 
 func (t *WorkSearchTool) Schema() ToolSchema {
 	return ToolSchema{
 		Type: "object",
 		Properties: map[string]PropertyDef{
-			"mode":  {Type: "string", Description: "history (default) searches by query; attention lists currently actionable or resumable work.", Enum: []string{"history", "attention"}, Default: "history"},
-			"query": {Type: "string", Description: "Words, identifiers, file names, or work references to find. Required in history mode; ignored in attention mode."},
-			"limit": {Type: "integer", Description: "Maximum thread cards, from 1 to 8. Default 5.", Default: 5},
+			"mode":         {Type: "string", Description: "history: keyword/window search; attention: actionable or resumable work.", Enum: []string{"history", "attention"}, Default: "history"},
+			"query":        {Type: "string", Description: "History keywords; optional with since/until, ignored for attention."},
+			"limit":        {Type: "integer", Description: "1–8 cards; one Run per time-window card, otherwise one thread.", Default: 5},
+			"since":        {Type: "string", Description: "Inclusive RFC3339 start with timezone; requires until."},
+			"until":        {Type: "string", Description: "Exclusive RFC3339 end with timezone."},
+			"cursor":       {Type: "string", Description: "Prior next_cursor; retain window and filters."},
+			"workspace_id": {Type: "string", Description: "Exact workspace filter for a history window; never changes execution scope."},
 		},
 	}
 }
@@ -45,12 +49,13 @@ func (t *WorkSearchTool) Metadata() ToolMetadata {
 }
 
 type workRunCard struct {
-	RunID       string `json:"run_id"`
-	Status      string `json:"status"`
-	WorkspaceID string `json:"workspace_id,omitempty"`
-	Channel     string `json:"channel,omitempty"`
-	StartedAt   string `json:"started_at"`
-	FinishedAt  string `json:"finished_at,omitempty"`
+	RunID        string `json:"run_id"`
+	Status       string `json:"status"`
+	WorkspaceID  string `json:"workspace_id,omitempty"`
+	Channel      string `json:"channel,omitempty"`
+	StartedAt    string `json:"started_at"`
+	FinishedAt   string `json:"finished_at,omitempty"`
+	ResumesRunID string `json:"resumes_run_id,omitempty"`
 }
 
 type workTaskCard struct {
@@ -82,6 +87,13 @@ func (t *WorkSearchTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	if mode != "history" && mode != "attention" {
 		return "", fmt.Errorf("mode must be history or attention")
+	}
+	window := taskStringArg(args, "since") != "" || taskStringArg(args, "until") != "" || taskStringArg(args, "cursor") != "" || taskStringArg(args, "workspace_id") != ""
+	if mode == "history" && window {
+		return t.historyWindow(args, scope)
+	}
+	if mode == "attention" && window {
+		return "", fmt.Errorf("history window filters require mode history")
 	}
 	if mode == "history" && query == "" {
 		return "", fmt.Errorf("query is required")

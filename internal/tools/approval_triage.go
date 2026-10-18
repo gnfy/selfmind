@@ -36,7 +36,7 @@ const (
 // defaultTriageWaitTimeout bounds a judge that does not publish its configured
 // foreground budget. A slow/hung judge must never stall the run: on timeout we
 // escalate (fail safe), we do not auto-approve.
-const defaultTriageWaitTimeout = 30 * time.Second
+const defaultTriageWaitTimeout = 15 * time.Second
 
 // ApprovalJudgeRoute is implemented by configured judges that can identify
 // their cheap role route without exposing credentials or provider internals.
@@ -80,6 +80,10 @@ func triageApproval(ctx context.Context, judge ApprovalJudge, toolName, subject,
 }
 
 func triageApprovalWithIntent(ctx context.Context, judge ApprovalJudge, toolName, subject, reason string, intent RunIntentSnapshot, containment ...ContainmentAssessment) (TriageVerdict, TriageAssessment, error) {
+	return triageApprovalWithCurrentIntent(ctx, judge, toolName, subject, reason, intent, nil, containment...)
+}
+
+func triageApprovalWithCurrentIntent(ctx context.Context, judge ApprovalJudge, toolName, subject, reason string, intent RunIntentSnapshot, current func() bool, containment ...ContainmentAssessment) (TriageVerdict, TriageAssessment, error) {
 	if judge == nil {
 		return TriageEscalate, TriageAssessment{}, nil
 	}
@@ -96,68 +100,47 @@ func triageApprovalWithIntent(ctx context.Context, judge ApprovalJudge, toolName
 	}
 	prompt := buildTriagePromptWithIntent(toolName, subject, reason, intent, containment...) + parallelPrompt
 
-	// Bound the wait independently of the judge honoring ctx: run the call on a
-	// goroutine and race it against a timeout. A judge that hangs must not hang
-	// the run — timeout escalates to a human.
+	// The configured timeout may shorten, never enlarge, the shared budget.
 	timeout := defaultTriageWaitTimeout
 	if configured, ok := judge.(ApprovalJudgeTimeout); ok {
-		if value := configured.ApprovalJudgeTimeout(); value > 0 {
+		if value := configured.ApprovalJudgeTimeout(); value > 0 && value < timeout {
 			timeout = value
 		}
 	}
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	type judgeResult struct {
-		reply    string
-		response ApprovalResponseMetadata
-		err      error
+	r := reviewApproval(tctx, judge, prompt, approvalFirstAttemptLimit, current)
+	if r.err != nil {
+		return TriageEscalate, TriageAssessment{Response: r.response}, r.err
 	}
-	ch := make(chan judgeResult, 1)
-	go func() {
-		if structured, ok := judge.(StructuredApprovalJudge); ok {
-			response, err := structured.JudgeResponse(tctx, prompt)
-			ch <- judgeResult{reply: response.Content, response: response.ApprovalResponseMetadata, err: err}
-			return
+	if intent.ModelAuthorization {
+		if protocolErr := validateStructuredTriageReply(r.reply); protocolErr != nil {
+			r.response.ProtocolStatus = protocolErr.Class
+			protocolErr.Metadata = r.response
+			return TriageEscalate, TriageAssessment{Response: r.response}, protocolErr
 		}
-		reply, err := judge.Judge(tctx, prompt)
-		ch <- judgeResult{reply: reply, err: err}
-	}()
-	select {
-	case <-tctx.Done():
-		return TriageEscalate, TriageAssessment{}, tctx.Err()
-	case r := <-ch:
-		if r.err != nil {
-			return TriageEscalate, TriageAssessment{Response: r.response}, r.err
-		}
-		if intent.ModelAuthorization {
-			if protocolErr := validateStructuredTriageReply(r.reply); protocolErr != nil {
-				r.response.ProtocolStatus = protocolErr.Class
-				protocolErr.Metadata = r.response
-				return TriageEscalate, TriageAssessment{Response: r.response}, protocolErr
-			}
-		}
-		verdict, assessment := parseTriageAssessment(r.reply)
-		assessment.Response = r.response
-		if r.response.Version >= 2 {
-			if err := validateRestrictionCitation(assessment, intent); err != nil {
-				assessment.Response.ProtocolStatus = "ungrounded_restriction"
-				return TriageEscalate, assessment, &ApprovalResponseError{Class: "ungrounded_restriction", Metadata: assessment.Response}
-			}
-		}
-		if assessment.Restriction != nil {
-			cited := *assessment.Restriction
-			cited.Quote = truncateRunes(RedactSensitive(cited.Quote), 500)
-			cited.AppliesTo = truncateRunes(RedactSensitive(cited.AppliesTo), 300)
-			assessment.Response.Restriction = &cited
-		}
-		assessment.Response.ProtocolStatus = "valid_decision"
-		if verdict == TriageApprove && intent.AuthorizationEvidenceIncomplete {
-			assessment.Outcome = "escalate"
-			assessment.Rationale = "Authorization evidence was omitted or unavailable; confirm this action with the complete user constraints."
-			verdict = TriageEscalate
-		}
-		return verdict, assessment, nil
 	}
+	verdict, assessment := parseTriageAssessment(r.reply)
+	assessment.Response = r.response
+	if r.response.Version >= 2 {
+		if err := validateRestrictionCitation(assessment, intent); err != nil {
+			assessment.Response.ProtocolStatus = "ungrounded_restriction"
+			return TriageEscalate, assessment, &ApprovalResponseError{Class: "ungrounded_restriction", Metadata: assessment.Response}
+		}
+	}
+	if assessment.Restriction != nil {
+		cited := *assessment.Restriction
+		cited.Quote = truncateRunes(RedactSensitive(cited.Quote), 500)
+		cited.AppliesTo = truncateRunes(RedactSensitive(cited.AppliesTo), 300)
+		assessment.Response.Restriction = &cited
+	}
+	assessment.Response.ProtocolStatus = "valid_decision"
+	if verdict == TriageApprove && intent.AuthorizationEvidenceIncomplete {
+		assessment.Outcome = "escalate"
+		assessment.Rationale = "Authorization evidence was omitted or unavailable; confirm this action with the complete user constraints."
+		verdict = TriageEscalate
+	}
+	return verdict, assessment, nil
 }
 
 // parseTriageVerdict maps a raw judge reply to a verdict. It is deliberately

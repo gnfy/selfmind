@@ -195,6 +195,10 @@ func IsGrantableCommandFamily(family string) bool {
 	if family == "" || family == "unknown" || strings.Contains(family, `\`) {
 		return false
 	}
+	// Legacy path-shaped Skill families never establish execution authority.
+	if strings.HasPrefix(family, "skill:") {
+		return false
+	}
 	if head, _, multi := strings.Cut(family, " "); multi {
 		family = strings.TrimSpace(head)
 	}

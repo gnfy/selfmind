@@ -49,3 +49,17 @@ func TestPagedSkillActivationAlsoActivatesSkillView(t *testing.T) {
 		t.Fatalf("full delivery activated tools: %v", got)
 	}
 }
+
+func TestPreboundPagedActiveSkillActivatesSkillView(t *testing.T) {
+	ctx := WithSkillRuntimeContext(context.Background(), SkillRuntimeContext{
+		Active: &ActiveSkillContext{
+			Name:                    "openclaw-LoopBench",
+			DeliveryMode:            SkillDeliveryModePaged,
+			DeliveryContractVersion: 1,
+		},
+	})
+	ctx = withToolActivationState(ctx)
+	if !deferredToolActive(ctx, "skill_view") {
+		t.Fatal("expected pre-bound paged Active Skill in SkillRuntimeContext to activate skill_view")
+	}
+}

@@ -54,9 +54,6 @@ func TestDispatchRetryClassificationUsesTrustedRegistration(t *testing.T) {
 			if !result.success || ledger.entry.RetryClass != tc.want || result.retryClass != tc.want {
 				t.Fatalf("result=%+v ledger=%+v want=%s", result, ledger.entry, tc.want)
 			}
-			if countsTowardPlanEvidence(tc.name, result.retryClass) != (tc.want != ToolRetryReadOnly) {
-				t.Fatal("planning and ledger classification disagree")
-			}
 		})
 	}
 }
@@ -86,7 +83,7 @@ func TestLedgerRecordsProvenObservationWithoutWideningReplay(t *testing.T) {
 	}
 }
 
-func TestBookkeepingEffectDoesNotGrantReplayOrPlanEvidence(t *testing.T) {
+func TestBookkeepingEffectDoesNotGrantReplay(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		metadata ToolExecutionMetadata
@@ -103,9 +100,6 @@ func TestBookkeepingEffectDoesNotGrantReplayOrPlanEvidence(t *testing.T) {
 			result := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{ID: "call", Function: "new_tool", Args: `{"bookkeeping_only":true,"effect_class":"run_bookkeeping"}`})
 			if !result.success || result.retryClass != ToolRetrySideEffect || ledger.entry.EffectClass != tc.want {
 				t.Fatalf("result=%+v ledger=%+v", result, ledger.entry)
-			}
-			if got := countsTowardPlanEvidence(result.toolName, result.retryClass, result.effectClass); got != (tc.want != ToolEffectBookkeeping) {
-				t.Fatalf("bookkeeping plan evidence=%t effect=%s", got, tc.want)
 			}
 		})
 	}

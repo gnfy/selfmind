@@ -14,6 +14,9 @@ type observationRule struct {
 	reject         []string
 	anyArgs        bool
 	credentialSafe bool
+	// Reviewed resource selectors for the bounded fan-out proof. Unknown
+	// dynamic options cannot establish a new target; this never grants approval.
+	targetValueFlags []string
 	// verify is an extra predicate for a program whose read/write split is not
 	// expressible as a leading subcommand plus a list of forbidden substrings.
 	// It runs after reject and before prefix matching, and it must fail closed.
@@ -57,6 +60,7 @@ var observationRules = []observationRule{
 	{program: "test", anyArgs: true, credentialSafe: true, readsState: testReadsFiles}, {program: "[", anyArgs: true, credentialSafe: true, readsState: bracketReadsFiles},
 	{program: ":", anyArgs: true, credentialSafe: true, readsState: readsNoState},
 	{program: "which", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "command", anyArgs: true, credentialSafe: true, readsState: readsNoState, verify: commandLookupArgs},
 	{program: "unset", anyArgs: true, credentialSafe: true, readsState: readsNoState, verify: func(args []string) bool { _, ok := proxyUnsetNames(args); return ok }},
 	// Ordinary read-only filters. They dominate the middle of a pipeline, and
 	// without them a single `| head` disqualified an otherwise provable command.
@@ -68,9 +72,9 @@ var observationRules = []observationRule{
 	{program: "od", anyArgs: true},
 	{program: "shasum", anyArgs: true}, {program: "sha256sum", anyArgs: true},
 	{program: "md5", anyArgs: true}, {program: "md5sum", anyArgs: true},
-	{program: "sort", anyArgs: true, reject: []string{"-o", "--output"}},
+	{program: "sort", anyArgs: true, verify: sortObservationArgs},
 	{program: "base64", anyArgs: true, reject: []string{"-o", "--output"}},
-	{program: "date", anyArgs: true, reject: []string{"-s", "--set"}, readsState: readsNoState},
+	{program: "date", anyArgs: true, verify: dateObservationArgs, readsState: readsNoState},
 	// `uniq`, `tee` and `xxd` are deliberately absent: uniq and xxd write to a
 	// second positional argument and tee writes to every one, and the rule shape
 	// here cannot express "no positional output". `xxd in out` and especially
@@ -82,15 +86,22 @@ var observationRules = []observationRule{
 	{program: "sleep", anyArgs: true, credentialSafe: true, readsState: readsNoState},
 	{program: "cat", anyArgs: true}, {program: "head", anyArgs: true},
 	{program: "tail", anyArgs: true}, {program: "wc", anyArgs: true},
-	{program: "stat", anyArgs: true}, {program: "file", anyArgs: true},
+	{program: "stat", anyArgs: true}, {program: "file", anyArgs: true, verify: fileObservationArgs},
 	{program: "readlink", anyArgs: true}, {program: "realpath", anyArgs: true},
 	{program: "basename", anyArgs: true, credentialSafe: true, readsState: readsNoState}, {program: "dirname", anyArgs: true, credentialSafe: true, readsState: readsNoState},
-	{program: "grep", anyArgs: true}, {program: "rg", anyArgs: true, reject: []string{"--pre", "--pre-glob"}},
+	{program: "ps", anyArgs: true}, {program: "lsof", anyArgs: true}, {program: "pgrep", anyArgs: true},
+	{program: "df", anyArgs: true}, {program: "du", anyArgs: true}, {program: "uptime", anyArgs: true},
+	{program: "uname", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "hostname", anyArgs: true, credentialSafe: true, readsState: readsNoState, verify: func(args []string) bool { return len(args) == 0 }},
+	{program: "sw_vers", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "id", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "whoami", anyArgs: true, credentialSafe: true, readsState: readsNoState},
+	{program: "grep", anyArgs: true}, {program: "rg", anyArgs: true, verify: rgObservationArgs},
 	{program: "jq", anyArgs: true, credentialSafe: true, reject: []string{"-i", "--in-place"}, readsState: jqReadsFile},
-	{program: "yq", anyArgs: true, reject: []string{"-i", "--inplace"}, readsState: yqReadsFile},
-	{program: "git", prefixes: [][]string{{"status"}, {"diff"}, {"log"}, {"show"}, {"rev-parse"}, {"merge-base"}, {"ls-files"}, {"ls-tree"}, {"cat-file"}, {"describe"}, {"remote", "get-url"}, {"ls-remote"}}},
+	{program: "yq", anyArgs: true, verify: yqObservationArgs, readsState: yqReadsFile},
+	{program: "git", verify: gitObservationArgs, prefixes: [][]string{{"status"}, {"diff"}, {"log"}, {"show"}, {"rev-parse"}, {"rev-list"}, {"grep"}, {"merge-base"}, {"ls-files"}, {"ls-tree"}, {"cat-file"}, {"describe"}, {"remote", "get-url"}, {"ls-remote"}}},
 	{program: "gcloud", external: true, credentialSafe: true, prefixes: [][]string{{"auth", "list"}, {"builds", "list"}, {"builds", "describe"}, {"builds", "triggers", "list"}, {"builds", "triggers", "describe"}, {"run", "services", "list"}, {"run", "services", "describe"}, {"container", "clusters", "list"}, {"container", "clusters", "describe"}, {"projects", "list"}, {"projects", "describe"}, {"projects", "get-iam-policy"}, {"config", "list"}, {"config", "get-value"}, {"artifacts", "repositories", "list"}, {"artifacts", "docker", "images", "list"}, {"artifacts", "docker", "tags", "list"}, {"artifacts", "docker", "versions", "list"}}},
-	{program: "aws", external: true, credentialSafe: true, prefixes: [][]string{{"sts", "get-caller-identity"}, {"codebuild", "batch-get-builds"}, {"codebuild", "batch-get-projects"}, {"codebuild", "list-builds"}, {"codebuild", "list-builds-for-project"}, {"codepipeline", "get-pipeline-execution"}, {"codepipeline", "list-pipeline-executions"}, {"iam", "get-role"}, {"iam", "get-role-policy"}, {"iam", "get-policy"}, {"iam", "get-policy-version"}, {"iam", "list-roles"}, {"iam", "list-policies"}, {"iam", "list-role-policies"}, {"iam", "list-attached-role-policies"}, {"iam", "simulate-principal-policy"}, {"kms", "describe-key"}, {"kms", "get-key-policy"}, {"kms", "list-keys"}, {"kms", "list-aliases"}, {"ssm", "describe-parameters"}, {"logs", "get-log-events"}}},
+	{program: "aws", external: true, credentialSafe: true, targetValueFlags: []string{"--ids", "--stack-name"}, prefixes: [][]string{{"sts", "get-caller-identity"}, {"codebuild", "batch-get-builds"}, {"codebuild", "batch-get-projects"}, {"codebuild", "list-builds"}, {"codebuild", "list-builds-for-project"}, {"codepipeline", "get-pipeline-execution"}, {"codepipeline", "list-pipeline-executions"}, {"iam", "get-role"}, {"iam", "get-role-policy"}, {"iam", "get-policy"}, {"iam", "get-policy-version"}, {"iam", "list-roles"}, {"iam", "list-policies"}, {"iam", "list-role-policies"}, {"iam", "list-attached-role-policies"}, {"iam", "simulate-principal-policy"}, {"kms", "describe-key"}, {"kms", "get-key-policy"}, {"kms", "list-keys"}, {"kms", "list-aliases"}, {"ssm", "describe-parameters"}, {"logs", "get-log-events"}}},
 	{program: "kubectl", external: true, credentialSafe: true, prefixes: [][]string{{"get"}, {"describe"}, {"diff"}, {"logs"}, {"version"}, {"cluster-info"}, {"auth", "can-i"}}, reject: []string{"secret", "secrets", "--raw"}, readsState: kubectlReadsState},
 	{program: "helm", external: true, credentialSafe: true, prefixes: [][]string{{"list"}, {"status"}, {"history"}, {"show"}, {"search"}, {"template"}, {"lint"}, {"env"}, {"version"}}, readsState: helmReadsState},
 	// `gh api` defaults to GET but can perform every method through the same
@@ -148,9 +159,6 @@ func deterministicObservationExec(toolName string, args map[string]interface{}) 
 		if !ok || !rule.matches(commandArgs) || (credentialed && program == "jq" && !credentialSafeJQ(commandArgs)) {
 			return false
 		}
-		if rule.verify != nil && !rule.verify(commandArgs) {
-			return false
-		}
 	}
 	return true
 }
@@ -205,6 +213,7 @@ func credentialSafeJQ(args []string) bool {
 }
 
 var observationGlobalValueFlags = map[string]map[string]struct{}{
+	"git": {"-C": {}},
 	"aws": {
 		"--profile": {}, "--region": {}, "--output": {}, "--endpoint-url": {},
 		"--ca-bundle": {}, "--cli-connect-timeout": {}, "--cli-read-timeout": {},
@@ -231,6 +240,7 @@ var observationGlobalValueFlags = map[string]map[string]struct{}{
 }
 
 var observationGlobalBoolFlags = map[string]map[string]struct{}{
+	"git":     {"--no-pager": {}, "--no-optional-locks": {}, "--literal-pathspecs": {}},
 	"aws":     {"--debug": {}, "--no-cli-pager": {}, "--no-paginate": {}, "--no-sign-request": {}},
 	"gcloud":  {"--quiet": {}, "-q": {}},
 	"kubectl": {"--disable-compression": {}, "--insecure-skip-tls-verify": {}, "--match-server-version": {}, "--warnings-as-errors": {}},
@@ -259,6 +269,14 @@ func observationCommandArgs(program string, args []string) ([]string, bool) {
 		}
 		name := arg
 		hasAttachedValue := false
+		// Short value flags may attach their value (-Crepo, -Rowner/repo).
+		// This applies only before the subcommand; diff -C is a different flag.
+		if len(name) > 2 && !strings.HasPrefix(name, "--") {
+			if _, known := valueFlags[name[:2]]; known {
+				name = name[:2]
+				hasAttachedValue = true
+			}
+		}
 		if eq := strings.IndexByte(name, '='); eq >= 0 {
 			name = name[:eq]
 			hasAttachedValue = true
@@ -282,6 +300,16 @@ func observationCommandArgs(program string, args []string) ([]string, bool) {
 }
 
 func (r observationRule) matches(args []string) bool {
+	var ok bool
+	args, ok = observationCommandArgs(r.program, args)
+	if !ok {
+		return false
+	}
+	// All consumers, including prefix plumbing and unattended watchers, use
+	// the same argument proof. A prefix match alone cannot drop this check.
+	if r.verify != nil && !r.verify(args) {
+		return false
+	}
 	raw := make([]string, 0, len(args))
 	normalized := make([]string, 0, len(args))
 	for _, arg := range args {
@@ -319,4 +347,41 @@ func (r observationRule) matches(args []string) bool {
 		}
 	}
 	return false
+}
+
+func commandLookupArgs(args []string) bool {
+	hasLookupFlag := false
+	hasOperand := false
+	afterSep := false
+	for _, arg := range args {
+		arg = strings.TrimSpace(arg)
+		if arg == "" {
+			continue
+		}
+		if afterSep {
+			hasOperand = true
+			continue
+		}
+		if arg == "--" {
+			afterSep = true
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			if len(arg) < 2 || strings.HasPrefix(arg, "--") {
+				return false
+			}
+			for _, ch := range arg[1:] {
+				switch ch {
+				case 'v', 'V':
+					hasLookupFlag = true
+				case 'p':
+				default:
+					return false
+				}
+			}
+			continue
+		}
+		hasOperand = true
+	}
+	return hasLookupFlag && hasOperand
 }

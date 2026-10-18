@@ -429,3 +429,71 @@ func appendPlanEvidence(t *testing.T, s *Store, runID, id string, b *verificatio
 		t.Fatal(err)
 	}
 }
+
+func TestPostCompletionCheckReplacementAndRunCompletionProjection(t *testing.T) {
+	ctx := context.Background()
+	s, identity, _, run := newRecoveryFixture(t)
+	plan, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "verify final bundle", []RunPlanStepInput{{
+		Step: "Generate and verify bundle", Status: "in_progress",
+		SuccessCriteria: "bundle is complete", VerificationRequired: true, WorkUnit: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := plan.Plan.Steps[0]
+	initial, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
+		StepID: step.StepID,
+	}, "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendObservedCheck(t, s, run.ID, "toolcall-16-0", initial, 10)
+
+	// Complete the step.
+	if _, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "completed", []RunPlanStepInput{{
+		StepID: step.StepID, Step: step.Step, Status: "completed",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Main opens a new observation cycle before checking the completed work
+	// again. The prior unit keeps its frozen window and proof.
+	reopened, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "recheck the bundle", []RunPlanStepInput{{StepID: step.StepID, Status: "in_progress"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Plan.Steps[0].WorkUnitID == step.WorkUnitID {
+		t.Fatal("recheck rewrote the closed work unit")
+	}
+	// The fresh check fails first, then its observation method is corrected.
+	postFailBinding, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
+		StepID: step.StepID, Criterion: "bundle files are non-empty", Target: "bundle",
+	}, "/workspace")
+	if err != nil || postFailBinding.StepID != step.StepID {
+		t.Fatalf("post-completion explicit step binding failed: %+v %v", postFailBinding, err)
+	}
+	failRaw, _ := json.Marshal(map[string]interface{}{"evidence": map[string]interface{}{
+		"kind": "verification", "tool_name": "verify", "tool_call_id": "toolcall-25-0", "status": "failed",
+		"started_at_unix_nano": 20, "finished_at_unix_nano": 21,
+		"command": map[string]interface{}{"command": "check bundle", "cwd": "/workspace", "binding": postFailBinding, "invoked": true, "process_started": true, "exit_code": 1, "effect_state": "failed"},
+	}})
+	if _, err := s.AppendEvent(ctx, Event{RunID: run.ID, Type: "evidence.recorded", Payload: failRaw}); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
+		Replaces: "toolcall-25-0", Reason: "fix glob expansion in verification command",
+	}, "/workspace")
+	if err != nil || replacement == nil || replacement.StepID != step.StepID {
+		t.Fatalf("replacement after completed work unit failed: %+v %v", replacement, err)
+	}
+	appendObservedCheck(t, s, run.ID, "toolcall-26-0", replacement, 30)
+
+	// Resolve a single step assessment citing the post-completion check and verify review completes with no blockers.
+	proj, err := s.ResolveConditionAssessments(ctx, identity.TenantID, run.ID, []verification.Assessment{{
+		StepID: step.StepID, EvidenceRefs: []string{"toolcall-26-0"}, Result: "met", Reason: "Bundle verified.",
+	}})
+	if err != nil || !proj.ReviewComplete || len(proj.Blockers) != 0 {
+		t.Fatalf("ResolveConditionAssessments failed after post-completion replacement: proj=%+v err=%v", proj, err)
+	}
+}

@@ -21,10 +21,17 @@ expect:
   min_tool_calls: 2
   min_progress_updates: 1
   # Keep all refusals/errors bounded; only typed, proven non-dispatch may recover.
-  max_tool_errors: 2
+  max_tool_errors: 0
   max_invoked_tool_errors: 0
 
 assert_state:
+  # Changed-step input still publishes a complete accepted Plan.
+  - on: events
+    type: tool.started
+    payload_fields:
+      tool: update_plan
+      args.mode: patch
+    count_gte: 1
   - on: file
     path: plan-progress.txt
     exists: true
@@ -43,6 +50,10 @@ assert_state:
     payload_contains: '"tool":"verify"'
     count_gte: 1
     count_lte: 1
+  - on: events
+    type: run.outcome
+    payload_contains: final_response
+    count_gte: 1
 
 checks:
   no_mojibake: true

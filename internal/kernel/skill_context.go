@@ -56,6 +56,8 @@ func withActiveSkillRuntimeState(ctx context.Context) context.Context {
 	state := &activeSkillRuntimeState{}
 	if selected, ok := SkillRuntimeContextFromContext(ctx); ok && selected.Active != nil {
 		state.workUnitSequence = selected.Active.WorkUnitSequence
+	} else if bundle, ok := RuntimeContextBundleFromContext(ctx); ok && bundle.ActiveSkill != nil {
+		state.workUnitSequence = bundle.ActiveSkill.WorkUnitSequence
 	}
 	return context.WithValue(ctx, activeSkillRuntimeStateContextKey{}, state)
 }

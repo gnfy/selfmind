@@ -19,13 +19,21 @@ func (c *RunCoordinator) humanWaitGrace() time.Duration {
 	return defaultHumanWaitGrace
 }
 
-func (c *RunCoordinator) parkHumanWait(ctx context.Context, identity *control.IdentityContext, runID, kind, ref, toolName string) (bool, error) {
-	err := kernel.SaveHumanWaitCheckpoint(ctx, kind, ref, toolName)
+// parkHumanWait releases the worker of a Run waiting on a person. reason is why
+// (a control.HumanWaitPark* value) and is kept with the request. An armed wait
+// already wrote the exact checkpoint when it started and nothing has changed it
+// since, so only an unarmed wait writes it now.
+func (c *RunCoordinator) parkHumanWait(ctx context.Context, identity *control.IdentityContext, runID, kind, ref, toolName, reason string, armed *armedHumanWait) (bool, error) {
+	var err error
+	if armed == nil {
+		err = kernel.SaveHumanWaitCheckpoint(ctx, kind, ref, toolName)
+	}
 	if err == nil {
 		var parked bool
-		parked, err = c.srv.Control.ParkHumanWaitRun(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, runID, kind, ref)
+		parked, err = c.srv.Control.ParkHumanWaitRun(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, runID, kind, ref, reason)
 		if err == nil && parked {
 			kernel.MarkHumanWaitParked(ctx)
+			armed.parked()
 			return true, nil
 		}
 		if err == nil {

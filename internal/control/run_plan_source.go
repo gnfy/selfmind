@@ -14,20 +14,21 @@ import (
 // child-Run verification verdict. External conditions and unrecorded changes
 // can make an earlier successful observation insufficient today.
 type InheritedPlanEvidence struct {
-	StepID             string    `json:"step_id"`
-	SourceRunID        string    `json:"source_run_id"`
-	SourceStepID       string    `json:"source_step_id"`
-	SourcePlanVersion  int       `json:"source_plan_version"`
-	SourceStatus       string    `json:"source_status"`
-	SourceCriterion    string    `json:"source_criterion"`
-	CriterionChanged   bool      `json:"criterion_changed"`
-	PriorVerification  string    `json:"prior_verification"`
-	LatestCheck        string    `json:"latest_check"`
-	Target             string    `json:"target"`
-	CheckedAt          time.Time `json:"checked_at"`
-	CheckID            string    `json:"check_id"`
-	ObservedCriterion  string    `json:"observed_criterion"`
-	ReuseBlockedReason string    `json:"reuse_blocked_reason"`
+	StepID             string                   `json:"step_id"`
+	SourceRunID        string                   `json:"source_run_id"`
+	SourceStepID       string                   `json:"source_step_id"`
+	SourcePlanVersion  int                      `json:"source_plan_version"`
+	SourceStatus       string                   `json:"source_status"`
+	SourceCriterion    string                   `json:"source_criterion"`
+	CriterionChanged   bool                     `json:"criterion_changed"`
+	PriorVerification  string                   `json:"prior_verification"`
+	LatestCheck        string                   `json:"latest_check"`
+	Target             string                   `json:"target"`
+	CheckedAt          time.Time                `json:"checked_at"`
+	CheckID            string                   `json:"check_id"`
+	ObservedCriterion  string                   `json:"observed_criterion"`
+	ReuseBlockedReason string                   `json:"reuse_blocked_reason"`
+	PriorCondition     *verification.Assessment `json:"prior_condition,omitempty"`
 }
 
 // ListInheritedPlanEvidence follows only the child Run's exact parent edge and
@@ -45,6 +46,9 @@ func (s *Store) ListInheritedPlanEvidence(ctx context.Context, tenantID, childRu
 	defer tx.Rollback()
 	result, err := inheritedPlanEvidenceTx(ctx, tx, tenant, childRunID)
 	if err != nil {
+		return nil, err
+	}
+	if err := attachInheritedConditionsTx(ctx, tx, result); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -224,20 +228,12 @@ func inheritedEvidenceReferenceTx(ctx context.Context, tx *sql.Tx, runID, parent
 // latest event of an entire Run. An open window also preserves a saved check
 // when execution stopped before the Plan's close-out transaction.
 func sourceStepVerificationTx(ctx context.Context, tx *sql.Tx, runID, stepID, workUnitID string) (string, string, []verification.Check, error) {
-	var start, end int64
-	if err := tx.QueryRowContext(ctx, `SELECT started_cursor, COALESCE(finished_cursor,0) FROM run_work_units
-		WHERE run_id=? AND id=?`, runID, workUnitID).Scan(&start, &end); err != nil {
+	start, end, err := workUnitEvidenceWindowTx(ctx, tx, runID, workUnitID)
+	if err != nil {
 		if err == sql.ErrNoRows {
 			return "blocked", "Source work-unit window is unavailable.", nil, nil
 		}
 		return "", "", nil, err
-	}
-	if end == 0 {
-		var err error
-		end, err = maxRunEventCursorTx(ctx, tx, runID)
-		if err != nil {
-			return "", "", nil, err
-		}
 	}
 	mutations, checks, err := workUnitVerificationChecksTx(ctx, tx, runID, start, end, stepID)
 	if err != nil {

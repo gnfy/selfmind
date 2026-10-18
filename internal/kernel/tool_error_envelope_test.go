@@ -37,7 +37,7 @@ func TestToolErrorEnvelopeCarriesRecoveryContract(t *testing.T) {
 	if env.FailurePhase != "preparation" || env.Retryability != "different_strategy" || env.EffectState != "not_dispatched" || env.StateChanged {
 		t.Fatalf("recovery envelope = %+v", env)
 	}
-	if len(env.Alternatives) != 2 || !strings.Contains(env.ModelContent, "provider_native_wait") {
+	if len(env.Alternatives) != 2 || !strings.Contains(env.ModelContent, "provider native wait") {
 		t.Fatalf("recovery alternatives missing from model content: %+v", env)
 	}
 }
@@ -56,7 +56,7 @@ func TestToolCompletionEventKeepsModelDiagnosticsOutOfUserError(t *testing.T) {
 	if !strings.Contains(event.Error, "timed out after 120 seconds") {
 		t.Fatalf("user event lost the actionable failure: %q", event.Error)
 	}
-	if !strings.Contains(env.ModelContent, "SelfMind diagnostic instruction") {
+	if !strings.Contains(env.ModelContent, "timed out after 120 seconds") || strings.Contains(env.ModelContent, "SelfMind diagnostic instruction") {
 		t.Fatalf("model surface lost recovery guidance: %q", env.ModelContent)
 	}
 }

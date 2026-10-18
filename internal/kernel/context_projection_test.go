@@ -57,7 +57,9 @@ func TestRunPlanContextAsksForCompactSnapshots(t *testing.T) {
 	}}
 	prompt := runtime.requiredPrompt()
 	for _, want := range []string{
-		"update_plan takes a complete snapshot that lists every step_id with its status and sends text or success_criteria only when changed",
+		"update_plan mode=patch sends only changed step_id/status entries",
+		"omitted steps stay unchanged",
+		"Every accepted result is complete",
 		`step_id=step-1 [completed] Inspect the sources; success_criteria="Sources are read"`,
 	} {
 		if !strings.Contains(prompt, want) {
@@ -192,7 +194,7 @@ func TestProviderRecoveryPreservesRequiredRuntimeContext(t *testing.T) {
 func TestSelectedPlanSeedsLoopOnContinuation(t *testing.T) {
 	for _, status := range []string{"completed", "pending"} {
 		t.Run(status, func(t *testing.T) {
-			provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold + 1}
+			provider := &planEscalationProvider{commands: 3}
 			agent := NewAgent(memory.NewMemoryManager(&mockStorage{}), &planEscalationBackend{}, provider, "helpful", 8, 1, nil)
 			events := make(chan string, 256)
 			ctx := WithTaskRuntimeContext(WithEventChannel(context.Background(), events), TaskRuntimeContext{

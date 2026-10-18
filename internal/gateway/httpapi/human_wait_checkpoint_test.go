@@ -25,11 +25,14 @@ import (
 type humanWaitProvider struct {
 	independent   atomic.Int32
 	clarification bool
-	readFirst     bool
-	doubleWrite   bool
-	retainedRead  atomic.Bool
-	missingIDs    bool
-	followupWrite bool
+	// clarifyThenRead asks a question and, in the same batch, reads a file: the
+	// read runs once the answer is in, with no approval to wait on.
+	clarifyThenRead bool
+	readFirst       bool
+	doubleWrite     bool
+	retainedRead    atomic.Bool
+	missingIDs      bool
+	followupWrite   bool
 }
 
 func (*humanWaitProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
@@ -64,6 +67,11 @@ func (p *humanWaitProvider) StreamChat(_ context.Context, req llm.ChatRequest) (
 	if strings.Contains(user, "independent work") {
 		p.independent.Add(1)
 		out <- llm.StreamEvent{Content: "Independent work completed."}
+	} else if p.clarifyThenRead {
+		out <- llm.StreamEvent{ToolCalls: []llm.ToolCall{
+			{ID: "pending-question", Function: "clarify", Args: `{"question":"Choose the receipt format","choices":["plain","json"]}`},
+			{ID: "follow-read", Function: "read_file", Args: `{"path":"input.txt"}`},
+		}}
 	} else if p.clarification {
 		out <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{ID: "pending-question", Function: "clarify", Args: `{"question":"Choose the receipt format","choices":["plain","json"]}`}}}
 	} else {
@@ -86,7 +94,7 @@ func newHumanWaitServer(t *testing.T) (*Server, *control.Store, *humanWaitProvid
 	return newHumanWaitServerWithStore(t, controltest.NewStore(t))
 }
 
-func newHumanWaitServerWithStore(t *testing.T, store *control.Store) (*Server, *control.Store, *humanWaitProvider, *control.IdentityContext) {
+func newHumanWaitServerWithStore(t *testing.T, store *control.Store, customize ...func(*tools.Dispatcher)) (*Server, *control.Store, *humanWaitProvider, *control.IdentityContext) {
 	t.Helper()
 	provider := &humanWaitProvider{}
 	agents := make([]*kernel.Agent, 2)
@@ -97,9 +105,15 @@ func newHumanWaitServerWithStore(t *testing.T, store *control.Store) (*Server, *
 		dispatcher.RegisterTool(tools.NewClarifyTool())
 		dispatcher.InjectMiddleware(tools.SmartApprovalMiddleware(t.TempDir()))
 		dispatcher.InjectMiddleware(tools.WorkspaceScopeMiddleware())
+		// Added last, a middleware runs closest to the tool: after the approval.
+		for _, add := range customize {
+			add(dispatcher)
+		}
 		agents[i] = kernel.NewAgent(memory.NewMemoryManager(nil), dispatcher, provider, "test", 4, 1, nil)
 	}
-	daemon := &Server{Control: store, Gateway: router.NewGateway(agents[0], nil), ExecutionRuntime: newTestExecutionRuntime(t), DefaultTenantID: "default", ApprovalWait: 10 * time.Second, ApprovalWaitUnattended: 10 * time.Second}
+	// These tests exercise the park path, so the in-place hold is off; the hold
+	// has its own tests (human_wait_hold_test.go) that turn it back on.
+	daemon := &Server{Control: store, Gateway: router.NewGateway(agents[0], nil), ExecutionRuntime: newTestExecutionRuntime(t), DefaultTenantID: "default", ApprovalWait: 10 * time.Second, ApprovalWaitUnattended: 10 * time.Second, HumanWaitHold: -1}
 	daemon.Gateway.EnableWorkerPool(agents[1:])
 	daemon.coordinator().activeLimit = 2
 	owner, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "local", "Local")

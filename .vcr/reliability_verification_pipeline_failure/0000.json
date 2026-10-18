@@ -1,4 +1,0 @@
-{
-  "method": "completion",
-  "completion": "check-target.py verification-fixture verify false|cat;echo_MASKED_SUCCESS failing-check-resumable"
-}

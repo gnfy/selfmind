@@ -1,5 +1,5 @@
 {
   "plan_binding_version": 1,
   "method": "completion",
-  "completion": "watch_external waiting_external receipt-handoff receipt.txt prerequisite.txt"
+  "completion": "watch_external waiting_external receipt-handoff prerequisite.txt receipt.txt"
 }

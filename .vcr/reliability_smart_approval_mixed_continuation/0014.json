@@ -3,25 +3,12 @@
   "method": "stream",
   "events": [
     {
-      "content": "I will check the"
+      "content": "I am updating the plan to mark all remaining steps as completed."
     },
     {
       "usage": {
-        "input_tokens": 17909,
-        "output_tokens": 4,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "content": " current todo list."
-    },
-    {
-      "usage": {
-        "input_tokens": 0,
-        "output_tokens": 4,
+        "input_tokens": 16861,
+        "output_tokens": 13,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -31,7 +18,7 @@
     {
       "usage": {
         "input_tokens": 0,
-        "output_tokens": 8,
+        "output_tokens": 79,
         "cache_read_input_tokens": 0,
         "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
@@ -43,10 +30,10 @@
     },
     {
       "usage": {
-        "input_tokens": 240,
+        "input_tokens": 1238,
         "output_tokens": 0,
-        "cache_read_input_tokens": 14783,
-        "cache_miss_input_tokens": 3366,
+        "cache_read_input_tokens": 15826,
+        "cache_miss_input_tokens": 2273,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true
@@ -55,12 +42,12 @@
     {
       "tool_calls": [
         {
-          "ID": "call_2076765",
-          "Function": "todo",
-          "Args": "{}",
+          "ID": "call_1617072",
+          "Function": "update_plan",
+          "Args": "{\"mode\":\"patch\",\"plan\":[{\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_4}}\",\"status\":\"completed\"},{\"status\":\"completed\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_1}}\"}]}",
           "replay_metadata": {
             "google": {
-              "thought_signature": "EpwGCpkGAWkUfRO22CwgbFcBgcjWNj5Hq8pWl39gC9uMPcQ3MoLgJFkqZvQFLmHtyn4ztjFV3aIEqANsAbyho/6A8+YPctytDIGVutpl6EMeO582hdcmwzV1L1m0ui6pig/fcm4bqnmRu/1+zX9+QQp0alvY4PM4AtIpx12GFoJmyrb2BMwDTKzOKwBkKijd8fJpwNCfeu8rYvCMBOaJk6FjG5lf12GGZiZZJIt3+m9dm6sy8VlgrPCI2Z4X/4Fdk3AUO9VkYfIO48o3oWRbhuYnOuD4e8Bu1HwKt7mKUSwOXzh/clbyLMDa3GX6uzvZOV4eQfiIteF0Mbwxcns5ucSBqDeYBcHLM3svbrT73HnGJlqEiQ0RoDUbrg0Bh/oANKbk6xXNYqoYcF06WbIAWcIVNrI2MY7PBY4EGilro35seJs7L3j4zZuE8dipy6anl7hMjs/Cy+QxLbJxo7itwJTtHmM/NF9yc1UqC7Z3e6wRksbq/fqWqQse5ekfVkTz/CNTBjhiKiRI8mGz1nmXizDqF/3vrmYAf3y0g3Q8Bok3EBuT59tvonUac5F/lOKZpJERM0acDeXXlW4Fzl/OKxw5TrMhXz0KkGIN/6BoMXFU72/XrE2kSXEBcce7v2CaYDLkgnLwcxY+MQZF+qFOHNbEiBeOGT9KPBh83q+i+JWXqPD/CFdd1etJTlwFHKI6lrtZGZ89hW5KXBLaBZ4od8PSXjpyGYRj+2cfxIHR9aDH/aHKbDf4BLlrscm19fZi/vvCR+uNAw5vmH4FpFIE2MmF6QS7I7f4fZS2EfoCdxugJMsF+Z9Bt/qoBluUsvnX37AjI6k/OpQpLJrxcZAVx1mUNMP4YvZK8Xe5uefkLPzUh/oDa1eAORRxL6qkKEe6ARD+hj3OF15TKGHwhQDoTh3KOWrIY54hztet0lMJiSsE6S8/VNC+53HltNWyoa/GeBY2B9hvOJLQF/vstJ/ez004ccB79UKnJEZ8yyyR+TD329T4xdKbegggoZGtpG2JqdBdk5S1gVQMeTIuGT3WUcFn+15fwuY4afHes7e3Sg=="
+              "thought_signature": "EtUGCtIGAWkUfRNcUipDa2swIwuMTEDqHSTwofCV+d4L3ySlEXR1Wb9A5lPY36hI3xPdStW2C/Z87LbU6FO5cJGohdAnQXn2/4ckSnlfxspWcA5gR6fgtnoNaOV19r/Grw1Dq5F7zEe5z2bC+fnZJIOx4Z0UG7PfBu2wx/8V3FnGhLMnoRaryqJfT6RdbNrJ0Sr5KLZHZ2JpWhEAkK0B6QXeW76rsG9SRIL1+ITUOj91yGMrbef1nOihTXziiQslGlnETSuL4IKXFyrpPu5dww4mEHcbuEib5+34LFqgb5AbOZQLPOo4hLgubFJQo+Hyp2j4ODWhh9eGOHyXgA23jUh2xrPrntYIj/U1YGsPa+efrLcZ5n2nyfNwIQuZVhD5I14+ZUY5ZARRSwUVRllYZUOMzOlc83D5xX14F6eLf/ibzFdoPoiHOFXEY/KsiZ75nsScqXO2H5+XZuMQbrgQELB4SeixTpfcT7p3Lqo0JjE71FimVom093haLhJGAQH7o2XOw5mJxNeVxtPX9Z7soEQOpLJO+dO/pilwtqplYuhFXCzcOERP5d6Vy+TQVcUAViqWEQrXCY80O+8BUa2QQ5bvYRxQpyMm2Xq+4EAdtuGVPDCXyNhEtWmh9eTtcyRJl2WVOIt9YwaFIM/719R8K4MjHNXfCezAfLhJTNcobzmqkBAP6QtuF8mXYzSwmvCbkPRZ32h/VWjJ9w0uB3Dy4b5O+g/OCUJWt3uEEWuyb9MIh/S//HzOkf2NswQy77Auht41tQ+BXoBQpitdA87sRvelcmcb5VhSqDJVZaW2fKObf4aCTK0PaonPCA+uMjzN4JcZ13WmIc3yxc3cxTzmJiWwD8xOnX+RqguT4Vyilis/+4H22VIh6LZ1a4RpskpmFcVQ5bf8K0ZzNhiZv2cPlmHUUPNl+W5BMf0DRMi+2G73ZolQOZSkV1FdyYMdCxm9+ktkpLHkhCfz49NAgTzIG5n9s/u4HHmp3ZcnKfvdkHwxKv1ob5zRMKluLnXENNlT4s+WyBRP+1acYGJHf6hNseSc2SJIXPVjMTvc4nbwLysPEDu2LHKnGgIqcUU5m42FK5dGB/RsJQKCk+q1AMWvIcuLUxWGVoF7CNmjpWG3vuc/g2qQzGbZAw=="
             }
           }
         }

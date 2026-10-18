@@ -104,6 +104,11 @@ func (h *SemanticRecallHealth) Expand(ctx context.Context, query string) string 
 	}
 	expanded, err := h.expander.ExpandWithError(ctx, query)
 	if err != nil {
+		// A caller finished lexical selection or cancelled its turn. That is
+		// not evidence that this configured role became unhealthy.
+		if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+			return query
+		}
 		h.markFailure(semanticRecallProbeResult(err))
 		return query
 	}

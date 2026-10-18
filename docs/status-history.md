@@ -6,6 +6,126 @@ snapshot. The text is unchanged. Versions, case counts, and schema numbers
 describe the moment each record was written; current state, open gates, and
 priorities live only in `STATUS.md`.
 
+## Exact-continuation progress and finish correction (2026-10-15)
+
+A Run answered an approval ten times and, at every answer, its continuation
+started the Plan over: the verified steps came back pending and the earliest
+verification-required step was re-selected, because the import treated the
+parent's Plan as a first plan. An exact continuation (the runtime's own resume
+edges) now carries the parent's verified progress: each completed required step
+is adopted from its source with a runtime-written reason while the same
+provenance, scope and freshness validation passes, over multiple hops (a saved
+direct reference shortens the walk; every skipped Run is still checked for
+changes and for scope). Only a step whose source no longer validates reopens,
+alone. A person's turn and a Main-selected continuation keep the conservative
+import. The same Run's `finish_run` was refused for citing an earlier Run's
+check id and then could not be corrected: the refusal lacked the corrected-input
+contract, so the single attempt was spent and the tool hidden. Input refusals now
+carry it, and the refusal for an evidence reference names the citeable checks
+and, for an imported step's observation, the step and whether it can be adopted.
+
+Validation: focused control, tools, verification and gateway tests, including a
+real approval answer that resumes a parked Run with a verified plan and a real
+Run that corrects a refused finish; full Go/doc checks. No model-backed eval case
+was recorded for either path, no migration is needed, and historical Runs are
+unchanged. Not changed: holding a parked approval open longer while a client is
+attached, and recognizing a wrapper script that needs network (a command that
+does not name its remote service still runs offline unless it asks).
+
+## Condition judgment and completion (2026-10-15)
+
+Optional `finish_run.assessments` separates Main's condition judgment from raw
+process/check results and goal completion. The model supplies result, evidence
+references and reason; one shared resolver binds runtime identity and rejects
+unavailable, stale, mixed-scope, unknown-dispatch or unsupported-version facts.
+Judgments and finish decisions share the existing outcome event. Prior negative
+findings survive unrelated successes and omitted later judgments. They appear
+through typed inherited evidence, and source adoption cannot turn a zero-exit
+negative finding into positive verification. Required Plan gates and unresolved
+external effects remain blocking. Evidence/outcome write failures now reach the
+existing failed-finalization path; stream drainage avoids abandoned producers.
+Historical rows without judgments remain unassessed; no migration or new model
+call is required.
+
+Paired investigation/required-condition live probes passed on Qwen, DeepSeek
+and Gemini with semantic recall disabled. One DeepSeek run recovered from a
+provider 503. Default-path Gemini recordings passed both strict cases, including
+unchanged-file assertions, and were selected as release replay evidence. Extra
+Qwen default-path probes were not clean: an inspection attempt had a provider
+timeout and invalid references, while a required-condition attempt preserved
+the correct negative/blocked result but failed the zero-reference-error gate.
+Those failed recordings were not promoted. This establishes the shared runtime
+behavior, not error-free model behavior or measured production speedup.
+
+Validation: full selfcheck passed all 118 offline cases, the Go build and test
+suite, and the 52-document contract. Focused race tests, vet and diff checks
+passed. Fault injection covers failure to save execution evidence or the outcome;
+other regressions cover stale and foreign references, unknown effects,
+independent failures, source adoption, and per-turn/watcher verdict isolation.
+The package and running daemon were not updated.
+
+## Verification interface simplification (2026-10-15)
+
+Normal Plan checks use `command` plus `step_id`; corrected methods use
+`command`, `replaces` and `reason` in the same working directory. The existing
+resolver inherits established condition, target, step and dependency identity.
+No inference, new permission, provider-specific repair or storage migration was
+added. Missing standalone fields now name the missing input, and Bash's strict
+failure behavior is described where the model chooses its command.
+
+The existing result envelope gives the model plain failure facts and specific
+guidance while retaining typed recovery fields and raw diagnostics. Negative
+checks no longer prescribe Plan transitions or another attempt. User decisions,
+non-dispatch and uncertain effects remain explicit; captured output and external
+error fields are not filtered as framework metadata. Tests exercise minimal
+inputs through the production durable resolver and reject changed criterion,
+target, working directory and foreign-step replacement before execution.
+
+Live adoption cases passed for Qwen, DeepSeek and Gemini with zero tool errors.
+Changed-criterion cases passed for DeepSeek and Gemini. Two Qwen probes failed
+the original raw-verification assertion. Reinspection distinguishes them: the
+first changed the criterion to confirming the mismatch and closed as done; the
+second correctly reported a negative condition, kept the required step unfinished
+and closed as blocked, but its conditional command exited zero and the legacy
+check projection said passed. The second had zero tool errors. Attributing both
+to model judgment was incorrect: the second exposed the shared projection's
+conflation of process success and condition truth. Neither case justifies a
+model-specific parser or a general model-quality claim.
+DeepSeek probes also encountered transient provider 503s; those recordings were
+not promoted. The default-path Gemini recording and offline replay retain genuine
+tool failures; the case separately forbids argument/reference repair errors.
+No controlled performance improvement or production rollout is claimed.
+
+Validation: full selfcheck passed all 117 offline cases, documentation contract,
+build and Go tests. Focused kernel/tools/httpapi race tests and vet passed.
+
+## Shared tool contract economy (2026-10-15)
+
+Argument preparation now collects up to eight independent schema errors before
+dispatch, through one shared walker. No model-name repair path was introduced.
+`finish_run` requires explicit status and accepts a complete final body without
+duplicated summary/list fields; summary-only callers remain supported. Completion
+and permission checks are unchanged. New step references use a compact stable
+Run namespace and sequence, reserve historical IDs, and preserve legacy/imported
+identities. Claim, retarget and old/new cassette binding regressions passed.
+
+Registered schemas and unchanged response arguments passed native OpenAI Chat,
+Anthropic and Responses transport round trips. Qwen, DeepSeek and Gemini live
+adoption cases passed with zero tool errors. All three changed-criterion cases
+also passed their safety/result assertions; they were not error-free: Qwen had
+two failed observations and two verification-contract refusals, DeepSeek one
+expected failed observation, and Gemini a failed observation plus a sandbox
+process-inspection refusal. An earlier draft DeepSeek attempt failed the strict
+zero-error adoption gate after a plan-boundary hold; the gate was not relaxed.
+Reasoning settings differ across routes, so durations do not establish a speed
+comparison. Verification retry friction remains a separate improvement candidate.
+
+The strengthened adoption case has a genuine default-config DeepSeek recording
+and passing offline replay; no extra release-case ID was added. Full selfcheck
+passed 117/117 offline cases, Go tests and 52-document governance. Focused race
+checks and independent Spec/Standards reviews passed. This batch was not installed
+or deployed; production throughput improvement remains unproven.
+
 ## Pre-Run recovery write failures (2026-10-11)
 
 Fault injection reproduced two gaps after the previous batch: returning a

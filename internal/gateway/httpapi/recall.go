@@ -213,15 +213,16 @@ type recallSelectionObserver interface {
 type RecallStats struct {
 	// Candidates counts eligible source hits before cross-source dedupe and the
 	// final prompt budget. Sources counts the slices that actually survived.
-	Candidates       map[string]int
-	Sources          map[string]int
-	Refs             []string
-	Expanded         bool
-	ExpansionSkipped string
-	ExpansionStatus  string
-	ExpansionMS      int64
-	Terms            int
-	Skipped          string // non-empty when recall was skipped ("control_command", "short_message")
+	Candidates          map[string]int
+	Sources             map[string]int
+	Refs                []string
+	Expanded            bool
+	ExpansionSkipped    string
+	ExpansionStatus     string
+	ExpansionMS         int64
+	ExpansionOverlapped bool
+	Terms               int
+	Skipped             string // non-empty when recall was skipped ("control_command", "short_message")
 	// ElapsedMS is the wall-clock cost of the whole Select call (expansion
 	// included) — the number /diag context reports per turn.
 	ElapsedMS int64
@@ -372,21 +373,19 @@ func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, wor
 	}
 
 	rawTerms := recallTerms(trimmed)
-	var expansionTerms []string
+	var expansion <-chan recallExpansionResult
+	expansionStarted := time.Now()
 	if kernel.HasExactLoopReplay(ctx) {
 		stats.ExpansionSkipped = "exact_checkpoint_replay"
 		stats.ExpansionStatus = "skipped_exact_replay"
+	} else if e.expander == nil {
+		stats.ExpansionStatus = "disabled"
 	} else {
-		started := time.Now()
-		expansion, status := e.expand(ctx, trimmed)
-		stats.ExpansionMS = time.Since(started).Milliseconds()
-		stats.ExpansionStatus = status
-		if status == "expanded" {
-			stats.Expanded = true
-			expansionTerms = recallTerms(expansion)
-		}
+		var cancel context.CancelFunc
+		expansion, cancel = e.startExpansion(ctx, trimmed)
+		defer cancel()
 	}
-	terms, rawCount := boundedRecallTerms(rawTerms, expansionTerms, recallMaxTerms)
+	terms, rawCount := boundedRecallTerms(rawTerms, nil, recallMaxTerms)
 	if len(terms) == 0 {
 		stats.Skipped = "no_terms"
 		return nil, stats
@@ -411,25 +410,47 @@ func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, wor
 	// Dedupe by work line: keep the best hit per task/session, preferring the
 	// richer source (label card over raw session fragment), then higher score.
 	best := map[string]RecallHit{}
-	for _, source := range e.sources {
-		hits, err := source.Search(ctx, query)
-		if err != nil {
-			continue // recall degrades, never fails the turn
-		}
-		for _, hit := range hits {
-			// A run-keyed session first collapses onto its resume chain root,
-			// so a continued line of work competes once rather than once per
-			// run.
-			key := e.workLineKey(ctx, tenantID, hit.WorkKey)
-			if query.excludesWorkKey(key) {
+	seenCandidates := map[string]bool{}
+	collect := func(query RecallQuery) {
+		for _, source := range e.sources {
+			hits, err := source.Search(ctx, query)
+			if err != nil {
 				continue
 			}
-			stats.Candidates[source.Name()]++
-			existing, ok := best[key]
-			if !ok || hit.Priority < existing.Priority ||
-				(hit.Priority == existing.Priority && hit.Score > existing.Score) {
-				best[key] = hit
+			for _, hit := range hits {
+				key := e.workLineKey(ctx, tenantID, hit.WorkKey)
+				if query.excludesWorkKey(key) {
+					continue
+				}
+				candidateKey := source.Name() + "\x00" + key
+				if !seenCandidates[candidateKey] {
+					stats.Candidates[source.Name()]++
+					seenCandidates[candidateKey] = true
+				}
+				existing, ok := best[key]
+				if !ok || hit.Priority < existing.Priority || hit.Priority == existing.Priority && hit.Score > existing.Score {
+					best[key] = hit
+				}
 			}
+		}
+	}
+	collect(query)
+	if expansion != nil {
+		stats.ExpansionOverlapped = true
+		select {
+		case result := <-expansion:
+			stats.ExpansionMS = result.duration.Milliseconds()
+			stats.ExpansionStatus = result.status
+			if result.status == "expanded" {
+				stats.Expanded = true
+				query.Terms, query.RawTermCount = boundedRecallTerms(rawTerms, recallTerms(result.text), recallMaxTerms)
+				stats.Terms = len(query.Terms)
+				collect(query)
+			}
+		default:
+			stats.ExpansionMS = time.Since(expansionStarted).Milliseconds()
+			stats.ExpansionStatus = "not_ready"
+			stats.ExpansionSkipped = "foreground_complete"
 		}
 	}
 	if len(best) == 0 {
@@ -657,6 +678,11 @@ func (s *taskCardRecallSource) Search(ctx context.Context, q RecallQuery) ([]Rec
 	}
 	var hits []RecallHit
 	for _, card := range cards {
+		statusLower := strings.ToLower(strings.TrimSpace(card.Status))
+		isIncomplete := statusLower == "cancelled" || statusLower == "failed"
+		if isIncomplete && len(card.ChangedFiles) == 0 && strings.TrimSpace(card.HandoffSummary) == "" {
+			continue
+		}
 		title := strings.ToLower(card.Title)
 		body := strings.ToLower(card.Summary + "\n" + card.HandoffSummary)
 		files := strings.ToLower(strings.Join(card.ChangedFiles, "\n"))
@@ -673,6 +699,9 @@ func (s *taskCardRecallSource) Search(ctx context.Context, q RecallQuery) ([]Rec
 		}
 		if score <= 0 {
 			continue
+		}
+		if isIncomplete {
+			score *= 0.6
 		}
 		hits = append(hits, RecallHit{
 			Slice: kernel.RecallSlice{

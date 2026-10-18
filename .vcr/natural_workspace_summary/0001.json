@@ -1,0 +1,74 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " start"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " exploring"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " structure"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " find"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " directories"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " records"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 12902,
+        "output_tokens": 119,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 12902,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_ZwkYtUxX76pFVPnie3w31308",
+          "Function": "ls_r",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"recursive\": true, \"max_entries\": 300}"
+        }
+      ]
+    }
+  ]
+}

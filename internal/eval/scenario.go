@@ -196,18 +196,19 @@ type StatePredicate struct {
 	Type   string `yaml:"type,omitempty" json:"type,omitempty"`     // events
 	Status string `yaml:"status,omitempty" json:"status,omitempty"` // approval
 
-	Eq              *string `yaml:"eq,omitempty" json:"eq,omitempty"`
-	Contains        *string `yaml:"contains,omitempty" json:"contains,omitempty"`
-	NotContains     *string `yaml:"not_contains,omitempty" json:"not_contains,omitempty"`
-	Matches         *string `yaml:"matches,omitempty" json:"matches,omitempty"`
-	PayloadContains *string `yaml:"payload_contains,omitempty" json:"payload_contains,omitempty"`
-	Exists          *bool   `yaml:"exists,omitempty" json:"exists,omitempty"`
-	Empty           *bool   `yaml:"empty,omitempty" json:"empty,omitempty"`
-	LenGte          *int    `yaml:"len_gte,omitempty" json:"len_gte,omitempty"`
-	LenLte          *int    `yaml:"len_lte,omitempty" json:"len_lte,omitempty"`
-	CountGte        *int    `yaml:"count_gte,omitempty" json:"count_gte,omitempty"`
-	CountLte        *int    `yaml:"count_lte,omitempty" json:"count_lte,omitempty"`
-	MinBytes        *int    `yaml:"min_bytes,omitempty" json:"min_bytes,omitempty"`
+	Eq              *string           `yaml:"eq,omitempty" json:"eq,omitempty"`
+	Contains        *string           `yaml:"contains,omitempty" json:"contains,omitempty"`
+	NotContains     *string           `yaml:"not_contains,omitempty" json:"not_contains,omitempty"`
+	Matches         *string           `yaml:"matches,omitempty" json:"matches,omitempty"`
+	PayloadContains *string           `yaml:"payload_contains,omitempty" json:"payload_contains,omitempty"`
+	PayloadFields   map[string]string `yaml:"payload_fields,omitempty" json:"payload_fields,omitempty"`
+	Exists          *bool             `yaml:"exists,omitempty" json:"exists,omitempty"`
+	Empty           *bool             `yaml:"empty,omitempty" json:"empty,omitempty"`
+	LenGte          *int              `yaml:"len_gte,omitempty" json:"len_gte,omitempty"`
+	LenLte          *int              `yaml:"len_lte,omitempty" json:"len_lte,omitempty"`
+	CountGte        *int              `yaml:"count_gte,omitempty" json:"count_gte,omitempty"`
+	CountLte        *int              `yaml:"count_lte,omitempty" json:"count_lte,omitempty"`
+	MinBytes        *int              `yaml:"min_bytes,omitempty" json:"min_bytes,omitempty"`
 }
 
 // needsWorkspaceIsolation reports whether a case must run in a fresh temp

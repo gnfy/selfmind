@@ -110,6 +110,8 @@ func (p *heldPlanProvider) StreamChat(_ context.Context, request llm.ChatRequest
 	switch n {
 	case 2:
 		plan[0]["status"], plan[1]["status"] = "completed", "in_progress"
+		// A genuine scope/text change still holds work; mere progress now does not.
+		plan[1]["step"] = "Review the updated reported scope"
 	case 4:
 		plan[0]["status"], plan[1]["status"] = "completed", "completed"
 	}

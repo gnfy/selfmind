@@ -128,7 +128,10 @@ func TestTypedDispatchFailureMatrix(t *testing.T) {
 				t.Fatalf("success=%v result=%s", result.success, result.msg.Content)
 			}
 			if ledger.outcomeErr != nil {
-				for _, needle := range []string{"effect_state: unknown", "failure_phase: outcome_recording", "observed-effect"} {
+				if result.effectState != "unknown" || result.failurePhase != "outcome_recording" {
+					t.Fatalf("lost persistence uncertainty: %+v", result)
+				}
+				for _, needle := range []string{"Execution effects are uncertain", "Observe their state before retrying", "observed-effect"} {
 					if !strings.Contains(result.msg.Content, needle) {
 						t.Fatalf("missing %q: %s", needle, result.msg.Content)
 					}

@@ -310,6 +310,13 @@ func TestStructuredDoneSurvivesExhaustedActionBudget(t *testing.T) {
 }
 
 func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
+	for _, providerErr := range []error{errors.New("unexpected EOF"), context.DeadlineExceeded} {
+		t.Run(providerErr.Error(), func(t *testing.T) { checkErroredRunIsDurableAndResumable(t, providerErr) })
+	}
+}
+
+func checkErroredRunIsDurableAndResumable(t *testing.T, providerErr error) {
+	t.Helper()
 	ctx := context.Background()
 	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
@@ -331,7 +338,7 @@ func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 		t.Fatalf("StartRun: %v", err)
 	}
 	server := &Server{Control: store, DefaultTenantID: "default"}
-	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli", errors.New("unexpected EOF"))
+	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli", providerErr)
 	if outcome.Status != "interrupted" || outcome.CompletionReason != "provider_or_transport_error" || !outcome.Resumable ||
 		!outcome.RecoveryScheduled || outcome.Recovery != nil {
 		t.Fatalf("outcome = %#v", outcome)
@@ -446,6 +453,13 @@ func TestFinalizeErroredRunPreservesStallAttributionAcrossGatewayBoundary(t *tes
 }
 
 func TestFinalizeErroredRunPreservesDurableStructuredOutcome(t *testing.T) {
+	for _, providerErr := range []error{errors.New("unexpected EOF"), context.DeadlineExceeded} {
+		t.Run(providerErr.Error(), func(t *testing.T) { checkErroredRunPreservesDurableOutcome(t, providerErr) })
+	}
+}
+
+func checkErroredRunPreservesDurableOutcome(t *testing.T, providerErr error) {
+	t.Helper()
 	ctx := context.Background()
 	store := controltest.NewStore(t)
 	t.Cleanup(func() { _ = store.Close() })
@@ -483,7 +497,7 @@ func TestFinalizeErroredRunPreservesDurableStructuredOutcome(t *testing.T) {
 	}
 
 	server := &Server{Control: store, DefaultTenantID: "default"}
-	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli", errors.New("unexpected EOF"))
+	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli", providerErr)
 	if outcome.Status != "done" || outcome.CompletionReason != "completed" || outcome.Resumable {
 		t.Fatalf("outcome = %#v", outcome)
 	}

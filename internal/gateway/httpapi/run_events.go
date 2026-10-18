@@ -257,8 +257,19 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 	paragraphBreak := false
 	keptLen := 0
 	var summary router.EventSummary
+	var criticalRecordErr error
 	observer := streamObserverFromContext(ctx)
+	if run != nil {
+		observer = withRunStreamIdentity(observer, run.TaskID, run.ID)
+	}
 	for event := range resp.Stream {
+		if event.EventType == "run.flush" {
+			if session := completionSession(ctx); session != nil {
+				id, _ := event.Payload["barrier_id"].(string)
+				session.acknowledge(id, criticalRecordErr)
+			}
+			continue
+		}
 		if event.EventType != "" {
 			// Assistant prose emitted before a tool call is progress narration,
 			// not the final answer. Keep publishing it live, but only materialize
@@ -294,25 +305,31 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			// come from provider token deltas. Materialize that content exactly
 			// once when no final answer was streamed, so a locally completed turn
 			// cannot become a missing_final_response at the gateway boundary.
-			if event.EventType == "turn.completed" && !hasFinalContent && strings.TrimSpace(event.Content) != "" {
-				fallback := llm.StreamEvent{
-					EventType: "stream", Content: event.Content,
-					Phase: llm.AssistantPhaseFinalAnswer,
+			declaredFinal := event.Payload["declared_final_response"] == true || event.Payload["declared_final_response"] == "true"
+			if event.EventType == "turn.completed" && (!hasFinalContent || declaredFinal) && strings.TrimSpace(event.Content) != "" {
+				if !hasFinalContent || strings.TrimSpace(finalContent.String()) != strings.TrimSpace(event.Content) {
+					fallback := llm.StreamEvent{
+						EventType: "stream", Content: event.Content,
+						Phase: llm.AssistantPhaseFinalAnswer,
+					}
+					if task != nil {
+						c.srv.events().publishAssistant(task, run, channel, fallback)
+					}
+					if observer != nil {
+						observer(fallback)
+					}
+					summary.Observe(fallback)
+					c.recordStreamEvent(ctx, channel, task, run, fallback)
 				}
-				if task != nil {
-					c.srv.events().publishAssistant(task, run, channel, fallback)
-				}
-				if observer != nil {
-					observer(fallback)
-				}
-				summary.Observe(fallback)
-				c.recordStreamEvent(ctx, channel, task, run, fallback)
 				sawStream = true
 				typedAssistantPhase = true
 				currentAssistantPhase = llm.AssistantPhaseFinalAnswer
 				finalContent.Reset()
 				finalContent.WriteString(event.Content)
 				hasFinalContent = true
+				if declaredFinal {
+					answerFixed = true
+				}
 				paragraphBreak, keptLen = false, 0
 			}
 			if event.EventType == "stream" && task != nil {
@@ -322,7 +339,10 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 				observer(event)
 			}
 			summary.Observe(event)
-			c.recordStreamEvent(ctx, channel, task, run, event)
+			if err := c.recordStreamEvent(ctx, channel, task, run, event); err != nil &&
+				(event.EventType == "run.outcome" || event.EventType == "evidence.recorded") {
+				criticalRecordErr = fmt.Errorf("%w: execution evidence or structured outcome was not saved: %v", errRunResultCommit, err)
+			}
 			if event.EventType == "tool.completed" && event.ToolName == "work_select" {
 				c.refreshDirectContinuation(ctx, task, run)
 			}
@@ -360,6 +380,9 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			continue
 		}
 		if event.Err != nil {
+			if criticalRecordErr != nil {
+				continue // Drain the producer after a failed durable write.
+			}
 			return finalContent.String(), usage, summary, hasFinalContent, event.Err
 		}
 		// An untyped content event is the run's own answer from the result
@@ -389,7 +412,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			usage = *event.Usage
 		}
 	}
-	return summary.WithContent(finalContent.String()), usage, summary, hasFinalContent, nil
+	return summary.WithContent(finalContent.String()), usage, summary, hasFinalContent, criticalRecordErr
 }
 
 // refreshDirectContinuation re-reads the run after work_select. A same-domain
@@ -414,16 +437,16 @@ func (c *RunCoordinator) refreshDirectContinuation(ctx context.Context, task *co
 	c.updateActive(ctx, task, run)
 }
 
-func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {
+func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) error {
 	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
-		return
+		return nil
 	}
 	eventType := event.EventType
 	// agent.step is the per-iteration state-machine trace (P0-B): live
 	// observability only, never durable task history — persisting one row per
 	// loop iteration would bloat task_events for no recall value.
 	if eventType == "stream" || eventType == "" || eventType == "tool.heartbeat" || eventType == "tool.output" || eventType == "agent.step" {
-		return
+		return nil
 	}
 	payload := map[string]interface{}{}
 	if event.Payload != nil {
@@ -478,6 +501,11 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 			}
 		}
 	case "run.outcome":
+		if session := completionSession(ctx); session != nil {
+			if _, _, committed := session.CommittedTurn(); committed {
+				return nil
+			}
+		}
 		eventType = "run.outcome"
 	case "agent.steering":
 		// run.steered means the gateway accepted guidance. This separate durable
@@ -513,7 +541,7 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 	if run != nil {
 		runID = run.ID
 	}
-	_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
+	_, err := c.srv.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      runID,
 		Type:       eventType,
@@ -521,6 +549,7 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		Channel:    channel,
 		Payload:    mustJSON(payload),
 	})
+	return err
 }
 
 func workUnitPlanFromPayload(payload map[string]interface{}) []control.WorkUnitPlanInput {

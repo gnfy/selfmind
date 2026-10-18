@@ -291,14 +291,15 @@ func (r *Registry) prepareToolArguments(name string, args map[string]interface{}
 			return nil, toolArgumentPreparationError(fmt.Errorf("failed to normalize arguments for %s: %w", name, normalizeErr))
 		}
 	}
-	coerced, coerceErr := CoerceArgs(t.Schema(), args)
-	if coerceErr != nil {
-		return nil, toolArgumentPreparationError(fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr))
+	argumentSchema := t.Schema()
+	if compatibility, ok := t.(argumentSchemaProvider); ok {
+		argumentSchema = compatibility.argumentSchema()
 	}
-	args = coerced
-	if err := ValidateArgs(t.Schema(), args); err != nil {
+	prepared, err := checkToolArguments(argumentSchema, args, true, true)
+	if err != nil {
 		return nil, toolArgumentPreparationError(fmt.Errorf("argument validation failed for %s: %w", name, err))
 	}
+	args = prepared
 	args[preparedToolInvocationArg] = &preparedToolInvocation{
 		registry: r, name: name, tool: t, middleware: middleware,
 	}

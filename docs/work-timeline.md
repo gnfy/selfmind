@@ -219,11 +219,15 @@ tools, but the gateway owns every state transition. Optional model disposition
 must not block foreground work and cannot grant execution authority.
 For an otherwise new user-originated turn, the selector also places at most
 three same-channel-first Attention cards in `TaskRuntimeContext`. These cards
-contain bounded structured Run state, never transcripts or tool output. They
+contain bounded structured Run state, including historical changed paths and
+reported risks from that exact Run's handoff, never transcripts or tool output.
+These references neither assert current file contents nor activate old Skills. They
 make a short reply discoverable by the normal Main call even when
 `semantic_recall` deliberately skips short text; they remain hints, and Main
 must call `work_select` before observing or resuming prior work. Explicit
-`/new` and daemon-originated turns receive no such hints.
+`/new` and daemon-originated turns receive no such hints. Direct selection
+returns and publishes the accepted child Plan with its version; the model
+updates it only when the plan changes, rather than restating it after selection.
 
 ## Continuation authority
 
@@ -306,13 +310,21 @@ daemon-origin gate: task text only, a command is refused
   Work Units remain Run-local; an echoed parent Work Unit id is translated only
   when it belongs to that exact source step, while unrelated stale ids fail.
   The bounded resume context follows exact lineage for prior-step evidence as
-  historical context, each check with its age at selection. Main may
+  historical context, each check with its age at selection.
+  The resume context also shows the existing evidence projection's reuse
+  blockers. Historical pass status is not a separate availability verdict, and
+  these observation fields are kept out of the Plan input array. Main may
   explicitly adopt an unchanged successful check with a reason in
   `update_plan`; the runtime verifies its source step, criterion, scope, and
   that the exact effective checks in the source Work Unit's evidence window
   remain fresh against their declared inputs, including source-tail and child
   changes. Reuse is revalidated on each later snapshot and at completion, even
   without another Plan update; acceptance does not freeze input freshness.
+  The final verification outcome uses those same validated source checks,
+  retaining their original call ids, observation times and dispatch/network
+  facts with explicit source Run/step references. An extra ordinary read does
+  not erase adoption, and a current failure cannot be hidden by it. This
+  projection records no new execution and never adopts a historical pass itself.
   Reopening a completed obligation starts a new Work Unit; the closed unit
   keeps its frozen evidence window for historical references.
   An unrelated report write does not invalidate a check with explicit
@@ -465,6 +477,26 @@ restart cannot duplicate the choice or lose its notification intent. The CLI
 replays the question only on its source session. A preferred IM endpoint uses
 an explicit `/choose` notice without widening bare-reply authority, and delivery
 rechecks the saved choice so an answered or expired question is not sent.
+
+### Current Run Plan and closure facts
+
+Current execution state is selected independently from historical attachment.
+The selector and a committed direct `work_select` read the exact person's Run
+Plan and bounded citeable checks in one control-store read transaction. The
+historical-parent gate still limits handoffs, events and prior observations;
+it never hides an already accepted current Run Plan. A failed auxiliary facts
+read keeps the Plan and explicitly marks the preview unavailable.
+
+The resulting `(run_id, plan_version)` snapshot travels through the existing
+`TaskRuntimeContext` and `RuntimeContextBundle` path or the accepted selection
+receipt. It is discovery output, not a Plan input, a completion verdict or
+reusable authorization. Later receipts supersede it, and final acceptance
+rechecks evidence freshness and provenance. No new writable state is added.
+
+Explicit `update_plan` patches expand against the runtime-selected current
+version in the Plan's existing transaction. Omitted steps retain their identity,
+acceptance and provenance. The persisted Plan, event and continuation remain
+complete snapshots; historical full-input callers keep their original behavior. Selection receipts distinguish the selected source `run_id` from the current `execution_run_id`; neither field grants execution authority.
 
 ### Admission snapshot and continuation fidelity
 
@@ -694,10 +726,21 @@ waits carry the reference without expanding the legacy eight-Run lookup window.
 The selector freezes check age and bounded unresolved external blockers for the
 Run. `work_inspect` exposes `plan_offset` pages of 12 steps and their source
 references, so prompt omissions remain recoverable. Main explicitly adopts sufficient old proof; inheritance does not complete
-steps or release effects. Changed dependency inputs, acceptance conditions or
+steps or release effects. The one exception is the runtime's own resume edges
+(approval and clarification answers, watcher, recovery, resource and provider
+wake-ups): those carry verified progress forward, adopting a step from its source
+with a runtime-written reason only while the same validation passes. Changed dependency inputs, acceptance conditions or
 execution scope prevent adoption. Missing legacy references remain unknown.
 
-`work_search` is the complete local structured/FTS base. `work_inspect` reads
+`work_search` is the complete local structured/FTS base. Its history mode accepts
+an explicit RFC3339 `[since, until)` interval (timezones required), an optional
+workspace and keyword, and an opaque `next_cursor`. Selection uses each Run's
+recorded execution activity, including unlisted/archived work and continuation
+edges; it does not substitute a Thread's current summary. Read all pages until
+`coverage: end_of_window`; pagination freezes the insertion boundary, not later
+status updates. Status is current, summaries are recorded findings, and neither
+proves fresh external state. Reading never resumes or grants execution authority.
+ `work_inspect` reads
 one exact, person-owned Run with bounded output; its next-step notice uses the
 resumability rule `work_select` enforces, so it proposes resuming only a Run
 that selection will accept and names the resumable Run of the same work when
@@ -799,3 +842,28 @@ transport recovery does not infer or create a new identity binding. Legacy rows
 with only an explicit channel retain that channel contract and gain no account
 reply authority. A successful HTTP response with an unreadable send receipt is
 `sent_unconfirmed`, including catch-up, and cannot enter blind retry.
+
+## Compound final progress
+
+New file-observation associations use version 2: their binding target identifies
+the Plan condition, while `Observation.target` and exact dependencies retain each
+physical input. One Main judgment can therefore cite several observed files
+without turning those reads into executable proof. Version 1 associations retain
+their recorded targets; unsupported versions fail closed. Every source and its
+freshness/window are still checked individually at preview and commit.
+
+An explicit `finish_run.plan_patch` is a proposed final delta to current steps,
+not a separate Plan write. Candidate validation rolls back; the existing Run
+materialization transaction rechecks and commits Plan, condition findings,
+reply and outcome together. It returns that exact accepted snapshot, without a
+fallible post-commit Plan reload. Input/cancellation conflicts leave the last
+accepted Plan intact. Legacy outcome-only calls remain compatible.
+
+Recovery contract v4 keeps Main's independent active step when a first Plan
+contains an unproven completed verification obligation: that obligation stays
+open without moving unrelated completed/active work backwards. Historical
+contracts and conservative non-exact imports retain their behavior. All
+necessary obligations must still resolve before done. Explicit observation
+adoption is versioned evidence association, never execution or authorization;
+its original source must remain inside the step's evidence window. Rechecks
+of closed work reopen an observation cycle rather than extending old windows.

@@ -248,6 +248,16 @@ func continuesParkedWork(ctx context.Context, req api.MessageRequest) bool {
 	return false
 }
 
+// exactContinuationEdge reports that the runtime itself resumes the claimed
+// parent's work: an approval or clarification answer, or a daemon wake-up
+// (watcher result, recovery, resource, provider wait). That is the same work
+// continuing, so its Plan keeps the parent's progress. A person's turn and a
+// continuation Main selected are not, however exact their parent is: Main
+// decides there what still holds.
+func exactContinuationEdge(ctx context.Context, req api.MessageRequest, attach taskAttach) bool {
+	return attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || continuesParkedWork(ctx, req)
+}
+
 // runInputSummary is what a Run row, /status and the work list say the work
 // is: the admitted request for a daemon continuation, else the turn's words.
 func runInputSummary(ctx context.Context, req api.MessageRequest) string {

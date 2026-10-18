@@ -16,6 +16,8 @@ import (
 type JSONLEvent struct {
 	Time              string                 `json:"time"`
 	Type              string                 `json:"type"`
+	RunID             string                 `json:"run_id,omitempty"`
+	Provenance        *RunProvenance         `json:"provenance,omitempty"`
 	CaseID            string                 `json:"case_id,omitempty"`
 	TurnIndex         int                    `json:"turn_index,omitempty"`
 	Channel           string                 `json:"channel,omitempty"`
@@ -162,6 +164,7 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 			CaseID:     r.caseID,
 			Tool:       event.ToolName,
 			ToolCallID: event.ToolCallID,
+			RunID:      event.RunID,
 			Message:    preview(tools.RedactSensitive(event.ToolArgs), 300),
 		})
 	case "tool.completed":
@@ -171,6 +174,7 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 			CaseID:     r.caseID,
 			Tool:       event.ToolName,
 			ToolCallID: event.ToolCallID,
+			RunID:      event.RunID,
 			OK:         &ok,
 			DurationMS: int64(event.DurationSeconds * 1000),
 			Message:    preview(tools.RedactSensitive(event.ToolResult), 500),
@@ -208,6 +212,7 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 				CaseID:     r.caseID,
 				Tool:       event.ToolName,
 				ToolCallID: event.ToolCallID,
+				RunID:      event.RunID,
 				Message:    preview(tools.RedactSensitive(event.Content), 500),
 				Metadata:   event.Payload,
 			})

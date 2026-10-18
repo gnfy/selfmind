@@ -223,34 +223,17 @@ func TestUpdatePlanContractAsksForCompactUnchangedSteps(t *testing.T) {
 			t.Errorf("%s does not say what an unchanged step may leave out: %s", name, text)
 		}
 	}
-	if !strings.Contains(tool.Description(), "a step that has not changed needs only its step_id and status") ||
-		!strings.Contains(tool.Description(), "returns the full plan") {
-		t.Errorf("tool description lost the compact-update contract: %s", tool.Description())
-	}
-	// The compact form needs ids a result issued, which a first plan cannot
-	// have: asking for it unconditionally made models send id-only entries
-	// where no step is stored (3 of the 4 first plans after it was introduced
-	// were refused for lacking step text, against 2 of 201 before).
-	for name, want := range map[string]struct{ text, phrase string }{
-		"tool description (first plan has no ids)":    {tool.Description(), "The first plan of a run has no step ids: give every step its text and leave step_id out"},
-		"tool description (compact needs issued ids)": {tool.Description(), "Once a result has issued ids"},
-		"tool description (nothing to cancel)":        {tool.Description(), "A first plan has nothing to cancel"},
-		"plan (text needed in the first plan)":        {schema["plan"].Description, "in the first plan every step needs its text"},
-		"step_id (leave it out in a first plan)":      {item["step_id"].Description, "The first plan has none: leave it out"},
-		"step (required in the first plan)":           {item["step"].Description, "Required for every step of the first plan"},
-	} {
-		if !strings.Contains(want.text, want.phrase) {
-			t.Errorf("%s lacks %q: %s", name, want.phrase, want.text)
+	for _, want := range []string{"mode=patch", "omitted steps stay unchanged", "full accepted Plan", "compatible default"} {
+		if !strings.Contains(tool.Description(), want) {
+			t.Errorf("Plan input contract lacks %q", want)
 		}
 	}
-	if strings.Contains(tool.Description(), "An unchanged step needs only its step_id and status") {
-		t.Errorf("the compact form must stay conditional on issued ids: %s", tool.Description())
+	mode := schema["mode"]
+	if strings.Join(mode.Enum, ",") != "snapshot,patch" {
+		t.Errorf("missing explicit snapshot/patch choice: %+v", mode)
 	}
-	// The snapshot is still complete: list every step, nothing is a patch.
-	for _, want := range []string{"List every step", "not a partial patch"} {
-		if !strings.Contains(tool.Description()+schema["plan"].Description, want) {
-			t.Errorf("complete-snapshot contract lost %q", want)
-		}
+	if !strings.Contains(item["step_id"].Description, "The first plan has none") || !strings.Contains(item["step"].Description, "Required for every step of the first plan") {
+		t.Fatal("first-plan identity/text guidance lost")
 	}
 	// What the wording promises must be what the runtime does without a Run
 	// store: an entry carrying only an id is still refused there, because

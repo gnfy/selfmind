@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -397,6 +398,10 @@ func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, run
 	personID = strings.TrimSpace(personID)
 	runID = strings.TrimSpace(runID)
 	steeringID = strings.TrimSpace(steeringID)
+	steeringID = strings.TrimPrefix(steeringID, "steering:")
+	if strings.HasPrefix(steeringID, "run_input:") {
+		return nil, fmt.Errorf("input %q is this run's active initial prompt, not a queued live steering message; handle it in this run without calling queue_user_input", steeringID)
+	}
 	if personID == "" || runID == "" || steeringID == "" {
 		return nil, fmt.Errorf("person id, run id, and input id are required")
 	}
@@ -407,6 +412,9 @@ func (s *Store) queueSteeringAsWork(ctx context.Context, tenantID, personID, run
 		FROM steering_mailbox WHERE tenant_id = ? AND id = ?`, tenantID, steeringID)
 	m, err := scanSteering(row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("live input %q not found in steering mailbox; queue_user_input only accepts [SelfMind live user input] id values from this run", steeringID)
+		}
 		return nil, fmt.Errorf("load live input: %w", err)
 	}
 	if m.PersonID != personID || m.RunID != runID {

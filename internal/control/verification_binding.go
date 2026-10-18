@@ -49,6 +49,14 @@ func (s *Store) ValidateVerificationReplacement(ctx context.Context, tenant, run
 			}
 		}
 		if unit == nil {
+			for i := len(units) - 1; i >= 0; i-- {
+				if units[i].Status == WorkUnitCompleted && evidenceCursor > units[i].StartedCursor {
+					unit = &units[i]
+					break
+				}
+			}
+		}
+		if unit == nil {
 			return fmt.Errorf("keep the work unit open before replacing historical verification")
 		}
 		if evidenceCursor <= unit.StartedCursor {

@@ -27,7 +27,8 @@ func EvidenceMiddleware() ResultMiddleware {
 	return func(next ResultExecutor) ResultExecutor {
 		return func(args map[string]interface{}) (kernel.ToolDispatchResult, error) {
 			toolName, _ := args["_tool_name"].(string)
-			if toolName != "write_file" && toolName != "patch" && toolName != "terminal" && toolName != "verify" {
+			static := toolName == "read_file" || toolName == "search_files"
+			if !static && toolName != "write_file" && toolName != "patch" && toolName != "terminal" && toolName != "verify" {
 				return next(args)
 			}
 			var binding *verification.Binding
@@ -35,10 +36,24 @@ func EvidenceMiddleware() ResultMiddleware {
 				var err error
 				binding, err = prepareVerificationBinding(args)
 				if err != nil {
-					return kernel.ToolDispatchResult{Invoked: new(bool)}, newStableToolError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use replaces and reason to inherit an eligible recorded obligation. Preserve its working directory. The runtime supplies omitted criterion, target and dependencies; historical unbound checks cannot acquire replacement authority.")
+					return kernel.ToolDispatchResult{Invoked: new(bool)}, newStableToolRecoveryError(err, "verification_reference_invalid", "stale_precondition", err.Error(), "Use step_id for a Plan check, or replaces and reason for a corrected attempt; omitted condition fields are inherited from that reference.", "preparation", "corrected_input", "not_dispatched", false)
 				}
 			}
 
+			var observation *verification.Observation
+			if static {
+				target := stringArg(args, "path")
+				observation = &verification.Observation{Kind: "file", Target: target, Offset: intArg(args, "offset", 1), Limit: intArg(args, "limit", 0)}
+				if toolName == "read_file" {
+					dependencies := []string{target}
+					identity := verification.Binding{LocalDependencies: &dependencies}
+					if err := resolveVerificationDependencies(args, &identity); err == nil {
+						observation.LocalDependencies = identity.LocalDependencies
+						observation.ResolvedLocalDependencies = identity.ResolvedLocalDependencies
+						observation.UnresolvedLocalDependencies = identity.UnresolvedLocalDependencies
+					}
+				}
+			}
 			started := time.Now()
 			files := evidenceSnapshots(toolName, args)
 			for i := range files {
@@ -49,6 +64,7 @@ func EvidenceMiddleware() ResultMiddleware {
 			result, err := next(args)
 			finished := time.Now()
 			evidence := kernel.RunEvidence{
+				Version:    1,
 				ToolCallID: stringArg(args, "_tool_call_id"),
 				ToolName:   toolName,
 				Kind:       evidenceKind(toolName),
@@ -57,6 +73,10 @@ func EvidenceMiddleware() ResultMiddleware {
 				FinishedAt: finished.UnixNano(),
 				Invoked:    result.Invoked,
 				Process:    result.Process,
+			}
+			if static {
+				evidence.Kind = "observation"
+				evidence.Observation = observation
 			}
 			var effect interface{ ToolEffectState() string }
 			if errors.As(err, &effect) {
@@ -105,10 +125,10 @@ func EvidenceMiddleware() ResultMiddleware {
 			if evidence.Command != nil && evidence.Command.Binding != nil {
 				result.Output += "\nVerification evidence: " + evidence.ToolCallID
 				if err != nil && strings.TrimSpace(binding.StepID) != "" {
-					result.Output += "\nThis verification_required obligation remains open. Keep exactly its existing plan step in_progress, keep diagnostic and report steps pending, and correct this same check with replaces. Cancel any separate retry step for this same check."
+					result.Output += "\nThis attempt did not prove the condition for step " + binding.StepID + "."
 				}
 				if err == nil && strings.TrimSpace(binding.Replaces) != "" && strings.TrimSpace(binding.StepID) != "" {
-					result.Output += "\nThis replacement remains bound to the original verification obligation. Before completing the plan, keep the original obligation and cancel any separate step created only for this retry; verify another verification_required step only when it represents a distinct condition."
+					result.Output += "\nThis check replaces " + binding.Replaces + " for step " + binding.StepID + "; its acceptance condition is unchanged."
 				}
 				if len(binding.UnresolvedLocalDependencies) > 0 {
 					result.Output += "\nDependency identity unresolved: " + strings.Join(binding.UnresolvedLocalDependencies, ", ") + ". Relative paths use tool cwd, not shell-internal cd. This check conservatively depends on all local changes; inspect and correct the declared inputs before relying on independence."

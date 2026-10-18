@@ -3,6 +3,7 @@ package tools
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // A call refused at the execution boundary before any process launches did
@@ -61,5 +62,15 @@ func TestRefusedStartReleasesItsExternalEffectClaim(t *testing.T) {
 	}
 	if left := f.unresolved(); len(left) != 1 {
 		t.Fatalf("a started background command holds its claim: %+v", left)
+	}
+	// This positive control owns a real background process. Wait for its exit
+	// observer before closing the store and deleting its workspace; returning
+	// while it still runs races TempDir cleanup and loses the observer's write.
+	deadline := time.Now().Add(30 * time.Second)
+	for len(f.unresolved()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("test process exit was not observed before cleanup")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -60,6 +60,26 @@ documents:
     owner: maintainers
     state: current
     language: en
+  - path: docs/agents/runtime-closure-execution.md
+    title: Runtime Closure Repair Execution Guide
+    class: guide
+    owner: agent-runtime
+    state: current
+    language: en
+  - path: docs/agents/runtime-closure-execution.zh-CN.md
+    title: 任务闭环修复执行指南
+    class: guide
+    owner: agent-runtime
+    state: current
+    language: zh-CN
+    translation_of: docs/agents/runtime-closure-execution.md
+    source_hash: b26dd6a3387426cd
+  - path: docs/agents/runtime-closure-checks.md
+    title: Runtime Closure Portable Checks and Evidence
+    class: reference
+    owner: agent-runtime
+    state: current
+    language: en
   - path: docs/architecture-constraints.md
     title: Architecture Constraints
     class: contract
@@ -87,7 +107,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: 9e20c299e7ffd910
+    source_hash: 840a2812d44c9168
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -101,7 +121,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: f3c35954ee0bb61b
+    source_hash: c9e0166828175216
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide

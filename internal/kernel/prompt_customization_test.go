@@ -245,7 +245,7 @@ func TestUpdatePlanGuidanceMatchesWorkUnitBoundary(t *testing.T) {
 		return map[string]interface{}{"name": name, "description": name, "parameters": map[string]interface{}{"type": "object"}}
 	}
 	prompt := buildToolUsePrompt([]map[string]interface{}{def("read_file"), def("update_plan")}, true, DefaultTaskStrategy(), PromptProfileForeground)
-	if !strings.Contains(prompt, "Put update_plan first") || !strings.Contains(prompt, "changed or unproven work boundary holds later actions") {
+	if !strings.Contains(prompt, "Later leading update_plan calls") || !strings.Contains(prompt, "Changed scope, reopened or cancelled work") || !strings.Contains(prompt, "a second Plan update or pending user input holds later actions") {
 		t.Fatalf("update_plan prompt does not explain the enforced boundary:\n%s", prompt)
 	}
 }

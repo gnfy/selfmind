@@ -45,15 +45,19 @@ func admitToolCalls(requested []llm.ToolCall, strategy TaskStrategy, used int, c
 			continue
 		}
 		code := "tool_budget_exhausted"
+		finalAnswerOnly := strategy.AllowedTools != nil && len(strategy.AllowedTools) == 0
 		if !strategy.AllowsTool(call.Function) {
 			atBudgetBoundary := used >= strategy.MaxActionTools ||
 				(strategy.CompletionReserve > 0 && used >= strategy.ActionToolBudgetLimit-strategy.CompletionReserve)
-			if !atBudgetBoundary || (strategy.AllowedTools != nil && len(strategy.AllowedTools) == 0) {
+			if !atBudgetBoundary || finalAnswerOnly {
 				code = "tool_not_available"
 				budget--
 			}
-		} else if cap := lifecycleToolCap(call.Function); cap > 0 && counts[call.Function] >= cap {
-			code = "tool_attempt_limit"
+		}
+		if !finalAnswerOnly {
+			if cap := lifecycleToolCap(call.Function); cap > 0 && counts[call.Function] >= cap {
+				code = "tool_attempt_limit"
+			}
 		}
 		refused = append(refused, refusedToolCall{call: call, err: toolAdmissionError{code: code}})
 	}

@@ -28,11 +28,15 @@ type receiptScriptedProvider struct {
 	submittedFinalProvider
 	mu       sync.Mutex
 	script   func(n int32, receipt []map[string]interface{}) []llm.ToolCall
+	observe  func(llm.ChatRequest)
 	received []string // update_plan results, as shown to the model before call n+2
 	sent     []string // update_plan arguments, in call order
 }
 
 func (p *receiptScriptedProvider) StreamChat(_ context.Context, request llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	if p.observe != nil {
+		p.observe(request)
+	}
 	n := p.calls.Add(1)
 	var receipt []map[string]interface{}
 	for i := len(request.Messages) - 1; i >= 0; i-- {
@@ -90,8 +94,11 @@ type planFlowDaemon struct {
 func newPlanFlowDaemon(t *testing.T, provider llm.Provider) planFlowDaemon {
 	t.Helper()
 	store := controltest.NewStore(t)
-	dispatcher := tools.NewDispatcherWithRegistry(tools.NewRegistry())
+	registry := tools.NewRegistry()
+	registry.UseResultMiddleware(tools.EvidenceMiddleware())
+	dispatcher := tools.NewDispatcherWithRegistry(registry)
 	dispatcher.RegisterTool(tools.NewReadFileTool())
+	dispatcher.RegisterTool(tools.NewBatchReadTool(dispatcher.Dispatch, dispatcher.ToolExecutionMetadata))
 	dispatcher.RegisterTool(tools.NewUpdatePlanTool())
 	dispatcher.RegisterTool(tools.NewFinishRunTool())
 	dispatcher.InjectMiddleware(tools.WorkspaceScopeMiddleware())
@@ -185,8 +192,14 @@ func TestCompactPlanInputKeepsTheCompleteReceiptAndBoundaryOfARealRun(t *testing
 	}
 	for i, content := range provider.received {
 		var receipt struct {
-			Plan      []map[string]interface{} `json:"plan"`
-			WorkUnits []map[string]interface{} `json:"work_units"`
+			Plan         []map[string]interface{} `json:"plan"`
+			WorkUnits    []map[string]interface{} `json:"work_units"`
+			PlanVersion  int                      `json:"plan_version"`
+			ClosureFacts *struct {
+				Available   bool     `json:"available"`
+				PlanVersion int      `json:"plan_version"`
+				OpenStepIDs []string `json:"open_step_ids"`
+			} `json:"closure_facts"`
 		}
 		if err := json.Unmarshal([]byte(content), &receipt); err != nil || len(receipt.Plan) != 2 {
 			t.Fatalf("receipt %d is not a complete plan: %v\n%s", i, err, content)
@@ -200,6 +213,18 @@ func TestCompactPlanInputKeepsTheCompleteReceiptAndBoundaryOfARealRun(t *testing
 		}
 		if len(receipt.WorkUnits) == 0 {
 			t.Fatalf("receipt %d lost its work-unit goal: %s", i, content)
+		}
+		if receipt.ClosureFacts == nil || !receipt.ClosureFacts.Available || receipt.ClosureFacts.PlanVersion != receipt.PlanVersion {
+			t.Fatalf("model did not receive current closure facts: %s", content)
+		}
+		var open []string
+		for _, step := range receipt.Plan {
+			if step["status"] == "pending" || step["status"] == "in_progress" {
+				open = append(open, step["step_id"].(string))
+			}
+		}
+		if strings.Join(open, ",") != strings.Join(receipt.ClosureFacts.OpenStepIDs, ",") {
+			t.Fatalf("closure facts disagree with accepted Plan: %s", content)
 		}
 	}
 	plan, err := flow.store.LatestRunPlan(context.Background(), flow.owner.TenantID, response.Run.ID)
@@ -340,13 +365,14 @@ func TestFirstPlanWithoutStepTextIsRefusedWithItsRepairInARealRun(t *testing.T) 
 	for _, want := range []string{
 		"plan[0].step is required: this run has no plan yet",
 		"ids are ignored in a first plan",
-		"error_code: plan_step_text_required",
-		"error_class: invalid_input",
 		"Send the complete plan again: every step with its text, and without step_id.",
 	} {
 		if !strings.Contains(provider.received[0], want) {
 			t.Errorf("the refusal the model saw lacks %q:\n%s", want, provider.received[0])
 		}
+	}
+	if strings.Contains(provider.received[0], "error_code:") || strings.Contains(provider.received[0], "error_class:") {
+		t.Errorf("model refusal leaked the internal recovery protocol: %s", provider.received[0])
 	}
 	events, err := flow.store.ListTaskEvents(context.Background(), response.Task.ID, 300)
 	if err != nil {

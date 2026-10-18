@@ -1,0 +1,122 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "All"
+    },
+    {
+      "reasoning_content": " three steps completed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " finish_run with status"
+    },
+    {
+      "reasoning_content": " done, assessments citing"
+    },
+    {
+      "reasoning_content": " evidence ref toolcall"
+    },
+    {
+      "reasoning_content": "-6"
+    },
+    {
+      "reasoning_content": "-0 for step"
+    },
+    {
+      "reasoning_content": " 3."
+    },
+    {
+      "reasoning_content": "\n\nNote: evidence"
+    },
+    {
+      "reasoning_content": "_refs \"never combine"
+    },
+    {
+      "reasoning_content": " selectors"
+    },
+    {
+      "reasoning_content": "\" — for step"
+    },
+    {
+      "reasoning_content": " 3 use"
+    },
+    {
+      "reasoning_content": " step_id. Provide"
+    },
+    {
+      "reasoning_content": " assessment for step "
+    },
+    {
+      "reasoning_content": "3 with"
+    },
+    {
+      "reasoning_content": " step_id and reason"
+    },
+    {
+      "reasoning_content": ". Maybe also assessments"
+    },
+    {
+      "reasoning_content": " for steps 1"
+    },
+    {
+      "reasoning_content": " and "
+    },
+    {
+      "reasoning_content": "2? They didn"
+    },
+    {
+      "reasoning_content": "'t require verification."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll include just the"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " step assessment (met"
+    },
+    {
+      "reasoning_content": ") with step_id"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": "\n\nfinal_response:"
+    },
+    {
+      "reasoning_content": " complete reply.\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 18239,
+        "output_tokens": 725,
+        "cache_read_input_tokens": 17408,
+        "cache_miss_input_tokens": 831,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 96,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "finish_run",
+          "Args": "{\"assessments\": \n[{\"reason\": \"verify evidence toolcall-6-0 ran in workspace_root: wc -c reported 13 bytes, od -c showed only the characters P L A N - C O M P L E T E with no newline or extra bytes, and the exit-gating comparisons bytes=13 and content=PLAN-COMPLETE both held, so the check completed with the EXACT MATCH message.\", \"result\": \"met\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_3}}\"}]\n\n, \"done\": \n[\"Inspected workspace_root (empty; plan-progress.txt absent)\", \"Wrote plan-progress.txt with exactly PLAN-COMPLETE\", \"Verified exact file contents with the verify tool\"]\n\n, \"files\": \n[\"{{SELFMIND_VCR_WORKSPACE}}/plan-progress.txt\"]\n\n, \"final_response\": \"Done — `plan-progress.txt` now contains exactly `PLAN-COMPLETE`.\\n\\nThree-step plan, all completed with an update after each transition:\\n\\n- **Inspect** — `ls_r` on `workspace_root` returned 0 entries, so the file did not previously exist and nothing was overwritten.\\n- **Write** — created `{{SELFMIND_VCR_WORKSPACE}}/plan-progress.txt` with the literal string `PLAN-COMPLETE`.\\n- **Verify** — a `verify` check bound to that step (evidence `toolcall-6-0`) reported `bytes=13`, `content=PLAN-COMPLETE`, and `od -c` showed only the 13 characters `P L A N - C O M P L E T E`. The check gated on both `bytes = 13` and `content = PLAN-COMPLETE`, so the file matches exactly with no trailing newline or extra characters.\\n\\nOne interpretation note: I read \\\"exactly PLAN-COMPLETE\\\" byte-literally and wrote no trailing newline. If your checker expects a newline-terminated text file (14 bytes), say the word and I'll rewrite it that way.\", \"status\": \"done\", \"summary\": \"plan-progress.txt written with exactly PLAN-COMPLETE (13 bytes) and verified; all three plan steps completed.\", \"tests\": \n[\"verify {{SELFMIND_VCR_PLAN_STEP_3}}: wc -c = 13, cat content = PLAN-COMPLETE, od -c byte dump — exit 0, evidence toolcall-6-0\"]\n\n}"
+        }
+      ]
+    }
+  ]
+}

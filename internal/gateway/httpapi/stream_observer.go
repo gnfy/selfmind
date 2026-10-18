@@ -33,3 +33,20 @@ func StreamObserverFromContext(ctx context.Context) StreamObserver {
 	observer, _ := ctx.Value(streamObserverKey{}).(StreamObserver)
 	return observer
 }
+
+// The coordinator owns these identities; raw kernel events need not contain
+// them. Observers receive the same ownership as the durable event projection.
+func withRunStreamIdentity(observer StreamObserver, taskID, runID string) StreamObserver {
+	if observer == nil {
+		return nil
+	}
+	return func(event llm.StreamEvent) {
+		if runID != "" {
+			event.RunID = runID
+		}
+		if taskID != "" {
+			event.TaskID = taskID
+		}
+		observer(event)
+	}
+}

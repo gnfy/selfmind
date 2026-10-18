@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -63,6 +65,12 @@ func inheritedSourceChecksTx(ctx context.Context, tx *sql.Tx, item InheritedPlan
 
 func inheritedEvidenceChangesTx(ctx context.Context, tx *sql.Tx, runID string, item *InheritedPlanEvidence) error {
 	if item.CheckID == "" || item.ReuseBlockedReason != "" {
+		return nil
+	}
+	if blocker, err := sourceConditionBlockTx(ctx, tx, item.SourceRunID, item.SourceStepID, item.SourceCriterion); err != nil {
+		return err
+	} else if blocker != "" {
+		item.ReuseBlockedReason = blocker
 		return nil
 	}
 	var sameScope bool
@@ -140,6 +148,20 @@ func verificationInputsChangedTx(ctx context.Context, tx *sql.Tx, runID string, 
 	}
 	if err := rows.Err(); err != nil {
 		return false, err
+	}
+	if check.Binding != nil && check.Binding.Version == 3 && check.Binding.LocalDependencies == nil &&
+		check.CWD != "" && filepath.IsAbs(check.CWD) &&
+		check.Binding.Target != "" && check.Binding.Target != check.Binding.StepID &&
+		!strings.ContainsAny(check.Binding.Target, " \t\n\r") &&
+		strings.Contains(check.Binding.Target, "/") {
+		dep := check.Binding.Target
+		if !filepath.IsAbs(dep) {
+			dep = filepath.Join(check.CWD, dep)
+		}
+		deps := []string{filepath.Clean(dep)}
+		binding := *check.Binding
+		binding.LocalDependencies = &deps
+		check.Binding = &binding
 	}
 	return verification.RelevantMutationAt(check, mutations) > check.StartedAt, nil
 }

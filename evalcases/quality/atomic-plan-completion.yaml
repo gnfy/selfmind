@@ -1,0 +1,61 @@
+id: atomic_plan_completion
+title: "Final progress, observed evidence and answer are one durable submission"
+suite: quality
+workspace: isolated
+channel: cli
+require_cassette: true
+setup:
+  files:
+    source.txt: "READY\n"
+turns:
+  - input: >-
+      Inspect source.txt and report whether it contains READY. This is an
+      investigation, not remediation. Maintain a visible two-step Plan:
+      inspect the file (criterion: determine the file contents; no executable
+      verification required), then report the finding (no executable verification
+      required). Read the file once. After seeing the result, submit finish_run
+      with status done, final_response, the final changed steps in plan_patch,
+      and an assessment explicitly associating the read's Observation reference
+      with the inspection step via step_id and evidence_refs. Preserve the
+      original criteria. Do not run verify or repeat the read.
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  max_tool_errors: 0
+  max_tool_calls: 3
+  contains:
+    - "READY"
+assert_state:
+  - on: events
+    type: provider.call.usage
+    count_lte: 3
+  - on: events
+    type: tool.started
+    payload_contains: '"tool":"read_file"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: tool.started
+    payload_contains: '"tool":"update_plan"'
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: tool.started
+    payload_fields:
+      tool: finish_run
+    payload_contains: plan_patch
+    count_gte: 1
+    count_lte: 1
+  - on: events
+    type: evidence.adopted
+    count_gte: 1
+  - on: events
+    type: run.finished
+    payload_contains: accepted_plan
+    count_gte: 1
+    count_lte: 1
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_mojibake: true

@@ -472,19 +472,21 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if parent != nil && attach.claimsPriorRuns() && (isUserOriginTurn(ctx, req) || attach.reason == taskAttachApprovalResume || attach.reason == taskAttachClarifyResume || runOrigin(ctx, req) == runOriginRecovery || runOrigin(ctx, req) == runOriginWatch || runOrigin(ctx, req) == runOriginResource || runOrigin(ctx, req) == runOriginProviderWait) {
 		claimParentID = parent.ID
 	}
+	exactContinuation := claimParentID != "" && exactContinuationEdge(ctx, req, attach)
 	viewReady := c.maybeAssignIsolatedGitView(ctx, identity, task, &req, parent != nil)
 	var run *control.Run
 	if viewReady {
 		c.setActiveExecutionRoots(ctx, req.ExecutionRoots)
 		run, err = d.Control.StartRunWithOptions(ctx, task, req.Channel, runInputSummary(ctx, req), control.StartRunOptions{
-			WorkKey:          attach.workKey,
-			ExecutionRoots:   req.ExecutionRoots,
-			ResumesRunID:     claimParentID,
-			QueueID:          req.QueueID,
-			QueueClaimToken:  req.QueueClaimToken,
-			MaxActiveRuns:    c.activeCapacity(),
-			ExclusiveChannel: req.Platform == "cli",
-			Admission:        req.Admission,
+			WorkKey:           attach.workKey,
+			ExecutionRoots:    req.ExecutionRoots,
+			ResumesRunID:      claimParentID,
+			ExactContinuation: exactContinuation,
+			QueueID:           req.QueueID,
+			QueueClaimToken:   req.QueueClaimToken,
+			MaxActiveRuns:     c.activeCapacity(),
+			ExclusiveChannel:  req.Platform == "cli",
+			Admission:         req.Admission,
 		})
 	} else {
 		// Reuse the admission fallback below: a fresh input is durably
@@ -827,6 +829,10 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	strategy.ExecSandboxNote = tools.ExecSandboxPromptNoteForContext(ctx)
 	ctx = kernel.WithTaskStrategy(ctx, strategy)
+	completion := &runCompletionSession{coordinator: c, identity: identity, task: task, run: run, req: req, replay: replay, waiters: make(map[string]chan error)}
+	ctx = context.WithValue(ctx, runCompletionSessionKey{}, completion)
+	ctx = tools.WithRunCompletionSink(ctx, completion)
+	ctx = kernel.WithCommittedTurnReader(ctx, completion)
 	// The work spine records what the person asked for. A daemon continuation
 	// runs on scheduling text, so it carries the admitted request instead, and
 	// scheduled work keeps its source tag however it reached a worker.
@@ -870,6 +876,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 
 	content, usage, eventSummary, hasFinalContent, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
+	if committed := completion.response(usage); committed != nil {
+		return *committed, http.StatusOK
+	}
 	if err != nil {
 		var providerWait *llm.ProviderWait
 		if errors.As(err, &providerWait) && ctx.Err() == nil {

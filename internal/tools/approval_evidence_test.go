@@ -21,19 +21,28 @@ func TestTriageUsesAttributedHumanEvidenceOnSystemResume(t *testing.T) {
 func TestTriageDecisionRechecksChangedHumanEvidence(t *testing.T) {
 	withExecSandboxPolicy(t, true, true, false)
 	judge := &fakeJudge{reply: "APPROVE"}
-	reads := 0
+	corrected := false
 	scope := ExecutionScope{TenantID: "tenant-a", PersonID: "person-a", TaskID: "task-1", RunID: "run-1", ApprovalMode: ApprovalSmart, Judge: judge,
 		IntentSnapshot: func() RunIntentSnapshot {
-			reads++
-			if reads == 1 {
+			if !corrected {
 				return RunIntentSnapshot{RawUserText: "Make the script executable", Source: "direct"}
 			}
 			return RunIntentSnapshot{RawUserText: "Make the script executable", Source: "direct", AddedRequirements: []string{"Limit the remaining work to inspection"}, AddedRequirementIDs: []string{"correction-1"}}
 		},
 	}
-	for _, err := range runSmartInOneRun(t, scope, "person-a", "chmod +x run.sh", "chmod +x run.sh", "chmod +x run.sh") {
+	defer SetExecutionScope("person-a", scope)()
+	for i := 0; i < 3; i++ {
+		// A new person input arrives between calls, not because a consumer reads
+		// the snapshot again to fence a pending review.
+		corrected = i > 0
+		ran := false
+		exec := SmartApprovalMiddleware("")(func(map[string]interface{}) (string, error) { ran = true; return "ok", nil })
+		_, err := exec(map[string]interface{}{"_tenant_id": "person-a", "_tool_name": "terminal", "command": "chmod +x run.sh"})
 		if err != nil {
 			t.Fatal(err)
+		}
+		if !ran {
+			t.Fatal("approved action did not run")
 		}
 	}
 	if judge.calls != 2 {

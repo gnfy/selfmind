@@ -29,11 +29,11 @@ const legacyVerificationStepIDArg = "_legacy_verification_step_id"
 
 func verificationBindingProperties() map[string]PropertyDef {
 	return map[string]PropertyDef{
-		"step_id":            {Type: "string", Description: "Server-issued current Plan step this check proves, including a pending step. Select it explicitly when declaring a criterion or target; omission keeps such a check standalone and cannot complete a Plan step."},
-		"criterion":          {Type: "string", Description: "Observable condition being verified; preserve it across retries."},
-		"target":             {Type: "string", Description: "Exact artifact or operation this condition concerns."},
-		"replaces":           {Type: "string", Description: "Previous verification evidence id in this Run, only when correcting or retrying that check. Checks without declared local_dependencies retain their original open-work-unit boundary."},
-		"reason":             {Type: "string", Description: "Why the new attempt addresses the old failure without changing the acceptance condition."},
+		"step_id":            {Type: "string", Description: "Server-issued Plan step to check, including a pending step. Its stored acceptance condition is inherited; no Plan transition is needed first."},
+		"criterion":          {Type: "string", Description: "Condition for a standalone check (also supply target). Omit when step_id or replaces already identifies the condition. A replacement must preserve the recorded condition exactly."},
+		"target":             {Type: "string", Description: "Exact artifact or operation for a standalone check. Omit to inherit from step_id or replaces. With criterion but no step_id, the check is standalone and cannot complete a Plan step."},
+		"replaces":           {Type: "string", Description: "Evidence id of the check being corrected in this Run. Supply reason and keep cwd; omit criterion, target and step_id to inherit them."},
+		"reason":             {Type: "string", Description: "Required with replaces: why this method checks the same unchanged condition."},
 		"local_dependencies": {Type: "array", Items: &PropertyDef{Type: "string"}, Description: "Local files or directories read by this observation method whose changes can invalidate its result, including source, configuration and check scripts. Relative to cwd. Use [] only for a direct external observation independent of local files. Omission conservatively depends on all local changes; on replacement, omission inherits the prior declaration while an explicit value describes the corrected method. Declaring inputs does not prove the criterion or grant permission."},
 	}
 }
@@ -124,8 +124,14 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 	} else if !explicit {
 		return nil, nil
 	}
+	if b.Criterion == "" {
+		return nil, fmt.Errorf("criterion is required for a standalone check; use step_id or replaces to inherit a recorded condition")
+	}
+	if b.Target == "" {
+		return nil, fmt.Errorf("target is required for a standalone check; use step_id or replaces to inherit a recorded condition")
+	}
 	if !verification.ValidBinding(&b) || len(b.Criterion) > 2000 || len(b.Target) > 1000 || len(b.Reason) > 2000 || len(b.Replaces) > 256 {
-		return nil, fmt.Errorf("verification check needs a bounded nonempty criterion and target")
+		return nil, fmt.Errorf("verification fields exceed limits or have an invalid binding: criterion <= 2000, target <= 1000, reason <= 2000, replaces <= 256 bytes")
 	}
 	if b.Replaces != "" {
 		if b.Reason == "" {

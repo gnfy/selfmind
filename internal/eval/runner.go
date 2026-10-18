@@ -36,17 +36,21 @@ type RunOptions struct {
 }
 
 type RunResult struct {
-	CaseID          string        `json:"case_id"`
-	Status          string        `json:"status"`
-	OutputPath      string        `json:"output_path"`
-	Duration        time.Duration `json:"duration"`
-	ToolCalls       int           `json:"tool_calls"`
-	ActionToolCalls int           `json:"action_tool_calls"`
-	ProgressUpdates int           `json:"progress_updates"`
-	ToolErrors      int           `json:"tool_errors"`
-	InputTokens     int           `json:"input_tokens"`
-	OutputTokens    int           `json:"output_tokens"`
-	Checks          []CheckResult `json:"checks"`
+	CaseID          string         `json:"case_id"`
+	Status          string         `json:"status"`
+	OutputPath      string         `json:"output_path"`
+	Duration        time.Duration  `json:"duration"`
+	ToolCalls       int            `json:"tool_calls"`
+	ActionToolCalls int            `json:"action_tool_calls"`
+	ProgressUpdates int            `json:"progress_updates"`
+	ToolErrors      int            `json:"tool_errors"`
+	InputTokens     int            `json:"input_tokens"`
+	OutputTokens    int            `json:"output_tokens"`
+	Checks          []CheckResult  `json:"checks"`
+	Error           string         `json:"error,omitempty"`
+	Provenance      *RunProvenance `json:"provenance,omitempty"`
+	Efficiency      *Efficiency    `json:"efficiency,omitempty"`
+	Samples         []RunResult    `json:"samples,omitempty"`
 }
 
 type runtimeHarness struct {
@@ -86,6 +90,9 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 	if c == nil {
 		return nil, fmt.Errorf("case is nil")
 	}
+	if c.CaptureReviewRequired {
+		return nil, fmt.Errorf("captured draft requires an isolated fixture and reviewed assertions; clear capture_review_required only after review")
+	}
 	repeat := c.Repeat
 	if repeat < 1 {
 		repeat = 1
@@ -93,47 +100,34 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 	if repeat == 1 {
 		return runSingle(ctx, c, opts, 0, 1)
 	}
-	// Sampled run for non-deterministic real-model scenarios: pass when the
-	// fraction of passing samples meets PassRate (default: all must pass).
-	passRate := c.PassRate
-	if passRate <= 0 {
-		passRate = 1.0
-	}
-	var last *RunResult
+	var samples []RunResult
 	var firstErr error
-	passed := 0
 	for s := 0; s < repeat; s++ {
+		started := time.Now()
 		r, err := runSingle(ctx, c, opts, s, repeat)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
-			continue
+			r = &RunResult{CaseID: c.ID, Status: "error", Duration: time.Since(started), Error: err.Error()}
 		}
-		last = r
-		if r.Status == "passed" {
-			passed++
+		samples = append(samples, *r)
+	}
+	result := aggregateSamples(c.ID, samples, c.PassRate)
+	allErrors := true
+	for _, sample := range samples {
+		if sample.Status != "error" {
+			allErrors = false
 		}
 	}
-	if last == nil {
-		return nil, firstErr
+	if allErrors {
+		return result, firstErr
 	}
-	rate := float64(passed) / float64(repeat)
-	ok := rate >= passRate
-	last.Status = "failed"
-	if ok {
-		last.Status = "passed"
-	}
-	last.Checks = append(last.Checks, CheckResult{
-		Name:    fmt.Sprintf("pass_rate>=%.2f", passRate),
-		OK:      ok,
-		Message: fmt.Sprintf("%d/%d samples passed (%.0f%%)", passed, repeat, rate*100),
-		Score:   rate,
-	})
-	return last, nil
+	return result, nil
 }
 
 func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSamples int) (*RunResult, error) {
+	sessionID := caseSessionID(c.ID, sampleIdx, totalSamples, llm.VCRRecordMode())
 	// Eval runs are data-isolated BY DEFAULT: every case gets a throwaway temp
 	// data dir (fresh control.db + memory), so record/replay sessions never
 	// write eval-* persons, current_task rows, or runs into the user's real
@@ -268,6 +262,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 
 	start := time.Now()
 	rec.StartCase(c, h.provider, h.model, workspace)
+	provenance := newRunProvenance(c, h.cfg, h.provider, h.model)
+	provenance.RecordingSession = sessionID
+	rec.Write(JSONLEvent{Type: "eval.provenance", Provenance: provenance})
 	var taskIDs []string
 	var runIDs []string
 	var createdRunIDs []string
@@ -277,6 +274,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	var lastCompletionReason string
 	var lastResumable bool
 	var lastVerificationState string
+	var lastConditionState string
 	var lastHTTPStatus int
 	// Track every person the case touched (the case identity plus any per-turn
 	// platform_user_id "stranger" identities) so post-case run finalization can
@@ -285,7 +283,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	if identity != nil && identity.PersonID != "" {
 		seenPersons[identity.PersonID] = true
 	}
-	backgroundCtx, cancelBackground := context.WithCancel(evalTurnVCRContext(httpapi.WithStreamObserver(ctx, rec.ObserveStreamEvent), c.ID, workspace))
+	backgroundCtx, cancelBackground := context.WithCancel(evalTurnVCRContext(httpapi.WithStreamObserver(ctx, rec.ObserveStreamEvent), sessionID, workspace))
 	defer func() {
 		cancelBackground()
 		deadline := time.Now().Add(5 * time.Second)
@@ -299,9 +297,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	// prior run of the same case in this process would otherwise leave a 0001+
 	// hole in recordings and break replays); in record mode also wipe the
 	// case's previous cassette generation so files never interleave.
-	llm.ResetVCRSession(c.ID)
+	llm.ResetVCRSession(sessionID)
 	if llm.VCRRecordMode() {
-		if err := llm.WipeVCRSessionRecordings("", c.ID); err != nil {
+		if err := llm.WipeVCRSessionRecordings("", sessionID); err != nil {
 			return nil, fmt.Errorf("wipe stale cassettes for %s: %w", c.ID, err)
 		}
 	}
@@ -394,7 +392,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		// Tag the turn with a VCR session (the case id) so model calls can be
 		// recorded/replayed deterministically when SELFMIND_EVAL_VCR is set.
 		// The turn mark lets the worker lease hook name the turn of every Run.
-		vcrCtx := withEvalTurn(evalTurnVCRContext(httpapi.WithStreamObserver(ctx, observer), c.ID, workspace), i+1)
+		vcrCtx := withEvalTurn(evalTurnVCRContext(httpapi.WithStreamObserver(ctx, observer), sessionID, workspace), i+1)
 		// A per-turn platform_user_id override simulates a different platform user
 		// (identity-isolation scenarios); the default keeps the case's identity.
 		req, err := h.turnRequest(c, turn, input, channel, replyToRunID, workspace, workspaceID)
@@ -436,12 +434,17 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			cancelMaintenance()
 		}
 		noteResponse(i, resp, false)
+		// A missing outcome is absence of this turn's evidence, not permission
+		// to reuse the previous turn's status or verification verdict.
+		lastOutcome, lastCompletionReason, lastResumable, lastVerificationState = "", "", false, ""
+		lastConditionState = ""
 		if resp.Outcome != nil {
 			lastOutcome = resp.Outcome.Status
 			lastCompletionReason = resp.Outcome.CompletionReason
 			lastResumable = resp.Outcome.Resumable
 			if resp.Outcome.Verification != nil {
 				lastVerificationState = resp.Outcome.Verification.State
+				lastConditionState = resp.Outcome.Verification.ConditionState
 			}
 		}
 		lastStatus = "completed"
@@ -473,8 +476,11 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			createdRunIDs = append(createdRunIDs, child.ID)
 			lastStatus, lastOutcome = outcome.Status, outcome.Status
 			lastCompletionReason, lastResumable = outcome.CompletionReason, outcome.Resumable
+			lastVerificationState = ""
+			lastConditionState = ""
 			if outcome.Verification != nil {
 				lastVerificationState = outcome.Verification.State
+				lastConditionState = outcome.Verification.ConditionState
 			}
 		}
 	}
@@ -512,6 +518,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	snap.CompletionReason = lastCompletionReason
 	snap.Resumable = lastResumable
 	snap.VerificationState = lastVerificationState
+	snap.ConditionState = lastConditionState
 	checks := append(EvaluateCase(c, snap), turnChecks...)
 	if finalizationCheck, ok := forcedRunFinalizationCheck(forceFinalized); ok {
 		// Cleanup keeps the eval database reusable, but the case must fail: a
@@ -544,6 +551,13 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		status = "failed"
 	}
 	rec.FinishCase(status, checks, inputTokens, outputTokens)
+	report, err := LoadReport(outPath)
+	if err != nil {
+		return nil, fmt.Errorf("read eval evidence: %w", err)
+	}
+	if report.CaseCount != 1 {
+		return nil, fmt.Errorf("eval result was not durably recorded")
+	}
 	return &RunResult{
 		CaseID:          c.ID,
 		Status:          status,
@@ -556,6 +570,8 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		Checks:          checks,
+		Provenance:      provenance,
+		Efficiency:      report.Efficiency,
 	}, nil
 }
 
@@ -806,16 +822,6 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		return nil, err
 	}
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
-	recallOptions := []httpapi.RecallEngineOption(nil)
-	if llm.VCRRecordMode() {
-		// The production recall deadline intentionally favors foreground
-		// latency and degrades to raw terms after three seconds. Recording is
-		// different: a timed-out auxiliary request becomes a permanent failure
-		// cassette and poisons every offline replay. Give the one-time live
-		// capture enough time while leaving production and replay behavior
-		// unchanged.
-		recallOptions = append(recallOptions, httpapi.WithRecallExpandTimeout(30*time.Second))
-	}
 	server := &httpapi.Server{
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
@@ -824,7 +830,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		ModelChanges:    modelChanges,
 		// Automatic semantic recall (Work Timeline P2): eval runs the same
 		// selector path as real input — no eval-only shortcut around recall.
-		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID, evalPrompts), recallOptions...),
+		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID, evalPrompts)),
 		// Cross-endpoint explicit memory commands (/remember, /forget) use the
 		// same production path in eval.
 		Memory: mem,
@@ -981,7 +987,9 @@ func makeEvalTempRoot(caseID string) (string, error) {
 	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" && !pathWithin(os.TempDir(), cacheDir) {
 		base := filepath.Join(cacheDir, "selfmind", "eval")
 		if err := os.MkdirAll(base, 0o700); err == nil {
-			return os.MkdirTemp(base, prefix)
+			if dir, err := os.MkdirTemp(base, prefix); err == nil {
+				return dir, nil
+			}
 		}
 	}
 	// Tests commonly replace HOME with a directory below /tmp, making the user
@@ -992,7 +1000,9 @@ func makeEvalTempRoot(caseID string) (string, error) {
 	if filepath.IsAbs(persistentTmp) && !pathWithin(os.TempDir(), persistentTmp) {
 		base := filepath.Join(persistentTmp, "selfmind", "eval")
 		if err := os.MkdirAll(base, 0o700); err == nil {
-			return os.MkdirTemp(base, prefix)
+			if dir, err := os.MkdirTemp(base, prefix); err == nil {
+				return dir, nil
+			}
 		}
 	}
 	cwd, err := os.Getwd()

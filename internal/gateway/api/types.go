@@ -464,16 +464,17 @@ type RunOutcome struct {
 	// RecoveryScheduled means the daemon durably queued one exact-parent child.
 	// Recovery is present instead when automatic continuation did not start and
 	// the person needs an actionable, person-scoped handoff.
-	RecoveryScheduled bool                     `json:"recovery_scheduled,omitempty"`
-	Recovery          *control.RecoveryHandoff `json:"recovery,omitempty"`
-	Summary           string                   `json:"summary,omitempty"`
-	Done              []string                 `json:"done,omitempty"`
-	NextSteps         []string                 `json:"next_steps,omitempty"`
-	Files             []string                 `json:"files,omitempty"`
-	Tests             []string                 `json:"tests,omitempty"`
-	Risks             []string                 `json:"risks,omitempty"`
-	NeedApprove       bool                     `json:"need_approve,omitempty"`
-	Verification      *VerificationOutcome     `json:"verification,omitempty"`
+	RecoveryScheduled bool                      `json:"recovery_scheduled,omitempty"`
+	Recovery          *control.RecoveryHandoff  `json:"recovery,omitempty"`
+	Summary           string                    `json:"summary,omitempty"`
+	Done              []string                  `json:"done,omitempty"`
+	NextSteps         []string                  `json:"next_steps,omitempty"`
+	Files             []string                  `json:"files,omitempty"`
+	Tests             []string                  `json:"tests,omitempty"`
+	Risks             []string                  `json:"risks,omitempty"`
+	NeedApprove       bool                      `json:"need_approve,omitempty"`
+	Verification      *VerificationOutcome      `json:"verification,omitempty"`
+	Assessments       []verification.Assessment `json:"assessments,omitempty"`
 	// External records the independently observed result of a durable external
 	// operation. A failed deployment does not mean the SelfMind finalization run
 	// failed: the run may have correctly detected, recorded, and reported that
@@ -506,16 +507,22 @@ type ExternalOutcome struct {
 // a model's prose claim that tests passed. State is one of not_applicable,
 // not_run, stale, passed, failed, partial, or blocked.
 type VerificationOutcome struct {
-	State                          string              `json:"state"`
-	Summary                        string              `json:"summary,omitempty"`
-	LatestMutationAt               int64               `json:"latest_mutation_at_unix_nano,omitempty"`
-	Checks                         []VerificationCheck `json:"checks,omitempty"`
-	OrdinaryCommands               int                 `json:"ordinary_commands,omitempty"`
-	OrdinaryCommandFailures        int                 `json:"ordinary_command_failures,omitempty"`
-	OrdinaryCommandAttempts        int                 `json:"ordinary_command_attempts,omitempty"`
-	OrdinaryCommandNotDispatched   int                 `json:"ordinary_command_not_dispatched,omitempty"`
-	OrdinaryCommandDispatchUnknown int                 `json:"ordinary_command_dispatch_unknown,omitempty"`
-	OrdinaryCommandExitUnknown     int                 `json:"ordinary_command_exit_unknown,omitempty"`
+	State string `json:"state"`
+	// State retains the legacy command/check result. ConditionState is Main's
+	// separately grounded conclusion; missing historical judgments stay unassessed.
+	ConditionState                 string                    `json:"condition_state,omitempty"`
+	Conditions                     []verification.Assessment `json:"conditions,omitempty"`
+	ConditionBlockers              []string                  `json:"condition_blockers,omitempty"`
+	ConditionReviewComplete        bool                      `json:"condition_review_complete,omitempty"`
+	Summary                        string                    `json:"summary,omitempty"`
+	LatestMutationAt               int64                     `json:"latest_mutation_at_unix_nano,omitempty"`
+	Checks                         []VerificationCheck       `json:"checks,omitempty"`
+	OrdinaryCommands               int                       `json:"ordinary_commands,omitempty"`
+	OrdinaryCommandFailures        int                       `json:"ordinary_command_failures,omitempty"`
+	OrdinaryCommandAttempts        int                       `json:"ordinary_command_attempts,omitempty"`
+	OrdinaryCommandNotDispatched   int                       `json:"ordinary_command_not_dispatched,omitempty"`
+	OrdinaryCommandDispatchUnknown int                       `json:"ordinary_command_dispatch_unknown,omitempty"`
+	OrdinaryCommandExitUnknown     int                       `json:"ordinary_command_exit_unknown,omitempty"`
 }
 
 type VerificationCheck = verification.Check

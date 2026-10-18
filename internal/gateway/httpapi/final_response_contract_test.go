@@ -256,3 +256,51 @@ func TestSubmittedFinalResponseCommitsOnceAndReportsStorageFailure(t *testing.T)
 		})
 	}
 }
+
+type preambleBeforeSubmittedFinalProvider struct {
+	submittedFinalProvider
+}
+
+func (p *preambleBeforeSubmittedFinalProvider) StreamChat(_ context.Context, _ llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	out := make(chan llm.StreamEvent, 2)
+	count := p.calls.Add(1)
+	if count == 1 {
+		out <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{ID: "read", Function: "read_file", Args: `{"path":"input.txt"}`}}}
+	} else {
+		out <- llm.StreamEvent{Content: "好的，我现在整理最终对比报告："}
+		out <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{ID: "finish", Function: "finish_run", Args: `{"status":"done","summary":"Source inspected","done":["Read input.txt"],"final_response":"The source contains READY.\n\nThe requested inspection is complete."}`}}}
+	}
+	close(out)
+	return out, nil
+}
+
+func TestSubmittedFinalResponseOverridesStreamedPreambleInSameTurn(t *testing.T) {
+	store := controltest.NewStore(t)
+	provider := &preambleBeforeSubmittedFinalProvider{}
+	dispatcher := tools.NewDispatcherWithRegistry(tools.NewRegistry())
+	dispatcher.RegisterTool(tools.NewReadFileTool())
+	dispatcher.RegisterTool(tools.NewFinishRunTool())
+	dispatcher.InjectMiddleware(tools.WorkspaceScopeMiddleware())
+	agent := kernel.NewAgent(memory.NewMemoryManager(nil), dispatcher, provider, "test", 4, 1, nil)
+	daemon := &Server{Control: store, Gateway: router.NewGateway(agent, nil), ExecutionRuntime: newTestExecutionRuntime(t), DefaultTenantID: "default"}
+	ctx := context.Background()
+	owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws := humanWaitWorkspace(t, store, owner, "preamble-final")
+	if err := os.WriteFile(filepath.Join(ws.LocalPath, "input.txt"), []byte("READY"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	response, code := daemon.ProcessMessage(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "preamble-final", WorkspaceID: ws.ID, Content: "Inspect input.txt and report the result", ApprovalMode: "full-auto"})
+	if code != 200 || response.Content != submittedFinalBody {
+		t.Fatalf("declared final_response was swallowed by preamble: code=%d got=%q want=%q", code, response.Content, submittedFinalBody)
+	}
+	saved, err := store.RunAssistantContent(ctx, owner.TenantID, owner.PersonID, response.Run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved != submittedFinalBody {
+		t.Fatalf("persisted assistant content mismatch: got=%q want=%q", saved, submittedFinalBody)
+	}
+}

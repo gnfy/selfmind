@@ -1,0 +1,49 @@
+id: reliability_inspection_negative_finding
+title: "A conclusive negative inspection completes without turning the condition into a pass"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+requires:
+  commands: [python3]
+setup:
+  files:
+    marker.txt: "WAITING\n"
+turns:
+  - input: >-
+      请只读调查 marker.txt 是否恰好包含 READY 加一个换行，并报告结果。
+      我的目标只是查明并得到准确报告，不需要把文件改成 READY；不要修改文件。
+      用一个调查里程碑记录计划，并用 verify 留下可核对的证据。
+      查明后保存你的条件判断和最终报告，结束本次调查，不要为了得到通过结果重复检查。
+expect:
+  condition_state: not_met
+  max_duration_seconds: 180
+assert_state:
+  - on: run
+    field: status
+    eq: done
+  # Accepted closure stays grounded. Plan-flow tests separately prove that the
+  # bounded closure_facts receipt reaches the model (not the UI preview).
+  # Replay does not establish live-model adoption of those newly exposed facts.
+  - on: events
+    type: run.outcome
+    payload_contains: '"assessments":['
+    count_gte: 1
+  - on: events
+    type: evidence.recorded
+    payload_contains: '"kind":"verification"'
+    count_gte: 1
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_category":"invalid_input"'
+    count_lte: 0
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_category":"stale_precondition"'
+    count_lte: 0
+  - on: file
+    path: marker.txt
+    matches: '\AWAITING\n\z'
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

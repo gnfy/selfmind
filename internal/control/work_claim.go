@@ -172,7 +172,7 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 	if err != nil {
 		return err
 	}
-	if _, err := s.inheritRunPlanTx(ctx, tx, tenantID, sourceRunID, resumesRunID, retarget || childPlan != nil); err != nil {
+	if _, err := s.inheritRunPlanTx(ctx, tx, tenantID, sourceRunID, resumesRunID, retarget || childPlan != nil, false); err != nil {
 		return err
 	}
 	now := time.Now().Unix()

@@ -25,9 +25,10 @@ func parseObservationScript(payload string, depth int) ([][]string, bool) {
 	if err != nil || len(file.Stmts) == 0 {
 		return nil, false
 	}
+	bindings := make(map[string]string)
 	commands := make([][]string, 0, len(file.Stmts))
 	for _, stmt := range file.Stmts {
-		part, ok := observationStmtCommands(stmt, depth)
+		part, ok := observationStmtCommands(stmt, depth, bindings)
 		if !ok {
 			return nil, false
 		}
@@ -36,34 +37,96 @@ func parseObservationScript(payload string, depth int) ([][]string, bool) {
 	return commands, len(commands) > 0
 }
 
-func observationStmtCommands(stmt *syntax.Stmt, depth int) ([][]string, bool) {
+func observationStmtCommands(stmt *syntax.Stmt, depth int, bindings map[string]string) ([][]string, bool) {
 	if stmt == nil || stmt.Cmd == nil || stmt.Negated || stmt.Background || stmt.Coprocess || stmt.Disown || !observationRedirectionsSafe(stmt.Redirs) {
 		return nil, false
 	}
 	switch cmd := stmt.Cmd.(type) {
 	case *syntax.CallExpr:
+		if len(cmd.Args) == 0 && len(cmd.Assigns) > 0 {
+			if !recordObservationBindings(cmd.Assigns, bindings) {
+				return nil, false
+			}
+			return nil, true
+		}
 		if len(cmd.Assigns) != 0 || len(cmd.Args) == 0 {
 			return nil, false
 		}
 		argv := make([]string, 0, len(cmd.Args))
-		for _, word := range cmd.Args {
-			value, ok := staticObservationWord(word)
+		for i, word := range cmd.Args {
+			var (
+				value string
+				ok    bool
+			)
+			if i == 0 {
+				value, ok = staticObservationWord(word)
+			} else {
+				argBindings := bindings
+				if (argv[0] == "echo" || argv[0] == "printf") && argBindings["?"] == "" {
+					argBindings = cloneObservationBindings(bindings)
+					argBindings["?"] = "0"
+				}
+				value, ok = staticObservationWordWithBindings(word, argBindings)
+			}
 			if !ok {
 				return nil, false
 			}
 			argv = append(argv, value)
 		}
+		if argv[0] == "unset" {
+			for _, arg := range argv[1:] {
+				if !strings.HasPrefix(arg, "-") {
+					delete(bindings, arg)
+				}
+			}
+		}
 		return observationArgvCommands(argv, depth)
 	case *syntax.BinaryCmd:
-		left, ok := observationStmtCommands(cmd.X, depth)
+		if cmd.Op == syntax.AndStmt {
+			left, ok := observationStmtCommands(cmd.X, depth, bindings)
+			if !ok {
+				return nil, false
+			}
+			right, ok := observationStmtCommands(cmd.Y, depth, bindings)
+			if !ok {
+				return nil, false
+			}
+			return append(left, right...), true
+		}
+		left, ok := observationStmtCommands(cmd.X, depth, cloneObservationBindings(bindings))
 		if !ok {
 			return nil, false
 		}
-		right, ok := observationStmtCommands(cmd.Y, depth)
+		right, ok := observationStmtCommands(cmd.Y, depth, cloneObservationBindings(bindings))
 		if !ok {
 			return nil, false
 		}
 		return append(left, right...), true
+	case *syntax.ForClause:
+		if !loopObservesIterator(cmd) {
+			return nil, false
+		}
+		iter, ok := cmd.Loop.(*syntax.WordIter)
+		if !ok || iter.Name == nil || len(iter.Items) == 0 {
+			return nil, false
+		}
+		var commands [][]string
+		for _, item := range iter.Items {
+			itemVal, ok := staticObservationWordWithBindings(item, bindings)
+			if !ok {
+				return nil, false
+			}
+			iterBindings := cloneObservationBindings(bindings)
+			iterBindings[iter.Name.Value] = itemVal
+			for _, bodyStmt := range cmd.Do {
+				part, ok := observationStmtCommands(bodyStmt, depth+1, iterBindings)
+				if !ok {
+					return nil, false
+				}
+				commands = append(commands, part...)
+			}
+		}
+		return commands, len(commands) > 0
 	default:
 		return nil, false
 	}
@@ -220,6 +283,10 @@ func observationRedirectionsSafe(redirs []*syntax.Redirect) bool {
 // the shell removes them: an analysis that read `-\o` or `-\X` literally would
 // miss the `-o` and `-X` the program receives.
 func staticObservationWord(word *syntax.Word) (string, bool) {
+	return staticObservationWordWithBindings(word, nil)
+}
+
+func staticObservationWordWithBindings(word *syntax.Word, bindings map[string]string) (string, bool) {
 	if word == nil {
 		return "", false
 	}
@@ -238,17 +305,88 @@ func staticObservationWord(word *syntax.Word) (string, bool) {
 				return "", false
 			}
 			for _, inner := range value.Parts {
-				lit, ok := inner.(*syntax.Lit)
-				if !ok {
+				switch elem := inner.(type) {
+				case *syntax.Lit:
+					b.WriteString(unescapeShellWord(elem.Value, true))
+				case *syntax.ParamExp:
+					resolved, ok := resolveObservationParam(elem, bindings)
+					if !ok {
+						return "", false
+					}
+					b.WriteString(resolved)
+				default:
 					return "", false
 				}
-				b.WriteString(unescapeShellWord(lit.Value, true))
 			}
+		case *syntax.ParamExp:
+			resolved, ok := resolveObservationParam(value, bindings)
+			if !ok || strings.IndexAny(resolved, " \t\r\n*?[]") >= 0 {
+				return "", false
+			}
+			b.WriteString(resolved)
 		default:
 			return "", false
 		}
 	}
 	return b.String(), true
+}
+
+func recordObservationBindings(assigns []*syntax.Assign, bindings map[string]string) bool {
+	if bindings == nil || len(assigns) == 0 {
+		return false
+	}
+	for _, assign := range assigns {
+		if assign == nil || assign.Append || assign.Naked || assign.Index != nil || assign.Array != nil || assign.Name == nil || assign.Value == nil {
+			return false
+		}
+		name := assign.Name.Value
+		if unsafeObservationVarName(name) {
+			return false
+		}
+		val, ok := staticObservationWordWithBindings(assign.Value, bindings)
+		if !ok || strings.IndexAny(val, "\r\n\x00") >= 0 {
+			return false
+		}
+		bindings[name] = val
+	}
+	return true
+}
+
+func resolveObservationParam(param *syntax.ParamExp, bindings map[string]string) (string, bool) {
+	if len(bindings) == 0 || param == nil || param.Excl || param.Length || param.Width ||
+		param.Index != nil || param.Slice != nil || param.Repl != nil || param.Exp != nil || param.Param == nil {
+		return "", false
+	}
+	val, ok := bindings[param.Param.Value]
+	return val, ok
+}
+
+func unsafeObservationVarName(name string) bool {
+	if name == "" {
+		return true
+	}
+	upper := strings.ToUpper(name)
+	switch upper {
+	case "PATH", "IFS", "ENV", "BASH_ENV", "CDPATH", "PROMPT_COMMAND", "SHELLOPTS", "BASHOPTS", "GLOBIGNORE", "HOME", "PWD", "OLDPWD", "KUBECONFIG":
+		return true
+	}
+	for _, prefix := range []string{"LD_", "DYLD_", "AWS_", "GOOGLE_", "CLOUDSDK_", "GH_", "GITHUB_", "GIT_"} {
+		if strings.HasPrefix(upper, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneObservationBindings(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return make(map[string]string)
+	}
+	out := make(map[string]string, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }
 
 // unescapeShellWord removes the backslashes the shell consumes. Unquoted, a

@@ -149,7 +149,7 @@ func dispatchPredicate(p StatePredicate, w WorldState) (bool, string) {
 		if w.eventsError != nil {
 			return false, w.eventsError.Error()
 		}
-		return evalCount(p, countEvents(w.Events, p.Type, p.PayloadContains))
+		return evalCount(p, countEvents(w.Events, p.Type, p.PayloadContains, p.PayloadFields))
 	case "artifact", "artifacts":
 		return evalArtifacts(p, w.Artifacts)
 	case "approval_triage":
@@ -300,13 +300,16 @@ func evalArtifacts(p StatePredicate, artifacts []control.Artifact) (bool, string
 	return evalCount(p, matched)
 }
 
-func countEvents(events []control.Event, eventType string, payloadContains *string) int {
+func countEvents(events []control.Event, eventType string, payloadContains *string, fields ...map[string]string) int {
 	n := 0
 	for _, e := range events {
 		if eventType != "" && !strings.EqualFold(e.Type, eventType) {
 			continue
 		}
 		if payloadContains != nil && !strings.Contains(string(e.Payload), *payloadContains) {
+			continue
+		}
+		if len(fields) > 0 && !eventPayloadFieldsMatch(e.Payload, fields[0]) {
 			continue
 		}
 		n++

@@ -21,6 +21,9 @@ func TestObservationBaselineCoversOrdinaryShellShape(t *testing.T) {
 		"cat notes.md | tr -d '\\r' | sort | head -5",
 		"aws sts get-caller-identity --profile cw2 | base64",
 		"gh api repos/owner/name/branches",
+		`CTX=arn:aws:eks:ap-southeast-1:123456789012:cluster/prod; unset HTTP_PROXY HTTPS_PROXY ALL_PROXY; kubectl --context "$CTX" -n prod get deploy,pods -o wide`,
+		`command -v jq >/dev/null && kubectl get ns -o name | head -5`,
+		`CTX=arn:aws:eks:ap-southeast-1:123456789012:cluster/prod; kubectl --context "$CTX" -n argocd get applications.argoproj.io --request-timeout=15s -o name 2>&1 | head -5; echo "rc=$?"`,
 	} {
 		if !provenReadOnly(t, command) {
 			t.Errorf("must be provable read-only: %s", command)

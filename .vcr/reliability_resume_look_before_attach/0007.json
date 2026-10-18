@@ -1,5 +1,0 @@
-{
-  "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "work_select value.txt od -c octal"
-}

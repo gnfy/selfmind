@@ -1,0 +1,119 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Plan"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " accepted"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " step ids. Now"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the file once."
+    },
+    {
+      "reasoning_content": "\n\nNote the instruction"
+    },
+    {
+      "reasoning_content": ": \"The"
+    },
+    {
+      "reasoning_content": " final result goes to"
+    },
+    {
+      "reasoning_content": " the last"
+    },
+    {
+      "reasoning_content": " channel input\" —"
+    },
+    {
+      "reasoning_content": " but the current"
+    },
+    {
+      "reasoning_content": " message is the task"
+    },
+    {
+      "reasoning_content": " itself. Let me"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the file.\n\n"
+    },
+    {
+      "reasoning_content": "Wait — should I"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " work_select? The"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": " says initial_continuation"
+    },
+    {
+      "reasoning_content": ": none"
+    },
+    {
+      "reasoning_content": ", and the task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " this turn's request"
+    },
+    {
+      "reasoning_content": ". No need."
+    },
+    {
+      "reasoning_content": "\n\nLet me"
+    },
+    {
+      "reasoning_content": " read the file once"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 14414,
+        "output_tokens": 141,
+        "cache_read_input_tokens": 13312,
+        "cache_miss_input_tokens": 1102,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 83,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "read_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/source.txt\"}"
+        }
+      ]
+    }
+  ]
+}

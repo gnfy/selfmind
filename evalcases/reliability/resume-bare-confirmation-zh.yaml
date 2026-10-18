@@ -26,7 +26,8 @@ turns:
         eq: waiting_user
       - on: events
         type: evidence.recorded
-        payload_contains: '"tool_name":"verify"}'
+        payload_fields:
+          evidence.tool_name: verify
         count_gte: 1
   - input: "确认，执行。"
 expect:

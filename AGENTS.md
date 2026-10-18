@@ -247,8 +247,8 @@ runtime Skills.
 - `context_length` is total context; `max_tokens` is output capacity. Never
   substitute one or fabricate model metadata.
 - Strategy is coarse policy, not keyword taxonomy. `update_plan` is
-  model-decided for genuinely multi-step work; every update is a complete
-  snapshot, and all steps resolve before a done outcome.
+  model-decided for genuinely multi-step work. Explicit patches merge into
+  complete accepted snapshots; all steps resolve before a done outcome.
 - Tool budgets are bounded and may extend only after real new evidence.
   Repeating an identical call without changed input or state is not progress.
   Completion requires a structured outcome plus execution evidence.

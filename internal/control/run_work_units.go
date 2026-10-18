@@ -318,23 +318,52 @@ func maxRunEventCursorTx(ctx context.Context, tx *sql.Tx, runID string) (int64, 
 	return cursor, err
 }
 
+// A zero cursor may also be a closed empty window. Openness comes from the
+// durable finish marker, never from assuming that zero means "keep reading".
+func workUnitEvidenceWindowTx(ctx context.Context, tx *sql.Tx, runID, unitID string) (start, end int64, err error) {
+	var closed bool
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(started_cursor,0),COALESCE(finished_cursor,0),COALESCE(finished_at,0)>0 FROM run_work_units WHERE run_id=? AND id=?`, runID, unitID).Scan(&start, &end, &closed)
+	if err == nil && end == 0 {
+		if !closed {
+			end, err = maxRunEventCursorTx(ctx, tx, runID)
+		} else {
+			// Released finalizers recorded a finish time without a cursor. The exact
+			// terminal receipt is an upper bound; never expand to later Run events.
+			err = tx.QueryRowContext(ctx, `SELECT COALESCE(MIN(cursor),0) FROM task_events WHERE run_id=? AND (idempotency_key=? OR type='run.finished')`, runID, "run:"+runID+":terminal").Scan(&end)
+		}
+	}
+	return
+}
+
 type workUnitEvidence struct {
-	ToolCallID string `json:"tool_call_id"`
-	Kind       string `json:"kind"`
-	Status     string `json:"status"`
-	StartedAt  int64  `json:"started_at_unix_nano"`
-	FinishedAt int64  `json:"finished_at_unix_nano"`
-	Files      []struct {
+	ToolName    string                    `json:"tool_name"`
+	Version     int                       `json:"version,omitempty"`
+	Observation *verification.Observation `json:"observation,omitempty"`
+	ToolCallID  string                    `json:"tool_call_id"`
+	Kind        string                    `json:"kind"`
+	Status      string                    `json:"status"`
+	StartedAt   int64                     `json:"started_at_unix_nano"`
+	FinishedAt  int64                     `json:"finished_at_unix_nano"`
+	Invoked     *bool                     `json:"invoked,omitempty"`
+	EffectState string                    `json:"effect_state,omitempty"`
+	Process     *struct {
+		Started           bool   `json:"started"`
+		ExitCode          *int   `json:"exit_code,omitempty"`
+		NetworkDecision   string `json:"network_decision,omitempty"`
+		NetworkPermission string `json:"network_permission,omitempty"`
+	} `json:"process,omitempty"`
+	Files []struct {
 		Path         string `json:"path"`
 		ResolvedPath string `json:"resolved_path"`
 		BeforeSHA256 string `json:"before_sha256"`
 		AfterSHA256  string `json:"after_sha256"`
 	} `json:"files"`
 	Command *struct {
-		Binding *verification.Binding `json:"binding,omitempty"`
-		Command string                `json:"command"`
-		CWD     string                `json:"cwd"`
-		Kind    string                `json:"kind"`
+		Binding  *verification.Binding `json:"binding,omitempty"`
+		Command  string                `json:"command"`
+		CWD      string                `json:"cwd"`
+		Kind     string                `json:"kind"`
+		ExitCode int                   `json:"exit_code"`
 	} `json:"command"`
 }
 
@@ -384,8 +413,8 @@ func workUnitVerificationChecksTx(ctx context.Context, tx *sql.Tx, runID string,
 	if err := stepRows.Close(); err != nil {
 		return nil, nil, fmt.Errorf("Verification obligation identities are unavailable.")
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(payload_json,'{}') FROM task_events
-		WHERE run_id=? AND COALESCE(cursor,0)>? AND COALESCE(cursor,0)<=? AND type='evidence.recorded'
+	rows, err := tx.QueryContext(ctx, `SELECT type,COALESCE(payload_json,'{}') FROM task_events
+		WHERE run_id=? AND ((type='evidence.recorded' AND COALESCE(cursor,0)>? AND COALESCE(cursor,0)<=?) OR type='evidence.adopted')
 		ORDER BY COALESCE(cursor,0), rowid`, runID, startedCursor, finishedCursor)
 	if err != nil {
 		return nil, nil, fmt.Errorf("Verification evidence is unavailable.")
@@ -394,9 +423,27 @@ func workUnitVerificationChecksTx(ctx context.Context, tx *sql.Tx, runID string,
 	var mutations []verification.Mutation
 	checks := []verification.Check{}
 	for rows.Next() {
-		var raw string
-		if rows.Scan(&raw) != nil {
+		var eventType, raw string
+		if rows.Scan(&eventType, &raw) != nil {
 			return nil, nil, fmt.Errorf("Verification evidence is unreadable.")
+		}
+		if eventType == "evidence.adopted" {
+			var adoption observationAdoption
+			if err := json.Unmarshal([]byte(raw), &adoption); err != nil {
+				return nil, nil, err
+			}
+			if adoption.SourceCursor <= startedCursor || adoption.SourceCursor > finishedCursor {
+				continue
+			}
+			check, err := observationCheckTx(ctx, tx, runID, adoption)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(stepIDs) > 0 && check.Binding.StepID != stepIDs[0] {
+				continue
+			}
+			checks = append(checks, check)
+			continue
 		}
 		var payload struct {
 			Evidence workUnitEvidence `json:"evidence"`
@@ -433,7 +480,13 @@ func workUnitVerificationChecksTx(ctx context.Context, tx *sql.Tx, runID string,
 				continue
 			}
 		}
-		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
+		check := verification.Check{ToolCallID: evidence.ToolCallID, Binding: binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, ExitCode: evidence.Command.ExitCode, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt, Invoked: evidence.Invoked, EffectState: evidence.EffectState}
+		var exitCode *int
+		if evidence.Process != nil {
+			check.ProcessStarted, exitCode = &evidence.Process.Started, evidence.Process.ExitCode
+			check.NetworkDecision, check.NetworkPermission = evidence.Process.NetworkDecision, evidence.Process.NetworkPermission
+		}
+		checks = append(checks, verification.WithDispatchFacts(check, exitCode))
 	}
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("Verification evidence is unavailable.")

@@ -6,11 +6,6 @@ identity-isolated (a different platform user sees nothing) from another channel.
 
 What each case proves today:
 
-- `continuity-status.yaml` (deterministic, `model_required: false`): a Run
-  seeded as `waiting_user` from the CLI is reported by `/status` on a weixin
-  turn of the same person. The assertion is the model-free control-plane view
-  of shared structured state; a production-path variant that parks the Run
-  through a real turn may be added alongside it.
 - `continuity-resume.yaml` and `continuity-start-execution.yaml`
   (cassette-backed): a follow-up cue (`继续`, `开始执行`) after a COMPLETED turn
   is ordinary new work that owns its own root (`require_task_switch`), while
@@ -19,18 +14,17 @@ What each case proves today:
   covered by `timeline/timeline-confirm-after-waiting-run.yaml` and Go tests.
 - `continuity-stranger.yaml` (cassette-backed): a different `platform_user_id`
   asking `/status` sees `No active task.` and never the first user's marker.
-- `recall-cross-task.yaml`, `memory-pinned-recall.yaml`, and
-  `memory-canonical-query-recall.yaml` (cassette-backed): prior work and saved
-  preferences reach a later turn through recall (`context.recall` state
-  assertions and the recalled marker).
-- `execution-environment-diagnostics.yaml` (deterministic) and
-  `execution-state-overlay-first-try.yaml` (cassette-backed): `/diag execution`
-  stays credential-free, and a sandboxed tool may write its own state directory
-  on first use without an authentication misdiagnosis.
+- `recall-cross-task.yaml` (cassette-backed): prior work and saved preferences
+  reach a later turn through recall (`context.recall` state assertions and the
+  recalled marker).
+- `execution-state-overlay-first-try.yaml` (cassette-backed): a sandboxed tool
+  may write its own state directory on first use without an authentication
+  misdiagnosis.
 
 Model-backed cases are marked `require_cassette: true`, so they run even in the
-fast local profile. Their cassettes are committed; deterministic control cases
-declare `model_required: false` and record nothing.
+fast local profile. Deterministic control-plane commands (`/status`, `/effects`,
+`/diag execution`) are covered by Go tests in `internal/gateway/httpapi` and
+`internal/eval/effect_seeds_test.go`.
 
 Ordinary new language owns a fresh root; prior work is related only by
 structured edges or by the normal in-Run Main path through `work_search`,
@@ -54,8 +48,6 @@ Cassettes land in `.vcr/<case-id>/` (one numbered JSON file per model call):
 - `.vcr/continuity_start_execution/`
 - `.vcr/continuity_stranger/`
 - `.vcr/recall_cross_task/`
-- `.vcr/memory_pinned_recall/`
-- `.vcr/memory_canonical_query_recall/`
 - `.vcr/execution_state_overlay_first_try/`
 
 **Commit the updated cassette directories.** Cassettes are what make the

@@ -21,7 +21,7 @@ func parkedHumanCancelFixture(t *testing.T, kind string) (*Store, *IdentityConte
 	if err := store.SaveLoopCheckpoint(ctx, awaitCheckpoint(owner, task, run, kind, ref, "waiting-call")); err != nil {
 		t.Fatal(err)
 	}
-	if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref); err != nil || !parked {
+	if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref, HumanWaitParkGrace); err != nil || !parked {
 		t.Fatalf("park=%v %v", parked, err)
 	}
 	return store, owner, task, run, ref

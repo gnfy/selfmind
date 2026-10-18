@@ -51,6 +51,9 @@ type RunFinalization struct {
 	// turns leave it empty; durable watcher finalization uses its stable
 	// watch+verdict-revision key.
 	EffectKey string
+	// Completion is an opt-in candidate validated again inside this transaction.
+	// Legacy finalization inputs and historical rows retain their contract.
+	Completion *RunCompletionCandidate
 }
 
 // MaterializeRunFinalization commits the run, task, assistant message,
@@ -66,6 +69,10 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		return nil, fmt.Errorf("run id and task id are required")
 	}
 	tenant := normalizeTenant(input.Identity.TenantID)
+	if candidate := input.Completion; candidate != nil &&
+		(candidate.tenant != tenant || candidate.person != input.Identity.PersonID || candidate.runID != input.RunID) {
+		return nil, fmt.Errorf("completion candidate does not belong to finalization identity")
+	}
 	if input.RunStatus == "" || input.RunStatus == "running" || input.RunStatus == "in_progress" {
 		input.RunStatus = "done"
 	}
@@ -92,6 +99,12 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		input.Event.IdempotencyKey = "run:" + input.RunID + ":terminal"
 	}
 	if existing, err := s.eventByIdempotencyKey(ctx, input.Event.IdempotencyKey); err == nil {
+		if input.Completion != nil {
+			if existing.RunID != input.RunID || existing.TaskID != input.TaskID {
+				return nil, fmt.Errorf("completion receipt belongs to another Run")
+			}
+			input.Completion.receipt = existing
+		}
 		return existing, nil
 	} else if err != sql.ErrNoRows {
 		return nil, err
@@ -126,6 +139,9 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 	if input.RunStatus != "cancelled" && (cancelRequested || currentStatus == "cancelled") {
 		return nil, ErrRunCancellationRequested
+	}
+	if err := s.materializeCompletionTx(ctx, tx, tenant, personID, &input); err != nil {
+		return nil, err
 	}
 	var cancellationEvents []Event
 	if input.RunStatus == "cancelled" {
@@ -439,6 +455,10 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	if input.Completion != nil {
+		event := input.Event
+		input.Completion.receipt = &event
 	}
 	s.publishParkedCancellation(cancellationEvents)
 	if s.events != nil {

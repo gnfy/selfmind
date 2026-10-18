@@ -126,7 +126,7 @@ func TestHumanWaitRevalidationPreservesAnswerAndRefusesSavedTail(t *testing.T) {
 				}
 				continue
 			}
-			if result.success || result.effectState != "not_dispatched" || !strings.Contains(result.msg.Content, "resume_revalidation_required") {
+			if result.success || result.effectState != "not_dispatched" || result.errorCode != "resume_revalidation_required" || !strings.Contains(result.msg.Content, "Observe current state") {
 				t.Fatalf("saved tail ran or lost refusal: %+v", result)
 			}
 		}

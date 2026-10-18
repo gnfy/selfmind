@@ -103,17 +103,22 @@ func TestToolGuardrailsSeeExternalObservationThroughProcessWrappers(t *testing.T
 }
 
 func TestToolGuardrailsAllowFiniteDistinctExternalObservations(t *testing.T) {
-	called := false
-	exec := NewToolGuardrails().Middleware(func(map[string]interface{}) (string, error) {
-		called = true
-		return "results", nil
-	})
-	_, err := exec(map[string]interface{}{
-		"_tool_name": "terminal",
-		"command":    `for pr in 123 124 125; do gh pr view "$pr" --json mergeable; sleep 1; done`,
-	})
-	if err != nil || !called {
-		t.Fatalf("distinct PR observations were refused: err=%v called=%v", err, called)
+	for _, command := range []string{
+		`for pr in 123 124 125; do gh pr view "$pr" --json mergeable; sleep 1; done`,
+		`for tag in 1564 1565 1568; do aws ecr describe-images --repository-name new-pps --image-ids imageTag=$tag --region ap-southeast-1 --output json; done`,
+	} {
+		called := false
+		exec := NewToolGuardrails().Middleware(func(map[string]interface{}) (string, error) {
+			called = true
+			return "results", nil
+		})
+		_, err := exec(map[string]interface{}{
+			"_tool_name": "terminal",
+			"command":    command,
+		})
+		if err != nil || !called {
+			t.Fatalf("distinct observations were refused (%s): err=%v called=%v", command, err, called)
+		}
 	}
 }
 
@@ -212,6 +217,99 @@ func TestToolGuardrailsAllowFiniteRemoteStatusBatch(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("finite status batch did not reach the executor")
+	}
+}
+
+func TestToolGuardrailsAllowFiniteBatchWithDestructuredIterator(t *testing.T) {
+	for _, command := range []string{
+		`for spec in "cw3-return-go-api:v20261014162544:dev" "cw3-return-web-shop:v20261014165212:dev"; do repo=${spec%%:*}; rest=${spec#*:}; tag=${rest%%:*}; br=${rest##*:}; gh api "repos/channelwill/$repo/compare/$tag...$br" --jq '{status: .status, ahead_by: .ahead_by}'; done`,
+		`for spec in "api:v1:dev" "web:v2:dev"; do IFS=: read -r repo tag br <<< "$spec"; gh api "repos/org/$repo/compare/$tag...$br"; done`,
+	} {
+		called := false
+		exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+			called = true
+			return `{"status":"ahead","ahead_by":1}`, nil
+		})
+		result, err := exec(map[string]interface{}{
+			"_tool_name": "terminal",
+			"command":    command,
+		})
+		if err != nil || !called || result == "" {
+			t.Fatalf("destructured finite batch was refused: command=%q result=%q err=%v called=%v", command, result, err, called)
+		}
+	}
+
+	// Overwriting a derived variable with a constant in the loop body makes the
+	// observation repeat the same remote target and must remain blocked.
+	for _, polling := range []string{
+		`for spec in "api:v1:dev" "web:v2:dev"; do repo=${spec%%:*}; repo=fixed; gh api "repos/org/$repo/commits"; done`,
+		`for spec in "api:v1:dev" "web:v2:dev"; do spec=fixed; gh api "repos/org/$spec/commits"; done`,
+	} {
+		called := false
+		exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+			called = true
+			return "ok", nil
+		})
+		if _, err := exec(map[string]interface{}{
+			"_tool_name": "terminal",
+			"command":    polling,
+		}); err == nil || called {
+			t.Fatalf("constant-target loop should be blocked as polling: command=%q err=%v called=%v", polling, err, called)
+		}
+	}
+}
+
+func TestToolGuardrailsDistinguishDerivedQueriesFromRepeatedTargets(t *testing.T) {
+	for _, tc := range []struct {
+		name, command string
+		allowed       bool
+	}{
+		{"scalar transformation", `for spec in api:v1 web:v2; do repo=${spec%%:*}; echo "$repo"; gh api "repos/org/$repo/commits" | head -5; done`, true},
+		{"formatting printf and && chain", `for repo in api web; do printf "=== %s ===\n" "$repo"; gh api "repos/org/$repo/commits" && gh api "repos/org/$repo/branches"; done`, true},
+		{"different provider", `for spec in build-1:prod build-2:prod; do id=${spec%%:*}; aws codebuild batch-get-builds --ids "$id"; done`, true},
+		{"positional fields", `for spec in "api v1" "web v2"; do set -- $spec; gh api "repos/org/$1/commits"; done`, true},
+		{"declaration", `for spec in api web; do export repo=$spec; gh api "repos/org/$repo/commits"; done`, true},
+		{"subshell", `repo=fixed; for spec in api web; do (repo=$spec); gh api "repos/org/$repo/commits"; done`, false},
+		{"unexecuted branch", `repo=fixed; for spec in api web; do if false; then repo=$spec; fi; gh api "repos/org/$repo/commits"; done`, false},
+		{"short circuit", `repo=fixed; for spec in api web; do false && repo=$spec; gh api "repos/org/$repo/commits"; done`, false},
+		{"function declaration", `repo=fixed; for spec in api web; do f() { repo=$spec; }; gh api "repos/org/$repo/commits"; done`, false},
+		{"declaration overwrite", `for spec in api web; do repo=$spec; export repo=fixed; gh api "repos/org/$repo/commits"; done`, false},
+		{"outer readonly binding", `readonly repo=fixed; for spec in api web; do repo=$spec; gh api "repos/org/$repo/commits"; done`, false},
+		{"outer field separator", `IFS=:; for spec in fixed:api fixed:web; do read -r repo rest <<< "$spec"; gh api "repos/org/$repo/commits"; done`, false},
+		{"outer read changes separator", `read -r IFS <<< :; for spec in fixed:api fixed:web; do read -r repo rest <<< "$spec"; gh api "repos/org/$repo/commits"; done`, false},
+		{"outer printf changes separator", `printf -v IFS :; for spec in fixed:api fixed:web; do read -r repo rest <<< "$spec"; gh api "repos/org/$repo/commits"; done`, false},
+		{"loop carried separator", `for spec in fixed:api fixed:web; do read -r repo rest <<< "$spec"; gh api "repos/org/$repo/commits"; read -r IFS <<< :; done`, false},
+		{"redirection assignment", `for spec in api web; do repo=$spec; echo hi <<< "$((repo=0))"; gh api "repos/org/$repo/commits"; done`, false},
+		{"outer nameref binding", `declare -n repo=other; for spec in api web; do repo=$spec; gh api "repos/org/$repo/commits"; done`, false},
+		{"printf changes binding", `for spec in api web; do repo=$spec; printf -v repo fixed; gh api "repos/org/$repo/commits"; done`, false},
+		{"array index is not a value", `for spec in 0 1; do repo[$spec]=fixed; gh api "repos/org/${repo[0]}/commits"; done`, false},
+		{"collapsed values", `for spec in api:v1 api:v2; do repo=${spec%%:*}; gh api "repos/org/$repo/commits"; done`, false},
+		{"duplicate items", `for repo in api api; do gh api "repos/org/$repo/commits"; done`, false},
+		{"varying header only", `for spec in 1 2; do attempt=$spec; gh api repos/org/api/commits -H "X-Attempt: $attempt"; done`, false},
+		{"attached varying display only", `for spec in 1 2; do display=$spec; aws codebuild batch-get-builds --ids fixed --query="$display"; done`, false},
+		{"varying timeout only", `for delay in 1 2; do aws codebuild batch-get-builds --ids fixed --cli-connect-timeout "$delay"; done`, false},
+		{"varying cache only", `for cache in 1s 2s; do gh api repos/org/fixed/commits --cache="$cache"; done`, false},
+		{"expanded option name", `for cache in 1s 2s; do option=--cache; gh api repos/org/fixed/commits "$option=$cache"; done`, false},
+		{"constant read overwrite", `for spec in api web; do read -r repo <<< "$spec"; read -r repo <<< fixed; gh api "repos/org/$repo/commits"; done`, false},
+		{"unknown substitution", `for spec in api web; do repo=$(echo "$spec"); gh api "repos/org/$repo/commits"; done`, false},
+		{"brace list is not one item", `for spec in {1..3}; do gh api repos/org/fixed/commits; done`, false},
+		{"pathname expansion", `for spec in 'api*' '*api'; do gh api repos/org/$spec/commits; done`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			called := false
+			exec := NewToolGuardrails().Middleware(func(map[string]interface{}) (string, error) {
+				called = true
+				return "observed", nil
+			})
+			_, err := exec(map[string]interface{}{"_tool_name": "terminal", "command": tc.command})
+			if tc.allowed {
+				if err != nil || !called {
+					t.Fatalf("distinct bounded queries were refused: called=%v err=%v", called, err)
+				}
+			} else if err == nil || called {
+				t.Fatalf("repeated or unproven targets were dispatched: called=%v err=%v", called, err)
+			}
+		})
 	}
 }
 
@@ -321,5 +419,59 @@ func TestToolGuardrailsDoNotTreatLocalShellLoopAsExternalWait(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("local loop did not reach executor")
+	}
+}
+
+func TestBuiltinEffectPossibleIgnoresFallbackHostSandboxAndReadOnlyObservations(t *testing.T) {
+	if builtinEffectPossible(toolExecutionPolicy{}, map[string]interface{}{
+		"_tool_name":              "terminal",
+		"command":                 "which aws kubectl",
+		"_effective_sandbox_mode": "host",
+		effectiveSandboxReasonArg: "exec sandbox disabled by configuration",
+	}) {
+		t.Fatal("automatic _effective_sandbox_mode=host fallback on local observation was treated as an external effect")
+	}
+	if builtinEffectPossible(toolExecutionPolicy{}, map[string]interface{}{
+		"_tool_name":              "verify",
+		"command":                 "test -s /tmp/report.md",
+		"_effective_sandbox_mode": "host",
+	}) {
+		t.Fatal("verify was treated as an external effect")
+	}
+	if builtinEffectPossible(toolExecutionPolicy{}, map[string]interface{}{
+		"_tool_name":              "terminal",
+		"command":                 "aws ecr describe-images --repository-name new-pps --region ap-southeast-1",
+		"_effective_sandbox_mode": "host",
+		"_network_shared":         true,
+		credentialReadArgKey:      true,
+	}) {
+		t.Fatal("read-only remote observation command was treated as an external effect")
+	}
+	if !builtinEffectPossible(toolExecutionPolicy{}, map[string]interface{}{
+		"_tool_name":              "terminal",
+		"command":                 "systemctl restart app",
+		"sandbox":                 "host",
+		"_effective_sandbox_mode": "host",
+	}) {
+		t.Fatal("explicit sandbox=host mutation should still be treated as an external effect")
+	}
+}
+
+func TestToolGuardrailsAllowBoundedFanoutWithCommandSubstitutionAndGuards(t *testing.T) {
+	for _, command := range []string{
+		`for spec in "cw3-return-go-api:v20261014162544:dev" "cw3-return-web-shop:v20261014165212:dev"; do repo=${spec%%:*}; rest=${spec#*:}; tag=${rest%%:*}; br=${rest##*:}; out=$(gh api "repos/channelwill/$repo/compare/$tag...$br" --jq '{status: .status, ahead_by: .ahead_by}'); if [ -z "$out" ]; then continue; fi; echo "=== $repo ==="; echo "$out" | sed 's/^/  /'; git -C "/workspace/$repo" status -sb; done`,
+		`for repo in api web; do for sh in $(gh api "repos/org/$repo/commits" --jq '.[].sha'); do gh api "repos/org/$repo/commits/$sh/pulls"; done; done`,
+	} {
+		called := false
+		exec := NewToolGuardrails().Middleware(func(args map[string]interface{}) (string, error) {
+			called = true
+			return "ok", nil
+		})
+		if _, err := exec(map[string]interface{}{
+			"_tool_name": "terminal",
+			"command":    command,
+		}); err != nil || !called {
+			t.Fatalf("bounded fan-out loop was refused: command=%q err=%v called=%v", command, err, called)
+		}
 	}
 }

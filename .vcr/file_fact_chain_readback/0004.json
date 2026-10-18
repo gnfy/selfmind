@@ -1,0 +1,332 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "All"
+    },
+    {
+      "reasoning_content": " three values confirmed."
+    },
+    {
+      "reasoning_content": " Report"
+    },
+    {
+      "reasoning_content": ".\n\nNo"
+    },
+    {
+      "reasoning_content": " file modification, no"
+    },
+    {
+      "reasoning_content": " terminal"
+    },
+    {
+      "reasoning_content": ". This is a"
+    },
+    {
+      "reasoning_content": " lookup task — finish"
+    },
+    {
+      "reasoning_content": "_run for report work"
+    },
+    {
+      "reasoning_content": "? Task class external"
+    },
+    {
+      "reasoning_content": "_lookup, but it"
+    },
+    {
+      "reasoning_content": " created"
+    },
+    {
+      "reasoning_content": " no durable state."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " instruction says finish_run"
+    },
+    {
+      "reasoning_content": " after the work for"
+    },
+    {
+      "reasoning_content": " non-trivial tool"
+    },
+    {
+      "reasoning_content": "-using work that creates"
+    },
+    {
+      "reasoning_content": " durable task"
+    },
+    {
+      "reasoning_content": " state. This is"
+    },
+    {
+      "reasoning_content": " a pure read-only"
+    },
+    {
+      "reasoning_content": " lookup —"
+    },
+    {
+      "reasoning_content": " I'll just answer"
+    },
+    {
+      "reasoning_content": " directly. Actually the"
+    },
+    {
+      "reasoning_content": " policy says \"Skip"
+    },
+    {
+      "reasoning_content": " it for direct answers"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " ordinary explanations.\" This"
+    },
+    {
+      "reasoning_content": " is a read-only"
+    },
+    {
+      "reasoning_content": " inspection"
+    },
+    {
+      "reasoning_content": " report. I'll"
+    },
+    {
+      "reasoning_content": " give"
+    },
+    {
+      "reasoning_content": " a short final answer"
+    },
+    {
+      "reasoning_content": ". But the run"
+    },
+    {
+      "reasoning_content": " status in context says"
+    },
+    {
+      "reasoning_content": " \"done"
+    },
+    {
+      "reasoning_content": "\" already... odd"
+    },
+    {
+      "reasoning_content": ". Just answer."
+    },
+    {
+      "reasoning_content": "\n\nReport the three"
+    },
+    {
+      "reasoning_content": " values conc"
+    },
+    {
+      "reasoning_content": "isely.\n"
+    },
+    {
+      "content": "All three"
+    },
+    {
+      "content": " values confirmed"
+    },
+    {
+      "content": " from the fixture files"
+    },
+    {
+      "content": ":\n\n-"
+    },
+    {
+      "content": " **FACT-SOURCE"
+    },
+    {
+      "content": "**:"
+    },
+    {
+      "content": " `N4C"
+    },
+    {
+      "content": "-271"
+    },
+    {
+      "content": "9-M"
+    },
+    {
+      "content": "IDDLE` — line"
+    },
+    {
+      "content": " 3 of `"
+    },
+    {
+      "content": "long-facts.txt"
+    },
+    {
+      "content": "`, recovered from the"
+    },
+    {
+      "content": " truncated"
+    },
+    {
+      "content": " batch output via artifact"
+    },
+    {
+      "content": " `art_6"
+    },
+    {
+      "content": "a0d2"
+    },
+    {
+      "content": "23"
+    },
+    {
+      "content": "8-62"
+    },
+    {
+      "content": "f9"
+    },
+    {
+      "content": "-4e8"
+    },
+    {
+      "content": "4-a"
+    },
+    {
+      "content": "5a6-"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "b0c6"
+    },
+    {
+      "content": "c7"
+    },
+    {
+      "content": "24b3"
+    },
+    {
+      "content": "3`"
+    },
+    {
+      "content": " (bytes 5"
+    },
+    {
+      "content": "000–"
+    },
+    {
+      "content": "9000"
+    },
+    {
+      "content": "), not by re"
+    },
+    {
+      "content": "-reading the"
+    },
+    {
+      "content": " file.\n-"
+    },
+    {
+      "content": " **active_beta**:"
+    },
+    {
+      "content": " `blue` —"
+    },
+    {
+      "content": " `lookup.cfg`"
+    },
+    {
+      "content": " line 2,"
+    },
+    {
+      "content": " matched by both the"
+    },
+    {
+      "content": " batch read and the"
+    },
+    {
+      "content": " regex search (`^"
+    },
+    {
+      "content": "active_("
+    },
+    {
+      "content": "alpha|beta)="
+    },
+    {
+      "content": "` also returned `"
+    },
+    {
+      "content": "active_alpha="
+    },
+    {
+      "content": "green` on line"
+    },
+    {
+      "content": " 3; `"
+    },
+    {
+      "content": "inactive_alpha=obsolete"
+    },
+    {
+      "content": "` correctly"
+    },
+    {
+      "content": " did not match)."
+    },
+    {
+      "content": "\n- **WINDOW"
+    },
+    {
+      "content": "-CHECK**: `"
+    },
+    {
+      "content": "L2"
+    },
+    {
+      "content": "-847"
+    },
+    {
+      "content": "` — `window"
+    },
+    {
+      "content": ".txt` line "
+    },
+    {
+      "content": "2, from the"
+    },
+    {
+      "content": " offset-2/"
+    },
+    {
+      "content": "limit-1 read"
+    },
+    {
+      "content": ".\n\nNo terminal"
+    },
+    {
+      "content": " commands were used and"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " files were modified."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 17161,
+        "output_tokens": 348,
+        "cache_read_input_tokens": 16384,
+        "cache_miss_input_tokens": 777,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 130,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

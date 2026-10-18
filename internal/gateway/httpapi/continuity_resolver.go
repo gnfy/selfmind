@@ -40,6 +40,7 @@ type ContinuityCandidate struct {
 	InputSummary   string   `json:"input_summary,omitempty"`
 	HandoffSummary string   `json:"handoff_summary,omitempty"`
 	NextSteps      []string `json:"next_steps,omitempty"`
+	ChangedFiles   []string `json:"changed_files,omitempty"`
 	Risks          []string `json:"risks,omitempty"`
 	CurrentStep    string   `json:"current_step,omitempty"`
 	LastActivity   string   `json:"last_activity,omitempty"`
@@ -90,6 +91,7 @@ func (d *Server) continuityCandidateForRun(ctx context.Context, identity *contro
 		card.HandoffSummary = textutil.Truncate(toOneLine(handoff.Summary), 220)
 		card.NextSteps = boundedOneLineStrings(handoff.NextSteps, 3, 120)
 		card.Risks = boundedOneLineStrings(handoff.Risks, 2, 120)
+		card.ChangedFiles = boundedOneLineStrings(handoff.ChangedFiles, 3, 160)
 	}
 	if plan := d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID); len(plan) > 0 {
 		for _, step := range plan {

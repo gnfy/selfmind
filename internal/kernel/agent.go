@@ -1241,19 +1241,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	toolAvailabilityRepairIssued := false
 	toolBudgetExhausted := false
 	toolAdmissionRefused := false
+	seedSelectedPlanCursor(ctx)
 	planSeen, unresolvedPlanSteps := selectedPlanState(ctx)
 	// acceptedPlanRead records a readable selected or accepted current-Run
 	// plan; an unreadable result cannot replace it or vouch for completion.
 	acceptedPlanRead := planSeen
 	planRepairAttempts := 0
-	// Distinct successful substantive action tools completed by this Run, taken
-	// from the same evidence gate that extends the tool budget. It excludes
-	// lifecycle bookkeeping and provably read-only observation, so only real
-	// multi-step work escalates the plan guidance below.
-	planEvidenceTools := 0
-	planGuidanceEscalated := false
-	// Tool actions since the last successful plan update, and the count at the
-	// last stale-plan reminder, so each reminder waits for new actions.
 	actionsSincePlanUpdate, actionsAtPlanReminder := 0, 0
 	successfulFinishStatus := ""
 	var finishRepair finishCorrection
@@ -1325,7 +1318,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if name := strings.TrimSpace(calls[idx].Function); name == "update_plan" || name == "work_select" {
 				// An unreadable result keeps the last accepted list. With none
 				// read yet, the gate fails closed on the request instead.
-				if unresolved, ok := unresolvedPlanStepsFromResult(calls[idx], res); ok {
+				if unresolved, ok := acceptRunPlanReceipt(ctx, calls[idx], res); ok {
 					planSeen = true
 					actionsSincePlanUpdate, actionsAtPlanReminder = 0, 0
 					unresolvedPlanSteps, acceptedPlanRead = unresolved, true
@@ -1368,6 +1361,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						"cleared": cleared, "active_total": activatedToolCount(ctx), "source": "work_unit_boundary",
 					}})
 				}
+				if res.toolName == "update_plan" {
+					if activated := activateToolsFromSearchResult(ctx, res.toolName, res.msg.Content); len(activated) > 0 {
+						EmitAgentEvent(eventCh, AgentEvent{Type: "tool.catalog.activated", Payload: map[string]interface{}{
+							"tools": activated, "active_total": activatedToolCount(ctx), "source": res.toolName,
+						}})
+					}
+				}
 			}
 			history.Steps = append(history.Steps, res.step)
 			messages = append(messages, res.msg)
@@ -1378,9 +1378,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				if _, seen := successfulActionEvidence[res.signature]; !seen {
 					successfulActionEvidence[res.signature] = struct{}{}
 					progressVersion++
-					if countsTowardPlanEvidence(res.toolName, res.retryClass, res.effectClass) {
-						planEvidenceTools++
-					}
 				}
 			}
 		}
@@ -1412,7 +1409,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		emitTurnCompleted(eventCh, answer, completion, streamLost)
 		return answer
 	}
-	completeAnswer := func(i int, resp string, planUnresolved bool) string {
+	completeAnswer := func(i int, resp string, planUnresolved bool, extra ...string) string {
 		history.Outcome = resp
 		completion := resolveTurnCompletion(completionSignals{
 			FinishStatus:         successfulFinishStatus,
@@ -1429,7 +1426,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 
 		recordStep(i, StepCompleteTurn, completion.Reason)
-		emitTurnCompleted(eventCh, resp, completion, streamLost)
+		emitTurnCompleted(eventCh, resp, completion, streamLost, extra...)
 		return resp
 	}
 	if resume, ok := humanWaitResumeFromContext(ctx); ok {
@@ -1515,37 +1512,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// tools here invites unrelated effects after completion.
 		if successfulFinishStatus != "" {
 			iterationStrategy.AllowedTools = map[string]bool{}
-		}
-		// Plan guidance escalation. The system prompt — including
-		// planToolGuidance — is composed once per Run, before any work has
-		// happened, so a model that simply never volunteers update_plan keeps
-		// reading the optional wording no matter how much work it does. This is
-		// the per-iteration seam: once the Run's own evidence shows genuinely
-		// multi-step work and there is still no durable plan, hand the model the
-		// required wording for the next model call. Same shape as the other
-		// runtime directives in this loop, and the same discipline as the tool
-		// budget — escalate only after real new evidence, never from the input
-		// text. Guidance only: no plan is fabricated, no provider call is added,
-		// and the model stays free to finish. It reads this iteration's strategy,
-		// so a turn whose plan tool is unavailable is never told to require it,
-		// and it stops once the turn is winding down — asking for a plan while
-		// the budget-exhausted path is telling the model to stop calling tools
-		// would be a contradiction, not guidance.
-		if successfulFinishStatus == "" && !planGuidanceEscalated && !toolBudgetExhausted && shouldEscalatePlanGuidance(iterationStrategy, planEvidenceTools, planSeen) {
-			planGuidanceEscalated = true
-			previousPlanPolicy := iterationStrategy.normalized().PlanPolicy
-			iterationStrategy = iterationStrategy.WithPlanRequired()
-			messages = append(messages, llm.Message{
-				Role: "user", ContextOrigin: llm.MessageOriginRuntimeControl, ControlCondition: "plan",
-				Content: runtimeControlPrefix + planGuidanceEscalationNudge(iterationStrategy, planEvidenceTools),
-			})
-			EmitAgentEvent(eventCh, AgentEvent{Type: "strategy.plan_guidance_escalated", Payload: map[string]interface{}{
-				"iteration":            i,
-				"plan_evidence_tools":  planEvidenceTools,
-				"threshold":            planGuidanceEscalationThreshold,
-				"previous_plan_policy": string(previousPlanPolicy),
-				"plan_policy":          string(iterationStrategy.PlanPolicy),
-			}})
 		}
 		// Stale plan reminder, at the same seam and appended at the tail so the
 		// cached request prefix survives. It only says the plan has not moved
@@ -1878,6 +1844,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				requested = callIDs.legacy(ExtractToolCalls(resp), i)
 			}
 			calls, refused, droppedForBudget, droppedForLifecycle = admitToolCalls(requested, iterationStrategy, actionToolsUsed, toolUseCounts)
+			// Spend an extension already earned by prior observations before
+			// rejecting a sibling at the soft boundary. The batch itself earns
+			// nothing yet; the hard ceiling and lifecycle caps remain intact.
+			if droppedForBudget > droppedForLifecycle && tryExtendToolBudget(i) {
+				iterationStrategy.MaxActionTools = actionToolBudget
+				calls, refused, droppedForBudget, droppedForLifecycle = admitToolCalls(requested, iterationStrategy, actionToolsUsed, toolUseCounts)
+			}
 			if len(calls) == 0 && len(refused) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
 				droppedForBudget = 1
 			}
@@ -1945,6 +1918,15 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			toolCtx = withHumanWaitBatch(toolCtx, LoopCheckpoint{Iteration: i, Outcome: StepExecuteTools, Messages: cloneLoopMessages(messages)})
 			results := a.executePlanAwareToolCalls(toolCtx, tenantID, eventCh, calls, messages, consumeToolResults)
 			actionToolsUsed += nestedToolsUsed()
+			if status, answer, committed := committedTurn(ctx); committed {
+				successfulFinishStatus = status
+				return completeAnswer(i, answer, false, "declared_final_response", "true"), totalUsage, nil
+			}
+			for _, result := range results {
+				if result.runError != nil {
+					return "", totalUsage, result.runError
+				}
+			}
 			// Safety valve only: a tool result's bytes were already decided when
 			// it was packaged, and rewriting a sent result breaks the request
 			// prefix. This fires for a runaway run; a zero return means every
@@ -1981,12 +1963,14 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				len(refused) == 0 && droppedForBudget == 0 && deferredAcrossWorkUnitBoundary == 0 && deferredAcrossWatchHandoff == 0 &&
 				(finalProseOnly && acceptedFinishAnswer(calls, results, resp) || declaredAnswer != "") {
 				answer := answerCarry.String()
+				var completeExtra []string
 				if declaredAnswer != "" {
 					answer = declaredAnswer
+					completeExtra = []string{"declared_final_response", "true"}
 					messages = append(messages, llm.Message{Role: "assistant", Content: answer})
 					history.Steps = append(history.Steps, answer)
 				}
-				return completeAnswer(i, answer, false), totalUsage, nil
+				return completeAnswer(i, answer, false, completeExtra...), totalUsage, nil
 			}
 			if deferredAcrossWorkUnitBoundary > 0 {
 				messages = append(messages, runtimeControlMessage("SelfMind applied the work-unit boundary before later tool calls. Re-issue only the calls still needed for the new in-progress work unit.", "notice"))
@@ -2523,6 +2507,7 @@ func (a *Agent) triggerEvolutionReview(tenantID string, history TaskHistory) {
 
 func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, prompt string, strategy TaskStrategy, eventCh chan string) context.Context {
 	if _, ok := RuntimeContextBundleFromContext(ctx); ok {
+		activateToolsForActiveSkill(ctx)
 		return ctx
 	}
 	bundle := RuntimeContextBundle{
@@ -2567,6 +2552,7 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 		bundle.ActiveSkill = selected.Active
 		bundle.SkillCandidates = append([]SkillCandidateContext(nil), selected.Candidates...)
 		if selected.Active != nil {
+			activateToolsForActiveSkill(ctx)
 			bundle.SelectionNotes = append(bundle.SelectionNotes, "one active skill selected for the current work unit")
 		} else if len(selected.Candidates) > 0 {
 			bundle.SelectionNotes = append(bundle.SelectionNotes, fmt.Sprintf("%d bounded skill candidate(s) selected for the current work unit", len(selected.Candidates)))

@@ -44,6 +44,19 @@ before changing `internal/tools`, execution middleware, or kernel tool dispatch.
 - Tools that do not need filesystem or process access must not receive broader
   scope as a convenience.
 
+Read-only command proof parses global options before the subcommand. For example,
+`git -C <directory> log` and `git diff -C` have different argument roles; query
+flags are checked under their command grammar. Recognized `grep`/`rev-list`
+queries share this proof with observation catalog consumers. Unknown options,
+configuration overrides, external programs and output-file flags remain unproven.
+This does not grant authority, settle effects or enable parallel terminals.
+
+Compound file reads return the exact `tool_call_id` on each dispatched item,
+including failed attempts with their failure status. A successful file observation
+may be associated by that item ID; the batch wrapper is not its source identity.
+Missing or overlong identities are omitted, never invented or truncated. This
+adds no executable-check authority and does not make success a goal verdict.
+
 ## Execution Environment
 
 An execution environment belongs to a run, not to the channel that submitted
@@ -938,6 +951,9 @@ mutation.
   text tool protocol is a compatibility fallback only.
 - Compatibility normalization, scalar coercion, and recursive schema validation
   finish before recovery policy, durable dispatch claim, or `tool.started`.
+  One shared schema walker returns up to eight independent argument errors in
+  deterministic order; no model-specific argument repair or automatic retry is
+  involved. Existing coercion and optional-null rules remain unchanged.
   Repeating the same malformed call is blocked until its arguments or the
   tool's catalogue generation changes. A prepared call retains the exact Tool
   and middleware snapshot it validated, so a concurrent catalogue refresh
@@ -1594,6 +1610,25 @@ metadata remains enforceable and is covered by mechanism tests.
 
 ## Result Envelope and Artifacts
 
+### Local file retrieval
+
+`search_files` preserves literal, whole-file matching and a file-path list by
+default. Explicit `match_mode: regex` uses Go/RE2 line matching;
+`output_mode: content` returns bounded matching text with source line numbers.
+No match is distinct from an unavailable root. Unreadable or oversized files
+make coverage partial; generated/VCS directories, binary files and symlinks
+are explicitly excluded. `file_glob` filters basenames, not traversal roots.
+`ls_r` also filters returned names without preventing directory traversal.
+
+`read_file` accepts a 1-based `offset`, `limit`, and optional `line_numbers`.
+Line-limited reads also respect the aggregate byte budget. Window output gives
+the next offset and observed size/modification time; these metadata are not a
+content hash or proof that a later window describes the same file version.
+Changes detected during a window read are reported as partial observations.
+Calls without the new options retain plain-text output.
+
+### Shared capture and read-back
+
 One tool result has three distinct surfaces:
 
 1. bounded raw capture for diagnostics and artifact persistence;
@@ -1607,14 +1642,25 @@ of repeating the original command. Spooling failure degrades to a bounded
 result note and must not turn a successful tool call into a failure. Aged tool
 results may shrink only when an addressable artifact retains the evidence.
 
+Compound reads use this same capture path before applying their smaller item
+budget. `batch_read` items retain a per-item artifact id and read-back note;
+spooling failure leaves a bounded warning without retrying the read or calling
+it an execution failure. Hard capture loss remains explicit even when the
+captured portion has an artifact. A parent JSON artifact does not replace the
+original bytes already omitted from a child result.
+
 Failed tools preserve a separate bounded diagnostic excerpt, byte count, and
 content hash in the durable event payload. This evidence is independent of the
 short user preview, so a failure can be classified and reviewed without
 persisting an unbounded stream. Exit status and known interface-drift failures
 are recorded as structured fields where they can be derived deterministically.
-An error classification already attached by the tool layer remains the single
-model-visible classification; the kernel reuses it instead of appending a
-second, potentially contradictory hint. Raw database-driver signatures are
+Error codes, classification, retryability, effect certainty and alternatives
+remain typed runtime/event facts. The existing result envelope projects a
+plain error and specific guidance for the model, without repeating recovery
+protocol fields or ordering a retry after every nonzero exit. Non-dispatch,
+user decisions and unknown effects remain explicit; unknown effects require
+observation before retry. Captured command output is preserved separately and
+is never filtered as framework metadata. Raw database-driver signatures are
 hidden only for trusted built-in tools whose failure exposes SelfMind storage.
 External/MCP database errors remain actionable model evidence, selected from
 trusted registry origin metadata rather than inferred from the tool name.
@@ -2256,9 +2302,24 @@ output/reasoning token usage, and protocol status without storing model text or
 private reasoning. Output-limit termination is unavailable even when the partial
 text parses. Empty output, unexpected tool calls, malformed JSON, incomplete
 decisions, and provider failures stay distinct from a valid `escalate` decision.
-All unavailable paths still require human confirmation; transport success alone
+After bounded recovery, unavailable paths still require human confirmation; transport success alone
 never authorizes execution. Existing injected legacy judges remain supported
 without fabricating response metadata.
+
+Automatic review may make one additional attempt for a typed transient transport
+failure, timeout or empty response. Both attempts share at most 15 seconds,
+including transport retries, and obey any shorter configured or caller budget;
+the first attempt uses at most 10 seconds and at most 80% of the effective
+remaining budget. A configured 10-second total therefore permits an 8-second
+first attempt and a retry within the remaining original deadline. The runtime
+does not promise a successful retry or renew an exhausted budget.
+Deny/escalate, caller cancellation, malformed or truncated decisions,
+auth/configuration failures and unknown error classes are not retried. Separate
+attempt channels fence late answers. Changed user evidence discards the pending
+review before a grant, dispatch or stale human ask; Main receives the new
+precondition instead. No execution tool is retried by this mechanism.
+The response envelope records bounded attempt diagnostics and summed known usage;
+missing usage is explicitly incomplete, never a fabricated zero.
 
 Version-2 response diagnostics also retain full provider usage (including cache
 reporting flags), model, role, latency, and a bounded restriction citation.
@@ -2301,10 +2362,34 @@ the missing context instead of silently ignoring a trailing restriction.
 - Missing judge, timeout, provider failure, malformed output, or an unknown
   decision always escalates. Triage never fails open.
 
-At an uninvoked native call, a human ask gets a short grace period for an
-in-place answer. Otherwise the exact call, paired prior results, pending request,
-Run and checkpoint are atomically parked before releasing the worker. A shorter
-configured wait or caller deadline uses that same boundary. Checkpoint failure,
+At an uninvoked native call, a human ask first stays in its Run when its person
+is sitting at the terminal that asked, and an answer inside that hold continues
+the same Run: no checkpoint hop, no continuation Run, and no plan or evidence
+carried across a Run boundary. A Run qualifies when its input came from an
+interactive terminal session (platform `cli`, a channel other than the literal
+`cli` that `selfmind send` and API callers use), directly or as an approval,
+clarification, resource or provider-wait continuation of that session's work;
+work a schedule, a watcher or a recovery started never qualifies. IM-origin asks
+take the short grace and park, since no IM answer time has been measured. The
+hold lasts at most 180 seconds, never past the approval or caller budget, and
+ends at once through the same exact-checkpoint park when the terminal's
+event-stream subscription closes (another CLI session or chat activity
+cannot stand in for that exact asking session), the daemon
+begins draining for a restart or model change, input of the same person is
+queued or starting (it needs the slot, the writable roots or the terminal lane
+the held Run keeps; a queue that cannot be read counts), or the cap is reached.
+An ask writes its exact pending-call checkpoint when it starts, so a crash
+during the hold recovers like a park; when that write fails it takes the short
+grace instead. Consuming the answer in place puts back the checkpoint the ask
+overwrote, in the same transaction as the decision claim for an approval and
+before the answer is returned for a clarification, so a pending-call binding
+never outlives its wait: a crash while the approved call runs cannot replay it,
+and a decision already consumed is not answerable again. Every other ask gets
+the short grace for an in-place answer. Otherwise the exact call, paired prior
+results, pending request, Run and checkpoint are atomically parked before
+releasing the worker, and the request records why (`park_reason`: `grace`,
+`hold_cap`, `capacity`, `draining` or `client_detached`). A shorter configured
+wait or caller deadline uses that same boundary. Checkpoint failure,
 an entered tool other than effect-free `clarify`, or opaque delegation retains
 cancellable occupancy; `clarify` may checkpoint its exact question.
 None may turn a control-store failure into an answer. A parked approval stays
@@ -2331,7 +2416,8 @@ the unattended resource budget. Defaults are 30 minutes for
 `agent.approval_wait` and 30 seconds for
 `agent.approval_wait_unattended`; the caller's remaining deadline may shorten
 either. These budgets bound legacy waits, while checkpointable asks release
-their worker after the grace period. A rapid park is therefore intentional
+their worker after the grace period, or after the hold for an attended terminal
+session. A rapid park is therefore intentional
 resource release, not rejection or expiry: the request remains answerable for
 seven days and a later answer resumes the task. If the caller already expired
 or a legacy ask has no budget, an `approval.skipped_no_budget` event records it
@@ -2366,8 +2452,8 @@ authorization assessment, grant key, provider route, latency, policy version,
 rationale, and a short redacted provider error. It never stores the command,
 arguments, prompt, or credentials. Records are retained for 14 days. A failure
 to write diagnostics must not block approval, so the foreground write has a
-short deadline and is best-effort. The judge has a five-second foreground
-deadline; its 4096-token output budget accommodates providers that still spend
+short deadline and is best-effort. The judge has a shared foreground
+deadline capped at 15 seconds (a shorter configured or caller budget wins); its 4096-token output budget accommodates providers that still spend
 hidden reasoning tokens before returning the compact structured verdict.
 
 The declarative read-only catalog may bypass a human only when both the command
@@ -2418,6 +2504,10 @@ Completion precondition failures are typed separately from storage failures.
 One failed `finish_run` may be retried after a genuinely changed plan or a
 successful `verify` call; unchanged retries, rejection, and unknown failures do
 not unlock it. Successful completion remains final and the retry is bounded.
+A finish refused as input (missing or invalid status, no body, empty or unusable
+assessments) was never dispatched and carries the corrected-input contract
+(phase `preparation`, effect `not_dispatched`), so it does not consume a committed finish attempt. Changed payload repairs remain bounded by the Run budget; identical input under unchanged runtime state is refused. A storage failure, an unmet completion requirement and a rejection
+keep their own meaning and do not.
 An identical rejected `update_plan` is retried only after its requested
 completed steps receive new successful bound verification or the durable Plan
 version changes. A check for a sibling step that the update did not complete
@@ -2454,8 +2544,48 @@ when a Plan exists, unless Main explicitly selects its step. Source references,
 completion verdicts and freshness checks share the exact Work Unit evidence
 window. Later observations outside that window cannot replace its proof, and
 every effective check must remain fresh against its own declared inputs.
-Failure feedback keeps the same open obligation in place;
-successful replacement feedback identifies a separate retry step as redundant.
+For a Plan check, the normal input is `command` plus `step_id`: the resolver
+inherits its stored condition and target. A corrected attempt normally supplies
+`command`, `replaces` and `reason`, keeping the same `cwd`; omitted condition,
+target, step and dependencies inherit from the exact referenced check. Explicit
+standalone checks still require both `criterion` and `target`. Failure feedback
+reports the unproven step and evidence reference without choosing Main's Plan
+transitions, creating retry work, or ordering another check. Main distinguishes
+an observed negative condition from a broken observation method; neither is a
+successful verification.
+The legacy verification state remains a command/check projection. Main's
+optional `finish_run.assessments` records a separate condition conclusion using
+only `result`, `evidence_refs` and `reason`; runtime version 1 adds exact Run,
+step, Plan criterion, observed criterion, target and working-directory identity.
+Only confirmed, effective, fresh current-Run observations can be referenced; a
+refusal lists the citeable checks and names the imported step behind an earlier
+Run's id.
+Accepted `update_plan` receipts also expose read-only `closure_facts`: the
+accepted Plan version, up to eight open step ids and eight currently citeable
+checks, with omitted counts. They use the same Work Unit windows, effective-check
+and freshness rules as acceptance. Historical checks are not current references;
+confirmed negative observations remain citeable without becoming passed checks.
+These fields are outside the writable Plan array. They require no new model call
+or durable state. A failed or version-mismatched auxiliary read reports
+`available: false` while preserving the accepted Plan; later finish acceptance
+revalidates references and Main still judges sufficiency and completion.
+Unknown dispatch, unknown effects, missing exits, foreign references and changed
+inputs do not become conclusive observations. One finding cannot mix targets
+or criteria. New findings replace only the same obligation; omissions and an
+unrelated success cannot erase another finding. Historical outcomes without
+this field stay unassessed, and unsupported record versions fail closed.
+Investigation/report work without a positive acceptance gate can finish with a
+grounded negative result without rewriting failed execution evidence. Required
+positive gates still demand passed verification and cannot finish with an
+explicit negative or unknown condition. Main judges the user's intended goal;
+no task classifier or model-specific parser makes this decision. Prior findings
+travel through the existing inherited-evidence selector as historical context;
+positive source adoption refuses a recorded negative or unknown condition even
+if its process exited zero. Permissions and uncertain-effect settlement are
+unchanged. An accepted judgment and finish decision share one `run.outcome`
+event. Failure to save that event or execution evidence is surfaced as failed
+finalization, never successful completion; the event stream is drained without
+replaying effects.
 When a role has `verify` and a sufficiently large action envelope, two calls
 inside the existing hard ceiling are reserved for verification. A bounded
 notice asks Main to finish the current scope and reconcile its plan first.
@@ -2829,6 +2959,14 @@ target, including a finite retry loop, must move to a durable watcher, a single
 provider-native wait, or an actionable handoff. A bounded read of distinct
 targets remains an ordinary batch. The guard does not classify a mutation as a
 status check.
+For bounded literal lists, the fan-out exemption evaluates simple scalar
+bindings and compares expanded queries, rather than treating any iterator
+reference as proof. Equal derived values do not establish different targets;
+dynamic options require reviewed target-selector metadata in the existing
+observation catalog. Unsupported scope, control flow,
+declaration attributes or substitutions retain the redirect. Static expansion
+has no command execution, filesystem access or inherited host environment;
+ordinary approval remains independent of this waiting policy.
 
 Successful registration is itself a trusted lifecycle handoff. The kernel
 records a structured `waiting_external` outcome and ends the foreground turn
@@ -3120,3 +3258,24 @@ Changes in this domain need focused coverage for:
 - effect profiles matching only their exact invocation: workspace, resolved
   cwd, literal argv, declared assignments and standard input;
 - UTF-8-safe previews, artifact spooling, and model truncation recovery.
+
+### Compound completion and observed facts
+
+`finish_run.plan_patch` plus `final_response` opts into atomic final progress.
+A rollback-only candidate transaction uses the same internal Plan, condition
+and evidence validators as materialization. Pending steering, cancellation,
+Plan version and evidence are rechecked in the final write transaction. A
+prepared tool result is not authority to close; the kernel ends only after a
+durable commit receipt. Outcome-only legacy calls keep their contract.
+
+Main may associate a current version-1 command/file observation with a Plan
+condition using `assessments.step_id` and exact `evidence_refs` in that compound
+submission. The runtime stores an `evidence.adopted` version-1 association,
+retaining the original call, cursor, timestamps and dispatch facts; it records
+no new execution and settles no effect. Unsupported historic ordinary output
+is ineligible. Static observations support investigation findings, never an
+executable positive gate. Executable gates require observed invocation, start,
+exit and fresh scoped inputs. Closed Work Unit windows stay frozen. Model
+observation references are bounded metadata, separate from raw capture and user
+preview. Every read-only catalog consumer applies the same argument grammar;
+unknown options on reviewed mixed-effect programs require ordinary review.

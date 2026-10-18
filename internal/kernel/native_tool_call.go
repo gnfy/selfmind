@@ -13,6 +13,7 @@ import (
 )
 
 type toolExecutionResult struct {
+	runError     error
 	pause        *toolLifecycleHandoff
 	index        int
 	step         string
@@ -223,46 +224,6 @@ func lifecycleToolCap(name string) int {
 	default:
 		return 0
 	}
-}
-
-// unresolvedPlanStepsFromResult reads the plan update_plan ACCEPTED. The
-// durable projection keeps a requested but unassessed cancellation open, so the
-// requested arguments overstate what is resolved: judging them let a Run finish
-// done while its stored plan still had a pending step. A result without a
-// readable plan is no evidence either way (ok=false): the caller keeps the last
-// accepted list rather than failing open to the request.
-func unresolvedPlanStepsFromResult(call llm.ToolCall, result toolExecutionResult) ([]string, bool) {
-	name := strings.TrimSpace(call.Function)
-	if name != "update_plan" && name != "work_select" {
-		return nil, false
-	}
-	var accepted struct {
-		Status     string `json:"status"`
-		CommitMode string `json:"commit_mode"`
-		Action     string `json:"action"`
-		Plan       []struct {
-			Step   string `json:"step"`
-			Status string `json:"status"`
-		} `json:"plan"`
-	}
-	if err := json.Unmarshal([]byte(result.rawResult), &accepted); err != nil || accepted.Plan == nil {
-		return nil, false
-	}
-	if name == "work_select" && (accepted.Status != "committed" || accepted.CommitMode != "direct" || accepted.Action != "resume") {
-		return nil, false
-	}
-	unresolved := make([]string, 0, len(accepted.Plan))
-	for _, step := range accepted.Plan {
-		if status := strings.TrimSpace(step.Status); status == "completed" || status == "cancelled" {
-			continue
-		}
-		name := strings.TrimSpace(step.Step)
-		if name == "" {
-			name = "unnamed step"
-		}
-		unresolved = append(unresolved, name)
-	}
-	return unresolved, true
 }
 
 // requestedOpenPlanSteps judges the requested snapshot when no accepted plan
@@ -500,6 +461,10 @@ func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh c
 }
 
 func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, eventCh chan string, idx int, call llm.ToolCall) toolExecutionResult {
+	if _, _, committed := committedTurn(ctx); committed {
+		return a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args,
+			newPreparationPolicyError("run_already_completed", "policy_redirect", "never", "not_dispatched", "The Run's result was already committed; no further action was executed.", nil))
+	}
 	return a.executeToolCall(ctx, tenantID, eventCh, idx, call, nil)
 }
 
@@ -730,6 +695,9 @@ func (a *Agent) executeToolCall(ctx context.Context, tenantID string, eventCh ch
 		packaged := packageDispatchedToolFailureCtx(ctx, name, result, err, metadata)
 		applyDispatchFacts(&packaged, dispatch)
 		if policy := RecoveryPolicyFromContext(ctx); policy != nil {
+			if packaged.FailurePhase == "preparation" && packaged.Retryability == "corrected_input" && packaged.EffectState == "not_dispatched" {
+				policy.RecordPreparationFailure(RecoveryFailure{Attempt: preparationAttempt, ErrorCode: packaged.ErrorCode, FailureClass: "invalid_input", Retryability: packaged.Retryability, EffectState: packaged.EffectState})
+			}
 			policy.RecordFailure(RecoveryFailure{
 				Attempt: recoveryAttempt, ErrorCode: packaged.ErrorCode, FailureClass: packaged.ErrorCategory,
 				Retryability: packaged.Retryability, EffectState: packaged.EffectState,
@@ -740,6 +708,11 @@ func (a *Agent) executeToolCall(ctx context.Context, tenantID string, eventCh ch
 			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err, completedMetadata...)
 		}
 		var pause *toolLifecycleHandoff
+		var runError error
+		var fatal interface{ ToolRunError() error }
+		if errors.As(err, &fatal) {
+			runError = fatal.ToolRunError()
+		}
 		var boundary interface{ ToolRunPause() (string, string, bool) }
 		if errors.As(err, &boundary) {
 			reason, message, needApproval := boundary.ToolRunPause()
@@ -751,6 +724,7 @@ func (a *Agent) executeToolCall(ctx context.Context, tenantID string, eventCh ch
 			pause = &toolLifecycleHandoff{Status: status, CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
 		}
 		return toolExecutionResult{
+			runError:     runError,
 			pause:        pause,
 			index:        idx,
 			step:         packaged.ModelContent,
@@ -770,6 +744,7 @@ func (a *Agent) executeToolCall(ctx context.Context, tenantID string, eventCh ch
 	}
 	modelResult := modelVisibleSkillToolResult(name, result)
 	packaged := packageToolResultCtx(ctx, name, modelResult)
+	packaged.ModelContent += modelObservationHint(dispatch.Evidence)
 	applyDispatchFacts(&packaged, dispatch)
 	if policy := RecoveryPolicyFromContext(ctx); policy != nil {
 		policy.RecordSuccess(recoveryAttempt)

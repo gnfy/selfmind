@@ -17,19 +17,19 @@ func TestHumanWaitParkingRequiresDurableBindingAndRollsBack(t *testing.T) {
 			} else {
 				ref = pendingClarification(t, store, owner, task, run).ID
 			}
-			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref); err == nil || parked {
+			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref, HumanWaitParkGrace); err == nil || parked {
 				t.Fatal("parked without a checkpoint")
 			}
 			if err := store.SaveLoopCheckpoint(ctx, awaitCheckpoint(owner, task, run, kind, ref, "pending-call")); err != nil {
 				t.Fatal(err)
 			}
-			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, "different-owner", run.ID, kind, ref); err == nil || parked {
+			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, "different-owner", run.ID, kind, ref, HumanWaitParkGrace); err == nil || parked {
 				t.Fatal("another person parked the Run")
 			}
 			if _, err := store.db.ExecContext(ctx, `CREATE TRIGGER fail_human_run BEFORE UPDATE ON runs WHEN NEW.status='waiting_user' BEGIN SELECT RAISE(ABORT,'injected run write failure'); END`); err != nil {
 				t.Fatal(err)
 			}
-			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref); err == nil || parked {
+			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref, HumanWaitParkGrace); err == nil || parked {
 				t.Fatal("failed transaction reported parking")
 			}
 			current, _ := store.GetRun(ctx, owner.TenantID, run.ID)
@@ -50,7 +50,7 @@ func TestHumanWaitParkingRequiresDurableBindingAndRollsBack(t *testing.T) {
 			if _, err := store.db.ExecContext(ctx, `DROP TRIGGER fail_human_run`); err != nil {
 				t.Fatal(err)
 			}
-			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref); err != nil || !parked {
+			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref, HumanWaitParkGrace); err != nil || !parked {
 				t.Fatalf("durable checkpoint failed to park: %v %v", parked, err)
 			}
 		})
@@ -80,7 +80,7 @@ func TestHumanWaitAnswerWinsBeforeParking(t *testing.T) {
 					t.Fatalf("live answer queued: %+v %v", q, err)
 				}
 			}
-			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref); err != nil || parked {
+			if parked, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref, HumanWaitParkGrace); err != nil || parked {
 				t.Fatalf("in-place answer was parked: %v %v", parked, err)
 			}
 			current, _ := store.GetRun(ctx, owner.TenantID, run.ID)

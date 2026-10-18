@@ -1,0 +1,59 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "我将先记录一个只读调查 marker.txt 的计划里程"
+    },
+    {
+      "usage": {
+        "input_tokens": 12464,
+        "output_tokens": 14,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": "碑。"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 2,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 95,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_229291",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"记录只读调查 marker.txt 的里程碑\",\"plan\":[{\"status\":\"in_progress\",\"verification_required\":false,\"step\":\"只读检查 marker.txt 是否恰好包含 READY 加一个换行并留下证据\",\"success_criteria\":\"查明 marker.txt 的实际内容是否恰好包含 READY 加一个换行，并记录 verify 证据\"}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "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"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

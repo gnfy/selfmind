@@ -1,43 +1,5 @@
 {
   "plan_binding_version": 1,
-  "method": "stream",
-  "events": [
-    {
-      "usage": {
-        "input_tokens": 12736,
-        "output_tokens": 95,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "finish_reason": "stop"
-    },
-    {
-      "usage": {
-        "input_tokens": 2042,
-        "output_tokens": 0,
-        "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 0,
-        "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0
-      }
-    },
-    {
-      "tool_calls": [
-        {
-          "ID": "call_1582681",
-          "Function": "finish_run",
-          "Args": "{\"tests\":[\"python3 -c \\\"assert open('value.txt', 'rb').read() == b'READY\\\\n'\\\"\"],\"done\":[\"Verified that value.txt contains exactly READY followed by a newline\"],\"next_steps\":[\"Report the verification result upon user confirmation\"],\"status\":\"waiting_user\",\"summary\":\"Verification completed. Waiting for user confirmation before reporting the result.\"}",
-          "replay_metadata": {
-            "google": {
-              "thought_signature": "EuwKCukKAWkUfROoVfmky/obkUr3V6iWTP8zcGEfB7RNosBoozjF8G3yGPNA4mZFkfuaz0wEJZRgUCAT9lGd6KjJFM4EFfC4g1HHFUiFuBEUd2E7Sh1B2EXdya+dBglUchUY2aaAMqORGVzcKBQc/xWxQfcezOPnr5CUjUWWONF6dKYCaWzr5/Bh114BQLAEACC7O5H2hEtz+d+vfoAgopu6DkgbEAyo71oCWkWWyKpLfgo8DlADaZxoM4n6XWeXGu5ucUO+fov9W1jUuC3wT497t0L+sdb59nlWZckQKq0ly1MWS9fsT70QwEiLd+grnSzC+FYJQOJP16Tzk7qe94s/+t4oannrRCegui+45ocQXz3FItz06rWW7z3OnW5dUxwy9yD2yucG7KOpzscwKKmdM1FnHS5x9xPieANJcGwnxGouSmjq2O5koPnupq06DaTd4KsmSxxr2CdX8nEc1cpt/wg85LxPbkv3z+oAd7+ZWjb7e5QzqTH/wZP5JAw2PbKyh4dNQ/jmWE+pM3253bu6EI4vQN0QNGrPn8k9nV/JecxzCA0Ef4UBfAe5IQLaWNUn4Q9ZJ3X6vdpHfaogBkfQdtT5+fRqFfDtD8YQiM1zuWidsHNJwN8zVdQ/SQ69F3zsfA5kmqsK2jl7q2JnBpNNwXMiRfk28gqCVrPYdjZnrRvyoA6qM4B28a8xfG5y2Z6sYfFs3iBL68h/1+g1R1NNQwidFv1AeY0h1fsVkouRRJb5oRrWpLjwXQwUVLrwYxGty6/YcHW0vZfjRiugMoo573VFvWD+mLR+2QAzaw4vee5/i08HBW0rGZahXAQnvzV6Nc0Y8TKyq6+jN4W5IxPVfO9fCnRCe57i3pm4/EEkuHlivBCjbMtsAyUpvpNcP/qX8D35NQxrk7YHmlDYygG/LFZpXagMGU0CUP33Z6MDjkG5BwEqa6rx/rRBd27EIaeaLJ7yoPCcF0BXTdrsptAq5AtQRl84aHiAkKOSxwCHWkEfi6v5WeDlYZx6xrwssnfjCb2IX42halWT9QtH7IauEzpBi5zL9aP49u70Rs5fUHJvZt5uXM99bEIEwcSXcbKeCO8J7hex5k67DEOhV9PWM8jDeZFMM/K1RPSpnGCkFVyaSAos1jrHDwmllOVV67uqP6lLrsMF2MTPlkWVYCm/n02Wyd+PlSK3fq7eF7uUJ+YfKDb+I8cXNWRovML8VyDh3/c2c9Y8HT4OdN9vm3mVc64PMcBoiIZIRs8sMhjyhyrPvfCmgD+4T2ia3YrWcUoOVldnE6AP39LRm7vOEPpsWVkHk93lR4gcLmabFtq5WCadS+E4IirAF6p0pUmbGUOVn/8H8Z3xFMhVxao6lfZgoPdtc2FVOLJSsPZIaOZlY/TKdVFYg07lpFQROLV6ad0D0lmbEFd2dE9i3ZFnnYNZRf9ZDWUJK+lwFXyZ0jUs3OTLITLyCrrzCVu45m9e+cGkroXpNZ2TZLYmnSQuemXyUOAIzV6WJ8s2B3jgFDFI1VnDKgJF4w2NhMf8XPAItWGUF4JOTHyDGSX29gnbcyBaGbnAYLa91UeVIxZnGRwziSdaK9zbpkgWyLkyIRzuF8CiweG92gdaYE8+nOSKs0SqFFcnpP2znVyKZBl2XhbLLvHwHr8y8HWL3WgFYYr00Gzh5ZM0VEEz/niHOdnwRDhd3YbROPG/gMVTiXIEYBykUKujGIl3fbvLwYz2MYiaC0ZgY21amzQt8mIuczMldCs4IDfZ/AhDYubjIRMiTV9DNzWqmQ22wgOqWMvY49fklOGV7SjOsH+RHrRD+EfPG2zDDTYvaUdG527LXpKA5lICQ6vXtuNs4+EhUW5bP70="
-            }
-          }
-        }
-      ]
-    }
-  ]
+  "method": "completion",
+  "completion": "reuse_prior_verification closure_facts work_select finish_run value.txt"
 }

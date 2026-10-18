@@ -63,3 +63,29 @@ func TestVCRCurrentPlanBindingSurvivesAgedHistoricalSteps(t *testing.T) {
 		t.Fatalf("aged historical ID shifted current plan binding: %+v", replay)
 	}
 }
+
+func TestVCRPlanReferencesSupportCompactAndLegacyIdentities(t *testing.T) {
+	for _, pair := range [][2]string{
+		{"step_1", "step_2"},
+		{"step_123456abcdef1234_1", "step_abcdef123456abcd_2"},
+		{"step_11111111-1111-4111-8111-111111111111", "step_abcdef123456abcd_2"},
+		{"step_11111111-1111-4111-8111-111111111111", "step_7"},
+		{"step_3", "step_22222222-2222-4222-8222-222222222222"},
+	} {
+		t.Run(pair[0], func(t *testing.T) {
+			request := func(id string) []Message {
+				return []Message{{Role: "tool", Name: "update_plan", Content: `{"plan":[{"step_id":"` + id + `"}]}`}}
+			}
+			path := filepath.Join(t.TempDir(), "0000.json")
+			provider := &vcrProvider{}
+			provider.save(context.Background(), path, cassette{Method: "stream", Events: []recordedEvent{{ToolCalls: []ToolCall{{ID: "check", Function: "verify", Args: `{"step_id":"` + pair[0] + `"}`}}}}}, request(pair[0]))
+			replay, err := provider.load(context.Background(), path, request(pair[1]))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if replay.Events[0].ToolCalls[0].Args != `{"step_id":"`+pair[1]+`"}` {
+				t.Fatalf("stale replay identity: %+v", replay.Events)
+			}
+		})
+	}
+}

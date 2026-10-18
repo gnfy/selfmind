@@ -36,6 +36,8 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 - [Documentation Index](README.md) - current, en
 - [Domain Documentation for Engineering Skills](agents/domain.md) - current, en
 - [Engineering Skills Issue Tracker](agents/issue-tracker.md) - current, en
+- [Runtime Closure Repair Execution Guide](agents/runtime-closure-execution.md) - current, en
+- [任务闭环修复执行指南](agents/runtime-closure-execution.zh-CN.md) - current, zh-CN
 - [Engineering Skills Triage Labels](agents/triage-labels.md) - current, en
 - [Command Reference](command-reference.md) - current, en
 - [命令参考](command-reference.zh-CN.md) - current, zh-CN
@@ -54,6 +56,7 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 
 ## Reference
 
+- [Runtime Closure Portable Checks and Evidence](agents/runtime-closure-checks.md) - current, en
 - [Coding Agent Foundations](coding-agent-foundations.md) - current, en
 - [编程 Agent 基础](coding-agent-foundations.zh-CN.md) - current, zh-CN
 - [上下文生命周期](context-lifecycle.zh-CN.md) - current, zh-CN

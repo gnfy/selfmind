@@ -103,7 +103,12 @@ func (closurePreconditionError) ToolErrorCategory() string { return "stale_preco
 func (closurePreconditionError) ModelSafeMessage() string {
 	return "Resolve the plan before finishing."
 }
-func (closurePreconditionError) ToolRecoveryHint() string { return "Update the plan." }
+func (closurePreconditionError) ToolRecoveryHint() string   { return "Update the plan." }
+func (closurePreconditionError) ToolFailurePhase() string   { return "preparation" }
+func (closurePreconditionError) ToolRetryability() string   { return "after_state_change" }
+func (closurePreconditionError) ToolEffectState() string    { return "not_dispatched" }
+func (closurePreconditionError) ToolStateChanged() bool     { return false }
+func (closurePreconditionError) ToolAlternatives() []string { return nil }
 
 type repairClosureBackend struct {
 	budgetClosureBackend
@@ -222,32 +227,45 @@ func TestActionToolsDisabledDropsReserveWithoutMutatingOriginal(t *testing.T) {
 	}
 }
 
-func TestFinishCorrectionNeverUnlocksUnchangedOrRepeatedFailures(t *testing.T) {
-	for _, code := range []string{"completion_precondition", "approval_rejected", "unknown"} {
+func TestFinishCorrectionRequiresProgressAndRejectsOtherFailures(t *testing.T) {
+	for _, code := range []string{"completion_precondition", "condition_assessment_invalid", "approval_rejected", "unknown"} {
 		counts := map[string]int{"finish_run": 1}
 		var correction finishCorrection
-		correction.observe([]toolExecutionResult{{toolName: "finish_run", errorCode: code}}, counts)
+		correction.observe([]toolExecutionResult{{toolName: "finish_run", errorCode: code, effectState: "not_dispatched"}}, counts)
 		correction.observe([]toolExecutionResult{{toolName: "update_plan", success: true, rawResult: `{"changed":false}`}}, counts)
 		if counts["finish_run"] != 1 {
 			t.Fatal("no-op plan unlocked finish")
 		}
 		correction.observe([]toolExecutionResult{{toolName: "verify", success: true}}, counts)
 		want := 1
-		if code == "completion_precondition" {
+		if code == "completion_precondition" || code == "condition_assessment_invalid" {
 			want = 0
 		}
 		if counts["finish_run"] != want {
 			t.Fatalf("%s unlocked incorrectly: %v", code, counts)
 		}
 		counts["finish_run"] = 1
-		correction.observe([]toolExecutionResult{{toolName: "finish_run", errorCode: code}, {toolName: "update_plan", success: true, rawResult: `{"changed":true}`}}, counts)
-		if counts["finish_run"] != 1 {
-			t.Fatal("second correction exceeded bounded finish attempts")
+		correction.observe([]toolExecutionResult{{toolName: "finish_run", errorCode: code, effectState: "not_dispatched"}, {toolName: "update_plan", success: true, rawResult: `{"changed":true}`}}, counts)
+		if counts["finish_run"] != want {
+			t.Fatal("a second state correction must follow the same progress and failure rules")
 		}
 	}
 }
 
-func TestFinishCorrectionAllowsOneCorrectedNotDispatchedArgumentFailure(t *testing.T) {
+func TestCappedHiddenLifecycleToolReportsAttemptLimit(t *testing.T) {
+	strategy := DefaultTaskStrategy().WithHiddenTools("finish_run")
+	_, refused, _, _ := admitToolCalls(
+		[]llm.ToolCall{{ID: "finish-2", Function: "finish_run", Args: `{}`}},
+		strategy,
+		0,
+		map[string]int{"finish_run": 1},
+	)
+	if len(refused) != 1 || refused[0].err.code != "tool_attempt_limit" {
+		t.Fatalf("expected tool_attempt_limit for capped finish_run, got %+v", refused)
+	}
+}
+
+func TestFinishCorrectionSeparatesInputRepairFromCommittedAttempts(t *testing.T) {
 	counts := map[string]int{"finish_run": 1}
 	var correction finishCorrection
 	invalid := toolExecutionResult{
@@ -260,8 +278,8 @@ func TestFinishCorrectionAllowsOneCorrectedNotDispatchedArgumentFailure(t *testi
 	}
 	counts["finish_run"] = 1
 	correction.observe([]toolExecutionResult{invalid}, counts)
-	if counts["finish_run"] != 1 {
-		t.Fatalf("argument correction was unlocked more than once: %v", counts)
+	if counts["finish_run"] != 0 {
+		t.Fatalf("uncommitted input repair consumed a completion: %v", counts)
 	}
 }
 

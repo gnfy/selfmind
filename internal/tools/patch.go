@@ -114,6 +114,7 @@ func parseV4APatch(patchContent string) ([]PatchOperation, error) {
 	i := startIdx + 1
 	var currentOp *PatchOperation
 	var currentHunk *Hunk
+	pendingBlankContext := 0
 
 	parseError := func(msg string) error {
 		return fmt.Errorf("parse error: %s", msg)
@@ -127,6 +128,12 @@ func parseV4APatch(patchContent string) ([]PatchOperation, error) {
 		addMatch := regexp.MustCompile(`^\*\*\*\s*Add\s+File:\s*(.+)`).FindStringSubmatch(line)
 		deleteMatch := regexp.MustCompile(`^\*\*\*\s*Delete\s+File:\s*(.+)`).FindStringSubmatch(line)
 		moveMatch := regexp.MustCompile(`^\*\*\*\s*Move\s+File:\s*(.+?)\s*->\s*(.+)`).FindStringSubmatch(line)
+		// An unprefixed blank inside an update is context, just like other
+		// implicit context lines. Defer it until another body line confirms it:
+		// blank separators before a hunk/file marker remain separators.
+		if updateMatch != nil || addMatch != nil || deleteMatch != nil || moveMatch != nil || strings.HasPrefix(line, "@@") {
+			pendingBlankContext = 0
+		}
 
 		if updateMatch != nil {
 			if currentOp != nil {
@@ -201,9 +208,15 @@ func parseV4APatch(patchContent string) ([]PatchOperation, error) {
 				currentHunk = &Hunk{ContextHint: strings.TrimSpace(hint)}
 			}
 
+		} else if currentOp != nil && line == "" && currentOp.Operation == OpUpdate {
+			pendingBlankContext++
 		} else if currentOp != nil && line != "" {
 			if currentHunk == nil {
 				currentHunk = &Hunk{}
+			}
+			for pendingBlankContext > 0 {
+				currentHunk.Lines = append(currentHunk.Lines, HunkLine{" ", ""})
+				pendingBlankContext--
 			}
 			if strings.HasPrefix(line, "+") {
 				currentHunk.Lines = append(currentHunk.Lines, HunkLine{"+", line[1:]})

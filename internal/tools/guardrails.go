@@ -182,6 +182,52 @@ func containsPollingLoopDepth(command string, depth int) bool {
 		return strings.Contains(normalized, " while ") || strings.Contains(normalized, " until ") ||
 			strings.Contains(normalized, " watch ") || strings.Contains(normalized, " for ((")
 	}
+	// Declarations with attributes and function definitions outside a loop can
+	// change assignment semantics or shadow the commands it observes. They
+	// cannot earn the straight-line fan-out exemption from this bounded proof.
+	bindingsKnown := true
+	syntax.Walk(file, func(node syntax.Node) bool {
+		switch value := node.(type) {
+		case *syntax.ForClause:
+			return false // the loop proof owns its straight-line body
+		case *syntax.FuncDecl:
+			bindingsKnown = false
+		case *syntax.ArithmCmd, *syntax.ArithmExp:
+			bindingsKnown = false
+		case *syntax.DeclClause:
+			if value.Variant.Value == "readonly" || value.Variant.Value == "nameref" {
+				bindingsKnown = false
+			}
+			for _, arg := range value.Args {
+				if arg.Name == nil || arg.Name.Value == "IFS" {
+					bindingsKnown = false
+				}
+			}
+		case *syntax.CallExpr:
+			if len(value.Args) > 0 {
+				name, static := staticObservationWord(value.Args[0])
+				if !static {
+					bindingsKnown = false
+				}
+				switch name {
+				case "read", "let", "eval", "source", ".", "shopt", "alias", "builtin", "command":
+					bindingsKnown = false
+				case "printf":
+					if printfMutatesBindings(value.Args[1:]) {
+						bindingsKnown = false
+					}
+				}
+			}
+			if len(value.Args) == 0 {
+				for _, assign := range value.Assigns {
+					if assign.Name != nil && assign.Name.Value == "IFS" {
+						bindingsKnown = false
+					}
+				}
+			}
+		}
+		return bindingsKnown
+	})
 	activeWait := false
 	syntax.Walk(file, func(node syntax.Node) bool {
 		if node == nil || activeWait {
@@ -191,7 +237,7 @@ func containsPollingLoopDepth(command string, depth int) bool {
 		case *syntax.WhileClause:
 			activeWait = true
 		case *syntax.ForClause:
-			activeWait = forClauseWaits(value)
+			activeWait = forClauseWaits(value) || (!bindingsKnown && finiteLiteralForLoop(value) && loopHasRemoteObservation(value.Do))
 		case *syntax.CallExpr:
 			if len(value.Args) == 0 {
 				return true
@@ -284,36 +330,6 @@ func loopHasRemoteObservation(stmts []*syntax.Stmt) bool {
 		}
 	}
 	return false
-}
-
-func loopObservesIterator(clause *syntax.ForClause) bool {
-	iter, ok := clause.Loop.(*syntax.WordIter)
-	if !ok || iter.Name == nil || iter.Name.Value == "" {
-		return false
-	}
-	found := false
-	allDistinct := true
-	for _, stmt := range clause.Do {
-		syntax.Walk(stmt, func(node syntax.Node) bool {
-			call, ok := node.(*syntax.CallExpr)
-			if !ok || !remoteObservationCall(call) {
-				return true
-			}
-			found = true
-			usesIterator := false
-			syntax.Walk(call, func(part syntax.Node) bool {
-				if param, ok := part.(*syntax.ParamExp); ok && param.Param != nil && param.Param.Value == iter.Name.Value {
-					usesIterator = true
-				}
-				return true
-			})
-			if !usesIterator {
-				allDistinct = false
-			}
-			return false
-		})
-	}
-	return found && allDistinct
 }
 
 func stmtsWait(stmts []*syntax.Stmt) bool {
@@ -443,11 +459,11 @@ unwrap:
 	if !ok {
 		return false
 	}
-	if rule, ok := observationRuleByProgram[program]; ok && rule.external && rule.matches(args) && (rule.verify == nil || rule.verify(args)) {
+	if rule, ok := observationRuleByProgram[program]; ok && rule.external && rule.matches(args) {
 		return true
 	}
 	rule, ok := pollingObservationRules[program]
-	return ok && rule.matches(args) && (rule.verify == nil || rule.verify(args))
+	return ok && rule.matches(args)
 }
 
 // pollingObservationRules recognizes external reads for this guard only. The

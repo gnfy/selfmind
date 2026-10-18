@@ -2448,6 +2448,11 @@ type StartRunOptions struct {
 	// inside the transaction; a lost race surfaces as ErrResumeTargetClaimed and
 	// creates nothing.
 	ResumesRunID string
+	// ExactContinuation says the runtime itself continues the parent's work on a
+	// deterministic edge (an approval or clarification answer, a watcher result,
+	// recovery or resource wake-up): the same logical work, not a new request.
+	// Its inherited Plan keeps the parent's progress; see inheritRunPlanTx.
+	ExactContinuation bool
 	// Admission freezes the authority this Run was admitted with, in the same
 	// row. Zero records none. It is never rewritten after creation.
 	Admission AdmissionSnapshot
@@ -2659,7 +2664,7 @@ func (s *Store) startRunOnce(ctx context.Context, owner RunOwner, channel, input
 	if run.ResumesRunID != "" {
 		// The exact-parent claim and durable Plan import are one transition.
 		// A failed import must leave neither a child Run nor a claimed parent.
-		if _, err := s.inheritRunPlanTx(ctx, tx, run.TenantID, run.ID, run.ResumesRunID, false); err != nil {
+		if _, err := s.inheritRunPlanTx(ctx, tx, run.TenantID, run.ID, run.ResumesRunID, false, options.ExactContinuation); err != nil {
 			return nil, err
 		}
 	}

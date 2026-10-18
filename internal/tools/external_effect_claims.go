@@ -688,17 +688,17 @@ func externalToolEffectPossible(policy toolExecutionPolicy) bool {
 func builtinEffectPossible(policy toolExecutionPolicy, args map[string]interface{}) bool {
 	name := stringArg(args, "_tool_name")
 	if isExecTool(name) {
-		if name == "watch_external" {
+		if name == "watch_external" || name == "verify" {
 			// Static proof restricts this built-in to one read-only check.
 			return false
 		}
-		if observationOnlyExec(name, args) {
+		if observationOnlyExec(name, args) || isRemoteObservationCommand(execCommandPayload(name, args)) {
 			// A deterministic read command or an exact owner-approved
 			// observation script can inspect a held target without acquiring
 			// another write claim. This is needed for evidence before release.
 			return false
 		}
-		if effectiveSandboxModeArg(args) == SandboxHost {
+		if effectiveSandboxModeArg(args) == SandboxHost && stringArg(args, effectiveSandboxReasonArg) != "exec sandbox disabled by configuration" {
 			return true
 		}
 		sharedNetwork, _ := args["_network_shared"].(bool)

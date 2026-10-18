@@ -120,7 +120,7 @@ func TestPackageToolResultSummarizesSkillAndBatchPreviews(t *testing.T) {
 	}
 }
 
-func TestPackageToolErrorGuidesModelToDiagnose(t *testing.T) {
+func TestPackageToolErrorReportsFailureWithoutChoosingRecovery(t *testing.T) {
 	env := packageToolError("terminal", errTest("exit status 1"))
 
 	if !strings.Contains(env.Preview, "Error executing terminal") {
@@ -129,11 +129,8 @@ func TestPackageToolErrorGuidesModelToDiagnose(t *testing.T) {
 	if strings.Contains(env.Preview, "SelfMind diagnostic instruction") {
 		t.Fatalf("preview should not expose model-only recovery instruction: %q", env.Preview)
 	}
-	if !strings.Contains(env.ModelContent, "SelfMind diagnostic instruction") {
-		t.Fatalf("model content should include recovery instruction: %q", env.ModelContent)
-	}
-	if !strings.Contains(env.ModelContent, "inspect relevant context") {
-		t.Fatalf("model content should nudge diagnosis before retry: %q", env.ModelContent)
+	if !strings.Contains(env.ModelContent, "exit status 1") || strings.Contains(env.ModelContent, "SelfMind diagnostic instruction") {
+		t.Fatalf("model content should expose the failure without dictating recovery: %q", env.ModelContent)
 	}
 }
 
@@ -142,11 +139,11 @@ func TestPackageToolErrorDoesNotDuplicateEnrichedClassification(t *testing.T) {
 	err := fmt.Errorf("exec: executable file not found\nerror_class: exec_not_found; hint: %s", hint)
 	env := packageToolError("terminal", err)
 
-	if got := strings.Count(env.ModelContent, "error_class:"); got != 1 {
-		t.Fatalf("error_class markers = %d, want 1: %q", got, env.ModelContent)
+	if got := strings.Count(env.ModelContent, "error_class:"); got != 0 {
+		t.Fatalf("error_class markers = %d, want 0: %q", got, env.ModelContent)
 	}
-	if got := strings.Count(env.ModelContent, "hint:"); got != 1 {
-		t.Fatalf("hint markers = %d, want 1: %q", got, env.ModelContent)
+	if got := strings.Count(env.ModelContent, hint); got != 1 {
+		t.Fatalf("helpful hint copies = %d, want 1: %q", got, env.ModelContent)
 	}
 	if env.ErrorCategory != "exec_not_found" || env.RecoveryHint != hint {
 		t.Fatalf("classification = %q / %q", env.ErrorCategory, env.RecoveryHint)
@@ -169,8 +166,6 @@ func TestPackageToolErrorSeparatesStableModelMessageFromLocalDiagnostic(t *testi
 	env := packageToolError("session_search", stableFailureTest{cause: "SQL logic error: no such column: 625 (1)"})
 	for _, want := range []string{
 		"Session history search is unavailable.",
-		"error_code: session_search_unavailable",
-		"error_class: data_store",
 		"Retry once with simpler literal text.",
 	} {
 		if !strings.Contains(env.ModelContent, want) {
@@ -207,8 +202,8 @@ func TestPackageToolErrorUserRejection(t *testing.T) {
 	}
 
 	ordinary := packageToolError("terminal", fmt.Errorf("exit status 1"))
-	if !strings.Contains(ordinary.ModelContent, "corrected next step") {
-		t.Fatalf("ordinary failures keep the diagnostic instruction, got: %s", ordinary.ModelContent)
+	if !strings.Contains(ordinary.ModelContent, "exit status 1") || strings.Contains(ordinary.ModelContent, "corrected next step") {
+		t.Fatalf("ordinary failures report facts without prescribing a retry, got: %s", ordinary.ModelContent)
 	}
 }
 

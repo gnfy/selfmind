@@ -35,6 +35,13 @@ type ToolArgumentNormalizer interface {
 	NormalizeArguments(map[string]interface{}) (map[string]interface{}, error)
 }
 
+// argumentSchemaProvider retains a released input contract behind a smaller
+// model-facing Schema. It is private to built-ins: compatibility accepts old
+// fields, never manufactures judgments or widens execution authority.
+type argumentSchemaProvider interface {
+	argumentSchema() ToolSchema
+}
+
 // ContextFromArgs returns the authenticated run context installed by the
 // kernel. Direct management/test dispatches have no run context and therefore
 // use Background rather than manufacturing a cancellable lifetime.
@@ -327,63 +334,10 @@ func isDefaultParallelSafe(name string) bool {
 	}
 }
 
-// ValidateArgs checks that all required fields are present and types match.
-// Returns an error describing the first validation failure.
+// ValidateArgs reports independent schema failures in deterministic, bounded order.
 func ValidateArgs(schema ToolSchema, args map[string]interface{}) error {
-	return validateObject("", args, schema.Properties, schema.Required, schema.AdditionalProperties, true)
-}
-
-func validateObject(path string, value map[string]interface{}, properties map[string]PropertyDef, required []string, additional *bool, root bool) error {
-	for _, name := range required {
-		if _, ok := value[name]; !ok {
-			return fmt.Errorf("missing required parameter: %s — expected %s", joinParameterPath(path, name), expectedParameter(properties[name]))
-		}
-	}
-	for name, item := range value {
-		if root && strings.HasPrefix(name, "_") {
-			continue
-		}
-		def, ok := properties[name]
-		if !ok {
-			if additional != nil && !*additional {
-				return unknownParameterError(path, name, properties)
-			}
-			continue
-		}
-		if err := validateProperty(joinParameterPath(path, name), item, def); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateProperty(path string, value interface{}, def PropertyDef) error {
-	if err := validateType(path, value, def.Type); err != nil {
-		return err
-	}
-	if len(def.Enum) > 0 {
-		text, ok := value.(string)
-		if !ok || !stringInList(text, def.Enum) {
-			return fmt.Errorf("parameter %s must be one of %s, got %q", path, strings.Join(def.Enum, ", "), text)
-		}
-	}
-	switch def.Type {
-	case "object":
-		object, ok := value.(map[string]interface{})
-		if ok {
-			return validateObject(path, object, def.Properties, def.Required, def.AdditionalProperties, false)
-		}
-	case "array":
-		items, ok := value.([]interface{})
-		if ok && def.Items != nil {
-			for index, item := range items {
-				if err := validateProperty(fmt.Sprintf("%s[%d]", path, index), item, *def.Items); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	_, err := checkToolArguments(schema, args, false, true)
+	return err
 }
 
 // expectedParameter says what a parameter's schema asks for, so the model can
@@ -477,65 +431,9 @@ func validateType(param string, val interface{}, expectedType string) error {
 	return nil
 }
 
-// CoerceArgs 将 string/bool/int 等动态类型强制转换为 schema 声明的类型
+// CoerceArgs preserves the published scalar and optional-null compatibility rules.
 func CoerceArgs(schema ToolSchema, args map[string]interface{}) (map[string]interface{}, error) {
-	return coerceObject("", args, schema.Properties, schema.Required, schema.AdditionalProperties, true)
-}
-
-func coerceObject(path string, args map[string]interface{}, properties map[string]PropertyDef, required []string, additional *bool, root bool) (map[string]interface{}, error) {
-	coerced := make(map[string]interface{}, len(args))
-	for name, value := range args {
-		if root && strings.HasPrefix(name, "_") {
-			coerced[name] = value
-			continue
-		}
-		def, ok := properties[name]
-		if !ok {
-			if additional != nil && !*additional {
-				return nil, unknownParameterError(path, name, properties)
-			}
-			// Open schemas preserve fields instead of silently discarding them.
-			coerced[name] = value
-			continue
-		}
-		if value == nil && def.Type != "" && def.Type != "null" {
-			if stringInList(name, required) {
-				return nil, fmt.Errorf("required parameter %s cannot be null", joinParameterPath(path, name))
-			}
-			continue
-		}
-		item, err := coerceProperty(joinParameterPath(path, name), value, def)
-		if err != nil {
-			return nil, err
-		}
-		coerced[name] = item
-	}
-	return coerced, nil
-}
-
-func coerceProperty(path string, value interface{}, def PropertyDef) (interface{}, error) {
-	coerced, err := coerceValue(path, value, def.Type)
-	if err != nil {
-		return nil, err
-	}
-	switch def.Type {
-	case "object":
-		if object, ok := coerced.(map[string]interface{}); ok {
-			return coerceObject(path, object, def.Properties, def.Required, def.AdditionalProperties, false)
-		}
-	case "array":
-		if items, ok := coerced.([]interface{}); ok && def.Items != nil {
-			out := make([]interface{}, len(items))
-			for index, item := range items {
-				out[index], err = coerceProperty(fmt.Sprintf("%s[%d]", path, index), item, *def.Items)
-				if err != nil {
-					return nil, err
-				}
-			}
-			return out, nil
-		}
-	}
-	return coerced, nil
+	return checkToolArguments(schema, args, true, false)
 }
 
 func coerceValue(param string, val interface{}, targetType string) (interface{}, error) {

@@ -1,5 +1,0 @@
-{
-  "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "prepared-version-inspection candidate_ref version.txt work_select resume"
-}

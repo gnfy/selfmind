@@ -36,19 +36,26 @@ func TestUnavailableToolCallReceivesPairedRefusal(t *testing.T) {
 				call = call || requested.ID == "blocked"
 			}
 			if msg.ToolCallID == "blocked" && msg.Role == "tool" {
-				result = strings.Contains(msg.Content, "not_dispatched") && strings.Contains(msg.Content, "tool_not_available")
+				result = strings.Contains(msg.Content, "Not executed.") && strings.Contains(msg.Content, "unavailable in the current turn")
 			}
 		}
 		if !call || !result {
 			t.Fatalf("missing paired refusal (stream=%v): call=%v result=%v", !nonStream, call, result)
 		}
 		close(events)
+		var typedRefusal bool
 		for raw := range events {
+			if event, ok := DecodeAgentEvent(raw); ok && event.Type == "tool.completed" {
+				typedRefusal = typedRefusal || event.Payload["error_code"] == "tool_not_available" && event.Payload["effect_state"] == "not_dispatched"
+			}
 			if event, ok := DecodeAgentEvent(raw); ok && event.Type == "turn.completed" {
 				if event.Payload["status"] != "incomplete" || event.Payload["resumable"] != true {
 					t.Fatalf("refusal was presented as completion: %+v", event)
 				}
 			}
+		}
+		if !typedRefusal {
+			t.Fatal("admission facts were lost from the durable event surface")
 		}
 	}
 }

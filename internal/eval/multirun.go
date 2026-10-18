@@ -124,7 +124,7 @@ func (c *Case) validateRuntimePredicate(p StatePredicate) error {
 		return fmt.Errorf("on: %s count_gte: 0 alone cannot fail", on)
 	}
 	if p.Field != "" || p.Path != "" || p.Type != "" || p.Eq != nil || p.Contains != nil || p.NotContains != nil ||
-		p.Matches != nil || p.PayloadContains != nil || p.Empty != nil || p.LenGte != nil || p.LenLte != nil || p.MinBytes != nil {
+		p.Matches != nil || p.PayloadContains != nil || len(p.PayloadFields) > 0 || p.Empty != nil || p.LenGte != nil || p.LenLte != nil || p.MinBytes != nil {
 		return fmt.Errorf("on: %s counts; use only status, target, count_gte, count_lte and exists", on)
 	}
 	status := strings.ToLower(strings.TrimSpace(p.Status))

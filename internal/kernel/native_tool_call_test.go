@@ -155,8 +155,8 @@ func TestArgumentPreparationRefusalPrecedesLedgerAndStartedEvent(t *testing.T) {
 	if ledger.entry.ToolCallID != "" {
 		t.Fatalf("invalid arguments claimed durable dispatch: %+v", ledger.entry)
 	}
-	if !strings.Contains(result.msg.Content, "failure_phase: preparation") ||
-		!strings.Contains(result.msg.Content, "effect_state: not_dispatched") {
+	if result.failurePhase != "preparation" || result.effectState != "not_dispatched" ||
+		!strings.Contains(result.msg.Content, "Not executed.") {
 		t.Fatalf("refusal lost preparation facts: %s", result.msg.Content)
 	}
 	for _, event := range drainAgentEvents(events) {
@@ -188,7 +188,7 @@ func TestArgumentPreparationBlocksOnlyIdenticalMalformedRepeat(t *testing.T) {
 	if backend.prepareCalls != 2 || backend.dispatchCalls != 1 {
 		t.Fatalf("identical refusal was re-prepared or correction was blocked: prepare=%d dispatch=%d", backend.prepareCalls, backend.dispatchCalls)
 	}
-	if !strings.Contains(second.msg.Content, "error_code: tool_arguments_repeated") {
+	if second.errorCode != "tool_arguments_repeated" {
 		t.Fatalf("identical malformed repeat lost typed refusal: %s", second.msg.Content)
 	}
 }
@@ -212,7 +212,7 @@ func TestArgumentPreparationBlocksIdenticalMalformedJSON(t *testing.T) {
 	if backend.prepareCalls != 1 || backend.dispatchCalls != 1 {
 		t.Fatalf("malformed JSON was reprocessed or correction was blocked: prepare=%d dispatch=%d", backend.prepareCalls, backend.dispatchCalls)
 	}
-	if !strings.Contains(second.msg.Content, "error_code: tool_arguments_repeated") {
+	if second.errorCode != "tool_arguments_repeated" {
 		t.Fatalf("identical malformed JSON repeat lost typed refusal: %s", second.msg.Content)
 	}
 }

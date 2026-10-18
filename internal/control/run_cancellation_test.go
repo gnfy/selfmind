@@ -27,7 +27,7 @@ func TestCancellationWinsHumanParkAndFinalization(t *testing.T) {
 					t.Fatal(err)
 				}
 				if parked {
-					if changed, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref); err != nil || !changed {
+					if changed, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref, HumanWaitParkGrace); err != nil || !changed {
 						t.Fatalf("park=%v %v", changed, err)
 					}
 				}
@@ -58,7 +58,7 @@ func TestCancellationWinsHumanParkAndFinalization(t *testing.T) {
 					t.Fatal("stale finalization overwrote the cancellation")
 				}
 				if !parked {
-					if changed, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref); changed {
+					if changed, err := store.ParkHumanWaitRun(ctx, owner.TenantID, owner.PersonID, run.ID, kind, ref, HumanWaitParkGrace); changed {
 						t.Fatalf("cancelled call parked again: %v", err)
 					}
 					stale.RunStatus = "cancelled"

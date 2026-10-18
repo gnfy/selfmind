@@ -196,3 +196,32 @@ func TestInProgressWorkUnitSequenceIgnoresOtherTools(t *testing.T) {
 		t.Errorf("unparsable content must not report a sequence, got %d", got)
 	}
 }
+
+func TestSkillViewActivatesForPagedActiveSkillAcrossWorkUnitBoundary(t *testing.T) {
+	ctx := WithRuntimeContextBundle(context.Background(), RuntimeContextBundle{
+		ActiveSkill: &ActiveSkillContext{
+			Name:             "release-audit",
+			WorkUnitSequence: 1,
+			DeliveryMode:     SkillDeliveryModePaged,
+		},
+	})
+	ctx = withActiveSkillRuntimeState(ctx)
+	ctx = withToolActivationState(ctx)
+
+	if got := activeSkillWorkUnitSequence(ctx); got != 1 {
+		t.Fatalf("expected initial activeSkillWorkUnitSequence=1 from RuntimeContextBundle.ActiveSkill, got %d", got)
+	}
+	if !deferredToolActive(ctx, "skill_view") {
+		t.Fatal("expected skill_view to be active when ActiveSkill has DeliveryMode=paged")
+	}
+
+	// Crossing into work unit 2 resets deferred tool activations, then update_plan
+	// projection with bound_skill_name or skill_catalog activates skill_view for the new unit.
+	if cleared := applyWorkUnitBoundary(ctx, 2); cleared != 1 {
+		t.Fatalf("expected 1 cleared tool on boundary, got %d", cleared)
+	}
+	activateToolsFromSearchResult(ctx, "update_plan", `{"work_units":[{"sequence":2,"plan_status":"in_progress","bound_skill_name":"release-audit"}]}`)
+	if !deferredToolActive(ctx, "skill_view") {
+		t.Fatal("expected skill_view to be re-activated immediately after work-unit boundary when new work unit has bound_skill_name")
+	}
+}

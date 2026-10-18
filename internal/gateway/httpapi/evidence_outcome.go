@@ -99,12 +99,26 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 			files = append(files, path)
 		}
 	}
-	if len(evidence) == 0 {
-		return nil, files
+	adopted, adoptionErr := c.srv.Control.AdoptedRunVerificationChecks(ctx, tenantID, runID)
+	current, currentErr := c.srv.Control.CurrentRunObservationChecks(ctx, tenantID, runID)
+	adoptionErr = errors.Join(adoptionErr, currentErr)
+	for _, check := range current {
+		if check.Observation != nil && check.Observation.Kind == "command" {
+			adopted = append(adopted, check)
+		}
+	}
+	if len(evidence) == 0 && len(adopted) == 0 && adoptionErr == nil {
+		condition, conditionErr := c.srv.Control.ResolveConditionAssessments(ctx, tenantID, runID, nil)
+		if conditionErr == nil && len(condition.Conditions) == 0 {
+			return nil, files
+		}
 	}
 	sort.Slice(evidence, func(i, j int) bool { return evidence[i].StartedAt < evidence[j].StartedAt })
 
-	result := &api.VerificationOutcome{}
+	result := &api.VerificationOutcome{Checks: adopted}
+	for i := range result.Checks {
+		result.Checks[i].NetworkMayFetch = tools.CommandMayFetchDependencies(result.Checks[i].Command)
+	}
 	var mutations []verification.Mutation
 	for _, item := range evidence {
 		if item.Kind == "mutation" && evidenceChangedFiles(item.Files, transient) {
@@ -134,6 +148,7 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 		}
 		// A refused preparation did not test the program. Preserve that fact
 		// separately from the tool wrapper's failure and historical exit code.
+		var processExit *int
 		if item.Process != nil {
 			started := item.Process.Started
 			check.ProcessStarted = &started
@@ -146,27 +161,22 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 			if executionenv.NetworkOfflineDespiteGrant(check.NetworkDecision, check.NetworkPermission) {
 				check.NetworkMayFetch = tools.CommandMayFetchDependencies(check.Command)
 			}
-			if !started || item.Process.ExitCode == nil {
-				check.Status = "blocked"
-			}
-			if started && item.Process.ExitCode != nil {
-				check.ExitCode = *item.Process.ExitCode
-				if check.ExitCode != 0 {
-					check.Status = "failed"
-				}
-			}
+			processExit = item.Process.ExitCode
 		}
-		if (item.Invoked != nil && !*item.Invoked) || item.EffectState == "not_dispatched" {
-			check.Status = "blocked"
-		}
-		if item.Process == nil && (item.Invoked != nil || item.EffectState != "") {
-			check.Status = "blocked"
-		}
-		result.Checks = append(result.Checks, check)
+		result.Checks = append(result.Checks, verification.WithDispatchFacts(check, processExit))
 	}
 
 	result.LatestMutationAt = verification.RelevantMutationAt(verification.Check{}, mutations)
 	result.State, result.Summary = verification.StateWithMutations(mutations, result.Checks)
+	if adoptionErr != nil {
+		switch result.State {
+		case "passed", "not_applicable", "not_run":
+			result.State = "blocked"
+		}
+		result.Summary += " Adopted verification could not be revalidated: " + tools.RedactSensitive(adoptionErr.Error())
+	} else if len(adopted) > 0 {
+		result.Summary += fmt.Sprintf(" %d check(s) explicitly adopted from prior Runs; source identity and observation times are preserved.", len(adopted))
+	}
 	if err := c.projectCommandObservations(ctx, tenantID, runID, evidence, result); err != nil {
 		result.State, result.Summary = "blocked", "Command dispatch evidence is unavailable; inspect the durable Run before completing."
 		return result, files
@@ -177,6 +187,8 @@ func (c *RunCoordinator) evidenceOutcome(ctx context.Context, tenantID, runID st
 			result.Summary += " Use verify for the relevant check after the latest change."
 		}
 	}
+	condition, conditionErr := c.srv.Control.ResolveConditionAssessments(ctx, tenantID, runID, nil)
+	applyConditionProjection(result, condition, conditionErr)
 	return result, files
 }
 
@@ -266,8 +278,13 @@ func verificationRequiresResume(verification *api.VerificationOutcome, changedFi
 	if verification == nil {
 		return false
 	}
+	if len(verification.ConditionBlockers) > 0 {
+		return true
+	}
 	switch verification.State {
-	case "failed", "stale", "blocked", "partial":
+	case "failed":
+		return !verification.ConditionReviewComplete
+	case "stale", "blocked", "partial":
 		return true
 	case "not_run":
 		return hasVerifiableFile(changedFiles)
@@ -340,9 +357,12 @@ func verificationNextStep(verification *api.VerificationOutcome) string {
 	if verification == nil {
 		return "Run the appropriate verification and continue."
 	}
+	if len(verification.ConditionBlockers) > 0 {
+		return strings.Join(verification.ConditionBlockers, " ")
+	}
 	switch verification.State {
 	case "failed":
-		return "Fix the failed verification, then run it again."
+		return "Assess the recorded result against the user's goal: report a conclusive finding, or correct an inconclusive observation method."
 	case "stale":
 		return "Run verification again after the latest file change."
 	case "blocked", "partial":
@@ -391,7 +411,7 @@ func withCompletionNotice(content string, outcome api.RunOutcome) string {
 }
 
 func withVerificationNotice(content string, verification *api.VerificationOutcome, mismatches []string) string {
-	if verification == nil || verification.State == "not_applicable" {
+	if verification == nil || verification.State == "not_applicable" && len(verification.ConditionBlockers) == 0 && (verification.ConditionState == "" || verification.ConditionState == "unassessed") {
 		return strings.TrimSpace(content)
 	}
 	line := conciseVerificationNotice(verification)
@@ -426,6 +446,23 @@ func offlineVerificationNotice(outcome *api.VerificationOutcome) string {
 func conciseVerificationNotice(verification *api.VerificationOutcome) string {
 	if verification == nil {
 		return ""
+	}
+	if len(verification.ConditionBlockers) > 0 {
+		return "Condition review incomplete: " + truncateRunes(toOneLine(strings.Join(verification.ConditionBlockers, " ")), 400)
+	}
+	switch verification.ConditionState {
+	case "not_met":
+		if !verification.ConditionReviewComplete {
+			return "Observed condition: not met. Other recorded checks remain unresolved."
+		}
+		return "Observed condition: not met."
+	case "met":
+		if !verification.ConditionReviewComplete {
+			return "Observed condition: met. Other recorded checks remain unresolved."
+		}
+		return strings.TrimSpace("Observed condition: met. " + offlineVerificationNotice(verification))
+	case "unknown":
+		return "Observed condition: undetermined."
 	}
 	switch verification.State {
 	case "passed":

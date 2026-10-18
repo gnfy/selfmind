@@ -1,0 +1,58 @@
+id: natural_workspace_summary
+title: "Natural evidence summary distinguishes completed work, human wait and stale snapshots"
+suite: quality
+workspace: isolated
+channel: cli
+require_cassette: true
+setup:
+  files:
+    INDEX.md: "Records: alpha/record.md, beta/record.md, gamma/record.md\n"
+    alpha/record.md: "2026-01-03 Alpha: 8 checks passed.\n"
+    beta/record.md: "2026-01-03 Beta: blocked on missing approval; tests have not run.\n"
+    gamma/record.md: "2026-01-03 Gamma: local branch snapshot from 2026-01-02. No remote refresh was performed. Current remote state is unverified.\n"
+turns:
+  - input: >-
+      Summarize the work recorded for 2026-01-03 across the local directories.
+      Do not modify files or contact remote services. Clearly distinguish
+      recorded success, waiting for a person, and unverified current state.
+      Include Alpha, Beta and Gamma, and identify the source files.
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  max_tool_errors: 0
+  max_tool_calls: 10
+  max_duration_seconds: 180
+  contains: [Alpha, Beta, Gamma, approval, unverified, alpha/record.md, beta/record.md, gamma/record.md]
+assert_state:
+  - on: events
+    type: provider.call.usage
+    count_lte: 8
+  - on: events
+    type: tool.started
+    payload_fields:
+      tool: finish_run
+    count_lte: 1
+  - on: events
+    type: tool.started
+    payload_fields:
+      tool: write_file
+    count_lte: 0
+  - on: events
+    type: tool.started
+    payload_fields:
+      tool: patch
+    count_lte: 0
+  - on: file
+    path: alpha/record.md
+    eq: "2026-01-03 Alpha: 8 checks passed.\n"
+  - on: file
+    path: beta/record.md
+    eq: "2026-01-03 Beta: blocked on missing approval; tests have not run.\n"
+  - on: file
+    path: gamma/record.md
+    eq: "2026-01-03 Gamma: local branch snapshot from 2026-01-02. No remote refresh was performed. Current remote state is unverified.\n"
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_mojibake: true

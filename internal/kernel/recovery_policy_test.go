@@ -204,7 +204,7 @@ func TestVerificationOnlyRecoveryHidesAndRefusesMutation(t *testing.T) {
 	ctx := WithToolInvocationScope(context.Background(), ToolInvocationScope{RunID: "run-recovery", RecoveryMode: "verify_only"})
 	ctx = WithToolLedger(ctx, &capturingToolLedger{})
 	refused := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{ID: "mutate-1", Function: "mutate", Args: `{}`})
-	if refused.success || len(backend.calls) != 0 || !strings.Contains(refused.msg.Content, "error_code: verification_only_mutation_refused") {
+	if refused.success || len(backend.calls) != 0 || refused.errorCode != "verification_only_mutation_refused" {
 		t.Fatalf("mutation escaped verification-only recovery: result=%+v calls=%v", refused, backend.calls)
 	}
 	observed := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{ID: "read-1", Function: "inspect", Args: `{}`})
@@ -224,8 +224,8 @@ func TestAgentRefusesRepeatedFailedDispatchBeforeToolExecution(t *testing.T) {
 		t.Fatalf("first failure=%+v calls=%d", first, backend.calls)
 	}
 	second := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{ID: "call-2", Function: "terminal", Args: `{"command":"false"}`})
-	if second.success || backend.calls != 1 || !strings.Contains(second.msg.Content, "error_code: recovery_attempt_repeated") ||
-		!strings.Contains(second.msg.Content, "effect_state: not_dispatched") {
+	if second.success || backend.calls != 1 || second.errorCode != "recovery_attempt_repeated" ||
+		second.effectState != "not_dispatched" || !strings.Contains(second.msg.Content, "Not executed.") {
 		t.Fatalf("repeat was dispatched or lost typed recovery: calls=%d result=%+v", backend.calls, second)
 	}
 }

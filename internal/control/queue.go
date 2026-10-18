@@ -196,6 +196,27 @@ func (s *Store) HasPendingQueuedSource(ctx context.Context, tenantID, personID, 
 	return pending, err
 }
 
+// HasDueQueuedWork reports that a person has input waiting for an execution
+// slot right now: a row nobody has claimed, or one a drain has claimed but not
+// yet bound to a Run. A Run that stays in place for a human answer holds a slot,
+// its writable roots and its terminal's lane, so this is the signal that it
+// should let them go. A row whose not_before lies ahead (a provider backoff) is
+// not waiting for a slot yet, and a started row already bound to a Run is that
+// Run's own record.
+func (s *Store) HasDueQueuedWork(ctx context.Context, tenantID, personID string) (bool, error) {
+	if strings.TrimSpace(personID) == "" {
+		return false, fmt.Errorf("person id is required")
+	}
+	var pending bool
+	err := s.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM task_queue WHERE tenant_id = ? AND person_id = ?
+		  AND status IN (?, ?) AND COALESCE(run_id, '') = ''
+		  AND COALESCE(not_before, 0) <= ?
+	)`, normalizeTenant(tenantID), personID,
+		QueueStatusQueued, QueueStatusStarted, time.Now().Unix()).Scan(&pending)
+	return pending, err
+}
+
 // DueQueuedRoute identifies one person with work that may be claimed now.
 // It carries only routing hints; the coordinator still reads and atomically
 // claims the exact queue row after checking capacity and resource conflicts.

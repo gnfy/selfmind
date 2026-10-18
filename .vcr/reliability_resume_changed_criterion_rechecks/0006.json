@@ -1,5 +1,69 @@
 {
   "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "value.txt DONE\\n DONE newline 验收条件 检查报告"
+  "method": "stream",
+  "events": [
+    {
+      "content": "I will now record waiting_user with finish_run to wait for your confirmation before"
+    },
+    {
+      "usage": {
+        "input_tokens": 13727,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " reporting the result."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 53,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 2255,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_159384",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"waiting_user\",\"final_response\":\"The verification check has been completed and established that `value.txt` was inspected without modification. Awaiting your confirmation before reporting the result.\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EpgJCpUJAWkUfROtgyklOFNvTzgfTmEJYI15Le9ZEzU/bR5VDKwIVGjcQo30h12uSBm7cHYLm88Kj7lbq3ZkUJFu43MK2WrxjWBUt8XP7C7/8bLHnRB5Q8miaRG2pXdnqU8vN6DpZkJOR3fjrsPaN3AegHKtWv8WKQZsNLVwusAZgrv6QxcW/ZDdVDryNdfsovMP/toEO2ajwAkWMsR4rMVrOY1qSkJss+rCv1/e1eNm6pomzoXRG86bjq45ax+hZ8LPPsRXqcNUEMieqypGHPKcxHzExTOn0sBX/srJwk7J3/LxovjuwzqC4whixivPPG7fYinTSaFa7oQfbK3LQyLIGL9sTyEPeU9obL5boy93Xdz3LS4gjPtSN7UJgV0JiPnvYCT36DzWgqlFeG4z/IvlfXevoMzJrUc5iMt1P3gaRzpoBT586eS20pvGfJeijK6md4n/DhRyT9eL+15tSizqN+R1glf8P62mgfZm92tJta6wZON6+SptMChvw0Sm13oPLa4acOmt/ju61BxScKrea1i4IuDqJwlBD6u2lP0UEIQDq+62w4kSbYM+E7/mfJtohgeZwMzbSwcTVr2ReNpmNPPBzHAEHz7sD+brsHEsd+gab/b9N/KYYCVBZ2VnQkkCglt0FnIbPFdWbCzdovKtUuSIK8+pQg+aX9LJKaUYe4OioMUse5tziVXAqeFTzQ+WX3D1Jan+c4szbjY07BFJgUoH0FTKOlbkQFOFfP7J04lYguTeNRz0Pbl/1kuRPiwqEgJ6H089cC8vygEEBoIBwEV47sRPO8nJtXLjzN8NtnQeWF7Uq6Q+UeIPmU1Rennn1V3SshujrQzEqJ+5VuiAvRc9XCelAn7/KdUaBQwAcxCrItKlTmEpEo+uK9FdjfJb7SbWKmV4IgRyKvVyNmyiq85KllE7UByIajakrbRqVNyIvp6ivHzGT5lyRvgMXj/Qtcq125+ogoMDBbQHJ4p+XeXR1z0vRa/O8eszKKbHHbOce2DKdEEATkBuwVSV9wVThIVxfit/2zDYEb/uuN0WmLYNVJ70j4DRwKcZbYvQux/w6wyKikU6KM2Vccf0jN/iTeDYAzugrovrP4nA/X/IGg+TylszIkW8OwrdBAN8OVjX6kKotlPvZoWNnIcPOSMxk0EM5DTEpHD1A/z0ozitMVa2QQEroPfhOa+O4VrOUTQ8U9n0n2pXRxkrx/1zBZN5XsPlk7RX4D01Xh7tj3q2yMIhiJ4U4XRjqL9sc74SauiPIsMgu+kBu7kFDql0nfQGCqbirM8oHo3MIOEXDg308uDulnmf0kba01aSreWLNvyGKcTXOe/uHuF9dOp/rSHVANYFaPi7B3X1K/BWh28IPVde/J/3pUuWxsH6+2Dvlu5Un7Skla/cNLI351BJ7eTUSiqNRhq9ImBNJySRLGPhDiEbNZWreAM2mc3M52wkngeSJRAYdJ/DiixEQawpDdZbROXz4RO81ui9vvjKQRmCGoCGUfotvL3FRJNxe21PxadVWjViarqSpwFnAbUzdZs68/8QN1XnPBayv1Ld/Dbw4pQzHPUhxj6U"
+            }
+          }
+        }
+      ]
+    }
+  ]
 }

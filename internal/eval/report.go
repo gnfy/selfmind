@@ -12,6 +12,8 @@ import (
 )
 
 type Report struct {
+	Efficiency           *Efficiency
+	Provenance           *RunProvenance
 	Path                 string
 	CaseCount            int
 	Passed               int
@@ -39,6 +41,7 @@ func LoadReport(path string) (*Report, error) {
 
 func ReadReport(path string, r io.Reader) (*Report, error) {
 	report := &Report{Path: path, ErrorCategories: map[string]int{}}
+	var efficiency efficiencyAccumulator
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -50,7 +53,10 @@ func ReadReport(path string, r io.Reader) (*Report, error) {
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			return nil, fmt.Errorf("parse report event: %w", err)
 		}
+		efficiency.observe(event)
 		switch event.Type {
+		case "eval.provenance":
+			report.Provenance = event.Provenance
 		case "case_finished":
 			report.CaseCount++
 			report.TotalDurationMS += event.DurationMS
@@ -84,6 +90,7 @@ func ReadReport(path string, r io.Reader) (*Report, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
+	report.Efficiency = &efficiency.Efficiency
 	return report, nil
 }
 
@@ -99,6 +106,9 @@ func (r *Report) String() string {
 	}
 	sb.WriteString("\n")
 	fmt.Fprintf(&sb, "Duration: %s  Tokens: input=%d output=%d\n", time.Duration(r.TotalDurationMS)*time.Millisecond, r.TotalInputTokens, r.TotalOutputTokens)
+	if r.Efficiency != nil {
+		fmt.Fprintln(&sb, efficiencyText(r.Efficiency))
+	}
 	if r.FirstTokenCount > 0 || r.TotalToolCalls > 0 || r.TotalToolErrors > 0 {
 		sb.WriteString("Runtime: ")
 		if r.FirstTokenCount > 0 {

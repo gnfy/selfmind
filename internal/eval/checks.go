@@ -29,6 +29,7 @@ type RunSnapshot struct {
 	CompletionReason  string
 	Resumable         bool
 	VerificationState string
+	ConditionState    string
 }
 
 type CheckResult struct {
@@ -123,6 +124,10 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	if want := strings.TrimSpace(c.Expect.VerificationState); want != "" {
 		got := strings.TrimSpace(snap.VerificationState)
 		add("verification_state:"+want, got == want, "verification state should match expectation; got "+firstNonEmpty(got, "<empty>"))
+	}
+	if want := strings.TrimSpace(c.Expect.ConditionState); want != "" {
+		got := strings.TrimSpace(snap.ConditionState)
+		add("condition_state:"+want, got == want, "condition state should match expectation; got "+firstNonEmpty(got, "<empty>"))
 	}
 	if c.Expect.RequireWorkspaceMatch || c.Checks.WorkspaceShouldMatch {
 		want := strings.TrimSpace(snap.ExpectedWorkspace)

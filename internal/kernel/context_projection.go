@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -28,13 +29,19 @@ func (r TaskRuntimeContext) requiredPrompt() string {
 		if r.PlanVersion > 0 {
 			fmt.Fprintf(&b, "plan_version: %d\n", r.PlanVersion)
 		}
-		b.WriteString("\n## Current Run Plan\nCurrent Run step IDs. Preserve criteria and independent unfinished work; update_plan takes a complete snapshot that lists every step_id with its status and sends text or success_criteria only when changed. Bind verify to step_id. Explicitly justify cancellations or replacements.\n")
+		b.WriteString("\n## Current Run Plan\nCurrent Run step IDs. Preserve criteria and independent unfinished work; update_plan mode=patch sends only changed step_id/status entries; omitted steps stay unchanged. Use snapshot mode to add or reorder steps. Every accepted result is complete. Bind verify to step_id. Explicitly justify cancellations or replacements.\n")
 		for _, step := range r.Plan {
 			fmt.Fprintf(&b, "- step_id=%s [%s] %s; success_criteria=%q verification_required=%t\n", step.StepID, step.Status, step.Step, step.SuccessCriteria, step.VerificationRequired)
 			if step.CancellationDisposition != "" {
 				fmt.Fprintf(&b, "  cancellation_disposition=%s reason=%q user_takeover_quote=%q replacement_step_id=%s scope_change_quote=%q\n", step.CancellationDisposition, step.CancellationReason, step.UserTakeoverQuote, step.ReplacementStepID, step.ScopeChangeQuote)
 			}
 		}
+	}
+	if r.ClosureFacts != nil {
+		b.WriteString("\n## Read-only closure facts\nCurrent-Run references at selection time, not a completion verdict or tool input. Later observations and accepted receipts supersede this snapshot; acceptance rechecks evidence.\n")
+		facts, _ := json.Marshal(r.ClosureFacts)
+		b.Write(facts)
+		b.WriteByte('\n')
 	}
 	if r.Handoff != nil && (r.Handoff.TestStatus != "" || len(r.Handoff.Risks) > 0) {
 		b.WriteString("\n## Verification and Risks\n")
@@ -58,6 +65,9 @@ func (r TaskRuntimeContext) requiredPrompt() string {
 			}
 			if item.ReuseBlockedReason != "" {
 				fmt.Fprintf(&b, " reuse_blocked=%q", item.ReuseBlockedReason)
+			}
+			if item.PriorConditionResult != "" {
+				fmt.Fprintf(&b, " prior_main_finding=%s finding_reason=%q", item.PriorConditionResult, item.PriorConditionReason)
 			}
 			if !item.CheckedAt.IsZero() {
 				fmt.Fprintf(&b, " checked_at=%s", item.CheckedAt.Format(time.RFC3339))

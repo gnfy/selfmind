@@ -10,6 +10,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
+	"selfmind/internal/verification"
 )
 
 // WorkSelectTool records Main's typed interpretation of one exact historical
@@ -225,9 +226,11 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 	var currentPlan []planStepView
 	var planVersion int
 	var shown interface{}
-	if current, err := t.store.LatestRunPlan(ctx, tenantID, claimed.ID); err != nil {
+	snapshot, err := t.store.ReadRunPlanSnapshot(ctx, tenantID, personID, claimed.ID)
+	if err != nil {
 		return "", err
-	} else if current != nil {
+	}
+	if current := snapshot.Plan; current != nil {
 		plan = make([]planStepView, 0, len(current.Steps))
 		for _, step := range current.Steps {
 			plan = append(plan, planStepView{StepID: step.StepID, Step: step.Step, Status: step.Status,
@@ -246,12 +249,17 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 		shown = plan
 	}
 	if len(plan) > 0 {
+		payload := map[string]interface{}{
+			"plan": shown, "explanation": "Plan inherited from the continued run",
+			"source": "resumed_run", "resumes_run_id": targetRunID,
+		}
+		// A legacy display-only plan has no accepted version to claim.
+		if planVersion > 0 {
+			payload["plan_version"] = planVersion
+		}
 		if _, err := t.store.AppendEvent(ctx, control.Event{
 			TaskID: claimed.TaskID, RunID: claimed.ID, Type: "plan.updated", Visibility: "task",
-			Channel: claimed.Channel, Payload: mustToolJSON(map[string]interface{}{
-				"plan": shown, "explanation": "Plan inherited from the continued run",
-				"source": "resumed_run", "resumes_run_id": targetRunID,
-			}),
+			Channel: claimed.Channel, Payload: mustToolJSON(payload),
 			IdempotencyKey: "plan.inherited:" + claimed.ID + ":" + targetRunID,
 		}); err != nil {
 			return "", err
@@ -276,13 +284,26 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 		}
 		retainedSkill = active != nil
 	}
-	encoded, _ := json.Marshal(map[string]interface{}{
-		"status": "committed", "commit_mode": "direct", "action": "resume", "run_id": targetRunID,
-		"thread_id":      claimed.TaskID,
-		"resume_context": resume,
-		"plan":           currentPlan, "plan_version": planVersion,
-		"active_skill_retained": retainedSkill,
-		"message":               "This turn now continues the selected run in the same execution scope. Use the resume context, do the remaining work here, keep the completed steps when you call update_plan, and finish with the real result rather than an acknowledgement.",
+	// Keep derived references last, after canonical Plan identities. This also
+	// preserves historical replay's first-occurrence identity binding.
+	encoded, _ := json.Marshal(struct {
+		Action              string                    `json:"action"`
+		ActiveSkillRetained bool                      `json:"active_skill_retained"`
+		CommitMode          string                    `json:"commit_mode"`
+		Message             string                    `json:"message"`
+		Plan                []planStepView            `json:"plan"`
+		PlanVersion         int                       `json:"plan_version"`
+		ResumeContext       string                    `json:"resume_context"`
+		RunID               string                    `json:"run_id"`
+		Status              string                    `json:"status"`
+		ThreadID            string                    `json:"thread_id"`
+		ClosureFacts        verification.ClosureFacts `json:"closure_facts"`
+		ExecutionRunID      string                    `json:"execution_run_id"`
+	}{
+		Action: "resume", ActiveSkillRetained: retainedSkill, CommitMode: "direct",
+		Message: "This turn now continues the selected run in the same execution scope. Use the resume context, do the remaining work here, keep the completed steps when you call update_plan, and finish with the real result rather than an acknowledgement.",
+		Plan:    currentPlan, PlanVersion: planVersion, ResumeContext: resume, RunID: targetRunID, Status: "committed", ThreadID: claimed.TaskID,
+		ClosureFacts: snapshot.ClosureFacts, ExecutionRunID: claimed.ID,
 	})
 	return string(encoded), nil
 }
@@ -374,7 +395,7 @@ func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, 
 				fmt.Fprintf(&sb, "  success_criteria=%q verification_required=%t\n", workBound(step.SuccessCriteria, 400), step.VerificationRequired)
 			}
 		}
-		sb.WriteString("This plan is inherited from the continued run. For multi-step work, call update_plan with a complete snapshot that keeps the completed steps and acceptance conditions, then continue from the in-progress step. Use only step IDs issued for the current Run; omit IDs for steps not yet registered here.\n")
+		sb.WriteString("Continue from the in-progress step. An accepted current-Run plan needs update_plan only when it changes, not to restate it after selection. Preserve completed steps and acceptance conditions. Use update_plan mode=patch for changed step_id/status entries; omitted steps stay unchanged and the result remains a complete snapshot. Use snapshot mode to add or reorder steps. Use only current-Run step IDs; omit IDs for new steps.\n")
 	}
 	prior, err := t.store.ListInheritedPlanEvidence(ctx, tenantID, childRunID)
 	if err != nil {
@@ -395,6 +416,13 @@ func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, 
 					age = " checked_ago=" + kernel.EvidenceAge(now.Sub(item.CheckedAt))
 				}
 				fmt.Fprintf(&sb, "  checked_at=%s%s\n", item.CheckedAt.Format(time.RFC3339), age)
+			}
+			if item.ReuseBlockedReason != "" {
+				fmt.Fprintf(&sb, "  reuse_blocked_reason=%q; prior verification cannot be adopted while this condition remains.\n", workBound(item.ReuseBlockedReason, 300))
+			}
+			if finding := item.PriorCondition; finding != nil {
+				fmt.Fprintf(&sb, "  prior_main_finding=%s criterion=%q reason=%q (historical judgment, not current proof)\n",
+					finding.Result, workBound(finding.Criterion, 160), workBound(finding.Reason, 240))
 			}
 			if item.CriterionChanged {
 				fmt.Fprintf(&sb, "  criterion changed from %q; prior verification cannot cover the new criterion without review.\n", workBound(item.SourceCriterion, 160))

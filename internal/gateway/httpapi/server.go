@@ -126,7 +126,12 @@ type Server struct {
 	ApprovalWaitUnattended time.Duration
 	// HumanWaitGrace is a short in-place grace before a checkpointed human wait
 	// releases its worker. Zero uses the default; injected by focused tests.
-	HumanWaitGrace     time.Duration
+	HumanWaitGrace time.Duration
+	// HumanWaitHold is how long an unanswered human wait may keep its Run in
+	// place while its person is at the terminal that asked and nothing else needs
+	// the slot. Zero uses the default, negative turns the hold off (every wait
+	// then releases its worker after the grace); injected by focused tests.
+	HumanWaitHold      time.Duration
 	ExecutionWaitGrace time.Duration
 	// ApprovalJudge is the optional cheap-model judge for smart-mode LLM approval
 	// triage (H2). Installed on every execution scope so a dangerous
@@ -843,6 +848,29 @@ func (d *Server) dispatchAdmitted(ctx context.Context, identity *control.Identit
 		coord.drainQueue(identity)
 	}()
 	runCtx = kernel.WithSteeringInputs(withActiveRun(runCtx, active), steerCh)
+
+	if isUserOriginTurn(ctx, req) && strings.EqualFold(strings.TrimSpace(identity.Platform), "cli") {
+		stopPresence := make(chan struct{})
+		defer close(stopPresence)
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopPresence:
+					return
+				case <-ctx.Done():
+					return
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+					if ctx.Err() == nil && runCtx.Err() == nil {
+						d.touchPresence(ctx, identity)
+					}
+				}
+			}
+		}()
+	}
 
 	resp, status := coord.runMessage(runCtx, identity, req, intent)
 	// Detached finish: if the endpoint that dispatched this sync turn vanished

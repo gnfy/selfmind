@@ -42,7 +42,7 @@ func TestUnparseableToolArgumentRefusalUsesInstalledRedactor(t *testing.T) {
 		if result.success || backend.dispatchCalls != 0 {
 			t.Fatalf("unparseable arguments were dispatched: %+v", result)
 		}
-		if strings.Contains(result.msg.Content, "secret-key-7d102e") || !strings.Contains(result.msg.Content, "tool_arguments_invalid") {
+		if strings.Contains(result.msg.Content, "secret-key-7d102e") || result.errorCode != "tool_arguments_invalid" || !strings.Contains(result.msg.Content, "[MASKED]") {
 			t.Fatalf("the refusal shown to the model leaked its arguments: %s", result.msg.Content)
 		}
 	}

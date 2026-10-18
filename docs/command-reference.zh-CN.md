@@ -323,7 +323,9 @@ selfmind eval list [path]
 selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID] [--tenant ID] [--workspace PATH] [--output PATH] [--record-content] [--live]
 selfmind eval report <jsonl-or-dir>
 selfmind eval repair [case-or-dir] [--worktree]
-selfmind eval scorecard [case-or-dir] [--provider ID] [--out PATH] [--live]
+selfmind eval scorecard [case-or-dir] [--provider ID] [--model ID] [--out PATH] [--live]
+selfmind eval compare <before> <after>
+selfmind eval canary init <new-private-directory>
 selfmind eval capture [turn-id|latest] [--title "..."] [--suite NAME]
 selfmind eval clean [--yes]
 

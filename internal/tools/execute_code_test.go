@@ -95,7 +95,17 @@ func TestExecuteCodeDirectoriesAreOutOfReachOfAnotherRunsSandbox(t *testing.T) {
 		t.Skip("isolated sandbox unavailable on this host")
 	}
 	withExecSandboxPolicy(t, true, false, false)
-	home := t.TempDir()
+	// Outside /tmp: the Linux sandbox replaces /tmp with a private one and creates the
+	// mount points of its writable roots there, so a shared parent under /tmp would be a
+	// writable directory of that private view rather than the host's read-only one.
+	base := fixtureBase(t)
+	home := filepath.Join(base, "home")
+	root := filepath.Join(base, "root")
+	for _, dir := range []string{home, root} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t.Setenv("HOME", home)
 	shared := filepath.Join(home, ".selfmind", "code_sandbox")
 	pending := filepath.Join(shared, "call-pending")
@@ -109,7 +119,6 @@ func TestExecuteCodeDirectoriesAreOutOfReachOfAnotherRunsSandbox(t *testing.T) {
 		}
 	}
 	planted := filepath.Join(shared, "planted.py")
-	root := t.TempDir()
 	const run = "execute-code-isolation"
 	runtime := NewExecutionRuntime(run, t.TempDir(), sandbox.PrivateState{}, nil)
 	t.Cleanup(SetExecutionScope(run, ExecutionScope{TenantID: "t", PersonID: run, RunID: run, WorkspaceRoot: root, AllowedRoots: []string{root},

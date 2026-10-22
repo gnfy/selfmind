@@ -23,7 +23,7 @@ func NewWorkSearchTool(store *control.Store) *WorkSearchTool {
 func (t *WorkSearchTool) Name() string { return "work_search" }
 
 func (t *WorkSearchTool) Description() string {
-	return "Read person-scoped work history or attention. Returns bounded cards, never raw transcripts."
+	return "Read bounded person-scoped history/attention cards, not transcripts."
 }
 
 func (t *WorkSearchTool) Schema() ToolSchema {
@@ -225,15 +225,15 @@ func NewWorkInspectTool(store *control.Store) *WorkInspectTool {
 func (t *WorkInspectTool) Name() string { return "work_inspect" }
 
 func (t *WorkInspectTool) Description() string {
-	return "Inspect one exact prior run for the current person. Returns bounded status, paged plan and source-check references, handoff, event summaries, and artifacts without raw transcripts. Use plan_offset for omitted steps; the current Run is already selected. Inspection does not attach the current turn; call work_select next when the request continues or asks about this run."
+	return "Inspect an exact prior run: bounded status, paged plan/check references, handoff, events, artifacts; no transcripts. Page omitted steps with plan_offset. Inspection does not attach; use work_select to observe/resume."
 }
 
 func (t *WorkInspectTool) Schema() ToolSchema {
 	return ToolSchema{
 		Type: "object",
 		Properties: map[string]PropertyDef{
-			"run_id":      {Type: "string", Description: "Exact server-issued run_id returned by work_search or a structured work hint."},
-			"plan_offset": {Type: "integer", Description: "Zero-based Plan step offset, default 0; returns up to 12 steps with their exact source-check references. Use the returned next_offset to read omitted steps."},
+			"run_id":      {Type: "string", Description: "Exact server-issued run_id from history or a structured hint."},
+			"plan_offset": {Type: "integer", Description: "Zero-based step offset (default 0); up to 12 steps/check refs. Page with next_offset."},
 		},
 		Required: []string{"run_id"},
 	}

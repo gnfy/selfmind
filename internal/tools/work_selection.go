@@ -30,7 +30,7 @@ func NewWorkSelectTool(store *control.Store) *WorkSelectTool {
 func (t *WorkSelectTool) Name() string { return "work_select" }
 
 func (t *WorkSelectTool) Description() string {
-	return "Propose how the current request relates to one exact inspected historical run. Use observe for a read-only status/result question, or resume to continue that work. When the target run has a pending clarification and the user's message answers it, pass clarify_id (optional) and answer so the gateway atomically commits the answer and continuation; selection without an answer will not claim or expire a parked question. A same-domain resume without a checkpoint wait is claimed immediately and returns its context. A scope/checkpoint/clarification wait proposes a transfer for gateway validation; it is not queued yet. A material effect in this interaction blocks implicit continuation. Only a committed claim or queue receipt proves that work will continue."
+	return "Relate this request to an evidenced prior run. observe reports state; resume continues. Pending questions require answer. Same-domain effect-free resumes without checkpoints claim directly; other scopes/checkpoints/questions propose a gateway transfer. Only a committed claim or queue receipt proves continuation."
 }
 
 func (t *WorkSelectTool) Schema() ToolSchema {
@@ -38,10 +38,10 @@ func (t *WorkSelectTool) Schema() ToolSchema {
 		Type:                 "object",
 		AdditionalProperties: rejectAdditionalProperties(),
 		Properties: map[string]PropertyDef{
-			"action":     {Type: "string", Enum: []string{"observe", "resume"}, Description: "observe reads/reports prior state; resume continues that work, directly in this turn when the execution domain matches."},
-			"run_id":     {Type: "string", Description: "Exact run_id already supported by work_search/work_inspect evidence."},
-			"clarify_id": {Type: "string", Description: "Optional pending clarification ID on the target run when the user's message answers that question."},
-			"answer":     {Type: "string", Description: "Required when action is resume on a run with a pending clarification: the user's answer or selected option (1-based option number or text)."},
+			"action":     {Type: "string", Enum: []string{"observe", "resume"}, Description: "observe reports prior state; resume continues work."},
+			"run_id":     {Type: "string", Description: "Exact run_id from a structured hint or history result."},
+			"clarify_id": {Type: "string", Description: "Optional ID of the target run's pending question."},
+			"answer":     {Type: "string", Description: "For resume with a pending question: the user's answer, 1-based option number, or option text."},
 		},
 		Required: []string{"action", "run_id"},
 	}

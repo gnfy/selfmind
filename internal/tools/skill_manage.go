@@ -286,6 +286,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 			return "", err
 		}
 		recordSkillLearningChange(tenantID, info.Name, "enable", info.State, SkillStateActive, info.Source, args)
+		reloadSkillToolsFromArgs(tenantID, args)
 		return fmt.Sprintf("Skill %q enabled.", info.Name), nil
 	case "disable":
 		if name == "" {
@@ -299,6 +300,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 			return "", err
 		}
 		recordSkillLearningChange(tenantID, info.Name, "disable", info.State, SkillStateDisabled, info.Source, args)
+		reloadSkillToolsFromArgs(tenantID, args)
 		return fmt.Sprintf("Skill %q disabled.", info.Name), nil
 	case "reload":
 		registry, _ := args["_registry"].(*Registry)

@@ -48,6 +48,21 @@ func TestCaptureFromFlight(t *testing.T) {
 	if len(c.Turns) != 1 || c.Turns[0].Input == "" {
 		t.Fatalf("turn not captured: %+v", c.Turns)
 	}
+	if c.Workspace != "isolated" || !c.CaptureReviewRequired {
+		t.Fatal("capture can replay against operator workspace without review")
+	}
+	for _, path := range []string{res.CasePath, filepath.Join(res.VCRPath, "0000.json")} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Fatalf("private capture permissions: %s %o", path, info.Mode().Perm())
+		}
+	}
+	if _, err := CaptureFromFlight("latest", CaptureOptions{Title: "continuation should keep the task", VCRDir: vcr, OutDir: out}); err == nil {
+		t.Fatal("capture overwrote a previous draft")
+	}
 }
 
 func TestCaptureFromFlightRejectsProviderFailure(t *testing.T) {

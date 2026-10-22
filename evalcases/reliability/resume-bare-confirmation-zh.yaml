@@ -26,7 +26,8 @@ turns:
         eq: waiting_user
       - on: events
         type: evidence.recorded
-        payload_contains: '"tool_name":"verify"}'
+        payload_fields:
+          evidence.tool_name: verify
         count_gte: 1
   - input: "确认，执行。"
 expect:
@@ -46,6 +47,9 @@ assert_state:
   - on: events
     type: plan.updated
     payload_contains: '"source":"resumed_run"'
+    count_gte: 1
+  - on: events
+    type: plan.evidence_inherited
     count_gte: 1
   - on: file
     path: value.txt

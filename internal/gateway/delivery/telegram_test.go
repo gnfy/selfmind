@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
-
-	"selfmind/internal/control"
+	"time"
 )
 
 func TestTelegramSenderAttachesApprovalButtons(t *testing.T) {
@@ -66,7 +66,7 @@ func TestTelegramSenderPlainMessageHasNoButtons(t *testing.T) {
 
 func TestTelegramNativeReplyReceiptReachesDurableOutbox(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestTelegramNativeReplyReceiptReachesDurableOutbox(t *testing.T) {
 
 func TestNativeReceiptCollisionDoesNotResendAcceptedMessage(t *testing.T) {
 	ctx := context.Background()
-	store, err := control.OpenStore(t.TempDir())
+	store, err := openDeliveryFixture(t)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,5 +123,40 @@ func TestNativeReceiptCollisionDoesNotResendAcceptedMessage(t *testing.T) {
 	rows, err := store.ListDueDeliveries(ctx, 10)
 	if err != nil || len(rows) != 0 {
 		t.Fatalf("accepted messages remain retryable: %+v, %v", rows, err)
+	}
+}
+
+func TestTelegramAcceptedResponseWithoutReceiptIsNeverBlindlyResent(t *testing.T) {
+	for _, body := range []string{"", "{", `{}`, `{"ok":true,"result":{"message_id":1.5}}`} {
+		t.Run(body, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := openDeliveryFixture(t)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			var sends atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sends.Add(1)
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(body))
+			}))
+			defer server.Close()
+			router := NewRouter(nil)
+			router.Register("telegram", &TelegramSender{Token: "fixture", BaseURL: server.URL, Client: server.Client()})
+			svc := NewService(store, router, Options{RetryBaseDelay: time.Nanosecond})
+			err = svc.EnqueueAndTry(ctx, Message{TenantID: "default", PersonID: "owner", Platform: "telegram", Channel: "chat-1", RunID: "run-1", Content: "result"})
+			if err == nil {
+				t.Fatal("missing receipt must retain a diagnostic")
+			}
+			rows, readErr := store.ListUndeliveredOutbound(ctx, "default", "owner", time.Time{}, 10)
+			if readErr != nil || len(rows) != 1 || rows[0].Status != "sent_unconfirmed" || rows[0].LastError == "" {
+				t.Fatalf("accepted response lost uncertainty or diagnostic: %+v %v", rows, readErr)
+			}
+			svc.flushDue(ctx)
+			if sends.Load() != 1 {
+				t.Fatalf("accepted message sent %d times", sends.Load())
+			}
+		})
 	}
 }

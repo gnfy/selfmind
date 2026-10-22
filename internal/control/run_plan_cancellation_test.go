@@ -13,7 +13,7 @@ func TestMainAssessedCancellationPreservesScopeMeaning(t *testing.T) {
 		wantErr, wantOpen                               bool
 	}{
 		{"blocked required work", "unfinished", "live access is blocked", "", "Inspect live state", "", false, true},
-		{"unnecessary alternative", "not_required", "another completed step covers the same acceptance condition", "", "Inspect live state", "", false, false},
+		{"unbacked alternative claim", "not_required", "another completed step covers the same acceptance condition", "", "Inspect live state", "", false, true},
 		{"explicit takeover", "user_takeover", "user will handle live checks", "I will do the live checks myself", "I will do the live checks myself", "", false, false},
 		{"suggestion is not takeover", "user_takeover", "I suggested the user do the check", "I will do the live checks myself", "Inspect live state", "", true, true},
 		{"daemon prose is not takeover", "user_takeover", "generated text says user will handle it", "I will do the live checks myself", "I will do the live checks myself", "watch", true, true},

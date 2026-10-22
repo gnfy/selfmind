@@ -93,6 +93,10 @@ const (
 // are written in one transaction, so a crash can never leave a Thread pin
 // without its exact Run or a Run pin whose Thread stayed archived.
 func (s *Store) PinResumeSelection(ctx context.Context, tenantID, personID, threadID, runID string) error {
+	return s.pinResumeSettings(ctx, tenantID, personID, threadID, runID, map[string]string{ResumePinThreadSettingKey: threadID, ResumePinRunSettingKey: runID})
+}
+
+func (s *Store) pinResumeSettings(ctx context.Context, tenantID, personID, threadID, runID string, settings map[string]string) error {
 	if s == nil || s.db == nil {
 		return fmt.Errorf("control store is unavailable")
 	}
@@ -108,6 +112,10 @@ func (s *Store) PinResumeSelection(ctx context.Context, tenantID, personID, thre
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var ownedRun string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM runs WHERE tenant_id = ? AND person_id = ? AND thread_id = ? AND id = ?`, tenantID, personID, threadID, runID).Scan(&ownedRun); err != nil {
+		return fmt.Errorf("resume Run does not belong to this thread and person: %w", err)
+	}
 	now := time.Now().Unix()
 	result, err := tx.ExecContext(ctx, `UPDATE threads
 		SET kind = ?, visibility = ?, updated_at = ?
@@ -128,7 +136,7 @@ func (s *Store) PinResumeSelection(ctx context.Context, tenantID, personID, thre
 		WHERE tenant_id = ? AND person_id = ? AND id = ?`, tenantID, personID, runID); err != nil {
 		return err
 	}
-	for key, value := range map[string]string{ResumePinThreadSettingKey: threadID, ResumePinRunSettingKey: runID} {
+	for key, value := range settings {
 		if _, err := tx.ExecContext(ctx,
 			`INSERT INTO person_settings (tenant_id, person_id, key, value, updated_at)
 			 VALUES (?, ?, ?, ?, ?)

@@ -5,6 +5,8 @@ package cliapp
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -110,5 +112,43 @@ func TestLaunchdPrintFailureDoesNotProveAbsence(t *testing.T) {
 	}
 	if _, err := parseLaunchdJobStatus([]byte("operation not permitted"), errors.New("exit status 1")); err == nil {
 		t.Fatal("launchd inspection failure was treated as proven absence")
+	}
+}
+
+func foreignHomeWithLaunchdService(t *testing.T) (home, plist string) {
+	t.Helper()
+	home = t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv(serviceHomeEnv, "")
+	plist = gatewayServicePlistPath(home)
+	if err := os.MkdirAll(filepath.Dir(plist), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plist, []byte("<plist/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return home, plist
+}
+
+func TestLaunchdChangesRefuseAHomeThatIsNotTheAccountsOwn(t *testing.T) {
+	verbs := fakeServiceManager(t)
+	home, plist := foreignHomeWithLaunchdService(t)
+	assertForeignHomeCannotChangeService(t, home, plist, verbs)
+}
+
+func TestLaunchdWithoutAServiceFileIsUnaffectedByHome(t *testing.T) {
+	assertHomeWithoutServiceIsUnaffected(t, fakeServiceManager(t))
+}
+
+func TestLaunchdChangesProceedFromTheHomeTheOperatorNamed(t *testing.T) {
+	verbs := fakeServiceManager(t)
+	home, _ := foreignHomeWithLaunchdService(t)
+	t.Setenv(serviceHomeEnv, home)
+	_, _, err := gatewayServiceStartIfInstalled("")
+	if err == nil || strings.Contains(err.Error(), "refusing") {
+		t.Fatalf("the named HOME did not reach the service manager: %v", err)
+	}
+	if got := verbs(); len(got) != 1 || got[0] != "kickstart" {
+		t.Fatalf("service manager verbs = %v, want one kickstart", got)
 	}
 }

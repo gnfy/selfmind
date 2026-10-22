@@ -74,15 +74,6 @@ const (
 	PlanPolicyRequired PlanPolicy = "required"
 )
 
-// planGuidanceEscalationThreshold is how many distinct successful substantive
-// action tool calls one Run may perform with no durable plan before its plan
-// guidance is escalated from optional to required. It is deliberately in the
-// default initial budget. Two distinct actions are already direct evidence of
-// multi-step work; escalating before a third prevents the first visible plan
-// from becoming a retrospective checklist. This is in-run evidence, never a
-// classification of the user's input.
-const planGuidanceEscalationThreshold = 2
-
 // planStaleReminderThreshold is how many tool actions a Run may perform after
 // its last plan update, with steps still open, before the next model call is
 // reminded that the visible plan may be out of date. Plan updates stay the
@@ -98,51 +89,6 @@ func shouldRemindStalePlan(strategy TaskStrategy, openSteps, actionsSinceUpdate,
 		return false
 	}
 	return actionsSinceUpdate-actionsAtReminder >= planStaleReminderThreshold
-}
-
-// countsTowardPlanEvidence reports whether one completed tool call is evidence
-// that this Run is doing genuinely multi-step work. Lifecycle bookkeeping is
-// not work, and a provably read-only observation is not either: a turn that
-// only looks at state may still be a direct answer that needs no visible plan.
-// Everything else — mutation, commands, unknown tools — fails toward "this is
-// real work", using the same dispatch classification as the durable ledger.
-func countsTowardPlanEvidence(toolName string, retryClass ToolRetryClass) bool {
-	if isLifecycleToolName(toolName) {
-		return false
-	}
-	return retryClass != ToolRetryReadOnly
-}
-
-// WithPlanRequired escalates plan guidance to PlanPolicyRequired. A turn the
-// strategy marked as a direct answer is never escalated: PlanPolicyDisabled
-// stays disabled and update_plan stays hidden. HiddenTools is intentionally not
-// recomputed, so an escalation cannot widen any other tool surface.
-func (s TaskStrategy) WithPlanRequired() TaskStrategy {
-	s = s.normalized()
-	if s.PlanPolicy == PlanPolicyDisabled {
-		return s
-	}
-	s.PlanPolicy = PlanPolicyRequired
-	return s
-}
-
-// shouldEscalatePlanGuidance decides whether this Run's plan guidance should
-// become the required wording for the next model call. It reads only in-run
-// evidence: how much substantive work already completed, and whether a durable
-// plan exists. Escalation is prompt guidance — it fabricates no plan, blocks no
-// completion, and adds no provider call.
-func shouldEscalatePlanGuidance(strategy TaskStrategy, planEvidenceTools int, planSeen bool) bool {
-	strategy = strategy.normalized()
-	if strategy.ToolMode == ToolModeNone || strategy.PlanPolicy != PlanPolicyOptional {
-		return false
-	}
-	if !strategy.AllowsTool("update_plan") {
-		return false
-	}
-	if planSeen {
-		return false
-	}
-	return planEvidenceTools >= planGuidanceEscalationThreshold
 }
 
 // WebPolicy controls web tools separately from local tools.
@@ -233,6 +179,14 @@ func (p ToolBudgetPolicy) apply(strategy TaskStrategy) TaskStrategy {
 	if p.MaxExtensions > 0 {
 		strategy.MaxBudgetExtensions = p.MaxExtensions
 	}
+	if strategy.ChannelMode == "im" && strategy.Class == TaskClassExternalLookup {
+		if strategy.ActionToolBudgetLimit > 20 {
+			strategy.ActionToolBudgetLimit = 20
+		}
+		if strategy.MaxBudgetExtensions > 2 {
+			strategy.MaxBudgetExtensions = 2
+		}
+	}
 	return strategy.normalized()
 }
 
@@ -296,17 +250,60 @@ func BuildTaskStrategy(prompt, channel string) TaskStrategy {
 	return policy
 }
 
+// AdmittedTaskStrategy rebuilds the strategy a Run was admitted with from the
+// identity its admission froze. The hidden tool set follows from the plan and
+// web policies and budgets start from the defaults, exactly as for a strategy
+// built from the request; prompt framing derived from the current
+// environment, such as the sandbox note, is the caller's to add.
+func AdmittedTaskStrategy(class TaskClass, toolMode ToolMode, plan PlanPolicy, web WebPolicy, channelMode string, verificationOnly bool) TaskStrategy {
+	strategy := DefaultTaskStrategy()
+	strategy.Class, strategy.ToolMode, strategy.PlanPolicy, strategy.WebPolicy = class, toolMode, plan, web
+	strategy.ChannelMode, strategy.VerificationOnly = channelMode, verificationOnly
+	strategy.HiddenTools = hiddenToolsFor(plan, web)
+	strategy.Reason = "the strategy this work was admitted with"
+	return strategy
+}
+
 func normalizeChannelMode(channel string) string {
-	switch strings.ToLower(strings.TrimSpace(channel)) {
-	case "cli", "tui", "terminal":
+	lower := strings.ToLower(strings.TrimSpace(channel))
+	switch {
+	case lower == "cli" || lower == "tui" || lower == "terminal":
 		return "interactive"
-	case "wechat", "weixin", "telegram", "slack", "dingtalk", "feishu":
+	case lower == "wechat" || lower == "weixin" || lower == "telegram" || lower == "slack" || lower == "dingtalk" || lower == "feishu" || lower == "qq" ||
+		strings.HasSuffix(lower, "@im.wechat") || strings.Contains(lower, "@im."):
 		return "im"
-	case "":
+	case lower == "":
 		return "default"
 	default:
-		return strings.ToLower(strings.TrimSpace(channel))
+		return lower
 	}
+}
+
+func promptChannelLabel(mode string) string {
+	if looksLikeUUID(mode) {
+		return "interactive"
+	}
+	return mode
+}
+
+func looksLikeUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func hiddenToolsFor(plan PlanPolicy, web WebPolicy) map[string]bool {
@@ -444,7 +441,7 @@ func (s TaskStrategy) SystemPromptNote() string {
 	var sb strings.Builder
 	sb.WriteString("\n# AGENT-FIRST TASK POLICY\n")
 	sb.WriteString(fmt.Sprintf("Task class: %s. Tool mode: %s. Planning: %s. Web: %s. Channel: %s.\n",
-		s.Class, s.ToolMode, s.PlanPolicy, s.WebPolicy, s.ChannelMode))
+		s.Class, s.ToolMode, s.PlanPolicy, s.WebPolicy, promptChannelLabel(s.ChannelMode)))
 	if s.ToolMode == ToolModeNone {
 		sb.WriteString("Answer directly. Do not call tools for this turn.\n")
 	} else {
@@ -456,6 +453,9 @@ func (s TaskStrategy) SystemPromptNote() string {
 		sb.WriteString("You decide whether tools are useful. Prefer a direct answer for pure questions and small snippets when no local or external state is needed.\n")
 		sb.WriteString("Use local tools when the user asks you to inspect, create, change, run, validate, or reason about files, directories, repositories, command output, workspace state, or a runnable artifact.\n")
 		sb.WriteString("For ambiguous CLI requests that may produce an artifact, do a cheap read-only probe first, such as listing the current directory, then decide whether to answer inline, create a standalone file, or ask a brief clarification.\n")
+		sb.WriteString("Bound external CLI and API queries with narrow filters, explicit limits, or short timeouts instead of wide cluster or history dumps. Do not re-run a timed-out wide command without narrowing its scope.\n")
+		sb.WriteString("For read-only status or inspection requests, once authoritative workspace records and a bounded live check answer the question, report the result directly instead of exhaustively auditing unrelated history.\n")
+		sb.WriteString("Cross-channel delivery and gateway notifications use registered runtime tools (discoverable via tool_search, such as set_delivery_target), never by searching user repositories for channel scripts.\n")
 		if s.ToolMode.MayWriteWorkspace() {
 			// Inspect-before-build: the workspace is the shared source of truth
 			// across endpoints, so reuse existing code instead of reinventing it.
@@ -472,7 +472,7 @@ func (s TaskStrategy) SystemPromptNote() string {
 		sb.WriteString("Do not use web tools unless the user explicitly asks to search, browse, inspect a URL, or retrieve current external information.\n")
 	}
 	if s.ChannelMode == "im" {
-		sb.WriteString("For IM channels, avoid token-by-token narration; preserve concise progress milestones and final outcomes. If a write or command needs a workspace and none is clearly bound, ask the user to select or bind one before acting.\n")
+		sb.WriteString("For IM channels, avoid token-by-token narration; preserve concise progress milestones and final outcomes. Keep mobile replies scannable: summarize multi-item inspections in a compact overview instead of repeating per-item command blocks or raw JSON unless asked, and report only observed values (omit unqueried timestamps/fields rather than emitting placeholders like `16:2xZ`). If a write or command needs a workspace and none is clearly bound, ask the user to select or bind one before acting.\n")
 	}
 	return sb.String()
 }

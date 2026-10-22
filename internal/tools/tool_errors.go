@@ -356,7 +356,7 @@ func isolatedSandboxTimeoutHint(decision SandboxDecision) string {
 	if decision.NetworkShared {
 		return ""
 	}
-	return "\nsandbox_context: isolated network-disabled; hint: The command timed out while isolated. Inspect the captured output before deciding whether it needs network:shared, different credentials, or a longer timeout."
+	return "\nsandbox_context: isolated network-disabled; hint: The command timed out while isolated. Inspect the captured output before deciding whether it needs network (retry once with network: true), different credentials, or a longer timeout."
 }
 
 func enrichSandboxTimeout(toolName string, err error, output string, decision SandboxDecision) error {
@@ -463,7 +463,7 @@ func enrichIsolatedSandboxFailure(toolName string, exitCode int, err error, outp
 	class := ClassifyToolError(toolName, err, output)
 	switch class {
 	case "network":
-		return fmt.Errorf("%w\nerror_class: sandbox_no_network; hint: The isolated command needs network access. Request the workspace-scoped network:shared capability; do not switch to host execution.", err)
+		return fmt.Errorf("%w\nerror_class: sandbox_no_network; hint: The isolated command ran without network access. If it needs the network, retry once with network: true (permission comes from the workspace's network:shared grant or an approval); do not switch to host execution.", err)
 	case "auth", "credential_missing", "credential_expired", "environment":
 		return fmt.Errorf("%w\nerror_class: %s; hint: %s Host execution is not an authentication or setup fix.", err, class, errorClassHints[class])
 	default:

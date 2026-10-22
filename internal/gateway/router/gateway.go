@@ -46,6 +46,42 @@ type Gateway struct {
 	// concurrency). See docs/worker-pool-design.md.
 	pool   *runpool.Pool
 	agents chan *kernel.Agent
+	// workerIndex numbers the pooled agents in construction order; the
+	// primary is worker 0.
+	workerIndex map[*kernel.Agent]int
+	leaseHook   WorkerLeaseHook
+}
+
+// WorkerLeaseHook observes one turn's tenure on an agent worker. It runs on
+// the turn's goroutine after the worker is checked out and before its agent
+// starts; the returned release function runs when the agent has finished and
+// before the worker is returned. A non-nil error ends the turn without starting
+// the agent, like a cancellation while waiting for a worker. The daemon
+// installs none. The eval harness uses one to attribute Runs to workers and to
+// hold a worker so that a model-free case can make Runs overlap.
+type WorkerLeaseHook func(ctx context.Context, worker int) (release func(), err error)
+
+// SetWorkerLeaseHook installs hook for every later turn. Call it before the
+// gateway serves turns.
+func (g *Gateway) SetWorkerLeaseHook(hook WorkerLeaseHook) {
+	if g != nil {
+		g.leaseHook = hook
+	}
+}
+
+// leaseWorker runs the lease hook for worker, if one is installed.
+func (g *Gateway) leaseWorker(ctx context.Context, worker int) (func(), error) {
+	if g.leaseHook == nil {
+		return func() {}, nil
+	}
+	release, err := g.leaseHook(ctx, worker)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		release = func() {}
+	}
+	return release, nil
 }
 
 func (g *Gateway) RuntimeContextBudget() kernel.RuntimeContextBudget {
@@ -64,8 +100,10 @@ func (g *Gateway) EnableWorkerPool(extra []*kernel.Agent) {
 	}
 	all := append([]*kernel.Agent{g.agent}, extra...)
 	g.agents = make(chan *kernel.Agent, len(all))
-	for _, a := range all {
+	g.workerIndex = make(map[*kernel.Agent]int, len(all))
+	for index, a := range all {
 		g.agents <- a
+		g.workerIndex[a] = index
 	}
 	g.pool = runpool.New(len(all))
 }
@@ -75,6 +113,11 @@ func (g *Gateway) EnableWorkerPool(extra []*kernel.Agent) {
 // workspace), checks out a worker agent, runs, and returns it.
 func (g *Gateway) runConversation(ctx context.Context, uid, channel, input string) (string, llm.UsageStats, error) {
 	if g.pool == nil {
+		release, err := g.leaseWorker(ctx, 0)
+		if err != nil {
+			return "", llm.UsageStats{}, err
+		}
+		defer release()
 		return g.agent.RunConversation(ctx, uid, channel, input)
 	}
 	var (
@@ -100,6 +143,12 @@ func (g *Gateway) runConversation(ctx context.Context, uid, channel, input strin
 	run := func() error {
 		ag := <-g.agents
 		defer func() { g.agents <- ag }()
+		release, err := g.leaseWorker(ctx, g.workerIndex[ag])
+		if err != nil {
+			runErr = err
+			return err
+		}
+		defer release()
 		resp, usage, runErr = ag.RunConversation(ctx, uid, channel, input)
 		return runErr
 	}
@@ -315,9 +364,11 @@ func (g *Gateway) modelDisplayLabel() string {
 // slash commands (/skills, /memory subcommands, /bundles, /curator,
 // /checkpoint) so a thin TUI client can run them without an in-process agent.
 // It is NOT a full agent turn — no per-run mutable state is touched — so it is
-// safe to call concurrently alongside the worker pool. Callers (the HTTP
-// handler) are responsible for restricting which tools may be dispatched and for
-// setting the tenant scope in args.
+// safe to call concurrently alongside the worker pool. It always runs on the
+// primary agent; a Skill change it makes reaches every worker because the
+// workers share one set of Skill tools. Callers (the HTTP handler) are
+// responsible for restricting which tools may be dispatched and for setting
+// the tenant scope in args.
 func (g *Gateway) DispatchTool(tool string, args map[string]interface{}) (string, error) {
 	if g == nil || g.agent == nil || g.agent.Dispatcher() == nil {
 		return "", fmt.Errorf("gateway agent is not configured")

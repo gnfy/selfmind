@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -29,14 +30,28 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 		return
 	}
 	switch event.Type {
-	case "background.notice":
+	case "continuation.candidates":
+		var payload struct {
+			ChoiceID string `json:"choice_id"`
+			Question string `json:"question"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil || payload.ChoiceID == "" || strings.TrimSpace(payload.Question) == "" {
+			return // Older audit-only events do not represent a visible question.
+		}
+		ref := eventRefFromRunEvent(event)
+		ref.Detail = true
+		content := strings.TrimSpace(payload.Question) + fmt.Sprintf("\nReply with a number, or use /choose %s <number> from another endpoint.", payload.ChoiceID)
+		m.program.Send(MsgBackgroundNotice{Content: content, Event: ref})
+	case "background.notice", "queue.start_failed":
 		var payload struct {
 			Message string `json:"message"`
 			Kind    string `json:"kind"`
 		}
 		_ = json.Unmarshal(event.Payload, &payload)
 		if message := strings.TrimSpace(payload.Message); message != "" {
-			m.program.Send(MsgBackgroundNotice{Content: message, Success: payload.Kind == "success"})
+			ref := eventRefFromRunEvent(event)
+			ref.Detail = event.Type == "queue.start_failed"
+			m.program.Send(MsgBackgroundNotice{Content: message, Success: payload.Kind == "success", Event: ref})
 		}
 	case "run.started":
 		var payload struct {
@@ -46,6 +61,7 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 			WatchID      string `json:"watch_id"`
 			TaskStatus   string `json:"task_status"`
 			Origin       string `json:"origin"`
+			ResumesRunID string `json:"resumes_run_id"`
 		}
 		_ = json.Unmarshal(event.Payload, &payload)
 		started := event.CreatedAt
@@ -55,6 +71,7 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 		m.program.Send(MsgDaemonRunStarted{
 			Presentation: payload.Presentation,
 			RunID:        strings.TrimSpace(event.RunID),
+			ResumesRunID: strings.TrimSpace(payload.ResumesRunID),
 			QueueID:      strings.TrimSpace(payload.QueueID),
 			TaskID:       strings.TrimSpace(event.TaskID),
 			WatchID:      strings.TrimSpace(payload.WatchID),
@@ -74,7 +91,7 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 		if status == "" {
 			switch event.Type {
 			case "run.finished":
-				status = "done"
+				status = "unknown"
 			case "run.cancelled":
 				status = "cancelled"
 			default:
@@ -159,8 +176,10 @@ func uiStatusForDaemonOutcome(status string) string {
 		return "cancelled"
 	case "interrupted", "verification_partial":
 		return "interrupted"
-	case "running", "waiting_user", "waiting_external":
-		return "done"
+	case "running":
+		return "working"
+	case "waiting_user", "waiting_external":
+		return strings.ToLower(strings.TrimSpace(status))
 	default:
 		return "error"
 	}

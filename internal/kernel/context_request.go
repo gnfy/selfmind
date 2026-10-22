@@ -26,7 +26,9 @@ func (c *ContextEngine) PrepareRequest(ctx context.Context, messages []llm.Messa
 	}
 	toolTokens := c.tokenizer.CountTools(tools)
 	budget := c.inputBudget()
-	messages = c.truncateMessages(ctx, messages, budget-toolTokens)
+	estimated, _ := c.requestTokens(ctx, messages, tools)
+	padding := estimated - c.countMessages(messages) - toolTokens
+	messages = c.truncateMessages(ctx, messages, budget-toolTokens-padding)
 	return c.fitRequest(ctx, messages, tools)
 }
 
@@ -35,11 +37,13 @@ func (c *ContextEngine) PrepareRequest(ctx context.Context, messages []llm.Messa
 func (c *ContextEngine) fitRequest(ctx context.Context, messages []llm.Message, tools []llm.ToolDefinition) ([]llm.Message, error) {
 	toolTokens := c.tokenizer.CountTools(tools)
 	budget := c.inputBudget()
-	if c.countMessages(messages)+toolTokens <= budget {
+	if used, _ := c.requestTokens(ctx, messages, tools); used <= budget {
 		return messages, ctx.Err()
 	}
-	messages = c.trimContext(ctx, messages, budget-toolTokens)
-	if used := c.countMessages(messages) + toolTokens; used > budget {
+	estimated, _ := c.requestTokens(ctx, messages, tools)
+	padding := estimated - c.countMessages(messages) - toolTokens
+	messages = c.trimContext(ctx, messages, budget-toolTokens-padding)
+	if used, _ := c.requestTokens(ctx, messages, tools); used > budget {
 		return nil, fmt.Errorf("required instructions and latest tool output exceed the input budget (%d estimated tokens; %d available). Shorten the input or reduce the active tool catalog before retrying", used, budget)
 	}
 	return messages, ctx.Err()

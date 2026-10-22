@@ -1,20 +1,70 @@
 {
   "plan_binding_version": 1,
-  "method": "chat",
-  "chat": {
-    "Content": "{\"outcome\":\"approve\",\"risk_level\":\"low\",\"user_authorization\":\"high\",\"rationale\":\"Writing receipt.txt with VERIFIED in the workspace matches the exact effect the person authorized in run_269887fc ('我授权...receipt.txt 写入') after the receipt-handoff wait group succeeded, and no accepted restriction excludes it.\"}",
-    "ReasoningContent": "",
-    "Phase": "",
-    "ToolCalls": [],
-    "Usage": {
-      "input_tokens": 2424,
-      "output_tokens": 71,
-      "cache_read_input_tokens": 0,
-      "cache_miss_input_tokens": 2424,
-      "cache_creation_input_tokens": 0,
-      "reasoning_output_tokens": 0,
-      "cache_usage_reported": true
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am now completing the run and submitting"
     },
-    "FinishReason": "stop"
-  }
+    {
+      "usage": {
+        "input_tokens": 17410,
+        "output_tokens": 8,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " the final result."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 256,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1424,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 16065,
+        "cache_miss_input_tokens": 2769,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2835392",
+          "Function": "finish_run",
+          "Args": "{\"final_response\":\"后台等待的前置条件已全部满足（`prerequisite.txt` 为 `READY`，`second-prerequisite.txt` 为 `READY_B`）。已在工作区根目录下创建 `receipt.txt` 并写入 `VERIFIED`，并通过 `test \\\"$(cat receipt.txt)\\\" = VERIFIED` 命令验证完成，计划步骤已全部更新为完成状态。\",\"tests\":[\"test \\\"$(cat receipt.txt)\\\" = VERIFIED\"],\"status\":\"done\",\"assessments\":[{\"reason\":\"receipt.txt 内容经验证确认为 VERIFIED\",\"step_id\":\"{{SELFMIND_VCR_PLAN_STEP_4}}\",\"result\":\"met\",\"evidence_refs\":[\"call_1372748\"]}],\"files\":[\"receipt.txt\"],\"done\":[\"确认前置条件（prerequisite.txt 为 READY，second-prerequisite.txt 为 READY_B）已达成\",\"创建 receipt.txt 并写入 VERIFIED\",\"使用 verify 验证 receipt.txt 内容确为 VERIFIED\",\"更新计划所有步骤为 completed\"]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EoYGCoMGAWkUfROyzfr6YpmG/HQooV5OSnQIo+BPgkY1yVeH5KM6a5v9C7yrKhT7UHW4kIGp9s6Lf7oDIbaFOoPYND91fDmQEl+NHUIcYhC72Y5GsbA9RrDLQb7eYFNJv1cLHZ7u/aGR9qojFY8Q8MnhUcgyXwRGQnM2cOy+/0LcUiMAhSQjXGC8Lic2zc1K6nYO0YCG2sJj5uEY9bfTLSsRWJLCDR94ie+9gOrnj1t6Vv11R6HVfKxyfZfb+1Fd8hotf1eZgqQdL0H2Eas73Iv6lcl+C0WHLxBm7I9kLqsSgTiqGKAJNmQ3AqVNZ1JMpJN6cobefGnactXR7t3qMYYEDAzL4D9blppeJxmE7klkiZGSbz92wOBsETEym3xiowGNznhcH33HEF3drc8zVSMxjp5Xf0i05mybx1EVKCxoYDzPJaaqQNIemPNeb8uywbHtruWnYoZxyYpf5k0yF5VSlEMakmkLMYxzZeKqIOjiWArRgBGmDKrwcMHgR8l9YRbVYwl34ReLFUP3IQ6L0VS5EPRV1+mlZK2Bcs0WVBFvvVlyQ6LZXQnZUtHb1YbBVBhBFYGOE1Dez3i+WhD6t+VMYEfUG0C7rZIzaU8T8D7jY27rOEE9vWlidgfwpk8knNU+eA82XtZCBcLaAHu9Aicogxggz769SAqHcRQFiAR6PhuR33zhyOaqKUOBaVliIe3RBuvqsMLt/k3W/sKB9FIt8swa/jEJ8BLma2WCaUR2n/WbTcQqkKQZyoPDjBaNriIsk+P6o6LX092DMX7SmDxsQme+qYcEJwjwKPooRaJne2QbmemOBGCt3O86B/jSMCk13aZqpP3rbERoTc3Vmdy7tiyY6rZ4ZKwFG+jOhk3TZ0IhO+5CHnm4Wswddip9fcJUhtHT2gZWGVsGauwykrDZEnKZkKfpo+lqF95+pJjofAefLErmePCnwDfjV+pyW004mGa162yZlauiPW81rpPFERXTlbQaZ8IjQXdZ7UVZ8mjKmcd5A0/Npi+i89ERs1cmM2EfQJED"
+            }
+          }
+        }
+      ]
+    }
+  ]
 }

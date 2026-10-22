@@ -1,0 +1,359 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " file contains exactly"
+    },
+    {
+      "reasoning_content": " \"READY\"."
+    },
+    {
+      "reasoning_content": " Observation"
+    },
+    {
+      "reasoning_content": " reference: toolcall"
+    },
+    {
+      "reasoning_content": "-1-0"
+    },
+    {
+      "reasoning_content": ".\n\nNow finish"
+    },
+    {
+      "reasoning_content": "_run with status done"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " final_response, plan"
+    },
+    {
+      "reasoning_content": "_patch for the changed"
+    },
+    {
+      "reasoning_content": " steps ("
+    },
+    {
+      "reasoning_content": "both completed), and"
+    },
+    {
+      "reasoning_content": " an assessment associating"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": "call-1-"
+    },
+    {
+      "reasoning_content": "0 with the inspection"
+    },
+    {
+      "reasoning_content": " step via step_id"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " evidence_refs.\n\n"
+    },
+    {
+      "reasoning_content": "Preserve original criteria"
+    },
+    {
+      "reasoning_content": " — omit"
+    },
+    {
+      "reasoning_content": " success_criteria in the"
+    },
+    {
+      "reasoning_content": " patch (omission"
+    },
+    {
+      "reasoning_content": " preserves stored criteria"
+    },
+    {
+      "reasoning_content": ").\n\nAssessment"
+    },
+    {
+      "reasoning_content": ": step"
+    },
+    {
+      "reasoning_content": "_id step_0"
+    },
+    {
+      "reasoning_content": "c31ff"
+    },
+    {
+      "reasoning_content": "0bef19"
+    },
+    {
+      "reasoning_content": "54"
+    },
+    {
+      "reasoning_content": "5f_1"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " result met, evidence"
+    },
+    {
+      "reasoning_content": "_refs [\"toolcall"
+    },
+    {
+      "reasoning_content": "-1-0"
+    },
+    {
+      "reasoning_content": "\"], reason.\n\n"
+    },
+    {
+      "reasoning_content": "Also maybe"
+    },
+    {
+      "reasoning_content": " an assessment for the"
+    },
+    {
+      "reasoning_content": " reporting step, but"
+    },
+    {
+      "reasoning_content": " the instruction"
+    },
+    {
+      "reasoning_content": " says \"an assessment"
+    },
+    {
+      "reasoning_content": " explicitly"
+    },
+    {
+      "reasoning_content": " associating the read"
+    },
+    {
+      "reasoning_content": "'s Observation reference with"
+    },
+    {
+      "reasoning_content": " the inspection"
+    },
+    {
+      "reasoning_content": " step via step_id"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " evidence_refs\". I"
+    },
+    {
+      "reasoning_content": "'ll include that one"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and possibly one for"
+    },
+    {
+      "reasoning_content": " the report"
+    },
+    {
+      "reasoning_content": " step too. Keep"
+    },
+    {
+      "reasoning_content": " it minimal but grounded"
+    },
+    {
+      "reasoning_content": " — I'll include"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " the inspection one as"
+    },
+    {
+      "reasoning_content": " instructed"
+    },
+    {
+      "reasoning_content": ", since the report"
+    },
+    {
+      "reasoning_content": " step is"
+    },
+    {
+      "reasoning_content": " satisfied by the final"
+    },
+    {
+      "reasoning_content": "_response itself. Actually"
+    },
+    {
+      "reasoning_content": " adding an assessment for"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " 2 with the"
+    },
+    {
+      "reasoning_content": " same evidence ref could"
+    },
+    {
+      "reasoning_content": " be reasonable, but"
+    },
+    {
+      "reasoning_content": " the instruction specifies"
+    },
+    {
+      "reasoning_content": " the inspection step."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": "'ll add only that"
+    },
+    {
+      "reasoning_content": " one to stay precise"
+    },
+    {
+      "reasoning_content": ".\n\nLet me"
+    },
+    {
+      "reasoning_content": " do the plan patch"
+    },
+    {
+      "reasoning_content": " + finish in one"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": ": finish_run with"
+    },
+    {
+      "reasoning_content": " plan_patch. The"
+    },
+    {
+      "reasoning_content": " instruction says \"After"
+    },
+    {
+      "reasoning_content": " seeing the result,"
+    },
+    {
+      "reasoning_content": " submit finish_run with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " done, final_response"
+    },
+    {
+      "reasoning_content": ", the"
+    },
+    {
+      "reasoning_content": " final changed steps in"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": "_patch, and an"
+    },
+    {
+      "reasoning_content": " assessment..."
+    },
+    {
+      "reasoning_content": "\". So one call"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": "\n\nNote: finish"
+    },
+    {
+      "reasoning_content": "_run requires final_response"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " plan_patch. Yes"
+    },
+    {
+      "reasoning_content": ".\n\nDon't"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " verify, don't"
+    },
+    {
+      "reasoning_content": " repeat the"
+    },
+    {
+      "reasoning_content": " read.\n\nAlso"
+    },
+    {
+      "reasoning_content": " note the \"final"
+    },
+    {
+      "reasoning_content": " result goes to last"
+    },
+    {
+      "reasoning_content": " channel input\" hint"
+    },
+    {
+      "reasoning_content": " — no live user"
+    },
+    {
+      "reasoning_content": " input block given,"
+    },
+    {
+      "reasoning_content": " so just"
+    },
+    {
+      "reasoning_content": " finish normally.\n"
+    },
+    {
+      "content": "The file contains the"
+    },
+    {
+      "content": " literal string READY."
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 14604,
+        "output_tokens": 688,
+        "cache_read_input_tokens": 14336,
+        "cache_miss_input_tokens": 268,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 340,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "finish_run",
+          "Args": "{\"assessments\": \n[{\"evidence_refs\": [\"toolcall-1-0\"], \"reason\": \"A single read-only read of workspace_root/source.txt returned its contents, exactly one line: READY. That observation determines the file contents and shows the literal string READY is present.\", \"result\": \"met\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\"}]\n\n, \"done\": \n[\"Read source.txt once (observation toolcall-1-0) and determined its contents\", \"Reported the finding: source.txt contains READY\"]\n\n, \"final_response\": \"Yes — source.txt contains READY.\\n\\nI read workspace_root/source.txt once as a read-only file read (observation toolcall-1-0). Its entire content is a single line, `READY`, so the literal string is present — not as part of a longer word or a negative status marker.\\n\\nThis was an investigation only; no remediation, no file modification, and no verify run were performed, and the read was not repeated.\", \"plan_patch\": \n[{\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\"}, {\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_2}}\"}]\n\n, \"status\": \"done\"}"
+        }
+      ]
+    }
+  ]
+}

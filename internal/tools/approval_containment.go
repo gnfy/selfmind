@@ -2,7 +2,12 @@ package tools
 
 import (
 	"strings"
+	"sync/atomic"
 )
+
+// containmentAssessments counts derivations. The approval funnel derives one
+// per call and hands it to every decision that needs it; a test pins that.
+var containmentAssessments atomic.Int64
 
 // ContainmentAssessment keeps the three execution boundaries independent.
 // Collapsing them into one bool made a network-enabled filesystem sandbox look
@@ -15,6 +20,10 @@ type ContainmentAssessment struct {
 	Credentials     string `json:"credentials"`
 	Enforced        bool   `json:"enforced"`
 	ObservationOnly bool   `json:"observation_only,omitempty"`
+	// HostCredentialWrites are the declared credential-state subpaths an
+	// enforcing backend that cannot mount makes writable in place on the host.
+	// They are part of the boundary the judge and the person approve.
+	HostCredentialWrites []string `json:"host_credential_writes,omitempty"`
 }
 
 const (
@@ -31,6 +40,7 @@ const (
 // sandbox annotation is required so /mode retro-resolution can never infer that
 // a pending host escape was isolated.
 func assessExecContainment(toolName string, args map[string]interface{}) ContainmentAssessment {
+	containmentAssessments.Add(1)
 	assessment := ContainmentAssessment{
 		Filesystem:  containmentFilesystemUnknown,
 		Network:     containmentNetworkNone,
@@ -47,15 +57,41 @@ func assessExecContainment(toolName string, args map[string]interface{}) Contain
 		assessment.Filesystem = containmentFilesystemIsolated
 		enabled, _, _ := execSandboxPolicyForArgs(args)
 		assessment.Enforced = enabled && ExecSandboxAvailable()
+		if assessment.Enforced && !SandboxBackendForMode(SandboxIsolated).MountsToolState() {
+			// The same plan preparation will make, under the credential
+			// decision this call actually holds.
+			if plan, err := previewHostStateWrites(toolName, args, false); err == nil {
+				assessment.HostCredentialWrites = plan.Paths()
+			}
+		}
 	}
 	if networkSharedArg(args) {
 		assessment.Network = containmentNetworkShared
 	}
-	if allowed, _ := args[credentialReadArgKey].(bool); allowed {
+	// Credentials are what the call's sandbox carries: the credential:read
+	// decision for a tool it names, or the operator state preparation hands an
+	// undecidable payload from the host inventory.
+	if credentialReadResolved(args) || receivesOperatorCredentials(toolName, args) {
 		assessment.Credentials = containmentCredentialsSelected
 	}
 	assessment.ObservationOnly = observationOnlyExec(toolName, args)
+	if assessment.ObservationOnly && assessment.Network == containmentNetworkShared && networkSharedByRequestAlone(toolName, args) {
+		// The release for a proven observation rests on the network being the
+		// observation's own: `kubectl get pods` reaches a cluster by purpose.
+		// When the command says it is local (`ls`, `git status`) and the network
+		// is shared only because the call asked for it, nothing proves the
+		// request is for the observation; the model chose it, and it reaches the
+		// funnel as any other networked call does.
+		assessment.ObservationOnly = false
+	}
 	return assessment
+}
+
+// networkSharedByRequestAlone reports a call whose command does not name a
+// remote service and whose network is therefore explained only by its explicit
+// `network: true`.
+func networkSharedByRequestAlone(toolName string, args map[string]interface{}) bool {
+	return networkRequestedByCall(toolName, args) && !commandPlausiblyNeedsEgress(toolName, args)
 }
 
 // AutoApprove reports whether smart mode may skip both judge and human. A fully
@@ -84,6 +120,9 @@ func (a ContainmentAssessment) Summary() string {
 	}
 	if !a.Enforced && a.Filesystem == containmentFilesystemIsolated {
 		parts = append(parts, "enforcement=unavailable")
+	}
+	if len(a.HostCredentialWrites) > 0 {
+		parts = append(parts, "host_credential_writes="+strings.Join(a.HostCredentialWrites, ";"))
 	}
 	return strings.Join(parts, ", ")
 }

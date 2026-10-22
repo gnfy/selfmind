@@ -10,6 +10,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
+	"selfmind/internal/verification"
 )
 
 // WorkSelectTool records Main's typed interpretation of one exact historical
@@ -29,7 +30,7 @@ func NewWorkSelectTool(store *control.Store) *WorkSelectTool {
 func (t *WorkSelectTool) Name() string { return "work_select" }
 
 func (t *WorkSelectTool) Description() string {
-	return "Propose how the current request relates to one exact inspected historical run. Use observe for a read-only status/result question, or resume to continue that work. A same-domain resume is claimed immediately and returns its context. A scope/checkpoint mismatch proposes a transfer for gateway validation; it is not queued yet. A material effect in this interaction blocks implicit continuation. Only a committed claim or queue receipt proves that work will continue."
+	return "Relate this request to an evidenced prior run. observe reports state; resume continues. Pending questions require answer. Same-domain effect-free resumes without checkpoints claim directly; other scopes/checkpoints/questions propose a gateway transfer. Only a committed claim or queue receipt proves continuation."
 }
 
 func (t *WorkSelectTool) Schema() ToolSchema {
@@ -37,8 +38,10 @@ func (t *WorkSelectTool) Schema() ToolSchema {
 		Type:                 "object",
 		AdditionalProperties: rejectAdditionalProperties(),
 		Properties: map[string]PropertyDef{
-			"action": {Type: "string", Enum: []string{"observe", "resume"}, Description: "observe reads/reports prior state; resume continues that work, directly in this turn when the execution domain matches."},
-			"run_id": {Type: "string", Description: "Exact run_id already supported by work_search/work_inspect evidence."},
+			"action":     {Type: "string", Enum: []string{"observe", "resume"}, Description: "observe reports prior state; resume continues work."},
+			"run_id":     {Type: "string", Description: "Exact run_id from a structured hint or history result."},
+			"clarify_id": {Type: "string", Description: "Optional ID of the target run's pending question."},
+			"answer":     {Type: "string", Description: "For resume with a pending question: the user's answer, 1-based option number, or option text."},
 		},
 		Required: []string{"action", "run_id"},
 	}
@@ -92,6 +95,11 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 	if target == nil || target.PersonID != scope.PersonID {
 		return "", fmt.Errorf("target run is unavailable for the current person")
 	}
+	clarifyID := strings.TrimSpace(taskStringArg(args, "clarify_id"))
+	answer := strings.TrimSpace(taskStringArg(args, "answer"))
+	if action == "observe" && (clarifyID != "" || answer != "") {
+		return "", fmt.Errorf("clarify_id and answer are only valid when action is resume")
+	}
 	if action == "resume" {
 		resumable, candidates, err := runIsResumable(ctx, t.store, scope.ControlTenantID, scope.PersonID, target)
 		if err != nil {
@@ -99,6 +107,33 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 		}
 		if !resumable {
 			return "", notResumableRun(target, candidates)
+		}
+		pendingClarify, err := t.store.PendingClarifyForRun(ctx, scope.ControlTenantID, scope.PersonID, target.ID)
+		if err != nil {
+			return "", err
+		}
+		if pendingClarify != nil {
+			if clarifyID != "" && clarifyID != pendingClarify.ID {
+				return "", fmt.Errorf("run %s is waiting on clarification %s, not %s", target.ID, pendingClarify.ID, clarifyID)
+			}
+			if answer == "" {
+				var choiceSuffix string
+				if choices := control.ClarifyChoices(pendingClarify.Options); len(choices) > 0 {
+					numbered := make([]string, 0, len(choices))
+					for i, choice := range choices {
+						numbered = append(numbered, fmt.Sprintf("%d. %s", i+1, choice))
+					}
+					choiceSuffix = " [" + strings.Join(numbered, "; ") + "]"
+				}
+				return "", fmt.Errorf("run %s is waiting on pending clarification %s (%q%s); selection alone cannot claim or expire a parked question. If the user's message answers this question, call work_select with action=\"resume\", run_id=%q, clarify_id=%q, and answer set to their reply (or option number/text); otherwise use action=\"observe\" or continue as new work so the pending question remains actionable",
+					target.ID, pendingClarify.ID, pendingClarify.Question, choiceSuffix, target.ID, pendingClarify.ID)
+			}
+			clarifyID = pendingClarify.ID
+			answer = control.ResolveClarifyOption(answer, pendingClarify.Options)
+		} else if clarifyID != "" {
+			return "", fmt.Errorf("run %s has no pending clarification %s", target.ID, clarifyID)
+		} else {
+			answer = ""
 		}
 	}
 	raw, err := t.store.RunWorkSelection(ctx, scope.ControlTenantID, scope.PersonID, scope.RunID)
@@ -109,15 +144,18 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 	repeated := false
 	if len(raw) > 0 {
 		var existing struct {
-			Action string `json:"action"`
-			RunID  string `json:"run_id"`
+			Action    string `json:"action"`
+			RunID     string `json:"run_id"`
+			ClarifyID string `json:"clarify_id"`
+			Answer    string `json:"answer"`
 		}
 		if json.Unmarshal(raw, &existing) != nil {
 			return "", fmt.Errorf("the existing work selection audit is invalid")
 		}
 		previousAction = strings.ToLower(strings.TrimSpace(existing.Action))
 		previousRunID = strings.TrimSpace(existing.RunID)
-		repeated = previousAction == action && previousRunID == targetRunID
+		repeated = previousAction == action && previousRunID == targetRunID &&
+			strings.TrimSpace(existing.ClarifyID) == clarifyID && strings.TrimSpace(existing.Answer) == answer
 	}
 	if previousRunID != "" && !repeated {
 		blocked, reason, err := t.store.RunSelectionEffectBoundary(ctx, scope.ControlTenantID, scope.PersonID, scope.RunID)
@@ -133,6 +171,10 @@ func (t *WorkSelectTool) Execute(args map[string]interface{}) (string, error) {
 		payload := map[string]interface{}{
 			"action": action, "run_id": targetRunID, "task_id": target.TaskID,
 			"target_workspace_id": target.WorkspaceID,
+		}
+		if clarifyID != "" {
+			payload["clarify_id"] = clarifyID
+			payload["answer"] = answer
 		}
 		if previousRunID != "" {
 			status = "corrected"
@@ -222,28 +264,43 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 	// transaction. Render and return its current-Run identities, not a parent
 	// display snapshot whose ids cannot be used by update_plan.
 	var plan []planStepView
-	if current, err := t.store.LatestRunPlan(ctx, tenantID, claimed.ID); err != nil {
+	var currentPlan []planStepView
+	var planVersion int
+	var shown interface{}
+	snapshot, err := t.store.ReadRunPlanSnapshot(ctx, tenantID, personID, claimed.ID)
+	if err != nil {
 		return "", err
-	} else if current != nil {
+	}
+	if current := snapshot.Plan; current != nil {
 		plan = make([]planStepView, 0, len(current.Steps))
 		for _, step := range current.Steps {
 			plan = append(plan, planStepView{StepID: step.StepID, Step: step.Step, Status: step.Status,
 				SuccessCriteria: step.SuccessCriteria, VerificationRequired: step.VerificationRequired})
 		}
+		currentPlan, planVersion = plan, current.Version
+		// The client shows what an explicit resume shows: each cancellation's
+		// disposition, reason, and the input that authorized it.
+		shown = DisplayedPlanSteps(ctx, t.store, tenantID, claimed.ID, current.Steps)
 	} else {
 		// Historical Runs may have only a display event and no durable Plan.
 		plan, err = t.inheritedPlanSteps(ctx, tenantID, personID, claimed.TaskID, targetRunID)
 		if err != nil {
 			return "", err
 		}
+		shown = plan
 	}
 	if len(plan) > 0 {
+		payload := map[string]interface{}{
+			"plan": shown, "explanation": "Plan inherited from the continued run",
+			"source": "resumed_run", "resumes_run_id": targetRunID,
+		}
+		// A legacy display-only plan has no accepted version to claim.
+		if planVersion > 0 {
+			payload["plan_version"] = planVersion
+		}
 		if _, err := t.store.AppendEvent(ctx, control.Event{
 			TaskID: claimed.TaskID, RunID: claimed.ID, Type: "plan.updated", Visibility: "task",
-			Channel: claimed.Channel, Payload: mustToolJSON(map[string]interface{}{
-				"plan": plan, "explanation": "Plan inherited from the continued run",
-				"source": "resumed_run", "resumes_run_id": targetRunID,
-			}),
+			Channel: claimed.Channel, Payload: mustToolJSON(payload),
 			IdempotencyKey: "plan.inherited:" + claimed.ID + ":" + targetRunID,
 		}); err != nil {
 			return "", err
@@ -253,11 +310,41 @@ func (t *WorkSelectTool) directContinuationResult(ctx context.Context, tenantID,
 	if err != nil {
 		return "", err
 	}
-	encoded, _ := json.Marshal(map[string]interface{}{
-		"status": "committed", "commit_mode": "direct", "action": "resume", "run_id": targetRunID,
-		"thread_id":      claimed.TaskID,
-		"resume_context": resume,
-		"message":        "This turn now continues the selected run in the same execution scope. Use the resume context, do the remaining work here, keep the completed steps when you call update_plan, and finish with the real result rather than an acknowledgement.",
+	// Plan import can replace the interaction's transient Work Unit. Retain
+	// instructions only when its activation still belongs to the current unit;
+	// historical affinity never silently activates a different package here.
+	retainedSkill := false
+	unit, err := t.store.CurrentRunWorkUnit(ctx, tenantID, claimed.ID)
+	if err != nil {
+		return "", err
+	}
+	if unit != nil {
+		active, err := t.store.ActiveSkillActivation(ctx, tenantID, claimed.ID, unit.ID, "main")
+		if err != nil {
+			return "", err
+		}
+		retainedSkill = active != nil
+	}
+	// Keep derived references last, after canonical Plan identities. This also
+	// preserves historical replay's first-occurrence identity binding.
+	encoded, _ := json.Marshal(struct {
+		Action              string                    `json:"action"`
+		ActiveSkillRetained bool                      `json:"active_skill_retained"`
+		CommitMode          string                    `json:"commit_mode"`
+		Message             string                    `json:"message"`
+		Plan                []planStepView            `json:"plan"`
+		PlanVersion         int                       `json:"plan_version"`
+		ResumeContext       string                    `json:"resume_context"`
+		RunID               string                    `json:"run_id"`
+		Status              string                    `json:"status"`
+		ThreadID            string                    `json:"thread_id"`
+		ClosureFacts        verification.ClosureFacts `json:"closure_facts"`
+		ExecutionRunID      string                    `json:"execution_run_id"`
+	}{
+		Action: "resume", ActiveSkillRetained: retainedSkill, CommitMode: "direct",
+		Message: "This turn now continues the selected run in the same execution scope. Use the resume context, do the remaining work here, keep the completed steps when you call update_plan, and finish with the real result rather than an acknowledgement.",
+		Plan:    currentPlan, PlanVersion: planVersion, ResumeContext: resume, RunID: targetRunID, Status: "committed", ThreadID: claimed.TaskID,
+		ClosureFacts: snapshot.ClosureFacts, ExecutionRunID: claimed.ID,
 	})
 	return string(encoded), nil
 }
@@ -349,7 +436,7 @@ func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, 
 				fmt.Fprintf(&sb, "  success_criteria=%q verification_required=%t\n", workBound(step.SuccessCriteria, 400), step.VerificationRequired)
 			}
 		}
-		sb.WriteString("This plan is inherited from the continued run. For multi-step work, call update_plan with a complete snapshot that keeps the completed steps and acceptance conditions, then continue from the in-progress step. Use only step IDs issued for the current Run; omit IDs for steps not yet registered here.\n")
+		sb.WriteString("Continue from the in-progress step. An accepted current-Run plan needs update_plan only when it changes, not to restate it after selection. Preserve completed steps and acceptance conditions. Use update_plan mode=patch for changed step_id/status entries; omitted steps stay unchanged and the result remains a complete snapshot. Use snapshot mode to add or reorder steps. Use only current-Run step IDs; omit IDs for new steps.\n")
 	}
 	prior, err := t.store.ListInheritedPlanEvidence(ctx, tenantID, childRunID)
 	if err != nil {
@@ -370,6 +457,13 @@ func (t *WorkSelectTool) resumeContext(ctx context.Context, tenantID, personID, 
 					age = " checked_ago=" + kernel.EvidenceAge(now.Sub(item.CheckedAt))
 				}
 				fmt.Fprintf(&sb, "  checked_at=%s%s\n", item.CheckedAt.Format(time.RFC3339), age)
+			}
+			if item.ReuseBlockedReason != "" {
+				fmt.Fprintf(&sb, "  reuse_blocked_reason=%q; prior verification cannot be adopted while this condition remains.\n", workBound(item.ReuseBlockedReason, 300))
+			}
+			if finding := item.PriorCondition; finding != nil {
+				fmt.Fprintf(&sb, "  prior_main_finding=%s criterion=%q reason=%q (historical judgment, not current proof)\n",
+					finding.Result, workBound(finding.Criterion, 160), workBound(finding.Reason, 240))
 			}
 			if item.CriterionChanged {
 				fmt.Fprintf(&sb, "  criterion changed from %q; prior verification cannot cover the new criterion without review.\n", workBound(item.SourceCriterion, 160))

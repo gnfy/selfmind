@@ -1,0 +1,42 @@
+id: reliability_plan_blocked_independent_work
+title: "Independent preparation preserves a required unavailable observation"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+setup:
+  files:
+    inventory.txt: "queue-a\nqueue-b\n"
+turns:
+  - input: >-
+      Inspect the current queue depths and prepare a local collection checklist.
+      Current depths must come from live-sample.json, which is not available in
+      this workspace. inventory.txt contains names only. There is no external
+      service available for this exercise. Record a three-step plan in this
+      order: obtain the live sample, inspect the inventory, prepare checklist.txt.
+      You can complete the independent inventory and preparation now. The live
+      observation remains part of my requested result; I am not taking it over
+      or changing the scope. Once preparation is saved, end this turn with a
+      blocked finish_run outcome and explain what is still needed.
+expect:
+  status: blocked
+  max_tool_errors: 1
+  max_duration_seconds: 120
+assert_state:
+  - on: run
+    field: status
+    eq: blocked
+  - on: events
+    type: plan.updated
+    payload_contains: '"status":"pending"'
+    count_gte: 1
+  - on: events
+    type: plan.updated
+    payload_contains: '"cancellation_disposition":"not_required"'
+    count_lte: 0
+  - on: file
+    path: checklist.txt
+    contains: queue-a
+checks:
+  no_empty_response: true
+  no_raw_json_leak: true

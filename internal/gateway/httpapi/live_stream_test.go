@@ -66,9 +66,15 @@ func TestEventsStreamReplaysAfterCursorAndScopesPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	notice, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Channel: "cli", Type: "queue.continuation_obsolete",
+		Payload: []byte(`{"message":"A queued continuation did not start. Use /resume run-parent to inspect.","queue_id":"queue-old"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	req := httptest.NewRequest(http.MethodGet, "/v1/events/stream?platform=cli&platform_user_id=alice&session=cli&once=true", nil)
+	req = asLocalCLI(req)
 	req.Header.Set("Last-Event-ID", fmt.Sprintf("%d", first.Cursor))
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
@@ -79,11 +85,16 @@ func TestEventsStreamReplaysAfterCursorAndScopesPerson(t *testing.T) {
 	if strings.Contains(body, "event: tool.started") {
 		t.Fatalf("event at the supplied cursor was replayed:\n%s", body)
 	}
+	if !strings.Contains(body, "event: background.notice") || !strings.Contains(body, fmt.Sprintf("id: %d", notice.Cursor)) ||
+		!strings.Contains(body, notice.ID) || !strings.Contains(body, "/resume run-parent") {
+		t.Fatalf("reconnect lost the durable, actionable queue notice:\n%s", body)
+	}
 
 	stranger := httptest.NewRequest(http.MethodGet, "/v1/events/stream?platform=cli&platform_user_id=bob&cursor=0&once=true", nil)
+	stranger = asLocalCLI(stranger)
 	strangerRec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(strangerRec, stranger)
-	if strings.Contains(strangerRec.Body.String(), "tool.completed") {
+	if strings.Contains(strangerRec.Body.String(), "tool.completed") || strings.Contains(strangerRec.Body.String(), "queued continuation") {
 		t.Fatalf("cross-person event leak:\n%s", strangerRec.Body.String())
 	}
 }
@@ -179,6 +190,22 @@ func TestForeignSessionReceivesOnlyProjectedRunFacts(t *testing.T) {
 	<-own.ch
 	<-attached.ch
 
+	hub.publish(api.RunEvent{PersonID: "person", Channel: "session-a", Type: "clarify.answered",
+		Payload: []byte(`{"clarify_id":"clarify-a","answer":"private answer details"}`)})
+	if got := string((<-other.ch).Payload); !strings.Contains(got, "clarify-a") || strings.Contains(got, "private answer details") {
+		t.Fatalf("foreign answered resolution lost identity or leaked answer: %s", got)
+	}
+	<-own.ch
+	<-attached.ch
+
+	hub.publish(api.RunEvent{PersonID: "person", Channel: "session-a", Type: "clarify.expired",
+		Payload: []byte(`{"clarify_id":"clarify-a","reason":"private cancellation details"}`)})
+	if got := string((<-other.ch).Payload); !strings.Contains(got, "clarify-a") || strings.Contains(got, "private cancellation details") {
+		t.Fatalf("foreign resolution lost identity or leaked details: %s", got)
+	}
+	<-own.ch
+	<-attached.ch
+
 	hub.publish(api.RunEvent{PersonID: "person", RunID: "run-a", Type: "tool.started", Payload: []byte(`{"secret":"missing-audience"}`)})
 	select {
 	case event := <-other.ch:
@@ -220,7 +247,8 @@ func TestEventReplayKeepsTheSessionAudience(t *testing.T) {
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	replay := func(query string) string {
 		rec := httptest.NewRecorder()
-		daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/events/stream?platform=cli&platform_user_id=alice&cursor=0&once=true"+query, nil))
+		pingReq := asLocalCLI(httptest.NewRequest(http.MethodGet, "/v1/events/stream?platform=cli&platform_user_id=alice&cursor=0&once=true"+query, nil))
+		daemon.Handler().ServeHTTP(rec, pingReq)
 		return rec.Body.String()
 	}
 	body := replay("&session=session-b")
@@ -265,7 +293,7 @@ func TestTwoTerminalsSeeOnlyTheirOwnSessionsDetail(t *testing.T) {
 	if err != nil || queued == nil || queued.Channel != "session-b" || queued.Content != "also check the logs" {
 		t.Fatalf("B's independent queued input = %+v err=%v", queued, err)
 	}
-	active := daemon.coordinator().currentActive(identity.PersonID)
+	active := daemon.coordinator().activeForIncoming(identity.PersonID, api.MessageRequest{Platform: "cli", PlatformUserID: "local", Channel: "session-a"})
 	if active == nil || active.RunID == "" {
 		t.Fatalf("A has no exact active run: %+v", active)
 	}
@@ -277,7 +305,7 @@ func TestTwoTerminalsSeeOnlyTheirOwnSessionsDetail(t *testing.T) {
 		t.Fatalf("B's exact reply did not reach A: %+v", exact)
 	}
 	provider.releaseNow()
-	waitUntil(t, 10*time.Second, func() bool { return daemon.coordinator().currentActive(identity.PersonID) == nil }, "runs did not finish")
+	waitUntil(t, 10*time.Second, func() bool { return daemon.coordinator().activeCount(identity.PersonID) == 0 }, "runs did not finish")
 
 	collect := func(sub *runEventSubscriber) []api.RunEvent {
 		var events []api.RunEvent

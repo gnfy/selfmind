@@ -68,6 +68,8 @@ func TestDispatchPartitionScoping(t *testing.T) {
 			Args: map[string]interface{}{"action": "list", "_skill_storage": "client-forged", "_registry": "client-forged"},
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/dispatch", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = asLocalCLI(req)
 		rec := httptest.NewRecorder()
 		daemon.Handler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -123,6 +125,8 @@ func TestDispatchSkillManageUsesDaemonConfiguredStorage(t *testing.T) {
 		Args: map[string]interface{}{"action": "create", "name": "daemon-root", "content": "Use the daemon root."},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/dispatch", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	var response api.DispatchResponse
@@ -180,6 +184,8 @@ func TestDispatchSkillManageMutationsUseAuthenticatedManagementScope(t *testing.
 			Tool: "skill_manage", Platform: "cli", PlatformUserID: "local", Args: args,
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/dispatch", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = asLocalCLI(req)
 		rec := httptest.NewRecorder()
 		daemon.Handler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -254,6 +260,7 @@ func TestSessionsEndpoint(t *testing.T) {
 	get := func(target string) *httptest.ResponseRecorder {
 		t.Helper()
 		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req = asLocalCLI(req)
 		rec := httptest.NewRecorder()
 		daemon.Handler().ServeHTTP(rec, req)
 		return rec

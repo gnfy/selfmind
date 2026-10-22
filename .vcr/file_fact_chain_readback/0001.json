@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me start with"
+    },
+    {
+      "reasoning_content": " batch_read of"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " two files.\n"
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll read both files"
+    },
+    {
+      "content": " in one batch"
+    },
+    {
+      "content": " call first.\n\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13131,
+        "output_tokens": 93,
+        "cache_read_input_tokens": 11264,
+        "cache_miss_input_tokens": 1867,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 11,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "batch_read",
+          "Args": "{\"operations\": \n[{\"tool\": \"read_file\", \"path\": \"long-facts.txt\", \"line_numbers\": true}, {\"tool\": \"read_file\", \"path\": \"lookup.cfg\", \"line_numbers\": true}]\n\n}"
+        }
+      ]
+    }
+  ]
+}

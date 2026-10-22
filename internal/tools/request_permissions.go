@@ -51,6 +51,9 @@ type requestedPermissionItem struct {
 	Label   string
 	RunOnly bool
 	Effect  map[string]interface{}
+	// HostWrites are the in-place credential writes a declared command makes;
+	// its key is bound to them.
+	HostWrites []string
 }
 
 // RequestPermissionsTool is the tool registration. It runs under the same
@@ -170,7 +173,9 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 		RunID:    scope.RunID,
 		Channel:  scope.Channel,
 		ToolName: "request_permissions",
-		Reason:   reason,
+		// Every surface truncates the reason, so the bundle's in-place
+		// credential writes lead it, as on every other ask.
+		Reason: prependApprovalReason(hostCredentialWritesFact(args, permissionHostWrites(pending)), reason),
 		Args: map[string]interface{}{
 			"permissions": describePermissionItems(pending),
 			"effects":     permissionEffectDisplays(pending),
@@ -314,6 +319,13 @@ func requestedPermissionEffects(args map[string]interface{}, scope ExecutionScop
 		}
 		prepared["_tool_name"] = toolName
 		prepared[toolExecutionPolicyArg] = policy
+		// The declared command is judged under this run's scope, as the live
+		// call will be: its lease decides what it writes in place.
+		for _, name := range []string{"_tenant_id", "_context", "_invocation_scope"} {
+			if value, ok := args[name]; ok {
+				prepared[name] = value
+			}
+		}
 		annotateEffectiveSandboxMode(prepared)
 		projectRoot := approvalProjectRoot("", scope, prepared)
 		if blocked, blockReason := hardlineToolCall(projectRoot, toolName, prepared); blocked {
@@ -338,7 +350,12 @@ func requestedPermissionEffects(args map[string]interface{}, scope ExecutionScop
 		if len(canonical) > requestPermissionsMaxEffectBytes {
 			return nil, fmt.Errorf("effects[%d] is too large for a reviewable bundle; use its ordinary single-call approval", index)
 		}
-		key := approvalDeclaredEffectKey(toolName, prepared, scope, true)
+		// Bound like every other reusable key: the live call's key carries the
+		// in-place credential writes it makes, so a bundle approved for other
+		// writes (or none) never releases it.
+		hostWrites := grantableHostCredentialWrites(toolName, prepared)
+		binding := hostCredentialWritesBinding(hostWrites)
+		key := bindHostCredentialWrites(approvalDeclaredEffectKey(toolName, prepared, scope, true), binding)
 		if key == "" {
 			return nil, fmt.Errorf("effects[%d] could not be bound to this run", index)
 		}
@@ -347,8 +364,12 @@ func requestedPermissionEffects(args map[string]interface{}, scope ExecutionScop
 		}
 		seen[key] = struct{}{}
 		items = append(items, requestedPermissionItem{
-			Key: key, Label: fmt.Sprintf("exact %s command: %s", toolName, truncateRunes(toSingleLine(RedactSensitive(command)), 180)),
-			RunOnly: true,
+			Key: key,
+			Label: describeHostCredentialWritesGrant(
+				fmt.Sprintf("exact %s command: %s", toolName, truncateRunes(toSingleLine(RedactSensitive(command)), 180)),
+				binding, compactHostPaths(prepared, hostWrites)),
+			HostWrites: hostWrites,
+			RunOnly:    true,
 			Effect: map[string]interface{}{
 				"tool":    toolName,
 				"args":    approvalDisplayArgs(prepared),
@@ -403,6 +424,22 @@ func describePermissionItems(items []requestedPermissionItem) string {
 		labels = append(labels, item.Label)
 	}
 	return strings.Join(labels, ", ")
+}
+
+// permissionHostWrites is every in-place credential write the items release,
+// each once, in declaration order.
+func permissionHostWrites(items []requestedPermissionItem) []string {
+	seen := map[string]bool{}
+	var paths []string
+	for _, item := range items {
+		for _, path := range item.HostWrites {
+			if !seen[path] {
+				seen[path] = true
+				paths = append(paths, path)
+			}
+		}
+	}
+	return paths
 }
 
 func permissionEffectDisplays(items []requestedPermissionItem) []interface{} {

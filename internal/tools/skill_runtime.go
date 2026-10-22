@@ -260,6 +260,7 @@ func NewSkillViewTool(stores ...*control.Store) *SkillViewTool {
 	tool := &SkillViewTool{
 		BaseTool: BaseTool{
 			name:        "skill_view",
+			metadata:    ToolMetadata{Category: "skill", RiskLevel: ToolRiskLow, BookkeepingOnly: true},
 			description: "Inspect a skill's SKILL.md or one linked file without activating or using it. Never substitute this for execution attribution; call skill_select when applying a Skill to the current work unit.",
 			schema: ToolSchema{
 				Type: "object",
@@ -807,30 +808,50 @@ func normalizeSkillCommandName(name string) string {
 	}, name), "-")
 }
 
+// ReloadSkillToolsForTenant reloads the hidden per-Skill compatibility tools.
+// A registry attached to a SkillToolManager reloads every agent worker's
+// dispatcher with it; any other registry reloads only itself.
 func ReloadSkillToolsForTenant(tenantID string, registry *Registry, invocation ...map[string]interface{}) ([]SkillDefinition, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("registry is required")
 	}
-	for _, name := range registry.List() {
-		if strings.HasPrefix(name, "skill:") {
-			registry.Unregister(name)
-		}
+	if manager := registry.sharedSkillToolManager(); manager != nil {
+		return manager.Reload(tenantID, invocation...)
 	}
+	defs, tools, err := loadSkillTools(tenantID, invocation...)
+	registry.replaceSkillTools(tools)
+	return defs, err
+}
+
+// loadSkillTools reads the compatibility tool of every enabled Skill on the
+// invocation's roots without registering any. Roots are read lowest
+// precedence first, so a higher-precedence Skill of the same name replaces a
+// lower one when the set is installed. A disabled Skill has no tool: its
+// state comes from the same usage records the Skill listing reads. On error
+// it returns what it read before the failure.
+func loadSkillTools(tenantID string, invocation ...map[string]interface{}) ([]SkillDefinition, []Tool, error) {
 	roots, err := SkillRootsForTenant(tenantID, invocation...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var loaded []SkillDefinition
+	userUsage := userSkillUsage(tenantID, invocation...)
+	var defs []SkillDefinition
+	var tools []Tool
 	for i := len(roots) - 1; i >= 0; i-- {
-		root := roots[i]
-		loader := NewSkillLoader(root.Path, registry)
-		defs, err := loader.LoadAll()
+		loaded, err := NewSkillLoader(roots[i].Path, nil).loadTools()
 		if err != nil {
-			return loaded, err
+			return defs, tools, err
 		}
-		loaded = append(loaded, defs...)
+		usage := rootSkillUsage(roots[i].Path, userUsage)
+		for _, skill := range loaded {
+			if skillUsageRecord(usage, skill.def.Name).State == SkillStateDisabled {
+				continue
+			}
+			defs = append(defs, skill.def)
+			tools = append(tools, skill.tool)
+		}
 	}
-	return loaded, nil
+	return defs, tools, nil
 }
 
 func truncateUTF8ByBytes(s string, max int) (string, bool) {

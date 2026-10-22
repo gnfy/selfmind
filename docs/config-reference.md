@@ -244,22 +244,33 @@ web:
 
 Bubblewrap isolation for `terminal`, `verify`, and `execute_code` on Linux.
 **Default ON, best effort.** `sandbox: auto` prefers an isolated read-only-root,
-workspace-writable process that shares the daemon's network namespace by
-default. If bubblewrap is unavailable, auto records a degraded host fallback;
-`required: true` fails closed instead.
+workspace-writable process that can share the daemon's network namespace (see
+`allow_network`). If bubblewrap is unavailable, auto records a degraded host
+fallback; `required: true` fails closed instead.
 
 ```yaml
 exec_sandbox:
   enabled: true         # prefer bwrap for auto-mode exec calls
   required: false       # if true, refuse to exec when the sandbox is unavailable (fail-closed)
-  allow_network: true   # share the daemon network namespace and inherited proxy/DNS settings
+  allow_network: true   # permit sharing the daemon network namespace and inherited proxy/DNS settings; false: trust alone no longer permits it
 ```
 
 Each exec tool accepts `sandbox: auto|isolated|host`. `isolated` refuses when
-the host cannot isolate. With `allow_network: true` (the default), isolated
-commands keep filesystem isolation while sharing the daemon process's network
-namespace and inherited proxy/DNS settings. Set it to `false` for a network-less
-sandbox. `host` is an explicit escape hatch for host credentials or writable
+the host cannot isolate. With `allow_network: true` (the default) the policy
+PERMITS network; it does not network every command. An isolated command in a
+trusted workspace keeps filesystem isolation and shares the daemon process's
+network namespace and inherited proxy/DNS settings only when it reaches a
+remote service (package installs, git remotes, infrastructure and cloud CLIs,
+`curl`) or the model set `network: true` on `terminal`, `verify` or
+`execute_code`; builds, tests, scripts and local inspection run offline. An
+untrusted workspace gets the network only through a `network:shared` grant or
+approval, which is likewise a permission and not a reason, and it needs one
+whatever `allow_network` says. Set `allow_network: false` so that trust alone
+never permits the network: the sandbox then has no network by default, and
+only a grant or approval a person gave lifts that, for the commands that reach
+a remote service or set `network: true`. `/diag execution` shows the policy and, for the active Run,
+how many calls received the network and why the others did not. `host` is an
+explicit escape hatch for host credentials or writable
 host paths; it always goes through the approval funnel and is disabled entirely
 when `required: true`. `selfmind gateway restart` preserves the running
 daemon's executable search path plus `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
@@ -331,11 +342,34 @@ gateway:
   delivery_retry_attempts: 3
 ```
 
-The daemon defaults to two independent Agent workers (`SELFMIND_WORKERS`
-unset). Capacity cannot exceed the worker count; startup rejects a mismatch.
-Set `max_active_work_runs: 1` to serialize work. Set both this key and
-`SELFMIND_WORKERS=1` to use one worker. Capacity 3 requires at least three
-workers in the daemon's environment. Explicit settings survive upgrades;
+`addr` is the TCP listener for IM webhooks and HTTP integrations. It never
+carries CLI identity: your own `selfmind` and TUI reach a local daemon on its
+local control socket (`control.sock` beside the daemon's runtime state), which
+the daemon verifies from the operating system's record of who connected, and no
+setting or `token` can grant the `cli` platform over TCP. A wildcard `addr`
+(`:8765`, `0.0.0.0:8765`, `[::]:8765`) is still this machine's daemon, reached
+by your own CLI on the same socket. `token` authenticates
+remote integrations only; set it before exposing the listener or letting
+sandboxed tools share the host network (`exec_sandbox.allow_network`), because
+without it any process that can reach `addr` may act as an IM or HTTP identity
+it can name. Stopping the gateway and reading its status beyond liveness also
+need `token`; with none set they answer only your own CLI on the control socket.
+A loopback `addr` refuses requests whose `Host` is not `localhost`, `127.0.0.1`
+or `[::1]` (DNS rebinding); an `addr` beyond loopback skips that check. Confined
+tools cannot read the daemon's runtime directory, control store, the
+configuration file the daemon loaded and its backups, credentials file, or chat
+account credentials, cannot move the directories that hold them aside, and on
+macOS cannot connect to `addr` or the control socket at all; on Linux they can
+still reach `addr` while the network is shared. See `docs/tool-safety.md`.
+
+The daemon starts one Agent worker per admitted Run: with `SELFMIND_WORKERS`
+unset, the worker count equals `max_active_work_runs` (two by default). An
+explicit `SELFMIND_WORKERS` must be a whole number no lower than the capacity
+(values above 16 are reduced to 16). A lower, zero, negative or malformed
+value stops startup with an error that names the settings involved. Set
+`max_active_work_runs: 1` to serialize work on one worker. Every worker has
+the same tools, including cron and MCP, and each configured MCP server has
+one connection that all workers share. Explicit settings survive upgrades;
 workspace and external-target conflicts still queue.
 
 `automatic_run_recovery: false` is the fail-closed operational rollback for
@@ -508,6 +542,7 @@ mcp:
       headers: {}                # optional HTTP headers
       auth: {}                   # optional bearer or user/pass static auth
       env_filter: []             # optional stdio environment allow-list
+      read_only_tools: []        # optional exact tool names marked read-only
 ```
 
 Empty by default. The daemon connects with the official MCP Go SDK at startup,
@@ -520,7 +555,13 @@ while a duplicate name is rejected instead of silently replacing a server.
 
 MCP tools are unclassified external tools by default. Each invocation requires
 a once-only human approval even in `full-auto`; it cannot reuse a grant or smart
-triage until a reviewed per-tool trust policy exists. SelfMind sends only the
+triage. `read_only_tools` lists exact remote tool names that the operator marks
+read-only for everyone using this server; a person can mark more for themselves
+with `/tools readonly <server>/<tool> on`. A marked tool's calls are approved
+like other reads, claim no external target, and may run alongside other reads.
+Patterns are rejected at load; a name the server does not expose is a warning
+in gateway status and `selfmind doctor`, not a failure. The server's own
+annotations, such as `readOnlyHint`, are never trusted. SelfMind sends only the
 tool's public input fields to the remote endpoint and strips daemon-only
 top-level underscore fields, including tenant/person/run scope and callbacks.
 Remote servers currently

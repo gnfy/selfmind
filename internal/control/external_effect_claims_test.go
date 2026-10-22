@@ -50,8 +50,9 @@ func TestExternalEffectRequiresExactFinalizedWatcherAndHumanLink(t *testing.T) {
 	if _, err := store.ObserveExternalEffectWithWatch(ctx, owner.TenantID, owner.PersonID, claim.ID, other.ID); err == nil {
 		t.Fatal("another Run's watcher released the effect")
 	}
+	// Registered before the effect: the shared sequence says so.
 	stale := watchFor(runA)
-	if _, err := store.db.ExecContext(ctx, `UPDATE external_watches SET created_at = created_at - 10 WHERE id = ?`, stale.ID); err != nil {
+	if _, err := store.db.ExecContext(ctx, `UPDATE external_watches SET sequence = (SELECT sequence - 1 FROM external_effect_claims WHERE id = ?) WHERE id = ?`, claim.ID, stale.ID); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := store.FinishExternalWatch(ctx, owner.TenantID, stale.ID, ExternalWatchSucceeded, "SUCCEEDED", ""); err != nil || !ok {
@@ -102,11 +103,11 @@ func TestOwnerBoundWatchSettlesOnlyItsExactObservedEffect(t *testing.T) {
 	}
 	claim(runA, "deploy-east", "cluster:east")
 	claim(runB, "deploy-west", "cluster:west")
-	if got, err := store.FindUnresolvedExternalEffectForTargets(ctx, owner.TenantID, owner.PersonID, runA.ID, []string{"cluster:west"}); err != nil || got != "" {
-		t.Fatalf("cross-run lookup = %q, %v", got, err)
+	if got, err := store.FindUnresolvedExternalEffectForTargets(ctx, owner.TenantID, owner.PersonID, runA.ID, []string{"cluster:west"}); err != nil || got.EffectID != "" {
+		t.Fatalf("cross-run lookup = %+v, %v", got, err)
 	}
-	if got, err := store.FindUnresolvedExternalEffectForTargets(ctx, owner.TenantID, owner.PersonID, runA.ID, []string{"cluster:east"}); err != nil || got != "deploy-east" {
-		t.Fatalf("exact lookup = %q, %v", got, err)
+	if got, err := store.FindUnresolvedExternalEffectForTargets(ctx, owner.TenantID, owner.PersonID, runA.ID, []string{"cluster:east"}); err != nil || got != (ExternalEffectRef{RunID: runA.ID, EffectID: "deploy-east"}) {
+		t.Fatalf("exact lookup = %+v, %v", got, err)
 	}
 	root := t.TempDir()
 	workspace, err := store.EnsureWorkspace(ctx, Workspace{TenantID: owner.TenantID,

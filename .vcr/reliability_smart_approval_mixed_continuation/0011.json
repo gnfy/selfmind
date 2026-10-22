@@ -1,5 +1,69 @@
 {
   "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "wait group receipt-handoff (all) waitgroup receipt-handoff receipt handoff durable external observation"
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am"
+    },
+    {
+      "usage": {
+        "input_tokens": 16644,
+        "output_tokens": 2,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " now writing `VERIFIED` into `receipt.txt` in the workspace root."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 26,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1010,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2511897",
+          "Function": "write_file",
+          "Args": "{\"path\":\"receipt.txt\",\"content\":\"VERIFIED\\n\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EukDCuYDAWkUfRO3qDPydXeK3Ad8dqejg3i9R41rS3gVdnt+MWf2OnRaVNvQoRmqsCEq9uvw27BYA/KQYQtHL9O1IrqM9VmBglfhQrn6Mc3c36fFy2xoUXPO5PPWLV9Mr4eSkd+vNbIsdAao3humX2wrlBrqClvLvX/s5GL79hbpgErJ8Mz0nTwKcdrSy3nTiw82R7+mixfbtXl/u4LYiIInAKh69AShS1D+c997In3mTdSxsAX3hhxQI5JNo1bzGZOaPL+Dxldr7pnIsqIM3ts4nFO/zdtHgBoobfSEr/1oINg/o9aujJw2SHb3BYvgkrmEspaWIkrrL0PQu6tWRyNvcpp6OXi6laHDnQeoMMZjCTRF+oI7li69E3GwaC683QgFKGF0mBypxHos3xoTDQQmc/agSrT0tp6d+LkZg9vz3EqGGblz3yv94UICGLNplbzYKo6bkNxooG2TtYvKXZyULwwlEcbUCYj4khtS7icoLp65gy44PuKXg+d2p/Ox0srnWIkD2VNKIpzZXSH5g+PZ9DwA5mm198dhR16w80jtcsGF3CaGm0ux4I+13PDt/Td2BuEsNiTJjhMsxRmQwQ+Z7kDV5pRg6jVXdyu5rnVAlG8ZXX0zIT3ehjQeA81rCmr3PQSpRzUeRLdt"
+            }
+          }
+        }
+      ]
+    }
+  ]
 }

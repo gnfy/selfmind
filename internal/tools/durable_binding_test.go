@@ -22,7 +22,7 @@ func TestDurableMaterialUsesFrozenBindingInsteadOfCurrentEnvironment(t *testing.
 	registry.Install([]string{"HOME=/home/other", "DURABLE_MARKER=second"},
 		"inherited", "principal-b", nil)
 
-	material, err := durableExecMaterial(nil, "printf ok", t.TempDir(), DurableExecutionScope{Binding: binding})
+	material, err := durableExecMaterial(nil, "printf ok", t.TempDir(), DurableExecutionScope{Binding: binding}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

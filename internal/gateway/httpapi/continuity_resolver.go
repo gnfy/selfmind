@@ -40,9 +40,13 @@ type ContinuityCandidate struct {
 	InputSummary   string   `json:"input_summary,omitempty"`
 	HandoffSummary string   `json:"handoff_summary,omitempty"`
 	NextSteps      []string `json:"next_steps,omitempty"`
-	Risks          []string `json:"risks,omitempty"`
-	CurrentStep    string   `json:"current_step,omitempty"`
-	LastActivity   string   `json:"last_activity,omitempty"`
+	ChangedFiles     []string `json:"changed_files,omitempty"`
+	Risks            []string `json:"risks,omitempty"`
+	CurrentStep      string   `json:"current_step,omitempty"`
+	PendingClarifyID string   `json:"pending_clarify_id,omitempty"`
+	PendingQuestion  string   `json:"pending_question,omitempty"`
+	PendingChoices   []string `json:"pending_choices,omitempty"`
+	LastActivity     string   `json:"last_activity,omitempty"`
 	Age            string   `json:"age,omitempty"`
 	Active         bool     `json:"active"`
 	Resumable      bool     `json:"resumable"`
@@ -90,6 +94,7 @@ func (d *Server) continuityCandidateForRun(ctx context.Context, identity *contro
 		card.HandoffSummary = textutil.Truncate(toOneLine(handoff.Summary), 220)
 		card.NextSteps = boundedOneLineStrings(handoff.NextSteps, 3, 120)
 		card.Risks = boundedOneLineStrings(handoff.Risks, 2, 120)
+		card.ChangedFiles = boundedOneLineStrings(handoff.ChangedFiles, 3, 160)
 	}
 	if plan := d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, run.TaskID, run.ID); len(plan) > 0 {
 		for _, step := range plan {
@@ -98,6 +103,19 @@ func (d *Server) continuityCandidateForRun(ctx context.Context, identity *contro
 				break
 			}
 		}
+		if card.CurrentStep == "" {
+			for _, step := range plan {
+				if step.Status == "pending" {
+					card.CurrentStep = textutil.Truncate(toOneLine(step.Step), 140)
+					break
+				}
+			}
+		}
+	}
+	if clarify, _ := d.Control.PendingClarifyForRun(ctx, identity.TenantID, identity.PersonID, run.ID); clarify != nil {
+		card.PendingClarifyID = clarify.ID
+		card.PendingQuestion = textutil.Truncate(toOneLine(clarify.Question), 200)
+		card.PendingChoices = boundedOneLineStrings(control.ClarifyChoices(clarify.Options), 6, 120)
 	}
 	card.LastActivity = d.latestActivityForRun(ctx, identity, run)
 	return card, true

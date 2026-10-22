@@ -1,4 +1,5 @@
 {
+  "plan_binding_version": 1,
   "method": "completion",
-  "completion": "plan-progress.txt PLAN-COMPLETE inspect write verify progress update file contents check verification tool step transition"
+  "completion": "plan-progress.txt PLAN-COMPLETE inspect write verify"
 }

@@ -21,9 +21,10 @@ const defaultFeishuBaseURL = "https://open.feishu.cn"
 //
 // The recipient is resolved from the delivery Message: a Channel that looks
 // like a chat id ("oc_...") is sent with receive_id_type=chat_id; otherwise the
-// PlatformUserID open id ("ou_...") is used with receive_id_type=open_id. This
-// matches what the inbound webhook parser records (chat_id as Channel, open_id
-// as PlatformUserID).
+// PlatformUserID is used as an open id ("ou_...", receive_id_type=open_id) or
+// a union id ("on_...", receive_id_type=union_id). This matches what the
+// inbound webhook parser records (chat_id as Channel, the union id when the
+// event carries one, else the open id, as PlatformUserID).
 type FeishuSender struct {
 	AppID     string
 	AppSecret string
@@ -71,7 +72,9 @@ func (s *FeishuSender) Send(ctx context.Context, msg Message) error {
 }
 
 // feishuReceiver picks the receive id and its type. Feishu chat ids start with
-// "oc_" and open ids with "ou_"; fall back to chat_id for an unknown channel.
+// "oc_", open ids with "ou_", and union ids — which the inbound parser prefers
+// as the sender's user id — with "on_"; fall back to chat_id for an unknown
+// channel.
 func feishuReceiver(msg Message) (string, string) {
 	channel := strings.TrimSpace(msg.Channel)
 	user := strings.TrimSpace(msg.PlatformUserID)
@@ -80,6 +83,8 @@ func feishuReceiver(msg Message) (string, string) {
 		return channel, "chat_id"
 	case strings.HasPrefix(user, "ou_"):
 		return user, "open_id"
+	case strings.HasPrefix(user, "on_"):
+		return user, "union_id"
 	case channel != "":
 		return channel, "chat_id"
 	case user != "":

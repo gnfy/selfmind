@@ -17,8 +17,10 @@ import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import urllib.error
-import urllib.request
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import soak_http  # noqa: E402
 
 
 class ModelHandler(BaseHTTPRequestHandler):
@@ -78,18 +80,9 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def request(base, token, path, payload=None):
-    headers = {"Authorization": "Bearer " + token}
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(base + path,
-                                 data=json.dumps(payload).encode() if payload is not None else None,
-                                 headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            return response.status, json.load(response)
-    except urllib.error.HTTPError as error:
-        return error.code, json.loads(error.read())
+def request(base, token, path, payload=None, socket_path=None):
+    """One request; CLI-identity requests travel on the daemon's control socket."""
+    return soak_http.request_json(base, token, path, payload, socket_path, timeout=20)
 
 
 def until(predicate, seconds, label):
@@ -159,10 +152,11 @@ models:
                         return False
                 try:
                     until(healthy, 30, "isolated daemon did not start")
+                    control_socket = soak_http.daemon_socket(base, token)
                     code, accepted = request(base, token, "/v1/message", {
                         "platform": "cli", "platform_user_id": "local", "channel": "wait-a",
                         "client_cwd": str(workspace), "content": "Answer the first request in one sentence.",
-                        "async": True})
+                        "async": True}, control_socket)
                     if code != 200 or not accepted.get("accepted"):
                         raise RuntimeError("first work was not accepted: " + repr(accepted))
                     database = sqlite3.connect(data_dir / "control.db")
@@ -188,10 +182,13 @@ models:
                     process.wait(timeout=5)
                     process = launch()
                     until(healthy, 30, "daemon did not restart")
+                    # A killed daemon leaves its socket file behind; the restarted one
+                    # must replace it, and the CLI must reach it there again.
+                    control_socket = soak_http.daemon_socket(base, token)
                     code, second = request(base, token, "/v1/message", {
                         "platform": "cli", "platform_user_id": "local", "channel": "wait-b",
                         "client_cwd": str(workspace), "content": "Answer the second request in one sentence.",
-                        "async": True})
+                        "async": True}, control_socket)
                     if code != 200 or not second.get("accepted"):
                         raise RuntimeError("second work was not accepted after restart: " + repr(second))
                     def settled():
@@ -210,12 +207,13 @@ models:
                     saved = database.execute("SELECT content FROM channel_messages WHERE id=?",
                                              ("msg_run_" + children[0][0] + "_assistant",)).fetchone()[0]
                     for session in ("wait-a", "wait-b"):
-                        url = (base + "/v1/events/stream?platform=cli&platform_user_id=local"
-                               + "&session=" + session + "&cursor=0&once=true")
-                        replay = urllib.request.Request(url, headers={"Authorization": "Bearer " + token})
-                        with urllib.request.urlopen(replay, timeout=10) as response:
-                            events = [json.loads(line[6:]) for line in response.read().decode().splitlines()
-                                      if line.startswith("data: ")]
+                        path = ("/v1/events/stream?platform=cli&platform_user_id=local"
+                                + "&session=" + session + "&cursor=0&once=true")
+                        status, stream = soak_http.fetch(base, token, path, socket_path=control_socket, timeout=10)
+                        if status != 200:
+                            raise RuntimeError("event replay refused: %d" % status)
+                        events = [json.loads(line[6:]) for line in stream.decode().splitlines()
+                                  if line.startswith("data: ")]
                         terminal = next(event for event in events if event.get("run_id") == children[0][0]
                                         and event.get("type") == "run.finished")
                         final_answer = terminal.get("payload", {}).get("final_answer")

@@ -156,9 +156,12 @@ func TestExecSandboxRequiredButUnavailableRefuses(t *testing.T) {
 
 // A backend that cannot enforce THIS plan must say so rather than run it with
 // a policy that quietly drops part of the contract. Seatbelt has no mount
-// namespace, so a plan whose tool state is redirected by a bind (the AWS SSO
-// token cache) is unenforceable there: the command must degrade to an
-// approval-gated host run, and a run that REQUIRED isolation must fail instead.
+// namespace, so a plan whose tool state is redirected by a bind is
+// unenforceable there. The plan is refused whatever was requested: an `auto`
+// call whose plan isolation cannot enforce is decided before approval
+// (host execution, asked about as such), so reaching this point means the
+// boundary that was approved cannot be had — and silently running it on the
+// host instead was the WP-F2 security finding.
 func TestMountBackedPlanIsRefusedRatherThanSilentlyWidened(t *testing.T) {
 	if SandboxBackendName(SandboxIsolated) != seatbeltBackendName {
 		t.Skip("mount-backed plans are enforceable on this platform")
@@ -173,36 +176,24 @@ func TestMountBackedPlanIsRefusedRatherThanSilentlyWidened(t *testing.T) {
 		}},
 	}
 
-	_, decision, _, err := sandboxedCommandWithMaterial(context.Background(),
-		[]string{"/bin/sh", "-c", "echo hi"}, material, SandboxAuto, runtime.GOOS, true)
-	if err != nil {
-		t.Fatalf("auto must degrade rather than fail: %v", err)
-	}
-	if decision.Mode != SandboxHost {
-		t.Fatalf("an unenforceable plan must not claim isolation: %+v", decision)
-	}
-	if !strings.Contains(decision.Reason, "cannot enforce this plan") {
-		t.Fatalf("the degraded reason must name the cause, got %q", decision.Reason)
-	}
-
-	// The constraint that must change the result: isolation was demanded, so
-	// there is nothing to degrade to.
-	if _, _, _, err := sandboxedCommandWithMaterial(context.Background(),
-		[]string{"/bin/sh", "-c", "echo hi"}, material, SandboxIsolated, runtime.GOOS, true); err == nil {
-		t.Fatal("an explicit isolated request must fail when the plan is unenforceable")
-	} else {
+	for _, requested := range []SandboxMode{SandboxAuto, SandboxIsolated} {
+		_, decision, _, err := sandboxedCommandWithMaterial(context.Background(),
+			[]string{"/bin/sh", "-c", "echo hi"}, material, requested, runtime.GOOS, true)
+		if decision.Mode == SandboxHost {
+			t.Fatalf("%s: an unenforceable plan was widened to the host: %+v", requested, decision)
+		}
 		var classified *stableToolError
 		if !errors.As(err, &classified) || classified.ToolFailurePhase() != "preparation" ||
 			classified.ToolEffectState() != "not_dispatched" || classified.ToolStateChanged() ||
 			!strings.Contains(classified.ModelSafeMessage(), "mount-backed state") {
-			t.Fatalf("preparation failure lost its cause or effect certainty: %v", err)
+			t.Fatalf("%s: preparation failure lost its cause or effect certainty: %v", requested, err)
 		}
 	}
 
 	// Generality: the same plan WITHOUT the mount is enforceable, so the
 	// refusal is about the mount and not about this material in general.
 	material.OverlayMounts = nil
-	_, decision, _, err = sandboxedCommandWithMaterial(context.Background(),
+	_, decision, _, err := sandboxedCommandWithMaterial(context.Background(),
 		[]string{"/bin/sh", "-c", "echo hi"}, material, SandboxAuto, runtime.GOOS, true)
 	if err != nil || decision.Mode != SandboxIsolated {
 		t.Fatalf("the same plan without a mount must isolate: %+v (%v)", decision, err)

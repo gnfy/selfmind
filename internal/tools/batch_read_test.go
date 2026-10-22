@@ -101,7 +101,7 @@ func TestBatchReadNestedEventsCarryCanonicalIdentityAndResults(t *testing.T) {
 		}
 	})
 
-	_, err := tool.ExecuteContext(ctx, map[string]interface{}{
+	out, err := tool.ExecuteContext(ctx, map[string]interface{}{
 		"_tool_call_id": "parent-call",
 		"operations": []interface{}{
 			map[string]interface{}{"tool": "read_file", "path": "main.go"},
@@ -112,6 +112,17 @@ func TestBatchReadNestedEventsCarryCanonicalIdentityAndResults(t *testing.T) {
 		t.Fatalf("ExecuteContext: %v", err)
 	}
 
+	var returned struct {
+		Items []struct {
+			ToolCallID string `json:"tool_call_id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &returned); err != nil {
+		t.Fatal(err)
+	}
+	if len(returned.Items) != 2 || returned.Items[0].ToolCallID != "parent-call:batch:1" || returned.Items[1].ToolCallID != "parent-call:batch:2" {
+		t.Fatalf("model cannot identify the child facts: %s", out)
+	}
 	var lifecycle []kernel.AgentEvent
 	for len(events) > 0 {
 		raw := <-events

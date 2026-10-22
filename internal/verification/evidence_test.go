@@ -73,3 +73,33 @@ func TestLatestPlanStepAttemptOwnsEffectiveObligationState(t *testing.T) {
 		t.Fatalf("unrelated plan evidence hid a failure: %s", got)
 	}
 }
+
+func TestSupersededStalePlanStepCheckDoesNotPoisonLaterFreshPass(t *testing.T) {
+	depsOld := []string{"/workspace/a.go", "/workspace/b.go"}
+	depsNew := []string{"/workspace/a.go"}
+	staleOld := Check{
+		ToolCallID: "toolcall-6-0",
+		Command:    "go test ./...",
+		CWD:        "/workspace/old",
+		Status:     "succeeded",
+		StartedAt:  10,
+		FinishedAt: 20,
+		Binding:    &Binding{Version: 3, StepID: "step-2", Criterion: "tests pass", Target: "step-2", LocalDependencies: &depsOld, ResolvedLocalDependencies: depsOld},
+	}
+	mutations := []Mutation{{Path: "/workspace/b.go", FinishedAt: 25}}
+	freshNew := Check{
+		ToolCallID: "toolcall-10-0",
+		Command:    "go test ./...",
+		CWD:        "/workspace",
+		Status:     "succeeded",
+		StartedAt:  30,
+		FinishedAt: 40,
+		Binding:    &Binding{Version: 3, StepID: "step-2", Criterion: "tests pass", Target: "step-2", LocalDependencies: &depsNew, ResolvedLocalDependencies: depsNew},
+	}
+	if got, _ := StateWithMutations(mutations, []Check{staleOld, freshNew}); got != "passed" {
+		t.Fatalf("superseded stale check poisoned step state: got %s, want passed", got)
+	}
+	if blockers := Blockers(mutations, []Check{staleOld, freshNew}); blockers != "" {
+		t.Fatalf("expected no blockers after fresh pass on same step, got %s", blockers)
+	}
+}

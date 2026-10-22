@@ -25,7 +25,7 @@ type tokenCountKey struct {
 	length int
 }
 
-// TokenEstimator wraps tiktoken-go for precise token counting.
+// TokenEstimator uses a local codec to estimate provider requests.
 // Falls back to heuristic estimation when the codec is unavailable.
 type TokenEstimator struct {
 	enc tokenizer.Codec
@@ -36,7 +36,7 @@ type TokenEstimator struct {
 }
 
 // NewTokenEstimator creates an estimator using the cl100k_base encoding
-// (used by GPT-4, Claude, and most modern models).
+// as a portable estimate, not a claim about another provider's tokenizer.
 func NewTokenEstimator() *TokenEstimator {
 	enc, err := tokenizer.Get(tokenizer.Cl100kBase)
 	if err != nil {
@@ -85,7 +85,7 @@ func (te *TokenEstimator) CountMessages(msgs []llm.Message) int {
 }
 
 func messageTokenCount(m llm.Message, count func(string) int) int {
-	total := count(m.Content) + 4
+	total := count(m.Content) + count(m.ReasoningContent) + count(m.Name) + 4
 	for _, part := range m.MultiContent {
 		total += count(part.Text)
 		if part.ImageURL != "" || part.Data != "" {
@@ -93,7 +93,7 @@ func messageTokenCount(m llm.Message, count func(string) int) int {
 		}
 	}
 	for _, call := range m.ToolCalls {
-		total += count(call.ID) + count(call.Function) + count(call.Args) + 4
+		total += count(call.ID) + count(call.Function) + count(call.Args) + count(string(call.ReplayMetadata)) + 4
 	}
 	return total + count(m.ToolCallID)
 }

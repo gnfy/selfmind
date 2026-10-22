@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"selfmind/internal/gateway/api"
 	"strings"
 	"testing"
@@ -22,7 +23,7 @@ func TestEveryUserFacingEnqueuePathAdmitsAttachments(t *testing.T) {
 	}
 	text := string(source)
 
-	enqueues := strings.Count(text, "d.Control.EnqueueQueued(ctx, control.QueuedTask{")
+	enqueues := len(regexp.MustCompile(`d\.Control\.EnqueueQueued\([^,]+, control\.QueuedTask\{`).FindAllStringIndex(text, -1))
 	admissions := strings.Count(text, "d.admitQueuedAttachments(ctx, identity, req)")
 	if enqueues == 0 {
 		t.Fatal("no enqueue call sites found; this guard would be vacuous")

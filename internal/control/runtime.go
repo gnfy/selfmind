@@ -123,13 +123,6 @@ func (s *Store) UpdateRunHeartbeat(ctx context.Context, tenantID, runID string) 
 	return err
 }
 
-func (s *Store) RequestRunCancel(ctx context.Context, tenantID, runID string) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE runs SET cancel_requested = 1 WHERE tenant_id = ? AND id = ?`,
-		normalizeTenant(tenantID), runID)
-	return err
-}
-
 func (s *Store) RunCancelRequested(ctx context.Context, tenantID, runID string) (bool, error) {
 	var requested int
 	err := s.db.QueryRowContext(ctx,
@@ -432,6 +425,10 @@ func (s *Store) ListPersonEventsAfter(ctx context.Context, tenantID, personID st
 }
 
 func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, error) {
+	return enqueueDelivery(ctx, s.db, d)
+}
+
+func enqueueDelivery(ctx context.Context, db deliveryWriter, d Delivery) (*Delivery, error) {
 	now := time.Now()
 	if d.TenantID == "" {
 		d.TenantID = DefaultTenantID
@@ -465,7 +462,7 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 	}
 	d.CreatedAt = now
 	d.UpdatedAt = now
-	result, err := s.db.ExecContext(ctx,
+	result, err := db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO outbound_messages
 		   (id, tenant_id, person_id, platform, platform_user_id, channel, thread_id, run_id, content, kind, approval_id, clarify_id, status, attempts, max_attempts,
 		    next_attempt_at, last_error, part_index, part_total, idempotency_key, created_at, updated_at)
@@ -477,7 +474,7 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 		return nil, err
 	}
 	if n, _ := result.RowsAffected(); n == 0 && strings.TrimSpace(d.IdempotencyKey) != "" {
-		return s.DeliveryByIdempotencyKey(ctx, d.TenantID, d.IdempotencyKey)
+		return deliveryByIdempotencyKey(ctx, db, d.TenantID, d.IdempotencyKey)
 	}
 	return &d, nil
 }
@@ -545,7 +542,11 @@ func firstNonEmptyDelivery(values ...string) string {
 // Callers must receive this real ID rather than the discarded candidate ID,
 // otherwise status checks report sql.ErrNoRows and recovery loops forever.
 func (s *Store) DeliveryByIdempotencyKey(ctx context.Context, tenantID, key string) (*Delivery, error) {
-	row := s.db.QueryRowContext(ctx,
+	return deliveryByIdempotencyKey(ctx, s.db, tenantID, key)
+}
+
+func deliveryByIdempotencyKey(ctx context.Context, db deliveryWriter, tenantID, key string) (*Delivery, error) {
+	row := db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(thread_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
@@ -575,7 +576,7 @@ func (s *Store) PruneOutboundDeliveries(ctx context.Context, olderThan time.Dura
 		     OR (
 		       status = 'failed'
 		       AND NOT (
-		         COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'external_watch', 'recovery', 'maintenance_health')
+		         COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'turn_choice', 'external_watch', 'recovery', 'maintenance_health')
 		         AND attempts < max_attempts
 		         AND (last_error LIKE '%ret=-2%' OR lower(last_error) LIKE '%prepare failed%')
 		       )
@@ -594,11 +595,20 @@ func (s *Store) PruneOutboundDeliveries(ctx context.Context, olderThan time.Dura
 	return count, err
 }
 
-// staleSendingSeconds is how long a delivery may sit in 'sending' before the
-// due-poller may reclaim it. A claim normally resolves in seconds; a stale one
-// means the dispatcher crashed mid-send, so the row must become retryable
-// instead of being stranded forever.
+// A stale send claim has an unknown effect: a dispatcher may have crashed
+// after the platform accepted it. It never becomes a blind retry.
 const staleSendingSeconds = 120
+
+// RecoverStaleDeliveryClaims exposes interrupted sends for bounded,
+// inbound-triggered catch-up. Failed recovery cannot make them claimable.
+func (s *Store) RecoverStaleDeliveryClaims(ctx context.Context) error {
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx, `UPDATE outbound_messages
+		SET status='sent_unconfirmed', attempts=attempts+1,
+		last_error=CASE WHEN COALESCE(last_error,'')='' THEN 'dispatcher stopped before its send receipt was saved' ELSE last_error END
+		WHERE status='sending' AND updated_at<=?`, now-staleSendingSeconds)
+	return err
+}
 
 func (s *Store) ListDueDeliveries(ctx context.Context, limit int) ([]Delivery, error) {
 	if limit <= 0 || limit > 100 {
@@ -610,10 +620,9 @@ func (s *Store) ListDueDeliveries(ctx context.Context, limit int) ([]Delivery, e
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), COALESCE(clarify_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
-		 WHERE (status IN ('pending', 'retry') AND next_attempt_at <= ?)
-		    OR (status = 'sending' AND updated_at <= ?)
+		 WHERE status IN ('pending', 'retry') AND next_attempt_at <= ?
 		 ORDER BY next_attempt_at ASC, created_at ASC LIMIT ?`,
-		now, now-staleSendingSeconds, limit)
+		now, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -634,17 +643,14 @@ func (s *Store) ListDueDeliveries(ctx context.Context, limit int) ([]Delivery, e
 // owns a given attempt. Without this claim the two dispatchers race between
 // send and MarkDeliveryAttempt and the recipient gets the message twice
 // (observed live: duplicate approval push, attempts=2). Returns false when the
-// row is already claimed or no longer due; a 'sending' row older than
-// staleSendingSeconds is reclaimable (dispatcher crashed mid-send).
+// row is already claimed or no longer due. Even a stale sending row is not
+// reclaimable: its effect must be exposed by RecoverStaleDeliveryClaims.
 func (s *Store) ClaimDelivery(ctx context.Context, id string) (bool, error) {
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE outbound_messages SET status = 'sending', updated_at = ?
-		 WHERE id = ? AND (
-		   (status IN ('pending', 'retry') AND next_attempt_at <= ?)
-		   OR (status = 'sending' AND updated_at <= ?)
-		 )`,
-		now, id, now, now-staleSendingSeconds)
+		 WHERE id = ? AND status IN ('pending', 'retry') AND next_attempt_at <= ?`,
+		now, id, now)
 	if err != nil {
 		return false, err
 	}
@@ -687,16 +693,18 @@ func (s *Store) MarkDeliverySuperseded(ctx context.Context, id, reason string) e
 	return err
 }
 
-// MarkDeliverySentUnconfirmed finalizes a delivery the platform accepted but
-// may silently drop (e.g. Weixin/iLink push on a stale context_token). It is
-// terminal for the retry queue — resending on the same stale session risks
-// duplicates — and distinct from 'sent' so the attach digest can list
-// possibly-missed notifications.
-func (s *Store) MarkDeliverySentUnconfirmed(ctx context.Context, id string) error {
+// MarkDeliverySentUnconfirmed records an accepted or uncertain send whose
+// receipt is not confirmed. It is terminal for blind retries and distinct
+// from 'sent' so the attach digest can list possibly-missed notifications.
+func (s *Store) MarkDeliverySentUnconfirmed(ctx context.Context, id string, diagnostic ...string) error {
+	reason := ""
+	if len(diagnostic) > 0 {
+		reason = diagnostic[0]
+	}
 	now := time.Now()
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE outbound_messages SET status = 'sent_unconfirmed', attempts = attempts + 1, last_error = '', updated_at = ?, delivered_at = ? WHERE id = ?`,
-		now.Unix(), now.Unix(), id)
+		`UPDATE outbound_messages SET status = 'sent_unconfirmed', attempts = attempts + 1, last_error = ?, updated_at = ?, delivered_at = ? WHERE id = ?`,
+		reason, now.Unix(), now.Unix(), id)
 	return err
 }
 
@@ -739,7 +747,7 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 		     status = 'sent_unconfirmed'
 		     OR (status = 'pending_session' AND attempts < max_attempts)
 		     OR (status = 'failed'
-		         AND COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'external_watch', 'recovery', 'maintenance_health')
+		         AND COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'turn_choice', 'external_watch', 'recovery', 'maintenance_health')
 		         AND attempts < max_attempts
 		         AND (last_error LIKE '%ret=-2%' OR lower(last_error) LIKE '%prepare failed%'))
 		   )
@@ -767,11 +775,11 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 // crash after the claim loses at most one re-push — never duplicates one.
 func (s *Store) ClaimDeliveryCatchUp(ctx context.Context, id string) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE outbound_messages SET catchup_at = ?, updated_at = ?
+		`UPDATE outbound_messages SET catchup_at = ?, updated_at = ?, status = 'sending'
 		 WHERE id = ? AND (
 		   status IN ('sent_unconfirmed', 'pending_session')
 		   OR (status = 'failed'
-		       AND COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'external_watch', 'recovery', 'maintenance_health')
+		       AND COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'turn_choice', 'external_watch', 'recovery', 'maintenance_health')
 		       AND (last_error LIKE '%ret=-2%' OR lower(last_error) LIKE '%prepare failed%'))
 		 ) AND COALESCE(catchup_at, 0) = 0`,
 		time.Now().Unix(), time.Now().Unix(), id)

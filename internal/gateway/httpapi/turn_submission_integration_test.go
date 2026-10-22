@@ -202,7 +202,7 @@ func TestActiveMainCanQueueIndependentSteeringWithoutChangingCurrentTask(t *test
 	}
 	second, status := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "weixin", PlatformUserID: "wx-user", Channel: "weixin",
-		Content: "prepare an unrelated weekly report",
+		Content: "prepare an unrelated weekly report", ReplyToRunID: first.Turn.RunID,
 	})
 	if status != 200 || !second.Accepted || second.Turn == nil || second.Turn.Status != "accepted" {
 		t.Fatalf("live input was not durably accepted: status=%d response=%+v", status, second)
@@ -275,14 +275,14 @@ func TestActiveMainCanReviseTheCurrentPlanFromRelatedSteering(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("active Main did not reach the steering boundary")
 	}
-	active := daemon.coordinator().currentActive(identity.PersonID)
+	active := daemon.coordinator().activeForRun(identity.PersonID, first.Turn.RunID)
 	if active == nil || active.RunID == "" {
 		t.Fatal("accepted background turn has no active run")
 	}
 	runID := active.RunID
 	steered, status := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "weixin", PlatformUserID: "wx-related", Channel: "weixin",
-		Content: "also include rollback verification",
+		Content: "also include rollback verification", ReplyToRunID: runID,
 	})
 	if status != 200 || !steered.Accepted {
 		t.Fatalf("related input was not accepted: status=%d response=%+v", status, steered)

@@ -23,9 +23,14 @@ func Blockers(mutations []Mutation, checks []Check) string {
 		return s
 	}
 	out := []gap{}
-	for _, check := range Latest(checks) {
+	latestChecks := Latest(checks)
+	affectedAt := func(check Check) int64 { return RelevantMutationAt(check, mutations) }
+	for _, check := range latestChecks {
 		status := check.Status
-		if check.StartedAt < RelevantMutationAt(check, mutations) {
+		if check.StartedAt < affectedAt(check) {
+			if stepCheckSupersededByFreshPass(check, latestChecks, affectedAt) {
+				continue
+			}
 			status = "stale"
 		}
 		if status == "succeeded" {

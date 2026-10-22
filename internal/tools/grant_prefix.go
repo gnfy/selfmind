@@ -1,8 +1,8 @@
 package tools
 
 import (
-	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -58,71 +58,123 @@ var grantWriteVerbs = regexp.MustCompile(`^(create|delete|start|stop|submit|upda
 
 var grantReadVerbs = regexp.MustCompile(`^(describe|list|get|view|status|show|read|batch-get|log|logs|history|search|check|validate|diff|inspect|top|explain)(-|$)`)
 
-// grantAPIMethodFlags are the flags that change an HTTP verb for a CLI whose
-// single subcommand can perform every method. `gh api` is the live example: it
-// was the largest single approval class in one week (84 asks) and
-// `gh api -X DELETE …` shares its leading tokens with an ordinary read.
-var grantAPIMethodFlags = map[string]struct{}{"-x": {}, "--method": {}}
-
 // apiReadMethods are the HTTP verbs that only read. Anything else — including a
 // verb this parser cannot resolve — is a mutation as far as approval is
 // concerned.
 var apiReadMethods = map[string]struct{}{"get": {}, "head": {}}
 
-// apiMethodFromArgs resolves the HTTP verb of an `api`-style invocation.
+// ghAPIValueOptions are `gh api`'s options that take a value, by each
+// spelling, with the meaning that matters here. ghAPIBoolOptions take none.
+var (
+	ghAPIValueOptions = map[string]string{
+		"-X": "method", "--method": "method", "--hostname": "host",
+		"-f": "body", "--raw-field": "body", "-F": "body", "--field": "body", "--input": "body",
+		"-H": "", "--header": "", "-q": "", "--jq": "", "-p": "", "--preview": "",
+		"-t": "", "--template": "", "--cache": "",
+	}
+	ghAPIBoolOptions = wordSet("-i", "--include", "--paginate", "--silent", "--slurp", "--verbose", "-h", "--help")
+)
+
+// ghAPICall is the request a `gh api` call makes.
+type ghAPICall struct {
+	endpoint string
+	// method is the verb sent, lowercased: the one --method names, else POST
+	// when the call sends a body (a field or --input), else GET.
+	method string
+	body   bool
+	// host: --hostname sends the call, and an enterprise token, elsewhere.
+	host bool
+}
+
+// ghAPIRequest reads the words after `gh api` the way gh's flag parser
+// (pflag) does: short options bundle (`-if title=x`), a value is attached
+// (`-ftitle=x`, `-XPOST`, `-X=POST`), after `=` (`--method=POST`) or the next
+// word, and options and the endpoint may come in any order.
 //
-// It exists because the verb was previously parsed twice, by two layers that
-// accepted different spellings of the same flag: the observation catalog
-// matched the substring "-x " and so read `-X=DELETE` and `-XDELETE` as
-// ordinary GETs, while the class derivation handled `-X=DELETE` but labelled
-// `-XDELETE` a GET. One destructive call could therefore be both auto-approved
-// as an observation and remembered under a read-only class name. Both layers
-// now ask this one function, so a spelling either parses for both or fails for
-// both.
-//
-// ok is false when a method flag is present but its value cannot be resolved
-// statically; callers must fail closed rather than fall back to the GET
-// default.
-func apiMethodFromArgs(rest []string) (string, bool) {
-	method := "get"
-	for i := 0; i < len(rest); i++ {
-		lowered := strings.ToLower(strings.Trim(strings.TrimSpace(rest[i]), `"'`))
-		if lowered == "" {
+// The observation catalog and the class derivation both ask this one parser,
+// so a spelling either parses for both or fails for both: they once parsed the
+// verb separately, and `-X=DELETE`, `-XDELETE` and a bundled `-f` each read as
+// a GET in one of them. ok is false for an option gh api does not have or a
+// value that cannot be resolved; callers fail closed.
+func ghAPIRequest(args []string) (ghAPICall, bool) {
+	var call ghAPICall
+	explicit, methodGiven := "", false
+	apply := func(meaning, value string) {
+		switch meaning {
+		case "method":
+			explicit, methodGiven = value, true
+		case "body":
+			call.body = true
+		case "host":
+			call.host = true
+		}
+	}
+	for i := 0; i < len(args); i++ {
+		arg := strings.TrimSpace(args[i])
+		if arg == "--" {
+			if call.endpoint == "" && i+1 < len(args) {
+				call.endpoint = args[i+1]
+			}
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			if call.endpoint == "" {
+				call.endpoint = arg
+			}
 			continue
 		}
-		if name, value, attached := strings.Cut(lowered, "="); attached {
-			if _, ok := grantAPIMethodFlags[name]; ok {
-				if value == "" {
-					return "", false
+		if strings.HasPrefix(arg, "--") {
+			name, value, attached := strings.Cut(arg, "=")
+			if _, flag := ghAPIBoolOptions[name]; flag {
+				continue
+			}
+			meaning, known := ghAPIValueOptions[name]
+			if !known {
+				return ghAPICall{}, false
+			}
+			if !attached {
+				if i+1 >= len(args) {
+					return ghAPICall{}, false
 				}
-				method = value
+				i++
+				value = args[i]
 			}
+			apply(meaning, value)
 			continue
 		}
-		if _, ok := grantAPIMethodFlags[lowered]; ok {
-			if i+1 >= len(rest) {
-				return "", false
+		for j := 1; j < len(arg); j++ {
+			name := "-" + arg[j:j+1]
+			if _, flag := ghAPIBoolOptions[name]; flag {
+				continue
 			}
-			value := strings.ToLower(strings.Trim(strings.TrimSpace(rest[i+1]), `"'`))
-			if value == "" || strings.HasPrefix(value, "-") {
-				return "", false
+			meaning, known := ghAPIValueOptions[name]
+			if !known {
+				return ghAPICall{}, false
 			}
-			method = value
-			i++
-			continue
-		}
-		// Attached short form, e.g. `-XDELETE`. Only the single-dash spelling
-		// concatenates; `--methodDELETE` is not a flag at all.
-		if strings.HasPrefix(lowered, "-") && !strings.HasPrefix(lowered, "--") && len(lowered) > 2 {
-			if _, ok := grantAPIMethodFlags[lowered[:2]]; ok {
-				method = lowered[2:]
+			value := strings.TrimPrefix(arg[j+1:], "=")
+			if j+1 == len(arg) {
+				if i+1 >= len(args) {
+					return ghAPICall{}, false
+				}
+				i++
+				value = args[i]
 			}
+			apply(meaning, value)
+			break
 		}
 	}
-	if method == "" {
-		return "", false
+	switch {
+	case methodGiven:
+		call.method = strings.ToLower(strings.Trim(strings.TrimSpace(explicit), `"'`))
+		if call.method == "" || strings.HasPrefix(call.method, "-") {
+			return ghAPICall{}, false
+		}
+	case call.body:
+		call.method = "post"
+	default:
+		call.method = "get"
 	}
-	return method, true
+	return call, true
 }
 
 // grantAPISubcommands names the (program, subcommand) pairs whose class must
@@ -140,13 +192,22 @@ var grantAPISubcommands = map[string]string{"gh": "api"}
 // production service, so it is an operation and must contribute a class. Only
 // programs that would be meaningless to name in a permission belong here.
 var grantPlumbingPrograms = map[string]struct{}{
-	"cd": {}, "set": {}, "export": {}, "umask": {}, "true": {}, "false": {},
+	"cd": {}, "set": {}, "export": {}, "unset": {}, "umask": {}, "true": {}, "false": {},
 	"test": {}, "[": {}, ":": {}, "which": {}, "pwd": {}, "echo": {}, "printf": {}, "sleep": {},
 	"ls": {}, "cat": {}, "head": {}, "tail": {}, "wc": {}, "stat": {}, "file": {},
 	"readlink": {}, "realpath": {}, "basename": {}, "dirname": {},
 	"grep": {}, "rg": {}, "jq": {}, "yq": {}, "tr": {}, "cut": {}, "nl": {}, "seq": {},
 	"paste": {}, "comm": {}, "column": {}, "diff": {}, "od": {},
 	"shasum": {}, "sha256sum": {}, "md5": {}, "md5sum": {}, "sort": {}, "base64": {}, "date": {},
+}
+
+var benignDevNullRedirectPattern = regexp.MustCompile(`(?i)(?:^|\s)(?:[12]&?>|&>)\s*/dev/null(?:\s+2>&1)?(?:\s|$)|(?:^|\s)2>&1(?:\s|$)`)
+
+func stripBenignDevNullRedirects(payload string) string {
+	for benignDevNullRedirectPattern.MatchString(payload) {
+		payload = benignDevNullRedirectPattern.ReplaceAllString(payload, " ")
+	}
+	return strings.TrimSpace(payload)
 }
 
 // grantCommandPrefix derives the token prefix a reusable grant would key on, or
@@ -161,13 +222,8 @@ func grantCommandPrefix(toolName string, args map[string]interface{}) ([]string,
 	if payload == "" {
 		return nil, false
 	}
-	for _, marker := range grantComplexShellMarkers {
-		if strings.Contains(payload, marker) {
-			return nil, false
-		}
-	}
-	segments, unparsed := expandCommandSegments(payload, 0)
-	if unparsed {
+	segments, ok := classSegments(payload, leaseProcessEnv(args))
+	if !ok {
 		return nil, false
 	}
 	var prefix []string
@@ -176,7 +232,7 @@ func grantCommandPrefix(toolName string, args map[string]interface{}) ([]string,
 		if !ok {
 			return nil, false
 		}
-		base := strings.ToLower(strings.TrimSpace(filepath.Base(fields[progIdx])))
+		base := programName(strings.TrimSpace(fields[progIdx]))
 		if base == "" {
 			return nil, false
 		}
@@ -186,16 +242,24 @@ func grantCommandPrefix(toolName string, args map[string]interface{}) ([]string,
 		if _, neutral := shellNeutralWords[base]; neutral {
 			continue
 		}
+		// Plumbing is skipped only as the observation catalog proves it: by its
+		// exact name, never a path or another spelling that may be a different
+		// program (`./ls`, `LS`).
+		if _, plumbing := grantPlumbingPrograms[base]; plumbing && fields[progIdx] == base && segmentIsBaselineObservation(base, fields[progIdx:]) {
+			continue
+		}
 		if _, banned := bannedGrantPrograms[base]; banned {
 			return nil, false
-		}
-		if _, plumbing := grantPlumbingPrograms[base]; plumbing && segmentIsBaselineObservation(base, fields[progIdx:]) {
-			continue
 		}
 		candidate := grantSegmentPrefix(base, fields[progIdx+1:])
 		if len(candidate) == 0 {
 			return nil, false
 		}
+		bound, ok := boundSelectors(base, fields[progIdx+1:])
+		if !ok {
+			return nil, false
+		}
+		candidate = append(candidate, bound...)
 		if prefix == nil {
 			prefix = candidate
 			continue
@@ -210,6 +274,269 @@ func grantCommandPrefix(toolName string, args map[string]interface{}) ([]string,
 		return nil, false
 	}
 	return prefix, true
+}
+
+// classSegments lists the argv of each command a payload runs when a
+// remembered class or rule can stand for it, the field reading's words that
+// grantCommandPrefix and approvalCommandPrefix derive keys from. Both readings
+// must agree that nothing but the named programs decides what runs: the
+// payload is literal, every program and wrapper word is its exact bare name
+// (`./kubectl`, `bin/kubectl` and `KUBECTL` may be other files), no assignment
+// changes what the run's environment holds, and no option selects another
+// configuration or credentials.
+func classSegments(payload string, env []string) ([][]string, bool) {
+	if hasDangerousDevRedirect(payload) {
+		return nil, false
+	}
+	payload = stripBenignDevNullRedirects(payload)
+	if payload == "" {
+		return nil, false
+	}
+	for _, marker := range grantComplexShellMarkers {
+		if strings.Contains(payload, marker) {
+			return nil, false
+		}
+	}
+	lower := strings.ToLower(payload)
+	for _, marker := range grantDeviceMarkers {
+		if strings.Contains(lower, marker) {
+			return nil, false
+		}
+	}
+	return classCommands(payload, env)
+}
+
+// classCommands lists the field reading's argv for each command a payload
+// runs when every command either reading finds can be named by a class or a
+// rule (classStandsFor).
+func classCommands(payload string, env []string) ([][]string, bool) {
+	var segments [][]string
+	for _, read := range fieldCommands(payload, 0) {
+		if !classStandsFor(read.id, env) {
+			return nil, false
+		}
+		if argv := read.id.program().argv(); len(argv) > 0 && !read.id.HasScript {
+			segments = append(segments, argv)
+		}
+	}
+	shell, _ := shellCommands(payload, 0)
+	for _, read := range shell {
+		if !classStandsFor(read.id, env) {
+			return nil, false
+		}
+	}
+	return segments, true
+}
+
+// classStandsFor reports whether a class can name one command a reading found.
+func classStandsFor(id commandIdentity, env []string) bool {
+	if id.Opaque || id.redirectsProgramResolution() || id.boundsNoClass() {
+		return false
+	}
+	for _, layer := range id.Layers {
+		if layer.Word != "" && layer.Word != layer.Name {
+			return false
+		}
+	}
+	for _, assignment := range id.assignments() {
+		if !environmentHolds(env, assignment) {
+			return false
+		}
+	}
+	return !selectsConfiguration(id.program())
+}
+
+// environmentHolds reports an assignment that changes nothing: the run's
+// environment snapshot already holds exactly that value. Any other assignment
+// (`KUBECONFIG=./kc`, `export AWS_PROFILE=prod`) changes what the program reads.
+func environmentHolds(env []string, assignment string) bool {
+	name, value, ok := strings.Cut(assignment, "=")
+	if !ok || strings.HasSuffix(name, "+") {
+		return false
+	}
+	current, set := lookupEnv(env, name)
+	return set && current == value
+}
+
+// grantSelectorFlags point a program at configuration or credentials the
+// command itself chooses — a file, an inline secret, another server, a proxy,
+// a CA to trust or no verification at all — or name a program for it to run.
+// A kubeconfig, a Docker config and an ssh option can each run another program
+// (credential plugins, credsStore, ProxyCommand), and a redirected or
+// unverified server receives the operator's token, so no class stands for a
+// call carrying one (`--kubeconfig ./kc`, `--ca-bundle ./x.pem`,
+// `ssh -o ProxyCommand=...`).
+var grantSelectorFlags = map[string]map[string]struct{}{
+	"kubectl": wordSet("--kubeconfig", "--kuberc", "--as", "--as-group", "--as-uid", "--token",
+		"--client-certificate", "--client-key", "--certificate-authority", "--insecure-skip-tls-verify",
+		"--tls-server-name", "--server", "-s", "--username", "--password"),
+	"helm": wordSet("--kubeconfig", "--kube-apiserver", "--kube-token", "--kube-as-user", "--kube-as-group",
+		"--kube-ca-file", "--kube-insecure-skip-tls-verify", "--kube-tls-server-name", "--registry-config",
+		"--repository-config", "--repository-cache", "--repo", "--ca-file", "--cert-file", "--key-file",
+		"--insecure-skip-tls-verify", "--plain-http", "--username", "--password", "--pass-credentials"),
+	"aws":    wordSet("--endpoint-url", "--ca-bundle", "--no-verify-ssl"),
+	"gcloud": wordSet("--impersonate-service-account", "--access-token-file", "--flags-file"),
+	"gsutil": wordSet("-o"),
+	"gh":     wordSet("--hostname"),
+	"docker": wordSet("--config", "--host", "-H", "--tls", "--tlsverify", "--tlscacert", "--tlscert", "--tlskey"),
+	"podman": wordSet("--url", "--identity", "--remote", "-r"),
+	"argocd": wordSet("--config", "--auth-token", "--server", "--insecure", "--plaintext", "--server-crt",
+		"--client-crt", "--client-crt-key", "--header", "-H", "--core", "--port-forward", "--grpc-web-root-path"),
+	"doctl":  wordSet("--access-token", "-t", "--config", "--api-url", "-u"),
+	"flyctl": wordSet("--access-token", "-t", "--config", "-c"),
+	"vercel": wordSet("--token", "-t", "--global-config", "-Q", "--local-config", "-A"),
+	"aliyun": wordSet("--config-path", "--access-key-id", "--access-key-secret", "--sts-token", "--mode",
+		"--ram-role-name", "--ram-role-arn", "--role-session-name", "--private-key", "--key-pair-name",
+		"--endpoint", "--skip-secure-verify", "--insecure"),
+	"ssh":    wordSet("-F", "-o", "-i", "-J", "-I", "-S", "-P"),
+	"scp":    wordSet("-F", "-o", "-i", "-J", "-S", "-D"),
+	"sftp":   wordSet("-F", "-o", "-i", "-J", "-S", "-D"),
+	"rsync":  wordSet("-e", "--rsh", "--rsync-path", "--password-file", "--remote-option", "-M"),
+	"nc":     netcatSelectorFlags,
+	"ncat":   netcatSelectorFlags,
+	"netcat": netcatSelectorFlags,
+}
+
+// netcatSelectorFlags run a program or reach the target through a proxy or
+// another trust anchor, in any of the netcats a host may name nc.
+var netcatSelectorFlags = wordSet("-e", "-c", "--exec", "--sh-exec", "--lua-exec", "-x", "-X", "--proxy",
+	"--proxy-type", "--proxy-auth", "--ssl-trustfile", "--ssl-cert", "--ssl-key")
+
+// grantAbbreviatingPrograms read a long option from any unique prefix of its
+// name — Python's argparse (aws, az, gcloud) and getopt (gsutil), and
+// getopt_long (ncat, netcat, and the nc that may be either) — so
+// `--endpoint-ur` is --endpoint-url. Cobra and pflag (kubectl, helm, docker,
+// gh, ...) read only exact names.
+var grantAbbreviatingPrograms = wordSet("aws", "az", "gcloud", "gsutil", "nc", "ncat", "netcat")
+
+// longSelector resolves a long option to the selectors it may name: its exact
+// spelling, or, for a program that reads abbreviations, every selector it
+// begins. drops reports a class-dropping option among them; bound lists the
+// bound selectors.
+func longSelector(program, name string) (drops bool, bound []string) {
+	dropping, binding := grantSelectorFlags[program], grantBoundSelectors[program]
+	if _, exact := dropping[name]; exact {
+		return true, nil
+	}
+	if _, exact := binding[name]; exact {
+		return false, []string{name}
+	}
+	if _, abbreviates := grantAbbreviatingPrograms[program]; !abbreviates || len(name) <= len("--") {
+		return false, nil
+	}
+	for option := range dropping {
+		drops = drops || strings.HasPrefix(option, name)
+	}
+	for option := range binding {
+		if strings.HasPrefix(option, name) {
+			bound = append(bound, option)
+		}
+	}
+	return drops, bound
+}
+
+// grantBoundSelectors choose an entry of the operator's own configuration by
+// name: a profile, a context, an account. The entry is the identity the call
+// acts as, so it becomes part of the class (`aws codebuild batch-get-builds
+// --profile=cw3`) and a class remembered for one identity never releases
+// another, while the daily workflow that names its profile keeps its answer.
+// Each spelling maps to its semantic selector so aliases cannot hide repeats.
+var grantBoundSelectors = map[string]map[string]string{
+	"kubectl": {"--context": "--context", "--cluster": "--cluster", "--user": "--user"},
+	"helm":    {"--kube-context": "--kube-context"},
+	"aws":     {"--profile": "--profile"},
+	"gcloud":  {"--account": "--account", "--configuration": "--configuration"},
+	"docker":  {"--context": "--context", "-c": "--context"},
+	"podman":  {"--connection": "--connection", "-c": "--connection"},
+	"az":      {"--subscription": "--subscription"},
+	"doctl":   {"--context": "--context", "-c": "--context"},
+	"vercel":  {"--scope": "--scope", "-S": "--scope"},
+	"aliyun":  {"--profile": "--profile", "-p": "--profile"},
+}
+
+// selectsConfiguration reports a selector option anywhere in a program's
+// arguments: `--flag`, `--flag=value`, an abbreviation its parser reads as
+// one, `-f`, an attached `-fvalue`, or a short-option bundle that holds it. A
+// bound selector also counts when its value is missing or is not one plain
+// word, or when an abbreviation could name more than one.
+func selectsConfiguration(program commandLayer) bool {
+	flags := grantSelectorFlags[program.Name]
+	for _, arg := range program.Args {
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			name, _, _ := strings.Cut(arg, "=")
+			if drops, _ := longSelector(program.Name, name); drops {
+				return true
+			}
+			continue
+		}
+		for i := 1; i < len(arg); i++ {
+			if _, selects := flags["-"+arg[i:i+1]]; selects {
+				return true
+			}
+		}
+	}
+	_, ok := boundSelectors(program.Name, program.Args)
+	return !ok
+}
+
+// boundSelectors reads the bound selectors a program's arguments carry as
+// canonical `--flag=value` words, sorted; an abbreviation is read as the one
+// selector it names. ok is false when one has no value, or a value that is not
+// one plain word, when an abbreviation could name more than one option, or
+// when a selector repeats, including through an alias. Sorting repeats would
+// lose the CLI's selection order, which no reusable class can name.
+func boundSelectors(program string, args []string) ([]string, bool) {
+	flags := grantBoundSelectors[program]
+	if len(flags) == 0 {
+		return nil, true
+	}
+	var bound []string
+	seen := make(map[string]bool)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		name, value, attached := strings.Cut(arg, "=")
+		if strings.HasPrefix(arg, "--") {
+			drops, named := longSelector(program, name)
+			if drops || len(named) > 1 {
+				return nil, false
+			}
+			if len(named) == 0 {
+				continue
+			}
+			name = named[0]
+		} else {
+			name, value, attached = arg, "", false
+			if len(arg) > 2 && strings.HasPrefix(arg, "-") {
+				if _, short := flags[arg[:2]]; short {
+					name, value, attached = arg[:2], strings.TrimPrefix(arg[2:], "="), true
+				}
+			}
+		}
+		selector, selects := flags[name]
+		if !selects {
+			continue
+		}
+		if seen[selector] {
+			return nil, false
+		}
+		seen[selector] = true
+		if !attached {
+			if i+1 >= len(args) {
+				return nil, false
+			}
+			i++
+			value = args[i]
+		}
+		if value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, " \t\n\"'=") {
+			return nil, false
+		}
+		bound = append(bound, name+"="+value)
+	}
+	sort.Strings(bound)
+	return bound, true
 }
 
 // segmentIsBaselineObservation reports whether this one segment is provable
@@ -266,46 +593,18 @@ func grantSegmentPrefix(program string, rest []string) []string {
 // never release a DELETE, and the resource path is bounded so the stored set
 // does not grow one row per URL.
 func grantAPIPrefix(program, subcommand string, rest []string) ([]string, bool) {
-	method, ok := apiMethodFromArgs(rest)
-	if !ok {
+	if len(rest) == 0 || strings.ToLower(strings.TrimSpace(rest[0])) != subcommand {
 		return nil, false
 	}
-	path := ""
-	found := false
-	for i := 0; i < len(rest); i++ {
-		token := strings.TrimSpace(rest[i])
-		if token == "" {
-			continue
-		}
-		lowered := strings.ToLower(token)
-		// The value of a separated method flag (`-X DELETE`) is a bare word, so
-		// it is skipped BY POSITION. Skipping it by comparing against the
-		// resolved method instead would also swallow a resource path that
-		// happens to be spelled like the verb, and a class with no path covers
-		// every path.
-		if _, ok := grantAPIMethodFlags[lowered]; ok {
-			i++
-			continue
-		}
-		if strings.HasPrefix(token, "-") {
-			continue
-		}
-		if !found {
-			if lowered != subcommand {
-				return nil, false
-			}
-			found = true
-			continue
-		}
-		if path == "" {
-			path = boundedAPIPath(token)
-		}
+	// The endpoint is read by gh's own grammar, so a method value is never
+	// mistaken for a path, and a path spelled like a verb survives. A call the
+	// grammar cannot read has no class at all, never the generic prefix.
+	call, ok := ghAPIRequest(rest[1:])
+	if !ok || call.host {
+		return nil, true
 	}
-	if !found {
-		return nil, false
-	}
-	prefix := []string{program, subcommand, method}
-	if path != "" {
+	prefix := []string{program, subcommand, call.method}
+	if path := boundedAPIPath(call.endpoint); path != "" {
 		prefix = append(prefix, path)
 	}
 	return prefix, true

@@ -59,6 +59,11 @@ func NewTodoTool() *TodoTool {
 				},
 				Required: []string{},
 			},
+			metadata: ToolMetadata{
+				Category:  "task",
+				RiskLevel: ToolRiskLow,
+				Exposure:  ToolExposureHidden,
+			},
 		},
 		store: NewTodoStore(),
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
+	"selfmind/internal/buildinfo"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/modelchange"
@@ -669,7 +670,7 @@ func TestStatusLineAlwaysShowsEffectiveApprovalMode(t *testing.T) {
 }
 
 func TestAssistantMessageRendersWithFinalGutter(t *testing.T) {
-	rendered := stripANSI(renderAssistantMessage("hello\nworld", 80))
+	rendered := stripANSI(renderAssistantMessage("hello world", 80))
 
 	if !strings.Contains(rendered, "• hello world") {
 		t.Fatalf("assistant final should use the stable bullet gutter: %q", rendered)
@@ -1099,6 +1100,23 @@ func TestOnboardingStartupCardShowsModelPairWorkspaceAndFirstTask(t *testing.T) 
 	}
 }
 
+func TestStartupCardDisplaysBuildVersionCommitAndTimestamp(t *testing.T) {
+	oldVersion, oldCommit, oldBuiltAt := buildinfo.Version, buildinfo.Commit, buildinfo.BuiltAt
+	t.Cleanup(func() {
+		buildinfo.Version, buildinfo.Commit, buildinfo.BuiltAt = oldVersion, oldCommit, oldBuiltAt
+	})
+	buildinfo.Version = "v0.1.0-beta.29"
+	buildinfo.Commit = "ff239ace0f161d236eceef87761a74e1536511fa"
+	buildinfo.BuiltAt = "2026-10-21T15:00:00Z"
+
+	controller := NewController("codex-cli", "gpt-primary", nil, "")
+	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(100), "\n"))
+	want := ">_ SelfMind  v0.1.0-beta.29 (ff239ace0f16, built 2026-10-21T15:00:00Z)"
+	if !strings.Contains(rendered, want) {
+		t.Fatalf("startup card missing build display %q:\n%s", want, rendered)
+	}
+}
+
 func TestStartupCardExplainsRoutesAndShowsOnlyExplicitRoleOverrides(t *testing.T) {
 	controller := NewController("codex-cli", "gpt-5.6-sol", nil, "")
 	controller.model.modelManagerStatus = components.ModelManagerStatus{
@@ -1425,7 +1443,7 @@ func TestClientModeSteerForwardsToDaemon(t *testing.T) {
 	model.channel = "session-a"
 	model.steerCh = make(chan string, 1) // local channel must stay untouched
 	var got, gotRunID, gotChannel string
-	model.steerFn = func(runID, channel, text string) error {
+	model.steerFn = func(runID, channel, text, approvalMode string) error {
 		got = text
 		gotRunID, gotChannel = runID, channel
 		return nil
@@ -1459,7 +1477,7 @@ func TestClientModeSteerErrorShowsHonestNotice(t *testing.T) {
 	model.thinking = true
 	model.daemonRunID = "run-a"
 	model.channel = "session-a"
-	model.steerFn = func(runID, channel, text string) error {
+	model.steerFn = func(runID, channel, text, approvalMode string) error {
 		return errors.New("no active run to steer")
 	}
 	model.editor.SetValue("hurry up please")
@@ -1486,7 +1504,7 @@ func TestClientModeSteerWaitsForAnExactRunWithoutLosingInput(t *testing.T) {
 	model.localRequestActive = true
 	model.editor.SetValue("add the missing scenario")
 	called := false
-	model.steerFn = func(runID, channel, text string) error {
+	model.steerFn = func(runID, channel, text, approvalMode string) error {
 		called = true
 		return nil
 	}

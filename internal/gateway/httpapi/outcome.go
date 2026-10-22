@@ -9,11 +9,15 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
 )
 
 type taskPlanStep struct {
-	Step   string `json:"step"`
-	Status string `json:"status"`
+	Step                     string                  `json:"step"`
+	Status                   string                  `json:"status"`
+	CancellationDisposition  string                  `json:"cancellation_disposition,omitempty"`
+	CancellationReason       string                  `json:"cancellation_reason,omitempty"`
+	CancellationAuthorizedBy *kernel.PlanQuoteOrigin `json:"cancellation_authorized_by,omitempty"`
 }
 
 func buildRunOutcome(content string) api.RunOutcome {
@@ -37,37 +41,29 @@ func buildRunOutcome(content string) api.RunOutcome {
 	return out
 }
 
-// latestPlanForRun returns one run's newest plan snapshot. Continuations
-// re-inject only the parent run's plan (P0 run-scoped context); the task-wide
-// variant below remains for display surfaces (/status, digest).
+// latestPlanForRun projects the exact Run's accepted durable plan. Legacy Runs
+// without a projection retain the event representation.
 func (d *Server) latestPlanForRun(ctx context.Context, tenantID, personID, taskID, runID string) []taskPlanStep {
-	if d == nil || d.Control == nil || personID == "" || taskID == "" || runID == "" {
+	identity := &control.IdentityContext{TenantID: tenantID, PersonID: personID}
+	return taskPlanStepsFromPayload(d.latestPlanPayloadForRun(ctx, identity, taskID, runID))
+}
+
+func taskPlanStepsFromPayload(payload string) []taskPlanStep {
+	var state struct {
+		Plan []taskPlanStep `json:"plan"`
+	}
+	if json.Unmarshal([]byte(payload), &state) != nil {
 		return nil
 	}
-	events, err := d.Control.ListRunEvents(ctx, tenantID, personID, taskID, runID, 50)
-	if err != nil {
-		return nil
-	}
-	for _, event := range events {
-		if event.Type != "plan.updated" {
-			continue
-		}
-		var payload struct {
-			Plan []taskPlanStep `json:"plan"`
-		}
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			continue
-		}
-		if len(payload.Plan) > 0 {
-			return payload.Plan
-		}
-	}
-	return nil
+	return state.Plan
 }
 
 func (d *Server) latestPlanPayloadForRun(ctx context.Context, identity *control.IdentityContext, taskID, runID string) string {
-	if d == nil || d.Control == nil || identity == nil || taskID == "" || runID == "" {
+	if d == nil || d.Control == nil || identity == nil || identity.PersonID == "" || taskID == "" || runID == "" {
 		return ""
+	}
+	if payload, authoritative := d.durableRunPlanPayload(ctx, identity, taskID, runID); authoritative {
+		return payload
 	}
 	events, err := d.Control.ListRunEvents(ctx, identity.TenantID, identity.PersonID, taskID, runID, 50)
 	if err != nil {

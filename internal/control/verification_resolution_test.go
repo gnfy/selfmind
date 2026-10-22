@@ -88,7 +88,7 @@ func TestVerificationBindsSpecificSubcheckToActiveRequiredStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
-		Criterion: "result.txt ends in one newline", Target: "result.txt",
+		StepID: plan.Plan.Steps[0].StepID, Criterion: "result.txt ends in one newline", Target: "result.txt",
 	}, "/workspace")
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestVerificationBindsToUniqueOpenRequiredStepBeforePlanTransition(t *testin
 	}
 	deps := []string{"/workspace/output.txt"}
 	binding, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
-		Criterion: "output value equals 7", Target: "output.txt", LocalDependencies: &deps,
+		StepID: plan.Plan.Steps[1].StepID, Criterion: "output value equals 7", Target: "output.txt", LocalDependencies: &deps,
 	}, "/workspace")
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestVerificationBindsToUniqueOpenRequiredStepBeforePlanTransition(t *testin
 	}
 }
 
-func TestVerificationBindsEarliestOpenRequiredStepWithinActiveWorkUnit(t *testing.T) {
+func TestVerificationBindsExplicitPendingStepWithinActiveWorkUnit(t *testing.T) {
 	ctx := context.Background()
 	s, identity, _, run := newRecoveryFixture(t)
 	plan, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "inspect then check", []RunPlanStepInput{
@@ -164,7 +164,7 @@ func TestVerificationBindsEarliestOpenRequiredStepWithinActiveWorkUnit(t *testin
 		t.Fatal(err)
 	}
 	binding, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
-		Criterion: "first condition passes", Target: "input.txt",
+		StepID: plan.Plan.Steps[1].StepID, Criterion: "first condition passes", Target: "input.txt",
 	}, "/workspace")
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +186,7 @@ func TestVerificationReplacementPreservesOriginalStepWhileLaterStepIsActive(t *t
 	}
 	deps := []string{"/workspace/setting.txt"}
 	first, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
-		Criterion: "setting is positive", Target: "setting.txt", LocalDependencies: &deps,
+		StepID: plan.Plan.Steps[0].StepID, Criterion: "setting is positive", Target: "setting.txt", LocalDependencies: &deps,
 	}, "/workspace")
 	if err != nil {
 		t.Fatal(err)
@@ -244,7 +244,7 @@ func TestVerificationReplacementBindsToActiveStepAfterOriginalWorkUnitCloses(t *
 	}
 	deps := []string{"/workspace/setting.txt"}
 	first, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
-		Criterion: "setting is positive", Target: "setting.txt", LocalDependencies: &deps,
+		StepID: plan.Plan.Steps[0].StepID, Criterion: "setting is positive", Target: "setting.txt", LocalDependencies: &deps,
 	}, "/workspace")
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +269,7 @@ func TestVerificationReplacementBindsToActiveStepAfterOriginalWorkUnitCloses(t *
 		t.Fatal(err)
 	}
 	recheck, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
-		Replaces: "original", Reason: "the declared input changed; observe the same condition again",
+		StepID: advanced.Plan.Steps[1].StepID, Replaces: "original", Reason: "the declared input changed; observe the same condition again",
 	}, "/workspace")
 	if err != nil {
 		t.Fatal(err)
@@ -296,7 +296,7 @@ func TestVerificationReplacementStaysBoundToRetainedOpenObligation(t *testing.T)
 		t.Fatal(err)
 	}
 	old, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
-		Criterion: "route is reachable", Target: "route",
+		StepID: initial.Plan.Steps[0].StepID, Criterion: "route is reachable", Target: "route",
 	}, "/workspace")
 	if err != nil {
 		t.Fatal(err)
@@ -334,9 +334,8 @@ func TestVerificationReplacementStaysBoundToRetainedOpenObligation(t *testing.T)
 	}
 }
 
-// A check recorded while another required step is in_progress belongs to that
-// step, whatever its criterion says. The rejection names the missing binding
-// and its next action, and following that action closes the plan.
+// An independent check cannot close the active step. The rejection names the
+// missing binding, and an explicit pending-step check avoids a Plan transition.
 func TestPlanCloseOutRejectionNamesTheBindingAction(t *testing.T) {
 	ctx := context.Background()
 	s, identity, _, run := newRecoveryFixture(t)
@@ -356,10 +355,10 @@ func TestPlanCloseOutRejectionNamesTheBindingAction(t *testing.T) {
 		}
 		return resolved
 	}
-	appendPlanEvidence(t, s, run.ID, "build-pass", resolve(verification.Binding{Criterion: "build succeeded", Target: "build 7"}), 10)
+	appendPlanEvidence(t, s, run.ID, "build-pass", resolve(verification.Binding{StepID: build.StepID, Criterion: "build succeeded", Target: "build 7"}), 10)
 	early := resolve(verification.Binding{Criterion: "record lists the build", Target: "record.md"})
-	if early.StepID != build.StepID {
-		t.Fatalf("check bound outside the in_progress step: %+v", early)
+	if early.StepID != "" {
+		t.Fatalf("independent check was guessed from Plan position: %+v", early)
 	}
 	appendPlanEvidence(t, s, run.ID, "record-early", early, 20)
 	complete := []RunPlanStepInput{
@@ -367,17 +366,11 @@ func TestPlanCloseOutRejectionNamesTheBindingAction(t *testing.T) {
 		{StepID: record.StepID, Step: record.Step, Status: "completed"},
 	}
 	_, err = s.SyncRunPlan(ctx, identity.TenantID, run.ID, "finish", complete)
-	if err == nil || !strings.Contains(err.Error(), `step "Write the release record": criterion "record lists the build"; no check is bound to this step; next: make it the in_progress step with update_plan, then run verify`) ||
+	if err == nil || !strings.Contains(err.Error(), `step "Write the release record": criterion "record lists the build"; no check is bound to this step; next: run verify with step_id=`+record.StepID) ||
 		strings.Contains(err.Error(), `step "Check the build"`) {
 		t.Fatalf("rejection did not name the binding action: %v", err)
 	}
-	if _, err = s.SyncRunPlan(ctx, identity.TenantID, run.ID, "record", []RunPlanStepInput{
-		{StepID: build.StepID, Step: build.Step, Status: "completed"},
-		{StepID: record.StepID, Step: record.Step, Status: "in_progress"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	bound := resolve(verification.Binding{Criterion: "record lists the build", Target: "record.md"})
+	bound := resolve(verification.Binding{StepID: record.StepID, Criterion: "record lists the build", Target: "record.md"})
 	if bound.StepID != record.StepID {
 		t.Fatalf("check did not bind to the in_progress step: %+v", bound)
 	}
@@ -399,7 +392,7 @@ func TestPlanCloseOutRejectionRechecksStaleBoundCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	step := plan.Plan.Steps[0]
-	first, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{Criterion: "deployment is healthy", Target: "web"}, "/workspace")
+	first, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{StepID: step.StepID, Criterion: "deployment is healthy", Target: "web"}, "/workspace")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,5 +427,73 @@ func appendPlanEvidence(t *testing.T, s *Store, runID, id string, b *verificatio
 		"command": map[string]interface{}{"command": "check", "cwd": "/workspace", "binding": b}}})
 	if _, err := s.AppendEvent(context.Background(), Event{RunID: runID, Type: "evidence.recorded", Payload: raw}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPostCompletionCheckReplacementAndRunCompletionProjection(t *testing.T) {
+	ctx := context.Background()
+	s, identity, _, run := newRecoveryFixture(t)
+	plan, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "verify final bundle", []RunPlanStepInput{{
+		Step: "Generate and verify bundle", Status: "in_progress",
+		SuccessCriteria: "bundle is complete", VerificationRequired: true, WorkUnit: true,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := plan.Plan.Steps[0]
+	initial, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
+		StepID: step.StepID,
+	}, "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendObservedCheck(t, s, run.ID, "toolcall-16-0", initial, 10)
+
+	// Complete the step.
+	if _, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "completed", []RunPlanStepInput{{
+		StepID: step.StepID, Step: step.Step, Status: "completed",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Main opens a new observation cycle before checking the completed work
+	// again. The prior unit keeps its frozen window and proof.
+	reopened, err := s.SyncRunPlan(ctx, identity.TenantID, run.ID, "recheck the bundle", []RunPlanStepInput{{StepID: step.StepID, Status: "in_progress"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Plan.Steps[0].WorkUnitID == step.WorkUnitID {
+		t.Fatal("recheck rewrote the closed work unit")
+	}
+	// The fresh check fails first, then its observation method is corrected.
+	postFailBinding, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
+		StepID: step.StepID, Criterion: "bundle files are non-empty", Target: "bundle",
+	}, "/workspace")
+	if err != nil || postFailBinding.StepID != step.StepID {
+		t.Fatalf("post-completion explicit step binding failed: %+v %v", postFailBinding, err)
+	}
+	failRaw, _ := json.Marshal(map[string]interface{}{"evidence": map[string]interface{}{
+		"kind": "verification", "tool_name": "verify", "tool_call_id": "toolcall-25-0", "status": "failed",
+		"started_at_unix_nano": 20, "finished_at_unix_nano": 21,
+		"command": map[string]interface{}{"command": "check bundle", "cwd": "/workspace", "binding": postFailBinding, "invoked": true, "process_started": true, "exit_code": 1, "effect_state": "failed"},
+	}})
+	if _, err := s.AppendEvent(ctx, Event{RunID: run.ID, Type: "evidence.recorded", Payload: failRaw}); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement, err := s.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{
+		Replaces: "toolcall-25-0", Reason: "fix glob expansion in verification command",
+	}, "/workspace")
+	if err != nil || replacement == nil || replacement.StepID != step.StepID {
+		t.Fatalf("replacement after completed work unit failed: %+v %v", replacement, err)
+	}
+	appendObservedCheck(t, s, run.ID, "toolcall-26-0", replacement, 30)
+
+	// Resolve a single step assessment citing the post-completion check and verify review completes with no blockers.
+	proj, err := s.ResolveConditionAssessments(ctx, identity.TenantID, run.ID, []verification.Assessment{{
+		StepID: step.StepID, EvidenceRefs: []string{"toolcall-26-0"}, Result: "met", Reason: "Bundle verified.",
+	}})
+	if err != nil || !proj.ReviewComplete || len(proj.Blockers) != 0 {
+		t.Fatalf("ResolveConditionAssessments failed after post-completion replacement: proj=%+v err=%v", proj, err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 )
 
 type toolExecutionResult struct {
+	runError     error
 	pause        *toolLifecycleHandoff
 	index        int
 	step         string
@@ -26,6 +27,9 @@ type toolExecutionResult struct {
 	retryability string
 	effectState  string
 	retryClass   ToolRetryClass
+	effectClass  string
+	// Set by the loop, never by tool output.
+	heldBeforeDispatch bool
 }
 
 type toolLifecycleHandoff struct {
@@ -43,6 +47,14 @@ type toolLifecycleHandoff struct {
 
 type parallelToolSupport interface {
 	SupportsParallelTool(name string) bool
+}
+
+// parallelToolCallSupport answers for one call of a batch with the trusted
+// runtime arguments it is dispatched with, so a policy that depends on the
+// Run's person can admit it. A fact the backend records in those arguments
+// travels with the call into its dispatch.
+type parallelToolCallSupport interface {
+	SupportsParallelToolCall(name string, args map[string]interface{}) bool
 }
 
 func (a *Agent) llmToolDefinitions(ctx context.Context, strategy TaskStrategy) []llm.ToolDefinition {
@@ -214,35 +226,28 @@ func lifecycleToolCap(name string) int {
 	}
 }
 
-func unresolvedPlanStepsFromToolCall(call llm.ToolCall) ([]string, bool) {
-	if strings.TrimSpace(call.Function) != "update_plan" {
-		return nil, false
+// requestedOpenPlanSteps judges the requested snapshot when no accepted plan
+// has been read. Every step not requested completed stays open, a requested
+// cancellation included, because the runtime may keep it pending.
+func requestedOpenPlanSteps(call llm.ToolCall) []string {
+	args, err := parseToolCallArgsStrict(call.Args)
+	raw, _ := args["plan"].([]interface{})
+	if err != nil || raw == nil {
+		return []string{"the accepted plan could not be read"}
 	}
-	args, argsErr := parseToolCallArgsStrict(call.Args)
-	if argsErr != nil {
-		return nil, false
-	}
-	raw, ok := args["plan"].([]interface{})
-	if !ok {
-		return nil, false
-	}
-	unresolved := make([]string, 0, len(raw))
+	open := make([]string, 0, len(raw))
 	for _, item := range raw {
-		step, ok := item.(map[string]interface{})
-		if !ok {
-			return nil, false
-		}
-		status := strings.TrimSpace(fmt.Sprintf("%v", step["status"]))
-		if status == "completed" || status == "cancelled" {
+		step, _ := item.(map[string]interface{})
+		if strings.TrimSpace(stringArg(step, "status")) == "completed" {
 			continue
 		}
-		name := strings.TrimSpace(fmt.Sprintf("%v", step["step"]))
+		name := strings.TrimSpace(stringArg(step, "step"))
 		if name == "" {
 			name = "unnamed step"
 		}
-		unresolved = append(unresolved, name)
+		open = append(open, name)
 	}
-	return unresolved, true
+	return open
 }
 
 func finishRunStatusFromToolCall(call llm.ToolCall) (string, bool) {
@@ -262,33 +267,11 @@ func isLifecycleToolName(name string) bool {
 	}
 }
 
-func legacyToolCallsToLLM(calls []ToolCall, iteration int, idPrefix string) []llm.ToolCall {
-	out := make([]llm.ToolCall, 0, len(calls))
-	for i, c := range calls {
-		out = append(out, llm.ToolCall{
-			ID:       idPrefix + fmt.Sprintf("legacy-toolcall-%d-%d", iteration, i),
-			Function: c.Name,
-			Args:     c.Args,
-		})
-	}
-	return out
-}
-
-func normalizeToolCallIDs(calls []llm.ToolCall, iteration int, idPrefix string) []llm.ToolCall {
-	out := make([]llm.ToolCall, len(calls))
-	copy(out, calls)
-	for i := range out {
-		if out[i].ID == "" {
-			out[i].ID = idPrefix + fmt.Sprintf("toolcall-%d-%d", iteration, i)
-		}
-	}
-	return out
-}
-
 // isolateWorkUnitBoundaryCall makes control-plane work boundaries exclusive.
 // queue_user_input wins over update_plan so independent work cannot mutate the
 // current plan or execute a sibling tool before it is durably separated.
-// update_plan keeps its existing work-unit boundary semantics.
+// A leading update_plan is executed and accounted for before its siblings;
+// executePlanAwareToolCalls decides whether they still belong to that boundary.
 func isolateWorkUnitBoundaryCall(calls []llm.ToolCall) ([]llm.ToolCall, int) {
 	if len(calls) < 2 {
 		return calls, 0
@@ -306,6 +289,9 @@ func isolateWorkUnitBoundaryCall(calls []llm.ToolCall) ([]llm.ToolCall, int) {
 	for i, call := range calls {
 		if strings.TrimSpace(call.Function) != "update_plan" {
 			continue
+		}
+		if i == 0 {
+			return calls, 0
 		}
 		kept := []llm.ToolCall{call}
 		// A finish_run after the plan update closes the run; it is not work in
@@ -435,13 +421,23 @@ func appendUniqueLifecycleItems(dst []string, items ...string) []string {
 
 func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh chan string, calls []llm.ToolCall) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
-	if shouldParallelizeToolCalls(calls, a.backend) {
+	// Each call gets its own trusted runtime arguments before the batch is
+	// decided. The backend may record a per-call fact in them while deciding,
+	// and the call carries that fact into its dispatch.
+	runtimeArgs := make([]map[string]interface{}, len(calls))
+	for idx := range calls {
+		runtimeArgs[idx] = map[string]interface{}{"_tenant_id": tenantID, "_context": ctx}
+		if invocationScope, ok := ToolInvocationScopeFromContext(ctx); ok {
+			runtimeArgs[idx]["_invocation_scope"] = invocationScope
+		}
+	}
+	if shouldParallelizeToolCalls(runtimeArgs, calls, a.backend) {
 		var wg sync.WaitGroup
 		for idx, call := range calls {
 			wg.Add(1)
 			go func(i int, c llm.ToolCall) {
 				defer wg.Done()
-				results[i] = a.executeSingleToolCall(ctx, tenantID, eventCh, i, c)
+				results[i] = a.executeToolCall(ctx, tenantID, eventCh, i, c, runtimeArgs[i])
 			}(idx, call)
 		}
 		wg.Wait()
@@ -454,13 +450,28 @@ func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh c
 			results[idx] = a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args, fmt.Errorf("run stopped at a control-plane boundary; this call was not executed"))
 			continue
 		}
-		results[idx] = a.executeSingleToolCall(ctx, tenantID, eventCh, idx, call)
+		callCtx := withHumanWaitCall(ctx, call)
+		results[idx] = a.executeToolCall(callCtx, tenantID, eventCh, idx, call, runtimeArgs[idx])
+		if boundary, _ := ctx.Value(humanWaitBoundaryKey{}).(*humanWaitBoundary); boundary != nil {
+			boundary.checkpoint.Messages = append(boundary.checkpoint.Messages, results[idx].msg)
+		}
 		paused = results[idx].pause != nil || (results[idx].success && call.Function == "finish_run")
 	}
 	return results
 }
 
 func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, eventCh chan string, idx int, call llm.ToolCall) toolExecutionResult {
+	if _, _, committed := committedTurn(ctx); committed {
+		return a.toolDispatchRefused(eventCh, idx, call, call.Function+"\x00"+call.Args,
+			newPreparationPolicyError("run_already_completed", "policy_redirect", "never", "not_dispatched", "The Run's result was already committed; no further action was executed.", nil))
+	}
+	return a.executeToolCall(ctx, tenantID, eventCh, idx, call, nil)
+}
+
+// executeToolCall runs one call. carried holds the trusted runtime arguments
+// the batch decision was made with, including any per-call fact the backend
+// recorded then; nil starts the call fresh.
+func (a *Agent) executeToolCall(ctx context.Context, tenantID string, eventCh chan string, idx int, call llm.ToolCall, carried map[string]interface{}) toolExecutionResult {
 	name := call.Function
 	signature := strings.TrimSpace(name) + "\x00" + strings.TrimSpace(call.Args)
 	if call.ID == "" {
@@ -524,9 +535,11 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 	args, argsErr := parseToolCallArgsStrict(call.Args)
 	if argsErr != nil {
+		// The parser's message can quote the arguments, such as the member
+		// path of a value it cannot decode.
 		argsErr = newPreparationPolicyError(
 			"tool_arguments_invalid", "invalid_input", "corrected_input", "not_dispatched",
-			argsErr.Error(), []string{"emit_valid_json_object", "correct_arguments"},
+			redactBoundaryText(argsErr.Error()), []string{"emit_valid_json_object", "correct_arguments"},
 		)
 		if policy := RecoveryPolicyFromContext(ctx); policy != nil {
 			policy.RecordPreparationFailure(preparationRecoveryFailure(preparationAttempt, name, argsErr))
@@ -534,6 +547,9 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		return a.toolDispatchRefused(eventCh, idx, call, signature, argsErr)
 	}
 	stripModelRuntimeArgs(args)
+	for key, value := range carried {
+		args[key] = value
+	}
 	args["_tenant_id"] = tenantID
 	args["_context"] = ctx
 	args["_tool_call_id"] = call.ID
@@ -577,6 +593,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		dispatchMetadata = append(dispatchMetadata, provider.ToolExecutionMetadata(name, args))
 	}
 	retryClass := ClassifyToolRetry(name, dispatchMetadata...)
+	effectClass := ToolEffectClass(retryClass, dispatchMetadata...)
 	recoveryAttempt := recoveryAttemptFromCall(ctx, name, args, signature, retryClass)
 	if policy := RecoveryPolicyFromContext(ctx); policy != nil {
 		if policyErr := policy.BeforeDispatch(recoveryAttempt); policyErr != nil {
@@ -605,7 +622,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 				ArgsHash: ToolArgsHash(call.Args), RetryClass: retryClass,
 				EffectID: ToolEffectID(ledgerRunID, call.ID), PlanVersion: planVersion,
 				PlanStepID: planStepID, Strategy: ToolExecutionStrategy(name, retryClass),
-				EffectClass: ToolEffectClass(retryClass, dispatchMetadata...), EnvironmentGeneration: environmentGeneration,
+				EffectClass: effectClass, EnvironmentGeneration: environmentGeneration,
 			})
 			if claimErr != nil && retryClass != ToolRetryReadOnly {
 				return a.toolDispatchRefused(eventCh, idx, call, signature,
@@ -678,6 +695,9 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		packaged := packageDispatchedToolFailureCtx(ctx, name, result, err, metadata)
 		applyDispatchFacts(&packaged, dispatch)
 		if policy := RecoveryPolicyFromContext(ctx); policy != nil {
+			if packaged.FailurePhase == "preparation" && packaged.Retryability == "corrected_input" && packaged.EffectState == "not_dispatched" {
+				policy.RecordPreparationFailure(RecoveryFailure{Attempt: preparationAttempt, ErrorCode: packaged.ErrorCode, FailureClass: "invalid_input", Retryability: packaged.Retryability, EffectState: packaged.EffectState})
+			}
 			policy.RecordFailure(RecoveryFailure{
 				Attempt: recoveryAttempt, ErrorCode: packaged.ErrorCode, FailureClass: packaged.ErrorCategory,
 				Retryability: packaged.Retryability, EffectState: packaged.EffectState,
@@ -688,6 +708,11 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err, completedMetadata...)
 		}
 		var pause *toolLifecycleHandoff
+		var runError error
+		var fatal interface{ ToolRunError() error }
+		if errors.As(err, &fatal) {
+			runError = fatal.ToolRunError()
+		}
 		var boundary interface{ ToolRunPause() (string, string, bool) }
 		if errors.As(err, &boundary) {
 			reason, message, needApproval := boundary.ToolRunPause()
@@ -699,6 +724,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			pause = &toolLifecycleHandoff{Status: status, CompletionReason: reason, Summary: message, Message: message, NeedApprove: needApproval}
 		}
 		return toolExecutionResult{
+			runError:     runError,
 			pause:        pause,
 			index:        idx,
 			step:         packaged.ModelContent,
@@ -718,6 +744,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 	modelResult := modelVisibleSkillToolResult(name, result)
 	packaged := packageToolResultCtx(ctx, name, modelResult)
+	packaged.ModelContent += modelObservationHint(dispatch.Evidence)
 	applyDispatchFacts(&packaged, dispatch)
 	if policy := RecoveryPolicyFromContext(ctx); policy != nil {
 		policy.RecordSuccess(recoveryAttempt)
@@ -734,13 +761,14 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 
 	return toolExecutionResult{
-		index:      idx,
-		step:       toolHistoryStep(name, packaged),
-		toolName:   name,
-		signature:  signature,
-		rawResult:  result,
-		success:    true,
-		retryClass: retryClass,
+		index:       idx,
+		step:        toolHistoryStep(name, packaged),
+		toolName:    name,
+		signature:   signature,
+		rawResult:   result,
+		success:     true,
+		retryClass:  retryClass,
+		effectClass: effectClass,
 		msg: llm.Message{
 			Role:       "tool",
 			Content:    packaged.ModelContent,
@@ -894,7 +922,10 @@ func parseToolCallArgsStrict(raw string) (map[string]interface{}, error) {
 	return args, nil
 }
 
-func shouldParallelizeToolCalls(calls []llm.ToolCall, backends ...AgentBackend) bool {
+// shouldParallelizeToolCalls reports whether every call of the batch may run
+// concurrently. runtimeArgs[i] are the trusted runtime arguments call i is
+// dispatched with; without them the backend answers by tool name only.
+func shouldParallelizeToolCalls(runtimeArgs []map[string]interface{}, calls []llm.ToolCall, backends ...AgentBackend) bool {
 	if len(calls) <= 1 {
 		return false
 	}
@@ -902,15 +933,22 @@ func shouldParallelizeToolCalls(calls []llm.ToolCall, backends ...AgentBackend) 
 	if len(backends) > 0 {
 		backend = backends[0]
 	}
-	for _, call := range calls {
-		if !toolSupportsParallel(call.Function, backend) {
+	for idx, call := range calls {
+		var args map[string]interface{}
+		if idx < len(runtimeArgs) {
+			args = runtimeArgs[idx]
+		}
+		if !toolSupportsParallel(call.Function, backend, args) {
 			return false
 		}
 	}
 	return true
 }
 
-func toolSupportsParallel(name string, backend AgentBackend) bool {
+func toolSupportsParallel(name string, backend AgentBackend, runtimeArgs map[string]interface{}) bool {
+	if support, ok := backend.(parallelToolCallSupport); ok && runtimeArgs != nil {
+		return support.SupportsParallelToolCall(name, runtimeArgs)
+	}
 	if support, ok := backend.(parallelToolSupport); ok {
 		return support.SupportsParallelTool(name)
 	}
@@ -989,6 +1027,8 @@ func planItemsFromArgs(args map[string]interface{}) []PlanItem {
 		workUnit, _ := obj["work_unit"].(bool)
 		verificationRequired, _ := obj["verification_required"].(bool)
 		items = append(items, PlanItem{
+			CancellationDisposition: stringArg(obj, "cancellation_disposition"), CancellationReason: stringArg(obj, "cancellation_reason"),
+			UserTakeoverQuote: stringArg(obj, "user_takeover_quote"), ReplacementStepID: stringArg(obj, "replacement_step_id"), ScopeChangeQuote: stringArg(obj, "scope_change_quote"),
 			StepID: stringArg(obj, "step_id"), Step: fmt.Sprintf("%v", obj["step"]),
 			Status: fmt.Sprintf("%v", obj["status"]), SuccessCriteria: stringArg(obj, "success_criteria"),
 			VerificationRequired: verificationRequired,

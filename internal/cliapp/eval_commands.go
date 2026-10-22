@@ -1,6 +1,7 @@
 package cliapp
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,10 @@ func (a *App) runEvalCommandIfRequested() (bool, int) {
 		return true, a.evalReport(args[1:])
 	case "repair":
 		return true, a.evalRepair(args[1:])
+	case "canary":
+		return true, a.evalCanary(args[1:])
+	case "compare":
+		return true, a.evalCompare(args[1:])
 	case "scorecard":
 		return true, a.evalScorecard(args[1:])
 	case "capture":
@@ -37,7 +42,7 @@ func (a *App) runEvalCommandIfRequested() (bool, int) {
 	case "clean":
 		return true, a.evalClean(args[1:])
 	default:
-		fmt.Fprintln(a.stderr, "usage: selfmind eval [list|run|report|repair|scorecard|capture|clean]")
+		fmt.Fprintln(a.stderr, "usage: selfmind eval [list|run|report|repair|scorecard|compare|canary|capture|clean]")
 		return true, 2
 	}
 }
@@ -50,7 +55,9 @@ func (a *App) printEvalHelp() {
 	fmt.Fprintln(a.stdout, "  selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID] [--tenant ID] [--workspace PATH] [--output PATH] [--record-content] [--turn-timeout D] [--live]")
 	fmt.Fprintln(a.stdout, "  selfmind eval report <jsonl-or-dir>")
 	fmt.Fprintln(a.stdout, "  selfmind eval repair [case-or-dir] [--worktree]")
-	fmt.Fprintln(a.stdout, "  selfmind eval scorecard [case-or-dir] [--provider ID] [--out PATH] [--live]")
+	fmt.Fprintln(a.stdout, "  selfmind eval scorecard [case-or-dir] [--provider ID] [--model ID] [--out PATH] [--live]")
+	fmt.Fprintln(a.stdout, "  selfmind eval canary init <new-private-directory> (generate fixtures; no provider calls)")
+	fmt.Fprintln(a.stdout, "  selfmind eval compare <before-json-or-jsonl-dir> <after-json-or-jsonl-dir>")
 	fmt.Fprintln(a.stdout, "  selfmind eval capture [turn-id|latest] [--title \"...\"] [--suite NAME]")
 	fmt.Fprintln(a.stdout, "  selfmind eval clean [--yes]   remove eval residue from the configured control.db and on-disk eval-* dirs (dry-run by default)")
 	fmt.Fprintln(a.stdout)
@@ -103,11 +110,16 @@ func (a *App) evalRun(args []string) int {
 		fmt.Fprintln(a.stderr, "--output can only be used with a single case file")
 		return 2
 	}
-	failed := 0
+	failed, unavailable := 0, 0
 	for _, file := range files {
 		start := time.Now()
 		fmt.Fprintf(a.stdout, "Running %s\n", file)
 		result, err := selfeval.RunCaseFile(a.ctx, file, opts)
+		if errors.Is(err, selfeval.ErrRequirementUnavailable) {
+			unavailable++
+			fmt.Fprintf(a.stdout, "  unavailable: %v\n", err)
+			continue
+		}
 		if err != nil {
 			failed++
 			fmt.Fprintf(a.stdout, "  failed: %v\n", err)
@@ -116,7 +128,18 @@ func (a *App) evalRun(args []string) int {
 		if result.Status != "passed" {
 			failed++
 		}
-		fmt.Fprintf(a.stdout, "  %s in %s  tools=%d errors=%d  log=%s\n", result.Status, time.Since(start).Round(time.Millisecond), result.ToolCalls, result.ToolErrors, result.OutputPath)
+		var logs []string
+		for _, sample := range selfeval.SamplesOf(*result) {
+			if sample.OutputPath != "" {
+				logs = append(logs, sample.OutputPath)
+			}
+		}
+		fmt.Fprintf(a.stdout, "  %s in %s  tools=%d errors=%d  log=%s\n", result.Status, time.Since(start).Round(time.Millisecond), result.ToolCalls, result.ToolErrors, strings.Join(logs, ", "))
+	}
+	// As in selfcheck, a missing requirement outranks a failure: the
+	// environment, not the product, stopped the run.
+	if unavailable > 0 {
+		return 2
 	}
 	if failed > 0 {
 		return 1
@@ -230,7 +253,7 @@ func (a *App) evalCapture(args []string) int {
 		return 1
 	}
 	fmt.Fprintf(a.stdout, "Captured eval draft: %s\n  case:     %s\n  cassette: %s (%d files)\n", res.CaseID, res.CasePath, res.VCRPath, res.Cassettes)
-	fmt.Fprintf(a.stdout, "Next: add deterministic assertions, replay the draft, then promote its YAML to evalcases/ and cassette directory to .vcr/ before running `selfmind selfcheck`.\n")
+	fmt.Fprintf(a.stdout, "Next: reconstruct the isolated fixture and assertions, clear capture_review_required after review, then replay and promote its YAML to evalcases/ and cassette directory to .vcr/ before running `selfmind selfcheck`.\n")
 	return 0
 }
 

@@ -11,9 +11,11 @@ import (
 )
 
 type workSelectionProposal struct {
-	Action string `json:"action"`
-	RunID  string `json:"run_id"`
-	TaskID string `json:"task_id,omitempty"`
+	Action    string `json:"action"`
+	RunID     string `json:"run_id"`
+	TaskID    string `json:"task_id,omitempty"`
+	ClarifyID string `json:"clarify_id,omitempty"`
+	Answer    string `json:"answer,omitempty"`
 }
 
 type workSelectionCommit struct {
@@ -42,6 +44,8 @@ func (c *RunCoordinator) latestWorkSelection(ctx context.Context, identity *cont
 	}
 	proposal.Action = strings.ToLower(strings.TrimSpace(proposal.Action))
 	proposal.RunID = strings.TrimSpace(proposal.RunID)
+	proposal.ClarifyID = strings.TrimSpace(proposal.ClarifyID)
+	proposal.Answer = strings.TrimSpace(proposal.Answer)
 	if (proposal.Action != "observe" && proposal.Action != "resume") || proposal.RunID == "" {
 		return nil, fmt.Errorf("invalid work selection proposal")
 	}
@@ -94,9 +98,23 @@ func (c *RunCoordinator) commitWorkSelection(ctx context.Context, identity *cont
 		// the selected work. Always materialize a fresh exact-parent child: its
 		// scope is frozen correctly at creation and its plan/checkpoint can be
 		// restored before Main starts.
+		content := req.Content
+		if proposal.ClarifyID != "" && proposal.Answer != "" {
+			content = proposal.Answer
+		}
+		platform, userID, channel := req.Platform, req.PlatformUserID, req.Channel
+		if proposal.ClarifyID != "" {
+			checkpoint, _ := c.srv.Control.IncompleteLoopCheckpointForRun(ctx, identity.TenantID, target.ID)
+			if checkpoint != nil && checkpoint.Outcome == "await_human" && checkpoint.WaitKind == control.LoopCheckpointWaitClarification && checkpoint.WaitRef == proposal.ClarifyID {
+				platform, userID, channel = c.srv.humanWaitContinuationRoute(ctx, identity, target, control.LoopCheckpointWaitClarification, proposal.ClarifyID, req.Channel)
+			}
+		}
 		queued, err := c.srv.Control.EnqueueSelectedContinuation(ctx, identity.TenantID, identity.PersonID, run.ID, target.ID, control.QueuedTask{
-			Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
-			Content: req.Content, ApprovalMode: req.ApprovalMode,
+			Channel: channel, Platform: platform, PlatformUserID: userID,
+			Content: content, ClarifyID: proposal.ClarifyID, ApprovalMode: req.ApprovalMode,
+			// The transfer carries the person's request on, under the
+			// authority that request was admitted with.
+			Admission: req.Admission,
 		})
 		if err != nil {
 			return nil, err
@@ -104,9 +122,13 @@ func (c *RunCoordinator) commitWorkSelection(ctx context.Context, identity *cont
 		commit.QueueID = queued.ID
 		commit.Notice = "The historical work was validated and queued as the next exact continuation."
 	}
-	if err := c.appendWorkSelectionEvent(ctx, task, run, req.Channel, "work.selection_committed", map[string]interface{}{
+	committedPayload := map[string]interface{}{
 		"action": proposal.Action, "run_id": target.ID, "queue_id": commit.QueueID, "commit_mode": "transfer",
-	}); err != nil {
+	}
+	if proposal.ClarifyID != "" {
+		committedPayload["clarify_id"] = proposal.ClarifyID
+	}
+	if err := c.appendWorkSelectionEvent(ctx, task, run, req.Channel, "work.selection_committed", committedPayload); err != nil {
 		return nil, err
 	}
 	return commit, nil

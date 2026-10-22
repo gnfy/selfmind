@@ -3,91 +3,65 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "Now"
-    },
-    {
-      "reasoning_content": " write"
-    },
-    {
-      "reasoning_content": " receipt"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " in"
-    },
-    {
-      "reasoning_content": " workspace"
-    },
-    {
-      "reasoning_content": " root"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "content": "Both"
-    },
-    {
-      "content": " prerequisites"
-    },
-    {
-      "content": " are"
-    },
-    {
-      "content": " satisfied"
-    },
-    {
-      "content": ","
-    },
-    {
-      "content": " so"
-    },
-    {
-      "content": " I"
-    },
-    {
-      "content": "'ll"
-    },
-    {
-      "content": " write"
-    },
-    {
-      "content": " the"
-    },
-    {
-      "content": " deliver"
-    },
-    {
-      "content": "able"
-    },
-    {
-      "content": " now"
-    },
-    {
-      "content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I will check the workspace contents to see if there are any"
     },
     {
       "usage": {
-        "input_tokens": 12963,
-        "output_tokens": 117,
-        "cache_read_input_tokens": 12544,
-        "cache_miss_input_tokens": 419,
+        "input_tokens": 15690,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 8,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "content": " existing reference files."
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 16,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 788,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_Nmznz1HUIl19sWxKkaWx7923",
-          "Function": "write_file",
-          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/receipt.txt\", \"content\": \"VERIFIED\\n\"}"
+          "ID": "call_599322",
+          "Function": "ls_r",
+          "Args": "{\"path\":\".\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "EtUDCtIDAWkUfRMANMnI7wiw5JQbbNrX8d9p04Q/9QLSq3vTRe0bDVNAS3MvKVdGm/ecY6Sycic3MGvdPNfpoZFNIux+BhX1ZziEk2yoU+nSa07DbDanDGoPvXYqR4U/AZS4+ZJvcQVN0Mmwu95JSekmcWUY2zNRjVtsFb3dccu0aBzQ3VanvmSwy4k/orXfChTf3PPt+FpMku6PE4TIU/tf8pLUCuKz+IgA26+keyq5PkUwYwY1tMgawBQH5RhRaA98M1M9YxvvT9u83FcL827AwXLOyVh1o9O+5qTz02N4WqVaEQs4H3GaMICOsRNO/cH8YTiFTgrrnyf8l2o4I7HdE6g5tceF/BqzQriOZrvBEtQu+wbUQJWfOU5Vx4b76/NSfJiQjTuzYtAVxpMQDCOhCYvthgF88iK5bf714RC7U/yfZEyYFKQX7TQzMyxMeLjGQDir3zryOGNaCnFPS3g8SClrTkx8QgxAiL+Q9Wq3cUcsI9hjtKPk4odARJGMyX4ZNDsIby959n8wwdR9nQOYREukXYGsGkcSbi41lAynrKQpu/UPuUnfhNisBs0QE6hm5aJvk9WKWXLcn8CqyTAMSi8pid+ry3txsIrYUexeRnt5j5bvBg=="
+            }
+          }
         }
       ]
     }

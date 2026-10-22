@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"selfmind/internal/verification"
 	"strings"
 	"testing"
@@ -301,6 +302,122 @@ func TestRunPlanRejectsForeignStepID(t *testing.T) {
 	}
 }
 
+// A model that lost track of an id needs to know which legal id is which step:
+// opaque ids alone leave it guessing, and a guess is another failed call.
+func TestRunPlanStaleStepErrorMapsLegalIdsToSteps(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	input := make([]RunPlanStepInput, 0, 14)
+	for i := 0; i < 14; i++ {
+		status := "pending"
+		switch i {
+		case 0:
+			status = "completed"
+		case 1:
+			status = "in_progress"
+		}
+		title := fmt.Sprintf("Step %02d of the plan", i)
+		if i == 1 {
+			title = "Edit the parser\n  and keep   the tests green " + strings.Repeat("long ", 30)
+		}
+		input = append(input, RunPlanStepInput{Step: title, Status: status})
+	}
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An invented id can be arbitrarily long; the receipt echoes at most 64 runes of it.
+	madeUp := "step_" + strings.Repeat("x", 100)
+	_, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Status: "completed"},
+		{StepID: madeUp, Status: "in_progress"},
+	})
+	var stale *StalePlanStepReferenceError
+	if !errors.As(err, &stale) {
+		t.Fatalf("foreign step id error=%T %v", err, err)
+	}
+	if index, supplied := stale.StalePlanEntry(); index != 1 || supplied != madeUp[:64]+"…" {
+		t.Fatalf("stale entry = %d %q, want plan[1] and the id cut at 64 characters", index, supplied)
+	}
+	if len(stale.CurrentPlanStepIDs()) != 14 {
+		t.Fatalf("legal ids must stay complete: %v", stale.CurrentPlanStepIDs())
+	}
+	listing := stale.CurrentPlanStepListing()
+	for i := 0; i < 12; i++ {
+		if !strings.Contains(listing, first.Plan.Steps[i].StepID+" ["+first.Plan.Steps[i].Status+"]") {
+			t.Fatalf("step %d missing from the listing:\n%s", i, listing)
+		}
+	}
+	if strings.Contains(listing, first.Plan.Steps[12].StepID) || !strings.HasSuffix(listing, "… and 2 more") {
+		t.Fatalf("listing is not bounded to 12 steps with a remainder:\n%s", listing)
+	}
+	collapsed := strings.Join(strings.Fields(input[1].Step), " ")
+	bounded := string([]rune(collapsed)[:60]) + "…"
+	if strings.Contains(listing, "\\n") || strings.Contains(listing, "  ") || !strings.Contains(listing, `"`+bounded+`"`) {
+		t.Fatalf("a long multi-line title must be one bounded line %q:\n%s", bounded, listing)
+	}
+	// A Run with no durable plan has nothing to list; ids are not invented.
+	if empty := (&StalePlanStepReferenceError{StepID: "x"}); empty.CurrentPlanStepListing() != "" {
+		t.Fatalf("empty listing = %q", empty.CurrentPlanStepListing())
+	}
+}
+
+// An entry with no text is refused as a typed error that knows whether the Run
+// had a plan: in a first plan no id exists and the ids sent are ignored, so an
+// id alone has nothing to keep; later, an id the Run issued keeps its text and
+// an invented one is the stale-id refusal, not this one.
+func TestRunPlanTextlessEntryIsATypedRefusalThatKnowsWhetherThereWasAPlan(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+
+	_, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{Step: "Inspect", Status: "in_progress"},
+		{StepID: "s2", Status: "pending"},
+	})
+	var textRequired *PlanStepTextRequiredError
+	if !errors.As(err, &textRequired) {
+		t.Fatalf("an id with no text in a first plan = %T %v", err, err)
+	}
+	if index, firstPlan := textRequired.PlanStepTextRequired(); index != 1 || !firstPlan {
+		t.Fatalf("first-plan refusal = entry %d firstPlan %v", index, firstPlan)
+	}
+	if !strings.Contains(err.Error(), "plan[1].step is required for a new or unmatched step") {
+		t.Fatalf("the refusal text changed: %v", err)
+	}
+
+	// The refused attempt stored nothing: the next plan is still the first one.
+	first, err := store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{Step: "Inspect", Status: "in_progress"}, {Step: "Edit", Status: "pending"},
+	})
+	if err != nil || first.Plan.Version != 1 {
+		t.Fatalf("first plan after a refusal: version %d err %v", first.Plan.Version, err)
+	}
+
+	// With a plan, an entry that has neither id nor text is a new step without text.
+	_, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Status: "completed"}, {Status: "pending"},
+	})
+	if !errors.As(err, &textRequired) {
+		t.Fatalf("an entry with no id and no text under a plan = %T %v", err, err)
+	}
+	if index, firstPlan := textRequired.PlanStepTextRequired(); index != 1 || firstPlan {
+		t.Fatalf("later refusal = entry %d firstPlan %v", index, firstPlan)
+	}
+
+	// An id the Run issued keeps its text; an invented one is the stale-id refusal.
+	if _, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Status: "completed"}, {StepID: first.Plan.Steps[1].StepID, Status: "in_progress"},
+	}); err != nil {
+		t.Fatalf("issued ids must keep their text: %v", err)
+	}
+	var stale *StalePlanStepReferenceError
+	if _, err = store.SyncRunPlan(ctx, identity.TenantID, run.ID, "", []RunPlanStepInput{
+		{StepID: first.Plan.Steps[0].StepID, Status: "completed"}, {StepID: "s9", Status: "pending"},
+	}); !errors.As(err, &stale) {
+		t.Fatalf("an invented id under a plan = %T %v", err, err)
+	}
+}
+
 func TestRunPlanRecoversStaleAliasOnlyFromUniqueExactStep(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
@@ -413,10 +530,13 @@ func TestFirstPlanKeepsPrematureVerifiedCompletionOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(projection.VerificationDeferred) != 2 || projection.Plan.Steps[1].Status != "in_progress" || projection.Plan.Steps[2].Status != "pending" {
-		t.Fatalf("first snapshot did not expose one executable verification obligation: %+v", projection)
+	if len(projection.VerificationDeferred) != 1 || projection.Plan.Steps[1].Status != "pending" || projection.Plan.Steps[2].Status != "in_progress" {
+		t.Fatalf("first snapshot lost its verification obligation or reordered independent progress: %+v", projection)
 	}
-	binding, err := store.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{Criterion: "output is exact", Target: "output.txt"}, "/workspace")
+	if store.ValidateRunCompletion(ctx, identity.TenantID, run.ID) == nil {
+		t.Fatal("normalization erased a necessary verification")
+	}
+	binding, err := store.ResolveVerificationBinding(ctx, identity.TenantID, run.ID, verification.Binding{StepID: projection.Plan.Steps[1].StepID, Criterion: "output is exact", Target: "output.txt"}, "/workspace")
 	if err != nil || binding == nil || binding.StepID != projection.Plan.Steps[1].StepID {
 		t.Fatalf("verification was not bound to normalized step: binding=%+v err=%v", binding, err)
 	}

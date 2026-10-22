@@ -1,26 +1,219 @@
 {
+  "plan_binding_version": 1,
   "method": "stream",
   "events": [
+    {
+      "reasoning_content": "Verify"
+    },
+    {
+      "reasoning_content": " passed. Now finalize"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ": step"
+    },
+    {
+      "reasoning_content": " 3 completed,"
+    },
+    {
+      "reasoning_content": " then finish_run with"
+    },
+    {
+      "reasoning_content": " status done. Guidance"
+    },
+    {
+      "reasoning_content": ": \"Only finish"
+    },
+    {
+      "reasoning_content": "_run may follow a"
+    },
+    {
+      "reasoning_content": " final Plan"
+    },
+    {
+      "reasoning_content": " with no active work"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " — so I can"
+    },
+    {
+      "reasoning_content": " send the final"
+    },
+    {
+      "reasoning_content": " plan update and then"
+    },
+    {
+      "reasoning_content": " finish_run separately."
+    },
+    {
+      "reasoning_content": " Can they share a"
+    },
+    {
+      "reasoning_content": " response"
+    },
+    {
+      "reasoning_content": "? \"A second"
+    },
+    {
+      "reasoning_content": " Plan update ... holds"
+    },
+    {
+      "reasoning_content": " later actions\" —"
+    },
+    {
+      "reasoning_content": " better"
+    },
+    {
+      "reasoning_content": " to send the final"
+    },
+    {
+      "reasoning_content": " update_plan, then"
+    },
+    {
+      "reasoning_content": " finish_run separately"
+    },
+    {
+      "reasoning_content": ". Actually finish_run"
+    },
+    {
+      "reasoning_content": " may"
+    },
+    {
+      "reasoning_content": " follow the final plan"
+    },
+    {
+      "reasoning_content": ". Let"
+    },
+    {
+      "reasoning_content": " me do update_plan"
+    },
+    {
+      "reasoning_content": " alone"
+    },
+    {
+      "reasoning_content": " first, then finish"
+    },
+    {
+      "reasoning_content": "_run with"
+    },
+    {
+      "reasoning_content": " final_response.\n\n"
+    },
+    {
+      "reasoning_content": "Actually I could combine"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": "_plan (final)"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " finish_run in the"
+    },
+    {
+      "reasoning_content": " same block? The"
+    },
+    {
+      "reasoning_content": " instruction says \"Only"
+    },
+    {
+      "reasoning_content": " finish_run may follow"
+    },
+    {
+      "reasoning_content": " a final Plan"
+    },
+    {
+      "reasoning_content": " with no active work"
+    },
+    {
+      "reasoning_content": "\" implying finish_run"
+    },
+    {
+      "reasoning_content": " can"
+    },
+    {
+      "reasoning_content": " be alongside/after"
+    },
+    {
+      "reasoning_content": ". But"
+    },
+    {
+      "reasoning_content": " safer sequential: update"
+    },
+    {
+      "reasoning_content": " plan, read accepted"
+    },
+    {
+      "reasoning_content": " result, then finish"
+    },
+    {
+      "reasoning_content": "_run.\n\nAlso"
+    },
+    {
+      "reasoning_content": ": should I save"
+    },
+    {
+      "reasoning_content": " memory? Nothing durable"
+    },
+    {
+      "reasoning_content": " worth saving. Skip"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let me do the"
+    },
+    {
+      "reasoning_content": " final plan update."
+    },
+    {
+      "content": "Verification"
+    },
+    {
+      "content": " passed with evidence `"
+    },
+    {
+      "content": "toolcall-6"
+    },
+    {
+      "content": "-0`."
+    },
+    {
+      "content": " Closing the last plan"
+    },
+    {
+      "content": " step.\n\n"
+    },
     {
       "finish_reason": "tool_calls"
     },
     {
       "usage": {
-        "input_tokens": 9845,
-        "output_tokens": 176,
-        "cache_read_input_tokens": 9728,
-        "cache_miss_input_tokens": 117,
+        "input_tokens": 17533,
+        "output_tokens": 298,
+        "cache_read_input_tokens": 16384,
+        "cache_miss_input_tokens": 1149,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 0,
+        "reasoning_output_tokens": 187,
         "cache_usage_reported": true
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_ET_8QCcVYUHFMewv8cvtlOr8035",
-          "Function": "finish_run",
-          "Args": "{\"status\": \"done\", \"summary\": \"Created plan-progress.txt containing exactly PLAN-COMPLETE and verified it.\", \"done\": [\"Inspected workspace (empty)\", \"Wrote plan-progress.txt with exactly PLAN-COMPLETE\", \"Verified exact file contents with verify tool\"], \"files\": [\"plan-progress.txt\"], \"tests\": [\"verify: content equals PLAN-COMPLETE (13 bytes, no extra characters)\"]}"
+          "ID": "",
+          "Function": "update_plan",
+          "Args": "{\"explanation\": \"Verify check succeeded; all three steps complete.\", \"mode\": \"patch\", \"plan\": \n[{\"status\": \"completed\", \"step_id\": \"{{SELFMIND_VCR_PLAN_STEP_1}}\"}]\n\n}"
         }
       ]
     }

@@ -147,13 +147,17 @@ func buildPostRunMaintenancePayload(identity *control.IdentityContext, task *con
 	return string(payload), nil
 }
 
-func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, taskStatus, workspaceID, userInput, channel, assistantContent string, outcome api.RunOutcome, attach taskAttach, handoff control.Handoff, event control.Event) error {
+func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, taskStatus, workspaceID, userInput, channel, assistantContent string, outcome api.RunOutcome, attach taskAttach, handoff control.Handoff, event control.Event, completion ...*control.RunCompletionCandidate) error {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil {
 		return fmt.Errorf("run finalization context is incomplete")
 	}
 	payload, err := buildPostRunMaintenancePayload(identity, task, run, workspaceID, userInput, outcome, attach, c.srv.PromptSnapshotHash)
 	if err != nil {
 		return err
+	}
+	var candidate *control.RunCompletionCandidate
+	if len(completion) > 0 {
+		candidate = completion[0]
 	}
 	_, err = c.srv.Control.MaterializeRunFinalization(context.WithoutCancel(ctx), control.RunFinalization{
 		Identity:   *identity,
@@ -189,6 +193,7 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 		MaintenancePayload: payload,
 		Event:              event,
 		EffectKey:          attach.effectKey,
+		Completion:         candidate,
 	})
 	if err == nil {
 		if c.srv.SelfEvolution.Enabled {

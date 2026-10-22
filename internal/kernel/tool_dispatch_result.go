@@ -1,6 +1,9 @@
 package kernel
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // ToolDispatchResult carries runtime observations independently of presentation.
 // It contains no Task/Thread identity or authorization. The invocation context
@@ -11,6 +14,9 @@ type ToolDispatchResult struct {
 	Invoked  *bool
 	Process  *ToolProcessResult
 	Evidence []RunEvidence
+	// RedactionUnparseable reports that masking a credential had to leave a
+	// JSON result unparseable rather than reveal a masked value.
+	RedactionUnparseable bool
 }
 
 // ToolProcessResult describes the observed process, not the tool's success.
@@ -20,6 +26,18 @@ type ToolProcessResult struct {
 	ExitCode        *int   `json:"exit_code,omitempty"`
 	SandboxMode     string `json:"sandbox_mode,omitempty"`
 	RecoveryOutcome string `json:"recovery_outcome,omitempty"`
+	NetworkMode     string `json:"network_mode,omitempty"`
+	// NetworkDecision is the runtime's decision about sharing the daemon's
+	// network with this call, with its reason when it was withheld: `shared` or
+	// `withheld: <reason>`. NetworkPermission says what permitted network for the
+	// workspace at the time (`trust`, `grant` or `approval`), empty when nothing
+	// did. A permission is not a use: a call under a grant may still run offline.
+	NetworkDecision   string `json:"network_decision,omitempty"`
+	NetworkPermission string `json:"network_permission,omitempty"`
+	ProxyMode         string `json:"proxy_mode,omitempty"`
+	// These are literal removals requested by the command, not proof of the
+	// route used by an arbitrary program. No environment values are exposed.
+	RequestedProxyRemovals []string `json:"requested_proxy_removals,omitempty"`
 }
 
 // ToolResultBackend is implemented by the production dispatcher. Legacy
@@ -46,9 +64,27 @@ func applyDispatchFacts(envelope *ToolResultEnvelope, result ToolDispatchResult)
 		}
 		envelope.ModelContent = "Process observation: started=" + strconv.FormatBool(result.Process.Started) + "; exit_code=" + exit + ".\n" + envelope.ModelContent
 	}
+	if process := result.Process; process != nil {
+		var facts []string
+		if process.NetworkMode != "" {
+			facts = append(facts, "network="+process.NetworkMode)
+		}
+		if process.ProxyMode != "" {
+			facts = append(facts, "proxy_mode="+process.ProxyMode)
+		}
+		if len(process.RequestedProxyRemovals) > 0 {
+			facts = append(facts, "requested_proxy_removals="+strings.Join(process.RequestedProxyRemovals, ","))
+		}
+		if len(facts) > 0 {
+			envelope.ModelContent = "Execution environment: " + strings.Join(facts, "; ") + ".\n" + envelope.ModelContent
+		}
+	}
 	for _, evidence := range result.Evidence {
 		if evidence.ToolCallID != "" {
 			envelope.EvidenceRefs = append(envelope.EvidenceRefs, evidence.ToolCallID)
 		}
+	}
+	if result.RedactionUnparseable {
+		envelope.ModelContent = "Redaction: masking a credential left this JSON result unparseable; read it as text.\n" + envelope.ModelContent
 	}
 }

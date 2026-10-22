@@ -35,7 +35,7 @@ func (s *Store) EnsureInheritedRunPlan(ctx context.Context, tenantID, childRunID
 	if childPersonID != parentPersonID {
 		return nil, fmt.Errorf("continuation parent belongs to another person")
 	}
-	projection, err := s.inheritRunPlanTx(ctx, tx, tenant, childRunID, parentRunID, false)
+	projection, err := s.inheritRunPlanTx(ctx, tx, tenant, childRunID, parentRunID, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +45,12 @@ func (s *Store) EnsureInheritedRunPlan(ctx context.Context, tenantID, childRunID
 	return projection, nil
 }
 
-func (s *Store) inheritRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, childRunID, parentRunID string, replace bool) (*RunPlanProjection, error) {
+// inheritRunPlanTx imports the exact parent's Plan into the child. A person's own
+// turn, or a continuation Main selected, keeps the conservative import: verified
+// steps reopen until Main adopts or rechecks them. An exact continuation (the
+// runtime resuming the same work) carries the progress instead; see
+// carryInheritedVerificationTx.
+func (s *Store) inheritRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, childRunID, parentRunID string, replace, exact bool) (*RunPlanProjection, error) {
 	current, err := latestRunPlanTx(ctx, tx, tenant, childRunID)
 	if err != nil {
 		return nil, err
@@ -64,7 +69,7 @@ func (s *Store) inheritRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, childR
 		// A corrected claim cannot leave the abandoned parent's Plan attached
 		// to this Run. Publish an empty snapshot while retaining old versions as
 		// audit history; Main can then plan against the corrected parent.
-		reset, err := s.syncRunPlanTx(ctx, tx, tenant, childRunID, "Continuation parent changed; no plan to inherit", nil, nil, true)
+		reset, err := s.syncRunPlanTx(ctx, tx, tenant, childRunID, "Continuation parent changed; no plan to inherit", nil, nil, true, false)
 		if err != nil {
 			return nil, err
 		}
@@ -75,12 +80,16 @@ func (s *Store) inheritRunPlanTx(ctx context.Context, tx *sql.Tx, tenant, childR
 		steps = append(steps, RunPlanStepInput{
 			Step: source.Step, Status: source.Status, SuccessCriteria: source.SuccessCriteria,
 			CancellationDisposition: source.CancellationDisposition, CancellationReason: source.CancellationReason, UserTakeoverQuote: source.UserTakeoverQuote,
+			ReplacementStepID: source.ReplacementStepID, ScopeChangeQuote: source.ScopeChangeQuote,
 			VerificationRequired: source.VerificationRequired, RelatedTaskID: source.RelatedTaskID,
 			WorkUnit: source.WorkUnit,
 		})
 	}
-	projection, err := s.syncRunPlanTx(ctx, tx, tenant, childRunID, parent.Explanation, steps, parent, replace)
+	projection, err := s.syncRunPlanTx(ctx, tx, tenant, childRunID, parent.Explanation, steps, parent, replace, exact)
 	if err != nil {
+		return nil, err
+	}
+	if err := saveInheritedEvidenceReferencesTx(ctx, tx, tenant, childRunID, parentRunID); err != nil {
 		return nil, err
 	}
 	return &projection, nil

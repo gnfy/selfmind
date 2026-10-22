@@ -110,6 +110,11 @@ func TestConcurrentIMInputNeedsExactChoiceBeforeSteering(t *testing.T) {
 	if err != nil || saved == nil || saved.Content != "one more requirement for A" || saved.TaskID != active[0].TaskID || saved.ReplyToRunID != "" {
 		t.Fatalf("late guidance lost its exact work grouping: queue=%+v err=%v", saved, err)
 	}
+	// The row is admitted on the person's own words, never on the answer that
+	// chose where they go.
+	if saved.Admission.Version != control.AdmissionSnapshotVersion || saved.Admission.Input.Summary != "one more requirement for A" {
+		t.Fatalf("late guidance admission = %+v, want the person's own words", saved.Admission)
+	}
 	repeated, code = daemon.ProcessMessage(ctx, input)
 	if code != 200 || !repeated.Accepted || repeated.Turn == nil || repeated.Turn.QueueID != late.Turn.QueueID {
 		t.Fatalf("repeated late answer created different queue work: code=%d response=%+v", code, repeated)
@@ -220,7 +225,7 @@ func TestMainCoordinationRoutesOnlyValidatedChoice(t *testing.T) {
 			} else if !tc.wantChoice || response.Choice == nil || len(active[0].Steer)+len(active[1].Steer) != 0 {
 				t.Fatalf("uncertain choice was not preserved: %+v", response)
 			} else if pending, err := store.PeekPendingTurnChoice(ctx, owner.TenantID, owner.PersonID,
-				response.Choice.ID, time.Now(), turnChoiceBareWindow); err != nil || pending == nil || !strings.Contains(pending.RequestJSON, "please check database B again") {
+				response.Choice.ID, time.Now()); err != nil || pending == nil || !strings.Contains(pending.RequestJSON, "please check database B again") {
 				t.Fatalf("fallback lost the original input: %+v, %v", pending, err)
 			}
 		})
@@ -277,6 +282,15 @@ func TestMainCoordinationCanQueueExactHistoricalResume(t *testing.T) {
 	queued, err := store.GetQueued(ctx, owner.TenantID, response.Turn.QueueID)
 	if err != nil || queued == nil || queued.ReplyToRunID != oldRun.ID || queued.TaskID != oldTask.ID {
 		t.Fatalf("historical input lost exact parent: %+v, %v", queued, err)
+	}
+	if queued.Admission.Input.Summary != "continue the old release and finish its verification" ||
+		queued.Admission.Strategy.ToolMode != string(kernel.ToolModeFull) {
+		t.Fatalf("routed input admission = %+v, want the person's own words and tool surface", queued.Admission)
+	}
+	// The coordination Run that routed it held no tools, and its row says so.
+	coordination, err := store.RunAdmissionSnapshot(ctx, owner.TenantID, provider.runID)
+	if err != nil || coordination.Strategy.ToolMode != string(kernel.ToolModeNone) || coordination.Strategy.WebPolicy != string(kernel.WebPolicyDisabled) {
+		t.Fatalf("coordination admission = %+v err=%v", coordination, err)
 	}
 }
 
@@ -366,7 +380,7 @@ func TestConcurrentIndependentSessionsExecuteWithoutCrossRunSelection(t *testing
 		}
 	}
 	active := daemon.coordinator().activeRunsForPerson(identity.PersonID)
-	if len(active) != 2 || active[0].RunID == active[1].RunID || daemon.coordinator().currentActive(identity.PersonID) != nil {
+	if len(active) != 2 || active[0].RunID == active[1].RunID {
 		t.Fatalf("multi-run registry selected an ambiguous run: %+v", active)
 	}
 	status, err := daemon.statusReply(ctx, identity)
@@ -557,7 +571,7 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 	cronDone := make(chan error, 1)
 	go func() {
 		cronDone <- NewCronExecutor(daemon, nil).RunCronJob(ctx, cron.CronJob{
-			TenantID: identity.TenantID, Platform: "weixin", DeliverTo: "wx-local", Channel: "cron-notice",
+			TenantID: identity.TenantID, Platform: "weixin", DeliverTo: "wx-local",
 			Prompt: "Independent scheduled work"})
 	}()
 	select {
@@ -577,7 +591,7 @@ func TestCLIIMAndCronRunsUseThreeIndependentSlots(t *testing.T) {
 		t.Fatalf("mixed sources shared a Run: %+v", active)
 	}
 	wantWorkspace := map[string]string{"cli-window": workspaceIDs["cli"], "one-chat": workspaceIDs["im"],
-		"cron-notice": workspaceIDs["cron"]}
+		"wx-local": workspaceIDs["cron"]}
 	for _, item := range active {
 		run, err := store.GetRun(ctx, identity.TenantID, item.RunID)
 		if err != nil || run == nil {
@@ -698,7 +712,7 @@ func TestQueuedCapacityRaceDoesNotDuplicateInput(t *testing.T) {
 		t.Fatal("cannot occupy admission slot")
 	}
 	defer coord.endActiveRun(identity.PersonID, handle)
-	response := coord.startAsyncRun(identity, api.MessageRequest{Channel: "session-b", Platform: "cli", PlatformUserID: "local",
+	response, _ := coord.startAsyncRun(identity, api.MessageRequest{Channel: "session-b", Platform: "cli", PlatformUserID: "local",
 		Content: "accepted once", QueueID: "queue-original", QueueClaimToken: "claim-original"}, router.IntentResult{})
 	if response.Accepted || response.Turn == nil || response.Turn.Status != "capacity_wait" {
 		t.Fatalf("capacity race response=%+v", response)
@@ -787,7 +801,13 @@ func TestWaitingExactReplyDoesNotStarveIndependentQueue(t *testing.T) {
 	if err := store.FinishRun(ctx, identity.TenantID, parent.ID, "interrupted"); err != nil {
 		t.Fatal(err)
 	}
-	child, err := store.StartRunWithOptions(ctx, task, "session-a", "recover A", control.StartRunOptions{ResumesRunID: parent.ID})
+	rootA := filepath.Join(t.TempDir(), "repo-a")
+	if err := os.MkdirAll(rootA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.StartRunWithOptions(ctx, task, "session-a", "recover A", control.StartRunOptions{ResumesRunID: parent.ID,
+		ExecutionRoots: []executionenv.RootBinding{{Path: rootA, Role: executionenv.RootRolePrimary,
+			AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceCLIAddDir}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -811,10 +831,6 @@ func TestWaitingExactReplyDoesNotStarveIndependentQueue(t *testing.T) {
 	}
 	coord := daemon.coordinator()
 	coord.activeLimit = 2
-	rootA := filepath.Join(t.TempDir(), "repo-a")
-	if err := os.MkdirAll(rootA, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	handle := &activeRun{PersonID: identity.PersonID, TaskID: task.ID, RunID: child.ID, Channel: "session-a",
 		ExecutionRoots: []executionenv.RootBinding{{Path: rootA, Role: executionenv.RootRolePrimary,
 			AccessCap: executionenv.RootAccessWrite, Source: executionenv.RootSourceCLIAddDir}}}

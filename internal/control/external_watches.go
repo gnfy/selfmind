@@ -127,11 +127,20 @@ type ExternalWatch struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	FinishedAt          *time.Time
+	// Sequence orders the registration among claims, watchers, and events
+	// (see nextEffectSequenceTx). Zero means the watcher was registered before
+	// schema v26: it precedes every sequenced row, and two zero rows have no
+	// recorded order.
+	Sequence int64
 }
 
 // Version 2 pins scalar matching and ordinary approval-controlled Main continuation.
 // Historical receipts retain their observation and file-only finalization policy.
 const ExternalWatchContinuationReceiptVersion = 2
+
+// Version 3 may bind a person-confirmed recovery observation to an exact claim.
+// Existing receipts acquire no cross-Run recovery authority.
+const ExternalWatchRecoveryReceiptVersion = 3
 
 type ExternalWatchPreflightReceipt struct {
 	Version               int      `json:"version"`
@@ -143,11 +152,16 @@ type ExternalWatchPreflightReceipt struct {
 	Capabilities          []string `json:"capabilities,omitempty"`
 	EffectRuleKey         string   `json:"effect_rule_key,omitempty"`
 	ObservationRuleKey    string   `json:"observation_rule_key,omitempty"`
+	RecoveryClaimID       string   `json:"recovery_claim_id,omitempty"`
 	EffectID              string   `json:"effect_id,omitempty"`
 	EffectTargetKeys      []string `json:"effect_target_keys,omitempty"`
 	EffectScriptRoot      string   `json:"effect_script_root,omitempty"`
 	EffectScriptPath      string   `json:"effect_script_path,omitempty"`
 	EffectScriptDigest    string   `json:"effect_script_digest,omitempty"`
+
+	// EffectRunID names the Run that dispatched EffectID when it is an earlier
+	// Run of the watcher's exact chain. Empty means the watcher's own Run.
+	EffectRunID string `json:"effect_run_id,omitempty"`
 }
 
 // externalWatchColumns is the single SELECT list for a full watch row.
@@ -170,7 +184,7 @@ const externalWatchColumns = `id, tenant_id, person_id,
 	COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
 	COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
 	COALESCE(credential_source_hash, ''), COALESCE(execution_binding_json, '{}'),
-	created_at, updated_at, finished_at`
+	created_at, updated_at, finished_at, sequence`
 
 func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*ExternalWatch, error) {
 	if s == nil || s.db == nil {
@@ -249,6 +263,18 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if watch.PreflightReceipt.RecoveryClaimID != "" {
+		if watch.PreflightReceipt.Version < ExternalWatchRecoveryReceiptVersion {
+			return nil, fmt.Errorf("effect recovery binding requires a versioned observation receipt")
+		}
+		claim, err := externalEffectForObservationTx(ctx, tx, watch.TenantID, watch.PersonID, watch.RunID, watch.PreflightReceipt.RecoveryClaimID)
+		if err != nil {
+			return nil, err
+		}
+		if claim.State == ExternalClaimObserved {
+			return nil, fmt.Errorf("effect claim is already observed")
+		}
+	}
 	if watch.WaitGroupID != "" && watch.PreflightReceipt.Version >= ExternalWatchContinuationReceiptVersion {
 		var allowed, duplicate int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM external_watch_groups g WHERE g.tenant_id=? AND g.id=? AND g.person_id=? AND g.run_id=? AND g.status='pending' AND (SELECT COUNT(*) FROM external_watches w WHERE w.tenant_id=g.tenant_id AND w.wait_group_id=g.id)<g.expected_count`, watch.TenantID, watch.WaitGroupID, watch.PersonID, watch.RunID).Scan(&allowed); err != nil {
@@ -264,6 +290,9 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 			return nil, fmt.Errorf("this observation is already registered in the wait group; register a distinct missing target")
 		}
 	}
+	if watch.Sequence, err = nextEffectSequenceTx(ctx, tx); err != nil {
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO external_watches (
 		id, tenant_id, person_id, workspace_id, thread_id, run_id, channel,
 		description, cwd, command, success_pattern, failure_pattern,
@@ -273,8 +302,8 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		attempts, last_output, last_output_hash, last_error,
 		environment_snapshot_id, environment_generation, principal_fingerprint,
 		environment_fingerprint, credential_source_hash, execution_binding_json,
-		created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+		created_at, updated_at, sequence)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		watch.ID, watch.TenantID, watch.PersonID, watch.WorkspaceID, watch.TaskID,
 		watch.RunID, watch.Channel, watch.Description, watch.CWD, watch.Command,
 		watch.SuccessPattern, watch.FailurePattern, watch.SpecVersion, watch.TargetPattern,
@@ -283,7 +312,7 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		watch.NextCheckAt.Unix(),
 		watch.EnvironmentSnapshotID, watch.EnvironmentGeneration, watch.PrincipalFingerprint,
 		watch.EnvironmentFingerprint, watch.CredentialSourceHash, string(bindingJSON),
-		now.Unix(), now.Unix()); err != nil {
+		now.Unix(), now.Unix(), watch.Sequence); err != nil {
 		return nil, err
 	}
 	if watch.PreflightReceipt.Version >= ExternalWatchContinuationReceiptVersion && (initialStatus == ExternalWatchSucceeded || initialStatus == ExternalWatchFailed) {
@@ -299,11 +328,13 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 				operation = WatchOperationFailed
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE external_watches SET status=?, checker_status=?, operation_status=?, last_output=?, last_output_hash=?, finished_at=? WHERE id=? AND tenant_id=?`, initialStatus, WatchCheckerOK, operation, initialOutput, fmt.Sprintf("%x", sha256.Sum256([]byte(initialOutput))), now.Unix(), watch.ID, watch.TenantID); err != nil {
+		settledRecovery := watch.PreflightReceipt.RecoveryClaimID != "" && watch.WaitGroupID == ""
+		if _, err := tx.ExecContext(ctx, `UPDATE external_watches SET status=?, checker_status=?, operation_status=?, last_output=?, last_output_hash=?, finished_at=?, finalized=?, notified=? WHERE id=? AND tenant_id=?`, initialStatus, WatchCheckerOK, operation, initialOutput, fmt.Sprintf("%x", sha256.Sum256([]byte(initialOutput))), now.Unix(), settledRecovery, settledRecovery, watch.ID, watch.TenantID); err != nil {
 			return nil, err
 		}
 		watch.Status, watch.LastOutput, watch.CheckerStatus, watch.OperationStatus = initialStatus, initialOutput, WatchCheckerOK, operation
 		watch.FinishedAt = &now
+		watch.Finalized, watch.Notified = settledRecovery, settledRecovery
 	}
 	// A live watcher is durable work evidence: list the Run's Thread now
 	// rather than only at finalization.
@@ -953,7 +984,7 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 		&watch.EnvironmentSnapshotID, &watch.EnvironmentGeneration, &watch.PrincipalFingerprint,
 		&watch.EnvironmentFingerprint, &watch.CredentialSourceHash,
 		&bindingJSON,
-		&createdAt, &updatedAt, &finishedAt)
+		&createdAt, &updatedAt, &finishedAt, &watch.Sequence)
 	if err != nil {
 		return ExternalWatch{}, err
 	}

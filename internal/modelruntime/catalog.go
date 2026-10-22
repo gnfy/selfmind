@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/platform/atomicfile"
 	"selfmind/internal/platform/log"
 )
 
@@ -541,11 +542,10 @@ func (c *Catalog) writeCache(key string, models []string) {
 		return
 	}
 	_ = os.MkdirAll(filepath.Dir(c.cachePath), 0755)
-	tmp := c.cachePath + ".tmp"
-	// Write via rename so a crash cannot leave the cache as partial JSON.
-	if err := os.WriteFile(tmp, data, 0600); err == nil {
-		_ = os.Rename(tmp, c.cachePath)
-	}
+	// Write via rename so a crash cannot leave the cache as partial JSON, through
+	// an exclusive temporary file rather than a predictable `.tmp` name a
+	// confined command could have planted.
+	_ = atomicfile.Write(c.cachePath, data, 0600)
 }
 
 func openAIModelsURL(baseURL string) string {

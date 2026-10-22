@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,10 +30,11 @@ const legacyVerificationStepIDArg = "_legacy_verification_step_id"
 
 func verificationBindingProperties() map[string]PropertyDef {
 	return map[string]PropertyDef{
-		"criterion":          {Type: "string", Description: "Observable condition being verified; preserve it across retries."},
-		"target":             {Type: "string", Description: "Exact artifact or operation this condition concerns."},
-		"replaces":           {Type: "string", Description: "Previous verification evidence id in this Run, only when correcting or retrying that check. Checks without declared local_dependencies retain their original open-work-unit boundary."},
-		"reason":             {Type: "string", Description: "Why the new attempt addresses the old failure without changing the acceptance condition."},
+		"step_id":            {Type: "string", Description: "Server-issued Plan step to check, including a pending step. Its stored acceptance condition is inherited. Pending steps in an open observation cycle need no transition; reopen a closed cycle as pending with update_plan mode=patch, preserving the current active step, before checking again."},
+		"criterion":          {Type: "string", Description: "Condition for a standalone check (also supply target). Omit when step_id or replaces already identifies the condition. A replacement must preserve the recorded condition exactly."},
+		"target":             {Type: "string", Description: "Exact artifact or operation for a standalone check. Omit to inherit from step_id or replaces. With criterion but no step_id, the check is standalone and cannot complete a Plan step."},
+		"replaces":           {Type: "string", Description: "Evidence id of the check being corrected in this Run. Supply reason and keep cwd; omit criterion, target and step_id to inherit them."},
+		"reason":             {Type: "string", Description: "Required with replaces: why this method checks the same unchanged condition."},
 		"local_dependencies": {Type: "array", Items: &PropertyDef{Type: "string"}, Description: "Local files or directories read by this observation method whose changes can invalidate its result, including source, configuration and check scripts. Relative to cwd. Use [] only for a direct external observation independent of local files. Omission conservatively depends on all local changes; on replacement, omission inherits the prior declaration while an explicit value describes the corrected method. Declaring inputs does not prove the criterion or grant permission."},
 	}
 }
@@ -54,9 +56,8 @@ func normalizeVerificationArgs(args map[string]interface{}) (map[string]interfac
 	for key, value := range legacy {
 		destination := key
 		if key == "step_id" {
-			// step_id was part of the published nested shape. Keep accepting it
-			// for old clients and replays, but do not republish it in the flat
-			// schema: the runtime validates and owns this association.
+			// Keep the old nested shape; the native field now exposes the same
+			// server-issued identity without asking Main to move Plan state first.
 			destination = legacyVerificationStepIDArg
 		} else if _, known := properties[key]; !known {
 			return nil, fmt.Errorf("unknown parameter: check.%s", key)
@@ -84,6 +85,9 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 		}
 	}
 	if value, ok := normalized[legacyVerificationStepIDArg]; ok {
+		if current, present := raw["step_id"]; present && !reflect.DeepEqual(current, value) {
+			return nil, fmt.Errorf("conflicting verification parameter: step_id")
+		}
 		raw["step_id"] = value
 		explicit = true
 	}
@@ -108,9 +112,21 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 	if resolver, ok := runPlanProjectionFromArgs(args).(verificationBindingResolver); ok {
 		resolved, err := resolver.ResolveVerification(ContextFromArgs(normalized), b, stringArg(normalized, "cwd"))
 		if err != nil {
+			var closed interface{ VerificationCycleClosed() bool }
+			if errors.As(err, &closed) && closed.VerificationCycleClosed() {
+				return nil, &stableToolError{cause: err, code: "verification_cycle_closed", category: "stale_precondition",
+					safeMessage: RedactSensitive(err.Error()), recoveryHint: "Use update_plan with mode=patch to reopen the selected step as pending, preserving the current in_progress step; then verify once with that step_id. The accepted Plan and historical evidence have not changed.",
+					failurePhase: "preparation", retryability: "after_state_change", effectState: "not_dispatched"}
+			}
 			return nil, err
 		}
 		if resolved != nil {
+			// The storage resolver retains legacy adoption behavior. A tool
+			// caller explicitly replacing evidence must not silently become a
+			// fresh observation (for example after changing cwd).
+			if b.Replaces != "" && resolved.Replaces != b.Replaces {
+				return nil, fmt.Errorf("verification replacement must preserve its recorded condition, target and working directory; for a new Plan observation, pass step_id without replaces")
+			}
 			b = *resolved
 			if err := resolveVerificationDependencies(normalized, &b); err != nil {
 				return nil, err
@@ -121,8 +137,14 @@ func prepareVerificationBinding(args map[string]interface{}) (*verification.Bind
 	} else if !explicit {
 		return nil, nil
 	}
+	if b.Criterion == "" {
+		return nil, fmt.Errorf("criterion is required for a standalone check; use step_id or replaces to inherit a recorded condition")
+	}
+	if b.Target == "" {
+		return nil, fmt.Errorf("target is required for a standalone check; use step_id or replaces to inherit a recorded condition")
+	}
 	if !verification.ValidBinding(&b) || len(b.Criterion) > 2000 || len(b.Target) > 1000 || len(b.Reason) > 2000 || len(b.Replaces) > 256 {
-		return nil, fmt.Errorf("verification check needs a bounded nonempty criterion and target")
+		return nil, fmt.Errorf("verification fields exceed limits or have an invalid binding: criterion <= 2000, target <= 1000, reason <= 2000, replaces <= 256 bytes")
 	}
 	if b.Replaces != "" {
 		if b.Reason == "" {
@@ -154,7 +176,29 @@ func resolveVerificationDependencies(args map[string]interface{}, b *verificatio
 			}
 			path := raw
 			if !filepath.IsAbs(path) {
-				path = filepath.Join(absoluteCWD(stringArg(args, "cwd")), path)
+				cwd := absoluteCWD(stringArg(args, "cwd"))
+				candidate := filepath.Join(cwd, path)
+				if _, statErr := os.Stat(candidate); statErr != nil {
+					cleanRaw := filepath.Clean(raw)
+					cwdBase := filepath.Base(cwd)
+					if cwdBase != "" && cwdBase != "." && cwdBase != string(filepath.Separator) && strings.HasPrefix(cleanRaw, cwdBase+string(filepath.Separator)) {
+						if alt := filepath.Join(filepath.Dir(cwd), cleanRaw); alt != candidate {
+							if _, altErr := os.Stat(alt); altErr == nil {
+								candidate = alt
+							}
+						}
+					}
+					if _, stillErr := os.Stat(candidate); stillErr != nil {
+						if scope, ok := currentExecutionScope(args); ok && strings.TrimSpace(scope.WorkspaceRoot) != "" {
+							if alt := filepath.Join(scope.WorkspaceRoot, cleanRaw); alt != candidate {
+								if _, altErr := os.Stat(alt); altErr == nil {
+									candidate = alt
+								}
+							}
+						}
+					}
+				}
+				path = candidate
 			}
 			if scope, ok := currentExecutionScope(args); ok {
 				var err error

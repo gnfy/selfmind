@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
@@ -17,8 +18,9 @@ import (
 // "Runtime attachment model"). While a run blocks on a clarify_requests row, a
 // plain non-command reply from the person IS the answer — it must resolve the
 // question rather than be queued as new work or steered into the running task.
-// The one exception is another open terminal's question: a plain message typed
-// in a different terminal is that terminal's own input ("Session audience").
+// The exceptions are another open terminal's question (a plain message typed in
+// a different terminal is that terminal's own input, "Session audience") and a
+// question that has waited staleClarifyAfter with its asking terminal gone.
 //
 // Precedence in the inbound stack (tryHandleControlCommand): a bare y/n
 // approval reply is tried FIRST, so if an approval is somehow also pending it
@@ -28,6 +30,20 @@ import (
 // are never simultaneously waiting for the same person — the defensive ordering
 // only matters if that invariant is ever violated. Slash commands are never
 // treated as answers, so /status, /stop, etc. still work while blocked.
+
+// staleClarifyAfter is how long a question may wait, with the session that asked
+// it gone, before a plain reply from another session stops answering it. The
+// reply then takes the named form "N: answer", as it already does while the
+// asking terminal is open, and anything else is new work. A person who reopens a
+// terminal hours later and types a new request must not have it taken for the
+// answer to a question they have long forgotten: on 2026-10-14 a release request
+// became the answer to a question asked 2h35m earlier and resumed that old
+// thread, with its plan, instead of starting the new work.
+const staleClarifyAfter = 30 * time.Minute
+
+// clarifyAckReassureAfter is the age from which an acknowledgement of an answer
+// given from another session also says how to undo the choice.
+const clarifyAckReassureAfter = 2 * time.Minute
 
 // tryHandleClarifyAnswer resolves a free-text reply against the person's pending
 // question. It claims the message only when (1) the content is not a slash
@@ -62,7 +78,7 @@ func (d *Server) tryHandleClarifyAnswer(ctx context.Context, identity *control.I
 		if _, err := d.answerClarifyTarget(ctx, identity, target, answer, channel); err != nil {
 			return true, clarifyAnswerFailure(err), nil
 		}
-		return true, "Got it — continuing with your answer.", nil
+		return true, clarifyAnswerAck(*target, channel, time.Now()), nil
 	}
 	pending, err := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 100)
 	if err != nil || len(pending) == 0 {
@@ -88,9 +104,10 @@ func (d *Server) tryHandleClarifyAnswer(ctx context.Context, identity *control.I
 	// open on a question — one window, or an IM question — any plain reply
 	// answers, as before. Numbers always count the whole list, so a listing and
 	// the reply that picks from it agree.
+	now := time.Now()
 	answerable := make(map[string]bool, len(pending))
 	for _, clarify := range pending {
-		if d.answersImplicitly(identity, channel, clarify.Channel) {
+		if d.clarifyAnswersImplicitly(identity, channel, clarify, now) {
 			answerable[clarify.ID] = true
 		}
 	}
@@ -139,7 +156,40 @@ func (d *Server) tryHandleClarifyAnswer(ctx context.Context, identity *control.I
 		return true, clarifyAnswerFailure(err), nil
 	}
 	_ = clarify
-	return true, "Got it — continuing with your answer.", nil
+	return true, clarifyAnswerAck(target, channel, time.Now()), nil
+}
+
+// clarifyAnswerAck confirms WHICH question the reply answered and how long it
+// had waited, so a reply that was meant as something else is noticed at once
+// rather than after the resumed run has worked for minutes. An answer given
+// from another session to a question that had waited a while also says how to
+// undo the choice.
+func clarifyAnswerAck(target control.ClarifyRequest, replyChannel string, now time.Time) string {
+	ack := "Got it — continuing with your answer"
+	if question := truncate(toOneLine(target.Question), 80); question != "" {
+		ack += " to “" + question + "”"
+	}
+	age := now.Sub(target.CreatedAt)
+	if age >= time.Minute {
+		ack += " (asked " + askedAge(age) + " ago)"
+	}
+	ack += "."
+	if asked := strings.TrimSpace(target.Channel); asked != "" && asked != strings.TrimSpace(replyChannel) && age >= clarifyAckReassureAfter {
+		ack += " Not what you meant? /stop it, then start new work with /new --run <request>."
+	}
+	return ack
+}
+
+// askedAge renders how long a question has waited: 35m, 2h35m, 3d.
+func askedAge(d time.Duration) string {
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 func clarifyAnswerFailure(err error) string {
@@ -169,9 +219,12 @@ func (d *Server) answerClarifyTarget(ctx context.Context, identity *control.Iden
 		return nil, err
 	} else if sourceRun != nil {
 		queuedInput.ExecutionRoots = executionenv.CloneRootBindings(sourceRun.ExecutionRoots)
-		if queuedInput.WorkspaceID == "" {
-			queuedInput.WorkspaceID = sourceRun.WorkspaceID
+		queuedInput.WorkspaceID = recoveryWorkspaceID(sourceRun, &control.Task{WorkspaceID: queuedInput.WorkspaceID})
+		checkpoint, _ := d.Control.IncompleteLoopCheckpointForRun(ctx, identity.TenantID, sourceRun.ID)
+		if checkpoint != nil && checkpoint.Outcome == "await_human" && checkpoint.WaitKind == control.LoopCheckpointWaitClarification && checkpoint.WaitRef == target.ID {
+			queuedInput.Platform, queuedInput.PlatformUserID, queuedInput.Channel = d.humanWaitContinuationRoute(ctx, identity, sourceRun, control.LoopCheckpointWaitClarification, target.ID, channel)
 		}
+		queuedInput.ReplyToRunID = sourceRun.ID
 	}
 	clarify, queued, err := d.Control.AnswerClarifyRequestWithResume(ctx,
 		identity.TenantID, identity.PersonID, target.ID, answer, channel, queuedInput)
@@ -219,6 +272,21 @@ func (d *Server) answersImplicitly(identity *control.IdentityContext, replyChann
 		return true
 	}
 	return !d.events().sessionAttached(identity.PersonID, waitChannel)
+}
+
+// clarifyAnswersImplicitly is answersImplicitly plus the age rule: a question
+// whose asking session is gone and that has waited staleClarifyAfter no longer
+// takes a plain reply from another session. The asking session itself always
+// may, since it has the question in front of it. Approvals keep the plain rule.
+func (d *Server) clarifyAnswersImplicitly(identity *control.IdentityContext, replyChannel string, clarify control.ClarifyRequest, now time.Time) bool {
+	if !d.answersImplicitly(identity, replyChannel, clarify.Channel) {
+		return false
+	}
+	asked := strings.TrimSpace(clarify.Channel)
+	if asked == "" || asked == strings.TrimSpace(replyChannel) {
+		return true
+	}
+	return now.Sub(clarify.CreatedAt) < staleClarifyAfter
 }
 
 // pickNumberedClarify parses the "N: answer" disambiguation prefix. It accepts

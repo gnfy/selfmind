@@ -151,6 +151,16 @@ var Catalog = []EnvProfile{
 			{From: StateSource{EnvVar: "AWS_CONFIG_FILE", HomeRelPath: ".aws/config"}},
 			{From: StateSource{EnvVar: "AWS_SHARED_CREDENTIALS_FILE", HomeRelPath: ".aws/credentials"}},
 		},
+		// Static configuration and credentials need only read access. Keep the
+		// mount contract only for selected authentication that churns state.
+		MountStateWhen: []MountStateCondition{
+			{From: StateSource{EnvVar: "AWS_CONFIG_FILE", HomeRelPath: ".aws/config"},
+				Keys:      []string{"sso_start_url", "sso_session", "sso_region", "role_arn", "credential_process"},
+				Selection: &ConfigurationSelection{Option: "--profile", EnvVars: []string{"AWS_PROFILE", "AWS_DEFAULT_PROFILE"}, DefaultSection: "default", SectionPrefix: "profile "}},
+			{From: StateSource{EnvVar: "AWS_SHARED_CREDENTIALS_FILE", HomeRelPath: ".aws/credentials"},
+				Keys:      []string{"sso_start_url", "sso_session", "sso_region", "role_arn", "credential_process"},
+				Selection: &ConfigurationSelection{Option: "--profile", EnvVars: []string{"AWS_PROFILE", "AWS_DEFAULT_PROFILE"}, DefaultSection: "default"}},
+		},
 		// The writable paths below live under `~/.aws`, and a host that has never
 		// used SSO has no `sso/` directory at all — so there was no mount point
 		// for them and the sandbox aborted before running anything. Declaring the
@@ -173,6 +183,8 @@ var Catalog = []EnvProfile{
 			{
 				Key: "aws/sso-cache",
 				At:  StateSource{HomeRelPath: ".aws/sso/cache"},
+				// The CLI keeps one JSON file per token here and nothing else.
+				Flat: true,
 				Seed: &CopyIn{
 					From:     StateSource{HomeRelPath: ".aws/sso/cache"},
 					Include:  []string{"*.json"},
@@ -184,8 +196,9 @@ var Catalog = []EnvProfile{
 			{
 				// The CLI cache holds STS/assume-role results and is written on
 				// every profile that uses them.
-				Key: "aws/cli-cache",
-				At:  StateSource{HomeRelPath: ".aws/cli/cache"},
+				Key:  "aws/cli-cache",
+				At:   StateSource{HomeRelPath: ".aws/cli/cache"},
+				Flat: true,
 				Seed: &CopyIn{
 					From:     StateSource{HomeRelPath: ".aws/cli/cache"},
 					Include:  []string{"*.json"},

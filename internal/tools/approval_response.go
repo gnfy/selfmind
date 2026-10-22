@@ -13,19 +13,27 @@ type ApprovalResponse struct {
 	ApprovalResponseMetadata
 }
 
+type ApprovalAttemptMetadata struct {
+	DurationMS     int64           `json:"duration_ms"`
+	ProtocolStatus string          `json:"protocol_status,omitempty"`
+	Usage          *llm.UsageStats `json:"usage,omitempty"`
+}
+
 type ApprovalResponseMetadata struct {
-	Restriction     *RestrictionEvidence `json:"restriction,omitempty"`
-	Usage           *llm.UsageStats      `json:"usage,omitempty"`
-	Model           string               `json:"model,omitempty"`
-	Role            string               `json:"role,omitempty"`
-	DurationMS      int64                `json:"duration_ms,omitempty"`
-	Version         int                  `json:"version,omitempty"`
-	ToolCallID      string               `json:"tool_call_id,omitempty"`
-	FinishReason    string               `json:"finish_reason,omitempty"`
-	ResponseBytes   int                  `json:"response_bytes"`
-	OutputTokens    int                  `json:"output_tokens"`
-	ReasoningTokens int                  `json:"reasoning_tokens"`
-	ProtocolStatus  string               `json:"protocol_status,omitempty"`
+	UsageIncomplete bool                      `json:"usage_incomplete,omitempty"`
+	Attempts        []ApprovalAttemptMetadata `json:"attempts,omitempty"`
+	Restriction     *RestrictionEvidence      `json:"restriction,omitempty"`
+	Usage           *llm.UsageStats           `json:"usage,omitempty"`
+	Model           string                    `json:"model,omitempty"`
+	Role            string                    `json:"role,omitempty"`
+	DurationMS      int64                     `json:"duration_ms,omitempty"`
+	Version         int                       `json:"version,omitempty"`
+	ToolCallID      string                    `json:"tool_call_id,omitempty"`
+	FinishReason    string                    `json:"finish_reason,omitempty"`
+	ResponseBytes   int                       `json:"response_bytes"`
+	OutputTokens    int                       `json:"output_tokens"`
+	ReasoningTokens int                       `json:"reasoning_tokens"`
+	ProtocolStatus  string                    `json:"protocol_status,omitempty"`
 }
 
 // StructuredApprovalJudge is implemented at the provider adapter. Legacy

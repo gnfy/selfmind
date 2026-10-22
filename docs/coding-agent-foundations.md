@@ -34,6 +34,13 @@ For an ordinary coding request, the agent should:
    of repeating command variants blindly.
 7. Report what changed, the verification evidence, and any remaining risk.
 
+Generated tool-call identities are reserved against the restored message ledger
+and all calls in the current loop, including calls removed by context trimming.
+Restarting the iteration counter on a continuation cannot reuse an earlier
+identity for a new action. Native provider identities and the exact pending call
+remain unchanged; the dispatch ledger still refuses changed arguments under an
+existing identity. Delegated and compatibility calls use the same reservation.
+
 The runtime enforces the same recovery discipline below the prompt. Tool
 attempts are correlated with the current durable plan step, target, strategy,
 and environment. One changed-input correction may follow diagnostic evidence;
@@ -44,25 +51,116 @@ state, select a genuinely different strategy, or finish with an actionable
 blocker. A plan step sets `verification_required` only when executable evidence
 is actually required by the user, repository instructions, or the nature of
 the change; optional verification remains reportable without making direct
-inspection tasks impossible to finish. Plan guidance is evidence-driven in the
-same way: after a Run completes several distinct, successful, non-read-only
-tool actions with no durable plan, its optional plan guidance is escalated to
-the required wording for the next model step. That escalation reads the Run's
-own tool evidence, never the request text, and it stays guidance — no plan is
-fabricated and no completion is blocked. Plans update at meaningful progress or
-scope changes; they do not require a transition around every tool call. Stable
-step IDs preserve work-unit attribution without asking the model to repeat it.
+inspection tasks impossible to finish. Main chooses a Plan for genuinely multi-step
+work; action counts and read/write categories do not escalate optional guidance
+into a requirement. Explicit policy and user-requested planning remain binding.
+Plans update at meaningful progress or scope changes, not around every tool call.
+Stable step IDs preserve work-unit attribution without asking the model to repeat it.
+New step IDs are short opaque Run-scoped references, not position aliases.
+All historical IDs in that Run remain reserved; reordering or resuming retains
+existing IDs, including legacy UUID-shaped references. Storage needs no migration.
 A snapshot that omits ids keeps each step's id by unchanged wording, and a
 reworded step keeps the id of the open step at its position when the snapshot
 keeps the plan's length, so rewording cannot silently replace unfinished steps.
+Plan input has two explicit modes. The compatible default, `snapshot`, lists
+all steps and supports creation, insertion and reordering. After a Plan exists,
+prefer `mode: patch` with only changed `step_id`/`status` entries. Omission keeps
+the exact current step, order and obligation; it never deletes or cancels work.
+Patch entries require exact current ids and explicit status, without positional
+or textual alias matching. Existing criteria, required verification and
+work-unit/source attribution use the same complete-snapshot validator.
+The runtime compares its execution cursor to the durable version and expands
+the patch in the committing transaction; the model never supplies a version.
+A stale/missing version refuses the patch before any change. Reconcile the
+current Plan with a complete snapshot before patching again. Startup selection
+and committed direct selection seed the cursor; later accepted receipts advance
+both the cursor and completion view. Every result and UI event still carries the
+complete accepted Plan, so compact input does not change dispatch policy. A Run's first plan has no ids (the runtime ignores any it is
+sent), so every step carries its text and nothing is listed only to be cancelled;
+an entry without text is refused with the stable `plan_step_text_required`
+contract error, which says whether the Run had a plan and what to resend. A refused stale
+`step_id` names the offending entry and maps each current id to its status and a
+bounded title. An argument name lexically close to a declared one is refused
+with a "did you mean" question and is never renamed for the model, because near
+names can differ in meaning.
+Argument preparation reports up to eight independent schema errors in stable
+path order in one refusal, before dispatch. It preserves existing scalar/null
+compatibility but never guesses missing states, drops unknown fields or retries.
 A plan with open steps that has not changed for 12 tool actions gets a one-line
 reminder at the tail of the next model call, again only after another 12; the
-model decides whether it is still true. The final answer is not a plan step,
-and `finish_run` may follow the final `update_plan` in the same response.
-Prose in a response whose only calls are `update_plan` or `finish_run` stays
-part of the final answer rather than narration, so an answer written beside
+model decides whether it is still true. A leading progress snapshot can share
+a response with later tools: the runtime consumes its durable accepted result
+before sequential dispatch, with fresh exposure and middleware checks. The
+current work-unit identity, goal, full ordered step identities, text and
+acceptance bars must remain unchanged. Existing statuses may advance from pending
+to active/completed or active to completed; reopening and cancellation remain
+barriers. The comparison uses the full accepted Plan, including inactive steps,
+and normalizes contiguous Work Unit membership rather than requiring the active
+step to repeat its group id. Failure, unreadable state, a second Plan update or
+buffered new user input holds later actions with paired `plan_boundary_held`
+non-dispatch results; input stays pending for Main. Initial Plans and semantic
+scope changes still stand alone. Historical selection and independent-input controls remain exclusive.
+Every accepted Plan update in the batch rechecks the original dispatch boundary,
+including a second update. Calls held by this loop-owned boundary cancel their
+reserved action budget and lifecycle attempt, and do not age the Plan reminder;
+paired refusal evidence remains visible. Failed attempted execution and unknown
+effects retain their charges and recovery limits. Reports rebuild each model
+step's invoked and held calls from durable tool results, because the live step
+event is not stored; a step missing a dispatch fact is counted apart instead of
+inferring progress from the requested batch. The same facts cost failed steps: a
+step with a failed tool call is charged the duration of the model call that
+requested it, split by recorded error category into contract refusals (malformed
+input, stale preconditions, policy or protocol refusals), command outcomes and
+other categories, with an immediate same-tool retry counted apart and every cost
+shown against the Run's own model time. Human waits, policy redirects, held
+calls and steps whose model call precedes the window are not failures. Reports
+also measure the share of `update_plan` argument characters that repeat text the
+Run already stores, against its latest accepted `plan.updated` snapshot; first
+snapshots, sub-agent calls and calls refused before dispatch are excluded.
+The final answer is not a plan step. The advertised `finish_run` contract requires
+`status` and one complete `final_response`; optional `plan_patch` and `assessments`
+carry final changes and Main's judgments. Without a patch, current progress is
+preserved; no artificial Plan or no-op update is required. Compact submissions
+use the existing candidate validator and atomic finalizer, including body-only
+inspection results. They cannot share a response with unobserved work.
+The runtime derives a bounded display summary and observed files/verification,
+never semantic completion, risks or user takeover from prose.
+Released summary-only calls and duplicate bookkeeping fields retain their
+coordinator path unless they explicitly submit an atomic patch. Their final
+`update_plan` plus `finish_run` batching and native `final_answer` handling remain
+compatible. Only accepted, complete output supplies the final body, preserving
+paragraphs and skipping regeneration without relaxing completion checks.
+Repeating the same answer in
+`done`, `tests` or `risks` is unnecessary. A missing body and missing/commentary phase, action calls, refusals or
+incomplete output keep the closing request. Neither path selects a model or
+provider name. Run state, assistant content, handoff and terminal event commit
+through the existing atomic finalizer. A failed commit produces a blocked,
+recoverable result rather than a successful completion; tool evidence remains
+available and completed effects must not be repeated.
+An answer written beside
 `finish_run` survives a closing line after it; a final answer the plan gate
-sends back is not kept.
+sends back is not kept. An answer continued across an output limit is
+assembled into the assistant message that produced it; results paired with
+refused calls keep their own content. A continued answer belongs to one
+attempt: one the plan gate sends back never prefixes the next answer, and an
+action tool ends it. A refused or dropped call ends it too: a response with
+text of its own completes the pending cut answer, which stands as the whole
+text when no repair hint follows, as it would have without the cut, while a
+textless response completes nothing and the pending text is dropped instead of
+carried as a fragment. An incomplete call in a
+cut or filtered response discards the pending cut text with that response,
+since neither is a whole answer. Prose continued beside only
+`update_plan` or `finish_run` stays in the final answer in order, and a
+textless plan or outcome call leaves a cut answer pending for its
+continuation. An answer that starts over replaces the cut part, even when it
+lays that part out with other whitespace or blank lines, and also in a reply
+the provider filtered. The plan gate
+judges the snapshot the runtime accepted, not the
+one requested, so a cancellation the runtime keeps open is an unresolved step:
+plan repair names it, and the turn cannot complete as done. A result without a
+readable plan keeps the last accepted snapshot; before any accepted snapshot
+was read, the gate fails closed on the requested one, counting a requested
+cancellation as open.
 
 Progress snapshots retain an existing step's acceptance condition and required
 verification flag when omitted; cancellation remains explicit. A changed
@@ -73,15 +171,38 @@ no handoff evidence. The former can conclude the agent's agreed scope; the
 latter remains unfinished. Suggested next steps alone never establish takeover.
 A missing final answer preserves an already known execution blocker.
 
-New Runs use recovery contract v2 for cancellation assessment. Main supplies
+New Runs use recovery contract v3 for cancellation assessment. Main supplies
 `cancellation_disposition` and `cancellation_reason`: `not_required` for work
 that is genuinely unnecessary or superseded, `user_takeover` for an explicit
-handoff, or `unfinished` for necessary work that remains open. A takeover also
-supplies `user_takeover_quote`; the runtime checks that this quote occurs in
-actual user input or consumed steering on the exact person-scoped continuation
-lineage, excluding sibling work and daemon-originated text. Main still judges
+handoff, or `unfinished` for necessary work that remains open. `not_required`
+references a completed `replacement_step_id` preserving the step's established
+success criterion (its first non-empty one) and required verification, or an
+actual user `scope_change_quote` establishing the changed scope. A step planned
+without a criterion has none to preserve: a completed replacement that the
+cancellation references and that states its own criterion covers it. A failure
+alone is not evidence of either. The runtime checks referenced Plan state and
+quote provenance; Main judges whether they cover the goal. A takeover also
+supplies `user_takeover_quote`. Both quotes are copied exactly from one actual
+user input or consumed steering message on the exact person-scoped
+continuation lineage, excluding sibling work and daemon-originated text: the
+whole message, one whole sentence of it, or a partial span aligned to word
+edges with at least two words and eight letters (each CJK character counting
+twice). A complete short instruction such as "no need" or "我来" therefore
+qualifies, while a fragment such as "the" does not. Punctuation is not a semantic
+veto: Main judges whether an instruction, including a politely phrased question,
+changes scope or hands work over. Finding the quote proves provenance only.
+Enumerators and abbreviations do not end sentences, and code blocks offer no
+whole sentence. Text that may have
+been cut (a Run summary ending in "...", or start-event text whose evidence
+was bounded) offers no whole message or last sentence, and a partial span may
+not end at the cut. The runtime records which input a validated quote matched
+(the earliest on the lineage) and shows it with the plan; a model cannot
+supply it. Main still judges
 its meaning against the original goal and later corrections. Unassessed or
-unfinished cancellations remain pending; omitting an open step from a complete
+unfinished cancellations remain pending, and the plan update names the one
+missing fact (no disposition, no evidence, an open or unknown replacement, a
+changed or unstated criterion, dropped verification) with the exact way to
+settle it. Omitting an open step from a complete
 snapshot retains its exact identity and acceptance condition. These facts
 travel with the existing Plan through restart and continuation. Historical Run
 contracts and snapshots are not rewritten or granted new authority by upgrade.
@@ -93,14 +214,115 @@ unknown dispatch or exit status separately; missing historical facts stay
 unknown unless the exact Run/call has a typed durable completion observation.
 These counters do not establish criterion-bound verification.
 
-`verify` accepts an optional version-1 `check` binding with a stable `criterion`
-and `target`. To correct a check method, Main supplies `replaces` (the prior
-verification evidence id) and a `reason`, keeping the condition and target
-unchanged. The resolver requires an earlier check in the same open work unit
-and working directory. Run and work-unit outcomes share one projection; the
-original failed attempt remains in history. Structural checks cannot prove
-semantic equivalence: Main must explain why the new method still proves the
-original condition. Unbound historical checks gain no replacement authority.
+`verify` exposes `step_id`, `criterion`, `target`, `local_dependencies`,
+`replaces` and `reason` as native fields; the legacy nested `check` shape remains
+compatible. A named criterion or target without `step_id` stays standalone and
+cannot satisfy a Plan milestone, even when its wording matches. Main explicitly
+selects a server-issued step, including a pending step; the normal call supplies
+`command` and `step_id` and inherits the stored acceptance condition and target.
+No intermediate Plan transition is needed. An unspecified check retains the
+existing active-obligation default. Plans describe outcome milestones rather than Skill reads, approvals or
+retry attempts, and updates remain complete snapshots.
+
+To correct a method, Main identifies the earlier check with `replaces` and
+explains `reason`, preserving its criterion, target and working directory. The
+condition and target need not be repeated. The original step is retained;
+reassignment to another current step requires explicit `step_id`. Dependency declarations and the existing replacement projection govern
+freshness. Original attempts stay in history; structural checks cannot establish
+semantic sufficiency. Unbound historical checks gain no replacement authority.
+
+Verification uses Bash `-e` and `pipefail`; expected nonzero statuses need explicit
+conditionals. An observed nonzero exit records failed evidence, not an automatic
+request to retry: Main judges whether the condition is false or the method is
+broken. Reporting a negative finding does not turn that condition into a pass;
+Main must not invert a check or replace the condition with "the result was
+determined" merely to close the work. Tool feedback reports the error, captured
+output and evidence reference;
+it does not prescribe Plan transitions or retry steps. Internal recovery fields
+remain durable typed facts, while user decisions and uncertain effects remain
+explicit on the model surface.
+
+Execution, condition judgment and goal completion are separate. The existing
+verification `state` retains command/check facts; it is not Main's conclusion
+about the condition. Main can submit optional `assessments` with `finish_run`,
+each containing `result` (`met`, `not_met`, `unknown`), a brief `reason`, and
+one evidence selector. For a Plan condition, prefer the current `step_id`:
+the runtime binds its effective observations only when they describe one
+condition, target and working directory. Explicit `evidence_refs` remain the
+alternative for exact current-Run checks; do not combine the selectors. An
+ambiguous step requires explicit current references or a new targeted check,
+never a guessed target. The runtime resolves identity and freshness, then saves
+versioned judgments with that outcome. Missing historical judgments stay unassessed.
+
+A step selector does not adopt history. Only an accepted completed step's existing
+adoption can supply prior proof, revalidated through the same source, scope,
+criterion, dependency and lineage rules as completion. Current checks take
+precedence. Such a finding is stored as assessment v2 with its original check
+ids and qualified source; it is never relabelled as execution in this Run.
+Current-check findings retain v1, and existing v1 rows do not gain adoption
+authority. Revalidation rejects changed sources or inputs. No SQL schema migration
+is involved. Main still supplies the condition judgment; a passed check or an
+adoption alone never manufactures one.
+An investigation/report milestone can complete with a grounded negative
+finding when positive verification was not required. A required positive
+milestone still needs passing verification and cannot close with a negative or
+unknown condition. Main chooses that obligation from the user's goal; the
+runtime never drops an established requirement. Unrelated successful checks
+and later outcomes without judgments do not erase unresolved findings.
+Changed inputs invalidate them. Continuations expose prior findings as
+historical context, and cannot adopt a negative finding as positive proof.
+A reference that is not an effective check of the current Run is refused as
+correctable input and never selects another Run's observation (call ids restart
+in every Run). The refusal lists the checks that can be cited and, when the id is
+the observation behind an imported step, names that step and whether the runtime
+would adopt it, so a model that read the id in an earlier record is told the way
+out instead of reconstructing the evidence boundary. `verify` `replaces` follows
+the same rule.
+Failure to save execution evidence or the structured outcome leaves work
+unfinished; restoring storage must not repeat completed effects.
+
+Exact continuations commit direct source-check references in the existing Work
+Journal with Plan inheritance. Repeated mechanical waits do not lose the original
+observation after the bounded legacy lineage window. This is historical context,
+not automatic completion: Main adopts a still-valid check explicitly with
+`reuse_prior_verification` and a reason. The runtime checks exact source identity,
+owned execution scope, unchanged milestone and criterion, effective check results,
+and intervening dependency changes. A saved successful check can be adopted after
+interruption before Plan bookkeeping; an independent unresolved failure remains
+blocking. Unknown mutations stay conservative. Historical snapshots are not
+rewritten. Prompt slices remain bounded and name omitted evidence references.
+
+An accepted independent source check does not need a duplicate current-Run check
+after unrelated writes. Current failed checks still block reuse. If final Plan
+preparation reopens a step, its existing verification deferral includes the cause;
+the refusal identifies the uncommitted candidate and leaves the stored Plan intact.
+After a proven not-dispatched completion-precondition failure, a later successful
+check or accepted changed Plan can restore the finish attempt, at most three times
+per loop. No-op updates, failed checks, rejection and unknown effects do not restore
+it. Input-only corrections retain their separate Run-budget and repeat protection.
+
+An exact continuation is the runtime resuming the same work (an approval or
+clarification answer, a watcher result, recovery, a resource or provider wake-up),
+so it starts from the parent's Plan as recorded. A completed step that required
+verification stays completed and is adopted from its source with a
+runtime-written reason when the same provenance, scope and freshness validation
+still passes, across any number of hops up to the lineage bound. Only a step
+whose source no longer validates (a failed or partial check, changed inputs or
+criterion, another execution scope, or a lineage beyond the bound) reopens, alone;
+the parent's active step stays active, else the earliest reopened step becomes
+active. A person's turn and a continuation Main selects keep the conservative
+import: verified steps reopen until Main adopts or rechecks them. Carrying grants
+nothing; completion validates every adopted step again. A carried step is a
+default for a step nobody looked at again, so a check this Run makes for it takes
+over: the saved plan drops the older observation, and a failed recheck is not
+hidden by it. Main's own explicit adoption keeps its rule and conflicts with a
+current check.
+
+The selected context names bounded unresolved external-effect blockers separately
+from milestones. `verify` may bind the same read-only observation to both a Plan
+step and `effect_claim_id`; existing own/foreign-chain release rules still apply.
+Final results include relevant unresolved runtime claims regardless of model prose
+claiming release. This neither settles claims nor grants execution authority.
 
 New Runs opt into a versioned recovery contract. A daemon or provider
 interruption with no external effect may enqueue one idempotent exact-parent

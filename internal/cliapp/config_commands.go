@@ -2,6 +2,7 @@ package cliapp
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"selfmind/internal/modelruntime"
+	"selfmind/internal/platform/atomicfile"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
 	uicommon "selfmind/internal/ui/common"
@@ -874,21 +876,40 @@ func pruneEmptyMapping(root *yaml.Node, path []string) {
 	yamlDeletePath(root, path)
 }
 
+// backupConfigFile keeps a copy of the configuration beside it, named by the
+// second. The copy holds every key in the file, so it is created exclusively: a
+// name that already exists (a second backup in the same second, or one a
+// command planted) is never written through, the next free name is taken.
 func backupConfigFile(path string, data []byte) (string, error) {
-	backup := fmt.Sprintf("%s.bak-%s", path, time.Now().Format("20060102-150405"))
-	if err := os.WriteFile(backup, data, 0600); err != nil {
-		return "", fmt.Errorf("write backup: %w", err)
+	stamp := time.Now().Format("20060102-150405")
+	for attempt := 0; attempt < 100; attempt++ {
+		backup := fmt.Sprintf("%s.bak-%s", path, stamp)
+		if attempt > 0 {
+			backup = fmt.Sprintf("%s-%d", backup, attempt)
+		}
+		file, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("write backup: %w", err)
+		}
+		_, writeErr := file.Write(data)
+		if closeErr := file.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		if writeErr != nil {
+			_ = os.Remove(backup)
+			return "", fmt.Errorf("write backup: %w", writeErr)
+		}
+		return backup, nil
 	}
-	return backup, nil
+	return "", fmt.Errorf("write backup: no free backup name beside %s", path)
 }
 
 func writeConfigBytesAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return atomicfile.Write(path, data, 0600)
 }

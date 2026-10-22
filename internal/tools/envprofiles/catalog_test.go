@@ -58,6 +58,15 @@ func TestCatalogInvariants(t *testing.T) {
 				t.Fatal("requires graph has a cycle")
 			}
 
+			for _, condition := range profile.MountStateWhen {
+				if len(condition.Keys) == 0 || (condition.From.EnvVar == "" && condition.From.HomeRelPath == "") {
+					t.Fatal("mount state condition requires a source and keys")
+				}
+				assertSafeRel(t, condition.From.HomeRelPath)
+				if condition.Selection != nil && (condition.Selection.Option == "" || condition.Selection.DefaultSection == "") {
+					t.Fatal("configuration selector needs an option and default section")
+				}
+			}
 			for _, spec := range profile.CopyIn {
 				if len(spec.Include) == 0 {
 					t.Fatal("copy_in needs an explicit include list; an empty list means 'everything'")

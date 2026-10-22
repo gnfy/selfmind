@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -13,6 +14,7 @@ import (
 // how many times it was consulted and can return a fixed reply, an error, or
 // block until the context is cancelled (to exercise the timeout path).
 type fakeJudge struct {
+	mu      sync.Mutex
 	reply   string
 	err     error
 	block   bool
@@ -28,8 +30,10 @@ type boundedFakeJudge struct {
 func (j *boundedFakeJudge) ApprovalJudgeTimeout() time.Duration { return j.timeout }
 
 func (f *fakeJudge) Judge(ctx context.Context, prompt string) (string, error) {
+	f.mu.Lock()
 	f.calls++
 	f.lastArg = prompt
+	f.mu.Unlock()
 	if f.block {
 		<-ctx.Done()
 		return "", ctx.Err()

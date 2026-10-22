@@ -18,7 +18,7 @@ func TestTypedCommandResultSurvivesCoercionAndMiddleware(t *testing.T) {
 			t.Run(tool.Name()+"/"+map[bool]string{true: "failure", false: "success"}[failed], func(t *testing.T) {
 				registry := NewRegistry()
 				registry.Register(tool)
-				registry.UseMiddleware(RedactionMiddleware())
+				registry.UseResultMiddleware(RedactionMiddleware())
 				registry.UseResultMiddleware(EvidenceMiddleware())
 				command := "printf observed"
 				if failed {
@@ -140,7 +140,7 @@ func TestTypedFactsSurviveRedactionAndApprovalRefusal(t *testing.T) {
 		registry := NewRegistry()
 		tool := &resultProbeTool{BaseTool: BaseTool{name: "probe", schema: ToolSchema{Type: "object"}}}
 		registry.Register(tool)
-		registry.UseMiddleware(RedactionMiddleware())
+		registry.UseResultMiddleware(RedactionMiddleware())
 		registry.UseMiddleware(ApprovalMiddleware(blocked))
 		result, err := registry.DispatchResult("probe", nil)
 		if err == nil || result.Invoked == nil || *result.Invoked == blocked {
@@ -187,7 +187,7 @@ func TestLegacyFileFailurePreservesObservedEffect(t *testing.T) {
 		}
 		return "partial write observed", context.Canceled
 	}})
-	registry.UseMiddleware(RedactionMiddleware())
+	registry.UseResultMiddleware(RedactionMiddleware())
 	registry.UseResultMiddleware(EvidenceMiddleware())
 	result, err := registry.DispatchResult("write_file", map[string]interface{}{"path": path, "_tool_call_id": "partial"})
 	if !errors.Is(err, context.Canceled) || result.Invoked == nil || !*result.Invoked || result.Process != nil || len(result.Evidence) != 1 {

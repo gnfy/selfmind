@@ -20,19 +20,22 @@ import (
 	"selfmind/internal/ui/components"
 )
 
-// RunWatcher follows the person's mid-flight daemon run: it streams live
-// events into the observer until the run ends and returns the recorded
-// outcome summary (empty when none). Client mode wires it to
+// RunWatcher observes one exact daemon Run and returns its recorded state.
+// Ending observation is not evidence that the work completed. It is wired to
 // client.WatchRun; it must honor ctx cancellation (local detach).
-type RunWatcher func(ctx context.Context, runID string, observer httpapi.StreamObserver) string
+type RunWatcher func(ctx context.Context, runID string, observer httpapi.StreamObserver) (api.RunObservation, error)
 
 // MsgAttachedRunDone is emitted when a watched (re-attached) run ends.
 // Cancelled marks a local cancel (the user chose c on the exit prompt), which
 // cancelActiveRunLocally has already reported.
 type MsgAttachedRunDone struct {
-	RunID     string
-	Summary   string
-	Cancelled bool
+	RunID         string
+	Summary       string
+	Status        string
+	ObservedRunID string
+	FinalAnswer   string
+	Err           error
+	Cancelled     bool
 }
 
 // SetStartupDigest hands the controller the attach digest fetched by the
@@ -112,10 +115,9 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 	// The trust question is asked, not printed: it arms a prompt in the active
 	// region alongside whatever the digest had to say.
 	m.armWorkspaceTrustPrompt()
-	if text == "" {
-		return nil
+	if text != "" {
+		m.addMessage("digest", text)
 	}
-	m.addMessage("digest", text)
 	if m.startupDigest == nil {
 		return nil
 	}
@@ -188,22 +190,23 @@ func approvalRequestFromDigest(item api.DigestApproval) MsgApprovalRequest {
 // suppression, showed a silent spinner that read as "stuck".
 func (m *uiModel) attachToActiveRun() tea.Cmd {
 	m.watchingRun = true
+	m.runStatus = "working"
 	name := strings.TrimSpace(m.watchedTaskTitle)
 	if name == "" {
 		name = "the running task"
 	}
-	m.setStatusNotice(noticeInfo, "Watching "+name+" — live progress below; type a new task to queue it, or /stop to cancel.")
+	m.setStatusNotice(noticeInfo, "Watching "+name+" — view only. /resume, then c, sends your next message to it; other input starts separate work.")
 	ctx, cancel := context.WithCancel(context.Background())
 	m.watchCancel = cancel
 	watcher := m.runWatcher
 	runID := m.watchedRunID
 	return func() tea.Msg {
-		summary := watcher(ctx, runID, func(event llm.StreamEvent) {
+		result, err := watcher(ctx, runID, func(event llm.StreamEvent) {
 			if event.EventType != "" {
 				m.forwardGatewayEventFrom(event, eventSourceWatch)
 			}
 		})
-		return MsgAttachedRunDone{RunID: runID, Summary: summary, Cancelled: ctx.Err() != nil}
+		return MsgAttachedRunDone{RunID: runID, ObservedRunID: result.RunID, Summary: result.Summary, Status: result.Status, FinalAnswer: result.FinalAnswer, Err: err, Cancelled: ctx.Err() != nil}
 	}
 }
 
@@ -231,11 +234,28 @@ func (m *uiModel) detachWatchedRunForNewTurn() {
 	}
 }
 
+// pendingClarifyLine says what a plain message typed in this session would do to
+// the one waiting question, how long it has waited, and what else is possible. A
+// question another session asked, or one that has waited too long with its
+// asker gone, takes only the named form; the line says so instead of inviting a
+// reply that would start new work.
+func pendingClarifyLine(clarify api.DigestClarify, session string) string {
+	line := strings.Join(strings.Fields(clarify.Line), " ")
+	age := ""
+	if clarify.AskedAgoSeconds >= 60 {
+		age = " (asked " + formatElapsedShort(clarify.AskedAgoSeconds) + " ago)"
+	}
+	if clarify.NumberedReplyOnly && strings.TrimSpace(clarify.Channel) != strings.TrimSpace(session) {
+		return fmt.Sprintf("⚠ 1 question waiting%s: %s — answer it as \"1: <your answer>\"; anything else you type starts new work", age, line)
+	}
+	return fmt.Sprintf("⚠ 1 question waiting%s: %s — just reply with your answer, or /new --run <request> to start something else", age, line)
+}
+
 // formatStartupDigest renders the digest as compact event/state sections for
 // the terminal of one session. Ids are deliberately absent: approvals resolve
 // by ordinal via /approvals on the gateway, tasks resume via /resume — UUID
-// hashes carry no meaning here. Another session's approvals and running work
-// are reported, not restored: they are that session's to show.
+// hashes carry no meaning here. Another session's approvals use the live
+// notice instead of this transcript block; its panels and progress stay there.
 func formatStartupDigest(digest *api.DigestResponse, session string) string {
 	if digest.Empty() {
 		return ""
@@ -255,50 +275,40 @@ func formatStartupDigest(digest *api.DigestResponse, session string) string {
 		sections = append(sections, strings.Join(away, "\n"))
 	}
 
-	attention := []string{"Still needs attention:"}
-	if n := len(digest.UnresolvedTasks); n == 1 {
-		attention = append(attention, fmt.Sprintf("↻ 1 earlier run still needs attention: %s (use /resume to continue)", digestTitleList(digest.UnresolvedTasks)))
-	} else if n > 1 {
-		unit := "runs"
-		verb := "need"
-		if n == 1 {
-			unit = "run"
-			verb = "needs"
+	var attention []string
+	if count := digest.ResumableRunCount; count != nil {
+		if *count > 0 {
+			attention = append(attention, fmt.Sprintf("History: %s available to resume — /resume", countNoun(*count, "run")))
 		}
-		attention = append(attention, fmt.Sprintf("↻ %d earlier %s still %s attention: %s (use /resume to continue)", n, unit, verb, digestTitleList(digest.UnresolvedTasks)))
+	} else if len(digest.UnresolvedTasks) > 0 {
+		// Older daemons return a capped mixed list, not a resumable total.
+		attention = append(attention, "History: earlier runs available — /resume")
 	}
 	var ownApprovals []api.DigestApproval
-	otherApprovals := 0
 	for _, approval := range digest.PendingApprovals {
-		if otherSessionChannel(approval.Channel, session) {
-			otherApprovals++
-		} else {
+		if !otherSessionChannel(approval.Channel, session) {
 			ownApprovals = append(ownApprovals, approval)
 		}
 	}
-	switch n := len(ownApprovals); {
-	case n == 1:
-		attention = append(attention, fmt.Sprintf("⚠ 1 approval waiting: %s — interactive choices restored below", ownApprovals[0].Line))
-	case n > 1:
-		attention = append(attention, fmt.Sprintf("⚠ %d approvals waiting — see /approvals", n))
+	if n := len(ownApprovals); n > 0 {
+		attention = append(attention, fmt.Sprintf("Pending: %s — choices restored below", countNoun(n, "approval")))
 	}
-	if otherApprovals > 0 {
-		attention = append(attention, fmt.Sprintf("⚠ %s waiting in another session — /approvals lists them, /approve answers them here", countNoun(otherApprovals, "approval")))
-	}
+	// Foreign approvals live in the actionable status notice. Repeating them
+	// here leaves stale transcript warnings after another endpoint answers.
 	switch n := len(digest.PendingClarifies); {
 	case n == 1:
-		attention = append(attention, fmt.Sprintf("⚠ 1 question waiting: %s — just reply with your answer", digest.PendingClarifies[0].Line))
+		attention = append(attention, pendingClarifyLine(digest.PendingClarifies[0], session))
 	case n > 1:
 		attention = append(attention, fmt.Sprintf("⚠ %d questions waiting — see /status", n))
 	}
-	if len(attention) > 1 {
+	if len(attention) > 0 {
 		sections = append(sections, strings.Join(attention, "\n"))
 	}
 
 	if len(digest.ActiveRuns) > 1 {
 		lines := []string{fmt.Sprintf("Current: %d runs are active", len(digest.ActiveRuns))}
 		for _, active := range digest.ActiveRuns {
-			title := strings.TrimSpace(active.Title)
+			title := strings.Join(strings.Fields(active.Title), " ")
 			if title == "" {
 				title = "untitled task"
 			}
@@ -307,14 +317,14 @@ func formatStartupDigest(digest *api.DigestResponse, session string) string {
 		lines = append(lines, "Use /status <run_id> for details; each session keeps its own progress.")
 		sections = append(sections, strings.Join(lines, "\n"))
 	} else if active := digest.ActiveRun; active != nil && otherSessionChannel(active.Channel, session) {
-		title := strings.TrimSpace(active.Title)
+		title := strings.Join(strings.Fields(active.Title), " ")
 		if title == "" {
 			title = "untitled task"
 		}
-		sections = append(sections, fmt.Sprintf("Current:\n▶ Another session is running: %s (%s) — /attach to watch it here; a new task typed here goes to it or queues behind it.", title, formatElapsedShort(active.ElapsedSeconds)))
+		sections = append(sections, fmt.Sprintf("Current:\n▶ Another session is running: %s (%s) — /resume to view; new input stays in this session.", title, formatElapsedShort(active.ElapsedSeconds)))
 	} else if active != nil {
 		lines := []string{"Current:"}
-		title := strings.TrimSpace(active.Title)
+		title := strings.Join(strings.Fields(active.Title), " ")
 		if title == "" {
 			title = "untitled task"
 		}
@@ -345,7 +355,7 @@ func digestShortRunID(id string) string {
 func digestTitleList(tasks []api.DigestTask) string {
 	titles := make([]string, 0, 3)
 	for _, task := range tasks {
-		title := strings.TrimSpace(task.Title)
+		title := strings.Join(strings.Fields(task.Title), " ")
 		if title == "" {
 			title = "untitled task"
 		}

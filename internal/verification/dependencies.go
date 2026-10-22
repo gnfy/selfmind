@@ -43,12 +43,23 @@ func overlapsPath(a, b string) bool {
 }
 
 func StateWithMutations(mutations []Mutation, checks []Check) (string, string) {
+	// Static observations support Main's investigation findings, never an
+	// executable verification verdict, even after explicit adoption.
+	executed := make([]Check, 0, len(checks))
+	for _, check := range checks {
+		if check.Observation == nil || check.Observation.Kind != "file" {
+			executed = append(executed, check)
+		}
+	}
+	checks = executed
 	latest := RelevantMutationAt(Check{}, mutations)
 	status, summary := state(latest, checks, func(check Check) int64 { return RelevantMutationAt(check, mutations) })
 	if status == "stale" {
 		var gaps []string
-		for _, check := range Latest(checks) {
-			if check.StartedAt >= RelevantMutationAt(check, mutations) {
+		latestChecks := Latest(checks)
+		affectedAt := func(check Check) int64 { return RelevantMutationAt(check, mutations) }
+		for _, check := range latestChecks {
+			if check.StartedAt >= affectedAt(check) || stepCheckSupersededByFreshPass(check, latestChecks, affectedAt) {
 				continue
 			}
 			target := "undeclared inputs"

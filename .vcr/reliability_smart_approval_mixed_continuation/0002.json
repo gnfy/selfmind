@@ -3,310 +3,52 @@
   "method": "stream",
   "events": [
     {
-      "reasoning_content": "No"
-    },
-    {
-      "reasoning_content": " res"
-    },
-    {
-      "reasoning_content": "um"
-    },
-    {
-      "reasoning_content": "able"
-    },
-    {
-      "reasoning_content": " runs"
-    },
-    {
-      "reasoning_content": " in"
-    },
-    {
-      "reasoning_content": " attention"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " So"
-    },
-    {
-      "reasoning_content": " no"
-    },
-    {
-      "reasoning_content": " work"
-    },
-    {
-      "reasoning_content": "_select"
-    },
-    {
-      "reasoning_content": " needed"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " This"
-    },
-    {
-      "reasoning_content": " is"
-    },
-    {
-      "reasoning_content": " new"
-    },
-    {
-      "reasoning_content": "/"
-    },
-    {
-      "reasoning_content": "independent"
-    },
-    {
-      "reasoning_content": " work"
-    },
-    {
-      "reasoning_content": " —"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " plan"
-    },
-    {
-      "reasoning_content": " is"
-    },
-    {
-      "reasoning_content": " fresh"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " pre"
-    },
-    {
-      "reasoning_content": "-existing"
-    },
-    {
-      "reasoning_content": " files"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": "-only"
-    },
-    {
-      "reasoning_content": " to"
-    },
-    {
-      "reasoning_content": " ground"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " plan"
-    },
-    {
-      "reasoning_content": " ("
-    },
-    {
-      "reasoning_content": "pr"
-    },
-    {
-      "reasoning_content": "erequisite"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": ","
-    },
-    {
-      "reasoning_content": " second"
-    },
-    {
-      "reasoning_content": "-pr"
-    },
-    {
-      "reasoning_content": "erequisite"
-    },
-    {
-      "reasoning_content": ".txt"
-    },
-    {
-      "reasoning_content": " content"
-    },
-    {
-      "reasoning_content": ")."
-    },
-    {
-      "reasoning_content": " That"
-    },
-    {
-      "reasoning_content": "'s"
-    },
-    {
-      "reasoning_content": " a"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": "-only"
-    },
-    {
-      "reasoning_content": " check"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " User"
-    },
-    {
-      "reasoning_content": " said"
-    },
-    {
-      "reasoning_content": " \""
-    },
-    {
-      "reasoning_content": "交付"
-    },
-    {
-      "reasoning_content": "执行"
-    },
-    {
-      "reasoning_content": "时"
-    },
-    {
-      "reasoning_content": "，"
-    },
-    {
-      "reasoning_content": "可按"
-    },
-    {
-      "reasoning_content": "需"
-    },
-    {
-      "reasoning_content": "对本"
-    },
-    {
-      "reasoning_content": "工作"
-    },
-    {
-      "reasoning_content": "区的"
-    },
-    {
-      "reasoning_content": "文件和"
-    },
-    {
-      "reasoning_content": "目录"
-    },
-    {
-      "reasoning_content": "进行"
-    },
-    {
-      "reasoning_content": "只"
-    },
-    {
-      "reasoning_content": "读"
-    },
-    {
-      "reasoning_content": "检查"
-    },
-    {
-      "reasoning_content": "\""
-    },
-    {
-      "reasoning_content": " —"
-    },
-    {
-      "reasoning_content": " allowed"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Reading"
-    },
-    {
-      "reasoning_content": " now"
-    },
-    {
-      "reasoning_content": " helps"
-    },
-    {
-      "reasoning_content": " the"
-    },
-    {
-      "reasoning_content": " plan"
-    },
-    {
-      "reasoning_content": " state"
-    },
-    {
-      "reasoning_content": " current"
-    },
-    {
-      "reasoning_content": " status"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "reasoning_content": " Cheap"
-    },
-    {
-      "reasoning_content": ".\n\n"
-    },
-    {
-      "reasoning_content": "Let"
-    },
-    {
-      "reasoning_content": " me"
-    },
-    {
-      "reasoning_content": " read"
-    },
-    {
-      "reasoning_content": " them"
-    },
-    {
-      "reasoning_content": "."
-    },
-    {
-      "finish_reason": "tool_calls"
+      "content": "I will read the prerequisite files to check their current status."
     },
     {
       "usage": {
-        "input_tokens": 12049,
-        "output_tokens": 179,
-        "cache_read_input_tokens": 11648,
-        "cache_miss_input_tokens": 401,
+        "input_tokens": 13168,
+        "output_tokens": 12,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
         "cache_creation_input_tokens": 0,
-        "reasoning_output_tokens": 95,
-        "cache_usage_reported": true
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 49,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 475,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
       }
     },
     {
       "tool_calls": [
         {
-          "ID": "call_00_6hcbt5iP22fbHPQNgdQC8859",
+          "ID": "call_1327496",
           "Function": "batch_read",
-          "Args": "{\"operations\": [{\"tool\": \"read_file\", \"path\": \"prerequisite.txt\"}, {\"tool\": \"read_file\", \"path\": \"second-prerequisite.txt\"}, {\"tool\": \"read_file\", \"path\": \"config.yaml\"}]}"
+          "Args": "{\"operations\":[{\"path\":\"prerequisite.txt\",\"tool\":\"read_file\"},{\"path\":\"second-prerequisite.txt\",\"tool\":\"read_file\"}]}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "Eu0BCuoBAWkUfRMJh8w+frJYXNrrRZTW8r6fu4ECs+8ojwGEiIN8/fD9usHkc+hWAiK5/WJksCGm2dTJJMOipfPjkNtQr3mNAE/xsxP3G+BVeERpolQPBFvcyiVdrtfzSljhGxCzmNwjs5jednyIQFfWi673pr9GffqdVGCcAQQrrf8XZBIfX8ZTlnjMpYwVo8wTMk9nGKvSXsLolXZmZW9DtEB2ewxI/FyjD/CI7NvlCxX/p7v+ymzClcvA76qW+aJKppZi28FiHCzER3rjlmDS/JKqt3yb+ss6dSSRdHxVFITK6VZuMDiXx5p0WkIj"
+            }
+          }
         }
       ]
     }

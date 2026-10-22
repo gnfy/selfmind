@@ -30,14 +30,23 @@ func isParkedTaskStatus(status string) bool {
 	}
 }
 
-func formatQueue(items []control.QueuedTask) string {
+func formatQueue(items []control.QueuedTask, reasons map[string]string) string {
 	if len(items) == 0 {
 		return "No queued tasks."
 	}
 	var sb strings.Builder
 	sb.WriteString("Queued tasks:\n")
 	for i, q := range items {
-		fmt.Fprintf(&sb, "%d. %s\n", i+1, textutil.Truncate(toOneLine(q.Content), 60))
+		marker := ""
+		if q.AdmissionError != nil {
+			// The row never starts and holds later work from its source; name
+			// the command that removes it.
+			marker = fmt.Sprintf(" [cannot start: /queue drop %d]", i+1)
+		}
+		fmt.Fprintf(&sb, "%d. %s%s\n", i+1, textutil.Truncate(toOneLine(q.Content), 60), marker)
+		if reason := reasons[q.ID]; reason != "" {
+			fmt.Fprintf(&sb, "   %s\n", reason)
+		}
 	}
 	sb.WriteString("\nUse /queue clear to drop all queued tasks.")
 	return strings.TrimSpace(sb.String())
@@ -357,8 +366,14 @@ func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *acti
 	}
 	if len(plan) > 0 {
 		sb.WriteString("\nPlan:\n")
+		now := time.Now()
 		for _, step := range plan {
 			fmt.Fprintf(&sb, "- %s %s\n", planStatusMarker(step.Status), step.Step)
+			// The same detail the live plan shows under an assessed cancellation.
+			if detail := api.PlanCancellationDetail(step.Status, step.CancellationDisposition,
+				truncateRunes(toOneLine(step.CancellationReason), 240), step.CancellationAuthorizedBy, now); detail != "" {
+				fmt.Fprintf(&sb, "  %s\n", detail)
+			}
 		}
 	}
 	if handoff != nil {

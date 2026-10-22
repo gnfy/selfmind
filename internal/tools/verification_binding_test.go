@@ -123,4 +123,26 @@ func TestMissingDependencyCannotClaimUnrelatedMutation(t *testing.T) {
 			t.Fatalf("unresolved dependency %q claimed independence from actual input mutation", path)
 		}
 	}
+
+	// Relative dependency that repeats the cwd directory name resolves to the existing file without recording an unresolved dependency.
+	subCWD := filepath.Join(root, "cicd")
+	targetFile := filepath.Join(subCWD, "gcp", "release.md")
+	if err := os.MkdirAll(filepath.Dir(targetFile), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetFile, []byte("ok"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deduped, err := prepareVerificationBinding(map[string]interface{}{
+		"cwd":                subCWD,
+		"criterion":          "release record exists",
+		"target":             "release_record",
+		"local_dependencies": []string{"cicd/gcp/release.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(deduped.UnresolvedLocalDependencies) != 0 || deduped.LocalDependencies == nil || !slices.Contains(*deduped.LocalDependencies, targetFile) {
+		t.Fatalf("expected duplicated cwd prefix in local_dependencies to resolve cleanly, got %+v", deduped)
+	}
 }

@@ -13,14 +13,15 @@ import (
 var ErrStalled = errors.New("run stalled: no progress within the idle timeout")
 
 // Phase describes why a run may be quiet. Provider/tool work is governed by
-// the idle watchdog; waits on a person have their own durable deadline and must
-// not be mistaken for a stuck execution.
+// the idle watchdog; admission and waits on a person must not be mistaken for
+// stuck execution.
 type Phase string
 
 const (
-	PhaseRunning         Phase = "running"
-	PhaseWaitingApproval Phase = "waiting_approval"
-	PhaseWaitingClarify  Phase = "waiting_clarify"
+	PhaseRunning          Phase = "running"
+	PhaseWaitingApproval  Phase = "waiting_approval"
+	PhaseWaitingClarify   Phase = "waiting_clarify"
+	phaseWaitingAdmission Phase = "waiting_admission"
 )
 
 type watchdogController struct {
@@ -53,7 +54,7 @@ func (c *watchdogController) current() Phase {
 }
 
 func (c *watchdogController) beginWait(phase Phase) func() {
-	if c == nil || !phaseWaitsForPerson(phase) {
+	if c == nil || !phasePausesWatchdog(phase) {
 		return func() {}
 	}
 	c.mu.Lock()
@@ -131,8 +132,18 @@ func RecordActivity(ctx context.Context) {
 	}
 }
 
-func phaseWaitsForPerson(phase Phase) bool {
-	return phase == PhaseWaitingApproval || phase == PhaseWaitingClarify
+func phasePausesWatchdog(phase Phase) bool {
+	return phase == PhaseWaitingApproval || phase == PhaseWaitingClarify || phase == phaseWaitingAdmission
+}
+
+// Pool admission is not provider/tool execution. Reuse the watchdog's nested
+// pause so an inherited person wait cannot be accidentally resumed, and start
+// a fresh idle window only once the worker actually begins the job.
+func beginAdmissionWait(ctx context.Context) func() {
+	if control, _ := ctx.Value(watchdogContextKey{}).(*watchdogController); control != nil {
+		return control.beginWait(phaseWaitingAdmission)
+	}
+	return func() {}
 }
 
 // WithWatchdog returns a child context that is cancelled with ErrStalled if
@@ -188,16 +199,16 @@ func WithWatchdog(parent context.Context, idle time.Duration) (context.Context, 
 			select {
 			case <-timer.C:
 				armed = false
-				if !phaseWaitsForPerson(control.current()) {
+				if !phasePausesWatchdog(control.current()) {
 					cancel(ErrStalled)
 					return
 				}
 			case <-reset:
-				if !phaseWaitsForPerson(control.current()) {
+				if !phasePausesWatchdog(control.current()) {
 					resetTimer()
 				}
 			case <-control.changed:
-				if phaseWaitsForPerson(control.current()) {
+				if phasePausesWatchdog(control.current()) {
 					pauseTimer()
 				} else {
 					resetTimer()

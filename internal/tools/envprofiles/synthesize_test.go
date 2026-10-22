@@ -87,7 +87,7 @@ func TestApplySynthesizesStateRootWhenNestedPathsAreMissing(t *testing.T) {
 // aborts the sandbox.
 func TestApplyDropsUnmountableOverlayWithNote(t *testing.T) {
 	home := t.TempDir() // no ~/.aws at all
-	result, err := Apply(Match([]string{"aws"}), ApplyContext{
+	result, err := Apply([]*EnvProfile{{ID: "test-state", MapRWAt: []MapRWAt{{Key: "cache", At: StateSource{HomeRelPath: ".missing/cache"}}}}}, ApplyContext{
 		Home:      home,
 		StateRoot: filepath.Join(t.TempDir(), "state"),
 		Trust:     TrustTrusted,

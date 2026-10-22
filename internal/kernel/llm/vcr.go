@@ -38,7 +38,7 @@ type vcrWorkspaceCtxKey struct{}
 const vcrWorkspacePlaceholder = "{{SELFMIND_VCR_WORKSPACE}}"
 
 var vcrWorkUnitIDPattern = regexp.MustCompile(`\bwu_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
-var vcrPlanStepIDPattern = regexp.MustCompile(`\bstep_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+var vcrPlanStepIDPattern = regexp.MustCompile(`\bstep_(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|(?:[0-9a-f]{16}_)?[1-9][0-9]*)\b`)
 var vcrSkillCandidateRefPattern = regexp.MustCompile(`\bskref_[0-9a-fA-F]{16}\b`)
 var vcrTaskIDPattern = regexp.MustCompile(`\btask_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
 var vcrRunIDPattern = regexp.MustCompile(`\brun_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
@@ -91,7 +91,7 @@ var vcrCounters sync.Map // session -> *atomic.Int64
 // at the start of EVERY case execution: the counter is process-global and was
 // never reset, so a case re-run in the same process continued numbering where
 // the previous run stopped — recording cassettes with a 0001+ hole (observed
-// live: .vcr/continuity_task_attach/ held 0001-0003 and no 0000) and failing
+// live: a multi-turn cassette held 0001-0003 and no 0000) and failing
 // replays that probe indices past the recorded range.
 func ResetVCRSession(session string) {
 	if strings.TrimSpace(session) == "" {
@@ -236,12 +236,14 @@ type recordedEvent struct {
 }
 
 type cassette struct {
-	PlanBindingVersion int             `json:"plan_binding_version,omitempty"`
-	Method             string          `json:"method"`
-	Error              string          `json:"error,omitempty"`
-	Events             []recordedEvent `json:"events,omitempty"`
-	Chat               *ChatResponse   `json:"chat,omitempty"`
-	Completion         string          `json:"completion,omitempty"`
+	RecordedWith       *RecordingProvenance `json:"recorded_with,omitempty"`
+	PlanBindingVersion int                  `json:"plan_binding_version,omitempty"`
+	Method             string               `json:"method"`
+	Error              string               `json:"error,omitempty"`
+	CallerCanceled     bool                 `json:"caller_canceled,omitempty"`
+	Events             []recordedEvent      `json:"events,omitempty"`
+	Chat               *ChatResponse        `json:"chat,omitempty"`
+	Completion         string               `json:"completion,omitempty"`
 }
 
 func (v *vcrProvider) nextKey(ctx context.Context) (string, bool) {
@@ -262,6 +264,9 @@ func (v *vcrProvider) load(ctx context.Context, path string, messages []Message)
 	var c cassette
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, err
+	}
+	if c.CallerCanceled && (c.Error != "" || len(c.Events) != 0 || c.Chat != nil || c.Completion != "") {
+		return nil, fmt.Errorf("canceled cassette cannot carry provider output or failure")
 	}
 	c = rewriteCassette(c, vcrWorkspacePlaceholder, vcrWorkspaceFromContext(ctx))
 	if c.PlanBindingVersion > 1 {
@@ -285,6 +290,9 @@ func (v *vcrProvider) load(ctx context.Context, path string, messages []Message)
 	for i, id := range vcrOpaqueIDs(messages, vcrArtifactIDPattern) {
 		c = rewriteCassette(c, vcrArtifactPlaceholder(i), id)
 	}
+	for i, id := range vcrOpaqueIDs(messages, vcrEffectClaimIDPattern) {
+		c = rewriteCassette(c, vcrEffectClaimPlaceholder(i), id)
+	}
 	return &c, nil
 }
 
@@ -300,6 +308,9 @@ func cassetteMiss(path, method string, recorded *cassette, loadErr error) error 
 }
 
 func (v *vcrProvider) save(ctx context.Context, path string, c cassette, messages []Message) {
+	if c.RecordedWith == nil {
+		c.RecordedWith = v.recordingProvenance(ctx, ChatRequest{Messages: messages}, false)
+	}
 	if strings.TrimSpace(c.Error) != "" {
 		// Recording the failure is REQUIRED: cassettes replay by ordinal, so a
 		// hole here would desynchronize every later call in the case. Say so
@@ -339,6 +350,9 @@ func (v *vcrProvider) save(ctx context.Context, path string, c cassette, message
 	for i, id := range vcrOpaqueIDs(messages, vcrArtifactIDPattern) {
 		c = rewriteCassette(c, id, vcrArtifactPlaceholder(i))
 	}
+	for i, id := range vcrOpaqueIDs(messages, vcrEffectClaimIDPattern) {
+		c = rewriteCassette(c, id, vcrEffectClaimPlaceholder(i))
+	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return
@@ -359,6 +373,9 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 		}
 		c, loadErr := v.load(ctx, key, req.Messages)
 		if loadErr == nil && c.Method == "stream" {
+			if c.CallerCanceled {
+				return nil, context.Canceled
+			}
 			if c.Error != "" {
 				return nil, errors.New(c.Error)
 			}
@@ -373,7 +390,7 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 	in, err := v.inner.StreamChat(ctx, req)
 	if err != nil {
 		if ok {
-			v.save(ctx, key, cassette{Method: "stream", Error: err.Error()}, req.Messages)
+			v.saveRequest(ctx, key, failedCassette(ctx, "stream", err), req)
 		}
 		return nil, err
 	}
@@ -388,7 +405,7 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 			rec = append(rec, toRecorded(ev))
 			out <- ev
 		}
-		v.save(ctx, key, cassette{Method: "stream", Events: rec}, req.Messages)
+		v.saveRequest(ctx, key, cassette{Method: "stream", Events: rec}, req)
 	}()
 	return out, nil
 }
@@ -404,6 +421,9 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 		}
 		c, loadErr := v.load(ctx, key, req.Messages)
 		if loadErr == nil && c.Method == "chat" {
+			if c.CallerCanceled {
+				return nil, context.Canceled
+			}
 			if c.Error != "" {
 				return nil, errors.New(c.Error)
 			}
@@ -420,7 +440,7 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	resp, err := v.inner.Chat(ctx, req)
 	if err != nil {
 		if ok {
-			v.save(ctx, key, cassette{Method: "chat", Error: err.Error()}, req.Messages)
+			v.saveRequest(ctx, key, failedCassette(ctx, "chat", err), req)
 		}
 		return resp, err
 	}
@@ -428,7 +448,7 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 		return resp, err
 	}
 	if ok {
-		v.save(ctx, key, cassette{Method: "chat", Chat: resp}, req.Messages)
+		v.saveRequest(ctx, key, cassette{Method: "chat", Chat: resp}, req)
 	}
 	return resp, err
 }
@@ -444,6 +464,9 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 		}
 		c, loadErr := v.load(ctx, key, messages)
 		if loadErr == nil && c.Method == "completion" {
+			if c.CallerCanceled {
+				return "", context.Canceled
+			}
 			if c.Error != "" {
 				return "", errors.New(c.Error)
 			}
@@ -458,7 +481,7 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 	text, err := v.inner.ChatCompletion(ctx, messages)
 	if err != nil {
 		if ok {
-			v.save(ctx, key, cassette{Method: "completion", Error: err.Error()}, messages)
+			v.save(ctx, key, failedCassette(ctx, "completion", err), messages)
 		}
 		return text, err
 	}
@@ -466,6 +489,16 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 		v.save(ctx, key, cassette{Method: "completion", Completion: text}, messages)
 	}
 	return text, err
+}
+
+// A caller deliberately abandoning optional work is a cancellation, not a
+// provider failure. Preserve its ordinal and replay the cancellation itself;
+// never turn it into a fabricated successful answer or hide uncanceled errors.
+func failedCassette(ctx context.Context, method string, err error) cassette {
+	if errors.Is(ctx.Err(), context.Canceled) && errors.Is(err, context.Canceled) {
+		return cassette{Method: method, CallerCanceled: true}
+	}
+	return cassette{Method: method, Error: err.Error()}
 }
 
 func cassetteSessionMiss(method string) error {

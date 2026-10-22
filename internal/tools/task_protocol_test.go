@@ -12,9 +12,13 @@ type durablePlanProjectionTest struct {
 	plan          PlanState
 	version       int
 	completionErr error
+	projectErr    error
 }
 
 func (p *durablePlanProjectionTest) Project(_ context.Context, state PlanState) (PlanProjectionResult, error) {
+	if p.projectErr != nil {
+		return PlanProjectionResult{}, p.projectErr
+	}
 	p.version++
 	for i := range state.Plan {
 		if state.Plan[i].StepID == "" {
@@ -23,6 +27,31 @@ func (p *durablePlanProjectionTest) Project(_ context.Context, state PlanState) 
 	}
 	p.plan = state
 	return PlanProjectionResult{Plan: state, Version: p.version, Changed: true}, nil
+}
+
+type verificationPreconditionTestError struct{}
+
+func (verificationPreconditionTestError) Error() string                      { return "check missing; prior reuse offered" }
+func (verificationPreconditionTestError) PlanVerificationPrecondition() bool { return true }
+
+func TestPlanVerificationRecoveryPreservesExplicitAdoption(t *testing.T) {
+	projection := &durablePlanProjectionTest{projectErr: verificationPreconditionTestError{}}
+	ctx := WithRunPlanProjection(context.Background(), projection)
+	_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+		"plan": []interface{}{map[string]interface{}{"step_id": "owned-step", "status": "completed"}}, "_context": ctx,
+	})
+	var recovery interface{ ToolRecoveryHint() string }
+	if !errors.As(err, &recovery) {
+		t.Fatalf("missing structured recovery: %v", err)
+	}
+	for _, want := range []string{"step_id without a Plan transition", "reuse_prior_verification=true", "reuse_reason", "explanation alone is not adoption"} {
+		if !strings.Contains(recovery.ToolRecoveryHint(), want) {
+			t.Fatalf("recovery lost %q: %s", want, recovery.ToolRecoveryHint())
+		}
+	}
+	if projection.version != 0 {
+		t.Fatal("recovery changed the rejected Plan")
+	}
 }
 
 func (p *durablePlanProjectionTest) ValidateCompletion(context.Context) error {
@@ -75,6 +104,27 @@ func TestPlanToolsUseDurableProjectionAsCompletionAuthority(t *testing.T) {
 	}
 }
 
+func TestFinishBodyPreservesParagraphsButCannotOverrideCompletionAuthority(t *testing.T) {
+	projection := &durablePlanProjectionTest{}
+	ctx := WithRunPlanProjection(context.Background(), projection)
+	tool := NewFinishRunTool()
+	args := map[string]interface{}{"status": "done", "summary": "checked", "final_response": "First paragraph.\n\nSecond paragraph.", "_context": ctx}
+	raw, err := tool.Execute(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		FinalResponse string `json:"final_response"`
+	}
+	if json.Unmarshal([]byte(raw), &out) != nil || out.FinalResponse != args["final_response"] {
+		t.Fatalf("body=%q", raw)
+	}
+	projection.completionErr = errors.New("required check is unresolved")
+	if raw, err := tool.Execute(args); err == nil || raw != "" {
+		t.Fatalf("prose overrode durable completion: %q %v", raw, err)
+	}
+}
+
 func TestPlanStepParserPreservesOmittedTextForExactIDInheritance(t *testing.T) {
 	steps, err := planStepsFromArgs([]interface{}{map[string]interface{}{
 		"step_id": "step-issued", "status": "completed",
@@ -86,6 +136,29 @@ func TestPlanStepParserPreservesOmittedTextForExactIDInheritance(t *testing.T) {
 	if len(steps) != 1 || steps[0].StepID != "step-issued" || steps[0].Step != "" || steps[0].Status != "completed" ||
 		!steps[0].ReusePriorVerification || steps[0].ReuseReason != "the same target is unchanged" {
 		t.Fatalf("parsed step=%+v", steps)
+	}
+}
+
+func TestPlanCancellationEvidenceSurvivesParsingAndDeduplication(t *testing.T) {
+	steps, err := planStepsFromArgs([]interface{}{map[string]interface{}{
+		"step_id": "step-issued", "status": "cancelled",
+		"replacement_step_id": "verified-step", "scope_change_quote": "Only prepare the checklist",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps[0].ReplacementStepID != "verified-step" || steps[0].ScopeChangeQuote != "Only prepare the checklist" {
+		t.Fatalf("cancellation provenance lost: %+v", steps)
+	}
+	changed := append([]PlanStep(nil), steps...)
+	changed[0].ReplacementStepID = "other-step"
+	if samePlanSteps(steps, changed) {
+		t.Fatal("a changed evidence reference was deduplicated")
+	}
+	changed = append([]PlanStep(nil), steps...)
+	changed[0].ScopeChangeQuote = "Only inspect local data"
+	if samePlanSteps(steps, changed) {
+		t.Fatal("a changed user scope quote was deduplicated")
 	}
 }
 
@@ -128,6 +201,186 @@ func TestUpdatePlanToolReturnsSynchronousWorkUnitIdentities(t *testing.T) {
 	}
 	if strings.Contains(result, `"skill_candidates"`) {
 		t.Fatalf("tool result duplicated unbounded candidate descriptions: %s", result)
+	}
+}
+
+// The model-facing contract asks for the compact form the runtime already
+// accepts: every step listed, an unchanged step carried by id and status alone.
+// Restating saved text on every update costs output tokens and buys nothing,
+// because the receipt returns the full plan.
+func TestUpdatePlanContractAsksForCompactUnchangedSteps(t *testing.T) {
+	tool := NewUpdatePlanTool()
+	schema := tool.Schema().Properties
+	item := schema["plan"].Items.Properties
+	for name, text := range map[string]string{
+		"tool description":      tool.Description(),
+		"plan":                  schema["plan"].Description,
+		"step":                  item["step"].Description,
+		"success_criteria":      item["success_criteria"].Description,
+		"verification_required": item["verification_required"].Description,
+	} {
+		if !strings.Contains(text, "omit") && !strings.Contains(text, "only") && !strings.Contains(text, "alone") {
+			t.Errorf("%s does not say what an unchanged step may leave out: %s", name, text)
+		}
+	}
+	for _, want := range []string{"mode=patch", "omitted steps stay unchanged", "full accepted Plan", "compatible default"} {
+		if !strings.Contains(tool.Description(), want) {
+			t.Errorf("Plan input contract lacks %q", want)
+		}
+	}
+	mode := schema["mode"]
+	if strings.Join(mode.Enum, ",") != "snapshot,patch" {
+		t.Errorf("missing explicit snapshot/patch choice: %+v", mode)
+	}
+	if !strings.Contains(item["step_id"].Description, "The first plan has none") || !strings.Contains(item["step"].Description, "Required for every step of the first plan") {
+		t.Fatal("first-plan identity/text guidance lost")
+	}
+	// What the wording promises must be what the runtime does without a Run
+	// store: an entry carrying only an id is still refused there, because
+	// nothing can supply its text.
+	if _, err := tool.Execute(map[string]interface{}{"plan": []interface{}{
+		map[string]interface{}{"step_id": "step_a", "status": "completed"},
+	}}); err == nil || !strings.Contains(err.Error(), "plan[0].step is required") {
+		t.Fatalf("a bare id without a durable plan must still be refused: %v", err)
+	}
+}
+
+type textRequiredTestError struct {
+	index     int
+	firstPlan bool
+}
+
+func (textRequiredTestError) Error() string { return "plan step needs text" }
+func (e textRequiredTestError) PlanStepTextRequired() (int, bool) {
+	return e.index, e.firstPlan
+}
+
+// An entry without text is refused with the repair that fits where it happened:
+// in a first plan no id can have kept text, so the whole plan goes again with
+// every step's text; later it is a new step that needs its own text. The code is
+// stable and a contract refusal, not an unclassified failure.
+func TestUpdatePlanTextlessEntryIsRefusedWithTheRepairForWhereItHappened(t *testing.T) {
+	run := func(failure error) (code, category, message, hint string) {
+		ctx := WithPlanProjectionSink(context.Background(), func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error) {
+			return nil, failure
+		})
+		// The entry has an id and no text, exactly what the runtime has to judge.
+		_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+			"plan":     []interface{}{map[string]interface{}{"step_id": "s1", "status": "completed"}},
+			"_context": ctx,
+		})
+		stable, ok := err.(interface {
+			ToolErrorCode() string
+			ToolErrorCategory() string
+			ModelSafeMessage() string
+			ToolRecoveryHint() string
+		})
+		if !ok {
+			t.Fatalf("text-required refusal = %T %v", err, err)
+		}
+		return stable.ToolErrorCode(), stable.ToolErrorCategory(), stable.ModelSafeMessage(), stable.ToolRecoveryHint()
+	}
+
+	code, category, message, hint := run(textRequiredTestError{index: 2, firstPlan: true})
+	if code != "plan_step_text_required" || category != "invalid_input" {
+		t.Errorf("first-plan refusal classified %s/%s", code, category)
+	}
+	for _, want := range []string{"plan[2].step is required", "this run has no plan yet", "ids are ignored in a first plan"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("first-plan message lacks %q: %s", want, message)
+		}
+	}
+	if !strings.Contains(hint, "Send the complete plan again: every step with its text, and without step_id.") {
+		t.Errorf("first-plan hint = %q", hint)
+	}
+
+	code, category, message, hint = run(textRequiredTestError{index: 0})
+	if code != "plan_step_text_required" || category != "invalid_input" {
+		t.Errorf("later refusal classified %s/%s", code, category)
+	}
+	if !strings.Contains(message, "plan[0].step is required: with no step_id the entry is a new step") || strings.Contains(message, "no plan yet") {
+		t.Errorf("later message = %s", message)
+	}
+	if !strings.Contains(hint, "echo the exact step_id an earlier update_plan result issued") {
+		t.Errorf("later hint = %q", hint)
+	}
+
+	// With a durable plan the runtime decides, even for an entry that has neither
+	// id nor text: the same typed refusal, not a bare string.
+	ctx := WithPlanProjectionSink(context.Background(), func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error) {
+		return nil, textRequiredTestError{index: 1, firstPlan: true}
+	})
+	_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+		"plan":     []interface{}{map[string]interface{}{"step": "Edit", "status": "pending"}, map[string]interface{}{"status": "pending"}},
+		"_context": ctx,
+	})
+	var typed interface{ ToolErrorCode() string }
+	if !errors.As(err, &typed) || typed.ToolErrorCode() != "plan_step_text_required" {
+		t.Fatalf("an entry with no id and no text under a durable plan = %T %v", err, err)
+	}
+}
+
+type stalePlanStepTestError struct {
+	index    int
+	supplied string
+	ids      []string
+	listing  string
+}
+
+func (stalePlanStepTestError) Error() string                    { return "plan step does not belong to the run" }
+func (e stalePlanStepTestError) CurrentPlanStepIDs() []string   { return e.ids }
+func (e stalePlanStepTestError) StalePlanEntry() (int, string)  { return e.index, e.supplied }
+func (e stalePlanStepTestError) CurrentPlanStepListing() string { return e.listing }
+
+type staleIdsOnlyTestError struct{ ids []string }
+
+func (staleIdsOnlyTestError) Error() string                  { return "plan step does not belong to the run" }
+func (e staleIdsOnlyTestError) CurrentPlanStepIDs() []string { return e.ids }
+
+func TestUpdatePlanStaleStepReceiptMapsIdsToStepsAndLocatesTheEntry(t *testing.T) {
+	run := func(t *testing.T, failure error) (string, string) {
+		t.Helper()
+		ctx := WithPlanProjectionSink(context.Background(), func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error) {
+			return nil, failure
+		})
+		_, err := NewUpdatePlanTool().Execute(map[string]interface{}{
+			"plan":     []interface{}{map[string]interface{}{"step_id": "step_made_up", "step": "Edit", "status": "in_progress"}},
+			"_context": ctx,
+		})
+		stable, ok := err.(interface {
+			ToolErrorCode() string
+			ToolErrorCategory() string
+			ModelSafeMessage() string
+		})
+		if !ok || stable.ToolErrorCode() != "stale_plan_step" || stable.ToolErrorCategory() != "stale_precondition" {
+			t.Fatalf("stale step recovery = %T %v", err, err)
+		}
+		return stable.ModelSafeMessage(), err.Error()
+	}
+
+	message, _ := run(t, stalePlanStepTestError{
+		index: 2, supplied: "step_made_up", ids: []string{"step_a", "step_b"},
+		listing: `step_a [completed] "Inspect"; step_b [in_progress] "Edit the parser"`,
+	})
+	for _, want := range []string{
+		`plan[2].step_id "step_made_up" is stale for the current run.`,
+		`Current steps (step_id [status] step): step_a [completed] "Inspect"; step_b [in_progress] "Edit the parser".`,
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("receipt lacks %q:\n%s", want, message)
+		}
+	}
+
+	// An error that knows only the ids keeps the plain listing.
+	message, _ = run(t, staleIdsOnlyTestError{ids: []string{"step_a", "step_b"}})
+	if want := "The supplied step_id is stale for the current run. Current step_id values: step_a, step_b."; !strings.Contains(message, want) {
+		t.Errorf("ids-only receipt = %q, want it to contain %q", message, want)
+	}
+
+	// Nothing to list: the first snapshot may omit ids; none are invented.
+	message, _ = run(t, stalePlanStepTestError{index: 0, supplied: "step_made_up"})
+	if !strings.Contains(message, "Omit step_id so this run can create its first durable plan snapshot.") || strings.Contains(message, "Current steps") {
+		t.Errorf("empty-plan receipt = %q", message)
 	}
 }
 
@@ -360,5 +613,29 @@ func TestPlanToolSuppressesIdenticalVisibleSnapshots(t *testing.T) {
 	}
 	if secondResult.Changed {
 		t.Fatal("identical steps and statuses must not repaint the plan")
+	}
+}
+
+// The schema is the model's contract for cancellation evidence. It must match
+// what the runtime accepts: a step planned without success_criteria has no
+// original criterion to preserve, and a whole short instruction is a quote.
+func TestUpdatePlanSchemaStatesTheCancellationEvidenceRules(t *testing.T) {
+	step := NewUpdatePlanTool().Schema().Properties["plan"].Items.Properties
+	replacement := step["replacement_step_id"].Description
+	for _, want := range []string{"established success_criteria", "planned without success_criteria", "states its own"} {
+		if !strings.Contains(replacement, want) {
+			t.Errorf("replacement_step_id lacks %q: %s", want, replacement)
+		}
+	}
+	if strings.Contains(replacement, "Preserve that original criterion") {
+		t.Errorf("replacement_step_id demands a criterion a criteria-less step lacks: %s", replacement)
+	}
+	for _, field := range []string{"scope_change_quote", "user_takeover_quote"} {
+		description := step[field].Description
+		for _, want := range []string{"whole user message", "whole sentence", "at least two words", "any part of a question"} {
+			if !strings.Contains(description, want) {
+				t.Errorf("%s lacks %q: %s", field, want, description)
+			}
+		}
 	}
 }

@@ -10,10 +10,12 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"selfmind/internal/control"
 	"selfmind/internal/platform/log"
 )
 
@@ -87,10 +89,12 @@ func LoggingMiddleware(next ToolExecutor) ToolExecutor {
 			log.Debug("tool error", "error", RedactSensitive(err.Error()))
 		} else {
 			log.Debug("tool result", "result", func() string {
-				if len(result) > 200 {
-					return RedactSensitive(result[:200]) + "..."
+				// Mask before cutting: a cut secret is no longer recognizable.
+				masked := RedactSensitive(result)
+				if len(masked) > 200 {
+					return masked[:200] + "..."
 				}
-				return RedactSensitive(result)
+				return masked
 			}())
 		}
 		return result, err
@@ -177,6 +181,33 @@ func EffectiveApprovalMode(s string) ApprovalMode {
 	return NormalizeApprovalMode(s)
 }
 
+// ApprovalModeAutonomy ranks a mode by how much it lets a Run do before a
+// person is asked: read-only 0, on-request and auto-edit 1 (every command
+// asks, edits flow), smart 2 (a command the sandbox contains does not ask, and
+// a judge may answer for the person), full-auto 3. approvalNeeded is the
+// contract the order follows: a lower rank asks at least wherever a higher one
+// does (TestApprovalModeAutonomyFollowsWhatEachModeAsks).
+func ApprovalModeAutonomy(mode ApprovalMode) int {
+	switch mode {
+	case ApprovalReadOnly:
+		return 0
+	case ApprovalFullAuto:
+		return 3
+	case ApprovalSmart:
+		return 2
+	}
+	return 1
+}
+
+// NarrowerApprovalMode is the one of two modes that lets a Run do less before
+// asking. On a tie it keeps a.
+func NarrowerApprovalMode(a, b ApprovalMode) ApprovalMode {
+	if ApprovalModeAutonomy(b) < ApprovalModeAutonomy(a) {
+		return b
+	}
+	return a
+}
+
 // IsKnownApprovalModeWord reports whether s is one of the accepted mode words
 // (including the aliases NormalizeApprovalMode understands). It is the single
 // authoritative word list shared by every /mode entry point, so a typo is
@@ -259,16 +290,22 @@ func operationClassesFor(toolName string, args map[string]interface{}, dangerous
 			classes = append(classes, OpClassExecInTurn)
 		}
 		command := execCommandPayload(toolName, args)
-		segments, _ := expandCommandSegments(command, 0)
-		if network, _ := egressCommand(command, segments); network {
+		commands := effectiveCommands(command)
+		if network, _ := egressIn(command, commands); network {
 			classes = append(classes, OpClassNetwork)
 		}
-		for _, fields := range segments {
-			programIndex, ok := segmentProgram(fields)
-			if !ok {
-				continue
-			}
-			if _, deletes := deleteExecBinaries[filepath.Base(fields[programIndex])]; deletes {
+		// A call that receives the daemon's network is a network operation,
+		// whatever made it so: a package install or a git remote the capability
+		// middleware recognised, a script that asked with `network: true`, a
+		// trusted workspace. "Do not use the network" then reaches every call
+		// that can, not only the ones that name an egress program.
+		if shared, _ := args["_network_shared"].(bool); shared {
+			classes = append(classes, OpClassNetwork)
+		}
+		for _, read := range commands {
+			program := read.id.program()
+			_, deletes := deleteExecBinaries[program.Name]
+			if deletes || (program.Name == "find" && slices.Contains(program.Args, "-delete")) {
 				classes = append(classes, OpClassDelete)
 				break
 			}
@@ -473,6 +510,7 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			toolName, _ := args["_tool_name"].(string)
 			annotateEffectiveSandboxMode(args)
 			scope, hasScope := currentExecutionScopeAny(args)
+			defer yieldQueuedHostExecution(args)
 			effectiveRoot := projectRoot
 			if hasScope {
 				effectiveRoot = approvalProjectRoot(projectRoot, scope, args)
@@ -486,11 +524,14 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 				// variant, but it is not a user decision.
 				return "", fmt.Errorf("operation blocked by safety policy: %s (do not retry; this is a hard safety limit, not a user rejection)", reason)
 			}
+			// Isolation was demanded but cannot be enforced for this call: no
+			// grant, judge or person is asked to approve a boundary that would
+			// not be the one enforced.
+			if refusal := strings.TrimSpace(stringArg(args, sandboxPlanRefusalArg)); refusal != "" && isExecTool(toolName) {
+				return "", unenforceableBoundaryError(refusal)
+			}
 
 			dangerous, reason := dangerousToolCall(effectiveRoot, toolName, args)
-			// Kept separate because `reason` is overwritten below for the deny
-			// and mode paths, and the standing-grant guard must read what the
-			// DANGER detector said, not the latest message written for display.
 			dangerousReason := reason
 			externalUnknown := unclassifiedExternalToolCall(args)
 			// A Run keeps the mode chosen at admission. A later person-level
@@ -529,6 +570,16 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			// contained exec call is recorded so /diag can show how much of the
 			// old ask volume was pure fatigue rather than judgement.
 			containment := assessExecContainment(toolName, args)
+			if isExecTool(toolName) {
+				// Whatever releases this call below covers exactly these
+				// in-place credential writes; dispatch refuses a plan that
+				// writes more.
+				args[approvedHostWritesArg] = append([]string{}, containment.HostCredentialWrites...)
+			}
+			hostOnce := mode == ApprovalSmart && isExecTool(toolName) && effectiveSandboxModeArg(args) == SandboxHost
+			hostWrites := hostCredentialWritesBinding(containment.HostCredentialWrites)
+			proxyReason := configuredProxyOverrideReason(toolName, args)
+			proxyOverride := proxyReason != ""
 			intentSnapshot := RunIntentSnapshot{}
 			if hasScope && scope.IntentSnapshot != nil {
 				intentSnapshot = scope.IntentSnapshot()
@@ -564,41 +615,51 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			// external effect, a write tool, and every uncontained exec all keep
 			// their review. Only a call the runtime can already prove harmless
 			// stops paying for a judgement about whether it was asked for.
-			contained := containment.AutoApprove() && !denyForcesHuman
-			// Parallel Runs may retain a configured network route and selected
-			// credentials. A shell using either can mutate a shared target that
-			// local workspace isolation cannot protect. Only a proven observation
-			// can skip the one-shot human decision; neither full-auto nor the
-			// model judge can authorize an unclassified remote effect.
-			parallelRemote := hasScope && scope.ParallelWork && isExecTool(toolName) &&
-				!containment.ObservationOnly &&
-				(containment.Network == containmentNetworkShared || containment.Credentials == containmentCredentialsSelected)
+			contained := containment.AutoApprove() && !denyForcesHuman && !proxyOverride
+			// Parallel Runs approve shared-network and credential-bearing
+			// commands exactly like a single Run (D7): full-auto runs them and
+			// smart has the judge review them. Cross-Run safety comes from the
+			// durable external-effect claim taken after this layer, whose only
+			// human ask is another Run's left-uncertain effect on the same
+			// target. When this layer asks anyway, that decision joins its ask.
+			foreignClaims, _ := args[externalEffectForeignClaimsArg].([]control.ExternalEffectClaim)
 			semanticReview := mode == ApprovalSmart && intentSnapshot.ModelAuthorization &&
 				!contained && (isWriteTool(toolName) || isExecTool(toolName) || dangerous)
-			if !semanticReview && !denyForcesHuman && !externalUnknown && !parallelRemote && !approvalNeeded(mode, toolName, dangerous, contained) {
+			if len(foreignClaims) == 0 && !semanticReview && !denyForcesHuman && !externalUnknown && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
 					recordScopeTriage(scope, toolName, "", TriageOutcomeContained, TriageAssessment{}, 0, nil)
 					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason, "assessment", containment.Summary())
 				}
 				return next(args)
 			}
+			// Review facts accumulate: a deny or a route change is added to what
+			// made the operation dangerous, never substituted for it in the judge
+			// prompt or the person's request.
 			if denyForcesHuman {
-				reason = "the current request contains an explicit deny; a person must confirm any override"
-			} else if !dangerous && reason == "" {
+				reason = appendApprovalReason("the current request contains an explicit deny; a person must confirm any override", reason)
+			} else if !dangerous && reason == "" && !proxyOverride {
 				reason = fmt.Sprintf("%s requires approval in %s mode", toolName, mode)
+			}
+			if proxyOverride {
+				reason = appendApprovalReason(reason, proxyReason)
 			}
 
 			// Layer 3: class-level allowlist. A coarse pattern key identifies the
 			// action CLASS; a matching task/person grant skips the human ask.
 			// Hardline never reaches here, so a granted class can never cover a
-			// hard-floor op.
-			patternKey := approvalPatternKeyForScope(toolName, args, reason, scope, hasScope)
-			exactRunKey := approvalExactRunKey(toolName, args, scope, hasScope)
-			declaredEffectKey := approvalDeclaredEffectKey(toolName, args, scope, hasScope)
+			// hard-floor op. Every reusable key is bound to the call's in-place
+			// credential writes: an approval covers the boundary it was given
+			// for, so a changed write set asks again and an unchanged one does
+			// not. The exact-run and decision keys carry them through the
+			// containment summary.
+			patternKey := bindHostCredentialWrites(approvalPatternKeyForScope(toolName, args, reason, scope, hasScope), hostWrites)
+			exactRunKey := approvalExactRunKey(toolName, args, scope, hasScope, containment)
+			declaredEffectKey := bindHostCredentialWrites(approvalDeclaredEffectKey(toolName, args, scope, hasScope), hostWrites)
 			// Rule candidates (batch B2) are the narrow authorizations this call
 			// could create — a command prefix, a host, a writable root — and the
 			// keys a previously granted rule is looked up under.
-			ruleCandidates := approvalRuleCandidates(toolName, args, scope, reason)
+			ruleCandidates := bindRuleCandidatesToHostWrites(approvalRuleCandidates(toolName, args, scope, reason), hostWrites,
+				compactHostPaths(args, containment.HostCredentialWrites))
 			targetKeys := approvalTargetRuleKeys(toolName, args, scope)
 			resumeFingerprint := approvalResumeFingerprint(toolName, args, scope, containment.Summary())
 			decisionKey := triageDecisionKey(resumeFingerprint, scope, intentSnapshot, mode)
@@ -609,23 +670,26 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			case denyForcesHuman:
 			// A current deny outranks full-auto, containment, and every stored
 			// grant. Continue directly to the human ask below.
+			case len(foreignClaims) > 0:
+				// No reusable grant or judge can resolve another Run's uncertain
+				// effect. Join that mandatory one-time decision into this ask.
+			case hostOnce:
+				// D1: each host invocation needs a fresh decision in smart mode.
 			case externalUnknown:
 				// External unknown effects are deliberately once-only. Historical
 				// broad grants and live run grants cannot release them.
-			case parallelRemote:
-				// A previous command class cannot grant a new shared-network or
-				// credential-bearing effect from this concurrent Run.
-			case isRunGranted(declaredEffectKey):
-				// A person approved this byte-identical command as part of a bounded
-				// phase. The hard floor and current deny already ran above; identity,
-				// workspace, environment and effective sandbox are part of the key.
-				recordScopeTriage(scope, toolName, declaredEffectKey, TriageOutcomeBundleHit, TriageAssessment{}, 0, nil)
-				return next(args)
 			case isRunGranted(decisionKey):
 				recordScopeTriage(scope, toolName, decisionKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
 			case semanticReview:
-				// An old capability grant cannot interpret a new human restriction.
+				// Broad grants cannot interpret today's restrictions. Only the exact
+				// decision key above includes the current intent snapshot.
+			case isRunGranted(declaredEffectKey):
+				recordScopeTriage(scope, toolName, declaredEffectKey, TriageOutcomeBundleHit, TriageAssessment{}, 0, nil)
+				return next(args)
+			case proxyOverride:
+				// An observation grant does not decide whether to discard the
+				// operator's route. Only an unchanged exact decision above can.
 			case isRunGranted(patternKey):
 				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
@@ -642,16 +706,22 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			// A parked approval is a one-shot capability for one byte-identical
 			// regenerated action. It sits below the hard floor and current explicit
 			// deny, so stale approval evidence cannot override today's safety facts.
-			if !denyForcesHuman && !externalUnknown && hasScope && scope.ResumeAuthorizations != nil && resumeFingerprint != "" {
+			// An ask that included other Runs' unresolved effects authorizes the
+			// action only against that same set of claims.
+			authorizationFingerprint := resumeFingerprint
+			if len(foreignClaims) > 0 {
+				authorizationFingerprint = foreignEffectAuthorizationFingerprint(toolName, args, scope, externalClaimIDs(firstClaimPerEffect(foreignClaims)))
+			}
+			if !denyForcesHuman && !externalUnknown && hasScope && scope.ResumeAuthorizations != nil && authorizationFingerprint != "" {
 				grantCtx := contextFromArgs(args)
 				approvalID, decisionID, grantKey, claimed, claimErr := scope.ResumeAuthorizations.ClaimApprovalResumeAuthorization(
-					grantCtx, scope.TenantID, scope.PersonID, scope.RunID, resumeFingerprint,
+					grantCtx, scope.TenantID, scope.PersonID, scope.RunID, authorizationFingerprint,
 				)
 				if claimErr != nil {
 					return "", fmt.Errorf("claim parked approval authorization: %w", claimErr)
 				}
 				if claimed {
-					if scope.runGrants != nil {
+					if scope.runGrants != nil && !hostOnce {
 						switch {
 						case strings.TrimSpace(grantKey) != "":
 							scope.runGrants.add(grantKey)
@@ -661,11 +731,14 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 							scope.runGrants.add(exactRunKey)
 						}
 					}
+					if len(foreignClaims) > 0 {
+						args[externalEffectToleratedClaimsArg] = externalClaimIDs(foreignClaims)
+					}
 					recordScopeTriage(scope, toolName, approvalID, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 					return next(args)
 				}
 			}
-			if !semanticReview && !denyForcesHuman && !externalUnknown && !parallelRemote && hasScope && scope.Grants != nil {
+			if len(foreignClaims) == 0 && !hostOnce && !semanticReview && !denyForcesHuman && !externalUnknown && !proxyOverride && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
 					if key == "" || !scope.StandingGrants.Allowed {
@@ -704,39 +777,6 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 			triageRisk := ""
 			triageAuthorization := ""
 			decisionPolicy := ""
-			// Host execution alone no longer forces a one-shot decision.
-			//
-			// It used to, and on a platform with no sandbox that is every exec
-			// call: 478 approvals over one week were all once-only and produced
-			// zero remembered decisions, so the person answered 9.5 times for
-			// each unit of work they had already accepted. The floor, not the
-			// filesystem, is what decides whether a class can bound a standing
-			// permission — and the class is now a verb-bounded prefix scoped to
-			// one workspace, so remembering `aws codebuild batch-get-builds`
-			// cannot release `aws codebuild start-build`.
-			//
-			// An uncontained payload keeps its one-shot decision in two cases.
-			//
-			// The floor refuses to classify it: `execute_code` runs a
-			// model-authored program, so there is nothing narrower than
-			// "arbitrary code" to remember and no reuse is safe.
-			//
-			// Or the dangerous-op heuristic flagged the COMMAND. Those classes —
-			// chmod, chown, mv, kill — are deliberately left OUT of the floor's
-			// banned set so they can be remembered under an ENFORCED sandbox,
-			// where the blast radius is the workspace. On the host there is no
-			// such bound, and a standing `chmod` would cover every path the
-			// person can reach.
-			//
-			// The reason has to be read, not just the flag: dangerousToolCall
-			// returns true with HostEscapeApprovalReason for EVERY host request,
-			// so treating the bare flag as "this command is destructive" would
-			// put every host call back on a one-shot decision and quietly undo
-			// the standing answer entirely.
-			//
-			// The test is "not provably isolated", not "host": an exec call
-			// whose sandbox mode failed to resolve is annotated with neither,
-			// and an unresolved mode is not evidence of containment.
 			hostWithoutClass := false
 			if isExecTool(toolName) && containment.Filesystem != containmentFilesystemIsolated {
 				destructive := dangerous && strings.TrimSpace(dangerousReason) != HostEscapeApprovalReason
@@ -744,14 +784,23 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 					hostWithoutClass = true
 				}
 			}
-			if semanticReview || externalUnknown || parallelRemote || denyForcesHuman || hostWithoutClass ||
-				(containment.Credentials == containmentCredentialsSelected && !containment.ObservationOnly) {
+			// A credential CLI's resolved credential:read outside the observation
+			// catalog is a once-only decision. Host-inventory state handed to an
+			// undecidable payload is not: it makes the call uncontained (above)
+			// but adds no remote reach, since without a network route it reaches
+			// no target and sandbox reads already cover the host's credential
+			// files.
+			if externalUnknown || denyForcesHuman || hostOnce || hostWithoutClass || proxyOverride ||
+				(credentialReadResolved(args) && !containment.ObservationOnly) {
 				decisionPolicy = ApprovalDecisionPolicyOnceOnly
 			}
-			if parallelRemote {
-				reason = "parallel execution with shared network or credentials requires one-time confirmation"
+			// The boundary facts lead the reason: every surface truncates it (an
+			// IM ask to 120 characters, the terminal panel to two lines), and
+			// these are the facts the judge and the person must not miss.
+			if fact := approvalBoundaryFact(args, containment); fact != "" {
+				reason = prependApprovalReason(fact, reason)
 			}
-			if mode == ApprovalSmart && hasScope && !denyForcesHuman && !externalUnknown && !parallelRemote {
+			if mode == ApprovalSmart && hasScope && !denyForcesHuman && !externalUnknown && len(foreignClaims) == 0 {
 				switch {
 				case scope.Judge == nil:
 					// No judge wired: smart mode cannot triage at all. Count it so
@@ -769,11 +818,24 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 					recordScopeTriage(scope, toolName, patternKey, TriageOutcomeEscalated, TriageAssessment{}, 0, nil)
 					log.Info("smart approval: triage stepped aside after repeated denials in this run", "tool", toolName, "run", scope.RunID)
 				default:
-					ctx := contextFromArgs(args)
+					ctx := withParallelApprovalContext(contextFromArgs(args), scope)
 					triageStarted := time.Now()
-					verdict, assessment, terr := triageApprovalWithIntent(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intentSnapshot, containment)
+					readIntent := scope.IntentSnapshot
+					if readIntent == nil && scope.TriageIntent != nil {
+						readIntent = func() RunIntentSnapshot { return RunIntentSnapshot{RawUserText: scope.TriageIntent()} }
+					}
+					verdict, assessment, terr := triageApprovalWithCurrentIntent(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intentSnapshot, approvalIntentGuard(intentSnapshot, readIntent), containment)
 					assessment.Response.ToolCallID = stringArg(args, "_tool_call_id")
 					triageLatency := time.Since(triageStarted)
+					if ctx.Err() != nil {
+						return "", ctx.Err()
+					}
+					var responseErr *ApprovalResponseError
+					if errors.As(terr, &responseErr) && responseErr.Class == "intent_changed" {
+						recordScopeTriage(scope, toolName, patternKey, TriageOutcomeUnavailable, assessment, triageLatency, terr)
+						message := "User requirements changed during automatic review; no action was executed."
+						return "", newStableToolRecoveryError(fmt.Errorf("%s %w", message, terr), "approval_context_changed", "stale_precondition", message, "Review the latest user requirements before submitting another action.", "preparation", "corrected_input", "not_dispatched", false)
+					}
 					triageRationale = assessment.Rationale
 					triageRisk = assessment.Risk
 					triageAuthorization = assessment.Authorization
@@ -784,7 +846,7 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 					case TriageApprove:
 						// Reuse only this action under unchanged human evidence and
 						// environment. A model verdict cannot grant a command class.
-						if decisionKey != "" {
+						if decisionKey != "" && !hostOnce {
 							recordApprovalGrant(ctx, scope, "run", decisionKey, time.Time{})
 						}
 						recordScopeTriage(scope, toolName, patternKey, TriageOutcomeApproved, assessment, triageLatency, nil)
@@ -827,10 +889,18 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 
 			// Layer 5: human ask.
 			if hasScope && scope.Approval != nil {
+				if len(foreignClaims) > 0 {
+					// Passing another Run's unresolved effect is a one-time
+					// decision about this exact call; it never becomes a grant.
+					reason = appendApprovalReason(reason, foreignEffectApprovalReason(foreignClaims))
+					triageRationale = foreignEffectApprovalReason(foreignClaims)
+					decisionPolicy = ApprovalDecisionPolicyOnceOnly
+				}
 				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeHumanAsk, TriageAssessment{
 					Risk: triageRisk, Authorization: triageAuthorization, Rationale: triageRationale,
 				}, 0, nil)
-				grantClass := grantClassForDecision(toolName, reason, args, patternKey)
+				grantClass := describeHostCredentialWritesGrant(grantClassForDecision(toolName, reason, args, patternKey), hostWrites,
+					compactHostPaths(args, containment.HostCredentialWrites))
 				runGrantClass := exactRunGrantDescription(patternKey, exactRunKey)
 				askRules := ruleCandidates
 				if decisionPolicy == ApprovalDecisionPolicyOnceOnly {
@@ -860,7 +930,8 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 					Containment:              containment.Summary(),
 					RuleCandidates:           askRules,
 					DecisionPolicy:           decisionPolicy,
-					AuthorizationFingerprint: resumeFingerprint,
+					AuthorizationFingerprint: authorizationFingerprint,
+					ExternalEffectClaimIDs:   externalClaimIDs(foreignClaims),
 				})
 				if err != nil {
 					return "", err
@@ -918,12 +989,12 @@ func SmartApprovalMiddleware(projectRoot string, prechecks ...func(map[string]in
 						}
 					}
 				}
+				if len(foreignClaims) > 0 {
+					args[externalEffectToleratedClaimsArg] = externalClaimIDs(foreignClaims)
+				}
 				return next(args)
 			}
 
-			if parallelRemote {
-				return "", fmt.Errorf("parallel remote execution requires an available human approval channel")
-			}
 			clarifyFn := clarifyHandlerFromArgs(args)
 			if clarifyFn != nil {
 				question := fmt.Sprintf("Dangerous operation detected.\nTool: %s\nArgs: %v\nReason: %s\nConfirm execution?", toolName, MarshalArgs(args), reason)
@@ -969,7 +1040,9 @@ func recordScopeTriage(scope ExecutionScope, toolName, grantKey string, outcome 
 // deliberately refuses to classify. The raw payload never leaves this function;
 // the key is in-memory only and includes the environment/blast-radius identity,
 // so changing code, sandbox, workspace, credentials, or network asks again.
-func approvalExactRunKey(toolName string, args map[string]interface{}, scope ExecutionScope, hasScope bool) string {
+// assessment is the call's containment, which the funnel has already derived
+// from the whole command; deriving it again doubled the cost of a long one.
+func approvalExactRunKey(toolName string, args map[string]interface{}, scope ExecutionScope, hasScope bool, assessment ContainmentAssessment) string {
 	if !hasScope || !isExecTool(toolName) || strings.TrimSpace(scope.RunID) == "" {
 		return ""
 	}
@@ -977,7 +1050,6 @@ func approvalExactRunKey(toolName string, args map[string]interface{}, scope Exe
 	if payload == "" {
 		return ""
 	}
-	assessment := assessExecContainment(toolName, args)
 	material := strings.Join([]string{
 		strings.ToLower(strings.TrimSpace(toolName)), payload,
 		strings.TrimSpace(scope.RunID), strings.TrimSpace(scope.WorkspaceID),
@@ -1120,6 +1192,19 @@ func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScop
 	}
 }
 
+// appendApprovalReason adds one review fact to the reason a judge and a person
+// see, keeping every earlier fact.
+func appendApprovalReason(reason, fact string) string {
+	reason, fact = strings.TrimSpace(reason), strings.TrimSpace(fact)
+	switch {
+	case reason == "":
+		return fact
+	case fact == "" || strings.Contains(reason, fact):
+		return reason
+	}
+	return reason + "; " + fact
+}
+
 // approvalGrantPersonTTL bounds a PERSON-scope class, which outlives every
 // workspace and every unit of work and is therefore the one scope a deadline
 // is the right instrument for. The 8h window matches the execution-capability
@@ -1145,15 +1230,21 @@ func approvalGrantExpiry(decisionScope string, args map[string]interface{}) time
 
 // approvalPatternKey returns a COARSE class identifier for an approval decision,
 // deliberately NOT the exact command. Approving one `chmod` should approve the
-// chmod CLASS for the granted scope, not just that byte-identical string. For
-// exec tools the class is "exec:"+the dangerous-op reason, which carries the
-// invoked binary (so "chmod 777 a" and "chmod +x b" both key to
-// "exec:invokes dangerous command: chmod", while an rm keys differently). For
-// write/path tools the class is the tool name plus a bucket of the reason with
-// the specific path stripped, so approving one out-of-workspace write does not
-// silently approve a write to a different out-of-workspace path forever — it
-// still buckets by REASON class, which is the intended coarseness. Returns ""
-// when there is nothing meaningful to remember.
+// chmod CLASS for the granted scope, not just that byte-identical string.
+//
+// An exec key is the command class the floor derives (grantCommandPrefix) and
+// nothing else: "exec:<tool>|class=<prefix>" for a sandboxed call, and the
+// workspace-bound host shape for a host escape. It is never built from the
+// approval reason. The reason is whatever made THIS call ask — the mode
+// ("terminal requires approval in on-request mode"), or nothing at all in smart
+// mode — so a key built from it named the whole tool: remembering one sandboxed
+// `kubectl get pods` released `kubectl delete` and `terraform destroy`, while
+// the prompt showed the mode text or a `kubectl get` class.
+//
+// For write/path tools the class is the tool name plus a bucket of the reason
+// with the specific path stripped, so approving one out-of-workspace write does
+// not silently approve a write to a different out-of-workspace path forever.
+// Returns "" when there is nothing meaningful to remember.
 func approvalPatternKey(toolName string, args map[string]interface{}, dangerousReason string) string {
 	return approvalPatternKeyForScope(toolName, args, dangerousReason, ExecutionScope{}, false)
 }
@@ -1162,12 +1253,9 @@ func approvalPatternKeyForScope(toolName string, args map[string]interface{}, da
 	if isExecTool(toolName) {
 		// Floor first: a payload whose class cannot bound what will run is
 		// approvable once but never remembered (see grant_floor.go).
-		if _, eligible := grantCommandPrefix(toolName, args); !eligible {
+		prefix, eligible := grantCommandPrefix(toolName, args)
+		if !eligible {
 			return ""
-		}
-		base := "exec:" + toolName
-		if dangerousReason != "" {
-			base = "exec:" + dangerousReason
 		}
 		if effectiveSandboxModeArg(args) == SandboxHost {
 			if !hasScope {
@@ -1175,13 +1263,20 @@ func approvalPatternKeyForScope(toolName string, args map[string]interface{}, da
 				// approved once, but must never create a reusable broad grant.
 				return ""
 			}
+			// A command dangerous for its own sake (chmod, kill, ssh) has no
+			// class on the host, where no sandbox bounds it: the ask is
+			// once-only (hostWithoutClass), so no stored key, however old,
+			// releases it.
+			if hostDangerousFamily(grantPrefixLabel(prefix)) {
+				return ""
+			}
 			resource := approvalResourceFingerprint(scope, toolName, args)
 			if resource == "" {
 				return ""
 			}
-			return base + "|resource=" + resource
+			return hostGrantKeyBase + grantKeyResourceMarker + resource
 		}
-		return base
+		return "exec:" + toolName + grantKeyClassMarker + grantPrefixLabel(prefix)
 	}
 	return toolName + ":" + patternReasonBucket(dangerousReason)
 }
@@ -1242,22 +1337,38 @@ var hardlineProtectedRoots = map[string]struct{}{
 	"/": {}, "/home": {}, "/etc": {}, "/usr": {}, "/var": {}, "/boot": {},
 }
 
-// hardlineDiskDevices are raw block-device path prefixes. Formatting one
-// (mkfs), overwriting it (dd of=), or redirecting into it destroys partitions
-// irrecoverably, so any such target is a hard block.
-var hardlineDiskDevices = []string{"/dev/sd", "/dev/nvme", "/dev/hd", "/dev/vd", "/dev/xvd"}
+// hardlineDiskDevices are raw block-device path prefixes, including the macOS
+// whole-disk nodes. Formatting one (mkfs), overwriting it (dd of=), or
+// redirecting into it destroys partitions irrecoverably, so any such target is
+// a hard block.
+var hardlineDiskDevices = []string{"/dev/sd", "/dev/nvme", "/dev/hd", "/dev/vd", "/dev/xvd", "/dev/disk", "/dev/rdisk"}
+
+// hardlineDiskDevice reports the device prefix a write target names, read
+// as the shell passes it: escapes removed.
+func hardlineDiskDevice(target string) (string, bool) {
+	target = strings.ToLower(strings.ReplaceAll(strings.Trim(target, `"'`), `\`, ""))
+	for _, dev := range hardlineDiskDevices {
+		if strings.HasPrefix(target, dev) {
+			return dev, true
+		}
+	}
+	return "", false
+}
 
 // hardlineToolCall is the UNBYPASSABLE safety floor. It fires before any
 // approval-mode bypass (full-auto included) because these operations have a
 // blast radius no session-level "yes" should ever authorize:
 //
 //   - recursive delete of the filesystem root or a protected system/home root
-//     (rm -rf /, /home, $HOME, /etc, /usr, /var, /boot);
-//   - raw-disk destruction: mkfs*, dd of=/dev/sdX|/dev/nvmeX, or any redirect
-//     into a /dev/sdX|/dev/nvmeX device;
+//     (rm -rf /, /home, $HOME, /etc, /usr, /var, /boot), including a find
+//     that amounts to one (find / -delete, find / -exec rm -rf {} +);
+//   - raw-disk destruction: mkfs*, newfs*, diskutil's erase verbs,
+//     dd of=/dev/sdX|/dev/nvmeX, or any redirect into a /dev/sdX|/dev/nvmeX
+//     device;
 //   - fork bomb (:(){ :|:& };:) which exhausts the process table;
 //   - powering the host down or rebooting it out from under a running task
-//     (shutdown, reboot, halt, poweroff, init 0, init 6).
+//     (shutdown, reboot, halt, poweroff, init or telinit 0|6, systemctl
+//     reboot|poweroff|halt|kexec|soft-reboot).
 //
 // It is intentionally TIGHT: only patterns whose harm is effectively
 // irreversible and never a legitimate agent action belong here. Everything
@@ -1279,45 +1390,78 @@ func hardlineToolCall(projectRoot, toolName string, args map[string]interface{})
 	}
 
 	// Raw-disk destruction via dd of=/dev/... or a redirect into /dev/...
-	// These are substring checks on the FULL command, so they already pierce
-	// any shell/priv wrapper (`bash -c "dd ... of=/dev/sda"`).
-	for _, dev := range hardlineDiskDevices {
-		if strings.Contains(lower, "of="+dev) {
-			return true, "overwrites raw disk device: " + dev + "*"
-		}
-		if strings.Contains(lower, "> "+dev) || strings.Contains(lower, ">"+dev) {
-			return true, "redirects over raw disk device: " + dev + "*"
-		}
-	}
-
-	// Per-segment program + argument inspection over the WRAPPER-UNWRAPPED
-	// segments, so `bash -c "rm -rf /"`, `sudo rm -rf /`, and `env rm -rf $HOME`
-	// are classified by their real inner program, not the wrapper. The floor
-	// stays TIGHT: an unwrappable payload does NOT hard-block here (that only
-	// raises the dangerous heuristic) — deny only what we can positively identify.
-	home := strings.TrimRight(os.Getenv("HOME"), "/")
-	segs, _ := expandCommandSegments(cmd, 0)
-	for _, fields := range segs {
-		progIdx, ok := segmentProgram(fields)
-		if !ok {
-			continue
-		}
-		base := filepath.Base(fields[progIdx])
-		rest := fields[progIdx+1:]
-		switch {
-		case base == "mkfs" || strings.HasPrefix(base, "mkfs."):
-			return true, "formats a filesystem: " + base
-		case base == "shutdown" || base == "reboot" || base == "halt" || base == "poweroff":
-			return true, "powers down or reboots the host: " + base
-		case base == "init" && len(rest) > 0 && (rest[0] == "0" || rest[0] == "6"):
-			return true, "changes runlevel to halt/reboot: init " + rest[0]
-		case base == "rm":
-			if target, hit := hardlineRmProtectedRoot(rest, home); hit {
-				return true, "recursive delete of protected root: " + target
+	// These substring checks on the FULL command pierce any wrapper and any
+	// code a payload is quoted in (`bash -c "dd ... of=/dev/sda"`); reading it
+	// once more with quotes and escapes removed catches `of="/dev/sda"`. The
+	// commands below check the same targets as the shell passes them.
+	unquoted := strings.ToLower(strings.NewReplacer(`"`, "", "'", "", `\`, "").Replace(cmd))
+	for _, text := range []string{lower, unquoted} {
+		for _, dev := range hardlineDiskDevices {
+			if strings.Contains(text, "of="+dev) {
+				return true, "overwrites raw disk device: " + dev + "*"
+			}
+			if strings.Contains(text, "> "+dev) || strings.Contains(text, ">"+dev) {
+				return true, "redirects over raw disk device: " + dev + "*"
 			}
 		}
 	}
+
+	// Program + argument inspection of every command the payload runs, named
+	// by identifyCommand: `bash -c "rm -rf /"`, `sudo rm -rf /`,
+	// `FOO=a/b RM -rf /` and `if x; then \rm -rf /; fi` are classified by the
+	// program the shell runs, not by how it is spelled. The floor stays TIGHT:
+	// an unwrappable payload does NOT hard-block here (that only raises the
+	// dangerous heuristic) — deny only what we can positively identify.
+	home := strings.TrimRight(os.Getenv("HOME"), "/")
+	for _, read := range effectiveCommands(cmd) {
+		if reason, hit := hardlineCommand(read, home); hit {
+			return true, reason
+		}
+	}
 	return false, ""
+}
+
+// hardlineCommand is the floor for one command the payload runs.
+func hardlineCommand(read readCommand, home string) (string, bool) {
+	for _, target := range read.writes {
+		if dev, hit := hardlineDiskDevice(target); hit {
+			return "redirects over raw disk device: " + dev + "*", true
+		}
+	}
+	program := read.id.program()
+	base, rest := program.Name, program.Args
+	if base == "dd" {
+		for _, arg := range rest {
+			if target, ok := strings.CutPrefix(arg, "of="); ok {
+				if dev, hit := hardlineDiskDevice(target); hit {
+					return "overwrites raw disk device: " + dev + "*", true
+				}
+			}
+		}
+	}
+	switch {
+	case base == "mkfs" || strings.HasPrefix(base, "mkfs.") || base == "newfs" || strings.HasPrefix(base, "newfs_"):
+		return "formats a filesystem: " + base, true
+	case base == "shutdown" || base == "reboot" || base == "halt" || base == "poweroff":
+		return "powers down or reboots the host: " + base, true
+	case (base == "init" || base == "telinit") && len(rest) > 0 && (rest[0] == "0" || rest[0] == "6"):
+		return "changes runlevel to halt/reboot: " + base + " " + rest[0], true
+	case base == "systemctl":
+		if verb, hit := systemctlPowerVerb(rest); hit {
+			return "powers down or reboots the host: systemctl " + verb, true
+		}
+	case base == "diskutil":
+		if verb, hit := diskutilEraseVerb(rest); hit {
+			return "erases a disk or volume: diskutil " + verb, true
+		}
+	case base == "rm":
+		if target, hit := hardlineRmProtectedRoot(rest, home); hit {
+			return "recursive delete of protected root: " + target, true
+		}
+	case base == "find":
+		return hardlineFindSweep(rest, home)
+	}
+	return "", false
 }
 
 // hardlineRmProtectedRoot reports whether an rm invocation (rest = args after
@@ -1354,26 +1498,41 @@ func hardlineRmProtectedRoot(rest []string, home string) (string, bool) {
 	return "", false
 }
 
-// hardlineProtectedRootTarget normalizes an rm target and reports whether it is
-// a protected root. It handles $HOME/~ expansion and a trailing /* glob
-// (rm -rf /* is as catastrophic as rm -rf /).
+// hardlineProtectedRootTarget normalizes an rm target the way it resolves —
+// the home directory however it is spelled, the path cleaned, trailing globs
+// collapsed — and only then reports whether it is a protected root:
+// `rm -rf ~/`, `rm -rf $HOME/..` and `rm -rf /*` are as catastrophic as
+// `rm -rf ~`, `rm -rf /home` and `rm -rf /`.
 func hardlineProtectedRootTarget(target, home string) (string, bool) {
 	t := strings.Trim(target, `"'`)
-	if t == "$HOME" || t == "${HOME}" || t == "~" {
-		return "$HOME", true
+	homeSpelled := false
+	for _, spelling := range []string{"${HOME}", "$HOME", "~"} {
+		if rest, ok := strings.CutPrefix(t, spelling); ok && (rest == "" || strings.HasPrefix(rest, "/")) {
+			t, homeSpelled = "$HOME"+rest, true
+			if home != "" {
+				t = home + rest
+			}
+			break
+		}
 	}
 	clean := cleanShellPathTarget(t)
-	// Collapse a trailing glob so "/*" and "/home/*" map to their root.
-	if strings.HasSuffix(clean, "/*") {
-		clean = strings.TrimSuffix(clean, "/*")
-		if clean == "" {
-			clean = "/"
+	for {
+		collapsed := strings.TrimSuffix(clean, "/*")
+		if collapsed == clean {
+			break
 		}
+		if collapsed == "" {
+			collapsed = "/"
+		}
+		clean = collapsed
 	}
 	if _, bad := hardlineProtectedRoots[clean]; bad {
 		return clean, true
 	}
-	if home != "" && clean == cleanShellPathTarget(home) {
+	if clean == "$HOME" || (home != "" && clean == cleanShellPathTarget(home)) {
+		if homeSpelled {
+			return "$HOME", true
+		}
 		return clean, true
 	}
 	return "", false
@@ -1388,22 +1547,9 @@ func cleanShellPathTarget(target string) string {
 	return path.Clean(target)
 }
 
-// segmentProgram returns the index of the invoked program in a segment's
-// fields, skipping leading VAR=value environment assignments. ok=false when the
-// segment is only assignments.
-func segmentProgram(fields []string) (int, bool) {
-	i := 0
-	for i < len(fields) && strings.Contains(fields[i], "=") && !strings.ContainsAny(fields[i], "/\\") {
-		i++
-	}
-	if i >= len(fields) {
-		return 0, false
-	}
-	return i, true
-}
-
 // dangerousBinaries are program names that warrant explicit approval before
-// execution. Matched by basename so that both `rm` and `/bin/rm` are caught.
+// execution. Matched by programName so that `rm`, `/bin/rm`, `RM` and `\rm`
+// are caught alike.
 var dangerousBinaries = map[string]struct{}{
 	"rm": {}, "rmdir": {}, "chmod": {}, "chown": {}, "kill": {}, "pkill": {},
 	"killall": {}, "shutdown": {}, "reboot": {}, "halt": {}, "poweroff": {},
@@ -1411,8 +1557,42 @@ var dangerousBinaries = map[string]struct{}{
 }
 
 // destructiveSubstrings are raw patterns that are dangerous regardless of how
-// the command is tokenized (e.g. redirecting over a device node).
-var destructiveSubstrings = []string{"> /dev/", ":(){", "/dev/sd", "/dev/nvme"}
+// the command is tokenized (e.g. fork bomb or raw disk nodes).
+var destructiveSubstrings = []string{":(){", "/dev/sd", "/dev/nvme"}
+
+var benignDevRedirectTargets = []string{
+	"null", "zero", "full", "random", "urandom", "stdin", "stdout", "stderr", "fd/",
+}
+
+// hasDangerousDevRedirect reports whether cmd redirects output to a /dev/
+// target other than harmless pseudo-devices such as /dev/null.
+func hasDangerousDevRedirect(cmd string) bool {
+	s := strings.ToLower(cmd)
+	for {
+		idx := strings.Index(s, ">")
+		if idx < 0 {
+			return false
+		}
+		rest := s[idx+1:]
+		rest = strings.TrimLeft(rest, ">|& \t")
+		if afterDev, ok := strings.CutPrefix(rest, "/dev/"); ok {
+			benign := false
+			for _, safe := range benignDevRedirectTargets {
+				if strings.HasPrefix(afterDev, safe) {
+					tail := afterDev[len(safe):]
+					if strings.HasSuffix(safe, "/") || tail == "" || strings.ContainsAny(tail[:1], " \t\n;|&)'\"") {
+						benign = true
+						break
+					}
+				}
+			}
+			if !benign {
+				return true
+			}
+		}
+		s = s[idx+1:]
+	}
+}
 
 // egressBinaries are programs whose primary purpose is moving data across the
 // network. They are classified dangerous (approval-gated) not because they are
@@ -1436,26 +1616,59 @@ var egressSubstrings = []string{"/dev/tcp/", "/dev/udp/"}
 // egressCommand reports whether the exec payload performs network egress. It is
 // a first-class safety classifier (its own function, not a buried list entry) so
 // the egress threat can be reasoned about, tested, and tightened independently
-// of the destructive-command heuristics. cmd is the raw payload; segs are its
-// wrapper-unwrapped segments (shared with dangerousToolCall to avoid re-parsing).
+// of the destructive-command heuristics. cmd is the raw payload and segs the
+// caller's field reading of it; the shell's own reading of cmd is added, so a
+// quoted assignment or a control structure cannot hide the program.
 func egressCommand(cmd string, segs [][]string) (bool, string) {
+	commands, _ := shellCommands(cmd, 0)
+	for _, fields := range segs {
+		commands = append(commands, readCommand{id: identifyCommand(fields), fallback: true})
+	}
+	return egressIn(cmd, commands)
+}
+
+func egressIn(cmd string, commands []readCommand) (bool, string) {
 	lower := strings.ToLower(cmd)
 	for _, sub := range egressSubstrings {
 		if strings.Contains(lower, sub) {
 			return true, "network egress via " + sub
 		}
 	}
-	for _, fields := range segs {
-		progIdx, ok := segmentProgram(fields)
-		if !ok {
-			continue
-		}
-		base := filepath.Base(fields[progIdx])
+	for _, read := range commands {
+		base := read.id.program().Name
 		if _, hit := egressBinaries[base]; hit {
-			return true, "network egress command: " + base
+			return true, egressCommandReason + base
 		}
 	}
 	return false, ""
+}
+
+// Dangerous-operation reasons that name a program or variable. They explain an
+// ask; a remembered class is never keyed on one (approvalPatternKeyForScope).
+const (
+	dangerousCommandReason = "invokes dangerous command: "
+	egressCommandReason    = "network egress command: "
+	codeInjectionReason    = "injects code through environment variable: "
+	findDeleteReason       = "find deletes files: -delete"
+)
+
+// codeInjectionAssignment returns the first variable the commands assign that
+// loads code into whatever program runs next, so no program, not even an
+// observation, can vouch for the call. PYTHONPATH counts when the payload
+// runs Python and ENV when it runs an interactive shell.
+func codeInjectionAssignment(commands []readCommand) string {
+	var readers injectionReaders
+	for _, read := range commands {
+		program := read.id.program()
+		readers.python = readers.python || pythonProgram(program.Name)
+		readers.interactiveShell = readers.interactiveShell || interactiveShell(program)
+	}
+	for _, read := range commands {
+		if variable := read.id.codeInjection(readers); variable != "" {
+			return variable
+		}
+	}
+	return ""
 }
 
 func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}) (bool, string) {
@@ -1464,36 +1677,52 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 	}
 	if isExecTool(toolName) {
 		cmd := execCommandPayload(toolName, args)
+		if hasDangerousDevRedirect(cmd) {
+			return true, "contains dangerous pattern: > /dev/"
+		}
 		for _, pattern := range destructiveSubstrings {
 			if strings.Contains(cmd, pattern) {
 				return true, fmt.Sprintf("contains dangerous pattern: %s", pattern)
 			}
 		}
-		// Inspect each WRAPPER-UNWRAPPED segment's program by basename, defeating
-		// both prefix tricks like /bin/rm AND wrapper tricks like
-		// `bash -c "rm ..."` / `sudo rm ...` / `env rm ...`.
-		segs, unparsed := expandCommandSegments(cmd, 0)
-		for _, fields := range segs {
-			progIdx, ok := segmentProgram(fields)
-			if !ok {
-				continue
-			}
-			base := filepath.Base(fields[progIdx])
+		// Every command the payload runs is named by identifyCommand, defeating
+		// spelling tricks like /bin/rm, RM or `FOO=a/b rm` AND wrapper tricks like
+		// `bash -c "rm ..."` / `sudo rm ...` / `exec rm ...`.
+		commands := effectiveCommands(cmd)
+		// Injected code runs inside whatever confines the program it is
+		// injected into. Enforced containment (writes confined to scope, no
+		// network or credential escape) already bounds arbitrary code, so the
+		// injection does not widen it; anywhere else no program can vouch for
+		// the call. It never backs a remembered class either way.
+		if variable := codeInjectionAssignment(commands); variable != "" && !assessExecContainment(toolName, args).AutoApprove() {
+			return true, codeInjectionReason + variable
+		}
+		for _, read := range commands {
+			base := read.id.program().Name
 			if _, bad := dangerousBinaries[base]; bad {
-				return true, fmt.Sprintf("invokes dangerous command: %s", base)
+				return true, dangerousCommandReason + base
+			}
+		}
+		// A command find runs is classified like any other command; -delete
+		// is find's own deletion.
+		for _, read := range commands {
+			if program := read.id.program(); program.Name == "find" && slices.Contains(program.Args, "-delete") {
+				return true, findDeleteReason
 			}
 		}
 		// Network egress (data exfiltration half of the IM-injection threat) is
-		// dangerous even when the command is otherwise harmless. Reuse the
-		// already-unwrapped segments so wrappers can't hide `sudo curl ...`.
-		if hit, ereason := egressCommand(cmd, segs); hit {
+		// dangerous even when the command is otherwise harmless. The same
+		// identification sees `sudo curl ...` through its wrapper.
+		if hit, ereason := egressIn(cmd, commands); hit {
 			return true, ereason
 		}
 		// A wrapper whose payload we could not extract (e.g. `bash script.sh`,
 		// `sh -s`) is opaque: treat it as dangerous (needs approval) but never
 		// hardline. This is the "can't parse → dangerous, not hard-blocked" rule.
-		if unparsed {
-			return true, "invokes an opaque wrapped command"
+		for _, read := range commands {
+			if read.id.Opaque {
+				return true, "invokes an opaque wrapped command"
+			}
 		}
 		// Host execution remains approval-gated, but only after inspecting the
 		// real payload. This preserves specific classes such as curl/chmod/rm
@@ -1534,197 +1763,6 @@ func execCommandPayload(toolName string, args map[string]interface{}) string {
 	return ""
 }
 
-// maxWrapperDepth bounds how deep the wrapper unwrapper recurses (e.g.
-// `sudo bash -c "env rm -rf /"`), so pathological nesting cannot spin the
-// classifier.
-const maxWrapperDepth = 3
-
-// shellDashCWrappers invoke a shell that runs a `-c "<script>"` payload; the
-// real command lives inside the quoted script, invisible to a first-token scan.
-var shellDashCWrappers = map[string]struct{}{
-	"sh": {}, "bash": {}, "zsh": {}, "dash": {},
-}
-
-// execPrefixWrappers prefix another command (optionally after their own flags
-// and, for env, VAR=value assignments). The wrapped program is the real target.
-var execPrefixWrappers = map[string]struct{}{
-	"env": {}, "sudo": {}, "doas": {}, "xargs": {}, "nohup": {}, "timeout": {},
-	"nice": {}, "ionice": {}, "setsid": {}, "stdbuf": {}, "command": {},
-}
-
-// wrapperValueFlags lists, per exec-prefix wrapper, the SEPARATED short flags
-// that consume the following token as their value (e.g. `sudo -u root <cmd>`).
-// Skipping the value is what stops `sudo -u root rm -rf /` from mis-identifying
-// `root` as the command and missing the `rm`. Attached forms (`-uroot`,
-// `--user=root`) are self-contained single tokens and need no entry.
-var wrapperValueFlags = map[string]map[string]struct{}{
-	"sudo":    {"-u": {}, "-g": {}, "-p": {}, "-C": {}, "-r": {}, "-t": {}, "-T": {}, "-U": {}, "-h": {}},
-	"doas":    {"-u": {}, "-C": {}},
-	"env":     {"-u": {}, "-C": {}, "-S": {}},
-	"nice":    {"-n": {}},
-	"ionice":  {"-c": {}, "-n": {}, "-p": {}, "-P": {}},
-	"timeout": {"-s": {}, "-k": {}, "--signal": {}, "--kill-after": {}},
-	"xargs":   {"-n": {}, "-I": {}, "-P": {}, "-L": {}, "-s": {}, "-d": {}, "-E": {}, "-a": {}},
-	"stdbuf":  {"-i": {}, "-o": {}, "-e": {}},
-}
-
-// expandCommandSegments splits a command line into its EFFECTIVE segments,
-// recursively unwrapping shell/priv/exec wrappers so downstream classifiers see
-// the wrapped payload. Each returned segment starts at its real program (leading
-// env assignments stripped). unparsed reports whether any wrapper's payload
-// could not be extracted, so the caller can degrade to "dangerous, not hardline".
-// Shared by hardlineToolCall (the floor) and dangerousToolCall (the heuristic).
-func expandCommandSegments(cmd string, depth int) (segs [][]string, unparsed bool) {
-	for _, seg := range splitTopLevelSegments(cmd) {
-		fields := shellFields(seg)
-		if len(fields) == 0 {
-			continue
-		}
-		sub, u := expandSegment(fields, depth)
-		segs = append(segs, sub...)
-		unparsed = unparsed || u
-	}
-	return segs, unparsed
-}
-
-// expandSegment unwraps a single tokenized segment. A shell `-c` wrapper is
-// replaced by the segments of its script; an exec-prefix wrapper is replaced by
-// re-classifying from its wrapped program. A wrapper we cannot see through
-// yields the wrapper segment itself plus unparsed=true.
-func expandSegment(fields []string, depth int) (segs [][]string, unparsed bool) {
-	progIdx, ok := segmentProgram(fields)
-	if !ok {
-		return nil, false
-	}
-	base := strings.ToLower(filepath.Base(fields[progIdx]))
-	rest := fields[progIdx+1:]
-	if depth < maxWrapperDepth {
-		if _, isShell := shellDashCWrappers[base]; isShell {
-			if script, found := dashCScript(rest); found {
-				return expandCommandSegments(script, depth+1)
-			}
-			return [][]string{fields[progIdx:]}, true
-		}
-		if _, isExec := execPrefixWrappers[base]; isExec {
-			if inner, found := execWrappedCommand(base, rest); found {
-				return expandSegment(inner, depth+1)
-			}
-			return [][]string{fields[progIdx:]}, true
-		}
-	}
-	return [][]string{fields[progIdx:]}, false
-}
-
-// dashCScript returns the script a shell `-c` runs. Because shellFields strips
-// quotes and splits on whitespace, a multi-word script like "rm -rf /" arrives
-// as several tokens; rejoining everything after the `-c` flag reconstructs it
-// (a small over-capture of any positional $0/$1 args after the script is
-// harmless — it only adds more tokens to classify). Matches `-c`, `--command`,
-// and a combined short cluster ending in c (e.g. `-lc`).
-func dashCScript(rest []string) (string, bool) {
-	for i := 0; i < len(rest); i++ {
-		tok := rest[i]
-		isDashC := tok == "-c" || tok == "--command" ||
-			(strings.HasPrefix(tok, "-") && !strings.HasPrefix(tok, "--") && len(tok) > 1 && strings.HasSuffix(tok, "c"))
-		if isDashC {
-			if i+1 < len(rest) {
-				return strings.Join(rest[i+1:], " "), true
-			}
-			return "", false
-		}
-	}
-	return "", false
-}
-
-// execWrappedCommand skips an exec-prefix wrapper's own flags, flag-values, and
-// env assignments (and timeout's leading DURATION) to return the wrapped command
-// fields. found=false when everything was consumed as wrapper options.
-func execWrappedCommand(wrapper string, rest []string) ([]string, bool) {
-	valueFlags := wrapperValueFlags[wrapper]
-	for i := 0; i < len(rest); i++ {
-		tok := rest[i]
-		switch {
-		case tok == "--":
-			if i+1 < len(rest) {
-				return rest[i+1:], true
-			}
-			return nil, false
-		case strings.HasPrefix(tok, "-"):
-			if valueFlags != nil {
-				if _, needsValue := valueFlags[tok]; needsValue && i+1 < len(rest) {
-					i++ // consume the flag's separated value
-				}
-			}
-		case strings.Contains(tok, "=") && !strings.ContainsAny(tok, "/\\"):
-			// leading VAR=value assignment (env), skip
-		case wrapper == "timeout" && isDurationToken(tok):
-			// `timeout DURATION cmd...`: the duration precedes the command
-		default:
-			return rest[i:], true
-		}
-	}
-	return nil, false
-}
-
-// isDurationToken reports whether tok looks like a timeout duration (5, 30s,
-// 2m, 1.5h). Used only to skip timeout's leading argument; a real command name
-// never matches this shape.
-func isDurationToken(tok string) bool {
-	if tok == "" {
-		return false
-	}
-	if s := tok[len(tok)-1]; s == 's' || s == 'm' || s == 'h' || s == 'd' {
-		tok = tok[:len(tok)-1]
-	}
-	if tok == "" {
-		return false
-	}
-	seenDot := false
-	for _, r := range tok {
-		switch {
-		case r >= '0' && r <= '9':
-		case r == '.' && !seenDot:
-			seenDot = true
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-// splitTopLevelSegments splits s on shell separators (; | & newline backtick
-// parens). It is deliberately NOT quote-aware: a separator inside quotes still
-// splits, which is strictly more CONSERVATIVE for approval classification (a
-// command hidden after an in-quote `;` still surfaces as its own segment) and,
-// combined with the quote-stripping in shellFields, lets the classifier see a
-// shell command embedded inside a code payload — e.g. execute_code running
-// `os.system('rm -rf /')`, where the parens/quotes are just delimiters.
-func splitTopLevelSegments(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool {
-		switch r {
-		case ';', '|', '&', '\n', '`', '(', ')':
-			return true
-		}
-		return false
-	})
-}
-
-// shellFields strips shell quote characters and splits the segment on
-// whitespace. Real shells GROUP a quoted span into one argument; treating its
-// words individually instead is intentional here — it can only over-split (a
-// false "dangerous", which merely asks for approval), never hide a program,
-// and it means a wrapped `-c "rm -rf /"` script re-tokenizes cleanly once
-// dashCScript rejoins the tokens after `-c`.
-func shellFields(seg string) []string {
-	cleaned := strings.Map(func(r rune) rune {
-		if r == '\'' || r == '"' {
-			return -1
-		}
-		return r
-	}, seg)
-	return strings.Fields(cleaned)
-}
-
 func contextFromArgs(args map[string]interface{}) context.Context {
 	if args != nil {
 		if ctx, ok := args["_context"].(context.Context); ok && ctx != nil {
@@ -1746,7 +1784,11 @@ func approvalDisplayArgs(args map[string]interface{}) map[string]interface{} {
 	if effectiveSandboxModeArg(args) == SandboxHost {
 		requested, _ := requestedSandboxMode(args)
 		if requested != SandboxHost {
-			out["effective_sandbox"] = "host (isolated sandbox unavailable or disabled)"
+			why := strings.TrimSpace(stringArg(args, effectiveSandboxReasonArg))
+			if why == "" {
+				why = "isolated sandbox unavailable or disabled"
+			}
+			out["effective_sandbox"] = RedactSensitive("host (" + why + ")")
 		}
 	}
 	return out
@@ -1782,7 +1824,7 @@ func redactApprovalValue(value interface{}) interface{} {
 var sensitiveApprovalField = regexp.MustCompile(`(?i)(^|[_-])(api[_-]?key|token|secret|password|credential|authorization)($|[_-])`)
 
 func redactApprovalNamedValue(key string, value interface{}) interface{} {
-	if text, ok := value.(string); ok && sensitiveApprovalField.MatchString(strings.TrimSpace(key)) && !isCredentialReference(text) {
+	if text, ok := value.(string); ok && sensitiveApprovalField.MatchString(strings.TrimSpace(key)) && !isWholeReference(text) {
 		return "[REDACTED]"
 	}
 	return redactApprovalValue(value)

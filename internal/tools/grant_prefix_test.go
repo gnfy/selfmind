@@ -26,7 +26,8 @@ func TestGrantPrefixSeparatesReadsFromWrites(t *testing.T) {
 	if read == write {
 		t.Fatalf("a read and a write must not share a class: %q", read)
 	}
-	if read != "aws codebuild batch-get-builds" || write != "aws codebuild start-build" {
+	// The profile the call acts as is part of its class.
+	if read != "aws codebuild batch-get-builds --profile=cw3" || write != "aws codebuild start-build --profile=cw3" {
 		t.Fatalf("prefixes = %q / %q", read, write)
 	}
 }
@@ -213,5 +214,29 @@ func TestUnresolvedSandboxModeIsTreatedAsUncontained(t *testing.T) {
 	}
 	if policy, _ := policyFor("aws codebuild batch-get-builds --ids b --profile cw3"); policy == ApprovalDecisionPolicyOnceOnly {
 		t.Fatal("an ordinary read still has a class that bounds a standing answer")
+	}
+}
+
+func TestGrantPrefixHandlesBenignDevNullWithoutGrantingSkillScripts(t *testing.T) {
+	if flagged, reason := dangerousToolCall("", "terminal", execArgs("gcloud builds list 2> /dev/null")); flagged {
+		t.Fatalf("2> /dev/null must not trip dangerousToolCall, got %q", reason)
+	}
+	if flagged, _ := dangerousToolCall("", "terminal", execArgs("echo x > /dev/sda")); !flagged {
+		t.Fatal("redirect to raw disk device must still trip dangerousToolCall")
+	}
+
+	label, ok := prefixOf(t, "unset HTTP_PROXY HTTPS_PROXY && gcloud builds list 2> /dev/null")
+	if !ok || label != "gcloud builds list" {
+		t.Fatalf("prefix = %q (%v), want 'gcloud builds list'", label, ok)
+	}
+
+	if label, ok := prefixOf(t, "bash skills/cloud-build/scripts/trigger.sh --project demo"); ok {
+		t.Fatalf("a Skill path cannot mint a command family: %q", label)
+	}
+	if IsGrantableCommandFamily("skill:cloud-build trigger.sh") || IsGrantableCommandFamily("skill:cloud-build") {
+		t.Fatal("legacy Skill families cannot authorize execution")
+	}
+	if bad, ok := prefixOf(t, "bash skills/cloud-build/../evil.sh"); ok {
+		t.Fatalf("path traversal skill script must not be grant-eligible, got %q", bad)
 	}
 }

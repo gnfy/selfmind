@@ -604,7 +604,7 @@ func partialStreamRecoveryMessages(messages []llm.Message, partial string) []llm
 	if partial != "" {
 		out = append(out, llm.Message{Role: "assistant", Content: partial})
 	}
-	out = append(out, llm.Message{Role: "user", Content: "[SelfMind transport recovery] The previous model stream disconnected before any tool was executed. Continue from the exact point where it stopped without repeating text. If a tool is needed, emit the complete tool call now."})
+	out = append(out, runtimeControlMessage("[SelfMind transport recovery] The previous model stream disconnected before any tool was executed. Continue from the exact point where it stopped without repeating text. If a tool is needed, emit the complete tool call now.", "notice"))
 	return out
 }
 
@@ -805,7 +805,7 @@ func toolFailureHintForClass(class string) string {
 	case "credential_state_readonly":
 		return "The tool could not write its own state directory inside the sandbox; this is an execution-environment gap, not a login problem."
 	case "sandbox_no_network":
-		return "The isolated command needs the workspace-scoped network capability."
+		return "The isolated command ran without network access; if it needs the network, retry once with network: true."
 	case "credential_missing", "credential_expired", "auth":
 		return "Check the relevant credential or login state before retrying."
 	case "timeout":
@@ -888,6 +888,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	ctx = withToolActivationState(ctx)
 	ctx = withActiveSkillRuntimeState(ctx)
 
+	// Per-Run accounting cannot leak between pooled workers or model changes.
+	tokenBaseline := &requestTokenBaseline{}
+	ctx = context.WithValue(ctx, requestTokenBaselineKey{}, tokenBaseline)
 	var totalUsage llm.UsageStats
 	eventCh := eventChannelFromContext(ctx, a.EventChannel)
 	addUsage := func(target *llm.UsageStats, usage llm.UsageStats) {
@@ -921,14 +924,20 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			},
 		})
 	}
+	firstProviderCall := true
 	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats, finishReason string, callErr error) {
 		route := llm.DescribeProviderRoute(a.activeLLM())
+		tokenBaseline.observed(status, usage)
 		var wait *llm.ProviderWait
 		deferred := errors.As(callErr, &wait)
 		var providerDispatched *bool
 		if deferred {
 			status = "deferred"
 			providerDispatched = &wait.Dispatched
+		}
+		firstCall := firstProviderCall && (providerDispatched == nil || *providerDispatched)
+		if firstCall {
+			firstProviderCall = false
 		}
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type: "provider.call.usage",
@@ -937,6 +946,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"model":                       route.Model,
 				"role":                        string(llm.RoleCodingAgent),
 				"iteration":                   iteration,
+				"first_call":                  firstCall,
 				"transport":                   transport,
 				"status":                      status,
 				"provider_dispatched":         providerDispatched,
@@ -1019,58 +1029,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 	// 0. Build dynamic system prompt (including facts + project context)
 	systemPrompt, promptSections, _ := a.buildSystemPrompt(ctx, tenantID, strategy, initialPrompt)
-	if a.primaryForegroundPromptProfile() {
-		note := strategy.SystemPromptNote()
-		if note != "" {
-			systemPrompt += note
-			promptSections = append(promptSections, PromptSection{Category: "runtime", Tokens: estimateTokens(note)})
-		}
-	}
-
-	// 0.1 Inject project context files (.selfmind.md, AGENTS.md, etc.). Internal
-	// background review is governed by its own role prompt and bounded data,
-	// not by untrusted repository instructions.
-	if a.contextScanner != nil && a.foregroundPromptProfile() {
-		// Size the project-context budget to the live model window (may have
-		// been changed by SetContextWindow). The project layer has its OWN
-		// budget, independent of the person-memory layer below.
-		if a.contextEngine != nil {
-			a.contextScanner.SetContextWindowTokens(a.contextEngine.maxTokens)
-		}
-		var ctxFiles []ContextFile
-		if workspace, ok := WorkspaceContextFromContext(ctx); ok {
-			ctxFiles, _ = a.contextScanner.ScanRoots(workspace.ContextRoots())
-		}
-		if len(ctxFiles) > 0 {
-			ctxPrompt := a.contextScanner.BuildContextPrompt(ctxFiles)
-			if ctxPrompt != "" {
-				systemPrompt += "\n\n" + ctxPrompt
-				promptSections = append(promptSections, PromptSection{Category: "project_context", Tokens: estimateTokens(ctxPrompt)})
-			}
-		}
-	}
-	// Add a compact, deterministic build-system profile for coding work. This
-	// is evidence derived from manifests and lockfiles only; prompt assembly
-	// never executes repository code. It is limited to foreground and delegated
-	// coding profiles; background review keeps its separate bounded role contract.
-	if workspace, ok := WorkspaceContextFromContext(ctx); ok && a.workspacePromptProfile() {
-		remainingProfiles := maxProfileProjects
-		for _, root := range workspace.ContextRoots() {
-			if remainingProfiles <= 0 {
-				break
-			}
-			profile := DetectProjectProfile(root)
-			if len(profile.Projects) > remainingProfiles {
-				profile.Projects = profile.Projects[:remainingProfiles]
-			}
-			remainingProfiles -= len(profile.Projects)
-			if profilePrompt := profile.Prompt(); profilePrompt != "" {
-				profilePrompt = fmt.Sprintf("# BOUND PROJECT ROOT\nroot: %s\n\n%s", root, profilePrompt)
-				systemPrompt += "\n\n" + profilePrompt
-				promptSections = append(promptSections, PromptSection{Category: "project_context", Tokens: estimateTokens(profilePrompt)})
-			}
-		}
-	}
 
 	// Compose the turn window (ContextComposer contract, context_composer.go):
 	// system prompt + person-level spine tail + compaction summary when over
@@ -1080,6 +1038,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	// compat path for history that predates the spine.
 	histKey := a.trajectoryKey(ctx, channel)
 	fallbackKeys := a.trajectoryFallbackKeys(ctx, channel)
+	ctx = withContextSystemSections(ctx, promptSections)
 	messages, err := a.Composer().Compose(
 		ctx, a.memory, tenantID,
 		histKey,
@@ -1102,14 +1061,17 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			resumed = append(resumed, messages[0])
 		}
 		for _, message := range resumeMessages {
-			if message.Role != "system" {
+			if message.Role != "system" && message.ContextOrigin != llm.MessageOriginRuntimeControl && message.ContextOrigin != llm.MessageOriginWorkSpine {
 				resumed = append(resumed, message)
 			}
 		}
 		if !exactLoopReplayFromContext(ctx) {
 			resumed = append(resumed, llm.Message{Role: "user", Content: initialPrompt})
 		}
-		messages = a.contextEngine.TruncateMessagesCtx(ctx, resumed)
+		messages = resumed
+		if _, humanResume := humanWaitResumeFromContext(ctx); !humanResume {
+			messages = a.contextEngine.TruncateMessagesCtx(ctx, resumed)
+		}
 		// Deferred-tool activation is scoped to this run's context, so a resumed
 		// run starts with an empty set and would refuse every capability it had
 		// already discovered. Activation is recorded in the tool_search results
@@ -1154,6 +1116,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	var previousToolNames map[string]bool
 	emitProviderCallContext := func(iteration int, transport string, callMessages []llm.Message, callStrategy TaskStrategy) ([]llm.Message, error) {
 		toolDefinitions := a.llmToolDefinitions(ctx, callStrategy)
+		// An adapter fingerprint includes protocol, model settings and schemas.
+		// Unknown adapters keep the portable local estimate.
+		requestKey := ""
+		if fingerprint, ok := llm.FingerprintProviderRequest(ctx, a.activeLLM(), llm.ChatRequest{
+			Messages: callMessages, Tools: toolDefinitions, PromptCacheKey: llm.StablePromptCacheKey(ctx),
+		}, transport == "stream"); ok {
+			route := llm.DescribeProviderRoute(a.activeLLM())
+			requestKey = route.Provider + "/" + route.Model + "/" + fingerprint.Protocol + "/" + fingerprint.PrefixHash
+		}
+		tokenBaseline.configure(requestKey)
 		prepared, err := a.contextEngine.PrepareRequest(ctx, callMessages, toolDefinitions)
 		if err != nil {
 			return nil, err
@@ -1183,7 +1155,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 		payload := ProviderCallContextBreakdown(promptSections, prepared, toolDefinitions)
 		payload["tool_schemas"] = a.contextEngine.tokenizer.CountTools(toolDefinitions)
-		payload["estimated_total"] = a.contextEngine.countMessages(prepared) + a.contextEngine.tokenizer.CountTools(toolDefinitions)
+		localTotal := a.contextEngine.countMessages(prepared) + a.contextEngine.tokenizer.CountTools(toolDefinitions)
+		estimatedTotal, measured := a.contextEngine.requestTokens(ctx, prepared, toolDefinitions)
+		payload["local_estimated_total"] = localTotal
+		payload["estimated_total"] = estimatedTotal
+		payload["token_estimate_source"] = "local_codec"
+		if measured {
+			payload["token_estimate_source"] = "provider_usage_plus_local_delta"
+			payload["input_tokens_baseline"] = tokenBaseline.input
+		}
+		tokenBaseline.submitted(prepared, localTotal)
 		payload["iteration"] = iteration
 		payload["transport"] = transport
 		payload["tool_schema_count"] = len(toolDefinitions)
@@ -1224,7 +1205,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	// finish_run and then closes with one line. A final answer the plan gate
 	// sends back is not carried; the model answers again after reconciling.
 	var answerCarry strings.Builder
-	callIDPrefix := delegatedCallIDPrefix(ctx)
+	callIDs := newToolCallIDs(delegatedCallIDPrefix(ctx), messages)
+	// Seed before any restored history was trimmed for the provider request.
+	callIDs.reserveMessages(loopResumeMessagesFromContext(ctx))
 	// streamLost records that some answer text never reached the event
 	// consumer; turn.completed carries it so the gap stays visible.
 	streamLost := false
@@ -1258,17 +1241,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	toolAvailabilityRepairIssued := false
 	toolBudgetExhausted := false
 	toolAdmissionRefused := false
-	planSeen := false
-	var unresolvedPlanSteps []string
+	seedSelectedPlanCursor(ctx)
+	planSeen, unresolvedPlanSteps := selectedPlanState(ctx)
+	// acceptedPlanRead records a readable selected or accepted current-Run
+	// plan; an unreadable result cannot replace it or vouch for completion.
+	acceptedPlanRead := planSeen
 	planRepairAttempts := 0
-	// Distinct successful substantive action tools completed by this Run, taken
-	// from the same evidence gate that extends the tool budget. It excludes
-	// lifecycle bookkeeping and provably read-only observation, so only real
-	// multi-step work escalates the plan guidance below.
-	planEvidenceTools := 0
-	planGuidanceEscalated := false
-	// Tool actions since the last successful plan update, and the count at the
-	// last stale-plan reminder, so each reminder waits for new actions.
 	actionsSincePlanUpdate, actionsAtPlanReminder := 0, 0
 	successfulFinishStatus := ""
 	var finishRepair finishCorrection
@@ -1315,7 +1293,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"detail":    detail,
 			},
 		})
-		if sink := loopCheckpointSinkFromContext(ctx); sink != nil {
+		if sink := loopCheckpointSinkFromContext(ctx); sink != nil && !humanWaitParked(ctx) {
 			checkpoint := LoopCheckpoint{
 				Iteration: iteration,
 				Outcome:   outcome,
@@ -1328,6 +1306,151 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				}})
 			}
 		}
+	}
+	// Resumed dispatches use the same result accounting as new model batches.
+	consumeToolResults := func(calls []llm.ToolCall, results []toolExecutionResult) {
+		actionToolsUsed -= releaseHeldToolReservations(calls, results, toolUseCounts)
+		finishRepair.observe(results, toolUseCounts)
+		for idx, res := range results {
+			if !res.success || idx >= len(calls) {
+				continue
+			}
+			if name := strings.TrimSpace(calls[idx].Function); name == "update_plan" || name == "work_select" {
+				// An unreadable result keeps the last accepted list. With none
+				// read yet, the gate fails closed on the request instead.
+				if unresolved, ok := acceptRunPlanReceipt(ctx, calls[idx], res); ok {
+					planSeen = true
+					actionsSincePlanUpdate, actionsAtPlanReminder = 0, 0
+					unresolvedPlanSteps, acceptedPlanRead = unresolved, true
+					messages = expireRuntimeControls(messages, "plan")
+				} else if name == "update_plan" && !acceptedPlanRead {
+					planSeen = true
+					unresolvedPlanSteps = requestedOpenPlanSteps(calls[idx])
+				}
+			}
+			if status, ok := finishRunStatusFromToolCall(calls[idx]); ok {
+				successfulFinishStatus = status
+			}
+		}
+
+		// Consume boundaries and messages together in execution order. A later
+		// fallback must also expire a Skill selected earlier in the same batch.
+		for idx, res := range results {
+			var call []llm.ToolCall
+			if idx < len(calls) {
+				call = calls[idx : idx+1]
+			}
+			if shouldExpireActiveSkillContext(ctx, call, []toolExecutionResult{res}) {
+				expireActiveSkillToolResults(messages)
+				systemPrompt = expireActiveSkillMessages(messages, systemPrompt)
+				clearActiveSkillWorkUnitSequence(ctx)
+			}
+			if res.success && res.toolName == "skill_select" {
+				var selected struct {
+					Success          bool `json:"success"`
+					WorkUnitSequence int  `json:"work_unit_sequence"`
+				}
+				if json.Unmarshal([]byte(res.rawResult), &selected) == nil && selected.Success {
+					setActiveSkillWorkUnitSequence(ctx, selected.WorkUnitSequence)
+				}
+			}
+			// Deferred tools share the work-unit boundary even without a Skill.
+			if res.success {
+				if cleared := applyWorkUnitBoundary(ctx, inProgressWorkUnitSequence(res.toolName, res.msg.Content)); cleared > 0 {
+					EmitAgentEvent(eventCh, AgentEvent{Type: "tool.catalog.activated", Payload: map[string]interface{}{
+						"cleared": cleared, "active_total": activatedToolCount(ctx), "source": "work_unit_boundary",
+					}})
+				}
+				if res.toolName == "update_plan" {
+					if activated := activateToolsFromSearchResult(ctx, res.toolName, res.msg.Content); len(activated) > 0 {
+						EmitAgentEvent(eventCh, AgentEvent{Type: "tool.catalog.activated", Payload: map[string]interface{}{
+							"tools": activated, "active_total": activatedToolCount(ctx), "source": res.toolName,
+						}})
+					}
+				}
+			}
+			history.Steps = append(history.Steps, res.step)
+			messages = append(messages, res.msg)
+			if planSeen && !res.heldBeforeDispatch && !isLifecycleToolName(res.toolName) {
+				actionsSincePlanUpdate++
+			}
+			if res.success && !isLifecycleToolName(res.toolName) {
+				if _, seen := successfulActionEvidence[res.signature]; !seen {
+					successfulActionEvidence[res.signature] = struct{}{}
+					progressVersion++
+				}
+			}
+		}
+	}
+	completeHandoff := func(iteration int, handoff toolLifecycleHandoff) string {
+		if handoff.Status == "waiting_user" {
+			reportTurnPause(ctx, TurnPause{Reason: handoff.CompletionReason, Message: strings.TrimSpace(handoff.Message), NeedApproval: handoff.NeedApprove})
+		}
+		payload := map[string]interface{}{
+			"status":            handoff.Status,
+			"summary":           handoff.Summary,
+			"done":              handoff.Done,
+			"next_steps":        handoff.NextSteps,
+			"files":             handoff.Files,
+			"tests":             handoff.Tests,
+			"risks":             handoff.Risks,
+			"need_approve":      handoff.NeedApprove,
+			"completion_reason": handoff.CompletionReason,
+		}
+		EmitAgentEvent(eventCh, AgentEvent{Type: "run.outcome", Payload: payload})
+		answer := strings.TrimSpace(handoff.Message)
+		messages = append(messages, llm.Message{Role: "assistant", Content: answer})
+		history.Steps = append(history.Steps, answer)
+		history.Outcome = answer
+		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, answer, handoff.Status, messages)
+		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
+		completion := resolveTurnCompletion(completionSignals{FinishStatus: handoff.Status})
+		recordStep(iteration, StepCompleteTurn, handoff.Status)
+		emitTurnCompleted(eventCh, answer, completion, streamLost)
+		return answer
+	}
+	completeAnswer := func(i int, resp string, planUnresolved bool, extra ...string) string {
+		history.Outcome = resp
+		completion := resolveTurnCompletion(completionSignals{
+			FinishStatus:         successfulFinishStatus,
+			ToolBudgetExhausted:  toolBudgetExhausted,
+			ToolAdmissionRefused: toolAdmissionRefused,
+			PlanUnresolved:       planUnresolved,
+		})
+
+		// Append this turn to the spine under the same key used to load it
+		// (slim entry: user text + final answer + touched paths + how the turn
+		// ended), and refresh the task-coherent FTS index.
+		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, completion.outcomeLabel(), messages)
+
+		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
+
+		recordStep(i, StepCompleteTurn, completion.Reason)
+		emitTurnCompleted(eventCh, resp, completion, streamLost, extra...)
+		return resp
+	}
+	if resume, ok := humanWaitResumeFromContext(ctx); ok {
+		calls, resumeErr := pendingHumanWaitCalls(messages, resume.ToolCallID)
+		if resumeErr != nil {
+			return "", totalUsage, resumeErr
+		}
+		actionToolsUsed += countActionToolCalls(calls)
+		incrementToolUseCounts(toolUseCounts, calls)
+		remainingNestedBudget := actionToolBudget - actionToolsUsed
+		if actionToolBudget == actionToolBudgetLimit {
+			remainingNestedBudget = max(0, remainingNestedBudget-strategy.CompletionReserve)
+		}
+		toolCtx, nestedToolsUsed := WithNestedActionToolBudget(ctx, remainingNestedBudget)
+		results, resumeErr := a.resumeHumanWaitCalls(toolCtx, tenantID, eventCh, messages, resume)
+		if resumeErr != nil {
+			return "", totalUsage, resumeErr
+		}
+		actionToolsUsed += nestedToolsUsed()
+		consumeToolResults(calls, results)
+		if handoff, ready := lifecycleHandoffFromToolResults(results); ready {
+			return completeHandoff(0, handoff), totalUsage, nil
+		}
+		recordStep(0, StepExecuteTools, "human_wait_resumed")
 	}
 	for i := 0; i < maxIterations; i++ {
 		// Mid-turn compaction (P0-C): recompute the window budget every
@@ -1352,7 +1475,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		iterationStrategy.MaxActionTools = actionToolBudget
 		if strategy.CompletionReserve > 0 && actionToolsUsed >= actionToolBudgetLimit-6 && !closureNoticeIssued {
 			closureNoticeIssued = true
-			messages = append(messages, llm.Message{Role: "user", Content: fmt.Sprintf("SelfMind has %d action calls left before the hard limit; the final %d are reserved for verify. Finish the current scope, update the plan to match observed progress, and verify the final changes. Do not expand the work. If incomplete, report the artifacts, actual checks, and exact remaining step.", actionToolBudgetLimit-actionToolsUsed, strategy.CompletionReserve)})
+			messages = append(messages, runtimeControlMessage(fmt.Sprintf("SelfMind has %d action calls left before the hard limit; the final %d are reserved for verify. Finish the current scope, update the plan to match observed progress, and verify the final changes. Do not expand the work. If incomplete, report the artifacts, actual checks, and exact remaining step.", actionToolBudgetLimit-actionToolsUsed, strategy.CompletionReserve), "notice"))
 		}
 		if strategy.CompletionReserve > 0 && actionToolsUsed >= actionToolBudgetLimit-strategy.CompletionReserve {
 			iterationStrategy.AllowedTools = map[string]bool{}
@@ -1390,50 +1513,26 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		if successfulFinishStatus != "" {
 			iterationStrategy.AllowedTools = map[string]bool{}
 		}
-		// Plan guidance escalation. The system prompt — including
-		// planToolGuidance — is composed once per Run, before any work has
-		// happened, so a model that simply never volunteers update_plan keeps
-		// reading the optional wording no matter how much work it does. This is
-		// the per-iteration seam: once the Run's own evidence shows genuinely
-		// multi-step work and there is still no durable plan, hand the model the
-		// required wording for the next model call. Same shape as the other
-		// runtime directives in this loop, and the same discipline as the tool
-		// budget — escalate only after real new evidence, never from the input
-		// text. Guidance only: no plan is fabricated, no provider call is added,
-		// and the model stays free to finish. It reads this iteration's strategy,
-		// so a turn whose plan tool is unavailable is never told to require it,
-		// and it stops once the turn is winding down — asking for a plan while
-		// the budget-exhausted path is telling the model to stop calling tools
-		// would be a contradiction, not guidance.
-		if successfulFinishStatus == "" && !planGuidanceEscalated && !toolBudgetExhausted && shouldEscalatePlanGuidance(iterationStrategy, planEvidenceTools, planSeen) {
-			planGuidanceEscalated = true
-			previousPlanPolicy := iterationStrategy.normalized().PlanPolicy
-			iterationStrategy = iterationStrategy.WithPlanRequired()
-			messages = append(messages, llm.Message{
-				Role:    "user",
-				Content: planGuidanceEscalationNudge(iterationStrategy, planEvidenceTools),
-			})
-			EmitAgentEvent(eventCh, AgentEvent{Type: "strategy.plan_guidance_escalated", Payload: map[string]interface{}{
-				"iteration":            i,
-				"plan_evidence_tools":  planEvidenceTools,
-				"threshold":            planGuidanceEscalationThreshold,
-				"previous_plan_policy": string(previousPlanPolicy),
-				"plan_policy":          string(iterationStrategy.PlanPolicy),
-			}})
-		}
 		// Stale plan reminder, at the same seam and appended at the tail so the
 		// cached request prefix survives. It only says the plan has not moved
 		// for a while; the model decides whether the plan is still true.
 		if successfulFinishStatus == "" && !toolBudgetExhausted && planSeen &&
 			shouldRemindStalePlan(iterationStrategy, len(unresolvedPlanSteps), actionsSincePlanUpdate, actionsAtPlanReminder) {
 			actionsAtPlanReminder = actionsSincePlanUpdate
-			messages = append(messages, llm.Message{Role: "user", Content: planStaleReminder(actionsSincePlanUpdate, unresolvedPlanSteps)})
+			messages = append(messages, runtimeControlMessage(planStaleReminder(actionsSincePlanUpdate, unresolvedPlanSteps), "plan"))
 			EmitAgentEvent(eventCh, AgentEvent{Type: "strategy.plan_stale_reminder", Payload: map[string]interface{}{
 				"iteration": i, "actions_since_plan_update": actionsSincePlanUpdate,
 				"open_steps": len(unresolvedPlanSteps), "threshold": planStaleReminderThreshold,
 			}})
 		}
 		var fullResp strings.Builder
+		finalProseOnly := true
+		appendResponseContent := func(content string, phase llm.AssistantPhase) {
+			fullResp.WriteString(content)
+			if content != "" && phase != llm.AssistantPhaseFinalAnswer {
+				finalProseOnly = false
+			}
+		}
 		var reasoningResp strings.Builder
 		var nativeCalls []llm.ToolCall
 		var streamErr error
@@ -1464,7 +1563,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			pendingStreamPhase = llm.AssistantPhaseUnspecified
 		}
 		handleStreamContent := func(content string, phase llm.AssistantPhase) {
-			fullResp.WriteString(content)
+			appendResponseContent(content, phase)
 			if suppressLegacyToolStream {
 				return
 			}
@@ -1499,7 +1598,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 		appendChatResponse := func(chatResp *llm.ChatResponse) {
 			if chatResp.Content != "" {
-				fullResp.WriteString(textutil.CleanUTF8(chatResp.Content))
+				appendResponseContent(textutil.CleanUTF8(chatResp.Content), chatResp.Phase)
 			}
 			if chatResp.ReasoningContent != "" {
 				reasoningResp.WriteString(textutil.CleanUTF8(chatResp.ReasoningContent))
@@ -1724,7 +1823,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		flushPendingStream()
 		resp := textutil.CleanUTF8(fullResp.String())
 		legacyMarkupPresent := legacyToolMarkerIndex(resp) >= 0
-		nativeCalls = normalizeToolCallIDs(nativeCalls, i, callIDPrefix)
+		nativeCalls = callIDs.normalize(nativeCalls, i)
 		stopped := llm.ClassifyStopReason(finishReason)
 		outputLimited := stopped.Continuable()
 		// A filtered reply is cut short like one that ran out of output, but
@@ -1737,14 +1836,21 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		var droppedForBudget, droppedForLifecycle, deferredAcrossWorkUnitBoundary, deferredAcrossWatchHandoff int
 		if outputCut {
 			if len(calls) == 0 {
-				calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix)
+				calls = callIDs.legacy(ExtractToolCalls(resp), i)
 			}
 		} else {
 			requested := nativeCalls
 			if len(requested) == 0 {
-				requested = legacyToolCallsToLLM(ExtractToolCalls(resp), i, callIDPrefix)
+				requested = callIDs.legacy(ExtractToolCalls(resp), i)
 			}
 			calls, refused, droppedForBudget, droppedForLifecycle = admitToolCalls(requested, iterationStrategy, actionToolsUsed, toolUseCounts)
+			// Spend an extension already earned by prior observations before
+			// rejecting a sibling at the soft boundary. The batch itself earns
+			// nothing yet; the hard ceiling and lifecycle caps remain intact.
+			if droppedForBudget > droppedForLifecycle && tryExtendToolBudget(i) {
+				iterationStrategy.MaxActionTools = actionToolBudget
+				calls, refused, droppedForBudget, droppedForLifecycle = admitToolCalls(requested, iterationStrategy, actionToolsUsed, toolUseCounts)
+			}
 			if len(calls) == 0 && len(refused) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
 				droppedForBudget = 1
 			}
@@ -1756,7 +1862,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			assistantContent = toolBudgetSafeAssistantContent(resp)
 		}
 
-		assistantMessageIndex := len(messages)
+		// Refused calls are answered right after this message, so the answer's
+		// home is this index, never the tail of messages or steps.
+		assistantMessageIndex, assistantStepIndex := len(messages), len(history.Steps)
 		messages = append(messages, llm.Message{
 			Role: "assistant", Content: assistantContent,
 			ReasoningContent: reasoningResp.String(), ToolCalls: requestedCallsWithRefusals(calls, refused),
@@ -1780,6 +1888,22 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				history.Steps = append(history.Steps, result.step)
 			}
 		}
+		// A refused or dropped call ends the answer attempt, whether or not
+		// this response earns a repair hint. A response with text of its own
+		// completes the pending cut answer, which stands as the whole text if
+		// no hint follows; a textless one completes nothing, and the pending
+		// text is dropped rather than carried as a fragment. An incomplete
+		// call in a cut or filtered response also ends the attempt, and there
+		// the pending text goes with the response: neither is a whole answer.
+		switch {
+		case outputCut && (len(calls) > 0 || legacyMarkupPresent):
+			continuedAnswer.Reset()
+		case len(refused) > 0 || droppedForBudget > 0:
+			if toolBudgetSafeAssistantContent(resp) != "" {
+				resp = continueAnswer(continuedAnswer.String(), resp)
+			}
+			continuedAnswer.Reset()
+		}
 		if len(calls) > 0 && !outputCut {
 			if !nativeToolActivityAnnounced {
 				emitAgentActivity(eventCh, toolCallActivity(calls), "tool_selection", i)
@@ -1791,69 +1915,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				remainingNestedBudget = max(0, remainingNestedBudget-strategy.CompletionReserve)
 			}
 			toolCtx, nestedToolsUsed := WithNestedActionToolBudget(ctx, remainingNestedBudget)
-			results := a.executeToolCalls(toolCtx, tenantID, eventCh, calls)
-			finishRepair.observe(results, toolUseCounts)
+			toolCtx = withHumanWaitBatch(toolCtx, LoopCheckpoint{Iteration: i, Outcome: StepExecuteTools, Messages: cloneLoopMessages(messages)})
+			results := a.executePlanAwareToolCalls(toolCtx, tenantID, eventCh, calls, messages, consumeToolResults)
 			actionToolsUsed += nestedToolsUsed()
-			for idx, res := range results {
-				if !res.success || idx >= len(calls) {
-					continue
-				}
-				if unresolved, ok := unresolvedPlanStepsFromToolCall(calls[idx]); ok {
-					planSeen = true
-					unresolvedPlanSteps = unresolved
-					actionsSincePlanUpdate, actionsAtPlanReminder = 0, 0
-				}
-				if status, ok := finishRunStatusFromToolCall(calls[idx]); ok {
-					successfulFinishStatus = status
-				}
-			}
-
-			// Append results in order
-			if shouldExpireActiveSkillContext(ctx, calls, results) {
-				expireActiveSkillToolResults(messages)
-				systemPrompt = expireActiveSkillMessages(messages, systemPrompt)
-				clearActiveSkillWorkUnitSequence(ctx)
+			if status, answer, committed := committedTurn(ctx); committed {
+				successfulFinishStatus = status
+				return completeAnswer(i, answer, false, "declared_final_response", "true"), totalUsage, nil
 			}
 			for _, result := range results {
-				if !result.success || result.toolName != "skill_select" {
-					continue
-				}
-				var selected struct {
-					Success          bool `json:"success"`
-					WorkUnitSequence int  `json:"work_unit_sequence"`
-				}
-				if json.Unmarshal([]byte(result.rawResult), &selected) == nil && selected.Success {
-					setActiveSkillWorkUnitSequence(ctx, selected.WorkUnitSequence)
-				}
-			}
-			// Deferred-tool activation shares the Active Skill's work-unit scope:
-			// a capability discovered for one unit of work is not evidence for the
-			// next. The sequence comes from the update_plan projection rather than
-			// the Skill's, so it resets even when no Skill was ever selected.
-			for _, result := range results {
-				if !result.success {
-					continue
-				}
-				if cleared := applyWorkUnitBoundary(ctx, inProgressWorkUnitSequence(result.toolName, result.msg.Content)); cleared > 0 {
-					EmitAgentEvent(eventCh, AgentEvent{Type: "tool.catalog.activated", Payload: map[string]interface{}{
-						"cleared": cleared, "active_total": activatedToolCount(ctx), "source": "work_unit_boundary",
-					}})
-				}
-			}
-			for _, res := range results {
-				history.Steps = append(history.Steps, res.step)
-				messages = append(messages, res.msg)
-				if planSeen && !isLifecycleToolName(res.toolName) {
-					actionsSincePlanUpdate++
-				}
-				if res.success && !isLifecycleToolName(res.toolName) {
-					if _, seen := successfulActionEvidence[res.signature]; !seen {
-						successfulActionEvidence[res.signature] = struct{}{}
-						progressVersion++
-						if countsTowardPlanEvidence(res.toolName, res.retryClass) {
-							planEvidenceTools++
-						}
-					}
+				if result.runError != nil {
+					return "", totalUsage, result.runError
 				}
 			}
 			// Safety valve only: a tool result's bytes were already decided when
@@ -1867,55 +1938,55 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					"live_bytes":   liveToolResultBytes(messages), "iteration": i,
 				}})
 			}
-			if onlyBookkeepingCalls(calls) && !legacyMarkupPresent {
-				carryAnswerProse(&answerCarry, resp)
-			} else {
+			// Executed calls end this answer attempt, except that a textless plan
+			// or outcome call leaves an answer cut by the output limit pending
+			// for its continuation. Prose beside only bookkeeping joins the
+			// final answer in order; an action supersedes the attempt.
+			switch {
+			case !onlyBookkeepingCalls(calls) || legacyMarkupPresent:
 				answerCarry.Reset()
+				continuedAnswer.Reset()
+			case strings.TrimSpace(resp) != "":
+				carryAnswerProse(&answerCarry, continueAnswer(continuedAnswer.String(), resp))
+				continuedAnswer.Reset()
 			}
 			handoff, handoffReady := lifecycleHandoffFromToolResults(results)
 			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
 			if handoffReady {
-				if handoff.Status == "waiting_user" {
-					reportTurnPause(ctx, TurnPause{Reason: handoff.CompletionReason, Message: strings.TrimSpace(handoff.Message), NeedApproval: handoff.NeedApprove})
+				return completeHandoff(i, handoff), totalUsage, nil
+			}
+			// An explicit body in an accepted finish receipt, or a native final
+			// phase beside accepted bookkeeping, avoids another generation.
+			// Refusals and incomplete output never take this shortcut.
+			declaredAnswer := acceptedFinishResponse(calls, results)
+			if successfulFinishStatus != "" && !legacyMarkupPresent && streamErr == nil &&
+				len(refused) == 0 && droppedForBudget == 0 && deferredAcrossWorkUnitBoundary == 0 && deferredAcrossWatchHandoff == 0 &&
+				(finalProseOnly && acceptedFinishAnswer(calls, results, resp) || declaredAnswer != "") {
+				answer := answerCarry.String()
+				var completeExtra []string
+				if declaredAnswer != "" {
+					answer = declaredAnswer
+					completeExtra = []string{"declared_final_response", "true"}
+					messages = append(messages, llm.Message{Role: "assistant", Content: answer})
+					history.Steps = append(history.Steps, answer)
 				}
-				payload := map[string]interface{}{
-					"status":            handoff.Status,
-					"summary":           handoff.Summary,
-					"done":              handoff.Done,
-					"next_steps":        handoff.NextSteps,
-					"files":             handoff.Files,
-					"tests":             handoff.Tests,
-					"risks":             handoff.Risks,
-					"need_approve":      handoff.NeedApprove,
-					"completion_reason": handoff.CompletionReason,
-				}
-				EmitAgentEvent(eventCh, AgentEvent{Type: "run.outcome", Payload: payload})
-				answer := strings.TrimSpace(handoff.Message)
-				messages = append(messages, llm.Message{Role: "assistant", Content: answer})
-				history.Steps = append(history.Steps, answer)
-				history.Outcome = answer
-				a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, answer, handoff.Status, messages)
-				a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
-				completion := resolveTurnCompletion(completionSignals{FinishStatus: handoff.Status})
-				recordStep(i, StepCompleteTurn, handoff.Status)
-				emitTurnCompleted(eventCh, answer, completion, streamLost)
-				return answer, totalUsage, nil
+				return completeAnswer(i, answer, false, completeExtra...), totalUsage, nil
 			}
 			if deferredAcrossWorkUnitBoundary > 0 {
-				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind applied the work-unit boundary before later tool calls. Re-issue only the calls still needed for the new in-progress work unit."})
+				messages = append(messages, runtimeControlMessage("SelfMind applied the work-unit boundary before later tool calls. Re-issue only the calls still needed for the new in-progress work unit.", "notice"))
 			}
 			if deferredAcrossWatchHandoff > 0 {
-				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind held later non-watcher calls at the watcher lifecycle boundary. Because registration did not complete the handoff, re-issue only the calls still needed after correcting the watcher."})
+				messages = append(messages, runtimeControlMessage("SelfMind held later non-watcher calls at the watcher lifecycle boundary. Because registration did not complete the handoff, re-issue only the calls still needed after correcting the watcher.", "notice"))
 			}
 
 			if droppedForBudget > droppedForLifecycle && tryExtendToolBudget(i) {
-				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because the completed calls produced new evidence. Continue with the next necessary action, and avoid repeating an identical call unless its inputs or relevant state changed."})
+				messages = append(messages, runtimeControlMessage("SelfMind extended the bounded tool budget because the completed calls produced new evidence. Continue with the next necessary action, and avoid repeating an identical call unless its inputs or relevant state changed.", "notice"))
 			}
 			continue
 		}
 		if droppedForBudget > 0 && !toolBudgetRepairIssued {
 			if droppedForBudget > droppedForLifecycle && tryExtendToolBudget(i) {
-				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because prior calls produced new evidence. Retry only the next necessary tool action; do not repeat unchanged calls."})
+				messages = append(messages, runtimeControlMessage("SelfMind extended the bounded tool budget because prior calls produced new evidence. Retry only the next necessary tool action; do not repeat unchanged calls.", "notice"))
 				recordStep(i, StepContinueModel, "budget_extended")
 				continue
 			}
@@ -1933,8 +2004,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				finalizeHint = "SelfMind reserved the remaining action calls for verify. Use verify for the outstanding checks, then resolve the plan and finish_run according to the evidence. Further implementation calls are unavailable."
 			}
 			messages = append(messages, llm.Message{
-				Role:    "user",
-				Content: finalizeHint,
+				Role: "user", ContextOrigin: llm.MessageOriginRuntimeControl, ControlCondition: "notice",
+				Content: runtimeControlPrefix + finalizeHint,
 			})
 			recordStep(i, StepContinueModel, "budget_exhausted_finalize")
 			continue
@@ -1945,7 +2016,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				if i+1 >= maxIterations {
 					maxIterations = i + 2
 				}
-				messages = append(messages, llm.Message{Role: "user", Content: "The requested tools are unavailable in the current strategy or turn phase. None of the refused calls was executed. Use the exposed tools to record an honest outcome, or write the answer with the missing work clearly identified. Do not repeat the unavailable action."})
+				messages = append(messages, runtimeControlMessage("The requested tools are unavailable in the current strategy or turn phase. None of the refused calls was executed. Use the exposed tools to record an honest outcome, or write the answer with the missing work clearly identified. Do not repeat the unavailable action.", "notice"))
 				recordStep(i, StepContinueModel, "tool_availability_finalize")
 				continue
 			}
@@ -1973,7 +2044,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				}
 				continuationHint = "Your previous response was cut off. None of its tool calls were executed. Re-issue only the still-needed calls with complete arguments; do not continue partial arguments."
 			} else if resp != "" {
-				continuedAnswer.WriteString(resp)
+				joined := continueAnswer(continuedAnswer.String(), resp)
+				continuedAnswer.Reset()
+				continuedAnswer.WriteString(joined)
 			}
 			if i+1 < maxIterations {
 				activity, detail := "Continuing because the model reached its output limit", "output_limit_continue"
@@ -1982,8 +2055,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				}
 				emitAgentActivity(eventCh, activity, "continuation", i)
 				messages = append(messages, llm.Message{
-					Role:    "user",
-					Content: continuationHint,
+					Role: "user", ContextOrigin: llm.MessageOriginRuntimeControl, ControlCondition: "notice",
+					Content: runtimeControlPrefix + continuationHint,
 				})
 				recordStep(i, StepContinueModel, detail)
 				continue
@@ -2001,28 +2074,32 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if len(calls) > 0 || legacyMarkupPresent {
 				resp = "The model provider filtered the reply before its tool request was complete. No tools from that response were executed."
 			}
-			history.Outcome = strings.TrimSpace(continuedAnswer.String() + resp)
+			history.Outcome = strings.TrimSpace(continueAnswer(continuedAnswer.String(), resp))
 			completion := resolveTurnCompletion(completionSignals{OutputFiltered: true})
 			recordStep(i, StepCompleteTurn, completion.Reason)
 			emitTurnCompleted(eventCh, history.Outcome, completion, streamLost, "finish_reason", finishReason)
 			return history.Outcome, totalUsage, nil
 		}
 		if continuedAnswer.Len() > 0 {
+			resp = continueAnswer(continuedAnswer.String(), resp)
+			continuedAnswer.Reset()
 			continuedAnswer.WriteString(resp)
-			resp = continuedAnswer.String()
-			history.Steps[len(history.Steps)-1] = resp
-			messages[len(messages)-1].Content = resp
+			history.Steps[assistantStepIndex] = resp
+			messages[assistantMessageIndex].Content = resp
 		}
 
 		planUnresolved := planSeen && len(unresolvedPlanSteps) > 0 && successfulFinishStatus == ""
 		if planUnresolved && planRepairAttempts < 2 && toolUseCounts["update_plan"] < lifecycleToolCap("update_plan") {
 			planRepairAttempts++
+			// The gate sends this answer back. It is not kept: the next answer
+			// is a new attempt, not a continuation of this one.
+			continuedAnswer.Reset()
 			if i+1 >= maxIterations {
 				maxIterations = i + 2
 			}
 			emitAgentActivity(eventCh, "The visible plan still has unresolved steps; reconciling final progress", PlanReconciliationPhase, i)
 			messages = append(messages, llm.Message{
-				Role: "user",
+				Role: "user", ContextOrigin: llm.MessageOriginRuntimeControl, ControlCondition: "plan",
 				// This used to read "mark finished steps completed and steps
 				// intentionally not performed cancelled", which asks for a
 				// status, not a judgement. On 2026-09-07 a plan whose own step 5
@@ -2030,7 +2107,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				// arrived here and came back completed, with the change absent.
 				// The gate can only require that statuses are filled in, so what
 				// it asks for has to be the comparison.
-				Content: "Before giving the final answer, reconcile the visible plan. Call update_plan once with the complete current snapshot. " +
+				Content: runtimeControlPrefix + "Before giving the final answer, reconcile the visible plan. Call update_plan once with the complete current snapshot. " +
 					"Judge each unresolved step against the success_criteria you declared for it: completed only when that criterion is actually met, cancelled when you decided not to do it. " +
 					"A step whose criterion you never checked is not completed — check it now, or resolve it honestly and name the unmet criterion in your final answer. " +
 					"Do not weaken a criterion to fit what happened. If work is genuinely blocked or waiting externally, call finish_run with that non-done status instead. Unresolved steps: " + strings.Join(unresolvedPlanSteps, "; "),
@@ -2047,25 +2124,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				resp = carried
 			}
 		}
-		history.Outcome = resp
-
-		completion := resolveTurnCompletion(completionSignals{
-			FinishStatus:         successfulFinishStatus,
-			ToolBudgetExhausted:  toolBudgetExhausted,
-			ToolAdmissionRefused: toolAdmissionRefused,
-			PlanUnresolved:       planUnresolved,
-		})
-
-		// Append this turn to the spine under the same key used to load it
-		// (slim entry: user text + final answer + touched paths + how the turn
-		// ended), and refresh the task-coherent FTS index.
-		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, completion.outcomeLabel(), messages)
-
-		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
-
-		recordStep(i, StepCompleteTurn, completion.Reason)
-		emitTurnCompleted(eventCh, resp, completion, streamLost)
-		return resp, totalUsage, nil
+		return completeAnswer(i, resp, planUnresolved), totalUsage, nil
 	}
 
 	// Iteration cap is a pure SAFETY backstop now, not a completion mechanism:
@@ -2095,6 +2154,16 @@ func shouldExpireActiveSkillContext(ctx context.Context, calls []llm.ToolCall, r
 		switch result.toolName {
 		case "skill_select", "skill_fallback":
 			return true
+		case "work_select":
+			var selection struct {
+				Status              string `json:"status"`
+				CommitMode          string `json:"commit_mode"`
+				ActiveSkillRetained bool   `json:"active_skill_retained"`
+			}
+			if json.Unmarshal([]byte(result.msg.Content), &selection) == nil &&
+				selection.Status == "committed" && selection.CommitMode == "direct" && !selection.ActiveSkillRetained {
+				return true
+			}
 		case "update_plan":
 			activeSequence := activeSkillWorkUnitSequence(ctx)
 			if activeSequence == 0 {
@@ -2138,7 +2207,7 @@ func shouldExpireActiveSkillContext(ctx context.Context, calls []llm.ToolCall, r
 
 func expireActiveSkillToolResults(messages []llm.Message) {
 	for i := range messages {
-		if messages[i].Role == "tool" && messages[i].Name == "skill_select" {
+		if messages[i].Role == "tool" && (messages[i].Name == "skill_select" || messages[i].Name == "skill_view") {
 			messages[i].Content = `{"success":true,"context_expired":true,"notice":"This skill belonged to an earlier work unit or was explicitly abandoned. Its instructions are no longer active."}`
 		}
 	}
@@ -2189,6 +2258,23 @@ func onlyBookkeepingCalls(calls []llm.ToolCall) bool {
 		}
 	}
 	return len(calls) > 0
+}
+
+// continueAnswer joins text that continues an answer cut by the output limit.
+// A model that starts its answer over repeats the cut part; that restart
+// replaces the cut part instead of duplicating it.
+func continueAnswer(cut, next string) string {
+	if restartsAnswer(cut, next) {
+		return next
+	}
+	return cut + next
+}
+
+// restartsAnswer reports whether next starts a cut answer over: it begins with
+// the cut text, whatever whitespace or blank lines either one uses.
+func restartsAnswer(cut, next string) bool {
+	cut = strings.Join(strings.Fields(cut), "")
+	return cut != "" && strings.HasPrefix(strings.Join(strings.Fields(next), ""), cut)
 }
 
 // carryAnswerProse appends one response's prose to the carried answer as its
@@ -2421,6 +2507,7 @@ func (a *Agent) triggerEvolutionReview(tenantID string, history TaskHistory) {
 
 func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, prompt string, strategy TaskStrategy, eventCh chan string) context.Context {
 	if _, ok := RuntimeContextBundleFromContext(ctx); ok {
+		activateToolsForActiveSkill(ctx)
 		return ctx
 	}
 	bundle := RuntimeContextBundle{
@@ -2465,8 +2552,10 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 		bundle.ActiveSkill = selected.Active
 		bundle.SkillCandidates = append([]SkillCandidateContext(nil), selected.Candidates...)
 		if selected.Active != nil {
+			activateToolsForActiveSkill(ctx)
 			bundle.SelectionNotes = append(bundle.SelectionNotes, "one active skill selected for the current work unit")
 		} else if len(selected.Candidates) > 0 {
+			activateToolsForActiveSkill(ctx)
 			bundle.SelectionNotes = append(bundle.SelectionNotes, fmt.Sprintf("%d bounded skill candidate(s) selected for the current work unit", len(selected.Candidates)))
 		}
 	}
@@ -2990,34 +3079,6 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			addStable("tools", content)
 		}
 	}
-	// Runtime context (workspace + task/run/recall state) is VOLATILE — it
-	// changes every turn, so it goes in the suffix, never between stable blocks
-	// (where it would bust the cacheable prefix, the pre-P1-3 bug).
-	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
-		if prompt := bundle.Prompt(bundle.Budget.TotalChars); strings.TrimSpace(prompt) != "" {
-			volatile = append(volatile, prompt)
-			sections = append(sections, SplitRuntimePromptSections(prompt)...)
-		}
-	} else {
-		if workspace, ok := WorkspaceContextFromContext(ctx); ok {
-			var sb strings.Builder
-			sb.WriteString("# CURRENT WORKSPACE\n")
-			if workspace.ID != "" {
-				sb.WriteString(fmt.Sprintf("workspace_id: %s\n", workspace.ID))
-			}
-			sb.WriteString(fmt.Sprintf("workspace_root: %s\n", workspace.Root))
-			sb.WriteString("Use workspace_root as the default directory for local tools and relative paths.\n")
-			sb.WriteString("When the user asks about this project, current repo, current codebase, or names a project without a path, inspect workspace_root first.\n")
-			sb.WriteString("If the request arrives from IM and no workspace is available, ask the user to select or bind a workspace instead of guessing a local path.")
-			addVolatile("runtime", sb.String())
-		}
-
-		if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
-			if prompt := runtime.Prompt(6000); strings.TrimSpace(prompt) != "" {
-				addVolatile("runtime", prompt)
-			}
-		}
-	}
 
 	// 2. Tool instructions are capability- and strategy-dependent, so they live
 	// in the volatile suffix even though most turns happen to share them.
@@ -3051,7 +3112,46 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 		}
 	}
 
+	for _, content := range a.projectPromptSections(ctx) {
+		addVolatile("project_context", content)
+	}
+	if a.primaryForegroundPromptProfile() {
+		if note := strategy.SystemPromptNote(); note != "" {
+			addVolatile("runtime", note)
+		}
+	}
+	appendRuntime := func() {
+		// Current Run state changes most frequently. Keep it last, including on
+		// exact resumes, while keeping its role and required budgets unchanged.
+		if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
+			if prompt := bundle.Prompt(bundle.Budget.TotalChars); strings.TrimSpace(prompt) != "" {
+				volatile = append(volatile, prompt)
+				sections = append(sections, SplitRuntimePromptSections(prompt)...)
+			}
+		} else {
+			if workspace, ok := WorkspaceContextFromContext(ctx); ok {
+				var sb strings.Builder
+				sb.WriteString("# CURRENT WORKSPACE\n")
+				if workspace.ID != "" {
+					sb.WriteString(fmt.Sprintf("workspace_id: %s\n", workspace.ID))
+				}
+				sb.WriteString(fmt.Sprintf("workspace_root: %s\n", workspace.Root))
+				sb.WriteString("Use workspace_root as the default directory for local tools and relative paths.\n")
+				sb.WriteString("When the user asks about this project, current repo, current codebase, or names a project without a path, inspect workspace_root first.\n")
+				sb.WriteString("If the request arrives from IM and no workspace is available, ask the user to select or bind a workspace instead of guessing a local path.")
+				addVolatile("runtime", sb.String())
+			}
+
+			if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
+				if prompt := runtime.Prompt(6000); strings.TrimSpace(prompt) != "" {
+					addVolatile("runtime", prompt)
+				}
+			}
+		}
+
+	}
 	if a.memory == nil {
+		appendRuntime()
 		return strings.Join(append(stable, volatile...), "\n\n"), sections, nil
 	}
 
@@ -3135,6 +3235,8 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			}(accessedIDs)
 		}
 	}
+
+	appendRuntime()
 
 	return strings.Join(append(stable, volatile...), "\n\n"), sections, nil
 }

@@ -48,7 +48,8 @@ func TestSemanticReviewRejectsIncompleteJudgment(t *testing.T) {
 	for _, reply := range []string{`{"risk_level":"low","user_authorization":"high","rationale":"Looks safe"}`, `APPROVE`, `{"outcome":"approve"}`} {
 		judge := &fakeJudge{reply: reply}
 		verdict, _, err := triageApprovalWithIntent(context.Background(), judge, "write_file", "receipt.txt", "effect authorization", RunIntentSnapshot{ModelAuthorization: true, RawUserText: "Write receipt.txt"})
-		if err == nil || verdict != TriageEscalate || judge.calls != 1 {
+		// One bounded protocol-correction retry still fails closed.
+		if err == nil || verdict != TriageEscalate || judge.calls != 2 {
 			t.Fatalf("invalid judgment inferred permission: reply=%q verdict=%v err=%v", reply, verdict, err)
 		}
 	}

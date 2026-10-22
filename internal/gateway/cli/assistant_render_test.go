@@ -26,6 +26,46 @@ func TestAssistantPhaseControlsFinalGutter(t *testing.T) {
 	}
 }
 
+// A final answer on 2026-10-14 listed three commands on consecutive lines with
+// no code fence, and every one of them ran into the same paragraph: single
+// newlines were folded into spaces. Rendered as Codex renders it, a soft break
+// is a line break and each command keeps its own row.
+func TestAssistantReplyKeepsTheCommandsAModelWroteOnePerLine(t *testing.T) {
+	reply := "Preflight is done; say go and I will start segment 1.\n\n" +
+		"Equivalent commands:\n" +
+		"aws codebuild start-build --project-name service-one --source-version v20261014162520\n" +
+		"aws codebuild start-build --project-name service-two --source-version v20261014162544\n" +
+		"aws codebuild start-build --project-name service-three --source-version v20261014165212\n\n" +
+		"Nothing was started; production is unchanged."
+	want := "• Preflight is done; say go and I will start segment 1.\n\n" +
+		"  Equivalent commands:\n" +
+		"  aws codebuild start-build --project-name service-one --source-version v20261014162520\n" +
+		"  aws codebuild start-build --project-name service-two --source-version v20261014162544\n" +
+		"  aws codebuild start-build --project-name service-three --source-version v20261014165212\n\n" +
+		"  Nothing was started; production is unchanged."
+	if got := strings.TrimSpace(ansi.Strip(renderAssistantMessage(reply, 100))); got != want {
+		t.Fatalf("reply rendered as\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A table is aligned columns under the answer's gutter, with its header row
+// starting where the other rows do (the first line of a reply used to lose its
+// padding), and a heavy rule under the header.
+func TestAssistantReplyRendersATableAsAlignedColumns(t *testing.T) {
+	reply := "| 项 | 实测值 |\n|---|:--:|\n| 构建 | SUCCEEDED |\n| deploy PR | OPEN |"
+	sp := func(n int) string { return strings.Repeat(" ", n) }
+	// Both columns are 9 cells wide; the second is centred. A cell is followed by its
+	// padding, the 2-cell gap and the next column's padding.
+	want := "•  项" + sp(12) + "实测值\n" +
+		"  " + strings.Repeat("━", 11) + "  " + strings.Repeat("━", 11) + "\n" +
+		"   构建" + sp(9) + "SUCCEEDED\n" +
+		"  " + strings.Repeat("─", 11) + "  " + strings.Repeat("─", 11) + "\n" +
+		"   deploy PR" + sp(6) + "OPEN"
+	if got := strings.TrimRight(ansi.Strip(renderAssistantMessage(reply, 80)), "\n"); got != "\n"+want {
+		t.Fatalf("table rendered as\n%s\nwant\n%s", got, want)
+	}
+}
+
 func TestCommentaryNarrationIsReadableAcrossScripts(t *testing.T) {
 	tests := []string{
 		"I will inspect the trigger mapping.",

@@ -21,6 +21,9 @@ func TestObservationBaselineCoversOrdinaryShellShape(t *testing.T) {
 		"cat notes.md | tr -d '\\r' | sort | head -5",
 		"aws sts get-caller-identity --profile cw2 | base64",
 		"gh api repos/owner/name/branches",
+		`CTX=arn:aws:eks:ap-southeast-1:123456789012:cluster/prod; unset HTTP_PROXY HTTPS_PROXY ALL_PROXY; kubectl --context "$CTX" -n prod get deploy,pods -o wide`,
+		`command -v jq >/dev/null && kubectl get ns -o name | head -5`,
+		`CTX=arn:aws:eks:ap-southeast-1:123456789012:cluster/prod; kubectl --context "$CTX" -n argocd get applications.argoproj.io --request-timeout=15s -o name 2>&1 | head -5; echo "rc=$?"`,
 	} {
 		if !provenReadOnly(t, command) {
 			t.Errorf("must be provable read-only: %s", command)
@@ -95,7 +98,7 @@ func TestObservationRejectsPathQualifiedPrograms(t *testing.T) {
 func TestObservationBaselineIsNarrowerThanTheGrantFloorNeutralSet(t *testing.T) {
 	for word := range shellNeutralWords {
 		switch word {
-		case "trap", "read", "declare", "local", "readonly", "unset", "shift", "wait", "]", "]]", "[[":
+		case "trap", "read", "declare", "local", "readonly", "shift", "wait", "]", "]]", "[[":
 			if _, present := observationRuleByProgram[word]; present {
 				t.Errorf("%q carries or binds state and must not be an observation word", word)
 			}
@@ -162,6 +165,8 @@ func TestObservationCredentialSafePlumbingDoesNotDisqualifyReads(t *testing.T) {
 		"cd /w && kubectl get pods -n platform -o json | jq -r '.items[].metadata.name'",
 		"which gcloud && gcloud config get-value account",
 		"test -d /w && cd /w && aws iam list-roles",
+		"set -euo pipefail; kubectl config get-contexts; kubectl get deploy -n app",
+		`CTX="prod"; NS="app"; for d in api web; do kubectl --context "$CTX" -n "$NS" get deploy "$d"; done`,
 	} {
 		if !provenReadOnlyWithCredentials(t, command) {
 			t.Errorf("credentialed read must survive its plumbing: %s", command)
@@ -180,6 +185,8 @@ func TestObservationCredentialSafeExcludesEveryFileReader(t *testing.T) {
 		// `set` and `export` carry no file access but print the whole variable
 		// environment when given no operands.
 		"set; gcloud builds list",
+		"set -o; gcloud builds list",
+		"set -- secret; gcloud builds list",
 		"export; aws iam list-roles",
 	} {
 		if provenReadOnlyWithCredentials(t, command) {

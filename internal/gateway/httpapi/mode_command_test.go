@@ -43,11 +43,11 @@ func TestModeCommandPersistsAndResolves(t *testing.T) {
 	}
 
 	// A later request with empty mode resolves to smart.
-	if got := daemon.coordinator().resolveApprovalMode(identity, ""); got != tools.ApprovalSmart {
+	if got, err := daemon.coordinator().resolveApprovalMode(ctx, identity, ""); err != nil || got != tools.ApprovalSmart {
 		t.Fatalf("resolved mode with empty request = %q, want smart", got)
 	}
 	// An explicit per-request mode still wins.
-	if got := daemon.coordinator().resolveApprovalMode(identity, "read-only"); got != tools.ApprovalReadOnly {
+	if got, err := daemon.coordinator().resolveApprovalMode(ctx, identity, "read-only"); err != nil || got != tools.ApprovalReadOnly {
 		t.Fatalf("explicit request mode should win, got %q", got)
 	}
 

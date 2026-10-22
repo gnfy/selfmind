@@ -46,7 +46,7 @@ func TestRouteTurnChoiceRollsBackClaimWhenDestinationWriteFails(t *testing.T) {
 	if _, err := store.RoutePendingTurnChoice(ctx, route); err == nil {
 		t.Fatal("expected injected queue failure")
 	}
-	peek, err := store.PeekPendingTurnChoice(ctx, "default", "person", choice.ID, time.Now(), time.Hour)
+	peek, err := store.PeekPendingTurnChoice(ctx, "default", "person", choice.ID, time.Now())
 	if err != nil || peek.RequestJSON != choice.RequestJSON {
 		t.Fatalf("accepted input lost after failed write: %+v err=%v", peek, err)
 	}
@@ -130,7 +130,7 @@ func TestObserveTurnChoiceRejectsFinishedRunWithoutClaimingInput(t *testing.T) {
 	if _, err := store.ObservePendingTurnChoice(ctx, "default", "person", choice.ID, "1", choice.RequestJSON, "stale snapshot"); !errors.Is(err, ErrTurnChoiceNotFound) {
 		t.Fatalf("finished run was observed: %v", err)
 	}
-	if pending, err := store.PeekPendingTurnChoice(ctx, "default", "person", choice.ID, time.Now(), time.Hour); err != nil || pending.RequestJSON != choice.RequestJSON {
+	if pending, err := store.PeekPendingTurnChoice(ctx, "default", "person", choice.ID, time.Now()); err != nil || pending.RequestJSON != choice.RequestJSON {
 		t.Fatalf("failed observation lost original input: %+v, %v", pending, err)
 	}
 }
@@ -171,7 +171,7 @@ func TestResumeTurnChoiceQueuesExactHistoricalRunAndRechecksState(t *testing.T) 
 	if _, err := store.RoutePendingTurnChoice(ctx, staleRoute); !errors.Is(err, ErrTurnChoiceNotFound) {
 		t.Fatalf("finished historical target accepted: %v", err)
 	}
-	if pending, err := store.PeekPendingTurnChoice(ctx, "default", "person", stale.ID, time.Now(), time.Hour); err != nil || pending.RequestJSON != stale.RequestJSON {
+	if pending, err := store.PeekPendingTurnChoice(ctx, "default", "person", stale.ID, time.Now()); err != nil || pending.RequestJSON != stale.RequestJSON {
 		t.Fatalf("stale resume erased original input: %+v, %v", pending, err)
 	}
 }
@@ -221,7 +221,7 @@ func TestRouteTurnChoiceRollsBackWhenSteeringWriteFails(t *testing.T) {
 	if _, err := store.RoutePendingTurnChoice(ctx, route); err == nil {
 		t.Fatal("expected injected mailbox failure")
 	}
-	if pending, err := store.PeekPendingTurnChoice(ctx, "default", "person", choice.ID, time.Now(), time.Hour); err != nil || pending.RequestJSON != choice.RequestJSON {
+	if pending, err := store.PeekPendingTurnChoice(ctx, "default", "person", choice.ID, time.Now()); err != nil || pending.RequestJSON != choice.RequestJSON {
 		t.Fatalf("choice consumed without mailbox: %+v err=%v", pending, err)
 	}
 	if _, err := store.db.ExecContext(ctx, `DROP TRIGGER reject_choice_steer`); err != nil {

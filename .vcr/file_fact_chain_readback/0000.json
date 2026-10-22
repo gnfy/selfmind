@@ -1,0 +1,5 @@
+{
+  "plan_binding_version": 1,
+  "method": "completion",
+  "completion": "long-facts.txt lookup.cfg window.txt FACT-SOURCE active_beta"
+}

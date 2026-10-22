@@ -155,7 +155,9 @@ func TestAutoSandboxHostFallbackIsApprovedAsHost(t *testing.T) {
 			if !strings.Contains(req.Reason, "host") {
 				t.Fatalf("fallback approval reason = %q", req.Reason)
 			}
-			if got := req.Args["effective_sandbox"]; got != "host (isolated sandbox unavailable or disabled)" {
+			// The ask names why this call that did not request the host will
+			// run there.
+			if got := req.Args["effective_sandbox"]; got != "host (exec sandbox disabled by configuration)" {
 				t.Fatalf("effective sandbox = %#v", got)
 			}
 			if req.ResourceFingerprint == "" {
@@ -363,9 +365,17 @@ func TestRedactSensitive(t *testing.T) {
 }
 
 func TestRedactSensitivePreservesCredentialReferences(t *testing.T) {
-	input := `TOKEN="$(gcloud auth print-access-token)" curl -H "Authorization: Bearer ${TOKEN}" {"token":"${TOKEN}"}`
-	if got := RedactSensitive(input); got != input {
-		t.Fatalf("credential reference structure changed:\n got: %s\nwant: %s", got, input)
+	for _, input := range []string{
+		`TOKEN="$(gcloud auth print-access-token)" curl -H "Authorization: Bearer ${TOKEN}" {"token":"${TOKEN}"}`,
+		`TOKEN=$(gcloud auth print-access-token) curl -H "Authorization: Bearer ${TOKEN}" --token ${TOKEN}`,
+	} {
+		if got := RedactSensitive(input); got != input {
+			t.Fatalf("credential reference structure changed:\n got: %s\nwant: %s", got, input)
+		}
+	}
+	// A quoted value that only starts like a reference is a literal.
+	if got, want := RedactSensitive(`TOKEN="$3cr3t-literal" {"token":"${TOKEN}x9Zq"}`), `TOKEN="[REDACTED]" {"token":"[REDACTED]"}`; got != want {
+		t.Fatalf("quoted literals:\n got: %s\nwant: %s", got, want)
 	}
 	literal := `GH_TOKEN="literal-secret-value" api_key=another-secret-value`
 	got := RedactSensitive(literal)

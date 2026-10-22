@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
 	"strings"
 
@@ -86,6 +85,10 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if cliClaim(req.Platform) && !requestLocalPeer(r).Verified {
+		writeError(w, http.StatusForbidden, d.newLocalControlRefusal(r, "CLI identity"))
+		return
+	}
 	tool := strings.TrimSpace(req.Tool)
 	if tool == "" {
 		http.Error(w, "tool is required", http.StatusBadRequest)
@@ -100,20 +103,19 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	identity, err := d.Control.ResolveOrCreateAccount(
-		r.Context(),
+	identity, err := d.resolveRequestIdentity(r,
 		d.tenantID(req.TenantID),
 		fallback(req.Platform, "cli"),
 		fallback(req.PlatformUserID, "local"),
 		req.DisplayName,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 
 	clientCWD, _ := req.Args["_client_cwd"].(string)
-	if !dispatchLoopbackCLI(r, req.Platform) {
+	if !d.localCLIRequest(r, req.Platform) {
 		clientCWD = ""
 	}
 	requestedWorkspaceID, _ := req.Args["_workspace_id"].(string)
@@ -202,20 +204,4 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, api.DispatchResponse{Result: result})
-}
-
-func dispatchLoopbackCLI(r *http.Request, platform string) bool {
-	if r == nil || !strings.EqualFold(strings.TrimSpace(platform), "cli") {
-		return false
-	}
-	host := strings.TrimSpace(r.RemoteAddr)
-	if parsed, _, err := net.SplitHostPort(host); err == nil {
-		host = parsed
-	}
-	host = strings.Trim(host, "[]")
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }

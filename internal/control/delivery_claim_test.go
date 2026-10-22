@@ -9,8 +9,8 @@ import (
 // TestClaimDeliveryExactlyOnce encodes the double-dispatch guard: the
 // EnqueueAndTry immediate attempt and the retry poller both see a freshly
 // enqueued row, and exactly one of them may win the claim. A duplicate claim
-// must fail until the attempt is resolved, and a crashed claim (stale
-// 'sending') must become reclaimable so the message is not stranded.
+// must fail until the attempt is resolved. A crashed claim preserves an
+// unknown send effect instead of granting another blind attempt.
 func TestClaimDeliveryExactlyOnce(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
@@ -58,9 +58,9 @@ func TestClaimDeliveryExactlyOnce(t *testing.T) {
 	}
 }
 
-// TestClaimDeliveryStaleReclaim covers dispatcher-crash recovery: a row stuck
-// in 'sending' beyond staleSendingSeconds becomes due and claimable again.
-func TestClaimDeliveryStaleReclaim(t *testing.T) {
+// A dispatcher crash cannot distinguish before-send from after-acceptance.
+// Recovery exposes the uncertainty, without allowing the due loop to resend.
+func TestStaleDeliveryClaimRequiresInboundRecovery(t *testing.T) {
 	ctx := context.Background()
 	store := newTestStore(t)
 
@@ -87,11 +87,24 @@ func TestClaimDeliveryStaleReclaim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(due) != 1 || due[0].ID != d.ID {
-		t.Fatalf("stale sending row should be due again: %+v", due)
+	if len(due) != 0 {
+		t.Fatalf("unknown send effect became a blind retry: %+v", due)
 	}
 	reclaimed, err := store.ClaimDelivery(ctx, d.ID)
-	if err != nil || !reclaimed {
-		t.Fatalf("stale claim should be reclaimable: %v %v", reclaimed, err)
+	if err != nil || reclaimed {
+		t.Fatalf("unknown send was reclaimed: %v %v", reclaimed, err)
+	}
+	if err := store.RecoverStaleDeliveryClaims(ctx); err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.DeliveryStatus(ctx, d.ID)
+	if err != nil || status != "sent_unconfirmed" {
+		t.Fatalf("unknown send was hidden: %s %v", status, err)
+	}
+	for i := 0; i < 2; i++ {
+		claimed, err := store.ClaimDeliveryCatchUp(ctx, d.ID)
+		if err != nil || claimed != (i == 0) {
+			t.Fatalf("bounded catch-up claim %d: %t %v", i, claimed, err)
+		}
 	}
 }

@@ -70,7 +70,7 @@ func TestWorkSelectClaimsSameDomainResumeInTurn(t *testing.T) {
 	if decoded.Status != "committed" || decoded.CommitMode != "direct" || decoded.ThreadID != targetTask.ID {
 		t.Fatalf("same-domain resume must commit directly: %s", result)
 	}
-	for _, want := range []string{"Preflight passed", "[x] read-only preflight", "[>] recite the release steps", "keeps the completed steps", "include the rollback step", "verification_required=true", "plan.json", "preflight target=release-A; ready=true"} {
+	for _, want := range []string{"Preflight passed", "[x] read-only preflight", "[>] recite the release steps", "Preserve completed steps", "include the rollback step", "verification_required=true", "plan.json", "preflight target=release-A; ready=true"} {
 		if !strings.Contains(decoded.ResumeContext, want) {
 			t.Fatalf("resume context lacks %q:\n%s", want, decoded.ResumeContext)
 		}
@@ -91,6 +91,13 @@ func TestWorkSelectClaimsSameDomainResumeInTurn(t *testing.T) {
 		childPlan.Steps[0].SourceStepID != parentPlan.Steps[0].StepID || childPlan.Steps[1].SourceStepID != parentPlan.Steps[1].StepID {
 		t.Fatalf("direct continuation must preserve logical step ids with exact source steps: %+v", childPlan)
 	}
+	var receipt struct {
+		Plan    []planStepView `json:"plan"`
+		Version int            `json:"plan_version"`
+	}
+	if err := json.Unmarshal([]byte(result), &receipt); err != nil || receipt.Version != childPlan.Version || len(receipt.Plan) != len(childPlan.Steps) || receipt.Plan[1].StepID != childPlan.Steps[1].StepID {
+		t.Fatalf("loop receipt must carry the accepted current-Run plan: %s", result)
+	}
 	events, _ := store.ListRunEvents(ctx, person.TenantID, person.PersonID, targetTask.ID, interactionRun.ID, 20)
 	var committed, inherited bool
 	for _, event := range events {
@@ -98,11 +105,26 @@ func TestWorkSelectClaimsSameDomainResumeInTurn(t *testing.T) {
 		case "work.selection_committed":
 			committed = strings.Contains(string(event.Payload), `"commit_mode":"direct"`)
 		case "plan.updated":
+			var projection struct {
+				Version int `json:"plan_version"`
+			}
+			if err := json.Unmarshal(event.Payload, &projection); err != nil || projection.Version != childPlan.Version {
+				t.Fatalf("inherited event must identify the accepted child Plan: %s", event.Payload)
+			}
 			inherited = strings.Contains(string(event.Payload), `"source":"resumed_run"`) && strings.Contains(string(event.Payload), "recite the release steps")
 		}
 	}
 	if !committed || !inherited {
 		t.Fatalf("direct claim must record the commit and restore the plan on the continued thread: %+v", events)
+	}
+	var closure struct {
+		Facts *struct {
+			Available bool `json:"available"`
+			Version   int  `json:"plan_version"`
+		} `json:"closure_facts"`
+	}
+	if err := json.Unmarshal([]byte(result), &closure); err != nil || closure.Facts == nil || !closure.Facts.Available || closure.Facts.Version != childPlan.Version {
+		t.Fatalf("selection omitted the current accepted Plan's closure facts: %s", result)
 	}
 	// Repeating the same selection converges without a second claim.
 	again, err := tool.Execute(map[string]interface{}{"action": "resume", "run_id": targetRun.ID, "_invocation_scope": scope})
@@ -222,5 +244,64 @@ func TestWorkSelectCorrectionToParentWithoutPlanClearsAbandonedPlan(t *testing.T
 	if len(fresh.Plan.Steps) != 1 || fresh.Plan.Steps[0].Status != "in_progress" ||
 		fresh.Plan.Steps[0].SourceStepID != "" || fresh.Plan.Steps[0].WorkUnitID == abandonedUnitID {
 		t.Fatalf("first new plan must have fresh identities and require current-run verification: %+v", fresh.Plan)
+	}
+}
+
+func TestWorkSelectLegacyDisplayDoesNotClaimAnAcceptedVersion(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	person, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "legacy-owner", "Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "legacy", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := store.StartRunWithOptions(ctx, task, "cli", "prior", control.StartRunOptions{ExecutionRoots: directClaimRoots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, RunID: parent.ID, Type: "plan.updated", Channel: "cli", Payload: mustToolJSON(map[string]interface{}{"plan": []map[string]string{{"step": "legacy remaining work", "status": "in_progress"}}})}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, person.TenantID, parent.ID, "waiting_user"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, Title: "reply", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.StartRunWithOptions(ctx, other, "cli", "continue", control.StartRunOptions{ExecutionRoots: directClaimRoots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewWorkSelectTool(store).Execute(map[string]interface{}{"action": "resume", "run_id": parent.ID, "_invocation_scope": kernel.ToolInvocationScope{ControlTenantID: person.TenantID, PersonID: person.PersonID, TaskID: other.ID, RunID: child.ID, ExecutionLane: "main"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.ListRunEvents(ctx, person.TenantID, person.PersonID, task.ID, child.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == "plan.updated" {
+			found = true
+			var payload map[string]interface{}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := payload["plan_version"]; exists {
+				t.Fatalf("legacy event claimed a durable version: %s", event.Payload)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("legacy display disappeared")
 	}
 }

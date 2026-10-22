@@ -31,7 +31,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	// Redaction is outermost so every model/event/artifact result surface sees
 	// the masked form, including errors returned by inner policy middleware.
-	disp.InjectMiddleware(tools.RedactionMiddleware())
+	disp.InjectResultMiddleware(tools.RedactionMiddleware())
 	// 1. Register auth middleware (load permissions from persistent layer)
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
 	disp.InjectMiddleware(tools.WorkspaceScopeMiddleware())
@@ -115,6 +115,8 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 		// body. A duplicate, conflicting, or unrecordable claim never executes.
 		disp.InjectResultMiddleware(tools.ExternalEffectClaimMiddleware(controlStore))
 	}
+
+	disp.InjectResultMiddleware(tools.ManagedExecutionMiddleware())
 
 	// 3. Register Vision LLM
 	disp.InjectVisionLLM(ag)

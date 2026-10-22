@@ -105,14 +105,30 @@ func describeApprovalGrant(grant control.ApprovalGrant, now time.Time) string {
 
 // humanApprovalClass turns a stored pattern key into something a person can
 // review. The key itself is never shown: it carries a hashed workspace
-// fingerprint and internal reason text.
+// fingerprint and internal reason text. A key bound to in-place credential
+// writes says so instead of showing the binding.
 func humanApprovalClass(patternKey, family string) string {
-	key := strings.TrimSpace(patternKey)
+	key, _, bound := strings.Cut(strings.TrimSpace(patternKey), tools.GrantKeyHostWritesMarker)
+	label := unboundApprovalClass(key, family)
+	if bound {
+		label += " (only while writing the same credential caches in place)"
+	}
+	return label
+}
+
+func unboundApprovalClass(key, family string) string {
+	if family == "" {
+		family, _ = tools.ReviewPersistedGrantKey(key)
+	}
 	if strings.Contains(key, tools.HostEscapeApprovalReason) {
 		if family != "" {
 			return fmt.Sprintf("run %q on the host, outside the sandbox", family)
 		}
 		return "run commands on the host, outside the sandbox"
+	}
+	if strings.HasPrefix(key, "exec:") && family != "" {
+		// A sandboxed class names exactly the commands it releases.
+		return fmt.Sprintf("%q commands in the sandbox", family)
 	}
 	reason := key
 	if idx := strings.Index(reason, "|resource="); idx >= 0 {

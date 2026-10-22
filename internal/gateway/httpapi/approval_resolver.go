@@ -146,44 +146,61 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 		return nil, fmt.Errorf("remembered approval is unavailable for this legacy request; approve it once instead")
 	}
 	var approval *control.ApprovalRequest
-	if resolved.WaiterState == "parked" {
-		task, taskErr := d.Control.GetTask(ctx, identity.TenantID, resolved.TaskID)
-		if taskErr != nil || task == nil {
-			if taskErr != nil {
-				return nil, taskErr
+	for attempt := 0; attempt < 2; attempt++ {
+		if resolved.WaiterState == "parked" {
+			task, taskErr := d.Control.GetTask(ctx, identity.TenantID, resolved.TaskID)
+			if taskErr != nil || task == nil {
+				if taskErr != nil {
+					return nil, taskErr
+				}
+				return nil, fmt.Errorf("approval %s no longer has a resumable task", resolved.ID)
 			}
-			return nil, fmt.Errorf("approval %s no longer has a resumable task", resolved.ID)
+			content := parkedApprovalDecisionContent(decision, input.Note)
+			var executionRoots []executionenv.RootBinding
+			sourceRun, runErr := d.Control.GetRun(ctx, identity.TenantID, resolved.RunID)
+			if runErr != nil {
+				return nil, runErr
+			}
+			if sourceRun != nil {
+				executionRoots = executionenv.CloneRootBindings(sourceRun.ExecutionRoots)
+			}
+			platform, userID, resumeChannel := identity.Platform, identity.PlatformUserID, continuationChannel(identity.Platform, fallback(channel, identity.Platform), sourceRun)
+			if sourceRun != nil {
+				platform, userID, resumeChannel = d.humanWaitContinuationRoute(ctx, identity, sourceRun, control.LoopCheckpointWaitApproval, resolved.ID, channel)
+			}
+			var queued *control.QueuedTask
+			approval, queued, err = d.Control.RespondParkedApprovalAndEnqueue(ctx,
+				identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input,
+				control.QueuedTask{
+					PersonID: identity.PersonID, Platform: platform,
+					PlatformUserID: userID, Channel: resumeChannel,
+					Content: content, WorkspaceID: recoveryWorkspaceID(sourceRun, task), TaskID: task.ID,
+					ApprovalID:     resolved.ID,
+					ExecutionRoots: executionRoots,
+					IdempotencyKey: "approval-resume:" + resolved.ID,
+					Class:          control.QueueClassForeground,
+				},
+			)
+			if err == nil && queued != nil {
+				// The row is durable before draining. If another run is active this is a
+				// harmless no-op; that run's finalizer drains it later.
+				d.coordinator().drainQueue(identity)
+			}
+		} else {
+			approval, err = d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input)
 		}
-		content := parkedApprovalDecisionContent(decision, input.Note)
-		var executionRoots []executionenv.RootBinding
-		sourceRun, runErr := d.Control.GetRun(ctx, identity.TenantID, resolved.RunID)
-		if runErr != nil {
-			return nil, runErr
+		if err == nil || attempt != 0 || resolved.WaiterState == "parked" {
+			break
 		}
-		if sourceRun != nil {
-			executionRoots = executionenv.CloneRootBindings(sourceRun.ExecutionRoots)
+		current, lookupErr := d.Control.GetApprovalRequest(ctx, identity.TenantID, resolved.ID)
+		if lookupErr != nil || current == nil || current.PersonID != identity.PersonID || current.Status != "pending" || current.WaiterState != "parked" {
+			break
 		}
-		var queued *control.QueuedTask
-		approval, queued, err = d.Control.RespondParkedApprovalAndEnqueue(ctx,
-			identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input,
-			control.QueuedTask{
-				PersonID: identity.PersonID, Platform: identity.Platform,
-				PlatformUserID: identity.PlatformUserID, Channel: continuationChannel(identity.Platform, fallback(channel, identity.Platform), sourceRun),
-				Content: content, WorkspaceID: recoveryWorkspaceID(sourceRun, task), TaskID: task.ID,
-				ApprovalID:     resolved.ID,
-				ExecutionRoots: executionRoots,
-				IdempotencyKey: "approval-resume:" + resolved.ID,
-				Class:          control.QueueClassForeground,
-			},
-		)
-		if err == nil && queued != nil {
-			// The row is durable before draining. If another run is active this is a
-			// harmless no-op; that run's finalizer drains it later.
-			d.coordinator().drainQueue(identity)
-		}
-	} else {
-		approval, err = d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input)
+		// The grace transaction won after the live-state read. Retry once through
+		// the parked answer+queue transaction rather than dropping the answer.
+		resolved = current
 	}
+
 	if err != nil {
 		return nil, err
 	}

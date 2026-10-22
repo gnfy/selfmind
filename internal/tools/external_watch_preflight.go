@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -61,6 +62,45 @@ func preflightExternalWatch(
 	}, commandTimeoutSeconds)
 }
 
+// watchPollBoundaryMismatch refuses a registration whose approved boundary is
+// not the one its polls will run under. Polls are daemon-owned, unattended and
+// unpinned: they resolve `auto` with no approval of their own, under the policy
+// this registering call freezes onto the watch, narrowed by the daemon's
+// current one (DurableSandboxPolicy) — the very policy registration records,
+// not the process-wide one alone. A watch approved for the host whose polls
+// resolve to isolation registers and then can never poll; one approved for
+// isolation whose polls resolve to the host would poll outside what was
+// approved.
+func watchPollBoundaryMismatch(args map[string]interface{}, approved SandboxMode, approvedReason string) error {
+	if approved != SandboxHost && approved != SandboxIsolated {
+		return nil
+	}
+	polls, err := resolveSandboxBoundaryForPolicy(SandboxAuto, "", "", runtime.GOOS, ExecSandboxAvailable(),
+		DurableSandboxPolicy(frozenSandboxPolicy(args)))
+	if err == nil && polls.Mode == approved {
+		return nil
+	}
+	describe := func(mode SandboxMode) string {
+		if mode == SandboxIsolated {
+			return "inside the sandbox"
+		}
+		return "on the host"
+	}
+	detail := "its unattended polls cannot run here"
+	if err == nil {
+		detail = "its unattended polls would run " + describe(polls.Mode)
+	}
+	detail += ", but this registration was approved to run " + describe(approved)
+	if reason := strings.TrimSpace(approvedReason); reason != "" {
+		detail += " (" + reason + ")"
+	}
+	return newStableToolRecoveryError(fmt.Errorf("watch not registered: %s", detail),
+		"watch_boundary_mismatch", "environment",
+		"Watch not registered: "+detail+". A durable watch needs one boundary for its preflight and every poll, so nothing was run.",
+		"Check the state in the foreground instead, or fix the cause that keeps the call off its polls' boundary and register again.",
+		"preparation", "after_environment_change", "not_dispatched", false)
+}
+
 func preflightExternalWatchPatterns(
 	args map[string]interface{},
 	command, cwd string,
@@ -78,6 +118,13 @@ func preflightExternalWatchPatterns(
 		executionClass = ToolExecutionLongRunning
 	}
 
+	// The registration approval covered the boundary the funnel resolved; the
+	// preflight runs under exactly that one, and only when every later poll
+	// will run under it too.
+	boundary, boundaryReason := approvedSandboxBoundary(args)
+	if err := watchPollBoundaryMismatch(args, boundary, boundaryReason); err != nil {
+		return "", err
+	}
 	result, runErr := Execute(ctx, ExecutionRequest{
 		ToolName:       "watch_external",
 		Payload:        command,
@@ -85,6 +132,8 @@ func preflightExternalWatchPatterns(
 		CWD:            cwd,
 		WorkspaceRoots: []string{cwd},
 		Sandbox:        SandboxAuto,
+		Boundary:       boundary,
+		BoundaryReason: boundaryReason,
 		NetworkShared:  true,
 		Timeout:        timeout,
 		ToolProfile:    ToolProfile{Class: executionClass, MaxTimeout: timeout, HeartbeatInterval: time.Second},

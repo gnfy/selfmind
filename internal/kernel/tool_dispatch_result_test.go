@@ -2,12 +2,45 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	"selfmind/internal/kernel/llm"
 )
+
+func TestDispatchFactsExposeEnvironmentOnlyToModel(t *testing.T) {
+	var process ToolProcessResult
+	if err := json.Unmarshal([]byte(`{"started":true,"exit_code":0,"network_mode":"shared","proxy_mode":"inherited","requested_proxy_removals":["HTTPS_PROXY"]}`), &process); err != nil {
+		t.Fatal(err)
+	}
+	envelope := ToolResultEnvelope{Raw: "observed", Preview: "observed", ModelContent: "observed"}
+	applyDispatchFacts(&envelope, ToolDispatchResult{Process: &process})
+	for _, fact := range []string{"network=shared", "proxy_mode=inherited", "requested_proxy_removals=HTTPS_PROXY"} {
+		if !strings.Contains(envelope.ModelContent, fact) {
+			t.Errorf("model lost execution environment %q: %s", fact, envelope.ModelContent)
+		}
+	}
+	if envelope.Raw != "observed" || envelope.Preview != "observed" {
+		t.Fatalf("runtime metadata replaced raw output or UI preview: %+v", envelope)
+	}
+}
+
+// A result that redaction had to leave unparseable tells the model to read it
+// as text; the raw capture and preview are unchanged.
+func TestDispatchFactsTellTheModelAboutAnUnparseableRedaction(t *testing.T) {
+	envelope := ToolResultEnvelope{Raw: `{"a":[REDACTED]}`, Preview: "observed", ModelContent: `{"a":[REDACTED]}`}
+	applyDispatchFacts(&envelope, ToolDispatchResult{RedactionUnparseable: true})
+	if !strings.HasPrefix(envelope.ModelContent, "Redaction: ") || !strings.HasSuffix(envelope.ModelContent, `{"a":[REDACTED]}`) || envelope.Raw != `{"a":[REDACTED]}` {
+		t.Fatalf("unparseable redaction was not explained: %+v", envelope)
+	}
+	clean := ToolResultEnvelope{ModelContent: `{"a":1}`}
+	applyDispatchFacts(&clean, ToolDispatchResult{})
+	if clean.ModelContent != `{"a":1}` {
+		t.Fatalf("a parseable result gained a redaction note: %s", clean.ModelContent)
+	}
+}
 
 type resultFaultLedger struct {
 	claimErr, outcomeErr error
@@ -95,7 +128,10 @@ func TestTypedDispatchFailureMatrix(t *testing.T) {
 				t.Fatalf("success=%v result=%s", result.success, result.msg.Content)
 			}
 			if ledger.outcomeErr != nil {
-				for _, needle := range []string{"effect_state: unknown", "failure_phase: outcome_recording", "observed-effect"} {
+				if result.effectState != "unknown" || result.failurePhase != "outcome_recording" {
+					t.Fatalf("lost persistence uncertainty: %+v", result)
+				}
+				for _, needle := range []string{"Execution effects are uncertain", "Observe their state before retrying", "observed-effect"} {
 					if !strings.Contains(result.msg.Content, needle) {
 						t.Fatalf("missing %q: %s", needle, result.msg.Content)
 					}

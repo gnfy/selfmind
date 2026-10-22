@@ -23,6 +23,7 @@ import (
 
 var errProviderWaitLimit = errors.New("provider wait continuation limit reached")
 var errProviderWaitCheckpoint = errors.New("provider wait checkpoint is unavailable")
+var errRunResultCommit = errors.New("run result could not be committed")
 
 // finalizeErroredRun is the single terminal path for provider, transport, and
 // cancellation failures after a run has started. It writes the same structured
@@ -51,6 +52,11 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		outcome.Summary = "The run stopped after execution made no progress within the watchdog window."
 		outcome.NextSteps = []string{"Reply \"continue\" to resume from the durable run history."}
 		outcome.Risks = []string{"An execution step stopped responding and was cancelled by the watchdog."}
+	} else if errors.Is(runErr, errRunResultCommit) {
+		outcome.Status = "blocked"
+		outcome.CompletionReason = "finalization_failed"
+		outcome.Summary = "The final result was not saved; this work has not been closed."
+		outcome.NextSteps = []string{"Inspect this Run's durable tool results and restore storage before closing it. Do not repeat completed effects."}
 	} else if errors.Is(runErr, errProviderWaitLimit) {
 		outcome.Status = "blocked"
 		outcome.CompletionReason = "provider_wait_limit"
@@ -70,8 +76,13 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		outcome.Status = "cancelled"
 		outcome.CompletionReason = "cancelled"
 		outcome.Resumable = false
-		outcome.Summary = "The run was cancelled before completion."
-		outcome.NextSteps = nil
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			outcome.Summary = "The run timed out before completion (deadline exceeded, not cancelled by user)."
+			outcome.NextSteps = []string{"Resume or retry with a narrower scope if the work is still needed."}
+		} else {
+			outcome.Summary = "The run was cancelled before completion."
+			outcome.NextSteps = nil
+		}
 		eventType = "run.cancelled"
 	}
 
@@ -97,6 +108,8 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 			outcome = applyVerificationOutcome(outcome)
 		}
 	}
+	_ = c.withExternalEffectFacts(finCtx, identity.TenantID, identity.PersonID, run.ID, "", &outcome)
+	content := ""
 	handoff := control.Handoff{
 		TaskID:    task.ID,
 		Summary:   outcome.Summary,
@@ -120,7 +133,10 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		}),
 	}
 	if err := c.materializeRunFinalization(finCtx, identity, task, run, taskStatus,
-		evidence.WorkspaceID, evidence.UserInput, channel, "", outcome, evidence.Attach, handoff, event); err != nil {
+		evidence.WorkspaceID, evidence.UserInput, channel, content, outcome, evidence.Attach, handoff, event); err != nil {
+		if errors.Is(err, control.ErrRunCancellationRequested) && outcome.Status != "cancelled" {
+			return c.finalizeErroredRun(finCtx, identity, task, run, channel, context.Canceled, replay...)
+		}
 		return outcome
 	}
 	if outcome.Status == "interrupted" && outcome.Resumable &&
@@ -149,42 +165,9 @@ func (c *RunCoordinator) parkProviderWait(ctx context.Context, identity *control
 	// A sequence of fresh 429s must be bounded. Capacity waits are different:
 	// two legitimate long model calls may occupy a route for minutes, so give
 	// them a slower bounded retry schedule instead of blocking after six seconds.
-	chain, err := c.srv.Control.ResumeChainRunIDs(ctx, identity.TenantID, run.ID)
+	capacityWaits, rateWaits, err := c.srv.Control.ProviderWaitRetryCounts(ctx, identity.TenantID, identity.PersonID, run.ID)
 	if err != nil {
 		return api.RunOutcome{}, err
-	}
-	capacityWaits, rateWaits := 0, 0
-	for _, ancestor := range chain {
-		queued, lookupErr := c.srv.Control.GetQueuedByIdempotencyKey(ctx, identity.TenantID, "provider-wait:"+ancestor)
-		if lookupErr != nil {
-			return api.RunOutcome{}, lookupErr
-		}
-		if queued != nil {
-			events, eventErr := c.srv.Control.ListRunEvents(ctx, identity.TenantID, identity.PersonID, task.ID, ancestor, 5)
-			if eventErr != nil {
-				return api.RunOutcome{}, eventErr
-			}
-			for _, event := range events {
-				if event.Type != "run.finished" {
-					continue
-				}
-				var payload struct {
-					ProviderWait struct {
-						Reason string `json:"reason"`
-					} `json:"provider_wait"`
-				}
-				if json.Unmarshal(event.Payload, &payload) != nil {
-					break
-				}
-				switch payload.ProviderWait.Reason {
-				case "capacity":
-					capacityWaits++
-				case "rate_limit":
-					rateWaits++
-				}
-				break
-			}
-		}
 	}
 	if wait.Reason == "rate_limit" && rateWaits >= 6 {
 		return api.RunOutcome{}, fmt.Errorf("%w after %d rate limits", errProviderWaitLimit, rateWaits)
@@ -216,6 +199,9 @@ func (c *RunCoordinator) parkProviderWait(ctx context.Context, identity *control
 		ExecutionRoots: executionenv.CloneRootBindings(run.ExecutionRoots),
 		TaskID:         task.ID, ReplyToRunID: run.ID, IdempotencyKey: "provider-wait:" + run.ID,
 		Class: control.QueueClassFinalization, NotBefore: wait.NotBefore,
+		// The parking transaction copies this Run's own snapshot; restating it
+		// here lets the store refuse any other.
+		Admission: req.Admission,
 	}
 	_, err = c.srv.Control.MaterializeRunFinalization(finCtx, control.RunFinalization{
 		Identity: *identity, RunID: run.ID, RunStatus: "waiting_external", TaskID: task.ID,
@@ -410,16 +396,20 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	}
 	if req.ForceNew {
 		// /new is the deterministic escape hatch when continuity resolution is
-		// unavailable or the user rejects every historical candidate. Consume a
-		// stale one-shot /resume pin so it cannot capture a later message, then
-		// create a root regardless of current-task projection or cue text.
-		_, _, _ = c.srv.consumeResumePin(ctx, identity)
+		// unavailable or the user rejects every historical candidate. The inbound
+		// path already cleared this session's selection; queued work has no pin.
 		task, attach, err := c.createRootTask(ctx, identity, req)
 		attach.workKey = inputWorkKey
 		return task, attach, err
 	}
 	if req.TaskID != "" {
 		task, err := store.GetTask(ctx, identity.TenantID, req.TaskID)
+		// A Thread the person does not own reads exactly like one that does
+		// not exist: the Run takes its owner from the Thread, so attaching
+		// would run this input as another person.
+		if task != nil && task.PersonID != identity.PersonID {
+			task = nil
+		}
 		if err != nil || task != nil {
 			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
 			reason := taskAttachExplicitTaskID
@@ -429,19 +419,11 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 			return task, newTaskAttach(reason, inputWorkKey, false, false), err
 		}
 	}
-	// The /resume pin covers exactly the NEXT agent-bound message, so it is
-	// consumed here no matter which branch wins below — a stale pin must never
-	// capture unrelated work later.
-	pinned, pinnedRunID, pinErr := c.srv.consumeResumePin(ctx, identity)
-	if pinErr != nil {
-		return nil, taskAttach{}, pinErr
-	}
-	// An explicit /resume is a deliberate act, so it may reopen a label the
-	// person completed or archived. Cancelled/failed labels stay closed.
-	if pinned != nil && (!terminalTaskStatus(pinned.Status) || resumableTaskStatus(pinned.Status)) {
-		task, err := c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
-		attach := newTaskAttach(taskAttachResumePin, inputWorkKey, false, false)
-		attach.resumesRunID = pinnedRunID
+	// An explicit selection was captured into ReplyToRunID before admission.
+	// Dispatch never consults mutable endpoint selections or historical pins.
+	if !isUserOriginTurn(ctx, req) {
+		task, attach, err := c.createRootTask(ctx, identity, req)
+		attach.workKey = inputWorkKey
 		return task, attach, err
 	}
 	// §5.3 step 8: every ordinary message owns a fresh root task. Wrong-looking
@@ -525,6 +507,7 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 		return func() {}
 	}
 	scope := tools.ExecutionScope{
+		Runtime:          c.srv.ExecutionRuntime,
 		TenantID:         identity.TenantID,
 		PersonID:         identity.PersonID,
 		ExecutionProfile: req.ExecutionProfile,
@@ -601,15 +584,6 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	// snapshotting it here makes the request self-describing and is what a
 	// separate execution node would receive.
 	scope.SandboxPolicy = tools.CurrentExecSandboxPolicy()
-	if scope.ParallelWork {
-		// A host shell can reach an external target through an otherwise
-		// innocuous command. Parallel Runs require enforced isolation before
-		// a local command can bypass the external-effect claim lane. Retain
-		// the configured network policy: when isolated network is explicitly
-		// enabled, approval and durable effect claims still guard the call.
-		scope.SandboxPolicy.Enabled = true
-		scope.SandboxPolicy.Required = true
-	}
 	for _, binding := range scope.RootBindings {
 		if binding.Source == executionenv.RootSourceExecutionView {
 			// A terminal escape to host execution would make an isolated view
@@ -620,9 +594,58 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 			break
 		}
 	}
-	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
-	scope.Clarify = c.gatewayClarify(ctx, identity, task, run, scope.Channel)
-	scope.ApprovalMode = c.resolveApprovalMode(identity, req.ApprovalMode)
+	scope.ExecutionWaitGrace = c.srv.ExecutionWaitGrace
+	if run != nil && task != nil {
+		scope.ParkExecutionWait = func(waitCtx context.Context, toolName string, host bool) (bool, error) {
+			return c.parkExecutionWait(waitCtx, identity, task, run, req, toolName, host)
+		}
+	}
+	scope.RefreshExecutionWaits = func(waitCtx context.Context) error {
+		_, err := c.srv.refreshExecutionWaits(waitCtx, identity.TenantID, identity.PersonID)
+		return err
+	}
+	if run != nil && run.ResumesRunID != "" && req.EffectKey == "execution-lane:"+run.ResumesRunID {
+		cp, err := c.srv.Control.IncompleteLoopCheckpointForRun(ctx, identity.TenantID, run.ResumesRunID)
+		if err == nil && cp != nil && cp.PersonID == identity.PersonID && cp.TaskID == run.TaskID && cp.Outcome == "await_execution" && cp.WaitKind == control.LoopCheckpointWaitExecutionHostLane && cp.WaitRef == run.ResumesRunID && cp.WaitToolCallID != "" {
+			scope.ExecutionWaitRef = cp.WaitRef
+		}
+	}
+	scope.ParallelContext = func(checkCtx context.Context) ([]tools.ParallelExecutionContext, error) {
+		return c.parallelExecutionContext(checkCtx, identity, scope.RunID)
+	}
+	// Whether a person may be sitting at the endpoint this Run came from decides
+	// if its unanswered approvals and questions may stay in the Run.
+	var humanWait []humanWaitOption
+	if humanWaitSourceCanHold(ctx, req, identity, scope.Channel) {
+		humanWait = append(humanWait, withHumanWaitHold(scope.Channel))
+	}
+	approval := c.toolApprovalHandler(identity, task, run, scope.Channel, humanWait...)
+	scope.Approval = func(askCtx context.Context, request tools.ToolApprovalRequest) (tools.ToolApprovalDecision, error) {
+		c.srv.ExecutionRuntime.YieldQueuedHostExecution(identity.TenantID, identity.PersonID, scope.ExecutionWaitRef)
+		return approval(askCtx, request)
+	}
+	clarify := c.gatewayClarify(ctx, identity, task, run, scope.Channel, humanWait...)
+	scope.Clarify = func(question string, choices []string) string {
+		c.srv.ExecutionRuntime.YieldQueuedHostExecution(identity.TenantID, identity.PersonID, scope.ExecutionWaitRef)
+		return clarify(question, choices)
+	}
+	clarifyWait := c.gatewayClarifyWait(identity, task, run, scope.Channel, humanWait...)
+	scope.ClarifyWait = func(askCtx context.Context, question string, choices []string) (string, error) {
+		c.srv.ExecutionRuntime.YieldQueuedHostExecution(identity.TenantID, identity.PersonID, scope.ExecutionWaitRef)
+		return clarifyWait(askCtx, question, choices)
+	}
+	scope.ApprovalMode = tools.ApprovalOnRequest
+	// Every Run reaches here with its mode frozen in its admission; a request
+	// that carries none and whose preference cannot be read runs asking for
+	// every command rather than under a guess.
+	if mode, err := c.resolveApprovalMode(ctx, identity, admissionModeRequest(req)); err == nil {
+		scope.ApprovalMode = mode
+	}
+	if req.AdmissionRestored {
+		// Work that waited runs under the narrower of its admitted mode and a
+		// tightening the person made since; the stored snapshot stays as it was.
+		scope.ApprovalMode = c.noteNarrowedAuthority(ctx, identity, task, run, req, c.restoredApprovalMode(ctx, identity, req.Admission))
+	}
 	// The person's own words for this turn, so smart-mode triage can judge
 	// AUTHORIZATION and not only risk: "delete the build directory" makes a
 	// destructive-looking command an instruction, while the same command with no
@@ -666,6 +689,7 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	releaseScope := tools.SetExecutionScope(identity.PersonID, scope)
 	leaseID := scope.LeaseID
 	return func() {
+		c.srv.ExecutionRuntime.YieldQueuedHostExecution(scope.TenantID, scope.PersonID, scope.ExecutionWaitRef)
 		releaseScope()
 		// The lease→snapshot binding is per-run process state. Dropping it when
 		// the run's scope goes away keeps the map bounded on a long-lived daemon;
@@ -693,6 +717,7 @@ func (c *RunCoordinator) intentWithAddedRequirements(ctx context.Context, identi
 	added, err := c.srv.Control.RunSteeringRequirements(ctx, identity.TenantID, runID, 10)
 	if err != nil {
 		log.Debug("approval intent: mid-run requirements unavailable", "run", runID, "error", err)
+		base.AuthorizationEvidenceIncomplete = true
 		return base
 	}
 	if len(added) == 0 {
@@ -787,6 +812,12 @@ func (c *RunCoordinator) materializeExecutionLease(ctx context.Context, identity
 				return nil, fmt.Errorf("list execution capabilities: %w", err)
 			}
 			for _, grant := range grants {
+				// credential:read is decided per call against the in-place
+				// credential writes it enables; a persisted grant (only legacy
+				// rows) must not skip that decision as a lease capability.
+				if grant.Capability == executionenv.CapabilityCredentialRead {
+					continue
+				}
 				capabilities = append(capabilities, grant.Capability)
 			}
 			if workspace.TrustLevel == executionenv.TrustTrusted && tools.ExecSandboxAllowsNetwork() {
@@ -890,18 +921,48 @@ func (c *RunCoordinator) appendEnvironmentRebuiltEvent(ctx context.Context, leas
 	})
 }
 
+// errApprovalModeUnreadable reports that the person's persisted /mode could not
+// be read. A new admission freezes its mode for the whole lineage, so it is
+// refused rather than admitted under a guess.
+var errApprovalModeUnreadable = errors.New("the approval mode could not be read")
+
+// readApprovalModeSetting reads the person's persisted /mode and when it was
+// written, retrying once. A read that fails is an error, never "unset".
+func (c *RunCoordinator) readApprovalModeSetting(ctx context.Context, identity *control.IdentityContext) (string, int64, error) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
+		return "", 0, errApprovalModeUnreadable
+	}
+	read := c.approvalModeRead
+	if read == nil {
+		read = func(ctx context.Context, tenantID, personID string) (string, int64, error) {
+			return c.srv.Control.GetPersonSettingStamped(ctx, tenantID, personID, personSettingApprovalMode)
+		}
+	}
+	value, at, err := read(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		value, at, err = read(ctx, identity.TenantID, identity.PersonID)
+	}
+	return value, at, err
+}
+
 // resolveApprovalMode applies the approval-mode precedence: an explicit
 // per-request mode wins; otherwise the person's persisted /mode preference
 // (approval_mode); otherwise the smart product default. This is what makes an IM `/mode smart`
-// apply to later messages that carry no mode of their own.
-func (c *RunCoordinator) resolveApprovalMode(identity *control.IdentityContext, reqMode string) tools.ApprovalMode {
+// apply to later messages that carry no mode of their own. A preference that
+// cannot be read is an error, never the default: the mode is frozen for the
+// whole lineage, and a guess could admit work looser than the person
+// configured.
+func (c *RunCoordinator) resolveApprovalMode(ctx context.Context, identity *control.IdentityContext, reqMode string) (tools.ApprovalMode, error) {
 	modeStr := strings.TrimSpace(reqMode)
 	if modeStr == "" && c != nil && c.srv != nil && c.srv.Control != nil && identity != nil {
-		if pref, err := c.srv.Control.GetPersonSetting(context.Background(), identity.TenantID, identity.PersonID, personSettingApprovalMode); err == nil {
-			modeStr = pref
+		pref, _, err := c.readApprovalModeSetting(ctx, identity)
+		if err != nil {
+			log.Warn("gateway: the approval-mode preference could not be read; the admission is refused", "person", identity.PersonID, "error", err)
+			return "", fmt.Errorf("%w: %v", errApprovalModeUnreadable, err)
 		}
+		modeStr = pref
 	}
-	return tools.EffectiveApprovalMode(modeStr)
+	return tools.EffectiveApprovalMode(modeStr), nil
 }
 
 // gatewayClarify answers the clarify tool as a FIRST-CLASS pending question,
@@ -913,10 +974,19 @@ func (c *RunCoordinator) resolveApprovalMode(identity *control.IdentityContext, 
 // the tool result; a timeout expires the row and returns the best-judgment
 // sentinel so the run never hangs. This is what lets a question survive the CLI
 // closing (docs/identity-continuity.md "Runtime attachment model").
-func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ClarifyHandler {
+func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, channel string, opts ...humanWaitOption) tools.ClarifyHandler {
+	wait := c.gatewayClarifyWait(identity, task, run, channel, opts...)
 	return func(question string, choices []string) string {
+		answer, _ := wait(runCtx, question, choices)
+		return answer
+	}
+}
+
+func (c *RunCoordinator) gatewayClarifyWait(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string, opts ...humanWaitOption) tools.ClarifyWaitHandler {
+	settings := newHumanWaitSettings(opts)
+	return func(runCtx context.Context, question string, choices []string) (string, error) {
 		if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
-			return clarifyFallbackSentinel
+			return clarifyFallbackSentinel, nil
 		}
 		store := c.srv.Control
 		taskID, runID := "", ""
@@ -930,6 +1000,7 @@ func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *contro
 		if runCtx == nil {
 			runCtx = context.Background()
 		}
+		requiresCheckpoint := kernel.HumanWaitToolCallID(runCtx) != "" || kernel.DelegationNamespace(runCtx) != "" || kernel.HasLoopCheckpointSink(runCtx)
 		waitCtx, cancel := context.WithTimeout(runCtx, clarifyWaitTimeout)
 		defer cancel()
 
@@ -943,8 +1014,10 @@ func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *contro
 			Channel:  reqChannel,
 		})
 		if err != nil {
-			// Cannot durably record the question: fall back rather than hang.
-			return clarifyFallbackSentinel
+			if requiresCheckpoint {
+				return "", fmt.Errorf("record human question: %w", err)
+			}
+			return clarifyFallbackSentinel, nil
 		}
 		// No Task gate: the Run owns the event, and a question the person never
 		// sees parks the work forever.
@@ -960,34 +1033,155 @@ func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *contro
 		defer resumeWatchdog()
 		c.notifyClarifyRequested(context.Background(), identity, taskID, runID, reqChannel, clarify, liveSurfaceInformed)
 
+		// An unanswered question may stay in the Run while its person is at the
+		// terminal that asked. Arming writes the exact pending-call checkpoint now,
+		// so a crash during the hold recovers like a park; when that cannot be
+		// written the question takes today's short grace and parks.
+		var hold *humanWaitHold
+		var arm *armedHumanWait
+		if requiresCheckpoint {
+			if hold = c.startHumanWaitHold(runCtx, settings, identity, clarifyWaitTimeout); hold != nil {
+				if arm = c.armHumanWait(runCtx, identity, runID, control.LoopCheckpointWaitClarification, clarify.ID, "clarify"); arm == nil {
+					hold = nil
+				}
+			}
+		}
+		defer arm.abandon(runCtx)
+
+		checkpointUnavailable := false
+		controlFailureReported := false
+		checkpointPark := func(reason string) error {
+			parked, parkErr := c.parkHumanWait(runCtx, identity, runID, control.LoopCheckpointWaitClarification, clarify.ID, "clarify", reason, arm)
+			cancel()
+			waitCtx = runCtx
+			if parkErr != nil {
+				checkpointUnavailable = true
+				return nil
+			}
+			if parked {
+				return &humanWaitPause{TurnPause: kernel.TurnPause{Reason: "clarification_parked", Message: "Work is paused for your answer to the pending question."}}
+			}
+			return nil
+		}
+		grace := time.NewTimer(c.humanWaitGrace())
+		defer grace.Stop()
+		graceC := grace.C
+		var holdC <-chan time.Time
+		if hold != nil {
+			grace.Stop()
+			graceC = nil
+			holdTimer := time.NewTimer(time.Until(hold.deadline))
+			defer holdTimer.Stop()
+			holdC = holdTimer.C
+		}
+		if !requiresCheckpoint {
+			grace.Stop()
+			graceC = nil
+		}
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
 			select {
+			case <-graceC:
+				graceC = nil
+				if pause := checkpointPark(control.HumanWaitParkGrace); pause != nil {
+					return "", pause
+				}
+			case <-holdC:
+				holdC, hold = nil, nil
+				if pause := checkpointPark(control.HumanWaitParkHoldCap); pause != nil {
+					return "", pause
+				}
 			case <-waitCtx.Done():
+				if requiresCheckpoint && runCtx.Err() == nil {
+					graceC = nil
+					reason := control.HumanWaitParkGrace
+					if hold != nil {
+						reason = control.HumanWaitParkHoldCap
+					}
+					holdC, hold = nil, nil
+					if pause := checkpointPark(reason); pause != nil {
+						return "", pause
+					}
+					continue
+				}
 				// A planned gateway shutdown parks the origin run as interrupted.
 				// Preserve its question: the next endpoint answer creates an exact
 				// child continuation through ClarifyID. A timeout or ordinary
 				// cancellation is terminal for this waiter and must expire the row
 				// so it cannot intercept an unrelated later message.
-				if !errors.Is(context.Cause(waitCtx), errGatewayShutdown) {
+				if requiresCheckpoint || !errors.Is(context.Cause(waitCtx), errGatewayShutdown) {
 					_ = store.ExpireClarifyRequest(context.WithoutCancel(waitCtx), identity.TenantID, clarify.ID, "waiter gone: "+waitCtx.Err().Error())
 				}
-				return clarifyFallbackSentinel
+				if requiresCheckpoint {
+					return "", runCtx.Err()
+				}
+				return clarifyFallbackSentinel, nil
 			case <-ticker.C:
-				current, err := store.GetClarifyRequest(waitCtx, identity.TenantID, clarify.ID)
+				if waitCtx.Err() != nil {
+					continue
+				}
+				current, err := store.GetClarifyRequest(runCtx, identity.TenantID, clarify.ID)
 				if err != nil || current == nil {
-					// Store hiccup / row vanished: don't hang, fall back.
-					return clarifyFallbackSentinel
+					if requiresCheckpoint && runCtx.Err() == nil {
+						if !controlFailureReported {
+							if err == nil {
+								err = fmt.Errorf("clarification request disappeared: %s", clarify.ID)
+							}
+							c.reportHumanWaitControlFailure(runCtx, runID, control.LoopCheckpointWaitClarification, clarify.ID, err)
+							controlFailureReported = true
+						}
+						if !checkpointUnavailable {
+							graceC = nil
+							if pause := checkpointPark(control.HumanWaitParkGrace); pause != nil {
+								return "", pause
+							}
+						}
+						continue
+					}
+					// Legacy callbacks have no native dispatch stack to preserve.
+					return clarifyFallbackSentinel, nil
 				}
 				switch current.Status {
 				case "answered":
 					if answer := strings.TrimSpace(current.Answer); answer != "" {
-						return answer
+						// An answer consumed in the Run ends the wait: put the checkpoint
+						// back before the calls that follow the question can run, so a
+						// crash among them cannot replay them from a pending-call binding.
+						if restoreErr := arm.restore(runCtx); restoreErr != nil {
+							if !controlFailureReported {
+								c.reportHumanWaitControlFailure(runCtx, runID, control.LoopCheckpointWaitClarification, clarify.ID, restoreErr)
+								controlFailureReported = true
+							}
+							continue
+						}
+						return answer, nil
 					}
-					return clarifyFallbackSentinel
+					if !requiresCheckpoint {
+						return clarifyFallbackSentinel, nil
+					}
+					if !controlFailureReported {
+						c.reportHumanWaitControlFailure(runCtx, runID, control.LoopCheckpointWaitClarification, clarify.ID, fmt.Errorf("answered clarification has no recorded answer"))
+						controlFailureReported = true
+					}
 				case "expired":
-					return clarifyFallbackSentinel
+					if !requiresCheckpoint {
+						return clarifyFallbackSentinel, nil
+					}
+					if !controlFailureReported {
+						c.reportHumanWaitControlFailure(runCtx, runID, control.LoopCheckpointWaitClarification, clarify.ID, fmt.Errorf("clarification expired before an answer was recorded"))
+						controlFailureReported = true
+					}
+				case "pending":
+					// Still unanswered: the hold lasts only while what justified it does.
+					if hold != nil && runCtx.Err() == nil {
+						if reason := hold.parkReason(runCtx); reason != "" {
+							holdC, hold = nil, nil
+							if pause := checkpointPark(reason); pause != nil {
+								return "", pause
+							}
+						}
+					}
 				}
 			}
 		}
@@ -1075,7 +1269,8 @@ func (c *RunCoordinator) personCanAnswer(ctx context.Context, identity *control.
 	return true
 }
 
-func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {
+func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string, opts ...humanWaitOption) tools.ToolApprovalHandler {
+	settings := newHumanWaitSettings(opts)
 	return func(ctx context.Context, req tools.ToolApprovalRequest) (tools.ToolApprovalDecision, error) {
 		if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
 			return tools.ToolApprovalDecision{}, fmt.Errorf("approval store is not available")
@@ -1084,6 +1279,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		if ctx == nil {
 			ctx = context.Background()
 		}
+		requiresCheckpoint := kernel.HumanWaitToolCallID(ctx) != "" || kernel.DelegationNamespace(ctx) != "" || kernel.HasLoopCheckpointSink(ctx)
 		taskID := req.TaskID
 		runID := req.RunID
 		if taskID == "" && task != nil {
@@ -1100,6 +1296,14 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		// exceeded" and produced no answer at all (observed in eval, where the
 		// case budget is far below the old hardcoded 30 minutes).
 		budget := c.approvalWaitBudget(ctx, identity)
+		// What the person's time allows, before the no-time fallback below: a wait
+		// that has to park at once has nothing to hold for.
+		holdWait := budget
+		if budget <= 0 && requiresCheckpoint && ctx.Err() == nil {
+			// The old final-answer reserve must not create a checkpoint-free
+			// human pause. The runtime can ask durably and checkpoint immediately.
+			budget = c.humanWaitGrace()
+		}
 		if budget <= 0 {
 			// No time left to ask. Creating a durable row plus a push
 			// notification for a request that would expire in the same breath
@@ -1143,13 +1347,15 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 			RequestedChannel:         fallback(channel, identity.Platform),
 			AuthorizationFingerprint: req.AuthorizationFingerprint,
 			Payload: mustJSON(map[string]interface{}{
-				"tool":            req.ToolName,
-				"target":          approvalActionTarget(req.ToolName, req.Args),
-				"reason":          req.Reason,
-				"args":            persistentArgs,
-				"grant_class":     req.GrantClass,
-				"run_grant_class": req.RunGrantClass,
-				"containment":     req.Containment,
+				"tool":                      req.ToolName,
+				"tool_call_id":              kernel.HumanWaitToolCallID(ctx),
+				"target":                    approvalActionTarget(req.ToolName, req.Args),
+				"reason":                    req.Reason,
+				"args":                      persistentArgs,
+				"grant_class":               req.GrantClass,
+				"run_grant_class":           req.RunGrantClass,
+				"containment":               req.Containment,
+				"external_effect_claim_ids": req.ExternalEffectClaimIDs,
 				// WHERE it runs and HOW BIG the change is: a decision made without
 				// them is a guess. All four are display-only context produced by the
 				// execution scope, never by the model's args.
@@ -1217,16 +1423,33 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		defer resumeWatchdog()
 		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval, liveSurfaceInformed)
 
+		// An unanswered ask may stay in the Run while its person is at the terminal
+		// that asked. Arming writes the exact pending-call checkpoint now, so a
+		// crash during the hold recovers like a park; when that cannot be written
+		// the ask takes today's short grace and parks.
+		var hold *humanWaitHold
+		var arm *armedHumanWait
+		if requiresCheckpoint {
+			if hold = c.startHumanWaitHold(ctx, settings, identity, holdWait); hold != nil {
+				if arm = c.armHumanWait(ctx, identity, runID, control.LoopCheckpointWaitApproval, approval.ID, req.ToolName); arm == nil {
+					hold = nil
+				}
+			}
+		}
+		defer arm.abandon(ctx)
+
 		// A resource deadline parks the request instead of invalidating it. An
 		// explicit run cancellation still expires it: /stop means stop, while an
 		// unattended timeout means "answer later and resume".
+		checkpointUnavailable := false
+		controlFailureReported := false
 		park := func() (tools.ToolApprovalDecision, error) {
 			cause := "waiter gone"
 			if err := waitCtx.Err(); err != nil {
 				cause += ": " + err.Error()
 			}
 			cleanupCtx := context.WithoutCancel(waitCtx)
-			explicitCancel := ctx.Err() != nil && errors.Is(context.Cause(ctx), context.Canceled)
+			explicitCancel := checkpointUnavailable || (ctx.Err() != nil && errors.Is(context.Cause(ctx), context.Canceled))
 			var current *control.ApprovalRequest
 			var transitioned bool
 			var err error
@@ -1254,7 +1477,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 			// A response can win exactly as the wait deadline fires. When the
 			// pending -> expired update changed no row, honor the stored human
 			// decision instead of fabricating a timeout event over it.
-			if decision, terminal, claimErr := claimStoredApprovalDecision(cleanupCtx, store, identity.TenantID, runID, current); terminal || claimErr != nil {
+			if decision, terminal, claimErr := claimStoredApprovalDecision(cleanupCtx, store, identity.TenantID, runID, current, nil); terminal || claimErr != nil {
 				return decision, claimErr
 			}
 			if current.Status == "pending" && current.WaiterState == "parked" {
@@ -1266,11 +1489,72 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 			return tools.ToolApprovalDecision{ApprovalID: approval.ID}, fmt.Errorf("approval request %s remained %s/%s after waiter cleanup", approval.ID, current.Status, current.WaiterState)
 		}
 
+		checkpointPark := func(reason string) (tools.ToolApprovalDecision, bool) {
+			parked, parkErr := c.parkHumanWait(ctx, identity, runID, control.LoopCheckpointWaitApproval, approval.ID, req.ToolName, reason, arm)
+			// A local wait deadline is never authority to discard the executing
+			// stack. An answer that won stays in this turn; an unsafe/failed
+			// checkpoint stays cancellable under the original Run lifetime.
+			cancel()
+			waitCtx = ctx
+			if parkErr != nil {
+				checkpointUnavailable = true
+				return tools.ToolApprovalDecision{}, false
+			}
+			if !parked {
+				return tools.ToolApprovalDecision{}, false
+			}
+			if current, lookupErr := store.GetApprovalRequest(context.WithoutCancel(ctx), identity.TenantID, approval.ID); lookupErr == nil && current != nil {
+				if _, eventErr := store.AppendApprovalParkedEvent(context.WithoutCancel(ctx), current, fallback(channel, identity.Platform), reason); eventErr != nil {
+					log.Warn("checkpointed approval notification could not be saved", "approval_id", approval.ID, "run_id", runID, "error", eventErr)
+				}
+			}
+			return tools.ToolApprovalDecision{ApprovalID: approval.ID, Outcome: tools.ApprovalOutcomeTimedOut, Reason: "approval checkpointed; answer later to resume this exact pending operation"}, true
+		}
+		grace := time.NewTimer(c.humanWaitGrace())
+		defer grace.Stop()
+		graceC := grace.C
+		var holdC <-chan time.Time
+		if hold != nil {
+			grace.Stop()
+			graceC = nil
+			holdTimer := time.NewTimer(time.Until(hold.deadline))
+			defer holdTimer.Stop()
+			holdC = holdTimer.C
+		}
+		if !requiresCheckpoint {
+			grace.Stop()
+			graceC = nil
+		}
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
 			select {
+			case <-graceC:
+				graceC = nil
+				if decision, parked := checkpointPark(control.HumanWaitParkGrace); parked {
+					return decision, nil
+				}
+			case <-holdC:
+				holdC, hold = nil, nil
+				if decision, parked := checkpointPark(control.HumanWaitParkHoldCap); parked {
+					return decision, nil
+				}
 			case <-waitCtx.Done():
+				if requiresCheckpoint && ctx.Err() == nil {
+					graceC = nil
+					reason := control.HumanWaitParkGrace
+					if hold != nil {
+						reason = control.HumanWaitParkHoldCap
+					}
+					holdC, hold = nil, nil
+					if decision, parked := checkpointPark(reason); parked {
+						return decision, nil
+					}
+					continue
+				}
+				// Cancellation ends execution; it must not manufacture an
+				// answerable legacy park for a stack without its checkpoint.
+				checkpointUnavailable = checkpointUnavailable || requiresCheckpoint
 				return park()
 			case <-ticker.C:
 				// Both branches can be ready on the same tick, and select then
@@ -1279,7 +1563,8 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				// an unanswered approval as a transport failure roughly half
 				// the time it timed out on a tick boundary.
 				if waitCtx.Err() != nil {
-					return park()
+					// The Done branch owns both checkpoint parking and cancellation.
+					continue
 				}
 				// The poll must NOT inherit the wait deadline. Checking
 				// waitCtx above still leaves a window where the budget lapses
@@ -1289,17 +1574,62 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				pollCtx, cancelPoll := context.WithTimeout(context.WithoutCancel(waitCtx), approvalPollTimeout)
 				current, err := store.GetApprovalRequest(pollCtx, identity.TenantID, approval.ID)
 				cancelPoll()
-				if err != nil {
+				if err != nil || current == nil {
+					if requiresCheckpoint && ctx.Err() == nil {
+						if !controlFailureReported {
+							if err == nil {
+								err = fmt.Errorf("approval request disappeared: %s", approval.ID)
+							}
+							c.reportHumanWaitControlFailure(ctx, runID, control.LoopCheckpointWaitApproval, approval.ID, err)
+							controlFailureReported = true
+						}
+						if !checkpointUnavailable {
+							graceC = nil
+							if decision, parked := checkpointPark(control.HumanWaitParkGrace); parked {
+								return decision, nil
+							}
+						}
+						continue
+					}
+					if err == nil {
+						err = fmt.Errorf("approval request disappeared: %s", approval.ID)
+					}
 					return tools.ToolApprovalDecision{ApprovalID: approval.ID}, err
 				}
-				if current == nil {
-					return tools.ToolApprovalDecision{ApprovalID: approval.ID}, fmt.Errorf("approval request disappeared: %s", approval.ID)
+				if requiresCheckpoint && current.Status == "expired" && ctx.Err() == nil {
+					if !controlFailureReported {
+						c.reportHumanWaitControlFailure(ctx, runID, control.LoopCheckpointWaitApproval, approval.ID, fmt.Errorf("approval expired before a human decision was recorded"))
+						controlFailureReported = true
+					}
+					continue
 				}
 				claimCtx, cancelClaim := context.WithTimeout(context.WithoutCancel(waitCtx), approvalPollTimeout)
-				decision, terminal, claimErr := claimStoredApprovalDecision(claimCtx, store, identity.TenantID, runID, current)
+				decision, terminal, claimErr := claimStoredApprovalDecision(claimCtx, store, identity.TenantID, runID, current, arm)
 				cancelClaim()
+				if claimErr != nil && requiresCheckpoint && ctx.Err() == nil {
+					if !controlFailureReported {
+						c.reportHumanWaitControlFailure(ctx, runID, control.LoopCheckpointWaitApproval, approval.ID, claimErr)
+						controlFailureReported = true
+					}
+					if !checkpointUnavailable {
+						graceC = nil
+						if paused, parked := checkpointPark(control.HumanWaitParkGrace); parked {
+							return paused, nil
+						}
+					}
+					continue
+				}
 				if terminal || claimErr != nil {
 					return decision, claimErr
+				}
+				// Still unanswered: the hold lasts only while what justified it does.
+				if hold != nil && ctx.Err() == nil {
+					if reason := hold.parkReason(ctx); reason != "" {
+						holdC, hold = nil, nil
+						if paused, parked := checkpointPark(reason); parked {
+							return paused, nil
+						}
+					}
 				}
 			}
 		}
@@ -1678,13 +2008,20 @@ func storedApprovalDecision(current *control.ApprovalRequest) (tools.ToolApprova
 // claimStoredApprovalDecision closes the crash window between a durable human
 // response and the live middleware consuming it. Only the original live waiter
 // may claim; parked decisions are consumed by resume authorization instead.
-func claimStoredApprovalDecision(ctx context.Context, store *control.Store, tenantID, runID string, current *control.ApprovalRequest) (tools.ToolApprovalDecision, bool, error) {
+// An armed wait gets its loop checkpoint back in the same transaction as the
+// claim, so the answer is never consumed while the checkpoint still names the
+// call it is about to release.
+func claimStoredApprovalDecision(ctx context.Context, store *control.Store, tenantID, runID string, current *control.ApprovalRequest, arm *armedHumanWait) (tools.ToolApprovalDecision, bool, error) {
 	decision, terminal := storedApprovalDecision(current)
 	if !terminal || current == nil || (current.Status != "approved" && current.Status != "rejected") {
 		return decision, terminal, nil
 	}
 	if current.WaiterState == "claimed" {
 		if current.ClaimedByRunID == "" || current.ClaimedByRunID == runID {
+			// This Run's own earlier claim: any pending-call binding left is spent.
+			if err := arm.restore(ctx); err != nil {
+				return tools.ToolApprovalDecision{ApprovalID: current.ID}, true, err
+			}
 			return decision, true, nil
 		}
 		return tools.ToolApprovalDecision{ApprovalID: current.ID}, true,
@@ -1694,18 +2031,22 @@ func claimStoredApprovalDecision(ctx context.Context, store *control.Store, tena
 		return tools.ToolApprovalDecision{ApprovalID: current.ID}, true,
 			fmt.Errorf("approval decision %s has no live waiter (state %s)", current.ID, current.WaiterState)
 	}
-	claimed, transitioned, err := store.ClaimApprovalDecision(ctx, tenantID, current.ID, runID)
+	claimed, transitioned, err := store.ClaimApprovalDecisionReleasing(ctx, tenantID, current.ID, runID, arm.release())
 	if err != nil {
 		return tools.ToolApprovalDecision{ApprovalID: current.ID}, true, err
 	}
 	if !transitioned {
 		if claimed != nil && claimed.WaiterState == "claimed" && (claimed.ClaimedByRunID == "" || claimed.ClaimedByRunID == runID) {
+			if err := arm.restore(ctx); err != nil {
+				return tools.ToolApprovalDecision{ApprovalID: current.ID}, true, err
+			}
 			resolved, _ := storedApprovalDecision(claimed)
 			return resolved, true, nil
 		}
 		return tools.ToolApprovalDecision{ApprovalID: current.ID}, true,
 			fmt.Errorf("approval decision %s could not be claimed", current.ID)
 	}
+	arm.consumed()
 	resolved, _ := storedApprovalDecision(claimed)
 	return resolved, true, nil
 }

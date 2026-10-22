@@ -73,6 +73,9 @@ func TestWorkContinuityHintsSurfaceWaitingRunForShortReply(t *testing.T) {
 	if err := store.FinishRun(ctx, identity.TenantID, waitingRun.ID, "waiting_user"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.SaveHandoff(ctx, control.Handoff{ID: "handoff_run_" + waitingRun.ID, TaskID: waitingTask.ID, Summary: "Preflight observed yesterday", ChangedFiles: []string{"repo/config.yaml"}, Risks: []string{"Last check failed: missing credentials"}}); err != nil {
+		t.Fatal(err)
+	}
 	interactionTask, err := store.CreateTask(ctx, control.TaskCreate{
 		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "确认执行", Channel: "cli",
 	})
@@ -91,7 +94,7 @@ func TestWorkContinuityHintsSurfaceWaitingRunForShortReply(t *testing.T) {
 	}
 	selected := kernel.TaskRuntimeContext{TaskID: interactionTask.ID, RunID: interactionRun.ID, WorkContinuityHints: hints}
 	prompt := selected.Prompt(10000)
-	for _, want := range []string{"Work Continuity Hints", waitingRun.ID, "Release RUQX-818", "waiting_user", "work_select"} {
+	for _, want := range []string{"Work Continuity Hints", waitingRun.ID, "Release RUQX-818", "waiting_user", "work_select", "repo/config.yaml", "Last check failed: missing credentials"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("continuity hint prompt missing %q:\n%s", want, prompt)
 		}
@@ -399,5 +402,82 @@ func TestExplicitCLIAttachIncludesPossiblyMissedIMFinalResult(t *testing.T) {
 	preLabel := server.coordinator().selectedTaskRuntimeContext(ctx, task, nil, nil, "cli", "cli", "unrelated message", true)
 	if strings.Contains(preLabel.Prompt(10000), "Delivery Continuity") {
 		t.Fatal("soft pre-label must not inject delivery history from a guessed task")
+	}
+}
+
+func TestWorkContinuityHintsBoundHistoricalFactsWithoutSelectingWork(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same workspace", true: "different workspaces"}[separate], func(t *testing.T) {
+			ctx := context.Background()
+			store := controltest.NewStore(t)
+			owner, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "owner", "Owner")
+			if err != nil {
+				t.Fatal(err)
+			}
+			stranger, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "stranger", "Stranger")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ws, err := store.EnsureWorkspace(ctx, control.Workspace{TenantID: owner.TenantID, OwnerPersonID: owner.PersonID, Name: "shared", LocalPath: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wanted := map[string]bool{}
+			for i, person := range []*control.IdentityContext{owner, owner, stranger} {
+				workspaceID := ws.ID
+				if separate && i == 1 {
+					other, err := store.EnsureWorkspace(ctx, control.Workspace{TenantID: owner.TenantID, OwnerPersonID: owner.PersonID, Name: "other", LocalPath: t.TempDir()})
+					if err != nil {
+						t.Fatal(err)
+					}
+					workspaceID = other.ID
+				}
+				if i == 2 {
+					workspaceID = ""
+				}
+				task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: person.TenantID, PersonID: person.PersonID, WorkspaceID: workspaceID, Title: "unfinished", Channel: "other-cli"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				run, err := store.StartRun(ctx, task, "other-cli", "continue separate work")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := store.SaveHandoff(ctx, control.Handoff{ID: "handoff_run_" + run.ID, TaskID: task.ID, Summary: "Historical finding", ChangedFiles: []string{"config/" + strings.Repeat("x", 200), "b", "c", "not-in-hint"}, Risks: []string{"failed check: " + strings.Repeat("x", 200), "second", "not-in-hint"}}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.FinishRun(ctx, person.TenantID, run.ID, "waiting_user"); err != nil {
+					t.Fatal(err)
+				}
+				if i < 2 {
+					wanted[run.ID] = true
+				}
+			}
+			task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, WorkspaceID: ws.ID, Title: "new input", Channel: "this-cli"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := store.StartRun(ctx, task, "this-cli", "continue")
+			if err != nil {
+				t.Fatal(err)
+			}
+			hints := (&Server{Control: store}).coordinator().workContinuityHints(ctx, owner, current, "this-cli", 3)
+			if len(hints) != 2 {
+				t.Fatalf("expected only owner's two candidates: %+v", hints)
+			}
+			for _, hint := range hints {
+				if !wanted[hint.RunID] || len(hint.ChangedFiles) != 3 || len(hint.Risks) != 2 || len([]rune(hint.ChangedFiles[0])) > 163 || len([]rune(hint.Risks[0])) > 123 {
+					t.Fatalf("hint scope/bounds: %+v", hint)
+				}
+			}
+			prompt := (kernel.TaskRuntimeContext{RunID: current.ID, WorkContinuityHints: hints}).Prompt(10000)
+			if strings.Contains(prompt, "not-in-hint") || !strings.Contains(prompt, "historical_paths") || !strings.Contains(prompt, "not current file contents or active Skill instructions") {
+				t.Fatalf("historical hints lost their bounds: %s", prompt)
+			}
+			after, err := store.GetRun(ctx, owner.TenantID, current.ID)
+			if err != nil || after.ResumesRunID != "" || after.TaskID != task.ID {
+				t.Fatalf("hints selected work: %+v %v", after, err)
+			}
+		})
 	}
 }

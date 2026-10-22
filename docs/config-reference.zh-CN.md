@@ -213,18 +213,26 @@ web:
 ### 执行沙箱与网络
 
 Linux 上的 `terminal`、`verify` 和 `execute_code` 默认优先使用 Bubblewrap：
-宿主根目录只读，工作区可写。默认共享 daemon 的网络命名空间，因此可继续使用
-daemon 继承到的代理和 DNS 配置。
+宿主根目录只读，工作区可写。沙箱可以共享 daemon 的网络命名空间（见
+`allow_network`），因此可继续使用 daemon 继承到的代理和 DNS 配置。
 
 ```yaml
 exec_sandbox:
   enabled: true
   required: false
-  allow_network: true   # false 表示创建无网络命名空间
+  allow_network: true   # 允许共享 daemon 网络命名空间；false 时仅凭信任不再许可网络
 ```
 
 每个执行工具也可指定 `sandbox: auto|isolated|host`。`isolated` 在隔离能力不可用
-时直接失败；`host` 会经过审批，并在 `required: true` 时禁用。
+时直接失败。`allow_network: true`（默认）只是*允许*共享网络，并不会让每条命令都联网：
+受信任工作区里的隔离命令，只有访问远程服务（包管理器安装、git 远程操作、基础设施和
+云 CLI、`curl`）或模型在 `terminal`、`verify`、`execute_code` 上设置了 `network: true`
+时，才共享 daemon 的网络命名空间和继承的代理/DNS 配置；构建、测试、脚本和本地检查离线
+运行。不受信任的工作区只有通过 `network:shared` 授权或审批才能联网，授权同样只是许可，
+不是联网的理由，且无论 `allow_network` 取值如何都需要它。设为 `allow_network: false`
+使仅凭信任不再许可任何网络：沙箱默认没有网络，只有人给出的授权或审批才能解除，且只对
+访问远程服务或设置了 `network: true` 的命令生效。`/diag execution` 会显示该策略，以及当前 Run 中有多少
+次调用获得了网络、其余调用为何没有。`host` 会经过审批，并在 `required: true` 时禁用。
 `selfmind gateway restart` 会合并当前终端和旧 daemon 的 `PATH`：当前目录优先，
 旧 daemon 独有的工具目录追加在后，因此 IDE 或更新器触发重启时不会隐藏
 `~/.local/bin`、Cloud SDK 等用户安装命令。同时会保留旧 daemon 的
@@ -283,10 +291,29 @@ gateway:
   delivery_retry_attempts: 3
 ```
 
-daemon 默认提供两个独立 Agent worker（未设置 `SELFMIND_WORKERS`）。容量不能
-超过 worker 数，不匹配时启动失败。设 `max_active_work_runs: 1` 可串行执行；若
-只需一个 worker，将该项和 `SELFMIND_WORKERS` 都设为 1。容量 3 要求 daemon
-环境至少有三个 worker。升级保留显式配置；工作区和外部目标冲突仍会排队。
+`addr` 是供 IM webhook 与 HTTP 集成使用的 TCP 监听地址，它从不承载 CLI 身份：
+你自己的 `selfmind` 与 TUI 通过本地控制 socket（位于 daemon 运行时状态旁的
+`control.sock`）连接本机 daemon，daemon 依据操作系统记录的“谁发起了连接”来验证
+客户端；任何配置或 `token` 都不能让 TCP 上的请求获得 `cli` 平台身份。通配地址的
+`addr`（`:8765`、`0.0.0.0:8765`、`[::]:8765`）仍然是本机的 daemon，你自己的 CLI
+同样经该 socket 访问它。`token`
+只用于认证远程集成；在暴露监听地址、或让沙箱工具共享主机网络
+（`exec_sandbox.allow_network`）之前应先设置它，否则任何能连到 `addr` 的进程都
+可以冒用它能说出的 IM 或 HTTP 身份。停止 gateway，以及读取超出存活信息的状态，
+同样需要 `token`；未设置时只有你自己的 CLI 经控制 socket 才能得到回答。loopback
+`addr` 会拒绝 `Host` 不是 `localhost`、`127.0.0.1` 或 `[::1]` 的请求（防 DNS
+rebinding）；绑定到 loopback 之外的 `addr` 不做这项检查。受限工具无法读取
+daemon 的运行时目录、控制库、daemon 加载的配置文件及其备份、凭证文件与聊天账号
+凭证，也无法把存放它们的目录挪走；在 macOS 上还根本无法连接 `addr` 或控制
+socket，在 Linux 上网络共享时仍可连到 `addr`。详见 `docs/tool-safety.md`。
+
+daemon 为每个可准入的 Run 启动一个 Agent worker：未设置 `SELFMIND_WORKERS`
+时，worker 数等于 `max_active_work_runs`（默认二）。显式设置的
+`SELFMIND_WORKERS` 必须是不小于容量的整数（超过 16 按 16 计）；更小、为零、
+为负或格式不对时启动失败，错误会点名相关配置。设 `max_active_work_runs: 1` 即在
+一个 worker 上串行执行。所有 worker 的工具相同，包括 cron 与 MCP；每个已配置的
+MCP 服务只有一条连接，由所有 worker 共享。升级保留显式配置；工作区和外部目标
+冲突仍会排队。
 
 `automatic_run_recovery: false` 是 daemon/provider 中断自动续跑的 fail-closed
 运维回滚开关。它不会丢弃持久计划、effect 证据或 recovery handoff，也不会改变
@@ -441,6 +468,7 @@ mcp:
       headers: {}                # 可选 HTTP 请求头
       auth: {}                   # 可选 bearer 或 user/pass 静态认证
       env_filter: []             # 可选 stdio 环境变量允许列表
+      read_only_tools: []        # 可选，标为只读的精确工具名
 ```
 
 默认为空。daemon 启动时通过官方 MCP Go SDK 连接服务器、协商兼容协议版本、
@@ -450,10 +478,15 @@ mcp:
 并打印启动警告，重名则直接拒绝，不会静默覆盖已有服务器。
 
 MCP 工具默认属于未分类外部工具。每次调用都需要一次性人工批准，即使
-`full-auto` 也一样；在有经过评审的逐工具信任策略之前，不能复用 grant 或 smart
-裁决。SelfMind 只向远端发送工具的公开输入字段，并剥离 tenant/person/run scope、
-回调等所有 daemon 内部的顶层下划线字段。远程服务器目前支持静态请求头、Bearer Token
-和 Basic Auth；SelfMind 尚未提供交互式 MCP OAuth 流程。
+`full-auto` 也一样；不能复用 grant 或 smart 裁决。`read_only_tools` 列出运维为
+所有使用该服务器的人标为只读的精确远端工具名；本人还可以用
+`/tools readonly <server>/<tool> on` 为自己标注更多工具。被标注工具的调用按其他
+读取方式审批、不占用外部目标，并可与其他读取并行。加载配置时拒绝通配模式；服务器
+未提供的名字只在 gateway 状态和 `selfmind doctor` 中显示为警告，不算失败。服务器
+对自身工具的标注（如 `readOnlyHint`）一律不被信任。SelfMind 只向远端发送工具的
+公开输入字段，并剥离 tenant/person/run scope、回调等所有 daemon 内部的顶层下划线
+字段。远程服务器目前支持静态请求头、Bearer Token 和 Basic Auth；SelfMind 尚未提供
+交互式 MCP OAuth 流程。
 
 ## 12. Agent 调优（高级）
 

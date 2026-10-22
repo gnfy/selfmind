@@ -278,14 +278,14 @@ func TestVerifyLegacyCheckObjectNormalizesBeforeStrictValidation(t *testing.T) {
 	}
 }
 
-func TestVerifyLegacyNestedStepIDRemainsCompatibilityOnly(t *testing.T) {
+func TestVerifyNativeStepIDRetainsLegacyCompatibility(t *testing.T) {
 	tool := NewVerifyTool()
 	definition := ToToolDefinition(tool)
 	function, _ := definition["function"].(map[string]interface{})
 	parameters, _ := function["parameters"].(map[string]interface{})
 	properties, _ := parameters["properties"].(map[string]interface{})
-	if _, published := properties["step_id"]; published {
-		t.Fatal("runtime-owned step_id was republished")
+	if _, published := properties["step_id"]; !published {
+		t.Fatal("Main cannot explicitly select a server-issued verification obligation")
 	}
 
 	normalized, err := tool.NormalizeArguments(map[string]interface{}{
@@ -303,6 +303,13 @@ func TestVerifyLegacyNestedStepIDRemainsCompatibilityOnly(t *testing.T) {
 	}
 	if err := ValidateArgs(tool.Schema(), normalized); err != nil {
 		t.Fatal(err)
+	}
+	b, err := prepareVerificationBinding(map[string]interface{}{"step_id": "step_server", "criterion": "ready", "target": "artifact"})
+	if err != nil || b.StepID != "step_server" {
+		t.Fatalf("native binding=%+v err=%v", b, err)
+	}
+	if _, err := prepareVerificationBinding(map[string]interface{}{"step_id": "step_a", "check": map[string]interface{}{"step_id": "step_b"}}); err == nil {
+		t.Fatal("conflicting native and legacy step identities were accepted")
 	}
 }
 
@@ -730,7 +737,7 @@ func TestArgumentRefusalsSayWhatIsExpected(t *testing.T) {
 		{"finish_run", map[string]interface{}{"summary": "Released."},
 			[]string{"missing required parameter: status", "expected a string, one of done", "waiting_user"}},
 		{"finish_run", map[string]interface{}{"status": "done", "summary": "Released.", "result": "ok"},
-			[]string{"unknown parameter: result", "accepts only done, files, need_approve, next_steps, risks, status, summary, tests"}},
+			[]string{"unknown parameter: result", "accepts only assessments, done, files, final_response, need_approve, next_steps, plan_patch, risks, status, summary, tests"}},
 		{"update_plan", map[string]interface{}{"plan": []interface{}{map[string]interface{}{"step": "publish"}}},
 			[]string{"missing required parameter: plan[0].status", "expected a string, one of pending, in_progress, completed"}},
 	} {

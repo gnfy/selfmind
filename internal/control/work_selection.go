@@ -51,14 +51,37 @@ func (s *Store) EnqueueSelectedContinuation(ctx context.Context, tenantID, perso
 	if !resumable {
 		return nil, fmt.Errorf("continuation parent is no longer resumable")
 	}
+	pendingClarify, err := s.PendingClarifyForRun(ctx, tenantID, personID, parent.ID)
+	if err != nil {
+		return nil, err
+	}
 	q.TenantID = tenantID
 	q.PersonID = personID
 	q.TaskID = parent.TaskID
 	q.ReplyToRunID = parent.ID
-	q.WorkspaceID = parent.WorkspaceID
+	q.WorkspaceID = strings.TrimSpace(parent.WorkspaceID)
+	if q.WorkspaceID == "" && parent.TaskID != "" {
+		if task, err := s.GetTask(ctx, tenantID, parent.TaskID); err == nil && task != nil {
+			q.WorkspaceID = strings.TrimSpace(task.WorkspaceID)
+		}
+	}
 	q.ExecutionRoots = executionenv.CloneRootBindings(parent.ExecutionRoots)
 	q.IdempotencyKey = "work-selection:" + sourceRunID + ":" + resumesRunID
 	q.Class = QueueClassForeground
+	if clarifyID := strings.TrimSpace(q.ClarifyID); clarifyID != "" {
+		if pendingClarify == nil || pendingClarify.ID != clarifyID {
+			return nil, fmt.Errorf("continuation parent does not have pending clarification %s", clarifyID)
+		}
+		answerChannel := strings.TrimSpace(source.Channel)
+		if answerChannel == "" {
+			answerChannel = q.Channel
+		}
+		_, queued, err := s.AnswerClarifyRequestWithResume(ctx, tenantID, personID, clarifyID, q.Content, answerChannel, q)
+		return queued, err
+	}
+	if pendingClarify != nil {
+		return nil, fmt.Errorf("continuation parent %s has pending clarification %s; selection cannot claim it without an explicit answer", parent.ID, pendingClarify.ID)
+	}
 	return s.EnqueueQueued(ctx, q)
 }
 
@@ -87,7 +110,7 @@ func (s *Store) RunSelectionEffectBoundary(ctx context.Context, tenantID, person
 	var count int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tool_ledger
 		WHERE tenant_id = ? AND run_id = ? AND retry_class <> 'read_only'
-		  AND COALESCE(effect_class, '') <> 'observation'
+		  AND COALESCE(effect_class, '') NOT IN ('observation', 'run_bookkeeping')
 		  AND tool_name NOT IN ('work_select', 'update_plan', 'finish_run')`, tenantID, runID).Scan(&count); err != nil {
 		return false, "", err
 	}

@@ -6,10 +6,9 @@ channel: cli
 require_cassette: true
 # The constraint that must change the result for the bare-confirmation cases:
 # the user replaces the criterion, so the passed READY check cannot be adopted.
-# A correct run observes the new criterion fail and reports it without editing
-# the file. Tool-error counts are not asserted: the failing verify is the
-# expected answer, and the harness does not yet separate "check said no" from
-# execution failure, so the case pins the evidence instead.
+# Main's negative condition judgment is separate from the script exit code.
+# The positive acceptance gate stays unresolved; a zero-exit observation may
+# report a valid negative finding but cannot complete that required milestone.
 requires:
   commands: [python3]
 setup:
@@ -29,13 +28,28 @@ turns:
         eq: waiting_user
       - on: events
         type: evidence.recorded
-        payload_contains: '"tool_name":"verify"}'
+        payload_fields:
+          evidence.tool_name: verify
         count_gte: 1
-  - input: "确认，但验收条件改了：value.txt 必须恰好是 DONE 加换行。按新条件检查后再报告，不要修改文件。"
+  - input: "确认，但验收条件改了：value.txt 必须恰好是 DONE 加换行。按新条件复查并报告，不要修改文件。如果不符合，保留这项必需验收为未完成并报告阻塞，不要把验收改成只要查明即可。"
 expect:
-  verification_state: failed
+  condition_state: not_met
   max_duration_seconds: 300
 assert_state:
+  - on: run
+    field: status
+    eq: blocked
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_category":"invalid_input"'
+    count_lte: 0
+  - on: events
+    type: tool.completed
+    payload_contains: '"error_category":"stale_precondition"'
+    count_lte: 0
+  - on: events
+    type: strategy.plan_guidance_escalated
+    count_lte: 0
   - on: events
     type: work.selection_committed
     count_gte: 1
@@ -45,7 +59,7 @@ assert_state:
     count_gte: 2
   - on: file
     path: value.txt
-    contains: READY
+    matches: '\AREADY\n\z'
 checks:
   no_empty_response: true
   no_raw_json_leak: true

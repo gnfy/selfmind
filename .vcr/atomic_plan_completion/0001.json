@@ -1,0 +1,89 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " need"
+    },
+    {
+      "reasoning_content": " to inspect"
+    },
+    {
+      "reasoning_content": " the source"
+    },
+    {
+      "reasoning_content": ".txt file and check"
+    },
+    {
+      "reasoning_content": " whether it contains \""
+    },
+    {
+      "reasoning_content": "READY"
+    },
+    {
+      "reasoning_content": "\" — this is"
+    },
+    {
+      "reasoning_content": " a straightforward"
+    },
+    {
+      "reasoning_content": " read-only verification,"
+    },
+    {
+      "reasoning_content": " so I'll start"
+    },
+    {
+      "reasoning_content": " by outlining the steps"
+    },
+    {
+      "reasoning_content": " before reading the file"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll set up a"
+    },
+    {
+      "content": " small plan"
+    },
+    {
+      "content": ", then read source"
+    },
+    {
+      "content": ".txt to check for"
+    },
+    {
+      "content": " READY.\n\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13941,
+        "output_tokens": 167,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 13941,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 38,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "update_plan",
+          "Args": "{\"plan\": \n[{\"step\": \"Read workspace source.txt\", \"status\": \"in_progress\", \"success_criteria\": \"The contents of source.txt in workspace_root are obtained by a read-only file read.\"}, {\"step\": \"Report whether source.txt contains READY\", \"status\": \"pending\", \"success_criteria\": \"The reply states a grounded yes/no finding about the presence of the literal string READY in source.txt.\"}]\n\n}"
+        }
+      ]
+    }
+  ]
+}

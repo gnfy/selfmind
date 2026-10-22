@@ -71,9 +71,16 @@ func (p *Pool) Run(ctx context.Context, key string, fn func() error) error {
 // RunObserved is Run with best-effort admission-state notifications.
 func (p *Pool) RunObserved(ctx context.Context, key string, observe StateObserver, fn func() error) error {
 	waited := false
+	resume := func() {}
+	defer func() { resume() }()
 	notify := func(state State) {
 		if state == StateWaitingResource || state == StateWaitingWorker {
+			if !waited {
+				resume = beginAdmissionWait(ctx)
+			}
 			waited = true
+		} else if state == StateRunning {
+			resume()
 		}
 		if observe != nil {
 			observe(state)
@@ -96,9 +103,16 @@ func (p *Pool) RunObserved(ctx context.Context, key string, observe StateObserve
 func (p *Pool) RunObservedPaths(ctx context.Context, paths []string, observe StateObserver, fn func() error) error {
 	paths = normalizePaths(paths)
 	waited := false
+	resume := func() {}
+	defer func() { resume() }()
 	notify := func(state State) {
 		if state == StateWaitingResource || state == StateWaitingWorker {
+			if !waited {
+				resume = beginAdmissionWait(ctx)
+			}
 			waited = true
+		} else if state == StateRunning {
+			resume()
 		}
 		if observe != nil {
 			observe(state)
@@ -233,7 +247,7 @@ func canonicalClaimPath(path string) string {
 }
 
 func pathsOverlap(a, b string) bool {
-	return pathWithin(a, b) || pathWithin(b, a)
+	return pathWithin(a, b) || pathWithin(b, a) || physicalPathWithin(a, b) || physicalPathWithin(b, a)
 }
 
 // PathsConflict uses the same physical-root normalization as worker

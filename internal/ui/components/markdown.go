@@ -1,7 +1,6 @@
 package components
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
 	gmtext "github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 var terminalMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
@@ -48,7 +48,10 @@ func NewMarkdownRenderer(t uitheme.Theme) MarkdownRenderer {
 // RenderMarkdown turns CommonMark/GFM source into terminal-safe semantic
 // lines. It deliberately owns layout rather than HTML generation so callers
 // retain correct terminal-cell wrapping, hanging indents, and narrow-table
-// fallbacks. ANSI/control sanitization remains the caller's trust boundary.
+// fallbacks. Where CommonMark's HTML rules and a terminal differ, line-level
+// behavior follows Codex's renderer (a soft break is a line break; code lines
+// wrap at words under their own indentation) rather than a design of our own.
+// ANSI/control sanitization remains the caller's trust boundary.
 func RenderMarkdown(source string, width int) string {
 	return NewMarkdownRenderer(uitheme.Default()).Render(source, width)
 }
@@ -66,7 +69,9 @@ func (m MarkdownRenderer) Render(source string, width int) string {
 		styles: m.styles,
 	}
 	doc := terminalMarkdown.Parser().Parse(gmtext.NewReader(r.source))
-	return strings.TrimSpace(strings.Join(r.renderBlockChildren(doc, width), "\n\n"))
+	// Only blank lines are trimmed: the first row of a table or a code block starts
+	// with the padding or gutter its other rows share.
+	return strings.Trim(strings.Join(r.renderBlockChildren(doc, width), "\n\n"), "\n")
 }
 
 type terminalMarkdownRenderer struct {
@@ -107,7 +112,10 @@ func (r terminalMarkdownRenderer) renderBlock(node ast.Node, width int) string {
 		}
 	case *ast.Blockquote:
 		inner := strings.Join(r.renderBlockChildren(typed, max(4, width-2)), "\n\n")
-		return prefixMarkdownLines(inner, r.styles.quote.Render("│ "), r.styles.quote.Render("│"))
+		// Every line carries the bar and a space, as Codex prints "> " on each;
+		// the space sits outside the style so a blank line can drop it.
+		bar := r.styles.quote.Render("│") + " "
+		return prefixMarkdownLines(inner, bar, bar)
 	case *ast.List:
 		return r.renderList(typed, width, "")
 	case *ast.FencedCodeBlock:
@@ -204,12 +212,56 @@ func (r terminalMarkdownRenderer) renderCodeLines(segments *gmtext.Segments, wid
 	for i := 0; i < segments.Len(); i++ {
 		segment := segments.At(i)
 		line := strings.TrimSuffix(string(segment.Value(r.source)), "\n")
-		wrapped := ansi.Hardwrap(line, max(1, width-2), false)
-		for _, physical := range strings.Split(wrapped, "\n") {
+		for _, physical := range wrapCodeLine(line, max(1, width-2)) {
 			lines = append(lines, "  "+r.styles.code.Render(physical))
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// wrapCodeLine word-wraps one code line to width cells and continues each
+// wrapped row under the line's own indentation, as Codex pre-wraps history
+// lines. A cut at a fixed column splits a flag such as `--confirm` across two
+// rows and leaves a command nobody can read back as written; a token wider than
+// the row is still broken, because a row must not overflow. An indentation wider
+// than half the row is not carried, so a deeply indented line in a narrow
+// terminal still makes progress.
+func wrapCodeLine(line string, width int) []string {
+	body := strings.TrimLeft(line, " \t")
+	indent := line[:len(line)-len(body)]
+	if ansi.StringWidth(indent) > width/2 {
+		indent, body = "", line
+	}
+	rows := strings.Split(wrapMarkdownWords(body, max(1, width-ansi.StringWidth(indent))), "\n")
+	for i := range rows {
+		rows[i] = indent + rows[i]
+	}
+	return rows
+}
+
+// textValue is a text node as written: a backslash before punctuation and
+// character references (&amp;, &#35;) stand for the character, as Codex's parser
+// delivers them. Inside a code span they are literal.
+func (r terminalMarkdownRenderer) textValue(text *ast.Text) []byte {
+	value := text.Segment.Value(r.source)
+	if _, inCode := text.Parent().(*ast.CodeSpan); inCode {
+		return value
+	}
+	var out []byte
+	for i := 0; i < len(value); {
+		if value[i] == '\\' && i+1 < len(value) && util.IsPunct(value[i+1]) {
+			out = append(out, value[i+1])
+			i += 2
+			continue
+		}
+		end := i + 1
+		for end < len(value) && !(value[end] == '\\' && end+1 < len(value) && util.IsPunct(value[end+1])) {
+			end++
+		}
+		out = append(out, util.ResolveEntityNames(util.ResolveNumericReferences(value[i:end]))...)
+		i = end
+	}
+	return out
 }
 
 func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
@@ -217,20 +269,22 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 	for node := parent.FirstChild(); node != nil; node = node.NextSibling() {
 		switch typed := node.(type) {
 		case *ast.Text:
-			out.Write(typed.Segment.Value(r.source))
-			if typed.HardLineBreak() {
+			out.Write(r.textValue(typed))
+			// A soft break stays a line break, as in Codex's renderer. CommonMark
+			// folds it into a space, which runs together the commands or items a
+			// model wrote one per line. A table row ends at the newline, so a cell
+			// never holds one.
+			if typed.HardLineBreak() || typed.SoftLineBreak() {
 				out.WriteByte('\n')
-			} else if typed.SoftLineBreak() {
-				out.WriteByte(' ')
 			}
 		case *ast.String:
 			out.Write(typed.Value)
 		case *ast.Emphasis:
 			content := r.renderInlines(typed)
 			if typed.Level >= 2 {
-				out.WriteString(lipgloss.NewStyle().Bold(true).Render(content))
+				out.WriteString(styleLines(lipgloss.NewStyle().Bold(true), content))
 			} else {
-				out.WriteString(lipgloss.NewStyle().Italic(true).Render(content))
+				out.WriteString(styleLines(lipgloss.NewStyle().Italic(true), content))
 			}
 		case *ast.CodeSpan:
 			content := strings.ReplaceAll(r.renderInlines(typed), "\n", " ")
@@ -241,7 +295,7 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 			if strings.TrimSpace(label) == "" {
 				label = destination
 			}
-			out.WriteString(r.styles.link.Render(label))
+			out.WriteString(styleLines(r.styles.link, label))
 			if destination != "" && strings.TrimSpace(ansi.Strip(label)) != destination {
 				out.WriteString(r.styles.muted.Render(" (" + destination + ")"))
 			}
@@ -257,7 +311,7 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 				out.WriteString(r.styles.muted.Render(" (" + destination + ")"))
 			}
 		case *extast.Strikethrough:
-			out.WriteString(r.styles.strike.Render(r.renderInlines(typed)))
+			out.WriteString(styleLines(r.styles.strike, r.renderInlines(typed)))
 		case *extast.TaskCheckBox:
 			if typed.IsChecked {
 				out.WriteString("[x] ")
@@ -273,119 +327,25 @@ func (r terminalMarkdownRenderer) renderInlines(parent ast.Node) string {
 	return out.String()
 }
 
-func (r terminalMarkdownRenderer) renderTable(table *extast.Table, width int) string {
-	var headers []string
-	rows := make([][]string, 0, 4)
-	for child := table.FirstChild(); child != nil; child = child.NextSibling() {
-		switch typed := child.(type) {
-		case *extast.TableHeader:
-			headers = r.tableCells(typed)
-		case *extast.TableRow:
-			rows = append(rows, r.tableCells(typed))
-		}
-	}
-	columns := len(headers)
-	for _, row := range rows {
-		columns = max(columns, len(row))
-	}
-	if columns == 0 {
-		return ""
-	}
-	for len(headers) < columns {
-		headers = append(headers, fmt.Sprintf("Column %d", len(headers)+1))
-	}
-	widths := make([]int, columns)
-	for column, header := range headers {
-		widths[column] = markdownCellWidth(header)
-	}
-	for _, row := range rows {
-		for column := range columns {
-			if column < len(row) {
-				widths[column] = max(widths[column], markdownCellWidth(row[column]))
-			}
-		}
-	}
-	total := 3 * (columns - 1)
-	for _, columnWidth := range widths {
-		total += columnWidth
-	}
-	if total > width {
-		return renderMarkdownTableRecords(headers, rows, width)
-	}
+func wrapMarkdownText(value string, width int) string {
+	return strings.TrimRight(wrapMarkdownWords(strings.TrimSpace(value), max(1, width)), "\n")
+}
 
-	lines := []string{r.renderMarkdownTableRow(headers, widths, true)}
-	rules := make([]string, columns)
-	for column, columnWidth := range widths {
-		rules[column] = strings.Repeat("─", columnWidth)
-	}
-	lines = append(lines, r.styles.muted.Render(strings.Join(rules, "─┼─")))
-	for _, row := range rows {
-		lines = append(lines, r.renderMarkdownTableRow(row, widths, false))
+// styleLines applies style to each line separately. lipgloss pads the shorter
+// lines of a multi-line string to the widest, which would underline or strike
+// through the blanks after a span that crosses a line break.
+func styleLines(style lipgloss.Style, value string) string {
+	lines := strings.Split(value, "\n")
+	for i, line := range lines {
+		lines[i] = style.Render(line)
 	}
 	return strings.Join(lines, "\n")
-}
-
-func (r terminalMarkdownRenderer) tableCells(parent ast.Node) []string {
-	cells := make([]string, 0, 4)
-	for cell := parent.FirstChild(); cell != nil; cell = cell.NextSibling() {
-		content := strings.TrimSpace(strings.ReplaceAll(r.renderInlines(cell), "\n", " "))
-		cells = append(cells, content)
-	}
-	return cells
-}
-
-func (r terminalMarkdownRenderer) renderMarkdownTableRow(cells []string, widths []int, header bool) string {
-	parts := make([]string, len(widths))
-	for column, width := range widths {
-		value := ""
-		if column < len(cells) {
-			value = cells[column]
-		}
-		if column < len(widths)-1 {
-			value = padMarkdownCell(value, width)
-		}
-		if header {
-			value = r.styles.tableHead.Render(value)
-		}
-		parts[column] = value
-	}
-	return strings.Join(parts, r.styles.muted.Render(" │ "))
-}
-
-func renderMarkdownTableRecords(headers []string, rows [][]string, width int) string {
-	records := make([]string, 0, len(rows))
-	for _, row := range rows {
-		fields := make([]string, 0, len(headers))
-		for column, header := range headers {
-			value := ""
-			if column < len(row) {
-				value = row[column]
-			}
-			label := strings.TrimSpace(ansi.Strip(header))
-			if label == "" {
-				label = fmt.Sprintf("Column %d", column+1)
-			}
-			prefix := lipgloss.NewStyle().Bold(true).Render(label + ":")
-			oneLine := prefix + " " + value
-			if markdownCellWidth(oneLine) <= width {
-				fields = append(fields, oneLine)
-				continue
-			}
-			fields = append(fields, prefix+"\n"+wrapMarkdownWithPrefixes(value, width, "  ", "  "))
-		}
-		records = append(records, strings.Join(fields, "\n"))
-	}
-	return strings.Join(records, "\n\n")
-}
-
-func wrapMarkdownText(value string, width int) string {
-	return strings.TrimRight(ansi.Wrap(strings.TrimSpace(value), max(1, width), ""), "\n")
 }
 
 func wrapMarkdownWithPrefixes(value string, width int, firstPrefix, continuation string) string {
 	prefixWidth := max(markdownCellWidth(firstPrefix), markdownCellWidth(continuation))
 	available := max(1, width-prefixWidth)
-	wrapped := ansi.Wrap(strings.TrimSpace(value), available, "")
+	wrapped := wrapMarkdownWords(strings.TrimSpace(value), available)
 	lines := strings.Split(wrapped, "\n")
 	for i := range lines {
 		if i == 0 {
@@ -409,14 +369,6 @@ func prefixMarkdownLines(value, firstPrefix, continuation string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
-}
-
-func padMarkdownCell(value string, width int) string {
-	padding := width - markdownCellWidth(value)
-	if padding <= 0 {
-		return value
-	}
-	return value + strings.Repeat(" ", padding)
 }
 
 func markdownCellWidth(value string) int {

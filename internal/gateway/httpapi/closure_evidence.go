@@ -31,6 +31,9 @@ func missingFinalEvidenceSummary(runID string, outcome api.RunOutcome, steps []t
 	}
 	if outcome.Verification != nil {
 		b.WriteString("\n\nRecorded verification: " + outcome.Verification.State + ". " + truncateRunes(toOneLine(outcome.Verification.Summary), 400))
+		if outcome.Verification.ConditionState != "" && outcome.Verification.ConditionState != "unassessed" {
+			b.WriteString("\n" + conciseVerificationNotice(outcome.Verification))
+		}
 	}
 	if runID != "" {
 		b.WriteString("\n\nResume: /resume " + runID)

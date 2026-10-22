@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -379,7 +380,17 @@ func (p *recordingLLMProvider) StreamChat(ctx context.Context, req llm.ChatReque
 type planningBackend struct{}
 
 func (b *planningBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
+	if name == "update_plan" {
+		return acceptedPlanResult(args), nil
+	}
 	return "ok", nil
+}
+
+// acceptedPlanResult answers update_plan as the tool does without a durable
+// projection: the accepted snapshot is the requested one.
+func acceptedPlanResult(args map[string]interface{}) string {
+	data, _ := json.Marshal(map[string]interface{}{"plan": args["plan"], "changed": true})
+	return string(data)
 }
 
 type planReconciliationProvider struct {
@@ -516,7 +527,7 @@ func (b *budgetClosureBackend) Dispatch(name string, args map[string]interface{}
 	case "read_file":
 		return "read evidence", nil
 	case "update_plan":
-		return `{"changed":true}`, nil
+		return acceptedPlanResult(args), nil
 	case "finish_run":
 		return `{"status":"done","summary":"implemented and verified"}`, nil
 	default:
@@ -657,7 +668,7 @@ func (b *planEscalationBackend) Dispatch(name string, args map[string]interface{
 	case "read_file":
 		return "file content", nil
 	case "update_plan":
-		return `{"changed":true}`, nil
+		return acceptedPlanResult(args), nil
 	default:
 		return "", fmt.Errorf("unexpected tool %s", name)
 	}
@@ -771,38 +782,22 @@ func requestsContainUserText(requests []llm.ChatRequest, needle string) bool {
 
 const (
 	requiredPlanWording = "Use update_plan early for this multi-step work"
-	optionalPlanWording = "call update_plan BEFORE the first action tool"
+	optionalPlanWording = "Use update_plan when a Plan is useful"
 )
 
-func TestPlanGuidanceBecomesRequiredAfterSubstantiveWorkWithoutAPlan(t *testing.T) {
-	// The observed defect: a model that never volunteers update_plan keeps
-	// reading the optional wording composed before any work happened, no matter
-	// how many real action tools the Run performs.
+func TestPlanChoiceStaysWithMainAfterManyDistinctActions(t *testing.T) {
 	provider := &planEscalationProvider{commands: 5}
 	events := runPlanEscalationTurn(t, provider, planEscalationStrategy(PlanPolicyOptional))
-
-	if !requestsContainUserText(provider.requests, requiredPlanWording) {
-		t.Fatalf("a Run with %d substantive tool actions and no plan never received the required wording", provider.commands)
+	if requestsContainUserText(provider.requests, requiredPlanWording) {
+		t.Fatal("tool count forced planning")
 	}
-	event, count := planEscalationEvent(events)
-	if count != 1 {
-		t.Fatalf("plan guidance escalation events = %d, want exactly 1", count)
-	}
-	if got := fmt.Sprint(event.Payload["plan_policy"]); got != string(PlanPolicyRequired) {
-		t.Fatalf("escalated plan policy = %q, want required: %+v", got, event.Payload)
-	}
-	if got := fmt.Sprint(event.Payload["previous_plan_policy"]); got != string(PlanPolicyOptional) {
-		t.Fatalf("previous plan policy = %q, want optional: %+v", got, event.Payload)
-	}
-	// Guidance only: the escalation must not fabricate a plan or stop the model
-	// from producing its answer.
-	if requestsContainUserText(provider.requests, "SelfMind tool budget for this turn has been reached") {
-		t.Fatal("plan escalation should not have consumed the tool budget")
+	if _, count := planEscalationEvent(events); count != 0 {
+		t.Fatal("tool count changed the Plan policy")
 	}
 }
 
 func TestPlanGuidanceStaysOptionalBelowTheEvidenceThreshold(t *testing.T) {
-	provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold - 1}
+	provider := &planEscalationProvider{commands: 1}
 	events := runPlanEscalationTurn(t, provider, planEscalationStrategy(PlanPolicyOptional))
 
 	if requestsContainUserText(provider.requests, requiredPlanWording) {
@@ -817,7 +812,7 @@ func TestPlanGuidanceStaysOptionalBelowTheEvidenceThreshold(t *testing.T) {
 }
 
 func TestPlanGuidanceNotEscalatedForDirectAnswerTurns(t *testing.T) {
-	provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold + 2}
+	provider := &planEscalationProvider{commands: 4}
 	events := runPlanEscalationTurn(t, provider, planEscalationStrategy(PlanPolicyDisabled))
 
 	if requestsContainUserText(provider.requests, requiredPlanWording) {
@@ -834,7 +829,7 @@ func TestPlanGuidanceNotEscalatedForDirectAnswerTurns(t *testing.T) {
 }
 
 func TestPlanGuidanceNotEscalatedWhenTheRunAlreadyPlanned(t *testing.T) {
-	provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold + 2, openWithPlan: true}
+	provider := &planEscalationProvider{commands: 4, openWithPlan: true}
 	events := runPlanEscalationTurn(t, provider, planEscalationStrategy(PlanPolicyOptional))
 
 	if requestsContainUserText(provider.requests, requiredPlanWording) {
@@ -851,10 +846,10 @@ func TestPlanGuidanceNotEscalatedWhileTheTurnIsWindingDown(t *testing.T) {
 	// would be a contradiction, so escalation stops there even though the
 	// evidence threshold was reached.
 	strategy := planEscalationStrategy(PlanPolicyOptional)
-	strategy.MaxActionTools = planGuidanceEscalationThreshold
-	strategy.ActionToolBudgetLimit = planGuidanceEscalationThreshold
+	strategy.MaxActionTools = 2
+	strategy.ActionToolBudgetLimit = 2
 	strategy.MaxBudgetExtensions = 1
-	provider := &planEscalationProvider{commands: planGuidanceEscalationThreshold + 3}
+	provider := &planEscalationProvider{commands: 5}
 	events := runPlanEscalationTurn(t, provider, strategy)
 
 	exhausted := false

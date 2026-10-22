@@ -65,7 +65,6 @@ var slashCommandMetas = []slashCommandMeta{
 	registrySlashMeta("/resume"),
 	tuiSlashMeta("/ws", "list or select a workspace"),
 	tuiSlashMeta("/add-dir", "grant this session another directory"),
-	tuiSlashMeta("/attach", "watch another session's running task here"),
 	// /ws is an ALIAS: the catalog resolves it to the /workspace entry and holds
 	// no alias-specific usage or summary, so repeating that entry here would
 	// print the /workspace help row twice. This one row stays local.

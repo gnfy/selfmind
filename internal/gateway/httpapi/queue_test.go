@@ -298,7 +298,7 @@ func TestModelChangeQueuePreservesReplyMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp := daemon.enqueueDuringModelChange(ctx, identity, api.MessageRequest{
+	resp, _ := daemon.enqueueDuringModelChange(ctx, identity, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "threaded answer",
 		ReplyToRunID: "run_parent",
 	})

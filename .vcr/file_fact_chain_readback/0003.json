@@ -1,0 +1,106 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Found"
+    },
+    {
+      "reasoning_content": " FACT-SOURCE:"
+    },
+    {
+      "reasoning_content": " N4"
+    },
+    {
+      "reasoning_content": "C-27"
+    },
+    {
+      "reasoning_content": "19-MIDDLE"
+    },
+    {
+      "reasoning_content": " on line"
+    },
+    {
+      "reasoning_content": " 3.\n\n"
+    },
+    {
+      "reasoning_content": "Now the remaining two"
+    },
+    {
+      "reasoning_content": " checks: search_files"
+    },
+    {
+      "reasoning_content": " on lookup.cfg with"
+    },
+    {
+      "reasoning_content": " pattern ^active_("
+    },
+    {
+      "reasoning_content": "alpha|beta)="
+    },
+    {
+      "reasoning_content": ", match_mode regex"
+    },
+    {
+      "reasoning_content": ", output_mode content"
+    },
+    {
+      "reasoning_content": "; and read_file"
+    },
+    {
+      "reasoning_content": " window.txt offset "
+    },
+    {
+      "reasoning_content": "2 limit"
+    },
+    {
+      "reasoning_content": " 1 line_numbers"
+    },
+    {
+      "reasoning_content": " true.\n"
+    },
+    {
+      "content": "Found the"
+    },
+    {
+      "content": " middle line."
+    },
+    {
+      "content": " Now running the search"
+    },
+    {
+      "content": " and the window.txt"
+    },
+    {
+      "content": " read.\n\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 16606,
+        "output_tokens": 214,
+        "cache_read_input_tokens": 14336,
+        "cache_miss_input_tokens": 2270,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 65,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "search_files",
+          "Args": "{\"path\": \"lookup.cfg\", \"pattern\": \"^active_(alpha|beta)=\", \"match_mode\": \"regex\", \"output_mode\": \"content\"}"
+        },
+        {
+          "ID": "",
+          "Function": "read_file",
+          "Args": "{\"path\": \"window.txt\", \"offset\": 2, \"limit\": 1, \"line_numbers\": true}"
+        }
+      ]
+    }
+  ]
+}

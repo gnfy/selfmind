@@ -6,18 +6,25 @@ import (
 	"path/filepath"
 	"strings"
 
+	"selfmind/internal/control"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
 )
 
-// InitMCP connects to all configured MCP servers, registers their tools, and
-// returns the lifecycle owner that callers must close during shutdown.
-func InitMCP(disp *tools.Dispatcher, cfg *config.Config) *tools.MCPToolManager {
-	if disp == nil || cfg == nil || len(cfg.MCP.Servers) == 0 {
+// initMCP connects once to each configured MCP server and registers its tools
+// in every agent worker's dispatcher, so all workers share the connection and
+// see the same MCP tools. Persons' read-only markings come from store; nil
+// leaves only the operator's. The returned manager owns the connections and
+// must be closed during shutdown.
+func initMCP(cfg *config.Config, dispatchers []*tools.Dispatcher, store *control.Store) *tools.MCPToolManager {
+	if len(dispatchers) == 0 || cfg == nil || len(cfg.MCP.Servers) == 0 {
 		return nil
 	}
-	manager := tools.NewMCPToolManager(disp)
+	manager := tools.NewMCPToolManager(dispatchers...)
+	if store != nil {
+		manager.UseReadOnlyMarks(store)
+	}
 	for _, server := range cfg.MCP.Servers {
 		resolvedName := fallbackMCPName(server.Name, server.Command, server.URL, server.Args)
 		if strings.TrimSpace(server.Name) == "" {
@@ -32,6 +39,9 @@ func InitMCP(disp *tools.Dispatcher, cfg *config.Config) *tools.MCPToolManager {
 			Headers:   server.Headers,
 			Auth:      server.Auth,
 			EnvFilter: server.EnvFilter,
+			// The operator's exact names; annotations the server reports
+			// about its own tools are never read.
+			ReadOnlyTools: server.ReadOnlyTools,
 		}
 		if err := manager.Connect(mcpCfg); err != nil {
 			log.Warn("mcp: skipped server", "name", mcpCfg.Name, "error", err)

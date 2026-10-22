@@ -971,17 +971,23 @@ func TestWorkEvidenceIgnoresProvenObservation(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	items, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
-	if err != nil {
-		t.Fatal(err)
+	for _, effect := range []string{"observation", "run_bookkeeping"} {
+		if _, err := store.db.ExecContext(ctx, `UPDATE tool_ledger SET effect_class=? WHERE run_id=?`, effect, run.ID); err != nil {
+			t.Fatal(err)
+		}
+		items, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(items) != 0 {
+			t.Fatalf("non-target effect %s became Attention: %+v", effect, items)
+		}
 	}
-	if len(items) != 0 {
-		t.Fatalf("a look-only interruption must not be attention: %+v", items)
-	}
+
 	if _, err := store.db.ExecContext(ctx, `UPDATE tool_ledger SET effect_class = 'side_effect' WHERE run_id = ?`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	items, err = timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
+	items, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

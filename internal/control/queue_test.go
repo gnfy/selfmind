@@ -175,7 +175,9 @@ func TestTaskQueueUsesClassPriorityAndNotBefore(t *testing.T) {
 	if err != nil || next == nil || next.ID != foreground.ID {
 		t.Fatalf("NextQueued = %+v, %v", next, err)
 	}
-	if err := store.MarkQueued(ctx, identity.TenantID, foreground.ID, QueueStatusStarted); err != nil {
+	// Complete the first dispatch: a merely claimed, unbound row still owns
+	// this source and must hold its later items, regardless of their priority.
+	if err := store.MarkQueued(ctx, identity.TenantID, foreground.ID, QueueStatusDone); err != nil {
 		t.Fatal(err)
 	}
 	next, err = store.NextQueued(ctx, identity.TenantID, identity.PersonID)

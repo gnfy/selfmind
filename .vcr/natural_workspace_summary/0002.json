@@ -1,0 +1,80 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Four"
+    },
+    {
+      "reasoning_content": " files"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Read"
+    },
+    {
+      "reasoning_content": " them"
+    },
+    {
+      "reasoning_content": " all"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Four"
+    },
+    {
+      "content": " files"
+    },
+    {
+      "content": " total"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Reading"
+    },
+    {
+      "content": " all"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " them"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 13402,
+        "output_tokens": 272,
+        "cache_read_input_tokens": 12928,
+        "cache_miss_input_tokens": 474,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 7,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_6ChvHxvnRNDwPT5yw7Xv6134",
+          "Function": "batch_read",
+          "Args": "{\"operations\": [{\"tool\": \"read_file\", \"path\": \"{{SELFMIND_VCR_WORKSPACE}}/INDEX.md\", \"line_numbers\": true}, {\"tool\": \"read_file\", \"path\": \"{{SELFMIND_VCR_WORKSPACE}}/alpha/record.md\", \"line_numbers\": true}, {\"tool\": \"read_file\", \"path\": \"{{SELFMIND_VCR_WORKSPACE}}/beta/record.md\", \"line_numbers\": true}, {\"tool\": \"read_file\", \"path\": \"{{SELFMIND_VCR_WORKSPACE}}/gamma/record.md\", \"line_numbers\": true}]}"
+        }
+      ]
+    }
+  ]
+}

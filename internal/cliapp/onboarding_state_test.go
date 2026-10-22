@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,7 +83,7 @@ func TestReadyModelsProceedToManagedRuntimeRepairWithoutModelPromptOrProbe(t *te
 		t.Fatal(err)
 	}
 	var actions []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newFakeGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/workspaces/register":
 			actions = append(actions, "register workspace")
@@ -283,7 +282,7 @@ func TestActiveGatewayKeepsForegroundAvailableAsRuntimeDegraded(t *testing.T) {
 	cfg.Normalize()
 	modelFingerprint := modelchange.SnapshotFromConfig(cfg).Fingerprint()
 	resolvedConfig, _ := config.ResolveConfigPath(configPath)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := newFakeGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/gateway/shutdown":
 			w.WriteHeader(http.StatusAccepted)
@@ -319,6 +318,15 @@ func TestActiveGatewayKeepsForegroundAvailableAsRuntimeDegraded(t *testing.T) {
 	state := onboardingState{WorkspacePath: workspace, ApprovalMode: "smart", BackgroundMode: "managed"}
 	var stdout, stderr bytes.Buffer
 	app := &App{ctx: context.Background(), stdout: &stdout, stderr: &stderr, configPath: configPath}
+	// This drives the real managed path from a scratch HOME. It ends at the
+	// deferred shutdown, before any service change, so naming the scratch HOME is
+	// safe here; the fake service manager keeps it safe if the flow ever changes.
+	fakeServiceManager(t)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(serviceHomeEnv, home)
 	if code := app.runOnboardingRuntimeStep(&state, onboardingOptions{NonInteractive: true, SkipModel: true}); code != 0 {
 		t.Fatalf("degraded runtime code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}

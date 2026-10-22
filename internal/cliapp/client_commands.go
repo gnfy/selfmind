@@ -3,6 +3,7 @@ package cliapp
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -207,10 +208,7 @@ func (a *App) sendGatewayMessageWithOptions(content string, opts sendOptions) in
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	if a.gatewayTargetIsLocal() {
-		a.attachLocalControlAuth(httpReq)
-	}
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	httpResp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -220,7 +218,7 @@ func (a *App) sendGatewayMessageWithOptions(content string, opts sendOptions) in
 		data, _ := io.ReadAll(httpResp.Body)
 		// The daemon returns {"error": "..."} payloads with human-readable
 		// messages; show that single line instead of dumping raw JSON.
-		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		fmt.Fprintln(a.stderr, a.gatewayErrorLine(httpResp.Status, data))
 		return 1
 	}
 
@@ -245,6 +243,19 @@ func (a *App) sendGatewayMessageWithOptions(content string, opts sendOptions) in
 		return 0
 	}
 	return 0
+}
+
+// gatewayErrorLine is the error the person reads for a failed request: the
+// free function's line, and for a refusal that concerns the daemon's local
+// control socket, the path of the socket. The daemon does not say where it is to
+// a caller it refused, so the CLI derives it from the data directory it already
+// holds. A remote gateway has no socket on this machine to point at.
+func (a *App) gatewayErrorLine(status string, body []byte) string {
+	line := gatewayErrorLine(status, body)
+	if strings.HasPrefix(status, "403") && strings.Contains(line, "local control socket") && a.gatewayTargetIsLocal() {
+		line += " (this daemon's local control socket is " + gatewayrt.LocalControlSocketPath(a.gatewayDataDir()) + ")"
+	}
+	return line
 }
 
 // gatewayErrorLine reduces a gateway error response to one human-readable
@@ -389,8 +400,7 @@ func (a *App) registerWorkspaceObservationProfile(args []string) int {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	httpResp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -398,7 +408,7 @@ func (a *App) registerWorkspaceObservationProfile(args []string) int {
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		fmt.Fprintln(a.stderr, a.gatewayErrorLine(httpResp.Status, data))
 		return 1
 	}
 	var payload struct {
@@ -417,7 +427,7 @@ func (a *App) registerWorkspaceObservationProfile(args []string) int {
 
 func (a *App) registerWorkspaceEffectProfile(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(a.stderr, "usage: selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]")
+		fmt.Fprintln(a.stderr, "usage: selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--cwd <dir>] [--env NAME=VALUE...] [--stdin <text> | --stdin-file <path>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]")
 		return 2
 	}
 	req := api.WorkspaceEffectProfileRequest{
@@ -425,18 +435,28 @@ func (a *App) registerWorkspaceEffectProfile(args []string) int {
 	}
 	for i := 1; i < len(args); i++ {
 		switch args[i] {
-		case "--target", "--workspace", "--observe-command":
+		case "--target", "--workspace", "--observe-command", "--cwd", "--env", "--stdin", "--stdin-file":
 			if i+1 >= len(args) {
 				fmt.Fprintf(a.stderr, "%s requires a value\n", args[i])
 				return 2
 			}
 			option := args[i]
 			i++
-			if option == "--target" {
+			switch option {
+			case "--target":
 				req.TargetKeys = append(req.TargetKeys, args[i])
-			} else if option == "--workspace" {
+			case "--workspace":
 				req.WorkspaceID = args[i]
-			} else {
+			case "--cwd":
+				req.Cwd = args[i]
+			case "--env":
+				req.Env = append(req.Env, args[i])
+			case "--stdin":
+				text := args[i]
+				req.StdinText = &text
+			case "--stdin-file":
+				req.StdinFile = args[i]
+			default:
 				req.ObservationCommand = args[i]
 			}
 		case "--network":
@@ -455,6 +475,10 @@ func (a *App) registerWorkspaceEffectProfile(args []string) int {
 		fmt.Fprintln(a.stderr, "effect profile needs at least one --target")
 		return 2
 	}
+	if req.StdinText != nil && req.StdinFile != "" {
+		fmt.Fprintln(a.stderr, "an effect script has one standard input: use --stdin or --stdin-file, not both")
+		return 2
+	}
 	a.ensureLocalGateway()
 	body, _ := json.Marshal(req)
 	httpReq, err := http.NewRequestWithContext(a.ctx, http.MethodPost, a.gatewayURL()+"/v1/workspaces/effect-profiles", bytes.NewReader(body))
@@ -464,8 +488,7 @@ func (a *App) registerWorkspaceEffectProfile(args []string) int {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	httpResp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -473,7 +496,7 @@ func (a *App) registerWorkspaceEffectProfile(args []string) int {
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		fmt.Fprintln(a.stderr, a.gatewayErrorLine(httpResp.Status, data))
 		return 1
 	}
 	var response struct {
@@ -520,8 +543,7 @@ func (a *App) listWorkspaceCapabilities(workspaceID string) int {
 		return 1
 	}
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	httpResp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -529,7 +551,7 @@ func (a *App) listWorkspaceCapabilities(workspaceID string) int {
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		fmt.Fprintln(a.stderr, a.gatewayErrorLine(httpResp.Status, data))
 		return 1
 	}
 	var payload struct {
@@ -577,8 +599,7 @@ func (a *App) revokeWorkspaceCapability(capability, workspaceID string) int {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	httpResp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -586,7 +607,7 @@ func (a *App) revokeWorkspaceCapability(capability, workspaceID string) int {
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		fmt.Fprintln(a.stderr, a.gatewayErrorLine(httpResp.Status, data))
 		return 1
 	}
 	var payload struct {
@@ -640,15 +661,14 @@ func (a *App) postWorkspaceTrust(workspaceID, trustLevel string) (trustedWorkspa
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	httpResp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		return trustedWorkspace{}, err
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		return trustedWorkspace{}, fmt.Errorf("%s", gatewayErrorLine(httpResp.Status, data))
+		return trustedWorkspace{}, fmt.Errorf("%s", a.gatewayErrorLine(httpResp.Status, data))
 	}
 	var payload struct {
 		Workspace trustedWorkspace `json:"workspace"`
@@ -659,13 +679,26 @@ func (a *App) postWorkspaceTrust(workspaceID, trustLevel string) (trustedWorkspa
 	return payload.Workspace, nil
 }
 
-func (a *App) attachLocalControlAuth(req *http.Request) {
-	if req == nil {
-		return
+// gatewayHTTPClient is the transport for requests that act as the person's
+// CLI. A local daemon is reached only on its local control socket, where it
+// verifies this process from kernel peer credentials; there is no TCP
+// fallback. A remote daemon is reached over TCP and grants no CLI identity.
+func (a *App) gatewayHTTPClient() *http.Client {
+	if a.gatewayTargetIsLocal() {
+		return gatewayrt.LocalControlClient(a.gatewayDataDir())
 	}
-	if token, err := gatewayrt.ReadLocalControlToken(a.gatewayDataDir()); err == nil {
-		req.Header.Set(api.LocalControlTokenHeader, token)
+	return http.DefaultClient
+}
+
+// requestGatewayStatus reads the daemon's status as the person: a daemon on
+// this host answers its own CLI in full on the local control socket, where over
+// TCP it says only that it is up. A remote daemon is asked over TCP.
+func (a *App) requestGatewayStatus(ctx context.Context) ([]byte, int, error) {
+	dataDir := ""
+	if a.gatewayTargetIsLocal() {
+		dataDir = a.gatewayDataDir()
 	}
+	return gatewayrt.RequestStatusFor(ctx, a.gatewayURL(), dataDir)
 }
 
 func (a *App) registerWorkspace(path, name string) int {
@@ -687,8 +720,7 @@ func (a *App) registerWorkspace(path, name string) int {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	httpResp, err := http.DefaultClient.Do(httpReq)
+	httpResp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -696,7 +728,7 @@ func (a *App) registerWorkspace(path, name string) int {
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		fmt.Fprintln(a.stderr, a.gatewayErrorLine(httpResp.Status, data))
 		return 1
 	}
 	var payload struct {

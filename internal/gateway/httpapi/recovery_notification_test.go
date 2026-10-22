@@ -355,7 +355,7 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 			continue
 		}
 		foundNotice = true
-		want := "Watcher " + shortExternalWatchID(watch.ID) + " | status: succeeded | task: waiting_finalization"
+		want := "Run " + msg.RunID + "\nWatcher " + shortExternalWatchID(watch.ID) + " | status: succeeded | task: waiting_finalization"
 		if msg.Content != want {
 			t.Fatalf("unexpected external watch notice: %q", msg.Content)
 		}
@@ -635,7 +635,7 @@ func TestExternalWatchFinalizationDeliversCommittedResultWithoutReplayingRun(t *
 	}
 
 	daemon.reconcileExternalWatchFinalizations(ctx)
-	if len(recorder.messages) != 1 || recorder.messages[0].Content != "Release complete and verified." || recorder.messages[0].RunID != run.ID {
+	if len(recorder.messages) != 1 || recorder.messages[0].Content != "Run "+run.ID+"\nRelease complete and verified." || recorder.messages[0].RunID != run.ID {
 		t.Fatalf("committed result delivery = %+v", recorder.messages)
 	}
 	if enqueued, err := store.EffectDeliveryEnqueued(ctx, watch.TenantID, row.IdempotencyKey); err != nil || !enqueued {
@@ -1046,6 +1046,14 @@ func TestConcludedWatchWithoutObservationParksItsRun(t *testing.T) {
 		t.Run(tc.status, func(t *testing.T) {
 			daemon, store, identity, task, _ := newApprovalTestServer(t)
 			ctx := context.Background()
+			// This regression concerns a concluded watcher whose finalization
+			// is still queued. Keep the work slot occupied rather than racing an
+			// immediately admitted continuation that already owns Attention.
+			held := &activeRun{PersonID: identity.PersonID, RunID: "occupied", Channel: "other-session"}
+			if !daemon.coordinator().beginActive(identity.PersonID, held) {
+				t.Fatal("cannot hold finalization in the queue")
+			}
+			defer daemon.coordinator().endActiveRun(identity.PersonID, held)
 			run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
 			if err != nil {
 				t.Fatal(err)

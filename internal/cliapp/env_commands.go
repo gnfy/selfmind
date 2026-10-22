@@ -12,7 +12,6 @@ import (
 
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
-	gatewayrt "selfmind/internal/runtime/gateway"
 	"selfmind/internal/tools"
 )
 
@@ -154,7 +153,7 @@ func (a *App) runEnvRefresh(args []string) int {
 func (a *App) daemonEnvironmentIdentity() (api.GatewayRuntimeInfo, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	data, code, err := gatewayrt.RequestStatus(ctx, a.gatewayURL())
+	data, code, err := a.requestGatewayStatus(ctx)
 	if err != nil || code != 200 {
 		return api.GatewayRuntimeInfo{}, false
 	}

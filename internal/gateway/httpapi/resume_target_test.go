@@ -66,8 +66,18 @@ func TestDaemonOriginCueNeverSteersActiveRun(t *testing.T) {
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	coord := daemon.coordinator()
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "long build", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "long build")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ok := coord.beginActive(identity.PersonID, &activeRun{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Platform: "cli", PlatformUserID: "local",
+		TaskID: task.ID, RunID: run.ID,
 		Channel: "cli", Summary: "long build", StartedAt: time.Now(),
 		Steer: make(chan kernel.SteeringInput, 1),
 	}); !ok {

@@ -30,6 +30,9 @@ type WorldState struct {
 	WorkspaceRoot       string
 	subjectTaskID       string
 	subjectRunID        string
+	// runtime holds the multi-Run facts; the harness fills it only when a
+	// predicate reads them.
+	runtime *runtimeFacts
 }
 
 // CollectWorldState pulls the post-run state once so predicates evaluate
@@ -111,6 +114,13 @@ func evalPredicate(p StatePredicate, w WorldState) CheckResult {
 		name += ":" + p.Path
 	} else if p.Type != "" {
 		name += ":" + p.Type
+	} else if runtimePredicateTargets[strings.ToLower(strings.TrimSpace(p.On))] {
+		if p.Target != "" {
+			name += ":" + p.Target
+		}
+		if p.Status != "" {
+			name += ":" + p.Status
+		}
 	}
 	ok, msg := dispatchPredicate(p, w)
 	score := 0.0
@@ -121,6 +131,9 @@ func evalPredicate(p StatePredicate, w WorldState) CheckResult {
 }
 
 func dispatchPredicate(p StatePredicate, w WorldState) (bool, string) {
+	if handled, ok, message := evalRuntimePredicate(p, w.runtime); handled {
+		return ok, message
+	}
 	switch strings.ToLower(strings.TrimSpace(p.On)) {
 	case "task":
 		if w.Task == nil {
@@ -136,7 +149,7 @@ func dispatchPredicate(p StatePredicate, w WorldState) (bool, string) {
 		if w.eventsError != nil {
 			return false, w.eventsError.Error()
 		}
-		return evalCount(p, countEvents(w.Events, p.Type, p.PayloadContains))
+		return evalCount(p, countEvents(w.Events, p.Type, p.PayloadContains, p.PayloadFields))
 	case "artifact", "artifacts":
 		return evalArtifacts(p, w.Artifacts)
 	case "approval_triage":
@@ -287,13 +300,16 @@ func evalArtifacts(p StatePredicate, artifacts []control.Artifact) (bool, string
 	return evalCount(p, matched)
 }
 
-func countEvents(events []control.Event, eventType string, payloadContains *string) int {
+func countEvents(events []control.Event, eventType string, payloadContains *string, fields ...map[string]string) int {
 	n := 0
 	for _, e := range events {
 		if eventType != "" && !strings.EqualFold(e.Type, eventType) {
 			continue
 		}
 		if payloadContains != nil && !strings.Contains(string(e.Payload), *payloadContains) {
+			continue
+		}
+		if len(fields) > 0 && !eventPayloadFieldsMatch(e.Payload, fields[0]) {
 			continue
 		}
 		n++

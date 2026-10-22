@@ -31,9 +31,12 @@ type ObservationScriptProfile struct {
 // BuildObservationScriptRule validates and fingerprints a profile. Callers
 // must still enforce that only an authenticated local CLI can persist it.
 func BuildObservationScriptRule(profile ObservationScriptProfile, workspaceRoot string) (ApprovalRuleCandidate, error) {
-	_, _, rel, digest, err := observationScriptMaterial(workspaceRoot, profile.ScriptPath)
+	_, resolved, rel, digest, err := observationScriptMaterial(workspaceRoot, profile.ScriptPath)
 	if err != nil {
 		return ApprovalRuleCandidate{}, err
+	}
+	if !shellPathReaches(workspaceRoot, profile.ScriptPath, resolved) {
+		return ApprovalRuleCandidate{}, fmt.Errorf("observation script path reaches another file through a symlink and \"..\"")
 	}
 	if len(profile.ArgvPrefix) == 0 && profile.AllowTrailing {
 		// This is intentionally allowed only when the local operator spelled out
@@ -79,7 +82,9 @@ func approvedObservationScript(toolName string, args map[string]interface{}) boo
 		absScript = scriptPath
 	}
 	_, resolvedScript, rel, digest, err := observationScriptMaterial(scope.WorkspaceRoot, absScript)
-	if err != nil || !scopeAllowsPath(scope, filepath.Clean(absScript)) {
+	// The approved file must be the one the shell runs, not only the one the
+	// path names once cleaned as text.
+	if err != nil || !scopeAllowsPath(scope, filepath.Clean(absScript)) || !shellPathReaches(cwd, scriptPath, resolvedScript) {
 		return false
 	}
 	if resolvedScript == "" {
@@ -108,7 +113,7 @@ func directObservationScriptInvocation(argv []string) (string, []string, bool) {
 	if len(argv) == 0 {
 		return "", nil, false
 	}
-	program := strings.ToLower(filepath.Base(argv[0]))
+	program := programName(argv[0])
 	if len(argv) >= 2 {
 		ext := strings.ToLower(filepath.Ext(argv[1]))
 		valid := (ext == ".py" && (program == "python" || program == "python3")) ||
@@ -169,6 +174,23 @@ func observationScriptMaterial(root, rawPath string) (string, string, string, st
 	}
 	sum := sha256.Sum256(data)
 	return filepath.Clean(resolvedRoot), filepath.Clean(resolvedScript), filepath.ToSlash(rel), fmt.Sprintf("%x", sum[:]), nil
+}
+
+// shellPathReaches reports whether a shell started in cwd that runs or opens
+// path reaches resolved, the file observationScriptMaterial found by cleaning
+// the path as text. The kernel follows a symlink before it applies a later
+// "..", so link/../x reaches the x beside the link's target, another file.
+func shellPathReaches(cwd, path, resolved string) bool {
+	if !filepath.IsAbs(path) {
+		dir, err := filepath.Abs(cwd)
+		if err != nil {
+			return false
+		}
+		// Joined as text, not cleaned: cleaning would apply ".." first.
+		path = dir + string(filepath.Separator) + path
+	}
+	physical, err := filepath.EvalSymlinks(path)
+	return err == nil && filepath.Clean(physical) == filepath.Clean(resolved)
 }
 
 func observationScriptRuntimeKeys(workspaceID, rel, digest string, args []string, network, credentials bool) []string {

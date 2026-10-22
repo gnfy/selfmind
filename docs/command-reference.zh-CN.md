@@ -74,6 +74,7 @@ selfmind reject [token]
 selfmind stop [n|run_id]
 selfmind id
 selfmind new [title]
+selfmind cron adopt <job_id> [--yes]
 ```
 
 - `watchers` 是不调用模型的持久 watcher 管理入口。默认优先显示运行中和需要
@@ -84,8 +85,8 @@ selfmind new [title]
   `MODE` 可用值为 `on-request`、`read-only`、`auto-edit`、`full-auto`
   或 `smart`。未保存个人偏好时默认使用 `smart`；未配置裁决模型时会安全
   降级为人工审批。
-- `--add-dir` 可重复使用，且只允许已认证、连接本机 loopback gateway 的 CLI
-  使用。相对路径以启动 SelfMind 的 shell 为基准解析；路径会被规范化，最多八个，
+- `--add-dir` 可重复使用，且只允许你自己的 CLI 通过本机 gateway 的本地控制
+  socket 使用（见下文“CLI 如何连接 gateway”）。相对路径以启动 SelfMind 的 shell 为基准解析；路径会被规范化，最多八个，
   并冻结到排队的 run 中，同时参与项目指令发现和文件系统冲突调度。它只扩大该 run
   的文件系统范围，不会授予 workspace 信任、绕过审批或沙箱，也不会修改持久
   workspace。运行中的 turn 不能改变附加目录集合；需要不同目录时应新开 run。
@@ -115,7 +116,7 @@ selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
 selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
-selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
+selfmind ws effect <script> --target <kind:id> [--target <kind:id>...] [--observe-command <exact-read-only-script-command>] [--cwd <dir>] [--env NAME=VALUE...] [--stdin <text> | --stdin-file <path>] [--network] [--credentials] [--workspace <id>] [-- <exact-script-args...>]
 selfmind ws revoke <capability> [workspace_id]
 ```
 
@@ -123,23 +124,61 @@ selfmind ws revoke <capability> [workspace_id]
   使用——这类回合本身没有所属目录。本地 CLI 或 TUI 在某个目录里启动时，无论
   默认值为何，都仍然使用该目录对应的工作区。
 
-- 只有已认证的本地 CLI 可以修改工作区信任状态。省略 workspace ID 时操作当前工作区；
+- 只有你自己的 CLI 通过本地控制 socket 才能修改工作区信任状态。省略 workspace ID 时操作当前工作区；
   `untrust` 还会撤销该工作区当前有效的执行能力授权。
 - `observe` 将可信工作区内的一份脚本登记为只读观测脚本。授权同时绑定工作区、
-  解析后的脚本路径、内容哈希、参数形状、网络和凭证选择；脚本被修改或替换后授权
-  自动失效。只有确认所有参数都只读时才使用 `--all-args`，否则在 `--` 后给出允许的
-  参数前缀。
+  解析后的脚本路径、内容哈希、参数形状、网络和凭证选择；`--network` 登记只匹配实际
+  带网络运行的调用，规则见 `effect`。脚本被修改或替换后授权自动失效。只有确认所有
+  参数都只读时才使用 `--all-args`，否则在 `--` 后给出允许的参数前缀。
 - `effect` 由本地用户对某一条精确脚本调用声明完整的外部目标集合。并行模式下，
   匹配的调用占用这些目标，而不是全人未知目标。脚本内容、工作区、全部参数、网络
-  和凭证模式都必须相同；脚本必须直接执行（例如 `./scripts/deploy.sh`），不能换
-  解释器。它不代替执行审批，也不在调用返回时解除占用，仍需可信
-  观察。可用 `--observe-command` 绑定观察同一目标集合的精确脚本命令，同时用
-  `ws observe` 将该脚本登记为只读。由同一 Run 在效果派发后创建的
-  `status_json.v1` watcher 成功且留下持久事件时，运行时可在两个授权与脚本哈希
+  和凭证模式都必须相同，调用的其余部分也必须相同：运行目录（`--cwd`，相对工作区，
+  默认工作区根目录）、写在脚本前的每个 `NAME=VALUE` 赋值（`--env`），以及唯一的
+  标准输入——here-string（`--stdin`）或用 `<` 重定向的工作区文件（`--stdin-file`，
+  同时绑定文件内容）。脚本路径和运行目录既按写出的形式也按解析后的实际路径匹配，
+  因此二者的符号链接别名都算另一次调用。`--network` 登记的调用只匹配实际带网络运行的
+  调用：脚本名看不出访问远程服务时，调用要设置 `network: true`，因为网络授权或信任
+  只是许可，并不会让每条命令联网。脚本必须直接执行（例如 `./scripts/deploy.sh`），不能换
+  解释器。它不代替执行审批，正常审批照常进行。未绑定 `--observe-command` 时，
+  匹配的调用以退出码 0 返回即像普通命令一样释放占用。可用 `--observe-command`
+  绑定观察同一目标集合的精确脚本命令，同时用 `ws observe` 将该脚本登记为只读；
+  此时占用保留，直到同一 Run 或其后续精确续接 Run 在效果派发后创建的该命令的
+  `status_json.v1` watcher 成功且留下持久事件，运行时在两个授权与脚本哈希
   仍有效的前提下自动解除精确占用。变更、含糊或未登记的调用回退到未知目标通道。
 - 同时存在多个审批时，`approve` 和 `reject` 可接审批 token。
 - `stop` 取消活跃 run；没有活跃 run 时只 dismiss 精确 pinned 的 Run，且在该 Run
   仍有待处理审批、澄清或活动 watcher 时拒绝。`new` 创建新的可见任务。
+- `cron adopt` 显示一个由旧版本保存、无法证明由谁创建的定时任务（它的 prompt 和
+  运行时间）；加上 `--yes` 时记录它属于你，此后以你的身份运行。只有你自己的 CLI
+  通过本地控制 socket 才能认领定时任务；可证明由他人创建的任务不能认领。
+  `selfmind doctor` 会列出这类任务。
+
+### CLI 如何连接 gateway
+
+daemon 只把 CLI 身份授予你自己的终端。`selfmind` 与 TUI 通过本地控制 socket
+连接本机 gateway（gateway 运行时目录中的 `control.sock`；该路径对 socket 地址
+过长时，改用 `/tmp` 下按用户划分的目录），该目录只有你的操作系统用户可以进入。
+daemon 依据操作系统记录的“谁发起了连接”来验证每个客户端：进程必须以你的身份
+运行，且不能是 gateway 本身或 gateway 启动的进程，因此 agent 运行的工具永远无法
+冒充你的 CLI。
+
+- 所有以你的身份执行的操作都走这条通道，且不会回退到 TCP：发送消息、审批
+  （`approve`、`reject`）、模式切换、工作区信任与授权、`--add-dir`、模型变更、
+  `cron adopt`，以及 TUI 的事件流。通过 TCP 声明 `cli` 平台的请求会被拒绝，
+  配置的 `gateway.token` 也不会授予该身份。
+- `selfmind gateway status` 与 `selfmind gateway stop` 同样经这个 socket 访问本机
+  gateway；早于该 socket 的 gateway 则走 TCP。未设置 `gateway.token` 时，gateway
+  会拒绝 TCP 上的停止请求并指明该 socket，并且在 TCP 上只报告自己是运行中还是排空
+  中、有多少 run 在活动以及构建信息；完整状态与 `stop` 需要你自己的终端或该 token。
+  这样读到的状态会标明 `liveness only`，并说明其余信息在哪里。
+- 指向远程 gateway（`SELF_GATEWAY_URL` 或 `gateway.url` 指向非 loopback 主机）的
+  CLI 无法在那里以你的身份行动；请改为指向本机的 gateway。通过 TCP 的集成保留
+  各自的认证，并以其声明的非 CLI 身份行动。
+- 早于本地控制 socket 的 gateway 仍能回答健康检查，但无法服务 CLI：命令会说明
+  这一点并指向 `selfmind gateway restart`（对旧 gateway 同样有效）。
+  `selfmind gateway status` 会显示该 socket，`selfmind doctor` 会报告通道状态以及
+  当前终端是否被接受（`[CONTROL]` 分类）。请在你自己的终端运行 `selfmind`：在
+  gateway 启动的工具内部运行时会被拒绝。
 
 ## 配置、模型与渠道
 
@@ -243,7 +282,7 @@ selfmind weixin status
   行，报告会把受影响的汇总明确标为“下界”，不会静默显示截断后的总数。
 - `doctor` 默认只显示当前问题，并为每个问题给出恢复或排查命令；健康子系统以及
   历史 run、错误、事件、活动和日志默认隐藏。问题使用 `[CONFIG]`、`[TRUST]`、
-  `[PROMPT]`、`[DELIVERY]`、`[SKILLS]` 等稳定分类标识，所有处理命令统一汇总到带编号的
+  `[PROMPT]`、`[CONTROL]`、`[DELIVERY]`、`[SKILLS]` 等稳定分类标识，所有处理命令统一汇总到带编号的
   `Next actions`。交互终端复用 TUI 的警告、错误、信息、成功、正文和弱化色；管道、
   重定向、`NO_COLOR`、`CLICOLOR=0` 和 `TERM=dumb` 保持纯文本。`--verbose`
   打印完整的脱敏诊断包，`--out FILE` 始终把完整诊断包写入文件，便于支持或离线
@@ -261,7 +300,10 @@ selfmind weixin status
   到达安全边界，再由服务重新拉起 daemon。两者都不需要管理员权限。Linux 上若已有
   系统级 `selfmind.service` 正在运行，个人设置会明确报告冲突，不会停止或替换它。
   把启动权交给 launchd/systemd 后，安装流程只等待该受管进程，绝不会再启动 detached
-  fallback 来掩盖服务 job 的失败。
+  fallback 来掩盖服务 job 的失败。launchd 标签和 systemd unit 每个账户只有一份，
+  因此从不是该账户自身主目录的 HOME（临时或测试用 HOME）发起的变更，会在停止任何
+  东西之前被拒绝，并写明两个路径；没有安装服务的 HOME 不受影响。刻意使用非默认 HOME
+  时，用 `SELFMIND_SERVICE_HOME=<路径>` 指明该 HOME。
 - 如果微信 iLink 会话过期，重新运行 `selfmind weixin login`。正在运行的
   gateway 会监听账号凭据文件，在新凭据保存后自动恢复轮询，不需要重启
   daemon。
@@ -281,7 +323,9 @@ selfmind eval list [path]
 selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID] [--tenant ID] [--workspace PATH] [--output PATH] [--record-content] [--live]
 selfmind eval report <jsonl-or-dir>
 selfmind eval repair [case-or-dir] [--worktree]
-selfmind eval scorecard [case-or-dir] [--provider ID] [--out PATH] [--live]
+selfmind eval scorecard [case-or-dir] [--provider ID] [--model ID] [--out PATH] [--live]
+selfmind eval compare <before> <after>
+selfmind eval canary init <new-private-directory>
 selfmind eval capture [turn-id|latest] [--title "..."] [--suite NAME]
 selfmind eval clean [--yes]
 
@@ -355,7 +399,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /apply <run_id>
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
-/effects [resolve <claim_id> <watch_id>]
+/effects [settle <claim_id> [reason] | resolve <claim_id> <watch_id>]
 /diag [learning|memory|context|models|delivery|inbound|execution|tools]
 /report daily [--since 24h]
 /events
@@ -363,53 +407,85 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /approve <n|id|all> [run]
 /reject <n|id|all>
 /mode [on-request|read-only|auto-edit|full-auto|smart]
+/tools readonly [<server>/<tool> on|off]
 /stop [n|run_id]
 /cancel
 /notify <on|off|auto|platform|desk-first|phone-first>
 /new [title] | /new --run <request>
-/resume [n|run_id]  (bare = list what needs attention)
+/resume [n|run_id]  (bare = view work)
 /choose <choice_id> <number>
 /remember <preference>
 /forget <text|ref>
 /ws [n|id | default <n|id> | trust|untrust|decline]  (bare = list)
 /add-dir [path]  (bare = list this session's extra roots)
-/attach [run_id]  (bare = the task running in another session)
 ```
 
 - 每个终端是独立的会话：只完整显示本会话的运行；其他会话正在运行的任务、待处理的
   审批或问题只以一行状态提示出现，审批面板只在发起该运行的会话里弹出。
-  `/attach [run_id]` 在本终端观察其他会话正在运行的任务而不接管它：最终回复仍发给
-  发起它的会话。在另一个会话输入的普通消息仍属于该会话的新工作；只有精确回复边
-  或显式附着才会指向别的 Run。
+  裸 `/resume` 打开任务列表，包含等待中、运行中和最近的 Run；方向键选择，
+  Enter 查看精确 Run 的状态、Plan 和待答内容。页面底部固定页脚列出可用按键：
+  `r` 刷新，Esc 或 `b` 返回列表并停在刚打开的那一行，`q` 关闭。
+  查看不会执行或回答工作。允许续接时，`c` 将该精确 Run 选为本会话下一条
+  用户消息的目标。`/attach [run_id]` 保留为只读兼容入口。本终端没有正在
+  执行的前台 Run 时，运行中的选择可在这里流式观察。等待仍显示为等待，
+  观察中断不代表任务完成。新输入保留在本会话，精确回复边或显式 `/resume`
+  选择才会指向另一 Run；仅查看不会选择输入目标。
 - `/views` 列出最近的受管 Git 执行视图；`/views <run_id>` 查看精确归属的 Run
-  中已提交、未提交、未跟踪及被忽略的文件。`/apply <run_id>` 只把干净且已提交的视图送成
+  中已提交、未提交、未跟踪、被忽略及被隐藏的工作。仍有 Run 可能写入该视图时，
+  只显示已提交的工作。`/apply <run_id>` 只把干净且已提交的视图送成
   原仓库里独立的 `selfmind/<view_id>` 分支。源分支可以前进，工作树也可以保留
   另一个 Run 的修改；原仓库身份和准入时的基准对象必须仍然有效。命令不改变当前
-  分支或丢弃视图文件。视图里的未提交、未跟踪及被忽略的文件仍留在原处供检查。
+  分支或丢弃视图文件；仍有 Run 可能写入该视图时会拒绝交付。原 checkout 仍可能被
+  改动时也会等待并点名原因：本人另一个对它有写权限、正在启动、运行或停放的 Run，
+  或这类 Run 启动的后台进程。视图里的未提交、
+  未跟踪及被忽略的文件仍留在原处供检查。Git 元数据指向别处，或配置新增了可运行
+  程序的键时，所有命令都不再使用该视图，但保留其文件。
   Run 完成后，`/views archive <run_id>` 可把已交付且干净的视图整体移到 daemon
-  保留区；仍有未完成 Run 或队列项引用、尚未交付或含被忽略文件时会拒绝。
-  `/views restore <run_id>` 将原有文件和 Git 元数据移回。归档保留全部数据，
-  不删除文件，也不回收磁盘空间。`/views prune <run_id>` 仅在 Run 已完成、没有
-  待办引用、视图干净且已交付，并确认没有额外本地 Git 工作后，才显式清理归档。
-  清理前会在源仓库建立保留提交的引用，随后删除检出及其本地 Git 元数据。
-  清理后不能恢复原检出；安全检查失败时保留归档。
+  保留区；仍有未完成 Run、队列项或正在启动的 Run 引用时会拒绝，尚未交付、含被
+  忽略文件或含隐藏工作（标记 skip-worktree 或 assume-unchanged 的索引项、链接
+  工作树、子模块仓库）时也会拒绝。`/views restore <run_id>` 为绑定该视图的任一
+  本人 Run 将原有文件和 Git 元数据移回，包括因视图已归档而停放的工作。归档保留
+  全部数据，不删除文件，也不回收磁盘空间。`/views prune <run_id>` 仅在 Run 已
+  完成、没有待办引用、视图干净且已交付，并确认没有额外本地 Git 工作后，才显式
+  清理归档：没有额外引用，视图自身存储的对象（无论松散还是已打包）都能从已交付
+  提交到达。清理前会在源仓库建立保留提交的引用，随后删除检出及其本地 Git 元数据；
+  与 `/apply` 一样，原 checkout 仍可能被改动时会等待。清理后不能恢复原检出；安全
+  检查失败时保留归档。
 - `/watchers` 在 CLI 与 IM 中使用同一个按 person 隔离的视图，展示 checker、
   operation、verification、finalization 和 notification 状态；原始命令、环境指纹
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用
   `/watchers 1` 查看第一条 watcher，使用 `/watchers cancel 1` 停止监控。
   取消 watcher 不会取消外部操作。
-- `/effects` 列出本人尚未确认的外部效果。没有可信适配器能自动判定远端结果时，
-  先查看该精确 Run 和它已成功定稿的 watcher，再用
-  `/effects resolve <claim_id> <watch_id>` 确认二者对应同一操作。运行时核对
-  本人归属、Run、watcher 来源与终态证据后，才释放该效果占用的全部目标；模型
-  自述成功不能解锁。
-  未绑定精确观察脚本的效果继续使用这条人工确认路径。
+- `/effects` 列出本人尚未释放的外部效果：每个占用的 Run、目标、状态（在途、
+  未确定或有绑定 watcher）、脱敏的命令摘要及其调用如何结束。多项工作同时运行时，
+  可能改变外部系统的命令或工具会占用目标；调用成功返回即自行释放，只有失败、
+  超时、取消或崩溃才留下未确定的占用。
+  `/effects settle <claim_id> [reason]` 释放你已知结果的未确定效果。只有你能结算
+  自己的占用；结算记录你的账号、当前 channel 与理由，等待该效果的工作随后继续。
+  仍在途的调用暂不能结算。
+  产生该效果的 Run 也可以用绑定到该占用的成功只读检查来释放它。
+  `/effects resolve <claim_id> <watch_id>` 把一个无人绑定、已成功定稿的 watcher
+  关联到该占用；运行时核对本人归属、Run、watcher 晚于该效果以及终态证据后，才释放
+  该效果占用的全部目标。模型自述成功不能解锁。
+  效果画像可以为同一目标集合绑定一条精确的观察脚本命令，并另用 `ws observe`
+  把该脚本登记为只读。由同一 Run 或其后续精确续接 Run 在派发后创建的
+  `status_json.v1` watcher 得到持久的成功结论后，可在两项授权与脚本哈希仍然有效时
+  自动释放该精确占用。
+- `/tools readonly` 列出被标为只读的 MCP 工具：运维在
+  `mcp.servers[].read_only_tools` 中写明的名字，以及本人的标注和每条标注的时间与
+  来源端点。`/tools readonly <server>/<tool> on` 为本人把已连接服务器上的一个
+  精确工具标为只读，`off` 撤销。只有本人亲自输入的命令能改变标注，定时任务的提示
+  词不能。被标注工具的调用无需审批、不占用外部目标，并可
+  与其他读取并行，因此只标注从不改变任何东西的工具。服务器对自身工具的标注
+  （annotations）一律不算数。标注绑定服务器配置的命令、参数或 URL；配置改变后，
+  列表会显示该标注已失效，直到本人重新标注。
 - `/new [title]` 保留现有的 task 标签行为；`/new --run <request>` 是确定性的
   新工作入口，不经过连续性模型判断。
 - `/status` 在同时有多个活动 Run 时列出总览；`/status <run_id>` 查看一个
   精确 Run 的状态，不按最近活动猜测目标。
-- 裸 `/resume` 展示当前 Attention，也是所有序号解析所依据的那份编号列表；
-  `/resume <n|run_id>` 精确继续一个 Run，恰有一个未解决 Run 的 Thread id 仍然
+- 裸 `/resume` 在 CLI 中查看任务，在 IM 中展示端点本地的 Attention 编号列表；
+  `/resume <n|run_id>` 为发起选择的会话下一条用户消息选择精确 Run，入队前
+  固定目标；恰有一个未解决 Run 的 Thread id 仍然
   接受。空闲时的 `/stop` 只 dismiss 该精确 Run，且在它仍有待处理审批、待处理
   澄清或活动 watcher 时拒绝。`/stop <n|run_id>` 清掉列表里的某一项而**不运行
   它**——陈旧项此前没有这个出口:自动归档从不碰仍有待处理人工输入的条目，而
@@ -430,8 +506,9 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   会话，启动时**只问一次**：`/ws trust` 开启这两项能力，`/ws decline` 保持未信任并
   不再询问。普通文件与命令工作不受影响。
 - `/choose <choice_id> <number>` 精确回答一个持久化的连续性问题，可从另一个
-  已绑定端点或 daemon 重启后回答。只有该 person 最近恰好有一个待答问题时，
-  才会把裸数字当作选择。
+  已绑定端点或 daemon 重启后回答。裸数字只回答同一账号在同一聊天或 CLI 窗口里
+  最近显示的那一个问题；在别处它是普通输入，原生回复或其他精确边始终送往自己的
+  目标。
 - `/notify <platform|auto>` 选择首选 IM 目标，`/notify <on|off>` 开关脱离
   会话时的通知；`desk-first` 让新审批先留在已附着的 TUI，并在 T1 后补推，
   `phone-first` 则立即同步到 IM。
@@ -444,13 +521,23 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   高敏感请求只显示“仅本次 / 拒绝”；新提示不再创建 task/person 级授权。
 - `/approvals grants` 与 `/approvals revoke <n>` 仍可查看和撤销历史记忆授权。
 - `/mode` 支持 `on-request`、`read-only`、`auto-edit`、`full-auto`
-  和 `smart`。设置只作用于新准入的 Run；已有 Run 保持准入时的模式，待处理审批
-  仍需用 `/approve` 或 `/reject` 回答。
+  和 `smart`。设置作用于新准入的 Run；收紧也作用于排队和停放的工作，放宽则
+  不会：等待中的工作（排队，或停放在模型提供方、审批或提问上）按它准入时的
+  模式与你当前模式中更严格的一个运行，且仅当你是在该工作首次准入之后设置当前
+  模式时才如此，因此显式的单次运行模式不会被更早的偏好降级。已经在运行的 Run
+  保持它的模式（用 `/stop` 停止它）。待处理审批仍需用 `/approve` 或 `/reject`
+  回答；你已批准的仍然有效。在终端里 `/mode` 只作用于当前会话：它设置本会话
+  之后的消息所携带的模式，不会更改你保存的偏好，因此不会收紧已经排队或停放的
+  工作。请在 IM 或 HTTP 中设置 `/mode`（会保存偏好），或先 `/stop` 该工作再重新
+  提出。显式的终端会话模式也会随运行中的补充消息传递到延期的新工作；未设置的
+  会话模式保持为空，直到该工作准入时再读取偏好。
 - `/notify` 选择 CLI 脱离后接收进度和最终结果的已绑定 IM 渠道。
 - `/diag tools` 显示注册期工具 schema 目录。被修复或隔离的外部工具只显示
   工具名、问题类别和 schema 哈希，不显示原始 schema 或参数值。隔离工具不会
   发送给模型，也不能执行。
-- `/diag inbound` 只列出当前用户已保存、但尚未确认接收的 IM 输入。
+- `/diag inbound` 只列出当前用户已保存、但尚未确认接收的 IM 输入，并附上记录的原因。
+  `pending` 收据尚未开始执行（例如在 SelfMind 关闭期间到达），来源会再次投递；
+  内容已变化的重投会被拒绝，并记录在这张收据上。
   `dispatching` 状态可能已经产生效果，因此该命令不会自动重试；再次发送前
   需要先核对相关工作。
 - `/diag context` 首行展示包含原生工具 schema 的最近一次 provider 请求估算；

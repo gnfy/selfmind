@@ -102,6 +102,8 @@ func TestAccountBindEndpoint(t *testing.T) {
 		DisplayName:    "Feishu User",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/accounts/bind", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 
 	daemon.Handler().ServeHTTP(rec, req)
@@ -149,6 +151,7 @@ func TestApprovalsEndpoints(t *testing.T) {
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	req := httptest.NewRequest(http.MethodGet, "/v1/approvals?platform=cli&platform_user_id=local", nil)
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -170,6 +173,8 @@ func TestApprovalsEndpoints(t *testing.T) {
 		Channel:        "cli",
 	})
 	req = httptest.NewRequest(http.MethodPost, "/v1/approvals/respond", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = asLocalCLI(req)
 	rec = httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -198,6 +203,8 @@ func TestLegacyDaemonTokenAuth(t *testing.T) {
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	body := bytes.NewReader([]byte(`{"platform":"cli","platform_user_id":"local","content":"/tasks"}`))
 	req := httptest.NewRequest(http.MethodPost, "/v1/message", body)
+	req.Header.Set("Content-Type", "application/json")
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnauthorized {
@@ -205,6 +212,8 @@ func TestLegacyDaemonTokenAuth(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader([]byte(`{"platform":"cli","platform_user_id":"local","content":"/tasks"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	req = asLocalCLI(req)
 	req.Header.Set("Authorization", "Bearer secret")
 	rec = httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
@@ -221,6 +230,8 @@ func TestGatewayTokenTakesPrecedence(t *testing.T) {
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	body := []byte(`{"platform":"cli","platform_user_id":"local","content":"/tasks"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = asLocalCLI(req)
 	req.Header.Set("Authorization", "Bearer old")
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
@@ -229,6 +240,8 @@ func TestGatewayTokenTakesPrecedence(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = asLocalCLI(req)
 	req.Header.Set("Authorization", "Bearer new")
 	rec = httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
@@ -249,6 +262,7 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 				Connected:  1,
 				Failed:     1,
 				Failures:   []tools.MCPServerFailure{{Name: "github", Error: "connection refused"}},
+				Warnings:   []tools.MCPServerWarning{{Name: "notion", Warning: "read_only_tools names tools this server does not expose: serch"}},
 			}
 		},
 		RuntimeStatusFunc: func() api.GatewayRuntimeInfo {
@@ -265,7 +279,7 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 			return llm.ToolCatalogPreview{Protocol: "openai_chat", Count: 2, Names: []string{"read_file", "finish_run"}, Hash: "catalog123", WireBytes: 512}
 		},
 	}
-	req := httptest.NewRequest(http.MethodGet, "/v1/gateway/status", nil)
+	req := asLocalCLI(httptest.NewRequest(http.MethodGet, "/v1/gateway/status", nil))
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -287,6 +301,9 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 	if status.MCP.Configured != 2 || status.MCP.Connected != 1 || status.MCP.Failed != 1 || len(status.MCP.Failures) != 1 {
 		t.Fatalf("status payload does not expose MCP health: %+v", status.MCP)
 	}
+	if len(status.MCP.Warnings) != 1 || status.MCP.Warnings[0].Name != "notion" || !strings.Contains(status.MCP.Warnings[0].Warning, "serch") {
+		t.Fatalf("status payload does not expose MCP warnings: %+v", status.MCP.Warnings)
+	}
 	if !status.ToolCatalog.Valid() || status.ToolCatalog.Hash != "catalog123" || status.ToolCatalog.Count != 2 {
 		t.Fatalf("status payload does not expose provider tool catalogue: %+v", status.ToolCatalog)
 	}
@@ -300,7 +317,6 @@ func TestGatewayToolCatalogProbeRequiresLocalControlAndUsesDaemonProbe(t *testin
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	called := false
 	daemon := &Server{
-		LocalControlToken: "local-secret",
 		ToolCatalogProbeFunc: func(context.Context) api.ProviderToolCatalogProbeResponse {
 			called = true
 			return api.ProviderToolCatalogProbeResponse{OK: true, Catalog: llm.ToolCatalogPreview{Protocol: "openai_chat", Count: 3}}
@@ -308,6 +324,7 @@ func TestGatewayToolCatalogProbeRequiresLocalControlAndUsesDaemonProbe(t *testin
 	}
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/gateway/tool-catalog/probe", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "127.0.0.1:4100"
 	recorder := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(recorder, request)
@@ -316,8 +333,9 @@ func TestGatewayToolCatalogProbeRequiresLocalControlAndUsesDaemonProbe(t *testin
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/v1/gateway/tool-catalog/probe", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "127.0.0.1:4100"
-	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	request = asLocalCLI(request)
 	recorder = httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || !called || !strings.Contains(recorder.Body.String(), `"protocol":"openai_chat"`) {
@@ -329,7 +347,6 @@ func TestGatewayModelProbeRequiresLocalControlAndValidatesRole(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	calledRole := ""
 	daemon := &Server{
-		LocalControlToken: "local-secret",
 		ModelProbeFunc: func(_ context.Context, role string) api.ModelProbeResponse {
 			calledRole = role
 			return api.ModelProbeResponse{Role: role, OK: true, Provider: "codex-cli", Model: "gpt-test"}
@@ -337,6 +354,7 @@ func TestGatewayModelProbeRequiresLocalControlAndValidatesRole(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/probe", strings.NewReader(`{"role":"primary"}`))
+	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "127.0.0.1:4100"
 	recorder := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(recorder, request)
@@ -345,8 +363,9 @@ func TestGatewayModelProbeRequiresLocalControlAndValidatesRole(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/v1/gateway/model/probe", strings.NewReader(`{"role":"memory_extract"}`))
+	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "127.0.0.1:4100"
-	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	request = asLocalCLI(request)
 	recorder = httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusBadRequest || calledRole != "" {
@@ -354,8 +373,9 @@ func TestGatewayModelProbeRequiresLocalControlAndValidatesRole(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "/v1/gateway/model/probe", strings.NewReader(`{"role":"auxiliary"}`))
+	request.Header.Set("Content-Type", "application/json")
 	request.RemoteAddr = "127.0.0.1:4100"
-	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	request = asLocalCLI(request)
 	recorder = httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK || calledRole != "auxiliary" || !strings.Contains(recorder.Body.String(), `"ok":true`) {
@@ -373,7 +393,8 @@ func TestGatewayShutdownEndpoint(t *testing.T) {
 			close(stopped)
 		},
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/shutdown", bytes.NewReader([]byte(`{}`)))
+	req := asLocalCLI(httptest.NewRequest(http.MethodPost, "/v1/gateway/shutdown", bytes.NewReader([]byte(`{}`))))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -428,7 +449,11 @@ func TestGatewayShutdownResponseSurvivesImmediateServerClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &http.Server{Handler: handler}
+	// The shutdown endpoint answers the person's own CLI, which reaches it on the
+	// control socket: every connection carries the verified verdict.
+	server := &http.Server{Handler: handler, ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
+		return WithLocalPeer(ctx, verifiedPeer)
+	}}
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- server.Serve(listener) }()
 	go func() {
@@ -821,7 +846,7 @@ func TestExplicitTaskDetailedMessageSelectsPriorWork(t *testing.T) {
 	}
 }
 
-func TestResumePinDetailedMessageSelectsPriorWork(t *testing.T) {
+func TestLegacyThreadPinDoesNotSelectExecution(t *testing.T) {
 	store := controltest.NewStore(t)
 	ctx := context.Background()
 	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-pin-detail", "Local User")
@@ -845,8 +870,8 @@ func TestResumePinDetailedMessageSelectsPriorWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() {
-		t.Fatalf("resume pin must participate in run-level continuation: resolved=%+v attach=%+v", resolved, attach)
+	if resolved == nil || resolved.ID == task.ID || attach.claimsPriorRuns() {
+		t.Fatalf("historical person-wide pin selected execution: resolved=%+v attach=%+v", resolved, attach)
 	}
 }
 
@@ -1231,6 +1256,7 @@ func TestTaskEventsEndpoint(t *testing.T) {
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local&task_id="+task.ID, nil)
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1270,6 +1296,7 @@ func TestTaskEventsStreamEndpoint(t *testing.T) {
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events/stream?platform=cli&platform_user_id=local&once=true&task_id="+task.ID, nil)
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -1307,6 +1334,7 @@ func TestTaskArtifactsEndpoint(t *testing.T) {
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/artifacts?platform=cli&platform_user_id=local&task_id="+task.ID, nil)
+	req = asLocalCLI(req)
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

@@ -518,6 +518,7 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		return "", err
 	}
 	stats := collectDailyQualityStats(events)
+	performance := collectDailyPerformance(events)
 	var evidenceGaps []string
 	chains, chainsErr := d.Control.WorkChainsSince(ctx, identity.TenantID, identity.PersonID, since, 10000)
 	if chainsErr != nil {
@@ -536,6 +537,14 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	backlog, backlogErr := d.Control.ApprovalBacklog(ctx, identity.TenantID, identity.PersonID)
 	if backlogErr != nil {
 		evidenceGaps = append(evidenceGaps, "approval backlog")
+	}
+	human, humanErr := d.Control.ApprovalDecisionFunnelSince(ctx, identity.TenantID, identity.PersonID, since)
+	if humanErr != nil {
+		evidenceGaps = append(evidenceGaps, "human response timing")
+	}
+	claims, claimsErr := d.Control.ListUnresolvedExternalEffects(ctx, identity.TenantID, identity.PersonID, 100)
+	if claimsErr != nil {
+		evidenceGaps = append(evidenceGaps, "unresolved effect age")
 	}
 	deliveryCounts, deliveryErr := d.Control.CountOutboundByStatusSince(ctx, identity.TenantID, identity.PersonID, since)
 	if deliveryErr != nil {
@@ -619,6 +628,7 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
+	sb.WriteString(performance.render())
 	fmt.Fprintf(&sb, "Model routes: %s\n", formatDailyRouteUsage(stats.ProviderRoutes))
 	fmt.Fprintf(&sb, "Provider admission waits: %s; %d affected Run(s)\n",
 		formatDailyProviderWaitUsage(stats.ProviderWaits), len(stats.ProviderWaitingRuns))
@@ -659,6 +669,23 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 			oldestParked = formatReportAge(time.Since(*backlog.OldestParkedAt))
 		}
 		fmt.Fprintf(&sb, "Approval backlog now: live %d, parked %d, oldest parked %s\n", backlog.Live, backlog.Parked, oldestParked)
+	}
+	if humanErr == nil {
+		fmt.Fprintf(&sb, "Human response wait: %s total, %d measured responses, %d unavailable (requests created in this window; decision timestamp, no clipping)\n", time.Duration(human.ResponseMS)*time.Millisecond, human.MeasuredResponses, human.ResponseUnavailable)
+	}
+	if claimsErr == nil {
+		oldest := "none"
+		var oldestAge time.Duration
+		for _, claim := range claims {
+			if !claim.CreatedAt.IsZero() {
+				age := generatedAt.Sub(claim.CreatedAt)
+				if oldest == "none" || age > oldestAge {
+					oldestAge = age
+					oldest = formatReportAge(age)
+				}
+			}
+		}
+		fmt.Fprintf(&sb, "Unresolved effects now: %d listed (cap 100), oldest %s; age never settles an effect\n", len(claims), oldest)
 	}
 	continuationShare := int64(0)
 	if stats.InputTokens+stats.OutputTokens > 0 {

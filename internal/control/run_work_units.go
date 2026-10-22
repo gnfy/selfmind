@@ -112,6 +112,7 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 		return nil, err
 	}
 	used := map[string]bool{}
+	matched := map[string]bool{}
 	for i, item := range plan {
 		sequence := i + 1
 		item.WorkUnitID = strings.TrimSpace(item.WorkUnitID)
@@ -133,10 +134,21 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 		var unit *RunWorkUnit
 		var err error
 		if !replace {
-			unit, err = resolvePlanWorkUnit(runID, item, existing, byID, used)
+			unit, err = resolvePlanWorkUnit(runID, item, existing, byID, matched)
 		}
 		if err != nil {
 			return nil, err
+		}
+		if unit != nil {
+			if matched[unit.ID] {
+				return nil, fmt.Errorf("work unit %s appears more than once in the plan snapshot", unit.ID)
+			}
+			matched[unit.ID] = true
+			// Reopening an obligation starts a new execution window. Keep
+			// the closed unit available to exact historical evidence references.
+			if workUnitTerminal(unit.Status) && (item.PlanStatus == "pending" || item.PlanStatus == "in_progress") {
+				unit = nil
+			}
 		}
 		if unit == nil {
 			unit = &RunWorkUnit{
@@ -166,7 +178,9 @@ func (s *Store) syncRunWorkUnitsTx(ctx context.Context, tx *sql.Tx, tenant, runI
 		}
 		remainingSequence++
 		unit.Sequence = remainingSequence
-		unit.PlanStatus = "cancelled"
+		if !workUnitTerminal(unit.Status) {
+			unit.PlanStatus = "cancelled"
+		}
 		if err := upsertProjectedWorkUnitTx(ctx, tx, unit, currentCursor, now); err != nil {
 			return nil, err
 		}
@@ -304,23 +318,52 @@ func maxRunEventCursorTx(ctx context.Context, tx *sql.Tx, runID string) (int64, 
 	return cursor, err
 }
 
+// A zero cursor may also be a closed empty window. Openness comes from the
+// durable finish marker, never from assuming that zero means "keep reading".
+func workUnitEvidenceWindowTx(ctx context.Context, tx *sql.Tx, runID, unitID string) (start, end int64, err error) {
+	var closed bool
+	err = tx.QueryRowContext(ctx, `SELECT COALESCE(started_cursor,0),COALESCE(finished_cursor,0),COALESCE(finished_at,0)>0 FROM run_work_units WHERE run_id=? AND id=?`, runID, unitID).Scan(&start, &end, &closed)
+	if err == nil && end == 0 {
+		if !closed {
+			end, err = maxRunEventCursorTx(ctx, tx, runID)
+		} else {
+			// Released finalizers recorded a finish time without a cursor. The exact
+			// terminal receipt is an upper bound; never expand to later Run events.
+			err = tx.QueryRowContext(ctx, `SELECT COALESCE(MIN(cursor),0) FROM task_events WHERE run_id=? AND (idempotency_key=? OR type='run.finished')`, runID, "run:"+runID+":terminal").Scan(&end)
+		}
+	}
+	return
+}
+
 type workUnitEvidence struct {
-	ToolCallID string `json:"tool_call_id"`
-	Kind       string `json:"kind"`
-	Status     string `json:"status"`
-	StartedAt  int64  `json:"started_at_unix_nano"`
-	FinishedAt int64  `json:"finished_at_unix_nano"`
-	Files      []struct {
+	ToolName    string                    `json:"tool_name"`
+	Version     int                       `json:"version,omitempty"`
+	Observation *verification.Observation `json:"observation,omitempty"`
+	ToolCallID  string                    `json:"tool_call_id"`
+	Kind        string                    `json:"kind"`
+	Status      string                    `json:"status"`
+	StartedAt   int64                     `json:"started_at_unix_nano"`
+	FinishedAt  int64                     `json:"finished_at_unix_nano"`
+	Invoked     *bool                     `json:"invoked,omitempty"`
+	EffectState string                    `json:"effect_state,omitempty"`
+	Process     *struct {
+		Started           bool   `json:"started"`
+		ExitCode          *int   `json:"exit_code,omitempty"`
+		NetworkDecision   string `json:"network_decision,omitempty"`
+		NetworkPermission string `json:"network_permission,omitempty"`
+	} `json:"process,omitempty"`
+	Files []struct {
 		Path         string `json:"path"`
 		ResolvedPath string `json:"resolved_path"`
 		BeforeSHA256 string `json:"before_sha256"`
 		AfterSHA256  string `json:"after_sha256"`
 	} `json:"files"`
 	Command *struct {
-		Binding *verification.Binding `json:"binding,omitempty"`
-		Command string                `json:"command"`
-		CWD     string                `json:"cwd"`
-		Kind    string                `json:"kind"`
+		Binding  *verification.Binding `json:"binding,omitempty"`
+		Command  string                `json:"command"`
+		CWD      string                `json:"cwd"`
+		Kind     string                `json:"kind"`
+		ExitCode int                   `json:"exit_code"`
 	} `json:"command"`
 }
 
@@ -328,45 +371,85 @@ type workUnitEvidence struct {
 // considered, or -1 when the evidence could not be read. With a step filter,
 // zero means no check in the window is bound to that step.
 func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64, stepIDs ...string) (string, string, string, int) {
+	mutations, checks, err := workUnitVerificationChecksTx(ctx, tx, runID, startedCursor, finishedCursor, stepIDs...)
+	if err != nil {
+		return "blocked", "[]", err.Error(), -1
+	}
+	state, summary := verification.StateWithMutations(mutations, checks)
+	refs := []string{}
+	for _, check := range verification.Latest(checks) {
+		if check.StartedAt >= verification.RelevantMutationAt(check, mutations) && strings.TrimSpace(check.Command) != "" {
+			refs = append(refs, check.Command)
+		}
+	}
+	refsJSON, _ := json.Marshal(refs)
+	// The work-unit API historically calls stale evidence not_run.
+	if state == "stale" {
+		state = "not_run"
+	}
+	return state, string(refsJSON), summary, len(checks)
+}
+
+// Both completion and continuation read this exact evidence window. Later
+// observations from another work unit cannot replace its frozen obligations.
+func workUnitVerificationChecksTx(ctx context.Context, tx *sql.Tx, runID string, startedCursor, finishedCursor int64, stepIDs ...string) ([]verification.Mutation, []verification.Check, error) {
 	knownPlanSteps := map[string]bool{}
 	stepRows, stepErr := tx.QueryContext(ctx, `SELECT DISTINCT step_id FROM run_plan_steps WHERE run_id=?`, runID)
 	if stepErr != nil {
-		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
+		return nil, nil, fmt.Errorf("Verification obligation identities are unavailable.")
 	}
 	for stepRows.Next() {
 		var stepID string
 		if stepRows.Scan(&stepID) != nil {
 			_ = stepRows.Close()
-			return "blocked", "[]", "Verification obligation identities are unreadable.", -1
+			return nil, nil, fmt.Errorf("Verification obligation identities are unreadable.")
 		}
 		knownPlanSteps[stepID] = true
 	}
 	if err := stepRows.Err(); err != nil {
 		_ = stepRows.Close()
-		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
+		return nil, nil, fmt.Errorf("Verification obligation identities are unavailable.")
 	}
 	if err := stepRows.Close(); err != nil {
-		return "blocked", "[]", "Verification obligation identities are unavailable.", -1
+		return nil, nil, fmt.Errorf("Verification obligation identities are unavailable.")
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(payload_json,'{}') FROM task_events
-		WHERE run_id=? AND COALESCE(cursor,0)>? AND COALESCE(cursor,0)<=? AND type='evidence.recorded'
+	rows, err := tx.QueryContext(ctx, `SELECT type,COALESCE(payload_json,'{}') FROM task_events
+		WHERE run_id=? AND ((type='evidence.recorded' AND COALESCE(cursor,0)>? AND COALESCE(cursor,0)<=?) OR type='evidence.adopted')
 		ORDER BY COALESCE(cursor,0), rowid`, runID, startedCursor, finishedCursor)
 	if err != nil {
-		return "blocked", "[]", "Verification evidence is unavailable.", -1
+		return nil, nil, fmt.Errorf("Verification evidence is unavailable.")
 	}
 	defer rows.Close()
 	var mutations []verification.Mutation
 	checks := []verification.Check{}
 	for rows.Next() {
-		var raw string
-		if rows.Scan(&raw) != nil {
-			return "blocked", "[]", "Verification evidence is unreadable.", -1
+		var eventType, raw string
+		if rows.Scan(&eventType, &raw) != nil {
+			return nil, nil, fmt.Errorf("Verification evidence is unreadable.")
+		}
+		if eventType == "evidence.adopted" {
+			var adoption observationAdoption
+			if err := json.Unmarshal([]byte(raw), &adoption); err != nil {
+				return nil, nil, err
+			}
+			if adoption.SourceCursor <= startedCursor || adoption.SourceCursor > finishedCursor {
+				continue
+			}
+			check, err := observationCheckTx(ctx, tx, runID, adoption)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(stepIDs) > 0 && check.Binding.StepID != stepIDs[0] {
+				continue
+			}
+			checks = append(checks, check)
+			continue
 		}
 		var payload struct {
 			Evidence workUnitEvidence `json:"evidence"`
 		}
 		if json.Unmarshal([]byte(raw), &payload) != nil || payload.Evidence.Kind == "" || (payload.Evidence.Kind == "verification" && payload.Evidence.Command == nil) {
-			return "blocked", "[]", "Verification evidence is malformed.", -1
+			return nil, nil, fmt.Errorf("Verification evidence is malformed.")
 		}
 		evidence := payload.Evidence
 		if evidence.Kind == "mutation" {
@@ -397,24 +480,18 @@ func workUnitEvidenceProjectionTx(ctx context.Context, tx *sql.Tx, runID string,
 				continue
 			}
 		}
-		checks = append(checks, verification.Check{ToolCallID: evidence.ToolCallID, Binding: binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt})
+		check := verification.Check{ToolCallID: evidence.ToolCallID, Binding: binding, Kind: evidence.Command.Kind, Command: evidence.Command.Command, CWD: evidence.Command.CWD, Status: evidence.Status, ExitCode: evidence.Command.ExitCode, StartedAt: evidence.StartedAt, FinishedAt: evidence.FinishedAt, Invoked: evidence.Invoked, EffectState: evidence.EffectState}
+		var exitCode *int
+		if evidence.Process != nil {
+			check.ProcessStarted, exitCode = &evidence.Process.Started, evidence.Process.ExitCode
+			check.NetworkDecision, check.NetworkPermission = evidence.Process.NetworkDecision, evidence.Process.NetworkPermission
+		}
+		checks = append(checks, verification.WithDispatchFacts(check, exitCode))
 	}
 	if err := rows.Err(); err != nil {
-		return "blocked", "[]", "Verification evidence is unavailable.", -1
+		return nil, nil, fmt.Errorf("Verification evidence is unavailable.")
 	}
-	state, summary := verification.StateWithMutations(mutations, checks)
-	refs := []string{}
-	for _, check := range verification.Latest(checks) {
-		if check.StartedAt >= verification.RelevantMutationAt(check, mutations) && strings.TrimSpace(check.Command) != "" {
-			refs = append(refs, check.Command)
-		}
-	}
-	refsJSON, _ := json.Marshal(refs)
-	// The work-unit API historically calls stale evidence not_run.
-	if state == "stale" {
-		state = "not_run"
-	}
-	return state, string(refsJSON), summary, len(checks)
+	return mutations, checks, nil
 }
 
 func (s *Store) ListRunWorkUnits(ctx context.Context, tenantID, runID string) ([]RunWorkUnit, error) {

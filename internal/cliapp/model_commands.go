@@ -488,8 +488,7 @@ func (a *App) requestModelChange(parent context.Context, request api.ModelChange
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		return api.ModelChangeResponse{}, err
 	}
@@ -502,7 +501,7 @@ func (a *App) requestModelChange(parent context.Context, request api.ModelChange
 		if resp.StatusCode == http.StatusNotFound {
 			return api.ModelChangeResponse{}, fmt.Errorf("%w", errModelChangeEndpointUnavailable)
 		}
-		return api.ModelChangeResponse{}, fmt.Errorf("%s", gatewayErrorLine(resp.Status, data))
+		return api.ModelChangeResponse{}, fmt.Errorf("%s", a.gatewayErrorLine(resp.Status, data))
 	}
 	var result api.ModelChangeResponse
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -529,7 +528,7 @@ func (a *App) performModelRecovery(cfg *config.Config, action, id string) (*mode
 		if _, err := service.RetryRecovery(changeID); err != nil {
 			return nil, "", err
 		}
-		if err := gatewayrt.SpawnRestartHelper(cfg.Path, a.gatewayDataDir(), changeID); err != nil {
+		if err := gatewayrt.SpawnRestartHelper(cfg.Path, a.gatewayDataDir(), changeID, ""); err != nil {
 			_, _ = service.MarkRecoveryRequired(changeID, err)
 			return nil, "", err
 		}

@@ -1,0 +1,146 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " is \"READY\"."
+    },
+    {
+      "reasoning_content": " The user asked me"
+    },
+    {
+      "reasoning_content": " to submit finish_run"
+    },
+    {
+      "reasoning_content": " with a specific final"
+    },
+    {
+      "reasoning_content": "_response."
+    },
+    {
+      "reasoning_content": " Note: the file"
+    },
+    {
+      "reasoning_content": " content is \"READY"
+    },
+    {
+      "reasoning_content": "\" not \"READY"
+    },
+    {
+      "reasoning_content": ".\\n\\nThe"
+    },
+    {
+      "reasoning_content": " inspection is complete"
+    },
+    {
+      "reasoning_content": ".\" — the final"
+    },
+    {
+      "reasoning_content": "_response is"
+    },
+    {
+      "reasoning_content": " what the user explicitly"
+    },
+    {
+      "reasoning_content": " wants. I should"
+    },
+    {
+      "reasoning_content": " comply"
+    },
+    {
+      "reasoning_content": " with the instruction,"
+    },
+    {
+      "reasoning_content": " as it's the"
+    },
+    {
+      "reasoning_content": " complete final reply text"
+    },
+    {
+      "reasoning_content": " they"
+    },
+    {
+      "reasoning_content": " want submitted. But"
+    },
+    {
+      "reasoning_content": " I should be careful"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " is there a mismatch"
+    },
+    {
+      "reasoning_content": " issue? The task"
+    },
+    {
+      "reasoning_content": " instructs to report"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " content and then use"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run with a specific"
+    },
+    {
+      "reasoning_content": " final_response. The"
+    },
+    {
+      "reasoning_content": " final_response states \""
+    },
+    {
+      "reasoning_content": "The source contains"
+    },
+    {
+      "reasoning_content": " READY.\" which matches"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": "\n\nLet me call"
+    },
+    {
+      "reasoning_content": " finish_run.\n"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11957,
+        "output_tokens": 210,
+        "cache_read_input_tokens": 11264,
+        "cache_miss_input_tokens": 693,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 122,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"done\", \"summary\": \"Read source.txt once; it contains exactly \\\"READY\\\".\", \"files\": \n[\"source.txt\"]\n\n, \"final_response\": \"The source contains READY.\\n\\nThe inspection is complete.\"}"
+        }
+      ]
+    }
+  ]
+}

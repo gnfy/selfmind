@@ -37,10 +37,11 @@ func withToolActivationState(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if _, ok := toolActivationStateFromContext(ctx); ok {
-		return ctx
+	if _, ok := toolActivationStateFromContext(ctx); !ok {
+		ctx = context.WithValue(ctx, toolActivationContextKey{}, &toolActivationState{active: make(map[string]struct{})})
 	}
-	return context.WithValue(ctx, toolActivationContextKey{}, &toolActivationState{active: make(map[string]struct{})})
+	activateToolsForActiveSkill(ctx)
+	return ctx
 }
 
 func toolActivationStateFromContext(ctx context.Context) (*toolActivationState, bool) {
@@ -157,6 +158,22 @@ func activatedToolNamesFromSearchResult(toolName, raw string) []string {
 			return []string{"skill_view"}
 		}
 		return nil
+	case "update_plan":
+		var projected struct {
+			WorkUnits []struct {
+				PlanStatus     string `json:"plan_status"`
+				SkillCatalog   string `json:"skill_catalog"`
+				BoundSkillName string `json:"bound_skill_name"`
+			} `json:"work_units"`
+		}
+		if json.Unmarshal([]byte(raw), &projected) == nil {
+			for _, unit := range projected.WorkUnits {
+				if unit.PlanStatus == "in_progress" && (strings.TrimSpace(unit.SkillCatalog) != "" || strings.TrimSpace(unit.BoundSkillName) != "") {
+					return []string{"skill_view"}
+				}
+			}
+		}
+		return nil
 	case "tool_search":
 	default:
 		return nil
@@ -179,6 +196,51 @@ func activatedToolNamesFromSearchResult(toolName, raw string) []string {
 
 func activateToolsFromSearchResult(ctx context.Context, toolName, raw string) []string {
 	return activateDeferredTools(ctx, activatedToolNamesFromSearchResult(toolName, raw))
+}
+
+func activeSkillNeedsViewTool(skill *ActiveSkillContext, maxChars int) bool {
+	if skill == nil {
+		return false
+	}
+	mode := strings.TrimSpace(skill.DeliveryMode)
+	if mode == "" && skill.DeliveryContractVersion <= 0 {
+		mode = BuildSkillMainDelivery(skill.Body, ActiveSkillDeliveryBodyBudget(maxChars, skill.LinkedFiles)).Mode
+	}
+	return mode == SkillDeliveryModePaged
+}
+
+// activateToolsForActiveSkill exposes skill_view whenever the runtime context
+// carries an active paged Skill or bounded Skill candidates for the current
+// work unit, matching work-unit boundary activation so a mid-turn skill_select
+// does not mutate the tools array and invalidate the provider prompt cache.
+func activateToolsForActiveSkill(ctx context.Context) []string {
+	var skill *ActiveSkillContext
+	var candidates []SkillCandidateContext
+	maxChars := 8 * 1024
+	if selected, ok := SkillRuntimeContextFromContext(ctx); ok {
+		skill = selected.Active
+		candidates = selected.Candidates
+	} else if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
+		skill = bundle.ActiveSkill
+		candidates = bundle.SkillCandidates
+		maxChars = bundle.Budget.SkillMainBytes
+	}
+	if skill == nil && len(candidates) == 0 {
+		return nil
+	}
+	if skill != nil && skill.WorkUnitSequence > 0 {
+		if state, ok := toolActivationStateFromContext(ctx); ok {
+			state.mu.Lock()
+			if state.unitSequence == 0 {
+				state.unitSequence = skill.WorkUnitSequence
+			}
+			state.mu.Unlock()
+		}
+	}
+	if activeSkillNeedsViewTool(skill, maxChars) || (skill == nil && len(candidates) > 0) {
+		return activateDeferredTools(ctx, []string{"skill_view"})
+	}
+	return nil
 }
 
 // seedToolActivationFromMessages rebuilds the activation set from a replayed
@@ -212,9 +274,9 @@ func seedToolActivationFromMessages(ctx context.Context, messages []llm.Message)
 			}
 		}
 		state.unitSequence = sequence
-		restored := len(state.active)
 		state.mu.Unlock()
-		return restored
+		activateToolsForActiveSkill(ctx)
+		return activatedToolCount(ctx)
 	}
 	return 0
 }

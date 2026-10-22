@@ -132,6 +132,14 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 	if checkpointCount > 0 {
 		return ErrResumeCheckpointRequired
 	}
+	var pendingClarifyCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM clarify_requests
+		WHERE tenant_id = ? AND person_id = ? AND run_id = ? AND status = 'pending'`, tenantID, personID, resumesRunID).Scan(&pendingClarifyCount); err != nil {
+		return err
+	}
+	if pendingClarifyCount > 0 {
+		return ErrResumeCheckpointRequired
+	}
 	if !retarget {
 		var sourceRunCount int
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE tenant_id = ? AND thread_id = ?`, tenantID, source.threadID).Scan(&sourceRunCount); err != nil {
@@ -172,7 +180,7 @@ func (s *Store) claimInteractionContinuationOnce(ctx context.Context, tenantID, 
 	if err != nil {
 		return err
 	}
-	if _, err := s.inheritRunPlanTx(ctx, tx, tenantID, sourceRunID, resumesRunID, retarget || childPlan != nil); err != nil {
+	if _, err := s.inheritRunPlanTx(ctx, tx, tenantID, sourceRunID, resumesRunID, retarget || childPlan != nil, false); err != nil {
 		return err
 	}
 	now := time.Now().Unix()

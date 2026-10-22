@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,23 +20,26 @@ import (
 	"selfmind/internal/gateway/api"
 )
 
-func TestMessageEndpointRejectsAddDirWithoutLoopbackControlAuth(t *testing.T) {
+func TestMessageEndpointRejectsAddDirWithoutTheVerifiedLocalCLI(t *testing.T) {
 	body, err := json.Marshal(api.MessageRequest{
 		Platform: "cli", Content: "inspect", ClientAdditionalRoots: []string{t.TempDir()},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(body))
-	request.RemoteAddr = "203.0.113.9:3000"
-	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
-	recorder := httptest.NewRecorder()
-	(&Server{LocalControlToken: "local-secret"}).Handler().ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
-	}
-	if !strings.Contains(recorder.Body.String(), "authenticated local CLI") {
-		t.Fatalf("actionable rejection missing: %s", recorder.Body.String())
+	for _, peer := range []LocalPeer{tcpPeer, refusedPeer} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/message", bytes.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.RemoteAddr = "127.0.0.1:3000"
+		request = request.WithContext(WithLocalPeer(request.Context(), peer))
+		recorder := httptest.NewRecorder()
+		(&Server{}).Handler().ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), "local control socket") {
+			t.Fatalf("actionable rejection missing: %s", recorder.Body.String())
+		}
 	}
 }
 
@@ -180,6 +184,56 @@ func TestSameCLIAdditionalRootsIgnoresWorkspaceBindings(t *testing.T) {
 	}
 	if !sameCLIAdditionalRoots(a, b) {
 		t.Fatal("workspace rebinding changed the CLI-root comparison")
+	}
+}
+
+// credential:read is decided per call, against the in-place credential writes
+// granting it enables. A persisted grant — no current path creates one; a
+// legacy row lives at most eight hours — must not become a lease capability
+// that skips that decision. Other persisted capabilities still apply.
+func TestLeaseIgnoresPersistedCredentialReadGrants(t *testing.T) {
+	ctx := context.Background()
+	store := controltest.NewStore(t)
+	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceRoot := t.TempDir()
+	workspace, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID,
+		Name: "workspace", LocalPath: workspaceRoot, AllowedRoots: []string{workspaceRoot},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range []string{executionenv.CapabilityCredentialRead, executionenv.CapabilityNetworkShared} {
+		if err := store.GrantExecutionCapability(ctx, identity.TenantID, identity.PersonID,
+			workspace.ID, capability, "legacy", "human:cli", time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: workspace.ID,
+		Title: "credential grant", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunWithOptions(ctx, task, "cli", "inspect", control.StartRunOptions{ExecutionRoots: workspaceRootBindings(workspace)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator := &RunCoordinator{srv: &Server{Control: store}}
+	lease, err := coordinator.materializeExecutionLease(ctx, identity, run, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(lease.ExecutionCapabilities, executionenv.CapabilityCredentialRead) {
+		t.Fatalf("a persisted credential:read grant became a lease capability: %#v", lease.ExecutionCapabilities)
+	}
+	// The constraint that must change the result: another persisted capability.
+	if !slices.Contains(lease.ExecutionCapabilities, executionenv.CapabilityNetworkShared) {
+		t.Fatalf("a persisted network:shared grant was dropped: %#v", lease.ExecutionCapabilities)
 	}
 }
 

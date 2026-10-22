@@ -69,16 +69,36 @@ func NewSkillLoader(skillsDir string, registry *Registry) *SkillLoader {
 
 // LoadAll 扫描 skillsDir 并加载所有有效的 skill 文件
 func (sl *SkillLoader) LoadAll() ([]SkillDefinition, error) {
-	var loaded []SkillDefinition
+	loaded, err := sl.loadTools()
+	if err != nil {
+		return nil, err
+	}
+	defs := make([]SkillDefinition, 0, len(loaded))
+	for _, skill := range loaded {
+		sl.registry.Register(skill.tool)
+		defs = append(defs, skill.def)
+	}
+	return defs, nil
+}
 
+// loadedSkill is one Skill's definition and its compatibility tool, read but
+// not registered anywhere.
+type loadedSkill struct {
+	def  SkillDefinition
+	tool *SkillTool
+}
+
+// loadTools reads every Skill in skillsDir without registering its tool.
+func (sl *SkillLoader) loadTools() ([]loadedSkill, error) {
 	entries, err := os.ReadDir(sl.skillsDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return loaded, nil
+			return nil, nil
 		}
 		return nil, fmt.Errorf("reading skills dir: %w", err)
 	}
 
+	var loaded []loadedSkill
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue
@@ -98,30 +118,30 @@ func (sl *SkillLoader) LoadAll() ([]SkillDefinition, error) {
 		} else {
 			continue
 		}
-		def, err := sl.LoadFile(path)
+		skill, err := loadSkillFile(path)
 		if err != nil {
 			log.Warn("failed to load skill file", "path", path, "error", err)
 			continue
 		}
-		loaded = append(loaded, def)
+		loaded = append(loaded, skill)
 	}
 	return loaded, nil
 }
 
-// LoadFile 加载单个 Markdown 文件，解析 front matter
-func (sl *SkillLoader) LoadFile(path string) (SkillDefinition, error) {
+// loadSkillFile 加载单个 Markdown 文件，解析 front matter
+func loadSkillFile(path string) (loadedSkill, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return SkillDefinition{}, err
+		return loadedSkill{}, err
 	}
 
 	// 解析 front matter（YAML between ---）
 	def, body, err := parseFrontMatter(string(data))
 	if err != nil {
-		return SkillDefinition{}, fmt.Errorf("front matter parse error: %w", err)
+		return loadedSkill{}, fmt.Errorf("front matter parse error: %w", err)
 	}
 	if err := validateSkillEnvironmentDeclarations(string(data)); err != nil {
-		return SkillDefinition{}, err
+		return loadedSkill{}, err
 	}
 	def.Source = path
 	if def.Name == "" {
@@ -134,8 +154,11 @@ func (sl *SkillLoader) LoadFile(path string) (SkillDefinition, error) {
 	if def.Description == "" {
 		def.Description = def.Name
 	}
-	if def.ToolName == "" {
-		def.ToolName = "skill:" + def.Name
+	// The address stays inside the skill: namespace whatever the front matter
+	// declares, so a Skill cannot replace another tool and a reload replaces
+	// exactly the tools Skills registered.
+	if !strings.HasPrefix(def.ToolName, skillToolPrefix) {
+		def.ToolName = skillToolPrefix + def.Name
 	}
 
 	// Keep the legacy dispatch address available during the presentation
@@ -143,9 +166,7 @@ func (sl *SkillLoader) LoadFile(path string) (SkillDefinition, error) {
 	// Slash/model activation converges on the typed activation service in P2;
 	// this hidden registration is only a rollback-safe compatibility surface.
 	steps := extractSkillSteps(body)
-	sl.registerSkillTool(def, body, steps)
-
-	return def, nil
+	return loadedSkill{def: def, tool: newSkillTool(def, body, steps)}, nil
 }
 
 // parseFrontMatter 提取 YAML front matter 和 Markdown body
@@ -362,8 +383,8 @@ func parseSimpleYAML(yaml string, def *SkillDefinition) ([]string, error) {
 	return unknown, nil
 }
 
-func (sl *SkillLoader) registerSkillTool(def SkillDefinition, body string, steps []string) {
-	tool := &SkillTool{
+func newSkillTool(def SkillDefinition, body string, steps []string) *SkillTool {
+	return &SkillTool{
 		BaseTool: BaseTool{
 			name:        def.ToolName,
 			description: def.Description,
@@ -381,11 +402,12 @@ func (sl *SkillLoader) registerSkillTool(def SkillDefinition, body string, steps
 		source:      def.Source,
 		versionHash: fmt.Sprintf("%x", sha256.Sum256([]byte(body))),
 	}
-	sl.registry.Register(tool)
 }
 
 // SkillTool is the hidden compatibility dispatch address created from one
 // Markdown Skill. It returns activation guidance and never executes scripts.
+// It is immutable: SkillToolManager registers one instance in every agent
+// worker's dispatcher.
 type SkillTool struct {
 	BaseTool
 	content     string
@@ -393,8 +415,6 @@ type SkillTool struct {
 	source      string
 	versionHash string
 }
-
-func (t *SkillTool) SetSkillSteps(steps []string) { t.steps = steps }
 
 func (t *SkillTool) Execute(args map[string]interface{}) (string, error) {
 	name := strings.TrimPrefix(t.Name(), "skill:")

@@ -8,13 +8,13 @@ import (
 	"time"
 )
 
-func TestPendingTurnChoiceBareClaimRequiresOneRecentChoice(t *testing.T) {
+func TestBareTurnChoiceIsScopedToItsEndpoint(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now().Truncate(time.Second)
-	create := func(label string) *PendingTurnChoice {
+	create := func(label, account, channel string) *PendingTurnChoice {
 		choice, err := store.CreatePendingTurnChoice(ctx, PendingTurnChoiceCreate{
-			TenantID: "default", PersonID: "person", AccountID: "account", Channel: "cli",
+			TenantID: "default", PersonID: "person", AccountID: account, Channel: channel,
 			RequestJSON: `{"content":"continue ` + label + `"}`,
 			Options: []TurnChoiceOption{
 				{Key: "1", Label: label, Action: "resume", TaskID: "task-1", RunID: "run-1"},
@@ -27,26 +27,50 @@ func TestPendingTurnChoiceBareClaimRequiresOneRecentChoice(t *testing.T) {
 		}
 		return choice
 	}
-	first := create("first")
-	claimed, option, err := store.ClaimPendingTurnChoice(ctx, "default", "person", "", "1", now, 30*time.Minute)
-	if err != nil {
-		t.Fatalf("bare claim: %v", err)
+	im := TurnChoiceEndpoint{AccountID: "account-im", Channel: "chat-one"}
+	first := create("first", im.AccountID, im.Channel)
+	for _, other := range []TurnChoiceEndpoint{
+		{AccountID: "account-cli", Channel: "cli-window-b"}, // another endpoint entirely
+		{AccountID: "account-cli", Channel: "chat-one"},     // same channel name, other account
+		{AccountID: "account-im", Channel: "chat-two"},      // same account, other chat
+		{AccountID: "account-im"},                           // no provable channel
+	} {
+		if _, err := store.PeekBareTurnChoice(ctx, "default", "person", other, now, 30*time.Minute); !errors.Is(err, ErrTurnChoiceNotFound) {
+			t.Fatalf("bare number on %+v saw another endpoint's choice: %v", other, err)
+		}
 	}
-	if claimed.ID != first.ID || option.RunID != "run-1" {
-		t.Fatalf("claimed=%+v option=%+v", claimed, option)
+	if _, err := store.PeekBareTurnChoice(ctx, "default", "other-person", im, now, 30*time.Minute); !errors.Is(err, ErrTurnChoiceNotFound) {
+		t.Fatalf("a stranger's bare number saw the choice: %v", err)
+	}
+	// Other endpoints' own questions do not make this endpoint ambiguous.
+	create("cli question", "account-cli", "cli-window-b")
+	create("other chat question", "account-im", "chat-two")
+	peeked, err := store.PeekBareTurnChoice(ctx, "default", "person", im, now, 30*time.Minute)
+	if err != nil || peeked.ID != first.ID {
+		t.Fatalf("bare peek = %+v, %v; want %s", peeked, err, first.ID)
+	}
+	claimed, option, err := store.ClaimPendingTurnChoice(ctx, "default", "person", peeked.ID, "1", now)
+	if err != nil || claimed.ID != first.ID || option.RunID != "run-1" {
+		t.Fatalf("claim of the peeked choice = %+v %+v, %v", claimed, option, err)
 	}
 
-	second := create("second")
-	third := create("third")
-	if _, _, err := store.ClaimPendingTurnChoice(ctx, "default", "person", "", "1", time.Now(), 30*time.Minute); !errors.Is(err, ErrTurnChoiceAmbiguous) {
+	second := create("second", im.AccountID, im.Channel)
+	third := create("third", im.AccountID, im.Channel)
+	if _, err := store.PeekBareTurnChoice(ctx, "default", "person", im, time.Now(), 30*time.Minute); !errors.Is(err, ErrTurnChoiceAmbiguous) {
 		t.Fatalf("bare ambiguous err=%v", err)
 	}
-	claimed, _, err = store.ClaimPendingTurnChoice(ctx, "default", "person", second.ID, "2", time.Now(), 30*time.Minute)
+	if _, err := store.PeekBareTurnChoice(ctx, "default", "person", im, time.Now().Add(31*time.Minute), 30*time.Minute); !errors.Is(err, ErrTurnChoiceNotFound) {
+		t.Fatalf("bare peek outside its window err=%v", err)
+	}
+	claimed, _, err = store.ClaimPendingTurnChoice(ctx, "default", "person", second.ID, "2", time.Now())
 	if err != nil || claimed.ID != second.ID {
 		t.Fatalf("named claim=%+v err=%v", claimed, err)
 	}
-	if _, _, err := store.ClaimPendingTurnChoice(ctx, "default", "other-person", third.ID, "1", time.Now(), 30*time.Minute); !errors.Is(err, ErrTurnChoiceNotFound) {
+	if _, _, err := store.ClaimPendingTurnChoice(ctx, "default", "other-person", third.ID, "1", time.Now()); !errors.Is(err, ErrTurnChoiceNotFound) {
 		t.Fatalf("foreign claim err=%v", err)
+	}
+	if _, _, err := store.ClaimPendingTurnChoice(ctx, "default", "person", "", "1", time.Now()); !errors.Is(err, ErrTurnChoiceNotFound) {
+		t.Fatalf("a claim without a named choice err=%v", err)
 	}
 }
 
@@ -64,7 +88,7 @@ func TestPendingTurnChoiceClaimIsSingleUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.ClaimPendingTurnChoice(ctx, "default", "person", choice.ID, "1", time.Now(), 30*time.Minute); err != nil {
+	if _, _, err := store.ClaimPendingTurnChoice(ctx, "default", "person", choice.ID, "1", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	var storedRequest string
@@ -74,7 +98,7 @@ func TestPendingTurnChoiceClaimIsSingleUse(t *testing.T) {
 	if storedRequest != "{}" {
 		t.Fatalf("claimed choice retained request snapshot: %q", storedRequest)
 	}
-	if _, _, err := store.ClaimPendingTurnChoice(ctx, "default", "person", choice.ID, "1", time.Now(), 30*time.Minute); !errors.Is(err, ErrTurnChoiceNotFound) {
+	if _, _, err := store.ClaimPendingTurnChoice(ctx, "default", "person", choice.ID, "1", time.Now()); !errors.Is(err, ErrTurnChoiceNotFound) {
 		t.Fatalf("second claim err=%v", err)
 	}
 }
@@ -132,7 +156,7 @@ func TestPendingTurnChoiceClaimIsSingleUseAcrossStoreConnections(t *testing.T) {
 		wg.Add(1)
 		go func(store *Store) {
 			defer wg.Done()
-			_, _, claimErr := store.ClaimPendingTurnChoice(context.Background(), "default", "person", choice.ID, "1", time.Now(), 30*time.Minute)
+			_, _, claimErr := store.ClaimPendingTurnChoice(context.Background(), "default", "person", choice.ID, "1", time.Now())
 			results <- claimErr
 		}(store)
 	}

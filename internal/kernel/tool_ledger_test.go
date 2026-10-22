@@ -54,9 +54,6 @@ func TestDispatchRetryClassificationUsesTrustedRegistration(t *testing.T) {
 			if !result.success || ledger.entry.RetryClass != tc.want || result.retryClass != tc.want {
 				t.Fatalf("result=%+v ledger=%+v want=%s", result, ledger.entry, tc.want)
 			}
-			if countsTowardPlanEvidence(tc.name, result.retryClass) != (tc.want != ToolRetryReadOnly) {
-				t.Fatal("planning and ledger classification disagree")
-			}
 		})
 	}
 }
@@ -81,6 +78,28 @@ func TestLedgerRecordsProvenObservationWithoutWideningReplay(t *testing.T) {
 			entry := ledger.entry
 			if !result.success || entry.EffectClass != tc.want || entry.RetryClass != ToolRetrySideEffect || entry.Strategy != "mutate" {
 				t.Fatalf("result=%+v entry=%+v want effect class %s", result, entry, tc.want)
+			}
+		})
+	}
+}
+
+func TestBookkeepingEffectDoesNotGrantReplay(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		metadata ToolExecutionMetadata
+		want     string
+	}{
+		{"builtin bookkeeping", ToolExecutionMetadata{Origin: "builtin", BookkeepingOnly: true}, ToolEffectBookkeeping},
+		{"external declaration", ToolExecutionMetadata{Origin: "external", BookkeepingOnly: true}, string(ToolRetrySideEffect)},
+		{"unclassified", ToolExecutionMetadata{BookkeepingOnly: true}, string(ToolRetrySideEffect)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ledger := &capturingToolLedger{}
+			ctx := WithToolLedger(WithTaskRuntimeContext(context.Background(), TaskRuntimeContext{RunID: "run-bookkeeping"}), ledger)
+			agent := &Agent{backend: registeredRetryBackend{metadata: tc.metadata}}
+			result := agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{ID: "call", Function: "new_tool", Args: `{"bookkeeping_only":true,"effect_class":"run_bookkeeping"}`})
+			if !result.success || result.retryClass != ToolRetrySideEffect || ledger.entry.EffectClass != tc.want {
+				t.Fatalf("result=%+v ledger=%+v", result, ledger.entry)
 			}
 		})
 	}

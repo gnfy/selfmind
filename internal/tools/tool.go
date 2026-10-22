@@ -27,10 +27,19 @@ type ContextTool interface {
 }
 
 // ToolArgumentNormalizer is a compatibility boundary that translates a
-// previously published argument shape into the tool's current public schema.
-// It runs before coercion and validation; unknown fields still fail closed.
+// previously published argument shape into the tool's current public schema,
+// or drops a field only the runtime writes that a model may echo from a
+// result. It runs before coercion and validation; other unknown fields still
+// fail closed.
 type ToolArgumentNormalizer interface {
 	NormalizeArguments(map[string]interface{}) (map[string]interface{}, error)
+}
+
+// argumentSchemaProvider retains a released input contract behind a smaller
+// model-facing Schema. It is private to built-ins: compatibility accepts old
+// fields, never manufactures judgments or widens execution authority.
+type argumentSchemaProvider interface {
+	argumentSchema() ToolSchema
 }
 
 // ContextFromArgs returns the authenticated run context installed by the
@@ -70,6 +79,11 @@ type ToolMetadata struct {
 	OperationClasses []OperationClass `json:"operation_classes,omitempty"`
 	TimeoutSeconds   int              `json:"timeout_seconds,omitempty"`
 	SearchText       string           `json:"search_text,omitempty"`
+	// BookkeepingOnly is a trusted built-in contract: the call may record
+	// runtime attribution but cannot execute the procedure, change its targets,
+	// grant authority, or create human/external waits. It grants no replay or
+	// parallel-execution permission and is never accepted from external tools.
+	BookkeepingOnly bool `json:"-"`
 }
 
 type MetadataProvider interface {
@@ -87,7 +101,11 @@ type toolExecutionPolicy struct {
 	Category         string
 	Risk             ToolRiskLevel
 	ReadOnly         bool
+	BookkeepingOnly  bool
 	OperationClasses []OperationClass
+	// ReadOnlyMarkedBy names the operator or person marking that made an
+	// external tool read-only for this call (see executionPolicyForCall).
+	ReadOnlyMarkedBy string
 }
 
 func executionPolicyForTool(t Tool) toolExecutionPolicy {
@@ -101,16 +119,19 @@ func executionPolicyForTool(t Tool) toolExecutionPolicy {
 	policy.Category = metadata.Category
 	policy.Risk = metadata.RiskLevel
 	policy.ReadOnly = metadata.ReadOnly
+	policy.BookkeepingOnly = policy.Origin == ToolSchemaOriginBuiltin && metadata.BookkeepingOnly
 	policy.OperationClasses = append([]OperationClass(nil), metadata.OperationClasses...)
 	return policy
 }
 
+// unclassifiedExternalToolCall reports an external tool that no operator or
+// person explicitly marked read-only. Its own metadata cannot classify it.
 func unclassifiedExternalToolCall(args map[string]interface{}) bool {
 	if args == nil {
 		return false
 	}
 	policy, ok := args[toolExecutionPolicyArg].(toolExecutionPolicy)
-	return ok && policy.Origin == ToolSchemaOriginExternal && !policy.ReadOnly
+	return ok && policy.Origin == ToolSchemaOriginExternal && policy.ReadOnlyMarkedBy == ""
 }
 
 // publicToolArgs returns the model-visible payload only. Top-level underscore
@@ -163,14 +184,19 @@ type BaseTool struct {
 func (b *BaseTool) Name() string        { return b.name }
 func (b *BaseTool) Description() string { return b.description }
 func (b *BaseTool) Schema() ToolSchema  { return b.schema }
+
+// Metadata returns the declared metadata with defaults filled into the copy.
+// It never writes: one tool instance can be registered in every agent
+// worker's dispatcher, and the workers read it concurrently.
 func (b *BaseTool) Metadata() ToolMetadata {
-	if b.metadata.Exposure == "" {
-		b.metadata.Exposure = ToolExposureDirect
+	metadata := b.metadata
+	if metadata.Exposure == "" {
+		metadata.Exposure = ToolExposureDirect
 	}
-	if b.metadata.RiskLevel == "" {
-		b.metadata.RiskLevel = ToolRiskMedium
+	if metadata.RiskLevel == "" {
+		metadata.RiskLevel = ToolRiskMedium
 	}
-	return b.metadata
+	return metadata
 }
 
 func (b *BaseTool) Execute(args map[string]interface{}) (string, error) {
@@ -308,63 +334,10 @@ func isDefaultParallelSafe(name string) bool {
 	}
 }
 
-// ValidateArgs checks that all required fields are present and types match.
-// Returns an error describing the first validation failure.
+// ValidateArgs reports independent schema failures in deterministic, bounded order.
 func ValidateArgs(schema ToolSchema, args map[string]interface{}) error {
-	return validateObject("", args, schema.Properties, schema.Required, schema.AdditionalProperties, true)
-}
-
-func validateObject(path string, value map[string]interface{}, properties map[string]PropertyDef, required []string, additional *bool, root bool) error {
-	for _, name := range required {
-		if _, ok := value[name]; !ok {
-			return fmt.Errorf("missing required parameter: %s — expected %s", joinParameterPath(path, name), expectedParameter(properties[name]))
-		}
-	}
-	for name, item := range value {
-		if root && strings.HasPrefix(name, "_") {
-			continue
-		}
-		def, ok := properties[name]
-		if !ok {
-			if additional != nil && !*additional {
-				return fmt.Errorf("unknown parameter: %s — this object accepts only %s", joinParameterPath(path, name), acceptedParameters(properties))
-			}
-			continue
-		}
-		if err := validateProperty(joinParameterPath(path, name), item, def); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validateProperty(path string, value interface{}, def PropertyDef) error {
-	if err := validateType(path, value, def.Type); err != nil {
-		return err
-	}
-	if len(def.Enum) > 0 {
-		text, ok := value.(string)
-		if !ok || !stringInList(text, def.Enum) {
-			return fmt.Errorf("parameter %s must be one of %s, got %q", path, strings.Join(def.Enum, ", "), text)
-		}
-	}
-	switch def.Type {
-	case "object":
-		object, ok := value.(map[string]interface{})
-		if ok {
-			return validateObject(path, object, def.Properties, def.Required, def.AdditionalProperties, false)
-		}
-	case "array":
-		items, ok := value.([]interface{})
-		if ok && def.Items != nil {
-			for index, item := range items {
-				if err := validateProperty(fmt.Sprintf("%s[%d]", path, index), item, *def.Items); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
+	_, err := checkToolArguments(schema, args, false, true)
+	return err
 }
 
 // expectedParameter says what a parameter's schema asks for, so the model can
@@ -458,62 +431,15 @@ func validateType(param string, val interface{}, expectedType string) error {
 	return nil
 }
 
-// CoerceArgs 将 string/bool/int 等动态类型强制转换为 schema 声明的类型
+// CoerceArgs preserves the published scalar and optional-null compatibility rules.
 func CoerceArgs(schema ToolSchema, args map[string]interface{}) (map[string]interface{}, error) {
-	return coerceObject("", args, schema.Properties, schema.AdditionalProperties, true)
-}
-
-func coerceObject(path string, args map[string]interface{}, properties map[string]PropertyDef, additional *bool, root bool) (map[string]interface{}, error) {
-	coerced := make(map[string]interface{}, len(args))
-	for name, value := range args {
-		if root && strings.HasPrefix(name, "_") {
-			coerced[name] = value
-			continue
-		}
-		def, ok := properties[name]
-		if !ok {
-			if additional != nil && !*additional {
-				return nil, fmt.Errorf("unknown parameter: %s — this object accepts only %s", joinParameterPath(path, name), acceptedParameters(properties))
-			}
-			// Open schemas preserve fields instead of silently discarding them.
-			coerced[name] = value
-			continue
-		}
-		item, err := coerceProperty(joinParameterPath(path, name), value, def)
-		if err != nil {
-			return nil, err
-		}
-		coerced[name] = item
-	}
-	return coerced, nil
-}
-
-func coerceProperty(path string, value interface{}, def PropertyDef) (interface{}, error) {
-	coerced, err := coerceValue(path, value, def.Type)
-	if err != nil {
-		return nil, err
-	}
-	switch def.Type {
-	case "object":
-		if object, ok := coerced.(map[string]interface{}); ok {
-			return coerceObject(path, object, def.Properties, def.AdditionalProperties, false)
-		}
-	case "array":
-		if items, ok := coerced.([]interface{}); ok && def.Items != nil {
-			out := make([]interface{}, len(items))
-			for index, item := range items {
-				out[index], err = coerceProperty(fmt.Sprintf("%s[%d]", path, index), item, *def.Items)
-				if err != nil {
-					return nil, err
-				}
-			}
-			return out, nil
-		}
-	}
-	return coerced, nil
+	return checkToolArguments(schema, args, true, false)
 }
 
 func coerceValue(param string, val interface{}, targetType string) (interface{}, error) {
+	if val == nil && targetType != "" && targetType != "null" {
+		return nil, fmt.Errorf("parameter %s cannot be null", param)
+	}
 	switch targetType {
 	case "integer":
 		switch v := val.(type) {

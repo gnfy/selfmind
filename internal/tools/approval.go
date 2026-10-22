@@ -77,6 +77,8 @@ type ToolApprovalRequest struct {
 	// and execution boundary. It lets a parked approval authorize only the same
 	// regenerated call after a daemon restart; display args remain redacted.
 	AuthorizationFingerprint string `json:"-"`
+	// Runtime-selected blockers, never inferred from the human-facing reason.
+	ExternalEffectClaimIDs []string `json:"external_effect_claim_ids,omitempty"`
 }
 
 // TriageStateUnavailable marks an ask that happened because smart-mode triage

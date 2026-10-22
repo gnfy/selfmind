@@ -14,17 +14,16 @@ import (
 // dedup key, and closing the old rows — is production code running against a
 // real control database.
 //
-// HasPlatform reports false so no run enqueues a delivery implicitly. A delivery
-// surface changes which notification paths a run takes, and the point of wiring
-// this only for cases that seed deliveries is to leave every other case's
-// behaviour unchanged. The recovery command reaches the sender directly, which
-// is the path under test.
+// Backlog-only cases keep HasPlatform false to preserve their notification
+// paths. delivery_enabled opts into ordinary gateway notices against a real
+// control store and an in-memory transport.
 type evalDeliverySender struct {
-	mu   sync.Mutex
-	sent []delivery.Message
+	mu      sync.Mutex
+	sent    []delivery.Message
+	enabled bool
 }
 
-func (s *evalDeliverySender) HasPlatform(string) bool { return false }
+func (s *evalDeliverySender) HasPlatform(string) bool { return s.enabled }
 
 func (s *evalDeliverySender) Send(ctx context.Context, msg delivery.Message) error {
 	_, err := s.SendWithReceipt(ctx, msg)
@@ -54,12 +53,12 @@ func (s *evalDeliverySender) Sent() []string {
 
 // newEvalDeliveryService returns a delivery service for cases that seed
 // deliveries, or nil for every other case so their notification paths stay
-// exactly as they are without one.
+// exactly as they are without one. delivery_enabled opts into notifications.
 func newEvalDeliveryService(c *Case, harness *runtimeHarness) *delivery.Service {
-	if c == nil || c.Setup == nil || len(c.Setup.Deliveries) == 0 || harness == nil || harness.controlStore == nil {
+	if c == nil || c.Setup == nil || (len(c.Setup.Deliveries) == 0 && !c.Setup.DeliveryEnabled) || harness == nil || harness.controlStore == nil {
 		return nil
 	}
-	sender := &evalDeliverySender{}
+	sender := &evalDeliverySender{enabled: c.Setup.DeliveryEnabled}
 	harness.deliverySender = sender
 	// A long poll interval keeps the background worker out of the way; the case
 	// drives recovery explicitly. Seeds carry their own age, so the default

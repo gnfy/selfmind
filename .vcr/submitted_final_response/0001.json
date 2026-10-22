@@ -1,0 +1,62 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user wants me to"
+    },
+    {
+      "reasoning_content": " read source.txt once"
+    },
+    {
+      "reasoning_content": " and report its exact"
+    },
+    {
+      "reasoning_content": " content, then use"
+    },
+    {
+      "reasoning_content": " finish_run"
+    },
+    {
+      "reasoning_content": " with status done and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " specified final_response."
+    },
+    {
+      "reasoning_content": "\n\nLet me read"
+    },
+    {
+      "reasoning_content": " the file first."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 11876,
+        "output_tokens": 64,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 11876,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 36,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "",
+          "Function": "read_file",
+          "Args": "{\"path\": \"source.txt\"}"
+        }
+      ]
+    }
+  ]
+}

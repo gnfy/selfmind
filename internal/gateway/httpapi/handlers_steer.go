@@ -41,15 +41,14 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "run_id and channel are required", http.StatusBadRequest)
 		return
 	}
-	identity, err := d.Control.ResolveOrCreateAccount(
-		r.Context(),
+	identity, err := d.resolveRequestIdentity(r,
 		d.tenantID(req.TenantID),
 		fallback(req.Platform, "cli"),
 		fallback(req.PlatformUserID, "local"),
 		req.DisplayName,
 	)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	active := d.coordinator().activeForRun(identity.PersonID, strings.TrimSpace(req.RunID))
@@ -77,8 +76,11 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 		PlatformUserID: fallback(req.PlatformUserID, active.PlatformUserID),
 		WorkspaceID:    active.WorkspaceID,
 		ExecutionRoots: active.ExecutionRoots,
-		ApprovalMode:   active.ApprovalMode,
-		Content:        text,
+		// Carry only the request's explicit mode. An unset mode is resolved
+		// when deferred guidance becomes new work; the active Run keeps its
+		// own frozen authority.
+		ApprovalMode: strings.TrimSpace(req.ApprovalMode),
+		Content:      text,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("persist steering: %w", err))
@@ -94,7 +96,7 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 	case active.Steer <- kernel.SteeringInput{ID: record.ID, Content: text, ContentHash: record.ContentHash}:
 		_ = d.Control.MarkSteeringClaimed(r.Context(), identity.TenantID, record.ID)
 	default:
-		_ = d.Control.MarkSteeringExpired(r.Context(), identity.TenantID, record.ID)
+		_, _ = d.Control.MarkSteeringExpired(r.Context(), identity.TenantID, record.ID)
 		writeError(w, http.StatusTooManyRequests, fmt.Errorf("steering buffer is full; try again in a moment"))
 		return
 	}
@@ -116,7 +118,7 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 // path falls back to the busy reply). active must be the coordinator's live
 // handle (its Steer channel is shared through the returned copy).
 func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityContext, active *activeRun, req api.MessageRequest) (api.MessageResponse, bool) {
-	if active == nil || active.Steer == nil {
+	if active == nil || active.Steer == nil || strings.TrimSpace(active.RunID) == "" {
 		return api.MessageResponse{}, false
 	}
 	text := strings.TrimSpace(req.Content)
@@ -129,7 +131,10 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 	// Same contract as the queue: import before acknowledging, so guidance that
 	// carries a file is not accepted with the file silently dropped.
 	steerAttachments := d.coordinator().importAttachments(ctx, identity, nil, req.Attachments)
-	record, err := d.Control.AcceptSteering(ctx, control.SteeringMessage{
+	// The fallback below may queue or refuse the input, which is safe only
+	// when a failed mailbox write left no live row behind.
+	mailboxCtx := exactWrite(ctx)
+	record, err := d.Control.AcceptSteering(mailboxCtx, control.SteeringMessage{
 		Attachments:    attachmentRefsFromAPI(steerAttachments),
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
@@ -143,8 +148,9 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 		// The roots this request froze, for when Main queues the input as its
 		// own work instead of applying it to this run.
 		ExecutionRoots: req.ExecutionRoots,
-		ApprovalMode:   fallback(req.ApprovalMode, active.ApprovalMode),
-		Content:        text,
+		// Only a mode this request itself named; never the active Run's.
+		ApprovalMode: req.ApprovalMode,
+		Content:      text,
 	})
 	if err != nil {
 		return api.MessageResponse{}, false
@@ -169,9 +175,27 @@ func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityC
 		}, true
 	default:
 		// Back-pressure: the caller's fallback (busy reply / durable queue)
-		// takes over; this row must not replay on top of that.
-		_ = d.Control.MarkSteeringExpired(ctx, identity.TenantID, record.ID)
-		return api.MessageResponse{}, false
+		// takes over; this row must not replay on top of that. Unless this
+		// expiry took the row out, the row admitted the input — it stays live
+		// and becomes follow-up work, or the Run's finalizer already deferred
+		// it to the queue or a consumption proof took it — so no second copy
+		// may be queued or refused.
+		expired, err := d.Control.MarkSteeringExpired(mailboxCtx, identity.TenantID, record.ID)
+		if err == nil && expired {
+			return api.MessageResponse{}, false
+		}
+		content := "Saved your update for run " + shortRunID(active.RunID) + "."
+		if err != nil {
+			log.Warn("steering back-pressure could not expire its mailbox row; keeping it as follow-up work",
+				"run_id", active.RunID, "steering_id", record.ID, "error", err)
+			content += " It has not reached the current execution yet."
+		}
+		return api.MessageResponse{
+			Identity: identity,
+			Content:  content,
+			Accepted: true,
+			Turn:     messageTurn("accepted", "running", "running", active.TaskID, active.RunID, content),
+		}, true
 	}
 }
 

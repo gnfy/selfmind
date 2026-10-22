@@ -34,6 +34,7 @@ type Message struct {
 	Kind       string `json:"kind,omitempty"`
 	ApprovalID string `json:"approval_id,omitempty"`
 	ClarifyID  string `json:"clarify_id,omitempty"`
+	ChoiceID   string `json:"choice_id,omitempty"`
 	PartIndex  int    `json:"part_index,omitempty"`
 	PartTotal  int    `json:"part_total,omitempty"`
 	// LogicalKey is a control-plane effect key used to replay a durable result
@@ -53,6 +54,9 @@ const KindApprovalResolution = "approval_resolution"
 // no native yes/no keyboard — the answer is free text, so senders render it as
 // plain text and the person's next non-command reply resolves it.
 const KindClarify = "clarify"
+
+// KindTurnChoice asks which work should receive an already saved input.
+const KindTurnChoice = "turn_choice"
 
 // KindFinalResult marks the terminal user-facing answer for a run. Keeping
 // final answers typed lets cross-endpoint continuity surface a missed result
@@ -87,6 +91,16 @@ type SessionRefreshError interface {
 	error
 	SessionRefreshRequired() bool
 }
+
+// UnconfirmedSendError records a send that may have been accepted but whose
+// receipt cannot be established. It is terminal for blind retry; the diagnostic
+// is retained separately from the delivery's effect certainty.
+type UnconfirmedSendError struct{ Cause error }
+
+func (e *UnconfirmedSendError) Error() string {
+	return fmt.Sprintf("send receipt unconfirmed: %v", e.Cause)
+}
+func (e *UnconfirmedSendError) Unwrap() error { return e.Cause }
 
 type Sender interface {
 	Send(ctx context.Context, msg Message) error
@@ -183,6 +197,8 @@ func (r *Router) SendWithNativeReceipt(ctx context.Context, msg Message) (bool, 
 }
 
 var ErrNoSender = fmt.Errorf("no outbound sender configured")
+
+var errEndpointUnbound = errors.New("delivery endpoint is no longer actively bound to this person; use a currently bound endpoint to recover the result")
 
 type Options struct {
 	MaxMessageChars int
@@ -301,11 +317,33 @@ func (s *Service) EnqueueAndTryAccepted(ctx context.Context, msg Message) (bool,
 	return accepted, err
 }
 
+// Enqueue records the message in the durable outbound queue and returns
+// without sending it: the service's loop delivers it and retries by its bounded
+// policy. It reports whether every part was recorded. Callers that must not
+// wait on a messaging platform — a queue drain that serves every person in
+// turn — use it instead of the try variants.
+func (s *Service) Enqueue(ctx context.Context, msg Message) (bool, error) {
+	accepted, _, err := s.enqueue(ctx, msg, false)
+	return accepted, err
+}
+
 func (s *Service) enqueueAndTry(ctx context.Context, msg Message) (bool, bool, error) {
+	return s.enqueue(ctx, msg, true)
+}
+
+func (s *Service) enqueue(ctx context.Context, msg Message, try bool) (bool, bool, error) {
 	if s == nil || s.store == nil {
 		return false, false, ErrNoSender
 	}
+	// One IM entry point may carry several Runs. Keep the exact work reference
+	// beside its notice, without deriving a target from the reply's prose.
+	if msg.RunID != "" {
+		msg.Content = "Run " + msg.RunID + "\n" + msg.Content
+	}
 	parts := splitMessage(msg.Content, s.opts.MaxMessageChars)
+	if msg.Kind == KindTurnChoice {
+		return s.enqueueTurnChoice(ctx, msg, parts, try)
+	}
 	var lastErr error
 	accepted := true
 	confirmed := true
@@ -334,6 +372,10 @@ func (s *Service) enqueueAndTry(ctx context.Context, msg Message) (bool, bool, e
 		if err != nil {
 			lastErr = err
 			accepted = false
+			confirmed = false
+			continue
+		}
+		if !try {
 			confirmed = false
 			continue
 		}
@@ -370,6 +412,9 @@ func (s *Service) loop(ctx context.Context) {
 }
 
 func (s *Service) flushDue(ctx context.Context) {
+	if err := s.store.RecoverStaleDeliveryClaims(ctx); err != nil {
+		return
+	}
 	deliveries, err := s.store.ListDueDeliveries(ctx, 50)
 	if err != nil {
 		return
@@ -396,26 +441,15 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 		return nil
 	}
 	if actionable, err := s.deliveryStillActionable(ctx, d); err != nil {
+		if errors.Is(err, errEndpointUnbound) {
+			return errors.Join(err, s.store.MarkDeliveryFailedPermanent(ctx, d.ID, err.Error()))
+		}
 		_ = s.store.MarkDeliveryAttempt(ctx, d.ID, false, tools.RedactSensitive(err.Error()), time.Now().Add(s.nextDelay(d.Attempts+1)))
 		return err
 	} else if !actionable {
-		return s.store.MarkDeliverySuperseded(ctx, d.ID, "approval is no longer pending")
+		return s.store.MarkDeliverySuperseded(ctx, d.ID, "human request is no longer pending")
 	}
-	msg := Message{
-		TenantID:       d.TenantID,
-		PersonID:       d.PersonID,
-		Platform:       d.Platform,
-		PlatformUserID: d.PlatformUserID,
-		Channel:        d.Channel,
-		TaskID:         d.TaskID,
-		RunID:          d.RunID,
-		Content:        d.Content,
-		Kind:           d.Kind,
-		ApprovalID:     d.ApprovalID,
-		ClarifyID:      d.ClarifyID,
-		PartIndex:      d.PartIndex,
-		PartTotal:      d.PartTotal,
-	}
+	msg := deliveryMessage(d)
 	confirmed := true
 	var nativeID string
 	if native, ok := s.sender.(SenderWithNativeReceipt); ok {
@@ -425,25 +459,16 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 	} else {
 		err = s.sender.Send(ctx, msg)
 	}
+	var unconfirmed *UnconfirmedSendError
+	if errors.As(err, &unconfirmed) {
+		if recordErr := s.store.MarkDeliverySentUnconfirmed(ctx, d.ID, tools.RedactSensitive(err.Error())); recordErr != nil {
+			return errors.Join(err, recordErr)
+		}
+		return err
+	}
+
 	if err == nil {
-		if !confirmed {
-			// Accepted by the platform but delivery is doubtful (e.g. stale
-			// iLink context_token). Terminal for the queue — retrying would
-			// reuse the same stale session and risk duplicates — but recorded
-			// distinctly so the attach digest can surface possibly-missed
-			// notifications.
-			return s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
-		}
-		if nativeID != "" {
-			if recordErr := s.store.MarkDeliverySentWithNativeID(ctx, d.ID, nativeID); recordErr != nil {
-				// The platform accepted the send. A failed receipt write makes
-				// the effect uncertain; never retry the outbound effect blindly.
-				_ = s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
-				return recordErr
-			}
-			return nil
-		}
-		return s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
+		return s.recordAcceptedDelivery(ctx, d.ID, confirmed, nativeID)
 	}
 	if err == ErrNoSender {
 		// No sender will ever appear for this row; retrying is futile and a
@@ -696,11 +721,14 @@ func shortRecoveryRef(value string) string {
 func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery) (string, error) {
 	actionable, err := s.deliveryStillActionable(ctx, d)
 	if err != nil {
+		if errors.Is(err, errEndpointUnbound) {
+			return "failed", errors.Join(err, s.store.MarkDeliveryFailedPermanent(ctx, d.ID, err.Error()))
+		}
 		_ = s.store.MarkDeliveryPendingSession(ctx, d.ID, tools.RedactSensitive(err.Error()))
 		return "pending_session", err
 	}
 	if !actionable {
-		if err := s.store.MarkDeliverySuperseded(ctx, d.ID, "approval is no longer pending"); err != nil {
+		if err := s.store.MarkDeliverySuperseded(ctx, d.ID, "human request is no longer pending"); err != nil {
 			return "", err
 		}
 		return "superseded", nil
@@ -717,19 +745,17 @@ func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery
 		err = s.sender.Send(ctx, msg)
 	}
 	if err == nil && confirmed {
-		if nativeID != "" {
-			if err := s.store.MarkDeliverySentWithNativeID(ctx, d.ID, nativeID); err != nil {
-				_ = s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
-				return "", err
-			}
-		} else if err := s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{}); err != nil {
-			return "", err
+		if err := s.recordAcceptedDelivery(ctx, d.ID, true, nativeID); err != nil {
+			return "sent_unconfirmed", err
 		}
 		return "sent", nil
 	}
 	if err == nil {
-		_ = s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
-		return "sent_unconfirmed", nil
+		return "sent_unconfirmed", s.recordAcceptedDelivery(ctx, d.ID, false, "")
+	}
+	var unconfirmed *UnconfirmedSendError
+	if errors.As(err, &unconfirmed) {
+		return "sent_unconfirmed", errors.Join(err, s.store.MarkDeliverySentUnconfirmed(ctx, d.ID, tools.RedactSensitive(err.Error())))
 	}
 	redacted := tools.RedactSensitive(err.Error())
 	if sessionRefreshRequired(err) {
@@ -746,7 +772,30 @@ func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery
 }
 
 func (s *Service) deliveryStillActionable(ctx context.Context, d *control.Delivery) (bool, error) {
+	if d != nil && strings.TrimSpace(d.PlatformUserID) != "" {
+		accounts, err := s.store.ListAccountsByPerson(ctx, d.TenantID, d.PersonID)
+		if err != nil {
+			return false, err
+		}
+		bound := false
+		for _, account := range accounts {
+			if account.Platform == d.Platform && account.PlatformUserID == d.PlatformUserID {
+				bound = true
+				break
+			}
+		}
+		if !bound {
+			return false, errEndpointUnbound
+		}
+	}
 	if d == nil || strings.TrimSpace(d.Kind) != KindApproval {
+		if choiceID := choiceIDForDelivery(d); choiceID != "" || (d != nil && d.Kind == KindTurnChoice) {
+			_, err := s.store.PeekPendingTurnChoice(ctx, d.TenantID, d.PersonID, choiceID, time.Now())
+			if errors.Is(err, control.ErrTurnChoiceNotFound) {
+				return false, nil
+			}
+			return err == nil, err
+		}
 		return true, nil
 	}
 	return s.store.IsApprovalPending(ctx, d.TenantID, d.PersonID, d.ApprovalID)
@@ -765,6 +814,7 @@ func deliveryMessage(d *control.Delivery) Message {
 		Kind:           d.Kind,
 		ApprovalID:     d.ApprovalID,
 		ClarifyID:      d.ClarifyID,
+		ChoiceID:       choiceIDForDelivery(d),
 		PartIndex:      d.PartIndex,
 		PartTotal:      d.PartTotal,
 	}
@@ -786,7 +836,7 @@ func sessionRefreshRequired(err error) bool {
 
 func catchUpWorthyKind(kind string) bool {
 	switch strings.TrimSpace(kind) {
-	case KindFinalResult, KindApproval, KindApprovalResolution, KindClarify, "external_watch", KindRecovery, "maintenance_health":
+	case KindFinalResult, KindApproval, KindApprovalResolution, KindClarify, KindTurnChoice, "external_watch", KindRecovery, "maintenance_health":
 		return true
 	default:
 		return false

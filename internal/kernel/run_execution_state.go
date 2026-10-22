@@ -52,3 +52,24 @@ func CurrentRunExecutionPlan(ctx context.Context) (version int, stepID string) {
 	defer state.mu.RUnlock()
 	return state.planVersion, state.planStepID
 }
+
+// A selected current Run Plan is the initial accepted version. Historical
+// context cannot seed another Run's cursor, and later receipts take precedence.
+func seedSelectedPlanCursor(ctx context.Context) {
+	if version, _ := CurrentRunExecutionPlan(ctx); version != 0 {
+		return
+	}
+	runtime, ok := TaskRuntimeContextFromContext(ctx)
+	scope, scoped := ToolInvocationScopeFromContext(ctx)
+	if !ok || !scoped || scope.RunID == "" || runtime.RunID != scope.RunID || runtime.PlanVersion < 1 || len(runtime.Plan) == 0 {
+		return
+	}
+	stepID := ""
+	for _, step := range runtime.Plan {
+		if step.Status == "in_progress" {
+			stepID = step.StepID
+			break
+		}
+	}
+	UpdateRunExecutionPlan(ctx, runtime.PlanVersion, stepID)
+}

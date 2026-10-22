@@ -58,11 +58,9 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	}
 
 	client := gwclient.New(res.URL, token)
-	if a.gatewayTargetIsLocal() {
-		if localToken, tokenErr := gatewayrt.ReadLocalControlToken(a.gatewayDataDir()); tokenErr == nil {
-			client.SetLocalControlToken(localToken)
-		}
-	}
+	// The TUI is the person's own CLI: every request it makes travels on the
+	// local control socket, where the daemon verifies this process.
+	client.HTTP = a.gatewayHTTPClient()
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	ctrl := tui.NewController(displayProvider, displayModel, cfg, tenantID)
 	ctrl.SetModelManagerOnly(a.modelManagerOnly)
@@ -143,6 +141,7 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// Re-attach to a mid-flight daemon run (G0-d): when the attach digest
 	// reports one, the controller watches its live events without a user turn.
 	ctrl.SetRunWatcher(client.WatchRun)
+	ctrl.SetRunViewer(client.ViewRun)
 	// Attach digest (G0-c). Ordering is load-bearing: the digest must be
 	// fetched BEFORE the first presence beat below, because that beat stamps
 	// accounts.last_seen_at — the very "since last CLI presence" anchor the

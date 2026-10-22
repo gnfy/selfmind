@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"selfmind/internal/executionenv"
+	"selfmind/internal/tools/sandbox"
 )
 
 // scratchExecScope installs a run scope with a lease so exec calls resolve run
@@ -29,6 +30,7 @@ func scratchExecScope(t *testing.T) (tenant string, workspace string) {
 	workspace = t.TempDir()
 	tenant = "tenant-scratch-" + t.Name()
 	cleanup := SetExecutionScope(tenant, ExecutionScope{
+		Runtime:       NewExecutionRuntime("", executionenv.RuntimeRoot(), sandbox.PrivateState{}, nil),
 		TenantID:      tenant,
 		PersonID:      "person-scratch",
 		WorkspaceID:   "ws-scratch",

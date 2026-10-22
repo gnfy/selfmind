@@ -76,11 +76,14 @@ type ApprovalBacklogStats struct {
 // describe automatic policy stages; this separate stock/flow view prevents
 // comparing escalations and approvals as if they shared one denominator.
 type ApprovalDecisionFunnel struct {
-	Requested         int
-	Statuses          map[string]int
-	DecisionChoices   map[string]int
-	Tools             map[string]int
-	AverageResponseMS int64
+	Requested           int
+	Statuses            map[string]int
+	DecisionChoices     map[string]int
+	Tools               map[string]int
+	AverageResponseMS   int64
+	MeasuredResponses   int64
+	ResponseMS          int64
+	ResponseUnavailable int
 }
 
 func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, personID string, since time.Time) (ApprovalDecisionFunnel, error) {
@@ -89,7 +92,7 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT status, COALESCE(decision_id, ''),
 		COALESCE(CASE WHEN json_valid(COALESCE(payload_json, '')) THEN json_extract(payload_json, '$.tool') ELSE '' END, ''),
-		created_at, updated_at
+		created_at, COALESCE(decision_recorded_at, 0)
 		FROM approval_requests
 		WHERE tenant_id = ? AND person_id = ? AND created_at >= ?`,
 		normalizeTenant(tenantID), strings.TrimSpace(personID), since.Unix())
@@ -101,8 +104,8 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 	var responseCount int64
 	for rows.Next() {
 		var status, decision, tool string
-		var created, updated int64
-		if err := rows.Scan(&status, &decision, &tool, &created, &updated); err != nil {
+		var created, decided int64
+		if err := rows.Scan(&status, &decision, &tool, &created, &decided); err != nil {
 			return funnel, err
 		}
 		funnel.Requested++
@@ -114,9 +117,13 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 			tool = "unknown"
 		}
 		funnel.Tools[tool]++
-		if status != "pending" && updated >= created {
-			responseTotal += (updated - created) * 1000
-			responseCount++
+		if status == "approved" || status == "rejected" {
+			if decided > 0 && decided >= created {
+				responseTotal += (decided - created) * 1000
+				responseCount++
+			} else {
+				funnel.ResponseUnavailable++
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -125,6 +132,7 @@ func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, perso
 	if responseCount > 0 {
 		funnel.AverageResponseMS = responseTotal / responseCount
 	}
+	funnel.MeasuredResponses, funnel.ResponseMS = responseCount, responseTotal
 	return funnel, nil
 }
 
@@ -360,17 +368,51 @@ func (s *Store) ParkOrphanedApprovals(ctx context.Context) ([]ApprovalRequest, e
 // decision. Recovery uses the absence of this claim to find a decision that was
 // durably recorded just before the daemon died.
 func (s *Store) ClaimApprovalDecision(ctx context.Context, tenantID, approvalID, runID string) (*ApprovalRequest, bool, error) {
+	return s.ClaimApprovalDecisionReleasing(ctx, tenantID, approvalID, runID, nil)
+}
+
+// ClaimApprovalDecisionReleasing claims the decision and, in the same
+// transaction, puts back the loop checkpoint the live wait armed (see
+// WaitRelease). A crash therefore leaves either the unclaimed decision, which
+// recovery resumes from its exact pending-call checkpoint, or a claimed one
+// whose checkpoint no longer names a pending call. With a nil release it is the
+// plain claim.
+func (s *Store) ClaimApprovalDecisionReleasing(ctx context.Context, tenantID, approvalID, runID string, release *WaitRelease) (*ApprovalRequest, bool, error) {
 	now := time.Now().Unix()
-	row := s.db.QueryRowContext(ctx,
-		`UPDATE approval_requests SET waiter_state = 'claimed', decision_claimed_at = ?, claimed_by_run_id = ?, updated_at = ?
+	tenantID, approvalID = normalizeTenant(tenantID), strings.TrimSpace(approvalID)
+	const claim = `UPDATE approval_requests SET waiter_state = 'claimed', decision_claimed_at = ?, claimed_by_run_id = ?, updated_at = ?
 		 WHERE tenant_id = ? AND id = ? AND status IN ('approved', 'rejected')
 		   AND COALESCE(waiter_state, 'live') = 'live' AND COALESCE(decision_claimed_at, 0) = 0
-		 RETURNING `+approvalSelectColumns,
-		now, strings.TrimSpace(runID), now, normalizeTenant(tenantID), strings.TrimSpace(approvalID))
-	item, err := scanApprovalRequest(row)
+		 RETURNING `
+	if release == nil {
+		row := s.db.QueryRowContext(ctx, claim+approvalSelectColumns, now, strings.TrimSpace(runID), now, tenantID, approvalID)
+		item, err := scanApprovalRequest(row)
+		if err == nil {
+			return &item, true, nil
+		}
+		if err != sql.ErrNoRows {
+			return nil, false, err
+		}
+		current, err := s.GetApprovalRequest(ctx, tenantID, approvalID)
+		return current, false, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	item, err := scanApprovalRequest(tx.QueryRowContext(ctx, claim+approvalSelectColumns, now, strings.TrimSpace(runID), now, tenantID, approvalID))
 	if err == nil {
+		if err := releaseHumanWait(ctx, tx, item.TenantID, item.PersonID, item.RunID, LoopCheckpointWaitApproval, item.ID, *release); err != nil {
+			_ = tx.Rollback()
+			return nil, false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, false, err
+		}
 		return &item, true, nil
 	}
+	// control.db has one connection: end the transaction before reading again.
+	_ = tx.Rollback()
 	if err != sql.ErrNoRows {
 		return nil, false, err
 	}
@@ -514,33 +556,39 @@ func (s *Store) EnqueueRecoveredApprovalContinuation(ctx context.Context, approv
 		return nil, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var status string
+	var status, parkedAdmission string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT status
+		`SELECT status, COALESCE((SELECT r.admission_json FROM runs r
+		   WHERE r.tenant_id = a.tenant_id AND r.id = a.run_id AND r.person_id = a.person_id), '')
 		 FROM approval_requests a WHERE a.tenant_id = ? AND a.id = ? AND a.person_id = ? AND a.thread_id = ?
 		   AND COALESCE(a.resume_queue_id, '') = '' AND a.status IN ('approved', 'rejected')
 		   AND COALESCE(a.decision_recorded_at, 0) > 0
 		   AND COALESCE(a.waiter_state, 'live') = 'live' AND COALESCE(a.decision_claimed_at, 0) = 0
 		   AND EXISTS (SELECT 1 FROM runs r WHERE r.id = a.run_id AND r.status = 'interrupted')`,
-		q.TenantID, approvalID, q.PersonID, q.TaskID).Scan(&status); err != nil {
+		q.TenantID, approvalID, q.PersonID, q.TaskID).Scan(&status, &parkedAdmission); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, false, nil
 		}
 		return nil, false, err
 	}
+	admissionJSON, err := parkedRunAdmissionJSON(q.Admission, parkedAdmission)
+	if err != nil {
+		return nil, false, err
+	}
 	notBefore := int64(0)
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, idempotency_key, class, priority, not_before, status, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, idempotency_key, class, priority, not_before, status, created_at, admission_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
-		q.WorkspaceID, rootsJSON, q.TaskID, q.ApprovalID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.WorkspaceID, rootsJSON, q.TaskID, q.ApprovalID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix(), admissionJSON)
 	if err != nil {
 		return nil, false, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM task_queue WHERE tenant_id = ? AND idempotency_key = ?`, q.TenantID, q.IdempotencyKey).Scan(&q.ID); err != nil {
 		return nil, false, err
 	}
+	q.setStoredAdmission(admissionJSON)
 	authState, authExpires := "", int64(0)
 	if status == "approved" {
 		authState = "available"
@@ -803,32 +851,43 @@ func (s *Store) RespondParkedApprovalAndEnqueue(ctx context.Context, tenantID, p
 		return nil, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var waiterState, currentStatus, owner, taskID string
+	var waiterState, currentStatus, owner, taskID, runID, parkedAdmission string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COALESCE(waiter_state, 'live'), status, person_id, COALESCE(thread_id, '')
+		`SELECT COALESCE(waiter_state, 'live'), status, person_id, COALESCE(thread_id, ''), COALESCE(run_id,''),
+		        COALESCE((SELECT r.admission_json FROM runs r WHERE r.tenant_id = approval_requests.tenant_id
+		          AND r.id = approval_requests.run_id AND r.person_id = approval_requests.person_id), '')
 		 FROM approval_requests WHERE tenant_id = ? AND id = ?`, tenantID, approvalID,
-	).Scan(&waiterState, &currentStatus, &owner, &taskID); err != nil {
+	).Scan(&waiterState, &currentStatus, &owner, &taskID, &runID, &parkedAdmission); err != nil {
 		return nil, nil, err
 	}
 	if owner != personID || currentStatus != "pending" || waiterState != "parked" || taskID != q.TaskID {
 		return nil, nil, fmt.Errorf("approval request %s is not an answerable parked request", approvalID)
+	}
+	if q.ReplyToRunID != "" && q.ReplyToRunID != runID {
+		return nil, nil, fmt.Errorf("approval continuation cannot name a different Run")
+	}
+	q.ReplyToRunID = runID
+	admissionJSON, err := parkedRunAdmissionJSON(q.Admission, parkedAdmission)
+	if err != nil {
+		return nil, nil, err
 	}
 	notBefore := q.NotBefore.Unix()
 	if q.NotBefore.IsZero() {
 		notBefore = 0
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, idempotency_key, class, priority, not_before, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, thread_id, approval_id, reply_to_run_id, idempotency_key, class, priority, not_before, status, created_at, admission_json)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
-		q.WorkspaceID, rootsJSON, q.TaskID, q.ApprovalID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.WorkspaceID, rootsJSON, q.TaskID, q.ApprovalID, q.ReplyToRunID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix(), admissionJSON)
 	if err != nil {
 		return nil, nil, err
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM task_queue WHERE tenant_id = ? AND idempotency_key = ?`, tenantID, q.IdempotencyKey).Scan(&q.ID); err != nil {
 		return nil, nil, err
 	}
+	q.setStoredAdmission(admissionJSON)
 	now := time.Now().Unix()
 	authorizationState, authorizationExpiry := "", int64(0)
 	if status == "approved" {

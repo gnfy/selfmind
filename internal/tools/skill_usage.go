@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"selfmind/internal/platform/atomicfile"
 )
 
 const (
@@ -73,15 +75,9 @@ func saveSkillUsageForDir(skillsDir string, records map[string]SkillUsageRecord)
 	if err != nil {
 		return err
 	}
-	tmp := usageFilePath(skillsDir) + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, usageFilePath(skillsDir)); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	// An exclusive temporary file, not a predictable `.tmp` name a confined
+	// command could have planted.
+	return atomicfile.Write(usageFilePath(skillsDir), data, 0644)
 }
 
 func updateSkillUsageForDir(skillsDir, name string, mutator func(*SkillUsageRecord)) error {

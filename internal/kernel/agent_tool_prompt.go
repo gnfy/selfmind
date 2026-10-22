@@ -33,14 +33,19 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 	sb.WriteString("Use only capabilities provided for this run. Do not invent tool names or imply that an unavailable action was performed.\n")
 	if profile != PromptProfileBackgroundReview {
 		if hasAny("read_file", "write_file", "patch", "apply_patch", "search_files", "list_files", "ls_r", "terminal", "execute_code", "run_command") {
-			sb.WriteString("Use the available local tools when the request requires workspace files, command output, project state, or system status.\n")
+			sb.WriteString("Use local tools for workspace facts. Read files with read_file; search text with search_files output_mode=content; list names with ls_r. Batch independent file reads with batch_read or independent native calls. Use terminal for commands and queries those tools cannot express; dependent operations wait for prior results.\n")
 		}
 		sb.WriteString("When a tool returns an error, treat the error as diagnostic evidence. Inspect the relevant state available to you, change the next action when evidence changes, and report a real blocker instead of repeating the same call.\n")
 		if hasAny("terminal", "execute_code", "run_command") {
 			sb.WriteString("For command failures, inspect the working directory, files, environment, authentication, runtime, and command help before choosing an override or retry.\n")
+			sb.WriteString("Use the runtime-provided process environment and network route by default. Execution facts report the network mode and proxy projection. Choose a per-command route override when the current user request or current diagnostics establish its need.\n")
 		}
 		if names["verify"] {
-			sb.WriteString("Use verify for checks that establish completion: it executes the command and records verification evidence. A command run through terminal is recorded as ordinary execution, not a verification check. Run the relevant check after the final change.\n")
+			sb.WriteString("Use verify for checks that establish completion: it executes the command and records verification evidence. A command run through terminal is recorded as ordinary execution, not a verification check. Run the relevant check after the final change. Skip verify for pure read-only queries or direct answers when no plan step requires verification.\n")
+			sb.WriteString("Command exit status is an execution fact, not a business verdict. An inspection can finish with a grounded negative finding; a required repair condition stays unresolved. Plan criteria describe the user's requested deliverable: do not turn a repair into an inspection to close it, or rerun a conclusive inspection merely to obtain exit zero.\n")
+			if names["finish_run"] {
+				sb.WriteString("For negative or inconclusive findings, cite verify evidence in finish_run assessments (result, evidence_refs, reason). Runtime resolves the condition and target; do not duplicate them.\n")
+			}
 			sb.WriteString("Verification shell commands stop on unhandled errors and failed pipelines. Use the tool's timeout instead of assuming a timeout executable is installed; do not hide a check's exit status behind an echo, output filter, or unconditional success.\n")
 		}
 		if names["update_plan"] {
@@ -50,7 +55,7 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 			}
 		}
 		if names["finish_run"] {
-			sb.WriteString("For non-trivial tool-using work that creates durable task state, call finish_run with the structured outcome after the work and plan are resolved. A successful finish is final. If completion preconditions reject it, correct the plan or verification before one bounded retry. Skip it for direct answers and ordinary explanations.\n")
+			sb.WriteString("For non-trivial tool-using work that creates durable task state, call finish_run after observing the work results. Supply an explicit status and write the complete final reply once in final_response, including the final changed steps in plan_patch rather than first sending a final update_plan. Omit the patch when no Plan changes. A separate summary and repeated lists are unnecessary when that body is ready. An accepted submission is saved and shown without another generation; do not send a second copy afterward. A summary or progress narration is not the complete reply. A successful finish is final. Correct refused input without rerunning work; obtain new evidence only for an actual missing or stale completion condition. Skip it for direct answers and ordinary explanations.\n")
 		}
 		if names["tool_search"] {
 			sb.WriteString("Use tool_search when you need a registered capability that is not currently active. A result activates matching deferred tools for later calls in this run.\n")
@@ -116,11 +121,11 @@ func buildToolUsePrompt(defs []map[string]interface{}, native bool, strategy Tas
 }
 
 func planToolGuidance(strategy TaskStrategy) string {
-	const boundary = "Call update_plan by itself; do not batch it with reads or other tools because it changes the work-unit boundary. Only finish_run may follow the final snapshot in the same response. "
-	const planStepDiscipline = "Every call replaces the prior plan, so send the complete snapshot. Update it at meaningful progress or scope changes, not around every tool call. Report the actual state of each step and resolve every step before a done outcome. Existing step IDs preserve execution attribution; work-unit IDs need not be repeated.\n"
+	const boundary = "Submit the initial Plan separately so you can read its accepted identities before choosing actions. Later leading update_plan calls may share a response with work when only existing step statuses advance within the same Work Unit, goal, scope and acceptance conditions. Runtime commits the complete accepted Plan before sequential tool checks. Changed scope, reopened or cancelled work, failure, a second Plan update or pending user input holds later actions for a new decision. At completion, submit final changed steps with the complete reply in finish_run; do not spend a separate turn restating final progress. Keep work_select and queue_user_input separate from other tools. "
+	const planStepDiscipline = "Use mode=patch for changed step_id/status entries after a Plan exists; omitted steps stay unchanged. First plans, adding steps and reordering use snapshot mode (the compatible default). Results always carry the full accepted Plan. Update at meaningful progress or scope changes, not around every tool call. Main states statuses explicitly, preserves acceptance conditions and resolves every necessary step before done. Existing step IDs preserve execution attribution; work-unit IDs need not be repeated.\n"
 	// planTriggers replaces an abstract test the model had to interpret with
 	// the concrete situations that call for a plan.
-	const planTriggers = "Plan when the work spans several actions over a long horizon, has ordered phases or dependencies, carries ambiguity worth outlining before acting, answers more than one request at once, or grows extra steps while you work. "
+	const planTriggers = "Main decides whether a visible Plan helps manage dependencies, ambiguity or a long horizon. Tool count and read/write classification do not decide this. Preserve existing Plans and explicit user planning or acceptance requirements. "
 	switch strategy.normalized().PlanPolicy {
 	case PlanPolicyDisabled:
 		return "Do not call update_plan for this turn.\n"
@@ -131,19 +136,8 @@ func planToolGuidance(strategy TaskStrategy) string {
 		// when …" wording read as a reason not to plan, and it said nothing
 		// about WHEN. The decision stays the model's; only its timing and its
 		// triggers are stated.
-		return boundary + "When this work will take multiple visible steps, call update_plan BEFORE the first action tool so the person can see the shape of the work from the start; a single-step turn needs no plan. " + planTriggers + planStepDiscipline
+		return boundary + "Use update_plan when a Plan is useful; a bounded investigation or small change may proceed directly. When you choose to plan, outline the work before its dependent actions. " + planTriggers + planStepDiscipline
 	}
-}
-
-// planGuidanceEscalationNudge carries the PlanPolicyRequired wording into a Run
-// whose system prompt was composed once, before the work proved multi-step. It
-// states the observed evidence, hands over the same required wording the
-// composer would have written, and keeps completion available so the escalation
-// cannot turn into busywork or block a finish.
-func planGuidanceEscalationNudge(strategy TaskStrategy, planEvidenceTools int) string {
-	return fmt.Sprintf("SelfMind observed %d substantive tool action(s) in this run and no visible plan, so this work is multi-step in practice. ", planEvidenceTools) +
-		planToolGuidance(strategy.WithPlanRequired()) +
-		"Do not perform extra tool work for the plan itself: describe the work already done and what genuinely remains, then continue. If only one step remains, send a one-step snapshot and finish normally.\n"
 }
 
 // planStaleReminder tells the model that its visible plan has not moved for a
@@ -153,5 +147,5 @@ func planStaleReminder(actionsSinceUpdate int, openSteps []string) string {
 	if len(openSteps) > 0 {
 		first = strings.TrimSpace(openSteps[0])
 	}
-	return fmt.Sprintf("SelfMind: the visible plan was last updated %d tool action(s) ago and still has %d open step(s), starting with %q. If the work has moved on, send a complete update_plan snapshot with the real progress in the same response as your next action; if the plan is still accurate, just continue. Do not do extra tool work for the plan.\n", actionsSinceUpdate, len(openSteps), first)
+	return fmt.Sprintf("SelfMind: the visible plan was last updated %d tool action(s) ago and still has %d open step(s), starting with %q. If the work has moved on, send update_plan with the real progress (mode=patch for changed steps) using the Plan tool's ordering contract; if the plan is still accurate, just continue. Do not do extra tool work for the plan.\n", actionsSinceUpdate, len(openSteps), first)
 }

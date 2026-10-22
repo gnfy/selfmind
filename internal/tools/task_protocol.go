@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"selfmind/internal/kernel"
+	"selfmind/internal/verification"
 )
 
 type planProjectionSinkContextKey struct{}
@@ -27,11 +28,12 @@ type PlanWorkUnitIdentity struct {
 }
 
 type PlanProjectionResult struct {
-	AcceptanceReview []string               `json:"acceptance_review,omitempty"`
-	Plan             PlanState              `json:"plan"`
-	Version          int                    `json:"version"`
-	Changed          bool                   `json:"changed"`
-	WorkUnits        []PlanWorkUnitIdentity `json:"work_units,omitempty"`
+	ClosureFacts     *verification.ClosureFacts `json:"closure_facts,omitempty"`
+	AcceptanceReview []string                   `json:"acceptance_review,omitempty"`
+	Plan             PlanState                  `json:"plan"`
+	Version          int                        `json:"version"`
+	Changed          bool                       `json:"changed"`
+	WorkUnits        []PlanWorkUnitIdentity     `json:"work_units,omitempty"`
 }
 
 // RunPlanProjection is the deep persistence seam for plan versioning,
@@ -47,6 +49,9 @@ type PlanProjectionSink func(context.Context, []PlanStep) ([]PlanWorkUnitIdentit
 type legacyPlanProjection struct{ sink PlanProjectionSink }
 
 func (l legacyPlanProjection) Project(ctx context.Context, state PlanState) (PlanProjectionResult, error) {
+	if state.Mode == "patch" {
+		return PlanProjectionResult{}, fmt.Errorf("patch mode requires the durable versioned Plan adapter")
+	}
 	units, err := l.sink(ctx, state.Plan)
 	return PlanProjectionResult{Plan: state, Changed: true, WorkUnits: units}, err
 }
@@ -88,6 +93,8 @@ type PlanStore struct {
 }
 
 type PlanState struct {
+	// Mode controls input expansion only; every receipt remains a full snapshot.
+	Mode        string     `json:"-"`
 	Explanation string     `json:"explanation,omitempty"`
 	Plan        []PlanStep `json:"plan"`
 }
@@ -96,6 +103,10 @@ type PlanStep struct {
 	CancellationDisposition string `json:"cancellation_disposition,omitempty"`
 	CancellationReason      string `json:"cancellation_reason,omitempty"`
 	UserTakeoverQuote       string `json:"user_takeover_quote,omitempty"`
+	ReplacementStepID       string `json:"replacement_step_id,omitempty"`
+	ScopeChangeQuote        string `json:"scope_change_quote,omitempty"`
+	// Result-only: the input a quote came from (plan_provenance.go).
+	CancellationAuthorizedBy *kernel.PlanQuoteOrigin `json:"cancellation_authorized_by,omitempty"`
 
 	StepID                 string `json:"step_id,omitempty"`
 	Step                   string `json:"step"`
@@ -126,41 +137,44 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 	return &PlanTool{
 		BaseTool: BaseTool{
 			name:        "update_plan",
-			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work; do not use for one-shot answers, small code examples, simple commands, or direct explanations. Include every step on every update, keep exactly one step in_progress while work is active, and resolve all steps before finishing successfully. Plan the work, not the reply: the final answer is not a step, so do not add one such as reporting the result or writing the conclusion.",
+			description: "Maintain an outcome plan for multi-step work. Use mode=patch with changed step_id/status entries; omitted steps stay unchanged. First plans, adding or reordering steps use snapshot (compatible default). Submit the first snapshot alone and use server-issued ids. Receipts return the full accepted Plan. Main judges status, cancellation and evidence sufficiency; keep necessary work open. Use declared cancellation/reuse fields; resolve necessary work before done.",
 			schema: ToolSchema{
 				Type:                 "object",
 				AdditionalProperties: rejectAdditionalProperties(),
 				Properties: map[string]PropertyDef{
+					"mode": {Type: "string", Enum: []string{"snapshot", "patch"}, Description: "snapshot (default): list every step; patch: change named current steps and preserve the rest. Runtime checks the selected version."},
 					"explanation": {
 						Type:        "string",
 						Description: "Optional short reason for the plan update.",
 					},
 					"plan": {
 						Type:        "array",
-						Description: "The complete ordered plan snapshot, including unchanged and completed steps. This replaces the previous snapshot; it is not a partial patch.",
+						Description: "Snapshot mode: all steps in order, each with explicit status (pending, in_progress, completed, or cancelled). Patch mode: changed current steps only, each with step_id and explicit status; omission preserves other steps. First plans and new steps require step text and status.",
 						Items: &PropertyDef{
 							Type:                 "object",
 							AdditionalProperties: rejectAdditionalProperties(),
 							Properties: map[string]PropertyDef{
 								"step_id": {
 									Type:        "string",
-									Description: "Stable step id returned by an earlier update_plan result. Echo it when updating or reordering that step; never invent one.",
+									Description: "Stable step id returned by an earlier update_plan result. Echo it when updating or reordering that step; never invent one. The first plan has none: leave it out (ids sent in a first plan are ignored).",
 								},
 								"step": {
 									Type:        "string",
-									Description: "A concise task step. Required for a new step; omission with an exact server-issued step_id preserves the existing text.",
+									Description: "A concise task step. Required for every step of the first plan and for any new step. Omit it only when echoing a step_id that an earlier update_plan result issued and the wording is unchanged; omission then preserves the stored text.",
 								},
 								"cancellation_disposition": {Type: "string", Enum: []string{"not_required", "user_takeover", "unfinished"}, Description: "Main's assessment against the original goal and user corrections. Cancel only work no longer necessary (not_required), or explicitly taken over by the user (user_takeover). A blocked necessary step is unfinished and remains pending, not resolved. Omission also keeps a cancelled obligation pending."},
 								"cancellation_reason":      {Type: "string", Description: "Why this step is no longer necessary or within the user's explicit takeover scope. Suggesting the user do the work is not a takeover."},
-								"user_takeover_quote":      {Type: "string", Description: "Exact quote of the actual user's explicit takeover instruction, required for user_takeover. Never quote your own suggestion, a tool result or daemon-originated text."},
+								"replacement_step_id":      {Type: "string", Description: "For not_required: an exact step id in this Plan that is completed and covers this step. The replacement repeats this step's established success_criteria exactly and keeps its required verification; for a step planned without success_criteria, the replacement states its own. A preparation or failed check does not replace the requested result."},
+								"scope_change_quote":       {Type: "string", Description: "For not_required without a completed replacement: actual user text establishing the changed or limited scope, copied exactly from one user input, never including any part of a question: the whole user message, one whole sentence of it, or a span of at least two words and eight letters (a CJK character counts twice). Explain why that instruction makes this step unnecessary. Runtime verifies quote provenance; Main judges its meaning."},
+								"user_takeover_quote":      {Type: "string", Description: "Exact quote of the actual user's explicit takeover instruction, required for user_takeover, never including any part of a question: the whole user message, one whole sentence of it, or a span of at least two words and eight letters (a CJK character counts twice). Never quote your own suggestion, a tool result or daemon-originated text."},
 								"status": {
 									Type:        "string",
-									Description: "One of pending, in_progress, completed, cancelled.",
+									Description: "Required on every step entry in both snapshot and patch modes. One of pending, in_progress, completed, cancelled.",
 									Enum:        []string{"pending", "in_progress", "completed", "cancelled"},
 								},
 								"success_criteria": {
 									Type:        "string",
-									Description: "Observable condition that proves this step is complete. State what would be true, not what you will do. Omission preserves this step's existing criterion. Judge completion against the original condition; explain a user-authorized scope change instead of weakening it to fit the result.",
+									Description: "Observable condition that proves this step is complete. State what would be true, not what you will do. For an existing step omit it unless the criterion changes; omission preserves the stored criterion. Judge completion against the original condition; explain a user-authorized scope change instead of weakening it to fit the result.",
 								},
 								// The wording used to be "True ONLY when this step
 								// cannot be considered complete without executable
@@ -178,12 +192,12 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 								// the step.
 								"verification_required": {
 									Type:        "boolean",
-									Description: "True only on the single plan step that owns a distinct acceptance condition requiring successful verify evidence. Keep that same step in_progress across failed attempts and replacements. Leave false on diagnostic attempts and on separate retry or recheck steps for the same condition; different conditions may each set true.",
+									Description: "True only when this milestone requires a successful executed check. verify or an explicitly associated confirmed command observation can supply it. Static inspection/reporting uses false and may complete with a grounded negative finding. Do not drop a required repair gate or create a retry milestone to escape it. On an existing step omit this field to keep the stored requirement.",
 									Default:     false,
 								},
 								"reuse_prior_verification": {
 									Type:        "boolean",
-									Description: "On an exact Run continuation only: mark a completed required check as satisfied by its unchanged, successful prior verification after judging that it still covers this step. The runtime checks the exact source and rejects a changed criterion or target, a different scope, or a file change recorded in this run; a read-only look first does not. Omit success_criteria or repeat it exactly. Otherwise run verify again.",
+									Description: "On an exact Run continuation only: Main may adopt an unchanged successful prior check with a reason. The runtime checks direct source provenance, criterion, scope and recorded changes to the check's declared inputs across waits; unrelated writes do not invalidate explicitly independent checks. Omit success_criteria or repeat it exactly. Otherwise run verify with this step_id again.",
 									Default:     false,
 								},
 								"reuse_reason": {
@@ -216,16 +230,25 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 }
 
 func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
+	mode := taskStringArg(args, "mode")
+	if mode != "" && mode != "snapshot" && mode != "patch" {
+		return "", fmt.Errorf("mode must be snapshot or patch")
+	}
 	steps, err := planStepsFromArgs(args["plan"])
 	if err != nil {
 		return "", err
 	}
 	projection := runPlanProjectionFromArgs(args)
+	if mode == "patch" && projection == nil {
+		return "", fmt.Errorf("patch mode requires a durable current Run Plan")
+	}
 	inProgress := 0
 	for i := range steps {
 		steps[i].Step = strings.TrimSpace(steps[i].Step)
 		steps[i].Status = strings.TrimSpace(steps[i].Status)
-		if steps[i].Step == "" && (steps[i].StepID == "" || projection == nil) {
+		// With a durable plan the runtime decides: only it knows whether a step
+		// id can keep this entry's text, so it names the repair (see below).
+		if steps[i].Step == "" && projection == nil {
 			return "", fmt.Errorf("plan[%d].step is required", i)
 		}
 		switch steps[i].Status {
@@ -242,6 +265,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	}
 
 	state := PlanState{
+		Mode:        mode,
 		Explanation: taskStringArg(args, "explanation"),
 		Plan:        steps,
 	}
@@ -249,10 +273,19 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	planVersion := 0
 	var workUnits []PlanWorkUnitIdentity
 	var acceptanceReview []string
+	var closureFacts *verification.ClosureFacts
 	if projection != nil {
 		projected, projectionErr := projection.Project(ContextFromArgs(args), state)
 		err = projectionErr
 		if err != nil {
+			var version interface{ CurrentPlanVersion() int }
+			if errors.As(err, &version) {
+				hint := "Inspect the current Plan, then reconcile it with a complete snapshot. Version matching is runtime-owned."
+				if version.CurrentPlanVersion() == 0 {
+					hint = "Submit the initial complete Plan with mode=\"snapshot\" (each step requires step text and status) before using mode=\"patch\"."
+				}
+				return "", newStableToolError(err, "plan_version_changed", "stale_precondition", err.Error(), hint)
+			}
 			var cancellation interface{ PlanCancellationPrecondition() bool }
 			if errors.As(err, &cancellation) {
 				return "", newStableToolError(err, "plan_cancellation_unresolved", "stale_precondition", err.Error(), "Keep necessary unfinished work pending. For a legitimate cancellation supply Main's disposition and reason; user_takeover also requires an exact quote from the actual user's instruction.")
@@ -260,17 +293,16 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 			var verification interface{ PlanVerificationPrecondition() bool }
 			if errors.As(err, &verification) && verification.PlanVerificationPrecondition() {
 				return "", newStableToolError(err, "plan_verification_required", "stale_precondition", err.Error(),
-					"Keep the current work unit open and follow each step's next action. verify binds to the in_progress verification_required step, so make an unbound step in_progress before verifying it; when correcting a bound check, preserve criterion and target, cite its evidence id in replaces and explain the method correction in reason. Then submit the completed plan snapshot.")
+					"Keep the current work unit open and follow each step's next action. verify can bind directly to an owned step_id without a Plan transition. When prior reuse is offered, Main must assess sufficiency and submit reuse_prior_verification=true with reuse_reason on that completed step; explanation alone is not adoption. For a replacement, preserve criterion and target, cite the evidence id in replaces and explain the method correction in reason. Then submit the complete plan snapshot.")
+			}
+			var textRequired interface{ PlanStepTextRequired() (int, bool) }
+			if errors.As(err, &textRequired) {
+				index, firstPlan := textRequired.PlanStepTextRequired()
+				return "", planStepTextRequiredError(err, index, firstPlan)
 			}
 			var staleStep interface{ CurrentPlanStepIDs() []string }
 			if errors.As(err, &staleStep) {
-				current := staleStep.CurrentPlanStepIDs()
-				safeMessage := "The supplied step_id is stale for the current run."
-				if len(current) > 0 {
-					safeMessage += " Current step_id values: " + strings.Join(current, ", ") + "."
-				} else {
-					safeMessage += " Omit step_id so this run can create its first durable plan snapshot."
-				}
+				safeMessage := staleStepReceipt(err, staleStep.CurrentPlanStepIDs())
 				return "", newStableToolError(err, "stale_plan_step", "stale_precondition", safeMessage,
 					"Replace the stale id with the matching server-issued id, or omit it only for a genuinely new step.")
 			}
@@ -299,6 +331,7 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		planVersion = projected.Version
 		workUnits = projected.WorkUnits
 		acceptanceReview = projected.AcceptanceReview
+		closureFacts = projected.ClosureFacts
 		currentStepID := ""
 		for _, step := range steps {
 			if step.Status == "in_progress" {
@@ -331,7 +364,10 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		PlanVersion      int                    `json:"plan_version,omitempty"`
 		AcceptanceReview []string               `json:"acceptance_review,omitempty"`
 		WorkUnits        []PlanWorkUnitIdentity `json:"work_units,omitempty"`
-	}{PlanState: state, Changed: changed, PlanVersion: planVersion, WorkUnits: workUnits, AcceptanceReview: acceptanceReview})
+		// Append derived hints after the canonical Plan: legacy cassette
+		// identities are bound in first-occurrence order within this receipt.
+		ClosureFacts *verification.ClosureFacts `json:"closure_facts,omitempty"`
+	}{ClosureFacts: closureFacts, PlanState: state, Changed: changed, PlanVersion: planVersion, WorkUnits: workUnits, AcceptanceReview: acceptanceReview})
 	return string(data), nil
 }
 
@@ -390,11 +426,49 @@ func samePlanSteps(a, b []PlanStep) bool {
 	}
 	for i := range a {
 		if a[i].StepID != b[i].StepID || a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].SuccessCriteria != b[i].SuccessCriteria || a[i].VerificationRequired != b[i].VerificationRequired || a[i].ReusePriorVerification != b[i].ReusePriorVerification || a[i].ReuseReason != b[i].ReuseReason ||
-			a[i].CancellationDisposition != b[i].CancellationDisposition || a[i].CancellationReason != b[i].CancellationReason || a[i].UserTakeoverQuote != b[i].UserTakeoverQuote || a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
+			a[i].CancellationDisposition != b[i].CancellationDisposition || a[i].CancellationReason != b[i].CancellationReason || a[i].UserTakeoverQuote != b[i].UserTakeoverQuote || a[i].ReplacementStepID != b[i].ReplacementStepID || a[i].ScopeChangeQuote != b[i].ScopeChangeQuote || a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
 			return false
 		}
 	}
 	return true
+}
+
+// planStepTextRequiredError words the refusal of an entry that has no text. In a
+// Run's first plan no step_id can refer to a stored step (the runtime ignores
+// the ids it was sent), so the repair is the whole plan with every step's text;
+// later, an entry without a step_id is a new step and has no stored text to keep.
+func planStepTextRequiredError(err error, index int, firstPlan bool) error {
+	if firstPlan {
+		return newStableToolError(err, "plan_step_text_required", "invalid_input",
+			fmt.Sprintf("plan[%d].step is required: this run has no plan yet, so a step_id cannot refer to a stored step (ids are ignored in a first plan).", index),
+			"Send the complete plan again: every step with its text, and without step_id.")
+	}
+	return newStableToolError(err, "plan_step_text_required", "invalid_input",
+		fmt.Sprintf("plan[%d].step is required: with no step_id the entry is a new step and has no stored text to keep.", index),
+		"Give a new step its text, or echo the exact step_id an earlier update_plan result issued for an existing step.")
+}
+
+// staleStepReceipt words the refusal for a step_id this Run never issued. With
+// the Run's step listing it says which legal id belongs to which step, so the
+// model maps by what a step is rather than guessing among opaque ids; an error
+// that carries only ids falls back to listing them.
+func staleStepReceipt(err error, current []string) string {
+	message := "The supplied step_id is stale for the current run."
+	var located interface{ StalePlanEntry() (int, string) }
+	if errors.As(err, &located) {
+		index, supplied := located.StalePlanEntry()
+		message = fmt.Sprintf("plan[%d].step_id %q is stale for the current run.", index, supplied)
+	}
+	if len(current) == 0 {
+		return message + " Omit step_id so this run can create its first durable plan snapshot."
+	}
+	var described interface{ CurrentPlanStepListing() string }
+	if errors.As(err, &described) {
+		if listing := described.CurrentPlanStepListing(); listing != "" {
+			return message + " Current steps (step_id [status] step): " + listing + "."
+		}
+	}
+	return message + " Current step_id values: " + strings.Join(current, ", ") + "."
 }
 
 func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
@@ -409,6 +483,7 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 			steps = append(steps, PlanStep{
 				StepID:                  taskStringArg(obj, "step_id"),
 				CancellationDisposition: taskStringArg(obj, "cancellation_disposition"), CancellationReason: taskStringArg(obj, "cancellation_reason"), UserTakeoverQuote: taskStringArg(obj, "user_takeover_quote"),
+				ReplacementStepID: taskStringArg(obj, "replacement_step_id"), ScopeChangeQuote: taskStringArg(obj, "scope_change_quote"),
 				Step:                   taskStringArg(obj, "step"),
 				Status:                 taskStringArg(obj, "status"),
 				SuccessCriteria:        taskStringArg(obj, "success_criteria"),
@@ -440,173 +515,6 @@ func planKey(args map[string]interface{}) string {
 		return tenantID
 	}
 	return "default"
-}
-
-type FinishRunTool struct {
-	BaseTool
-	store *PlanStore
-}
-
-var finishRunStatuses = []string{
-	"done", "blocked", "failed", "running", "waiting_external", "waiting_user", "needs_approval",
-}
-
-func validFinishRunStatus(status string) bool {
-	for _, allowed := range finishRunStatuses {
-		if status == allowed {
-			return true
-		}
-	}
-	return false
-}
-
-func NewFinishRunTool() *FinishRunTool {
-	return NewFinishRunToolWithStore(nil)
-}
-
-func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
-	return &FinishRunTool{
-		BaseTool: BaseTool{
-			name:        "finish_run",
-			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, waiting on a registered external watch, prepared and waiting for the user's go-ahead (waiting_user), or needs approval. It may follow the final update_plan in the same response.",
-			schema: ToolSchema{
-				Type:                 "object",
-				AdditionalProperties: rejectAdditionalProperties(),
-				Properties: map[string]PropertyDef{
-					"status": {
-						Type: "string",
-						// User-owned lifecycle states such as cancelled and archived
-						// deliberately do not belong here. They are available only
-						// through explicit gateway controls, never a model tool call.
-						Description: "Task status. Cancellation and archival are user controls and are not valid finish_run outcomes.",
-						Enum:        append([]string(nil), finishRunStatuses...),
-					},
-					"summary": {
-						Type:        "string",
-						Description: "Short user-facing summary.",
-					},
-					"done": {
-						Type:        "array",
-						Description: "Completed items.",
-						Items:       &PropertyDef{Type: "string"},
-					},
-					"next_steps": {
-						Type:        "array",
-						Description: "Remaining or suggested next steps.",
-						Items:       &PropertyDef{Type: "string"},
-					},
-					"files": {
-						Type:        "array",
-						Description: "Files or artifacts touched.",
-						Items:       &PropertyDef{Type: "string"},
-					},
-					"tests": {
-						Type:        "array",
-						Description: "Verification performed.",
-						Items:       &PropertyDef{Type: "string"},
-					},
-					"risks": {
-						Type:        "array",
-						Description: "Known risks or blockers.",
-						Items:       &PropertyDef{Type: "string"},
-					},
-					"need_approve": {
-						Type:        "boolean",
-						Description: "Whether user approval is needed.",
-					},
-				},
-				Required: []string{"status", "summary"},
-			},
-			metadata: ToolMetadata{
-				Category:  "task",
-				RiskLevel: ToolRiskLow,
-			},
-		},
-		store: store,
-	}
-}
-
-func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
-	status := strings.TrimSpace(taskStringArg(args, "status"))
-	if status == "" {
-		status = "done"
-	}
-	if !validFinishRunStatus(status) {
-		return "", fmt.Errorf("status must be one of %s", strings.Join(finishRunStatuses, ", "))
-	}
-	if status == "needs_approval" {
-		status = "blocked"
-		args["need_approve"] = true
-	}
-	summary := strings.TrimSpace(taskStringArg(args, "summary"))
-	if summary == "" {
-		return "", fmt.Errorf("summary is required")
-	}
-	key := planKey(args)
-	projection := runPlanProjectionFromArgs(args)
-	if status == "done" && projection != nil {
-		if err := projection.ValidateCompletion(ContextFromArgs(args)); err != nil {
-			var precondition interface{ CompletionPrecondition() bool }
-			if errors.As(err, &precondition) && precondition.CompletionPrecondition() {
-				return "", completionPreconditionFailure(err)
-			}
-			return "", err
-		}
-	}
-	if status == "done" && projection == nil && t.store != nil {
-		if plan, ok := t.store.Get(key); ok {
-			var unresolved []string
-			for _, step := range plan.Plan {
-				if step.Status != "completed" && step.Status != "cancelled" {
-					unresolved = append(unresolved, step.Step)
-				}
-			}
-			if len(unresolved) > 0 {
-				return "", completionPreconditionFailure(fmt.Errorf("successful run still has unresolved plan steps: %s; call update_plan with the complete plan snapshot before finish_run", strings.Join(unresolved, "; ")))
-			}
-		}
-	}
-	out := map[string]interface{}{
-		"status":       status,
-		"summary":      summary,
-		"done":         taskStringSliceArg(args, "done"),
-		"next_steps":   taskStringSliceArg(args, "next_steps"),
-		"files":        taskStringSliceArg(args, "files"),
-		"tests":        taskStringSliceArg(args, "tests"),
-		"risks":        taskStringSliceArg(args, "risks"),
-		"need_approve": taskBoolArg(args, "need_approve"),
-	}
-	if reason := finishRunCompletionReason(status); reason != "" {
-		out["completion_reason"] = reason
-	}
-	data, _ := json.Marshal(out)
-	if t.store != nil {
-		t.store.Purge(key)
-	}
-	return string(data), nil
-}
-
-func completionPreconditionFailure(err error) error {
-	return newStableToolRecoveryError(err, "completion_precondition", "stale_precondition", err.Error(),
-		"Resolve the outstanding plan or verification requirement. One corrected finish_run attempt is available after a changed plan or successful verification; unchanged retries are refused.",
-		"preparation", "after_state_change", "not_dispatched", false)
-}
-
-func finishRunCompletionReason(status string) string {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "done", "completed":
-		return "completed"
-	case "waiting_external":
-		return "waiting_external"
-	case "waiting_user":
-		return "waiting_user"
-	case "blocked":
-		return "blocked"
-	case "failed":
-		return "failed"
-	default:
-		return ""
-	}
 }
 
 type ToolSearchTool struct {

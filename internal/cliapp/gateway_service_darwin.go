@@ -128,6 +128,9 @@ func launchdErrorDetail(err error) string {
 }
 
 func gatewayServiceInstall(configPath string, previousPID int, parent []string) (gatewayServiceInstallReceipt, error) {
+	if err := requireServiceHome("install the background service"); err != nil {
+		return gatewayServiceInstallReceipt{}, err
+	}
 	command, err := resolvedGatewayServiceCommand(configPath)
 	if err != nil {
 		return gatewayServiceInstallReceipt{}, err
@@ -257,6 +260,9 @@ func gatewayServiceUninstall() (bool, string, error) {
 	} else if err != nil {
 		return false, "", err
 	}
+	if err := requireServiceHome("remove the background service"); err != nil {
+		return true, "", err
+	}
 	_ = runLaunchctl(context.Background(), "bootout", launchdDomain()+"/"+gatewayLaunchdLabel)
 	if err := os.Remove(plistPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return true, "", fmt.Errorf("remove launchd service: %w", err)
@@ -274,6 +280,9 @@ func gatewayServiceStartIfInstalled(configPath string) (bool, string, error) {
 		return false, "", nil
 	} else if err != nil {
 		return false, "", err
+	}
+	if err := requireServiceHome("start the background service"); err != nil {
+		return true, "", err
 	}
 	loaded, err := gatewayServiceLoaded()
 	if err != nil {
@@ -312,6 +321,9 @@ func gatewayServiceRestartIfInstalled(configPath string) (bool, string, error) {
 	} else if err != nil {
 		return false, "", err
 	}
+	if err := requireServiceHome("restart the background service"); err != nil {
+		return true, "", err
+	}
 	if err := rotateInstalledLaunchdLog(home); err != nil {
 		return true, "", err
 	}
@@ -336,6 +348,9 @@ func gatewayServiceStopIfInstalled() (bool, string, error) {
 	if err != nil || !installed {
 		return installed, "", err
 	}
+	if err := requireServiceHome("stop the background service"); err != nil {
+		return true, "", err
+	}
 	if err := runLaunchctl(context.Background(), "bootout", launchdDomain()+"/"+gatewayLaunchdLabel); err != nil {
 		return true, "", err
 	}
@@ -346,7 +361,11 @@ func gatewayServiceSupported() bool {
 	return true
 }
 
-func gatewayServicePreflight() error { return nil }
+// The guard runs before anything is shut down, so a refused install changes
+// nothing, not even the Gateway of the HOME that asked.
+func gatewayServicePreflight() error {
+	return requireServiceHome("change the background service")
+}
 
 func gatewayServiceHealthy() bool {
 	status, err := inspectLaunchdJob(context.Background(), launchdDomain()+"/"+gatewayLaunchdLabel)

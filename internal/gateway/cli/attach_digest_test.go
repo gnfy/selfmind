@@ -48,8 +48,7 @@ func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
 		"While you were away:",
 		"✔ 2 tasks finished: Ship the report, Fix the build",
 		"✖ 1 task stopped early: Refactor parser (use /resume to continue)",
-		"Still needs attention:",
-		"⚠ 1 approval waiting: [terminal] command=rm -rf build — destructive command — interactive choices restored below",
+		"Pending: 1 approval — choices restored below",
 		"⚠ 1 push may not have reached weixin (see /status)",
 	} {
 		if !strings.Contains(text, want) {
@@ -78,13 +77,8 @@ func TestStartupDigestLabelsOlderUnresolvedWorkWithoutAwayClaim(t *testing.T) {
 	if strings.Contains(text, "While you were away:") || strings.Contains(text, "stopped early") {
 		t.Fatalf("older unresolved work must not be presented as a new away event:\n%s", text)
 	}
-	for _, want := range []string{
-		"Still needs attention:",
-		"↻ 1 earlier run still needs attention: Implement binary search in Go (use /resume to continue)",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("unresolved digest missing %q:\n%s", want, text)
-		}
+	if text != "History: earlier runs available — /resume" {
+		t.Fatalf("legacy unresolved digest = %q", text)
 	}
 }
 
@@ -103,6 +97,68 @@ func TestStartupDigestEmptyRendersNothing(t *testing.T) {
 	}
 }
 
+func TestStartupDigestForeignApprovalHasOneActionableNotice(t *testing.T) {
+	m := NewController("", "", nil, "").model
+	m.channel = "new-session"
+	m.startupDigest = &api.DigestResponse{PendingApprovals: []api.DigestApproval{{
+		ID: "apr-old", Channel: "closed-session", Tool: "terminal", Target: "git push",
+	}}}
+	m.maybeShowStartupDigest(100)
+	if len(m.messages) != 0 {
+		t.Fatalf("approval must appear once in the live notice, not also in history: %+v", m.messages)
+	}
+	if m.approvalPrompt != nil || m.thinking {
+		t.Fatal("an earlier session's approval must not capture this session's input")
+	}
+	for _, want := range []string{"Pending: 1 approval", "another session", "/approvals", "/approve <n|id>"} {
+		if !strings.Contains(m.statusMsg, want) {
+			t.Fatalf("notice missing %q: %q", want, m.statusMsg)
+		}
+	}
+	m.otherSessionApprovalResolved("apr-old")
+	if m.statusMsg != "" {
+		t.Fatalf("answered approval still visible: %q", m.statusMsg)
+	}
+}
+
+func TestStartupDigestLegacyHistoryDoesNotClaimExactCount(t *testing.T) {
+	items := make([]api.DigestTask, 10)
+	for i := range items {
+		items[i] = api.DigestTask{Title: "a long\nmultiline task title", Status: "waiting_user"}
+	}
+	text := formatStartupDigest(&api.DigestResponse{UnresolvedTasks: items}, "")
+	if text != "History: earlier runs available — /resume" {
+		t.Fatalf("legacy capped history must remain compact without inventing a total: %q", text)
+	}
+}
+
+func TestStartupDigestUsesFullResumableCount(t *testing.T) {
+	count := 36
+	digest := &api.DigestResponse{
+		ResumableRunCount: &count,
+		UnresolvedTasks:   make([]api.DigestTask, 10),
+	}
+	if got := formatStartupDigest(digest, ""); got != "History: 36 runs available to resume — /resume" {
+		t.Fatalf("capped history was mistaken for the full count: %q", got)
+	}
+	digest.UnresolvedTasks = nil
+	if digest.Empty() || formatStartupDigest(digest, "") == "" {
+		t.Fatal("a full count must remain visible even without a history page")
+	}
+	count = 0
+	digest.UnresolvedTasks = []api.DigestTask{{Title: "waiting for approval"}}
+	if got := formatStartupDigest(digest, ""); got != "" {
+		t.Fatalf("pending waits must not also be counted as resumable history: %q", got)
+	}
+}
+
+func TestStartupDigestFlattensMultilineAwayTitles(t *testing.T) {
+	digest := &api.DigestResponse{FinishedTasks: []api.DigestTask{{Title: "Check\n\t a different project"}}}
+	if got := formatStartupDigest(digest, ""); got != "While you were away:\n✔ 1 task finished: Check a different project" {
+		t.Fatalf("stored title broke the startup hierarchy: %q", got)
+	}
+}
+
 // TestStartupDigestAttachesToActiveRun: an active run in the digest must (1)
 // announce the attach, (2) flip the running-state flags so the composer
 // behaves as if a run is active, and (3) start the run watcher.
@@ -111,11 +167,11 @@ func TestStartupDigestAttachesToActiveRun(t *testing.T) {
 	c.SetClientMode(true)
 	watcherStarted := make(chan struct{})
 	var watchedRunID string
-	c.SetRunWatcher(func(ctx context.Context, runID string, observer httpapi.StreamObserver) string {
+	c.SetRunWatcher(func(ctx context.Context, runID string, observer httpapi.StreamObserver) (api.RunObservation, error) {
 		watchedRunID = runID
 		close(watcherStarted)
 		<-ctx.Done()
-		return ""
+		return api.RunObservation{}, ctx.Err()
 	})
 	c.SetStartupDigest(&api.DigestResponse{
 		ActiveRun: &api.DigestActiveRun{RunID: "r9", TaskID: "t9", Title: "Long migration", ElapsedSeconds: 720},
@@ -173,7 +229,7 @@ func TestAttachedRunDoneReportsOutcome(t *testing.T) {
 	model.watchingRun = true
 	model.watchedRunID = "r9"
 
-	updated, _ := model.updateInner(MsgAttachedRunDone{RunID: "r9", Summary: "migration complete"})
+	updated, _ := model.updateInner(MsgAttachedRunDone{RunID: "r9", Status: "done", Summary: "migration complete"})
 	model = updated.(*uiModel)
 	if model.watchingRun {
 		t.Fatalf("state after watched run end: watchingRun=%v", model.watchingRun)
@@ -253,5 +309,56 @@ func TestStartupDigestRendersActiveRunProgress(t *testing.T) {
 	// The empty-digest contract is untouched.
 	if got := formatStartupDigest(&api.DigestResponse{}, ""); got != "" {
 		t.Fatalf("empty digest must render nothing, got %q", got)
+	}
+}
+
+// A waiting question says what a plain message typed here would do to it, how
+// long it has waited, and what else is possible. A reply that no longer answers
+// it (another session's open question, or one that has waited too long with its
+// asker gone) is told to take the named form, instead of being invited to type
+// a reply that would start new work. On 2026-10-14 the banner read "just reply
+// with your answer" and a new release request, pasted into a fresh terminal,
+// became the answer to a question asked two and a half hours earlier.
+func TestPendingQuestionLineSaysWhatAPlainReplyDoes(t *testing.T) {
+	question := api.DigestClarify{ID: "clr_1", Line: "Which one did you mean?\n(it is irreversible)", Channel: "old-session"}
+
+	fresh := pendingClarifyLine(question, "this-session")
+	for _, want := range []string{"1 question waiting: Which one did you mean? (it is irreversible)", "just reply with your answer", "/new --run <request> to start something else"} {
+		if !strings.Contains(fresh, want) {
+			t.Fatalf("fresh question line lacks %q: %s", want, fresh)
+		}
+	}
+	if strings.Contains(fresh, "asked") || strings.Contains(fresh, "1: <your answer>") {
+		t.Fatalf("a question that just arrived has no age and takes a plain reply: %s", fresh)
+	}
+
+	question.AskedAgoSeconds = 720
+	if line := pendingClarifyLine(question, "this-session"); !strings.Contains(line, "(asked 12m ago)") || !strings.Contains(line, "just reply with your answer") {
+		t.Fatalf("a twelve-minute-old question still takes a plain reply and says how old it is: %s", line)
+	}
+
+	question.AskedAgoSeconds, question.NumberedReplyOnly = 2*3600+35*60, true
+	stale := pendingClarifyLine(question, "this-session")
+	for _, want := range []string{"(asked 2h35m ago)", `answer it as "1: <your answer>"`, "anything else you type starts new work"} {
+		if !strings.Contains(stale, want) {
+			t.Fatalf("stale question line lacks %q: %s", want, stale)
+		}
+	}
+	if strings.Contains(stale, "just reply with your answer") {
+		t.Fatalf("a question a plain reply no longer answers must not invite one: %s", stale)
+	}
+
+	// The session that asked still answers with plain text, however long ago.
+	if own := pendingClarifyLine(question, "old-session"); !strings.Contains(own, "just reply with your answer") || strings.Contains(own, "1: <your answer>") {
+		t.Fatalf("the asking session answers with plain text: %s", own)
+	}
+
+	digest := &api.DigestResponse{PendingClarifies: []api.DigestClarify{question}}
+	if text := formatStartupDigest(digest, "this-session"); !strings.Contains(text, stale) {
+		t.Fatalf("the startup digest does not carry the question line:\n%s", text)
+	}
+	digest.PendingClarifies = append(digest.PendingClarifies, api.DigestClarify{ID: "clr_2", Line: "Another"})
+	if text := formatStartupDigest(digest, "this-session"); !strings.Contains(text, "⚠ 2 questions waiting — see /status") {
+		t.Fatalf("several questions keep their summary line:\n%s", text)
 	}
 }

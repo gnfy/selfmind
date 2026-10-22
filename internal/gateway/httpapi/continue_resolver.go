@@ -26,45 +26,18 @@ func (d *Server) tryHandleDirectIntent(ctx context.Context, identity *control.Id
 	return false, api.MessageResponse{}
 }
 
-// resumePinKey is the person_settings key holding the one-shot "attach the
-// next agent-bound message to this task" marker written by /resume. It is
-// person-scoped and consumed by the first message
-// that reaches resolveTask, so a stale /resume can never capture unrelated new
-// work later.
+// Account and channel jointly identify an endpoint; chat ids can collide
+// across two bound platforms belonging to the same person.
+func resumeSelectionEndpoint(identity *control.IdentityContext, channel string) string {
+	return identity.AccountID + ":" + fallback(channel, identity.Platform)
+}
+
+// Historical person-wide pins are retained only for display/stop compatibility.
+// New input authority is endpoint-scoped and captured before admission.
 const (
 	resumePinKey    = "resume_pin_task"
 	resumeRunPinKey = "resume_pin_run"
 )
-
-// consumeResumePin returns the task pinned by an explicit /resume and clears
-// the pin in the same step (one-shot). A missing, foreign, or unreadable task
-// yields nil so the caller falls through to new-task creation.
-func (d *Server) consumeResumePin(ctx context.Context, identity *control.IdentityContext) (*control.Task, string, error) {
-	if d == nil || d.Control == nil || identity == nil {
-		return nil, "", nil
-	}
-	taskID, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey)
-	if err != nil {
-		return nil, "", err
-	}
-	if strings.TrimSpace(taskID) == "" {
-		return nil, "", nil
-	}
-	runID, runErr := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey)
-	_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, "")
-	_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumeRunPinKey, "")
-	if runErr != nil {
-		return nil, "", runErr
-	}
-	task, err := d.Control.GetTask(ctx, identity.TenantID, taskID)
-	if err != nil {
-		return nil, "", err
-	}
-	if task == nil || task.PersonID != identity.PersonID {
-		return nil, "", fmt.Errorf("resume target is no longer available")
-	}
-	return task, strings.TrimSpace(runID), nil
-}
 
 // terminalTaskStatus reports whether a task status ends its life for implicit
 // continuation and the pre-label default. `archived` (the /task <id> archive
@@ -84,18 +57,6 @@ func terminalTaskStatus(status string) bool {
 // distinguish it from completed work.
 func archivedTaskStatus(status string) bool {
 	return strings.EqualFold(strings.TrimSpace(status), "archived")
-}
-
-// resumableTaskStatus names terminal label states that explicit person
-// authority may reopen. Cancellation and failure remain closed because they
-// represent a negative execution outcome rather than ordinary label hygiene.
-func resumableTaskStatus(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "done", "completed", "archived":
-		return true
-	default:
-		return false
-	}
 }
 
 // withResumeContext prepends the parent run's durable state to a deliberate

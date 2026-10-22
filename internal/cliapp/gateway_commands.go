@@ -122,7 +122,7 @@ func (a *App) gatewayStatus(args []string) int {
 	}
 	ctx, cancel := contextWithTimeout(a.ctx, 3*time.Second)
 	defer cancel()
-	data, statusCode, err := gatewayrt.RequestStatus(ctx, a.gatewayURL())
+	data, statusCode, err := a.requestGatewayStatus(ctx)
 	if err == nil && statusCode < 400 {
 		if *jsonOut {
 			fmt.Fprintln(a.stdout, string(data))
@@ -558,6 +558,15 @@ func (a *App) gatewayService(args []string) int {
 func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	runtime := status.Runtime
 	fmt.Fprintf(a.stdout, "SelfMind gateway: %s\n", status.State)
+	if status.LivenessOnly {
+		// The daemon withheld the rest: say so, and where the rest is, instead of
+		// printing a bare "running" that looks like a daemon with nothing to report.
+		if status.LocalControl.Socket {
+			fmt.Fprintf(a.stdout, "liveness only: the gateway did not accept this process as your own CLI (%s). Run `selfmind gateway status` from your own terminal.\n", status.LocalControl.Refusal)
+		} else {
+			fmt.Fprintln(a.stdout, "liveness only: over TCP the gateway tells a caller without its gateway token only that it is up. Run `selfmind gateway status` from your own terminal on the gateway's machine, or set SELF_GATEWAY_TOKEN.")
+		}
+	}
 	if runtime.BuildFingerprint != "" {
 		fmt.Fprintf(a.stdout, "build: %s\n", runtime.BuildFingerprint)
 	}
@@ -572,6 +581,14 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	}
 	if runtime.Addr != "" {
 		fmt.Fprintf(a.stdout, "addr: http://%s\n", runtime.Addr)
+		// The TCP address serves IM and HTTP integrations. The person's own CLI
+		// reaches the daemon only on the local control socket, so a daemon that
+		// reports none predates it and cannot serve this CLI until it restarts.
+		if runtime.LocalControlSocket != "" {
+			fmt.Fprintf(a.stdout, "local control: %s\n", runtime.LocalControlSocket)
+		} else {
+			fmt.Fprintln(a.stdout, "local control: none (this gateway predates the local control socket; run `selfmind gateway restart`)")
+		}
 	}
 	if runtime.RuntimeDir != "" {
 		fmt.Fprintf(a.stdout, "runtime: %s\n", runtime.RuntimeDir)
@@ -586,7 +603,14 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 		fmt.Fprintf(a.stdout, "model routes: %s\n", shortRuntimeIdentity(runtime.ModelRouteFingerprint))
 	}
 	if status.StoreSchema.CurrentVersion > 0 {
-		fmt.Fprintf(a.stdout, "control schema: v%d (binary supports v%d)\n", status.StoreSchema.Version, status.StoreSchema.CurrentVersion)
+		missing := ""
+		if len(status.StoreSchema.MissingTables) > 0 {
+			missing = ", missing tables: " + strings.Join(status.StoreSchema.MissingTables, ", ")
+		}
+		fmt.Fprintf(a.stdout, "control schema: v%d (binary supports v%d)%s\n", status.StoreSchema.Version, status.StoreSchema.CurrentVersion, missing)
+		if missing != "" {
+			fmt.Fprintln(a.stdout, "- an earlier development build stamped this database; restore the backup taken before that upgrade with `selfmind maintenance restore-control --backup PATH --yes`, then restart")
+		}
 	}
 	if status.MCP.Configured > 0 {
 		fmt.Fprintf(a.stdout, "mcp servers: %d connected / %d configured, %d failed\n", status.MCP.Connected, status.MCP.Configured, status.MCP.Failed)
@@ -596,6 +620,13 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 				break
 			}
 			fmt.Fprintf(a.stdout, "- %s: %s\n", oneLine(failure.Name, 40), oneLine(failure.Error, 160))
+		}
+		for index, warning := range status.MCP.Warnings {
+			if index == 3 {
+				fmt.Fprintf(a.stdout, "- ... and %d more warning(s)\n", len(status.MCP.Warnings)-index)
+				break
+			}
+			fmt.Fprintf(a.stdout, "- %s: warning: %s\n", oneLine(warning.Name, 40), oneLine(warning.Warning, 160))
 		}
 	}
 	if status.ActiveRunCount > 0 {

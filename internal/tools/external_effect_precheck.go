@@ -3,46 +3,54 @@ package tools
 import (
 	"fmt"
 	"maps"
-	"strings"
 
 	"selfmind/internal/control"
 )
 
+// externalEffectForeignClaimsArg carries other Runs' left-uncertain claims
+// that conflict with this call from the read-only precheck to the approval
+// layer, so an ask the mode already makes can include the one-time decision
+// about them.
+const externalEffectForeignClaimsArg = "_external_effect_foreign_claims"
+
+// externalEffectToleratedClaimsArg carries the claims a person's one-time
+// approval of this exact call covered, from the approval layer to the claim.
+const externalEffectToleratedClaimsArg = "_external_effect_tolerated_claims"
+
 // ExternalEffectPrecheck prevents asking for authorization which cannot
-// resolve an already-known uncertain effect. It never releases a held claim.
+// resolve an already-known unresolved effect of the Run's own chain. It never
+// releases or reserves a claim; the claim gate decides again after approval.
 func ExternalEffectPrecheck(store *control.Store) func(map[string]interface{}) error {
 	return func(args map[string]interface{}) error {
+		delete(args, externalEffectForeignClaimsArg)
 		scope, installed := currentExecutionScopeAny(args)
 		if !installed || !scope.ParallelWork {
 			return nil
 		}
 		// A pending network capability ask must not hide a known blocker.
 		// Project the requested route without granting or mutating it.
-		if commandPlausiblyNeedsEgress(stringArg(args, "_tool_name"), args) {
-			args = maps.Clone(args)
-			args["_network_shared"] = true
+		projected := args
+		if commandWantsNetwork(stringArg(args, "_tool_name"), args) {
+			projected = maps.Clone(args)
+			projected["_network_shared"] = true
 		}
-		if !externalEffectPossible(args) {
+		if !externalEffectPossible(projected) {
 			return nil
 		}
 		if store == nil {
 			return fmt.Errorf("external effect admission store is unavailable; this call was not dispatched")
 		}
-		targets, _ := externalEffectTargets(args, store)
-		claims, needsObservation, err := store.InspectExternalEffectBlockers(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.RunID, targets)
+		targets, _ := externalEffectTargets(projected, store)
+		conflicts, err := store.InspectExternalEffectConflicts(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.RunID, targets)
 		if err != nil {
 			return fmt.Errorf("external effect admission cannot be checked: %w", err)
 		}
-		if !needsObservation {
-			return nil
+		if len(conflicts.Own) > 0 {
+			return ownUnresolvedEffectError(scope.RunID, conflicts.All)
 		}
-		ids := make([]string, 0, len(claims))
-		for _, claim := range claims {
-			ids = append(ids, claim.ID)
+		if len(conflicts.Foreign) > 0 {
+			args[externalEffectForeignClaimsArg] = conflicts.Foreign
 		}
-		message := fmt.Sprintf("External effect remains unresolved in run %s (claims: %s). This call was not dispatched. Human approval cannot establish the earlier effect's result.", claims[0].RunID, strings.Join(ids, ", "))
-		return newStableToolRecoveryError(fmt.Errorf("%s", message), "external_effect_unresolved", "stale_precondition", message,
-			"Inspect with a proven read-only command or an owner-approved observation script. Do not replay the earlier effect or clear its claim. If observation cannot establish the result, report the unresolved effect and the required human action.",
-			"admission", "after_observation", "not_dispatched", false, "read_only_observation", "human_handoff")
+		return nil
 	}
 }

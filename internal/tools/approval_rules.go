@@ -178,13 +178,9 @@ func approvalCommandPrefix(toolName string, args map[string]interface{}) (string
 	if payload == "" {
 		return "", false
 	}
-	for _, marker := range grantComplexShellMarkers {
-		if strings.Contains(payload, marker) {
-			return "", false
-		}
-	}
-	segments, unparsed := expandCommandSegments(payload, 0)
-	if unparsed || len(segments) != 1 {
+	// A rule stands for a command exactly as a class does (classSegments).
+	segments, ok := classSegments(payload, leaseProcessEnv(args))
+	if !ok || len(segments) != 1 {
 		return "", false
 	}
 	fields := segments[0]
@@ -202,7 +198,12 @@ func approvalCommandPrefix(toolName string, args map[string]interface{}) (string
 	if len(rawFields) == 0 {
 		return "", false
 	}
-	if !strings.EqualFold(filepath.Base(rawFields[0]), filepath.Base(fields[progIdx])) {
+	if programName(rawFields[0]) != programName(fields[progIdx]) {
+		return "", false
+	}
+	// A literal prefix cannot say which profile or context it was granted
+	// under; only the class, which binds it, can.
+	if bound, ok := boundSelectors(programName(fields[progIdx]), fields[progIdx+1:]); !ok || len(bound) > 0 {
 		return "", false
 	}
 	tokens := make([]string, 0, approvalRuleCommandPrefixTokens)
@@ -217,7 +218,7 @@ func approvalCommandPrefix(toolName string, args map[string]interface{}) (string
 			break
 		}
 		if len(tokens) == 0 {
-			trimmed = strings.ToLower(filepath.Base(trimmed))
+			trimmed = programName(trimmed)
 			if !prefixRuleAllowedProgram(trimmed) {
 				return "", false
 			}
@@ -248,8 +249,10 @@ func approvalEgressHost(toolName string, args map[string]interface{}) (string, b
 	if payload == "" {
 		return "", false
 	}
-	segments, unparsed := expandCommandSegments(payload, 0)
-	if unparsed {
+	// A host rule stands for its command as a class does: exact program
+	// names, no assignment or option that redirects what it reads or runs.
+	segments, ok := classCommands(payload, leaseProcessEnv(args))
+	if !ok {
 		return "", false
 	}
 	if egress, _ := egressCommand(payload, segments); !egress {

@@ -29,6 +29,7 @@ func TestCurrentControlSchemaSkipsFullIntegrityCheck(t *testing.T) {
 			checks++
 			return errors.New("unexpected full integrity check")
 		},
+		orderedMigrations,
 	)
 	if err != nil {
 		t.Fatalf("reopen current schema: %v", err)
@@ -142,6 +143,7 @@ func TestLegacyControlSchemaKeepsMigrationBoundaryIntegrityChecks(t *testing.T) 
 			checks++
 			return quickCheckDB(ctx, db)
 		},
+		orderedMigrations,
 	)
 	if err != nil {
 		t.Fatalf("migrate legacy schema: %v", err)

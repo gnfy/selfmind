@@ -20,6 +20,7 @@ type Pager struct {
 	width    int
 	height   int
 	build    PagerContent
+	hint     string
 }
 
 func NewPager(c *common.Common, width, height int, build PagerContent) *Pager {
@@ -31,6 +32,11 @@ func NewPager(c *common.Common, width, height int, build PagerContent) *Pager {
 	p.viewport.GotoTop()
 	return p
 }
+
+// SetHint replaces the default "q/Esc close" in the fixed footer with the keys
+// this page answers to. Keys listed inside the scrolling content scroll out of
+// sight on a long page; the footer never does.
+func (p *Pager) SetHint(hint string) { p.hint = hint }
 
 func (p *Pager) Resize(width, height int) {
 	if width <= 0 {
@@ -61,7 +67,13 @@ func (p *Pager) Update(msg tea.Msg) (closed bool, cmd tea.Cmd) {
 
 func (p *Pager) View() string {
 	p.refresh()
-	footerText := fmt.Sprintf(" line %d  q/Esc close - up/down scroll", p.viewport.YOffset+1)
+	hint := p.hint
+	if hint == "" {
+		hint = "q/Esc close"
+	}
+	// One row: the viewport is sized for a single footer line, and a long hint
+	// must be cut rather than wrapped.
+	footerText := lipgloss.NewStyle().MaxWidth(p.width).Render(fmt.Sprintf(" line %d  %s - up/down scroll", p.viewport.YOffset+1, hint))
 	footerStyle := lipgloss.NewStyle().Bold(true).Width(p.width)
 	if p.common != nil && p.common.Styles != nil {
 		footerStyle = p.common.Styles.Chat.Selected.Copy().Bold(true).Width(p.width)

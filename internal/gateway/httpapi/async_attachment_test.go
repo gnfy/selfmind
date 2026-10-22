@@ -70,7 +70,7 @@ func TestAsyncAttachmentReachesProvider(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("provider not called")
 			}
-			waitUntil(t, 3*time.Second, func() bool { return daemon.coordinator().currentActive(resp.Identity.PersonID) == nil }, "run did not finish")
+			waitUntil(t, 3*time.Second, func() bool { return daemon.coordinator().activeCount(resp.Identity.PersonID) == 0 }, "run did not finish")
 			var managedPath string
 			for _, message := range request.Messages {
 				for _, line := range strings.Split(message.Content, "\n") {

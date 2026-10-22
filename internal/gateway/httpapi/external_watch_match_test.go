@@ -75,9 +75,9 @@ func TestRunExternalWatchCommandUsesBash(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("SelfMind's production daemon runs on Linux")
 	}
-	server := &Server{}
+	server := &Server{ExecutionRuntime: newTestExecutionRuntime(t)}
 	result, err := server.runExternalWatchCommand(context.Background(), control.ExternalWatch{
-		CWD: t.TempDir(), Command: "set -euo pipefail; printf SUCCESS",
+		TenantID: "tenant", PersonID: "person", CWD: t.TempDir(), Command: "set -euo pipefail; printf SUCCESS",
 	})
 	if err != nil {
 		t.Fatalf("bash watch command failed: %v (%s)", err, result.Output)
@@ -98,9 +98,9 @@ func TestExternalWatchCommandDoesNotInheritControlPlaneSecret(t *testing.T) {
 	tools.SetExecSandbox(false, false, false)
 	t.Cleanup(func() { tools.SetExecSandbox(false, false, false) })
 
-	server := &Server{}
+	server := &Server{ExecutionRuntime: newTestExecutionRuntime(t)}
 	result, err := server.runExternalWatchCommand(context.Background(), control.ExternalWatch{
-		CWD:     t.TempDir(),
+		TenantID: "tenant", PersonID: "person", CWD: t.TempDir(),
 		Command: `printf '%s' "${SELF_GATEWAY_TOKEN:-}"`,
 	})
 	if err != nil {

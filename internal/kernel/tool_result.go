@@ -53,6 +53,8 @@ type ToolResultEnvelope struct {
 	StateChanged        bool
 	Alternatives        []string
 	Truncated           bool
+	ArtifactID          string
+	CaptureTruncated    bool
 	Bytes               int
 	DiagnosticExcerpt   string
 	DiagnosticHash      string
@@ -87,7 +89,19 @@ func packageToolResult(name, raw string) ToolResultEnvelope {
 // command. Any sink failure degrades to the plain head/tail note — spooling
 // must never fail a tool call.
 func packageToolResultCtx(ctx context.Context, name, raw string) ToolResultEnvelope {
+	return BoundToolOutput(ctx, name, raw, toolResultModelBytes)
+}
+
+// BoundToolOutput lets compound tools use the same capture and artifact path
+// before applying their smaller item budget. It never increases the standard
+// model budget, and artifact failure does not turn execution success into failure.
+func BoundToolOutput(ctx context.Context, name, raw string, modelBytes int) ToolResultEnvelope {
+	if modelBytes <= 0 || modelBytes > toolResultModelBytes {
+		modelBytes = toolResultModelBytes
+	}
+	modelBytes = max(modelBytes, 4096)
 	raw = textutil.CleanUTF8(raw)
+	captureTruncated := len(raw) > toolResultRawCapBytes
 	if len(raw) > toolResultRawCapBytes {
 		marker := fmt.Sprintf(
 			"\n\n... [SelfMind note: output exceeded the %dMB capture limit; %d bytes from the middle were dropped at capture and are not recoverable. Narrow the command if the middle matters.] ...\n\n",
@@ -96,11 +110,17 @@ func packageToolResultCtx(ctx context.Context, name, raw string) ToolResultEnvel
 		raw = textutil.HeadTail(raw, (toolResultRawCapBytes-len(marker))/2, marker)
 	}
 	env := ToolResultEnvelope{
-		Raw:     raw,
-		Preview: toolResultPreview(name, raw),
-		Bytes:   len(raw),
+		Raw:              raw,
+		Preview:          toolResultPreview(name, raw),
+		Bytes:            len(raw),
+		CaptureTruncated: captureTruncated,
 	}
-	env.ModelContent, env.Truncated = toolResultModelContent(raw)
+	captureNote := ""
+	if captureTruncated {
+		captureNote = "\n[Capture limit reached: some original bytes were not captured and cannot be recovered.]"
+	}
+	env.ModelContent, env.Truncated = toolResultModelContentLimit(raw, modelBytes-len(captureNote))
+	env.ModelContent += captureNote
 	if !env.Truncated {
 		return env
 	}
@@ -112,11 +132,15 @@ func packageToolResultCtx(ctx context.Context, name, raw string) ToolResultEnvel
 	if err != nil || strings.TrimSpace(ref.ID) == "" {
 		return env
 	}
+	env.ArtifactID = ref.ID
 	marker := fmt.Sprintf(
 		"\n\n... [SelfMind note: tool output truncated for model context; the full %d-byte output was %s%s. Beginning and ending are shown. To read any omitted range, call tool_output_view with {\"artifact_id\": %q, \"offset_bytes\": N, \"limit_bytes\": M} instead of re-running the command.] ...\n\n",
 		len(raw), toolArtifactNoteToken, ref.ID, ref.ID,
 	)
-	keep := (toolResultModelBytes - len(marker)) / 2
+	if captureTruncated {
+		marker += "[Capture limit reached: some original bytes were not captured and cannot be recovered.]\n"
+	}
+	keep := (modelBytes - len(marker)) / 2
 	if keep < 1024 {
 		keep = 1024
 	}
@@ -138,6 +162,7 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 	safeError := rawError
 	code := ""
 	category, hint := classifyToolFailure(rawError)
+	_, _, specificHint := structuredToolFailureMarker(rawError)
 	var stable stableToolFailure
 	if errors.As(err, &stable) {
 		code = strings.TrimSpace(stable.ToolErrorCode())
@@ -149,6 +174,7 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 		}
 		if value := strings.TrimSpace(stable.ToolRecoveryHint()); value != "" {
 			hint = value
+			specificHint = true
 		}
 	}
 	failurePhase := ""
@@ -180,6 +206,7 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 			safeError = replacement
 			category = leakCategory
 			hint = leakHint
+			specificHint = true
 			if code == "" {
 				code = "internal_state"
 			}
@@ -206,22 +233,10 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 		msg += "\nalternatives: " + strings.Join(alternatives, ", ")
 	}
 	msg = textutil.CleanUTF8(msg)
-	// A user rejection is a decision, not a failure. The generic
-	// diagnose-and-retry guidance below is exactly what made the model retry a
-	// variant of a rejected command (observed live: /reject spawned a fresh
-	// approval for a tweaked command). Kernel must not import concrete tools,
-	// so the stable "operation rejected"/"operation cancelled by user" error
-	// strings from tools.SmartApprovalMiddleware are the documented contract.
-	instruction := "\n\nSelfMind diagnostic instruction: this tool failed. Treat the error as evidence, inspect relevant context such as cwd, files, environment, auth state, provider constraints, or command help, and continue with a corrected next step unless this is a confirmed blocker."
-	if userRejected {
-		instruction = "\n\nSelfMind instruction: the USER explicitly rejected this operation. This is a decision, not an error. Do NOT retry this operation or any variant of it in this turn. Acknowledge the rejection, state briefly what was not done, and either propose a genuinely different approach for the user to confirm or finish the turn."
-	}
-	modelContent := msg + instruction
 	envelope := ToolResultEnvelope{
 		Raw:           msg,
 		Preview:       textutil.Truncate(msg, toolResultPreviewBytes),
 		DisplayError:  compactToolDisplayError(safeError, effectState),
-		ModelContent:  textutil.Truncate(modelContent, 4000),
 		ErrorCode:     code,
 		ErrorCategory: category,
 		RecoveryHint:  hint,
@@ -230,9 +245,20 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 		EffectState:   effectState,
 		StateChanged:  stateChanged,
 		Alternatives:  append([]string(nil), alternatives...),
-		Truncated:     len(modelContent) > 4000,
 		Bytes:         len(msg),
 	}
+	// A nonzero exit may be the answer to a check, rather than a method to fix.
+	// Keep specific guidance, but do not prescribe a retry for a generic failure.
+	if !specificHint && (category == "command_failed" || category == "unknown") {
+		hint = ""
+	}
+	modelError := safeError
+	if !strings.EqualFold(strings.TrimSpace(metadata.Origin), "external") {
+		modelError = plainToolFailureMessage(modelError)
+	}
+	modelContent := toolFailureModelContent(name, modelError, hint, envelope, userRejected)
+	envelope.ModelContent = textutil.Truncate(modelContent, 4000)
+	envelope.Truncated = len(modelContent) > 4000
 	if safeError != rawError {
 		digest := sha256.Sum256([]byte(rawError))
 		envelope.DiagnosticHash = fmt.Sprintf("%x", digest[:])
@@ -244,8 +270,7 @@ func packageToolErrorWithMetadata(name string, err error, metadata ToolExecution
 }
 
 // compactToolDisplayError is the human-facing error surface. Structured
-// recovery metadata and diagnostic instructions belong in ModelContent and
-// durable event fields; repeating them in the transcript makes a recoverable
+// recovery metadata belongs in durable event fields; repeating it in the transcript makes a recoverable
 // attempt look like a fatal application error.
 func compactToolDisplayError(message, effectState string) string {
 	message = textutil.CleanUTF8(message)
@@ -349,7 +374,7 @@ func packageDispatchedToolFailureCtx(ctx context.Context, name, raw string, err 
 		truncated = true
 	}
 	combined := fmt.Sprintf("%s\n\nCaptured tool output:\n%s", errEnv.Raw, outputExcerpt)
-	modelContent := combined + "\n\nSelfMind diagnostic instruction: use the captured output as evidence. Correct the next step rather than repeating the same failing call."
+	modelContent := fmt.Sprintf("%s\n\nCaptured tool output:\n%s", errEnv.ModelContent, outputExcerpt)
 	return ToolResultEnvelope{
 		Raw: combined,
 		// Preview is a user-facing surface, so it shows the tool's own output
@@ -395,14 +420,18 @@ func nonEmpty(value, fallback string) string {
 }
 
 func toolResultModelContent(raw string) (string, bool) {
-	if len(raw) <= toolResultModelBytes {
+	return toolResultModelContentLimit(raw, toolResultModelBytes)
+}
+
+func toolResultModelContentLimit(raw string, modelBytes int) (string, bool) {
+	if len(raw) <= modelBytes {
 		return raw, false
 	}
 	marker := fmt.Sprintf(
 		"\n\n... [SelfMind note: tool output truncated for model context; original output was %d bytes. Beginning and ending are shown. Re-run a narrower tool call if omitted middle content matters.] ...\n\n",
 		len(raw),
 	)
-	keep := (toolResultModelBytes - len(marker)) / 2
+	keep := (modelBytes - len(marker)) / 2
 	if keep < 1024 {
 		keep = 1024
 	}

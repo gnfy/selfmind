@@ -26,7 +26,20 @@ func (d *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, d.GatewayStatus())
+	status := d.GatewayStatus()
+	// The caller learns how the daemon judged this very connection; nothing
+	// about any other peer is reported.
+	peer := requestLocalPeer(r)
+	status.LocalControl = api.LocalControlPeer{
+		Socket: peer.Socket, Verified: peer.Verified, PID: peer.PID, Refusal: peer.Refusal,
+	}
+	// What the daemon is running, where its state lives and what is wrong with
+	// it belong to the person: a caller that only reached the port learns that
+	// the daemon is up.
+	if !d.adminCaller(r) {
+		status = livenessStatus(status)
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (d *Server) handleGatewayToolCatalogProbe(w http.ResponseWriter, r *http.Request) {
@@ -271,13 +284,17 @@ func (d *Server) handleGatewayShutdown(w http.ResponseWriter, r *http.Request) {
 		Reason              string `json:"reason"`
 		WaitForSafeBoundary bool   `json:"wait_for_safe_boundary"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&payload)
+	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&payload)
 	reason := strings.TrimSpace(payload.Reason)
 	if reason == "" {
 		reason = "api shutdown"
 	}
 	if len(reason) > 160 {
 		reason = reason[:160]
+	}
+	if !d.adminCaller(r) && !d.restartCapabilityHeld(r, reason) {
+		writeError(w, http.StatusForbidden, d.adminRefusal(r, "stopping the daemon"))
+		return
 	}
 	if _, ok := modelChangeShutdownID(reason); ok && d.ModelChanges == nil {
 		http.Error(w, "model change service is unavailable", http.StatusConflict)
@@ -372,6 +389,9 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 		for _, failure := range health.Failures {
 			mcpHealth.Failures = append(mcpHealth.Failures, api.MCPServerFailure{Name: failure.Name, Error: failure.Error})
 		}
+		for _, warning := range health.Warnings {
+			mcpHealth.Warnings = append(mcpHealth.Warnings, api.MCPServerWarning{Name: warning.Name, Warning: warning.Warning})
+		}
 	}
 	storeSchema := api.StoreSchemaHealth{}
 	if d.Control != nil {
@@ -379,6 +399,7 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 		storeSchema.Version = status.Version
 		storeSchema.CurrentVersion = status.CurrentVersion
 		storeSchema.BackupCreated = status.MigrationBackup != ""
+		storeSchema.MissingTables = status.MissingTables
 	}
 	return api.GatewayStatusResponse{
 		Runtime:        runtime,

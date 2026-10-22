@@ -3,6 +3,7 @@ package cron
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,7 +12,6 @@ import (
 	"github.com/robfig/cron/v3"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/log"
-	"selfmind/internal/tools"
 )
 
 const skillPrunerNamePrefix = "skill-pruner-"
@@ -29,6 +29,10 @@ type CronJob struct {
 	// DeliverTo is the platform user/chat id. Empty for local-only jobs.
 	Platform  string
 	DeliverTo string
+	// CreatorPersonID is the person whose invocation created this job. An
+	// endpoint may be rebound later; that never transfers the job's authority.
+	// Empty historical rows require independent creator evidence at the gateway.
+	CreatorPersonID string
 	// Web allows a job to enable web tools for this turn (e.g. a market summary
 	// that must look things up), overriding the default web-off policy.
 	Web bool
@@ -127,6 +131,9 @@ func (s *Scheduler) SetTimezone(name string) error {
 
 // InitSchema creates the cron_jobs table if it doesn't exist.
 func (s *Scheduler) InitSchema(ctx context.Context) error {
+	if err := s.prepareCreatorSchema(ctx); err != nil {
+		return err
+	}
 	schema := `
 CREATE TABLE IF NOT EXISTS cron_jobs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,12 +154,13 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 	// Idempotent migration for proactive-delivery columns. SQLite has no
 	// "ADD COLUMN IF NOT EXISTS", so probe the table and add what is missing.
 	if err := s.migrateColumns(ctx, map[string]string{
-		"platform":      "TEXT NOT NULL DEFAULT ''",
-		"deliver_to":    "TEXT NOT NULL DEFAULT ''",
-		"web":           "INTEGER NOT NULL DEFAULT 0",
-		"authorized_at": "INTEGER NOT NULL DEFAULT 0",
-		"once":          "INTEGER NOT NULL DEFAULT 0",
-		"task_id":       "TEXT NOT NULL DEFAULT ''",
+		"platform":          "TEXT NOT NULL DEFAULT ''",
+		"deliver_to":        "TEXT NOT NULL DEFAULT ''",
+		"web":               "INTEGER NOT NULL DEFAULT 0",
+		"authorized_at":     "INTEGER NOT NULL DEFAULT 0",
+		"creator_person_id": "TEXT NOT NULL DEFAULT ''",
+		"once":              "INTEGER NOT NULL DEFAULT 0",
+		"task_id":           "TEXT NOT NULL DEFAULT ''",
 		// system_key identifies daemon-registered system jobs so they can be
 		// deduplicated by a partial unique index without constraining users'
 		// freedom to create same-named jobs of their own (system_key stays
@@ -161,7 +169,11 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 	}); err != nil {
 		return err
 	}
-	return s.migrateSystemJobs(ctx)
+	if err := s.migrateSystemJobs(ctx); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", cronSchemaVersion))
+	return err
 }
 
 // migrateSystemJobs retires the obsolete memory.db skill-metric pruner. Skill
@@ -248,10 +260,10 @@ func (s *Scheduler) AddJob(ctx context.Context, job *CronJob) (int64, error) {
 	}
 
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, enabled, system_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, enabled, system_key, creator_person_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.Name, job.CronExpr, job.Prompt, job.TenantID, job.Channel,
-		job.Platform, job.DeliverTo, btoi(job.Web), unixOrZero(job.AuthorizedAt), btoi(job.Once), btoi(job.Enabled), job.SystemKey)
+		job.Platform, job.DeliverTo, btoi(job.Web), unixOrZero(job.AuthorizedAt), btoi(job.Once), btoi(job.Enabled), job.SystemKey, job.CreatorPersonID)
 	if err != nil {
 		return 0, fmt.Errorf("insert cron job: %w", err)
 	}
@@ -264,6 +276,19 @@ func (s *Scheduler) AddJob(ctx context.Context, job *CronJob) (int64, error) {
 		}
 	}
 	return id, nil
+}
+
+// ClaimLegacySystemJob gives a system job's key to the row an earlier release
+// registered for it before system jobs were keyed: the oldest unkeyed row with
+// exactly the job's name and prompt. Run before EnsureJob with that key, so a
+// row someone else stored under the same name is never taken for it.
+func (s *Scheduler) ClaimLegacySystemJob(ctx context.Context, key, name, prompt string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE cron_jobs SET system_key = ?
+		WHERE id = (SELECT MIN(id) FROM cron_jobs WHERE COALESCE(system_key, '') = '' AND name = ? AND prompt = ?)
+		  AND NOT EXISTS (SELECT 1 FROM cron_jobs WHERE system_key = ?)`,
+		key, name, prompt, key)
+	return err
 }
 
 // EnsureJob inserts the job if none with the same name+tenant exists, otherwise
@@ -315,6 +340,11 @@ func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) 
 		}
 	}
 	job.ID = id
+	// EnsureJob updates system registrations, but must not rewrite or invent
+	// the creator of a row that already exists.
+	if err := s.db.QueryRowContext(ctx, "SELECT creator_person_id FROM cron_jobs WHERE id = ?", id).Scan(&job.CreatorPersonID); err != nil {
+		return id, err
+	}
 	s.mu.Lock()
 	for _, duplicateID := range ids[1:] {
 		if entryID, ok := s.entries[duplicateID]; ok {
@@ -338,13 +368,39 @@ func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) 
 	return id, nil
 }
 
+// cronJobColumns is the column list scanCronJob reads.
+const cronJobColumns = `id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, enabled,
+		       last_run, next_run, created_at, COALESCE(task_id, ''), COALESCE(system_key, ''), COALESCE(creator_person_id, '')`
+
+func scanCronJob(row interface{ Scan(dest ...any) error }) (CronJob, error) {
+	var j CronJob
+	var web, once int
+	var authorizedAt int64
+	var lastRun, nextRun sql.NullInt64
+	var createdAt int64
+	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID,
+		&j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.Enabled, &lastRun, &nextRun, &createdAt, &j.TaskID, &j.SystemKey, &j.CreatorPersonID); err != nil {
+		return CronJob{}, err
+	}
+	j.Web = itob(web)
+	j.AuthorizedAt = timeOrZero(authorizedAt)
+	j.Once = itob(once)
+	if lastRun.Valid {
+		t := time.Unix(lastRun.Int64, 0)
+		j.LastRun = &t
+	}
+	if nextRun.Valid {
+		t := time.Unix(nextRun.Int64, 0)
+		j.NextRun = &t
+	}
+	j.CreatedAt = time.Unix(createdAt, 0)
+	return j, nil
+}
+
 // ListJobs returns all cron jobs for a tenant.
 func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, enabled,
-		       last_run, next_run, created_at, COALESCE(task_id, '')
-		FROM cron_jobs WHERE tenant_id = ? ORDER BY id`,
-		tenantID)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+cronJobColumns+` FROM cron_jobs WHERE tenant_id = ? ORDER BY id`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -352,30 +408,33 @@ func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, e
 
 	var jobs []CronJob
 	for rows.Next() {
-		var j CronJob
-		var web, once int
-		var authorizedAt int64
-		var lastRun, nextRun sql.NullInt64
-		var createdAt int64
-		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID,
-			&j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.Enabled, &lastRun, &nextRun, &createdAt, &j.TaskID); err != nil {
+		j, err := scanCronJob(rows)
+		if err != nil {
 			return nil, err
 		}
-		j.Web = itob(web)
-		j.AuthorizedAt = timeOrZero(authorizedAt)
-		j.Once = itob(once)
-		if lastRun.Valid {
-			t := time.Unix(lastRun.Int64, 0)
-			j.LastRun = &t
-		}
-		if nextRun.Valid {
-			t := time.Unix(nextRun.Int64, 0)
-			j.NextRun = &t
-		}
-		j.CreatedAt = time.Unix(createdAt, 0)
 		jobs = append(jobs, j)
 	}
 	return jobs, rows.Err()
+}
+
+// ErrJobNotFound reports a job that does not exist for the tenant asked: it was
+// deleted, never existed, or belongs to another tenant. It is the one error
+// GetJob returns for an answer; any other error is a lookup that failed.
+var ErrJobNotFound = errors.New("cron job not found")
+
+// GetJob returns one job of the tenant. A caller that must act on whether a
+// job still exists (a fire that waited in a queue) can tell ErrJobNotFound from
+// a failed lookup.
+func (s *Scheduler) GetJob(ctx context.Context, tenantID string, id int64) (*CronJob, error) {
+	j, err := scanCronJob(s.db.QueryRowContext(ctx,
+		`SELECT `+cronJobColumns+` FROM cron_jobs WHERE id = ? AND tenant_id = ?`, id, tenantID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrJobNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &j, nil
 }
 
 // RemoveJob deletes a cron job and unschedules it.
@@ -395,16 +454,17 @@ func (s *Scheduler) RemoveJob(ctx context.Context, id int64) error {
 func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error {
 	// Reload job to get cron expr
 	row := s.db.QueryRowContext(ctx,
-		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, COALESCE(task_id, '') FROM cron_jobs WHERE id = ?", id)
+		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, COALESCE(task_id, ''), created_at, COALESCE(system_key, ''), COALESCE(creator_person_id, '') FROM cron_jobs WHERE id = ?", id)
 	var j CronJob
 	var web, once int
-	var authorizedAt int64
-	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.TaskID); err != nil {
+	var authorizedAt, createdAt int64
+	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.TaskID, &createdAt, &j.SystemKey, &j.CreatorPersonID); err != nil {
 		return err
 	}
 	j.Web = itob(web)
 	j.AuthorizedAt = timeOrZero(authorizedAt)
 	j.Once = itob(once)
+	j.CreatedAt = time.Unix(createdAt, 0)
 	j.Enabled = enabled
 
 	s.mu.Lock()
@@ -434,7 +494,7 @@ func (s *Scheduler) SetTaskID(ctx context.Context, id int64, taskID string) erro
 func (s *Scheduler) Start(ctx context.Context) error {
 	// Load and schedule all enabled jobs
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, COALESCE(task_id, '') FROM cron_jobs WHERE enabled = 1`)
+		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, authorized_at, once, COALESCE(task_id, ''), created_at, COALESCE(system_key, ''), COALESCE(creator_person_id, '') FROM cron_jobs WHERE enabled = 1`)
 	if err != nil {
 		return err
 	}
@@ -444,14 +504,17 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	for rows.Next() {
 		var j CronJob
 		var web, once int
-		var authorizedAt int64
-		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.TaskID); err != nil {
+		var authorizedAt, createdAt int64
+		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &authorizedAt, &once, &j.TaskID, &createdAt, &j.SystemKey, &j.CreatorPersonID); err != nil {
 			s.mu.Unlock()
 			return err
 		}
 		j.Web = itob(web)
 		j.AuthorizedAt = timeOrZero(authorizedAt)
 		j.Once = itob(once)
+		// A fire traces who created a job that names no account by when the
+		// job was stored, and knows a daemon-registered job by its key.
+		j.CreatedAt = time.Unix(createdAt, 0)
 		if err := s.scheduleJobLocked(j.ID, &j); err != nil {
 			log.Debug("cron: failed to schedule job", "job_id", j.ID, "job_name", j.Name, "error", err)
 		}
@@ -563,188 +626,6 @@ func btoi(b bool) int {
 // itob converts int (SQLite integer) to bool.
 func itob(i int) bool {
 	return i != 0
-}
-
-// CronTool provides /cron slash commands via the tools layer.
-// It is registered as a built-in tool with the dispatcher.
-type CronTool struct {
-	sched *Scheduler
-}
-
-// ToolAdapter wraps a CronTool to satisfy the tools.Tool interface.
-type ToolAdapter struct {
-	CronTool *CronTool
-}
-
-func (a *ToolAdapter) Name() string { return "cron" }
-func (a *ToolAdapter) Description() string {
-	return "Manage scheduled jobs and reminders. Use once=true for a one-time reminder; otherwise schedules recur."
-}
-func (a *ToolAdapter) Execute(args map[string]interface{}) (string, error) {
-	return a.CronTool.Execute(context.Background(), args)
-}
-func (a *ToolAdapter) Schema() tools.ToolSchema {
-	return tools.ToolSchema{
-		Type: "object",
-		Properties: map[string]tools.PropertyDef{
-			"action":     {Type: "string", Description: "Action: list, add, remove, enable"},
-			"name":       {Type: "string"},
-			"cron":       {Type: "string", Description: "Cron expression, e.g. 0 9 * * *"},
-			"prompt":     {Type: "string"},
-			"job_id":     {Type: "integer"},
-			"enabled":    {Type: "boolean"},
-			"tenantID":   {Type: "string"},
-			"channel":    {Type: "string", Description: "Delivery channel, e.g. cli, weixin, telegram"},
-			"platform":   {Type: "string", Description: "Platform to deliver the result on, e.g. weixin"},
-			"deliver_to": {Type: "string", Description: "Recipient id (platform user/chat) for proactive delivery"},
-			"web":        {Type: "boolean", Description: "Allow web tools for this job (e.g. market/news lookups)"},
-			"once":       {Type: "boolean", Description: "Run once, then disable automatically (for one-time reminders)"},
-		},
-	}
-}
-
-// NewCronTool creates a cron tool wrapping a scheduler.
-func NewCronTool(sched *Scheduler) *CronTool {
-	return &CronTool{sched: sched}
-}
-
-// ToolDefinition returns the OpenAPI-style tool definition for /cron.
-func (ct *CronTool) ToolDefinition() map[string]interface{} {
-	return map[string]interface{}{
-		"type": "function",
-		"function": map[string]interface{}{
-			"name":        "cron",
-			"description": "Manage scheduled jobs and reminders. Use once=true for a one-time reminder; otherwise schedules recur.",
-			"parameters": map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"action": map[string]interface{}{
-						"type":        "string",
-						"description": "Action: list, add, remove, enable",
-					},
-					"name":       map[string]interface{}{"type": "string"},
-					"cron":       map[string]interface{}{"type": "string", "description": "Cron expression, e.g. 0 9 * * *"},
-					"prompt":     map[string]interface{}{"type": "string", "description": "Prompt sent to the agent when the job fires"},
-					"job_id":     map[string]interface{}{"type": "integer", "description": "Job ID to remove or enable"},
-					"enabled":    map[string]interface{}{"type": "boolean"},
-					"tenantID":   map[string]interface{}{"type": "string"},
-					"channel":    map[string]interface{}{"type": "string", "description": "Delivery channel, e.g. cli, weixin"},
-					"platform":   map[string]interface{}{"type": "string", "description": "Platform to deliver on, e.g. weixin"},
-					"deliver_to": map[string]interface{}{"type": "string", "description": "Recipient id for proactive delivery"},
-					"web":        map[string]interface{}{"type": "boolean", "description": "Allow web tools for this job"},
-					"once":       map[string]interface{}{"type": "boolean", "description": "Run once, then disable automatically (for one-time reminders)"},
-				},
-			},
-		},
-	}
-}
-
-// Execute runs a cron sub-command.
-func (ct *CronTool) Execute(ctx context.Context, args map[string]interface{}) (string, error) {
-	action, _ := args["action"].(string)
-	tenantID, _ := args["tenantID"].(string)
-	if tenantID == "" {
-		tenantID = "default"
-	}
-
-	switch action {
-	case "list":
-		jobs, err := ct.sched.ListJobs(ctx, tenantID)
-		if err != nil {
-			return "", err
-		}
-		if len(jobs) == 0 {
-			return "No cron jobs found.", nil
-		}
-		var lines []string
-		for _, j := range jobs {
-			enabled := "disabled"
-			if j.Enabled {
-				enabled = "enabled"
-			}
-			lastRun := "never"
-			if j.LastRun != nil {
-				lastRun = j.LastRun.Format("2006-01-02 15:04")
-			}
-			nextRun := "—"
-			if j.NextRun != nil {
-				nextRun = j.NextRun.Format("2006-01-02 15:04")
-			}
-			lines = append(lines, fmt.Sprintf("[%d] %s | %s | %s | last:%s | next:%s",
-				j.ID, j.Name, j.CronExpr, enabled, lastRun, nextRun))
-		}
-		return "Cron jobs:\n" + strings.Join(lines, "\n"), nil
-
-	case "add":
-		name, _ := args["name"].(string)
-		cronExpr, _ := args["cron"].(string)
-		prompt, _ := args["prompt"].(string)
-		channel, _ := args["channel"].(string)
-		platform, _ := args["platform"].(string)
-		deliverTo, _ := args["deliver_to"].(string)
-		web, _ := args["web"].(bool)
-		once, _ := args["once"].(bool)
-		if deliverTo != "" && (channel == "" || strings.EqualFold(channel, platform)) {
-			channel = deliverTo
-		}
-		if channel == "" {
-			channel = firstNonEmptyCron(platform, "cli")
-		}
-		if name == "" || cronExpr == "" || prompt == "" {
-			return "", fmt.Errorf("name, cron, and prompt are required for add")
-		}
-		job := &CronJob{
-			Name:      name,
-			CronExpr:  cronExpr,
-			Prompt:    prompt,
-			TenantID:  tenantID,
-			Channel:   channel,
-			Platform:  platform,
-			DeliverTo: deliverTo,
-			Web:       web,
-			Once:      once,
-			Enabled:   true,
-		}
-		id, err := ct.sched.AddJob(ctx, job)
-		if err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Cron job %d (%s) added.", id, name), nil
-
-	case "remove":
-		id, ok := args["job_id"].(float64)
-		if !ok {
-			return "", fmt.Errorf("job_id required")
-		}
-		if err := ct.sched.RemoveJob(ctx, int64(id)); err != nil {
-			return "", err
-		}
-		return fmt.Sprintf("Cron job %d removed.", int64(id)), nil
-
-	case "enable":
-		id, _ := args["job_id"].(float64)
-		enabled, _ := args["enabled"].(bool)
-		if err := ct.sched.EnableJob(ctx, int64(id), enabled); err != nil {
-			return "", err
-		}
-		state := "disabled"
-		if enabled {
-			state = "enabled"
-		}
-		return fmt.Sprintf("Cron job %d %s.", int64(id), state), nil
-
-	default:
-		return "", fmt.Errorf("unknown cron action: %s", action)
-	}
-}
-
-func firstNonEmptyCron(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
 }
 
 // unixOrZero and timeOrZero move an authorisation instant across the durable

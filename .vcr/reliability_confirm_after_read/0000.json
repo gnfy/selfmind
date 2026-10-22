@@ -1,5 +1,0 @@
-{
-  "plan_binding_version": 1,
-  "method": "completion",
-  "completion": "instructions.txt result.txt finish_run waiting_user plan"
-}

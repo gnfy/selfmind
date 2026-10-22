@@ -74,7 +74,7 @@ func TestSuccessfulReplacementExplainsThatEvidenceDoesNotMoveToAnotherObligation
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result.Output, "remains bound to the original verification obligation") || !strings.Contains(result.Output, "cancel any separate step created only for this retry") {
+	if !strings.Contains(result.Output, "replaces failed-check for step step-required") || !strings.Contains(result.Output, "acceptance condition is unchanged") {
 		t.Fatalf("missing replacement scope guidance: %q", result.Output)
 	}
 	_ = readEvidenceEvent(t, events)
@@ -156,8 +156,9 @@ func TestFailedBoundVerificationExplainsThatTheSameObligationRemainsOpen(t *test
 	if err == nil {
 		t.Fatal("failed verification unexpectedly succeeded")
 	}
-	if !strings.Contains(result.Output, "obligation remains open") || !strings.Contains(result.Output, "same check with replaces") || !strings.Contains(result.Output, "exactly its existing plan step in_progress") {
-		t.Fatalf("missing correction guidance: %q", result.Output)
+	if !strings.Contains(result.Output, "did not prove the condition for step step-required") ||
+		!strings.Contains(result.Output, "replaces=failed-check and reason (omit criterion and target to inherit the recorded binding)") {
+		t.Fatalf("missing condition result: %q", result.Output)
 	}
 	evidence := readEvidenceEvent(t, events)
 	if evidence.Command == nil || evidence.Command.Binding == nil || evidence.Command.Binding.StepID != "step-required" {
@@ -209,4 +210,38 @@ func readEvidenceEvent(t *testing.T, events <-chan string) kernel.RunEvidence {
 		t.Fatal(err)
 	}
 	return evidence
+}
+
+func TestFileObservationRecordsLexicalAndResolvedInputsBeforeRead(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	alias := filepath.Join(dir, "alias.txt")
+	if err := os.WriteFile(target, []byte("READY"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	events := make(chan string, 1)
+	ctx := kernel.WithEventChannel(context.Background(), events)
+	yes := true
+	run := EvidenceMiddleware()(func(map[string]interface{}) (kernel.ToolDispatchResult, error) {
+		return kernel.ToolDispatchResult{Output: "READY", Invoked: &yes}, nil
+	})
+	if _, err := run(map[string]interface{}{"_context": ctx, "_tool_name": "read_file", "_tool_call_id": "read", "path": alias}); err != nil {
+		t.Fatal(err)
+	}
+	fact := readEvidenceEvent(t, events)
+	if fact.Observation == nil || fact.Observation.LocalDependencies == nil {
+		t.Fatal("file inputs were not observed")
+	}
+	canonical, err := canonicalContainmentPath(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &verification.Binding{Version: 3, StepID: "inspect", Criterion: "inspect", Target: alias, LocalDependencies: fact.Observation.LocalDependencies, ResolvedLocalDependencies: fact.Observation.ResolvedLocalDependencies}
+	check := verification.Check{Binding: b}
+	if got := verification.RelevantMutationAt(check, []verification.Mutation{{Path: canonical, FinishedAt: 20}}); got != 20 {
+		t.Fatal("edit through the referent left an alias observation fresh")
+	}
 }

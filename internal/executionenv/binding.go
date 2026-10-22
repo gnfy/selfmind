@@ -49,6 +49,33 @@ type Binding struct {
 	EnvironmentGeneration  int64  `json:"environment_generation,omitempty"`
 	EnvironmentFingerprint string `json:"environment_fingerprint,omitempty"`
 	CredentialSourceHash   string `json:"credential_source_hash,omitempty"`
+
+	// SandboxPolicy is the execution policy the creating Run's registration
+	// call ran under. A durable action never runs under a looser one, however
+	// the operator's configuration changed after it was registered. Nil for
+	// rows registered before it was recorded.
+	SandboxPolicy *SandboxPolicy `json:"sandbox_policy,omitempty"`
+
+	// ApprovedBoundary is the execution boundary the registration's approval
+	// resolved: "isolated" or "host". Every later execution under this binding
+	// runs under exactly it, so an isolated boundary the backend can no longer
+	// enforce is not dispatched rather than run on the host. Empty for rows
+	// registered before it was recorded, which resolve under the policy alone.
+	ApprovedBoundary string `json:"approved_boundary,omitempty"`
+
+	// HostStateWrites are the in-place host credential-state paths the
+	// registration's approval covered. Every later execution under this
+	// binding is held to them; a row that recorded none covers none.
+	HostStateWrites []string `json:"host_state_writes,omitempty"`
+}
+
+// SandboxPolicy is the secret-free execution policy a Binding froze: whether
+// commands are isolated and whether host fallback is forbidden. Network is not
+// part of it: a durable action's network is its binding's network:shared
+// capability, which every poll checks against the policy in force.
+type SandboxPolicy struct {
+	Enabled  bool `json:"enabled"`
+	Required bool `json:"required"`
 }
 
 // BindingFromLease freezes the non-secret execution material a durable action

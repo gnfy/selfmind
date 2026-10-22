@@ -16,6 +16,7 @@ import (
 	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
+	"selfmind/internal/tools/mcptest"
 )
 
 // writeRunnerFixtures prepares a hermetic eval environment: temp HOME (no real
@@ -355,23 +356,51 @@ func TestNewRuntimeHarnessFailsUnansweredApprovalsPromptlyInEveryMode(t *testing
 	}
 }
 
-func TestRegisterDaemonOwnedEvalToolsIncludesWorkContinuityBroker(t *testing.T) {
-	store, err := control.OpenStore(t.TempDir())
+// The harness builds its worker through the daemon's construction path, with
+// the control store: it carries the production continuity tools and the shared
+// MCP tools from that one call, not an eval-only registration.
+func TestNewRuntimeHarnessBuildsTheDaemonWorker(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boots the full gateway harness")
+	}
+	_, cfgPath := writeRunnerFixtures(t)
+	stub := mcptest.Build(t)
+	startLog := filepath.Join(t.TempDir(), "mcp-starts.log")
+	mcpConfig := "mcp:\n  servers:\n    - name: stub\n      transport: stdio\n      command: " + strconv.Quote(stub) +
+		"\n      args: [" + strconv.Quote(mcptest.StartLogArgs(startLog)[0]) + ", " + strconv.Quote(startLog) + "]\n"
+	config, err := os.ReadFile(cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
-	dispatcher := tools.NewDispatcherWithRegistry(tools.NewRegistry())
-	registerDaemonOwnedEvalTools(dispatcher, store)
-
-	available := make(map[string]bool)
-	for _, name := range dispatcher.ListTools() {
-		available[name] = true
+	if err := os.WriteFile(cfgPath, append(config, []byte(mcpConfig)...), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	for _, name := range []string{"queue_user_input", "work_search", "work_inspect", "work_select"} {
-		if !available[name] {
-			t.Fatalf("eval harness omitted production continuity tool %q: %v", name, dispatcher.ListTools())
+	c := writeRunnerCase(t, "daemon_worker_construction", "")
+	root, err := makeEvalTempRoot(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cleanupEvalTempRoot(root) })
+
+	harness, err := newRuntimeHarness(RunOptions{ConfigPath: cfgPath}, c, filepath.Join(root, "data"))
+	if err != nil {
+		t.Fatalf("newRuntimeHarness: %v", err)
+	}
+	defer harness.Close()
+	if len(harness.gateway.Workers) != 1 {
+		t.Fatalf("eval workers = %d, want 1", len(harness.gateway.Workers))
+	}
+	dispatcher := harness.gateway.Workers[0].Dispatcher
+	for _, name := range []string{
+		"queue_user_input", "work_search", "work_inspect", "work_select", "watch_external",
+		tools.MCPToolLocalName("stub", mcptest.EchoTool),
+	} {
+		if !dispatcher.ToolExists(name) {
+			t.Fatalf("eval worker lacks production tool %q: %v", name, dispatcher.ListTools())
 		}
+	}
+	if starts := mcptest.Starts(t, startLog); len(starts) != 1 {
+		t.Fatalf("MCP server processes = %d, want 1", len(starts))
 	}
 }
 

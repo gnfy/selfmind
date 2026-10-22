@@ -73,6 +73,11 @@ func (m *uiModel) clearStatusNotice() {
 	m.statusNoticeID = 0
 	m.watcherNoticeID = ""
 	m.watcherNoticeCursor = 0
+	// Human waits outlive transient notices. Restore their live entry point
+	// when a local notice clears, without replaying a stale transcript warning.
+	if len(m.otherApprovals) > 0 || m.otherClarify != "" {
+		m.refreshOtherSessionNotice()
+	}
 }
 
 func clearStatusNoticeAfter(id uint64, delay time.Duration) tea.Cmd {

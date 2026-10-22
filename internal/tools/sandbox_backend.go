@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -23,10 +24,12 @@ import (
 //
 // Backends are NOT interchangeable in strength. Seatbelt is a permission
 // filter: it confines writes and egress, but provides no PID/IPC/UTS namespace
-// and cannot mount, so a plan needing OverlayMounts or SynthesizedDirs is
-// refused there and degrades to approval-gated host execution. Callers must
-// keep reading the containment assessment rather than treating "enforced" as
-// one uniform guarantee.
+// and cannot mount. Tool state bubblewrap shadows with a private overlay is
+// therefore written in place there, on exactly the declared subpaths
+// (HostStateWrites), and a plan still needing OverlayMounts or SynthesizedDirs
+// is refused — never run on the host instead. Callers must keep reading the
+// containment assessment rather than treating "enforced" as one uniform
+// guarantee.
 
 // bubblewrapBackend enforces a plan with bwrap: read-only host root, writable
 // roots bound over it, the run's scratch bound at both its real path and /tmp,
@@ -39,10 +42,19 @@ func (bubblewrapBackend) Available() bool {
 	return runtime.GOOS == "linux" && sandbox.Available()
 }
 
+func (bubblewrapBackend) MountsToolState() bool { return true }
+
 func (b bubblewrapBackend) Command(ctx context.Context, argv []string, plan SandboxPlan, material ProcessMaterial) (*exec.Cmd, error) {
+	if len(plan.HostStateWrites) > 0 {
+		// In-place state writes are how a backend that cannot mount realizes
+		// tool state. Honouring them here would write the host where this
+		// backend promises a private overlay.
+		return nil, fmt.Errorf("%w: in-place host state writes are not a bubblewrap plan", errSandboxUnavailable)
+	}
 	policy := sandbox.Policy{
 		Network:    plan.NetworkMode == "shared",
 		ScratchTmp: material.ScratchTmp(),
+		Private:    existingPrivateState(executionRuntimeFromContext(ctx).PrivateState()),
 	}
 	for _, root := range plan.WritableRoots {
 		if resolved := resolveWritableRoot(root); resolved != "" {
@@ -91,6 +103,8 @@ func (seatbeltBackend) Available() bool {
 	return runtime.GOOS == "darwin" && sandbox.SeatbeltAvailable()
 }
 
+func (seatbeltBackend) MountsToolState() bool { return false }
+
 func (seatbeltBackend) Command(ctx context.Context, argv []string, plan SandboxPlan, material ProcessMaterial) (*exec.Cmd, error) {
 	if len(plan.OverlayMounts) > 0 || len(plan.SynthesizedDirs) > 0 {
 		return nil, fmt.Errorf("%w: mount-backed state requires overlay mounts or synthesized directories", errSandboxUnavailable)
@@ -98,11 +112,34 @@ func (seatbeltBackend) Command(ctx context.Context, argv []string, plan SandboxP
 	policy := sandbox.Policy{
 		Network:    plan.NetworkMode == "shared",
 		ScratchTmp: material.ScratchTmp(),
+		// The daemon's private state: denied in every form, whatever else this
+		// policy opens (the in-place state writes below are not an exception).
+		Private: executionRuntimeFromContext(ctx).PrivateState(),
+		// The declared subpaths preparation validated against their state
+		// root; the policy builder still refuses one that is not a clean
+		// absolute path.
+		StateWritePaths: append([]string{}, plan.HostStateWrites...),
+		FlatStatePaths:  append([]string{}, plan.FlatHostStateWrites...),
+		Canary:          material.SandboxCanary(),
 	}
 	for _, root := range plan.WritableRoots {
 		if resolved := resolveWritableRoot(root); resolved != "" {
 			policy.WritableRoots = append(policy.WritableRoots, resolved)
 		}
+	}
+	// The runtime's records of what sandboxed commands left stay read-only
+	// even when a writable root contains the runtime root. Seatbelt matches
+	// real paths, so the directory is made and resolved first; a record
+	// directory that cannot be protected refuses the plan.
+	if records := executionRuntimeFromContext(ctx).HostStateRecordsDir(); records != "" {
+		if err := os.MkdirAll(records, 0o700); err != nil {
+			return nil, fmt.Errorf("%w: protect the runtime records: %v", errSandboxUnavailable, err)
+		}
+		resolved, err := filepath.EvalSymlinks(records)
+		if err != nil {
+			return nil, fmt.Errorf("%w: protect the runtime records: %v", errSandboxUnavailable, err)
+		}
+		policy.DenyWritePaths = append(policy.DenyWritePaths, resolved)
 	}
 	// Mount-backed state redirection is carried through unchanged so the policy
 	// builder can refuse it. Dropping these here instead would produce a policy
@@ -141,6 +178,10 @@ type hostBackend struct{}
 func (hostBackend) Name() string { return hostBackendName }
 
 func (hostBackend) Available() bool { return true }
+
+// MountsToolState is false: host execution has no mount namespace, and its
+// tools use their real state directories.
+func (hostBackend) MountsToolState() bool { return false }
 
 func (hostBackend) Command(ctx context.Context, argv []string, _ SandboxPlan, material ProcessMaterial) (*exec.Cmd, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
@@ -204,6 +245,6 @@ func resolveWritableRoot(root string) string {
 }
 
 // errSandboxUnavailable signals that a backend cannot enforce a plan on this
-// host. The caller decides whether that is a hard failure (isolation was
-// required) or an observable fallback.
+// host. A call whose boundary resolved to isolation is refused, not dispatched;
+// it never falls back to the host.
 var errSandboxUnavailable = errors.New("sandbox backend unavailable on this host")

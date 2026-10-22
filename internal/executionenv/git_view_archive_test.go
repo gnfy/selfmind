@@ -27,7 +27,7 @@ func TestDeliveredGitViewRetirementIsReversibleAndBytePreserving(t *testing.T) {
 	if _, err := DeliverGitViewBranch(ctx, views, view.ID, baseline); err != nil {
 		t.Fatal(err)
 	}
-	retired, err := RetireGitView(ctx, views, view.ID, baseline)
+	retired, err := RetireGitView(ctx, views, view.ID, baseline, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestDeliveredGitViewRetirementIsReversibleAndBytePreserving(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(retired.Path, "file.txt")); err != nil || string(data) != "committed work\n" {
 		t.Fatalf("retained file changed: %q %v", data, err)
 	}
-	if again, err := RetireGitView(ctx, views, view.ID, baseline); err != nil || again.Path != retired.Path {
+	if again, err := RetireGitView(ctx, views, view.ID, baseline, nil); err != nil || again.Path != retired.Path {
 		t.Fatalf("retirement retry = %+v %v", again, err)
 	}
 	restored, err := RestoreGitView(ctx, views, view.ID, baseline)
@@ -71,7 +71,7 @@ func TestGitViewRetirementKeepsUndeliveredAndIgnoredWorkAtLivePath(t *testing.T)
 	if err := os.WriteFile(path, []byte("do not lose"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RetireGitView(ctx, views, view.ID, baseline); err == nil {
+	if _, err := RetireGitView(ctx, views, view.ID, baseline, nil); err == nil {
 		t.Fatal("undelivered draft was retired")
 	}
 	if data, err := os.ReadFile(path); err != nil || string(data) != "do not lose" {
@@ -95,7 +95,7 @@ func TestGitViewRetirementKeepsUndeliveredAndIgnoredWorkAtLivePath(t *testing.T)
 	if _, err := DeliverGitViewBranch(ctx, views, view.ID, baseline); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RetireGitView(ctx, views, view.ID, baseline); err == nil {
+	if _, err := RetireGitView(ctx, views, view.ID, baseline, nil); err == nil {
 		t.Fatal("ignored state was retired without review")
 	}
 	if data, err := os.ReadFile(ignored); err != nil || string(data) != "keep" {
@@ -120,7 +120,7 @@ func TestGitViewRetirementRefusesUndeliveredCommit(t *testing.T) {
 	}
 	baselineGit(t, view.Path, "add", "file.txt")
 	baselineGit(t, view.Path, "commit", "-qm", "isolated work")
-	if _, err := RetireGitView(ctx, views, view.ID, baseline); err == nil {
+	if _, err := RetireGitView(ctx, views, view.ID, baseline, nil); err == nil {
 		t.Fatal("undelivered commit was retired")
 	}
 	if data, err := os.ReadFile(filepath.Join(view.Path, "file.txt")); err != nil || string(data) != "committed but not delivered\n" {
@@ -148,11 +148,11 @@ func TestPruneRetiredGitViewKeepsDeliveredCommitAndReclaimsCheckout(t *testing.T
 	if _, err := DeliverGitViewBranch(ctx, views, view.ID, baseline); err != nil {
 		t.Fatal(err)
 	}
-	retired, err := RetireGitView(ctx, views, view.ID, baseline)
+	retired, err := RetireGitView(ctx, views, view.ID, baseline, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pruned, err := PruneRetiredGitView(ctx, views, view.ID, baseline)
+	pruned, err := PruneRetiredGitView(ctx, views, view.ID, baseline, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestPruneRetiredGitViewKeepsDeliveredCommitAndReclaimsCheckout(t *testing.T
 	if err := os.WriteFile(filepath.Join(partial, "interrupted-delete"), []byte("partial"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if again, err := PruneRetiredGitView(ctx, views, view.ID, baseline); err != nil || again != pruned {
+	if again, err := PruneRetiredGitView(ctx, views, view.ID, baseline, nil); err != nil || again != pruned {
 		t.Fatalf("prune retry = %+v %v", again, err)
 	}
 	if _, err := os.Lstat(partial); !os.IsNotExist(err) {
@@ -206,11 +206,11 @@ func TestPruneRetiredGitViewRefusesHiddenGitWork(t *testing.T) {
 				baselineGit(t, view.Path, "commit", "-qm", "unreviewed work")
 				baselineGit(t, view.Path, "reset", "--hard", baseline.Commit)
 			}
-			retired, err := RetireGitView(ctx, views, view.ID, baseline)
+			retired, err := RetireGitView(ctx, views, view.ID, baseline, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := PruneRetiredGitView(ctx, views, view.ID, baseline); err == nil {
+			if _, err := PruneRetiredGitView(ctx, views, view.ID, baseline, nil); err == nil {
 				t.Fatal("hidden Git work was deleted")
 			}
 			if _, err := os.Stat(retired.Path); err != nil {
@@ -232,7 +232,7 @@ func TestPruneRetiredGitViewResumesAfterStagingCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	retired, err := RetireGitView(ctx, views, view.ID, baseline)
+	retired, err := RetireGitView(ctx, views, view.ID, baseline, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestPruneRetiredGitViewResumesAfterStagingCrash(t *testing.T) {
 	if err := os.Rename(retired.Path, filepath.Join(staging, view.ID)); err != nil {
 		t.Fatal(err)
 	}
-	pruned, err := PruneRetiredGitView(ctx, views, view.ID, baseline)
+	pruned, err := PruneRetiredGitView(ctx, views, view.ID, baseline, nil)
 	if err != nil || pruned.HeadCommit != baseline.Commit {
 		t.Fatalf("staged prune recovery = %+v %v", pruned, err)
 	}
@@ -265,14 +265,14 @@ func TestPruneRetiredGitViewRefusesReappearingLiveView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	retired, err := RetireGitView(ctx, views, view.ID, baseline)
+	retired, err := RetireGitView(ctx, views, view.ID, baseline, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(view.Path, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PruneRetiredGitView(ctx, views, view.ID, baseline); err == nil {
+	if _, err := PruneRetiredGitView(ctx, views, view.ID, baseline, nil); err == nil {
 		t.Fatal("prune ignored a second live path")
 	}
 	if _, err := os.Stat(retired.Path); err != nil {
@@ -292,10 +292,10 @@ func TestInspectPrunedGitViewRejectsSymlinkRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := RetireGitView(ctx, views, view.ID, baseline); err != nil {
+	if _, err := RetireGitView(ctx, views, view.ID, baseline, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PruneRetiredGitView(ctx, views, view.ID, baseline); err != nil {
+	if _, err := PruneRetiredGitView(ctx, views, view.ID, baseline, nil); err != nil {
 		t.Fatal(err)
 	}
 	marker := filepath.Join(views, ".retired", ".pruned", view.ID+".json")

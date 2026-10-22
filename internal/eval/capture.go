@@ -49,6 +49,17 @@ func CaptureFromFlight(turnID string, opts CaptureOptions) (*CaptureResult, erro
 	vcrDir := firstNonEmpty(opts.VCRDir, ".vcr-drafts")
 	outDir := firstNonEmpty(opts.OutDir, filepath.Join("evaldrafts", suite))
 	caseID := slugifyCase(opts.Title, turnID)
+	casePath := filepath.Join(outDir, caseID+".yaml")
+	if _, err := os.Lstat(casePath); err == nil || !os.IsNotExist(err) {
+		return nil, fmt.Errorf("capture destination already exists or is unavailable: %s", casePath)
+	}
+
+	if err := os.MkdirAll(outDir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(outDir, 0o700); err != nil {
+		return nil, err
+	}
 
 	// Copy the recorded cassette (NNNN.json only, not meta.json) so the case
 	// replays the EXACT model interaction offline.
@@ -59,15 +70,32 @@ func CaptureFromFlight(turnID string, opts CaptureOptions) (*CaptureResult, erro
 		return nil, err
 	}
 
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(dstDir)
+		}
+	}()
 	channel := firstNonEmpty(meta.Channel, "cli")
 	yaml := renderCaseYAML(caseID, opts.Title, suite, channel, meta.Prompt)
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
+	f, err := os.OpenFile(casePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
 		return nil, err
 	}
-	casePath := filepath.Join(outDir, caseID+".yaml")
-	if err := os.WriteFile(casePath, []byte(yaml), 0o644); err != nil {
-		return nil, err
+	defer func() {
+		if !complete {
+			_ = os.Remove(casePath)
+		}
+	}()
+	_, writeErr := f.WriteString(yaml)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return nil, writeErr
 	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	complete = true
 	return &CaptureResult{CaseID: caseID, CasePath: casePath, VCRPath: dstDir, Cassettes: cassettes}, nil
 }
 
@@ -104,11 +132,18 @@ func copyCassettes(srcDir, dstDir string) (int, error) {
 	if len(recordings) == 0 {
 		return 0, fmt.Errorf("no cassette files in %s (was the turn recorded?)", srcDir)
 	}
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dstDir), 0o700); err != nil {
+		return 0, err
+	}
+	if err := os.Chmod(filepath.Dir(dstDir), 0o700); err != nil {
+		return 0, err
+	}
+	if err := os.Mkdir(dstDir, 0o700); err != nil {
 		return 0, err
 	}
 	for i, recording := range recordings {
-		if err := os.WriteFile(filepath.Join(dstDir, recording.name), recording.data, 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dstDir, recording.name), recording.data, 0o600); err != nil {
+			_ = os.RemoveAll(dstDir)
 			return i, err
 		}
 	}
@@ -126,7 +161,8 @@ func renderCaseYAML(caseID, title, suite, channel, prompt string) string {
 	fmt.Fprintf(&b, "id: %s\n", caseID)
 	fmt.Fprintf(&b, "title: %q\n", title)
 	fmt.Fprintf(&b, "suite: %s\n", suite)
-	fmt.Fprintf(&b, "workspace: \".\"\n")
+	fmt.Fprintf(&b, "workspace: isolated\ncapture_review_required: true\n")
+	fmt.Fprintf(&b, "# Reconstruct setup and assertions before clearing the review guard.\n")
 	fmt.Fprintf(&b, "channel: %s\n", channel)
 	fmt.Fprintf(&b, "turns:\n  - channel: %s\n    input: |\n%s\n", channel, indentBlock(prompt, "      "))
 	b.WriteString("expect:\n  status: completed\n  must_not_contain: [\"<tool>\", \"Process summary:\"]\n")

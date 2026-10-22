@@ -81,3 +81,47 @@ func TestEffectsControlIsPersonScopedAndReleasesOnlyFinalizedWatcher(t *testing.
 		t.Fatalf("resolved effect remained listed: %q", reply)
 	}
 }
+
+func TestEffectsCommandExplainsMissingLifecycleWithoutReleasingIt(t *testing.T) {
+	ctx := context.Background()
+	store := controltest.NewStore(t)
+	owner := &control.IdentityContext{TenantID: "default", PersonID: "legacy-owner", Platform: "cli"}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: owner.TenantID, PersonID: owner.PersonID, Title: "legacy effect", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunWithOptions(ctx, task, "cli", "legacy effect", control.StartRunOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := store.ClaimExternalEffects(ctx, control.ExternalEffectClaimRequest{
+		TenantID: owner.TenantID, PersonID: owner.PersonID, RunID: run.ID,
+		EffectID: "legacy", TargetKeys: []string{control.UnknownExternalTarget},
+	})
+	if err != nil || !decision.Granted {
+		t.Fatalf("claim: %+v %v", decision, err)
+	}
+	// This is the shape left by older versions, before lifecycle events.
+	if err := store.MarkExternalEffectPossible(ctx, owner.TenantID, run.ID, "legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, owner.TenantID, run.ID, "blocked"); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Control: store, DefaultTenantID: owner.TenantID}
+	for i := 0; i < 2; i++ {
+		handled, reply, _, err := server.tryHandleControlCommand(ctx, owner, api.MessageRequest{Channel: "cli", Content: "/effects"})
+		if err != nil || !handled {
+			t.Fatalf("effects: handled=%v %v", handled, err)
+		}
+		for _, want := range []string{decision.Claims[0].ID, "dispatch details unavailable", "effect outcome not established", "unknown; conflicts with all your external targets", "| since ", "/effects settle", "/effects resolve"} {
+			if !strings.Contains(reply, want) {
+				t.Fatalf("missing %q: %s", want, reply)
+			}
+		}
+		claim, err := store.ExternalEffectClaimDetail(ctx, owner.TenantID, owner.PersonID, decision.Claims[0].ID)
+		if err != nil || claim.State != control.ExternalClaimUncertain || claim.DispatchRecorded {
+			t.Fatalf("view changed legacy effect authority: %+v %v", claim, err)
+		}
+	}
+}

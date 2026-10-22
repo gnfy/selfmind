@@ -253,7 +253,7 @@ func TestApprovalDenySendsRejectionImmediately(t *testing.T) {
 	model.clientMode = true
 	model.thinking = true
 	var steered bool
-	model.steerFn = func(runID, channel, text string) error {
+	model.steerFn = func(runID, channel, text, approvalMode string) error {
 		steered = true
 		return nil
 	}
@@ -424,6 +424,33 @@ func TestAgentDoneKeepsParkedApprovalAnswerable(t *testing.T) {
 	model = updated.(*uiModel)
 	if model.approvalPrompt == nil || model.pendingApprovalID != "apr_1" || !model.approvalPrompt.IsParked() {
 		t.Fatalf("parked approval was lost at run end: pending=%q prompt=%+v", model.pendingApprovalID, model.approvalPrompt)
+	}
+}
+
+// Person-wide parking events must not turn a different terminal's status into
+// a local human wait, including when this terminal has its own pending ask.
+func TestForeignOrResolvedApprovalParkingLeavesLocalStatusAlone(t *testing.T) {
+	for _, own := range []bool{false, true} {
+		model, _ := newApprovalTestModel()
+		model.channel = "session-b"
+		if own {
+			model.Update(sampleApproval("apr_local"))
+		}
+		model.Update(MsgApprovalRequest{ID: "apr_foreign", Tool: "terminal", Channel: "session-a"})
+		status, notice := model.statusMsg, model.statusNoticeID
+		model.Update(MsgApprovalParked{ID: "apr_foreign", Event: sessionRef("run_foreign", "event-park-foreign", "session-a", false)})
+		if model.statusMsg != status || model.statusNoticeID != notice {
+			t.Fatalf("foreign approval replaced local status: own=%v status=%q", own, model.statusMsg)
+		}
+		if own && model.approvalPrompt.IsParked() {
+			t.Fatal("foreign approval marked local panel parked")
+		}
+		model.Update(MsgApprovalResolved{ID: "apr_foreign", Status: "approved", Event: uiEventRef{EventID: "event-answer-foreign"}})
+		status, notice = model.statusMsg, model.statusNoticeID
+		model.Update(MsgApprovalParked{ID: "apr_foreign", Event: sessionRef("run_foreign", "event-late-park", "session-a", false)})
+		if model.statusMsg != status || model.statusNoticeID != notice {
+			t.Fatalf("resolved approval recreated a wait: own=%v status=%q", own, model.statusMsg)
+		}
 	}
 }
 

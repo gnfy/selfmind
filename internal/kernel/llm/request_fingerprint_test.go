@@ -42,6 +42,7 @@ func TestProtocolAdaptersExposeRequestFingerprints(t *testing.T) {
 		provider Provider
 		protocol string
 	}{
+		{"chat", &OpenAIAdapter{Model: "chat-test"}, "openai_chat"},
 		{"responses", &ResponsesAdapter{Model: "gpt-test"}, "openai_responses"},
 		{"anthropic", &AnthropicAdapter{Model: "claude-test", MaxTokens: 128}, "anthropic_messages"},
 	}
@@ -50,6 +51,14 @@ func TestProtocolAdaptersExposeRequestFingerprints(t *testing.T) {
 			got, ok := FingerprintProviderRequest(context.Background(), test.provider, req, false)
 			if !ok || got.Protocol != test.protocol || got.PrefixHash == "" || got.RequestHash == "" {
 				t.Fatalf("fingerprint = %+v ok=%v", got, ok)
+			}
+			tagged := req
+			tagged.Messages = append([]Message(nil), req.Messages...)
+			tagged.Messages[1].ContextOrigin = MessageOriginRuntimeControl
+			tagged.Messages[1].ControlCondition = "plan"
+			withOrigin, ok := FingerprintProviderRequest(context.Background(), test.provider, tagged, false)
+			if !ok || withOrigin.RequestHash != got.RequestHash || withOrigin.PrefixHash != got.PrefixHash {
+				t.Fatal("local retention metadata changed the provider payload")
 			}
 		})
 	}

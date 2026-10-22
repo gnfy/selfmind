@@ -16,7 +16,8 @@ turns:
       run verify to establish it, and mark the step completed. Then stop and
       wait for my confirmation before reporting the result: keep a distinct
       pending reporting step and record waiting_user with finish_run. Do not
-      modify value.txt.
+      modify value.txt. For each finish_run, supply the explicit status and
+      complete final_response; do not duplicate that text in summary or lists.
     assert_state:
       - on: run
         field: status
@@ -24,15 +25,33 @@ turns:
   - input: >-
       I confirm. value.txt and the acceptance condition have not changed since
       your successful check. Continue the exact waiting work and report the
-      verified result. Judge whether the prior observation still suffices;
+      verified result. Assess the inherited check's source, criterion and any
+      reuse blocker before judging whether the prior observation still suffices.
+      Use the accepted current-Run plan and its read-only closure_facts from
+      work_select; those facts are discovery output, never update_plan input.
+      Keep historical observations separate from directly citeable current checks;
       avoid repeating the check solely because this is a new turn. Complete
-      the plan and record a done outcome with finish_run. Do not modify files.
+      the checked step by explicitly adopting the valid prior verification
+      with update_plan.reuse_prior_verification and a reuse_reason. Complete
+      the plan and record a done outcome with finish_run. Include your explicit
+      condition finding for the verified Plan step, using the published tool
+      contract to let the runtime bind its evidence. Do not modify files.
 expect:
   status: completed
+  completion_reason: completed
+  resumable: false
   verification_state: passed
   max_tool_errors: 0
   max_duration_seconds: 300
+# A committed continuation already owns its imported Plan; the loop must
+# reconcile that state rather than claim that no plan was supplied.
 assert_state:
+  - on: run
+    field: status
+    eq: done
+  - on: events
+    type: strategy.plan_guidance_escalated
+    count_lte: 0
   - on: events
     type: evidence.recorded
     payload_contains: '"kind":"verification"'
@@ -46,6 +65,29 @@ assert_state:
     type: plan.updated
     payload_contains: '"source":"resumed_run"'
     count_gte: 1
+  # The direct selection publishes the accepted child version, not an unversioned snapshot.
+  - on: events
+    type: plan.updated
+    payload_contains: '"plan_version":1,"resumes_run_id":'
+    count_gte: 1
+  # Assert the final projected source; the first turn's verdict is insufficient.
+  - on: events
+    type: run.finished
+    payload_contains: '"source":{"run_id":'
+    count_gte: 1
+  # The adopted finding carries explicit source provenance, never a fake new check.
+  - on: events
+    type: run.outcome
+    payload_contains: '"version":2'
+    count_gte: 1
+  - on: events
+    type: tool.started
+    payload_contains: '\"final_response\":'
+    count_gte: 2
+  - on: events
+    type: tool.started
+    payload_contains: '\"summary\":'
+    count_lte: 0
   - on: file
     path: value.txt
     contains: READY

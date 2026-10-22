@@ -51,6 +51,9 @@ type PendingTurnChoice struct {
 }
 
 type PendingTurnChoiceCreate struct {
+	// ID lets the gateway prepare associated notification parts before this
+	// atomic write. Ordinary callers leave it empty for a generated id.
+	ID           string
 	TenantID     string
 	PersonID     string
 	AccountID    string
@@ -59,12 +62,23 @@ type PendingTurnChoiceCreate struct {
 	RequestJSON  string
 	Options      []TurnChoiceOption
 	ExpiresAt    time.Time
+	Notice       *PendingTurnChoiceNotice
+}
+
+// PendingTurnChoiceNotice persists an asynchronous question with the choice
+// that owns its input. Synchronous callers return the question directly.
+type PendingTurnChoiceNotice struct {
+	TaskID          string
+	Question        string
+	QueueID         string
+	QueueClaimToken string
+	Deliveries      []Delivery
 }
 
 // CreatePendingTurnChoice persists one person-scoped choice. It intentionally
 // does not supersede another live choice: a bare number is accepted only when
-// exactly one row is eligible, while reply metadata or /choose can name either
-// row precisely.
+// exactly one row is eligible on its endpoint, while reply metadata or /choose
+// can name either row precisely.
 func (s *Store) CreatePendingTurnChoice(ctx context.Context, input PendingTurnChoiceCreate) (*PendingTurnChoice, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("control store is unavailable")
@@ -121,7 +135,15 @@ func (s *Store) CreatePendingTurnChoice(ctx context.Context, input PendingTurnCh
 		CreatedAt:    now,
 		ExpiresAt:    input.ExpiresAt,
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO pending_turn_choices
+	if strings.TrimSpace(input.ID) != "" {
+		choice.ID = strings.TrimSpace(input.ID)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO pending_turn_choices
 		(id, tenant_id, person_id, account_id, channel, resolution_id, request_json, options_json,
 		 status, chosen_key, created_at, expires_at, claimed_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, 0)`,
@@ -130,7 +152,63 @@ func (s *Store) CreatePendingTurnChoice(ctx context.Context, input PendingTurnCh
 	if err != nil {
 		return nil, err
 	}
+	var notices []Event
+	if input.Notice != nil {
+		notices, err = savePendingTurnChoiceNoticeTx(ctx, tx, choice, input.Notice)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	for _, event := range notices {
+		s.events.publish(event)
+	}
 	return choice, nil
+}
+
+func savePendingTurnChoiceNoticeTx(ctx context.Context, tx *sql.Tx, choice *PendingTurnChoice, notice *PendingTurnChoiceNotice) ([]Event, error) {
+	if strings.TrimSpace(notice.Question) == "" {
+		return nil, fmt.Errorf("turn choice notice needs a question")
+	}
+	var owned int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM threads WHERE id=? AND tenant_id=? AND person_id=?`,
+		notice.TaskID, choice.TenantID, choice.PersonID).Scan(&owned); err != nil {
+		return nil, fmt.Errorf("resolve turn choice notice owner: %w", err)
+	}
+	payload, err := json.Marshal(map[string]interface{}{"choice_id": choice.ID,
+		"question": notice.Question, "options": choice.Options})
+	if err != nil {
+		return nil, err
+	}
+	notices, err := insertScopedEventsTx(ctx, tx, choice.TenantID, choice.PersonID, "", notice.TaskID, choice.Channel,
+		[]Event{{Type: "continuation.candidates", Payload: payload, IdempotencyKey: "turn-choice:" + choice.ID}})
+	if err != nil {
+		return nil, err
+	}
+	if notice.QueueID != "" {
+		result, err := tx.ExecContext(ctx, `UPDATE task_queue SET status='done'
+			WHERE tenant_id=? AND person_id=? AND id=? AND status='started' AND claim_token=? AND COALESCE(run_id,'')=''`,
+			choice.TenantID, choice.PersonID, notice.QueueID, notice.QueueClaimToken)
+		if err != nil {
+			return nil, err
+		}
+		if changed, err := result.RowsAffected(); err != nil {
+			return nil, err
+		} else if changed != 1 {
+			return nil, ErrQueueClaimLost
+		}
+	}
+	for _, d := range notice.Deliveries {
+		if d.TenantID != choice.TenantID || d.PersonID != choice.PersonID {
+			return nil, fmt.Errorf("turn choice notice delivery owner does not match")
+		}
+		if _, err := enqueueDelivery(ctx, tx, d); err != nil {
+			return nil, err
+		}
+	}
+	return notices, nil
 }
 
 var (
@@ -139,11 +217,10 @@ var (
 	ErrTurnChoiceOption    = errors.New("turn choice option is invalid")
 )
 
-// ClaimPendingTurnChoice atomically consumes one choice. An empty choiceID is
-// the bare-number path and is deliberately narrower: exactly one pending row
-// created within bareWindow must exist for the person. A named choice remains
-// claimable until its durable expiry.
-func (s *Store) ClaimPendingTurnChoice(ctx context.Context, tenantID, personID, choiceID, optionKey string, now time.Time, bareWindow time.Duration) (*PendingTurnChoice, *TurnChoiceOption, error) {
+// ClaimPendingTurnChoice atomically consumes one named choice, which remains
+// claimable until its durable expiry. A bare number names its choice through
+// PeekBareTurnChoice first, so selection by endpoint lives in one place.
+func (s *Store) ClaimPendingTurnChoice(ctx context.Context, tenantID, personID, choiceID, optionKey string, now time.Time) (*PendingTurnChoice, *TurnChoiceOption, error) {
 	if s == nil || s.db == nil {
 		return nil, nil, fmt.Errorf("control store is unavailable")
 	}
@@ -151,14 +228,11 @@ func (s *Store) ClaimPendingTurnChoice(ctx context.Context, tenantID, personID, 
 	personID = strings.TrimSpace(personID)
 	choiceID = strings.TrimSpace(choiceID)
 	optionKey = strings.TrimSpace(optionKey)
-	if personID == "" || optionKey == "" {
+	if personID == "" || choiceID == "" || optionKey == "" {
 		return nil, nil, ErrTurnChoiceNotFound
 	}
 	if now.IsZero() {
 		now = time.Now()
-	}
-	if bareWindow <= 0 {
-		bareWindow = 30 * time.Minute
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -171,34 +245,11 @@ func (s *Store) ClaimPendingTurnChoice(ctx context.Context, tenantID, personID, 
 		return nil, nil, err
 	}
 
-	var row *sql.Row
-	if choiceID != "" {
-		row = tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, account_id, channel, resolution_id,
-			request_json, options_json, status, chosen_key, created_at, expires_at, claimed_at
-			FROM pending_turn_choices
-			WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = ? AND expires_at > ?`,
-			tenantID, personID, choiceID, TurnChoicePending, now.Unix())
-	} else {
-		var count int
-		cutoff := now.Add(-bareWindow).Unix()
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pending_turn_choices
-			WHERE tenant_id = ? AND person_id = ? AND status = ? AND expires_at > ? AND created_at >= ?`,
-			tenantID, personID, TurnChoicePending, now.Unix(), cutoff).Scan(&count); err != nil {
-			return nil, nil, err
-		}
-		if count == 0 {
-			return nil, nil, ErrTurnChoiceNotFound
-		}
-		if count != 1 {
-			return nil, nil, ErrTurnChoiceAmbiguous
-		}
-		row = tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, account_id, channel, resolution_id,
-			request_json, options_json, status, chosen_key, created_at, expires_at, claimed_at
-			FROM pending_turn_choices
-			WHERE tenant_id = ? AND person_id = ? AND status = ? AND expires_at > ? AND created_at >= ?
-			ORDER BY created_at DESC LIMIT 1`, tenantID, personID, TurnChoicePending, now.Unix(), cutoff)
-	}
-	choice, err := scanPendingTurnChoice(row)
+	choice, err := scanPendingTurnChoice(tx.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, account_id, channel, resolution_id,
+		request_json, options_json, status, chosen_key, created_at, expires_at, claimed_at
+		FROM pending_turn_choices
+		WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = ? AND expires_at > ?`,
+		tenantID, personID, choiceID, TurnChoicePending, now.Unix()))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, ErrTurnChoiceNotFound
 	}

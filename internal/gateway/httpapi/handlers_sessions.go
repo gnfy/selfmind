@@ -39,13 +39,13 @@ func (d *Server) handleSessions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if d.Sessions == nil {
-		http.Error(w, "session index is not configured", http.StatusServiceUnavailable)
-		return
-	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
+		return
+	}
+	if d.Sessions == nil {
+		http.Error(w, "session index is not configured", http.StatusServiceUnavailable)
 		return
 	}
 	q := r.URL.Query()

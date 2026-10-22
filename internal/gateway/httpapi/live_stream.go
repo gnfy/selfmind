@@ -34,7 +34,8 @@ var personWideRunEventTypes = map[string]bool{
 	"run.cancelled": true, "run.interrupted": true, "run.failed": true,
 	"approval.requested": true, "approval.approved": true, "approval.rejected": true,
 	"approval.expired": true, "approval.archived": true, "approval.parked": true,
-	"clarify.requested": true, "background.notice": true, "external_watch.completed": true,
+	"clarify.requested": true, "clarify.answered": true, "clarify.expired": true,
+	"background.notice": true, "external_watch.completed": true,
 }
 
 // wants decides one event's audience, identically for live delivery and for
@@ -108,6 +109,8 @@ func (s *runEventSubscriber) view(event api.RunEvent) (api.RunEvent, bool) {
 		copyField("clarify_id")
 		// A generated question may quote the private input of this run.
 		summary["question"], _ = json.Marshal("A question is waiting")
+	case "clarify.answered", "clarify.expired":
+		copyField("clarify_id")
 	case "background.notice":
 		copyShortField("message", 160)
 		copyField("kind")
@@ -291,7 +294,7 @@ func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	if presenceClaimed(r) {
@@ -334,8 +337,13 @@ func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			}
-			_, _ = fmt.Fprint(w, ": keep-alive\n\n")
+			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
+			if presenceClaimed(r) {
+				d.touchPresence(r.Context(), identity)
+			}
 		case event := <-sub.ch:
 			if sub.gap.Swap(false) {
 				writeRunEventSSE(w, api.RunEvent{Type: "stream.gap", Durability: api.EventEphemeral, PersonID: identity.PersonID, CreatedAt: time.Now()})
@@ -351,6 +359,9 @@ func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 			}
 			writeRunEventSSE(w, event)
 			flusher.Flush()
+			if presenceClaimed(r) {
+				d.touchPresence(r.Context(), identity)
+			}
 		}
 	}
 }
@@ -392,10 +403,17 @@ func (d *Server) replayPersonEvents(ctx context.Context, w http.ResponseWriter, 
 }
 
 func durableRunEvent(event control.Event) api.RunEvent {
+	// Queue retirement is a person-visible recovery notice. Preserve durable
+	// identity and cursor so reconnects replay it and clients can deduplicate it.
+	// Raw work history retains the original scheduling event type.
+	eventType := event.Type
+	if eventType == "queue.continuation_obsolete" {
+		eventType = "background.notice"
+	}
 	return api.RunEvent{
 		EventID: event.ID, Cursor: event.Cursor, TenantID: event.TenantID,
 		PersonID: event.PersonID, TaskID: event.TaskID, RunID: event.RunID,
-		Channel: event.Channel, Type: event.Type, Durability: api.EventDurable,
+		Channel: event.Channel, Type: eventType, Durability: api.EventDurable,
 		CreatedAt: event.CreatedAt, Payload: event.Payload,
 	}
 }

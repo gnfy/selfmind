@@ -22,6 +22,8 @@ selfmind selfcheck                 # docs + build + test + offline-replay eval g
 selfmind selfcheck --skip-go --skip-eval # documentation-only release gate
 selfmind eval repair [case-or-dir] # re-run failures, print a repair brief (apply stays manual)
 selfmind eval scorecard [dir]      # per-scenario daily-driver readiness report
+selfmind eval compare before.md.json after.md.json # advisory cost/quality comparison
+selfmind eval canary init /tmp/my-new-canary # create private synthetic live fixtures; no calls
 selfmind eval capture [latest]     # promote the last recorded turn into an eval case
 selfmind eval clean [--yes]        # remove historic eval residue (control.db rows + on-disk eval-* dirs)
 ```
@@ -45,7 +47,93 @@ version their plan-ID binding and prefer the newest plan evidence, keeping
 old tool-result aging from shifting current step IDs. Existing cassettes retain
 their original binding contract.
 
+Tool-error limits keep all failures and refusals visible. A case may additionally
+set `max_invoked_tool_errors: 0` to reject failed or uncertain tool attempts while
+allowing bounded preparation recovery under `max_tool_errors`. Only runtime facts
+with both `invoked: false` and `effect_state: not_dispatched` qualify as proven
+non-dispatch; missing, untyped or unknown-effect facts remain failures. No error
+message, model name or scenario-specific code grants an exception.
+
+Optional requests deliberately canceled by their caller record `caller_canceled`
+and replay a cancellation, never a successful response. The marker requires both
+a canceled caller context and a cancellation error; unrelated provider errors,
+including timeouts, remain failures. Conflicting output/error markers are invalid.
+This keeps overlapped recall recordable without weakening the provider-failure gate.
+
+Natural-task efficiency checks use the same input, fixture and route before and
+after a change, without instructing the model which tool sequence to use.
+Report task correctness, verification, tool failures, Main calls and elapsed time
+separately; count refusals and retain failed provider samples. An isolated summary
+checks recorded success, a human wait and stale local evidence without mutation.
+A small live sample establishes protocol coverage, not sustained speed or parity.
+
+## Efficiency evidence and live canaries
+
+Scorecards keep every repeat sample, including startup errors. Repeated record mode keeps separate `<case>-sN`
+sessions in the configured VCR directory; no attempt overwrites its predecessor.
+Select an intact sample explicitly when promoting a canonical release cassette.
+Aggregate
+`RunResult` counters and duration are totals; sample medians are calculated from
+`samples`, never from the last successful run. Markdown has a private JSON
+sidecar (`<report.md>.json`) with each sample's checks and evidence path.
+`eval report` and scorecards use the same efficiency projection. Lifecycle means
+`update_plan` and `finish_run`; `verify` is reported separately. Main usage counts
+include failed provider requests, exclude proven local deferrals, and separate
+other/unknown roles. Missing historical usage stays unknown.
+
+Finish first-pass measures the first tool receipt for each identified Run that
+attempts finish, not successful durable delivery or task correctness. Closing
+model cost starts with that first attempt's generating call and includes later
+recovery on the same Run; it is not a claim that all closing work is waste.
+Missing Run identity or timing is not inferred from the last three calls. Judge
+latency is not added again to enclosing tool intervals.
+
+`eval compare <before> <after>` reads JSON sidecars, raw JSONL, or directories of
+JSONL (not both originals and sidecars). It retains incomplete and unmatched
+samples. Sidecars also retain failures before a JSONL log could be created; use
+them for sampled experiments. Live latency deltas require equal sample counts and matching fixture hashes, route, reasoning,
+model/sandbox policy and execution mode; build identities may differ. Unknown
+provenance and replay show no live speed claim. This is advisory output, not a
+new selfcheck or release gate. Policy hashes cover model selections and sandbox
+configuration, not every host/environment difference: hold those constant too.
+
+`eval canary init <new-directory>` writes five synthetic, isolated fixtures:
+cross-project history, a code repair with existing tests, a negative investigation,
+a tool-free answer, and a confirmation/continuation with a pre-confirmation
+no-write assertion. Each requests three samples on the configured route in
+smart mode; task assertions determine quality and tool errors remain separate
+friction metrics rather than being hidden by the final success; no tool sequence or minimum round count is taught. Generation makes
+no provider call. Explicit `scorecard <directory> --live --out before.md` incurs
+provider usage; run both builds against the identical fixture directory and
+configuration, alternating order when collecting repeated comparisons. Three
+samples are smoke evidence, not a tail-latency or sustained-quality estimate.
+These starter fixtures do not yet prove long Git histories, real IM, or recovery
+under sustained load. Keep them outside the committed replay corpus.
+
+Replay reports distinguish its configured route from the actual recording
+sources; a playback configured for Qwen never makes a legacy tape a Qwen sample.
+New recordings carry advisory `recorded_with` metadata: time, resolved model/role,
+build and available schema/prefix hashes. Legacy provenance stays unknown; file
+mtime is not treated as a recording date. Fingerprint drift does not fail replay.
+Caller-canceled optional work retains cancellation semantics rather than being
+limited by a fixed allowed count. Actual provider failures remain forbidden in
+release recordings.
+
 ## Data Isolation (default)
+
+Each turn's outcome assertions read that turn's returned state. An absent
+verification verdict does not inherit a preceding turn's `passed` or `failed`.
+When a case waits for a watcher continuation, its final assertions use that
+child's actual outcome, including absence of verification. Adopted evidence
+cases also assert the source reference in the durable final outcome, so a
+historical verdict alone cannot satisfy the continuation gate.
+Plan-ID placeholders support legacy UUID and compact Run-namespaced identities
+in both directions; shortening references does not require re-recording unrelated
+cases. The adoption case also requires status plus a complete final body without
+duplicated summary arguments on both turns.
+The changed-criterion case allows a genuine negative check but separately
+rejects invalid-input and stale-reference errors in durable tool events; an
+expected failed check cannot hide a contract-repair loop.
 
 Every eval run — record and replay alike — uses a **throwaway temp data dir**
 (fresh `control.db` + memory) by default. Eval identities (`eval-<case-id>`
@@ -67,8 +155,9 @@ Two related knobs:
 
 VCR cassettes are unaffected: they live under `.vcr/<case-id>/` (or
 `SELFMIND_EVAL_VCR_DIR`) keyed by case ID, independent of the data dir.
-Artifact references are rebound from the current request during recording and
-replay, like Run identities. Corpus checks reject literal recording-time artifact
+Artifact and external-effect claim references are rebound from the current
+request during recording and replay, like Run identities. An identity absent
+from the current request is never invented or granted replay authority. Corpus checks reject literal recording-time artifact
 IDs; artifact-read cases must also assert zero tool errors so an answer in a
 cassette cannot hide a failed read.
 
@@ -144,12 +233,16 @@ tests, for free.
    flight cassette containing a provider failure; rerun the turn successfully
    instead of promoting a timeout or transport error as fixed model behavior.
 
-3. **Edit the draft** to encode *what should have happened* — fill in
+3. **Review the isolated draft** before execution. Capture preserves private
+   directory/file permissions (0700/0600), refuses overwrites, and sets
+   `capture_review_required: true`. Reconstruct `setup` and its ground truth, then
+   clear that flag. Raw recordings do not restore files, remote state or approvals,
+   and replay really executes tools. Fill in
    `assert_state` (e.g. a file that must exist, a task that must continue) and/or
    `expect`. The recorded model output is the negative example; you pin the
    desired terminal state.
 
-4. **Promote it.** Replay the draft directly, then move the reviewed YAML into
+4. **Promote it.** Replay the reviewed draft, then move the reviewed YAML into
    the appropriate `evalcases/<suite>/` directory and its cassette directory
    into `.vcr/<case-id>/`. Only then does `selfmind selfcheck` treat it as
    release evidence. A model-backed promoted case without its cassette fails
@@ -227,6 +320,16 @@ setup:
 
 Use multi-turn cases to test `continue`, `可以`, and `按方案做` behavior:
 
+`expect.verification_state` checks the legacy execution/check projection.
+`expect.condition_state` checks Main's evidence-bound conclusion (`met`,
+`not_met`, `unknown`, or `unassessed`). These are not interchangeable: a
+zero-exit observation can establish a negative condition. Each final turn or
+watcher child owns both projections; an earlier turn's verdict cannot satisfy
+the later assertion. Pair condition assertions with durable Run/Plan state and
+unchanged-file checks. The investigation case completes with a negative finding;
+the changed-required-criterion case retains that negative condition and blocks
+completion. Failed methods and wrong references remain observable errors.
+
 ```yaml
 turns:
   - input: "先给方案，不要改代码。"
@@ -265,6 +368,12 @@ For deterministic exact-Run controls, `setup.task.parked_runs` may seed a
 resumable Run and `seeded_run_ordinal: 1` appends its generated ID to that
 turn's `input`. The ordinal refers to the setup list, not a recent-work UI
 position; this permits owner and stranger probes without a hardcoded Run ID.
+A parked Run may also carry `unresolved_effect` (`summary`, `exit_code`, and
+an optional `target`, by default the person-wide unknown target). Before the
+Run parks, the harness claims the target, records the dispatch with that
+redacted summary, and records a return with that exit status through the
+production store, so the claim is left uncertain. `seeded_effect_ordinal: 1`
+appends that claim's ID to a turn's `input`, whatever state it has reached.
 
 A turn may set `wait_for_external_watches: true` in an isolated workspace/data
 case. After a real `waiting_external` handoff the harness starts the production
@@ -292,6 +401,193 @@ excluding the case. It does not make other model-backed cases optional.
 id: continuity_resume
 require_cassette: true
 ```
+
+Event assertions may use `payload_fields` to match exact string values by dotted
+JSON paths (for example `tool: update_plan` and `args.mode: patch`). JSON-encoded
+object strings are decoded while traversing, so whitespace/key order do not
+change a tool-argument assertion. Missing, malformed or non-string values do not
+match; all fields must match the same event. Count bounds still apply.
+
+## Multi-Run Runtime And Endpoints
+
+A case runs one Run on one agent worker unless it declares `runtime`. The
+harness then builds that runtime through `app.InitGateway` and the production
+worker pool, with fixtures in place of operator services:
+
+```yaml
+requires:
+  commands: [go]            # mcp_stubs builds the stub from the source checkout
+runtime:
+  max_active_work_runs: 2   # gateway.max_active_work_runs, 1-3
+  workers: 2                # defaults to the capacity and may not be lower
+  cron: true                # every worker offers the cron tool; no job runs
+  mcp_stubs:                # stdio servers backed by internal/tools/mcptest
+    - name: stub
+```
+
+The capacity sets both the process registry and the durable admission check,
+as in the daemon. Without `cron` the harness builds no cron scheduler; with it
+the scheduler store exists but its loop never starts. MCP stubs are added to
+any configured servers. Every worker registers a stub's tools as
+`mcp_<name>_<tool>_<hash>`, and all workers share one stub process. Building
+the stub needs the Go tool and the SelfMind checkout, so such a case declares
+`requires.commands: [go]`. The build has a two-minute limit, and in strict
+offline replay it may use only the module cache on disk (`GOPROXY=off`). When
+the environment cannot supply the stub (no Go tool or checkout, modules or a
+toolchain it cannot fetch, or the time limit), the case is UNAVAILABLE with the
+reason. A stub that does not compile is a regression and fails the case.
+
+Turns can come from the case person's other endpoints:
+
+```yaml
+turns:
+  - input: "Draft the release notes for the parser"
+    platform: cli          # the sending endpoint; default: the eval account
+    channel: session-a     # for the CLI, one terminal session
+    cwd: parser            # CLI working directory inside the isolated workspace
+    hold_worker: true      # submit without waiting; the Run keeps its worker
+  - input: "/stop"
+    platform: cli
+    channel: session-a
+    turn_run_ordinal: 1    # appends the id of the Run that turn 1 started
+```
+
+`platform` sends the turn from that endpoint, such as `cli`, `weixin` or
+`telegram`. The case user on any platform is the case person's own account
+and sees the person's work there. A different `platform_user_id` stays a
+stranger unless `setup.accounts` binds it. `cwd` (CLI turns only) creates the
+directory if needed, and the gateway binds the workspace from it as it does
+for the terminal client. Two sessions in different directories therefore do
+not share a write lock.
+
+`hold_worker` makes overlap deterministic without a model. The harness submits
+the turn and waits until its Run has leased an agent worker, then runs the
+next turn while the Run keeps that worker. The Run makes no model call and ends
+only when it is stopped, normally by a later `/stop` with `turn_run_ordinal`.
+That cancellation is the expected outcome, not an error, and the case status
+stays that of its last foreground turn. A held turn fails as
+`turn-N:hold_leased_worker` when its Run never leased a worker. It fails as
+`turn-N:hold_stopped` unless a stop ended the hold and the Run is stored as
+cancelled; the turn deadline and the run watchdog's stall cancellation do not
+count. A hold the case never stops is released when the case ends and its Run
+is cancelled, so no automatic recovery Run follows it. A held turn's
+`assert_state` is checked as soon as its Run holds the worker. Held Runs count
+toward `require_no_run` and the runtime counts, but the subject of case-level
+`run` and `task` assertions is the last foreground turn's.
+
+Model-backed turns still run one at a time. Concurrent model calls would
+interleave the case's single cassette ordinal stream, so overlap evidence
+comes from `hold_worker`.
+
+Multi-Run IM routing reads state that a case seeds through the production
+store:
+
+```yaml
+setup:
+  accounts:                # further accounts of the case person
+    - platform: weixin
+      platform_user_id: wx-second-phone
+  task:
+    parked_runs:
+      - input: "Compile the nightly report"
+  turn_choices:            # a pending multi-Run choice on one channel and account
+    - platform: weixin     # account platform/user; default: the eval account
+      channel: wx-chat-1
+      request: "Also attach the error summary"   # what choosing a number submits
+      options:             # keys 1..n in list order
+        - action: resume   # steer and resume name a parked Run
+          parked_run: 1
+          label: "Resume the nightly report"   # optional shown text
+        - action: new
+  sent_messages:           # a delivered IM message and its reply edges
+    - platform: weixin
+      channel: wx-chat-1
+      message_id: wx-msg-approval-1   # the platform id a native reply names
+      approval_id: approval_missing   # literal; may name a missing approval
+      content: "Approve the export?"  # optional delivered text
+```
+
+A turn's `native_reply_message_id` then resolves, on that channel only, to the
+seeded message's `parked_run`, `approval_id` or `clarify_id` edge. A seed's
+account must be the case user on some platform or a `setup.accounts` entry.
+Without a `label`, an option shows `Resume <run>`, `Update <run>` or `This is
+new work`; without `content`, a message names its `message_id`. The choice
+stores the request exactly as the gateway does, with the case's approval mode
+and workspace.
+
+A turn may also arrive as stored text instead of the person:
+
+```yaml
+setup:
+  task:
+    parked_runs:
+      - input: "Deploy the service to staging"
+  approvals:               # a pending approval the parked Run waits on
+    - parked_run: 1
+      command: "rm -rf build"
+turns:
+  - input: "/approve"
+    scheduled: true        # fired as a job of the turn's account
+```
+
+`scheduled: true` fires the input as the prompt of a scheduled job through the
+daemon's cron executor, the path a job's stored text takes when it fires; the
+turn's answer is what the executor delivers. The job belongs to the turn's
+`platform` and `platform_user_id` account and delivers to its direct chat, so
+a scheduled turn carries no channel, reply or approval edge, roots, cwd, or
+held worker. A seeded approval is a terminal command the parked Run asked
+about; it is parked with its Run, so answering it resumes that Run.
+
+`assert_state` counts these runtime facts with `count_gte`, `count_lte` or
+`exists`. Each needs one that can fail: counts are never negative, and
+`count_gte: 0` alone is refused. A case also fails to load when a count names a
+status or target that cannot match. Run statuses are `running`, `done`,
+`completed`, `failed`, `cancelled`, `interrupted`, `waiting_user`,
+`waiting_external`, `verification_partial` and `blocked`; queue statuses are
+`queued`, `started`, `done`, `failed` and `cancelled`. An `mcp:` target or an
+`mcp_server_starts` target must name a `runtime.mcp_stubs` server exactly as
+declared, and a tool of the stub (`echo`, `rendezvous` or `record`, a writing
+tool whose annotations falsely claim `readOnlyHint`). Any other tool
+target must be a tool some worker registers, or `cron`; an unknown name fails
+the assertion instead of counting zero.
+
+| `on` | Counts |
+| --- | --- |
+| `workers` | agent workers built for the case |
+| `worker_tool` + `target` | workers offering the tool: `cron` or `mcp:<server>/<tool>` |
+| `worker_catalogs` | distinct worker catalogues; `count_lte: 1` means identical |
+| `mcp_server_starts` + `target` | processes started for that MCP stub |
+| `worker_leases` | Runs that leased an agent worker |
+| `leased_workers` | distinct workers those Runs used |
+| `worker_overlap` | the most Runs that held workers at the same time |
+| `worker_tool_calls` + `target` | distinct workers on which a Run completed the tool |
+| `runs` + optional `status` | the person's Runs |
+| `queued` + optional `status` | the person's queue rows, in any status by default |
+| `turn_choices` + optional `status` | the person's seeded or shown choices: `pending` or `resolved` |
+
+```yaml
+assert_state:
+  - on: worker_overlap
+    count_gte: 2
+  - on: worker_tool
+    target: mcp:stub/echo
+    count_gte: 2
+  - on: turn_choices
+    status: pending
+    count_gte: 1
+```
+
+Worker facts come from a lease hook on the gateway
+(`router.Gateway.SetWorkerLeaseHook`), which the daemon does not install.
+`worker_tool_calls` counts only completed calls. An unmarked MCP stub tool is
+an unclassified external tool, which asks a person in every approval mode, and
+no person answers in eval. A case that must call one first marks the exact
+tool read-only with a `/tools readonly <server>/<tool> on` turn; otherwise it
+shows MCP tools as offered and proves calls with internal tools such as `cron`.
+The stub's `record` tool writes, so a case must not mark it.
+As in the daemon, the primary worker's engine executes durable background
+reviews (`Server.SkillReviewer`), so a review that a worker queued runs in the
+case's `wait_for_maintenance` pass.
 
 ## Selfcheck Profiles And Ownership
 
@@ -347,10 +643,38 @@ Three exit codes keep the gate honest:
 - `0`: all selected checks passed.
 - `1`: a build, test, or behavioral assertion regressed.
 - `2`: arguments or the verification environment are unavailable, including a
-  missing Go toolchain, repository root, eval directory, or required command.
+  missing Go toolchain, repository root, eval directory, or required command,
+  or an MCP stub a case cannot build.
 
 `SELFMIND_EVAL_MIN_CASES=N` remains a compatibility guard for custom local
 automation, but the repository CI uses explicit case ownership instead.
+
+### Per-user state stays out of the gate
+
+Developers run the gate where their daemon lives, so nothing it starts may
+touch their `~/.selfmind`, caches, or config. `go build` and `go test` run with
+a throwaway HOME (XDG directories below it, `SELF_CONFIG` cleared) at a stable
+per-checkout path, so Go's test cache still recognizes unchanged packages;
+`GOCACHE`, `GOMODCACHE`, `GOPATH` and `GOENV` keep the values `go env` reports
+for the real environment, so nothing is rebuilt or re-downloaded. That path is
+used only under an exclusive lock, in a sticky parent owned by root or the
+user, and when nothing but the user's own directory is already there; a
+second selfcheck of the same checkout, or anything planted at the path, gets a
+HOME of its own instead and loses only the cache benefit. If tests
+leave a `.selfmind*` tree or SelfMind's cache directory
+(`Library/Caches/selfmind`, `.cache/selfmind`) in that HOME, the gate fails and
+names the paths. Replay runs under its own throwaway HOME and reads the explicit
+or default config only when that file exists, using built-in defaults
+otherwise; `selfmind selfcheck` and `selfmind docs` never create
+`~/.selfmind/config.yaml`.
+
+A test package that reaches HOME-derived paths isolates its whole binary with
+`func TestMain(m *testing.M) { testhome.Main(m) }` from
+`internal/testutil/testhome`. HOME, the XDG directories and `SELF_CONFIG` then
+point at a scratch home made for that binary — outside the system temp
+directory, so execution runtime roots under HOME still work — which is removed
+at exit. `t.Setenv("HOME", ...)` still works, and a helper process that
+re-executes the same binary keeps the environment it was started with.
 
 ### Cassette hygiene
 
@@ -448,6 +772,9 @@ recording-run IDs must never be copied into a new Run or committed cassette.
 - `internal/eval/state_oracle.go` evaluates `assert_state` world-state
   predicates against `control.db` and the workspace after a run.
 - `internal/eval/scenario.go` drives multi-turn scenario cases.
+- `internal/eval/multirun.go`, `held_turns.go`, `worker_leases.go`,
+  `im_seeds.go` and `runtime_facts.go` build the declared runtime, hold Runs on
+  workers, seed endpoint state and evaluate the runtime assertions.
 - `internal/eval/capture.go` promotes a flight-recorded real turn into a
   replayable eval case (`/capture`, `selfmind eval capture`).
 - `internal/eval/report.go` summarizes JSONL logs.

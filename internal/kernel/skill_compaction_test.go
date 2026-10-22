@@ -21,8 +21,8 @@ func TestContextWindowRecoveryPreservesActiveSkillReceiptExactly(t *testing.T) {
 		{Role: "system", Content: system},
 		{Role: "user", Content: "latest request"},
 	})
-	if len(got) != 2 || got[0].Content == system {
-		t.Fatalf("recovery did not reduce surrounding system context")
+	if len(got) != 2 || got[0].Content != system {
+		t.Fatalf("recovery changed unclassified mandatory system context")
 	}
 	start := strings.Index(got[0].Content, activeSkillPromptBegin)
 	end := strings.Index(got[0].Content, activeSkillPromptEnd)

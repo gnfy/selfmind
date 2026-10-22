@@ -146,7 +146,7 @@ func TestToolResponseCompletenessAcrossEncodings(t *testing.T) {
 					if limited {
 						paired := 0
 						for _, msg := range provider.requests[1].Messages {
-							if msg.Role == "tool" && strings.Contains(msg.Content, "effect_state: not_dispatched") {
+							if msg.Role == "tool" && strings.Contains(msg.Content, "Not executed.") {
 								paired++
 							}
 						}

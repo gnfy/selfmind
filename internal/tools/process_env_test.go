@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func TestProcessProxyProjectionDistinguishesNoConfiguredRoute(t *testing.T) {
+	for _, parent := range [][]string{{"PATH=/usr/bin"}, {"HTTPS_PROXY=", "NO_PROXY=localhost"}} {
+		got, decision := adaptProcessEnvForNetwork(parent, true, func(string) bool { t.Fatal("no proxy should be probed"); return false })
+		if decision.Mode != "not_configured" || !reflect.DeepEqual(got, parent) {
+			t.Fatalf("missing route was reported as an inherited proxy: %+v env=%v", decision, got)
+		}
+	}
+}
+
 func TestProcessProxyProjectionFollowsExecutionNetwork(t *testing.T) {
 	parent := []string{
 		"PATH=/usr/bin",

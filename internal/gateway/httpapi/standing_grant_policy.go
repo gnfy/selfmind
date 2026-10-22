@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"time"
 
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
@@ -27,7 +28,20 @@ import (
 // A run may USE a standing class; only a person answering an ask creates one.
 // Automatic triage is already confined to a single run by the run-scope grant
 // it records on an auto-approval.
+//
+// Who authorized the work is read from its admission, which every continuation
+// restores from its exact parent: an approval answered on a scheduled job's
+// work keeps the schedule's instant, whatever trigger started that hop.
 func standingGrantPolicy(ctx context.Context, req api.MessageRequest) tools.StandingGrantPolicy {
+	if !req.Admission.IsZero() {
+		if req.Admission.Origin.Kind != runOriginCron {
+			return tools.InteractiveStandingGrants()
+		}
+		if req.Admission.StandingGrantsAuthorizedAt <= 0 {
+			return tools.ScheduledStandingGrants(time.Time{})
+		}
+		return tools.ScheduledStandingGrants(time.Unix(req.Admission.StandingGrantsAuthorizedAt, 0))
+	}
 	if runOrigin(ctx, req) == runOriginCron {
 		return tools.ScheduledStandingGrants(req.StandingGrantsAuthorizedAt)
 	}

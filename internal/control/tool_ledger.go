@@ -242,14 +242,18 @@ func (s *Store) ListUncertainToolEntriesForTask(ctx context.Context, tenantID, t
 }
 
 // PruneToolLedger drops resolved (completed/failed) rows past the retention
-// window at worker/boot time. Uncertain `dispatched` rows are never pruned:
-// they are correctness state until a resume verifies them.
+// window at worker/boot time. Uncertain `dispatched` rows and evidence of an
+// unresolved external effect are never pruned: a tool returning is not proof
+// that its external effect settled.
 func (s *Store) PruneToolLedger(ctx context.Context, olderThan time.Duration) (int, error) {
 	if olderThan <= 0 {
 		olderThan = ToolLedgerRetention
 	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM tool_ledger
-		WHERE status IN (?, ?) AND updated_at < ?`,
+		WHERE status IN (?, ?) AND updated_at < ?
+		AND NOT EXISTS (SELECT 1 FROM external_effect_claims c
+		 WHERE c.tenant_id=tool_ledger.tenant_id AND c.run_id=tool_ledger.run_id
+		 AND c.effect_id=tool_ledger.effect_id AND c.state <> 'observed')`,
 		ToolLedgerCompleted, ToolLedgerFailed, time.Now().Add(-olderThan).Unix())
 	if err != nil {
 		return 0, err

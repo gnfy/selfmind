@@ -88,6 +88,9 @@ type Registry struct {
 	// recorded. It is not a middleware: middlewares govern whether and how a
 	// call runs, while this only watches what already ran.
 	attributionFn SkillAttributionObserver
+	// skillToolManager, when set, owns this registry's Skill tools together
+	// with every other agent worker's; a Skill tool reload goes through it.
+	skillToolManager *SkillToolManager
 }
 
 const preparedToolInvocationArg = "_prepared_tool_invocation"
@@ -212,7 +215,7 @@ func (r *Registry) DispatchResult(name string, args map[string]interface{}) (ker
 	args = prepared
 	invocation, ok := preparedToolFromArgs(r, name, args)
 	if !ok {
-		return kernel.ToolDispatchResult{Invoked: new(bool)}, toolArgumentPreparationError(fmt.Errorf("tool %s has no valid prepared invocation", name))
+		return kernel.ToolDispatchResult{Invoked: new(bool)}, redactToolFailure(toolArgumentPreparationError(fmt.Errorf("tool %s has no valid prepared invocation", name)))
 	}
 	exec := r.wrapResult(invocation.tool, invocation.middleware)
 	result, err := exec(args)
@@ -239,7 +242,15 @@ func (r *Registry) DispatchResult(name string, args map[string]interface{}) (ker
 // any execution evidence. It is deliberately idempotent because direct callers
 // enter through DispatchResult, while the Agent also invokes this boundary
 // before its durable side-effect ledger.
+//
+// A refusal may quote the rejected argument, and it never passes the result
+// middleware, so it is redacted here as a tool failure would be there.
 func (r *Registry) PrepareToolArguments(name string, args map[string]interface{}) (map[string]interface{}, error) {
+	prepared, err := r.prepareToolArguments(name, args)
+	return prepared, redactToolFailure(err)
+}
+
+func (r *Registry) prepareToolArguments(name string, args map[string]interface{}) (map[string]interface{}, error) {
 	if _, ok := preparedToolFromArgs(r, name, args); ok {
 		return args, nil
 	}
@@ -280,14 +291,15 @@ func (r *Registry) PrepareToolArguments(name string, args map[string]interface{}
 			return nil, toolArgumentPreparationError(fmt.Errorf("failed to normalize arguments for %s: %w", name, normalizeErr))
 		}
 	}
-	coerced, coerceErr := CoerceArgs(t.Schema(), args)
-	if coerceErr != nil {
-		return nil, toolArgumentPreparationError(fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr))
+	argumentSchema := t.Schema()
+	if compatibility, ok := t.(argumentSchemaProvider); ok {
+		argumentSchema = compatibility.argumentSchema()
 	}
-	args = coerced
-	if err := ValidateArgs(t.Schema(), args); err != nil {
+	prepared, err := checkToolArguments(argumentSchema, args, true, true)
+	if err != nil {
 		return nil, toolArgumentPreparationError(fmt.Errorf("argument validation failed for %s: %w", name, err))
 	}
+	args = prepared
 	args[preparedToolInvocationArg] = &preparedToolInvocation{
 		registry: r, name: name, tool: t, middleware: middleware,
 	}
@@ -669,7 +681,7 @@ func (d *Dispatcher) ToolExecutionMetadata(name string, args map[string]interfac
 	if !ok {
 		return kernel.ToolExecutionMetadata{Origin: string(ToolSchemaOriginExternal), RiskLevel: string(ToolRiskHigh)}
 	}
-	policy := executionPolicyForTool(t)
+	policy := executionPolicyForCall(t, args)
 	classifiedArgs := make(map[string]interface{}, len(args)+2)
 	for key, value := range args {
 		classifiedArgs[key] = value
@@ -698,10 +710,14 @@ func (d *Dispatcher) ToolExecutionMetadata(name string, args map[string]interfac
 		// deterministic proof holds, wherever the command will run.
 		observation = observation || (class == OpClassObserve && isExecTool(name))
 	}
+	// A marked external read is a look, not work. Its replay stays governed by
+	// the external origin's retry class.
+	observation = observation || policy.ReadOnlyMarkedBy != ""
 	return kernel.ToolExecutionMetadata{
 		Origin: string(policy.Origin), Category: policy.Category,
 		RiskLevel: string(policy.Risk), ReadOnly: policy.ReadOnly,
 		OperationClasses: classNames, ObservationOnly: observation,
+		BookkeepingOnly: policy.BookkeepingOnly,
 	}
 }
 
@@ -711,6 +727,17 @@ func (d *Dispatcher) SupportsParallelTool(name string) bool {
 		return false
 	}
 	return ToolMetadataFor(t).SupportsParallel
+}
+
+// SupportsParallelToolCall answers for one call of a batch: args carry its
+// trusted runtime scope, so an external tool the call's person or the
+// operator marked read-only may join a read-only batch.
+func (d *Dispatcher) SupportsParallelToolCall(name string, args map[string]interface{}) bool {
+	t, ok := d.registry.Get(name)
+	if !ok {
+		return false
+	}
+	return ToolMetadataFor(t).SupportsParallel || executionPolicyForCall(t, args).ReadOnlyMarkedBy != ""
 }
 
 // ListTools returns all registered tool names

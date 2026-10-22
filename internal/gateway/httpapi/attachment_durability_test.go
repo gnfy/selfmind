@@ -32,7 +32,7 @@ func TestQueuedWorkKeepsItsAttachments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	resp := daemon.enqueueUntilModelReady(ctx, identity, api.MessageRequest{
+	resp, _ := daemon.enqueueUntilModelReady(ctx, identity, api.MessageRequest{
 		Platform: "cli", Channel: "cli", Content: "look at this",
 		Attachments: []api.MessageAttachment{{Name: "diagram.png", Path: source, MimeType: "image/png"}},
 	})

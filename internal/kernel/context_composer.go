@@ -70,6 +70,7 @@ type spineEntry struct {
 	Assistant   string   `json:"assistant"`
 	Files       []string `json:"files,omitempty"`
 	Source      string   `json:"source,omitempty"`
+	ChainID     string   `json:"resume_chain_id,omitempty"`
 	RunID       string   `json:"run_id,omitempty"`
 	WorkspaceID string   `json:"workspace_id,omitempty"`
 	// Outcome is how the turn that wrote the entry ended: a finish_run status,
@@ -80,6 +81,10 @@ type spineEntry struct {
 	// TaskID is label provenance only (which task this turn was pre-labeled
 	// with); it never gates what the model sees.
 	TaskID string `json:"task_id,omitempty"`
+	// Read-time fold metadata; saveHistory leaves these empty.
+	EarlierUser       string `json:"earlier_user,omitempty"`
+	EarlierObservedAt string `json:"earlier_observed_at,omitempty"`
+	FoldedTurns       int    `json:"folded_turns,omitempty"`
 }
 
 // buildSpineEntry derives the slim turn entry from the finished turn: the
@@ -88,6 +93,9 @@ type spineEntry struct {
 // turn's tool calls — replayed spine/legacy history is stripped of ToolCalls
 // at load — so the harvest is turn-scoped by construction.
 func buildSpineEntry(ctx context.Context, userInput, finalAnswer, outcome string, messages []llm.Message) spineEntry {
+	if request := spineRequestFromContext(ctx); request != "" {
+		userInput = request
+	}
 	entry := spineEntry{
 		Kind:       spineEntryKind,
 		User:       textutil.TruncateBytes(textutil.CleanUTF8(stripInjectedContextBlocks(userInput)), composerSpineUserSaveBytes),
@@ -100,6 +108,7 @@ func buildSpineEntry(ctx context.Context, userInput, finalAnswer, outcome string
 	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
 		entry.TaskID = strings.TrimSpace(runtime.TaskID)
 		entry.RunID = strings.TrimSpace(runtime.RunID)
+		entry.ChainID = runtime.SpineChainID
 		entry.WorkspaceID = strings.TrimSpace(runtime.WorkspaceID)
 	}
 	return entry
@@ -129,6 +138,9 @@ func (e spineEntry) toMessages() []llm.Message {
 	}
 	if e.Outcome != "" {
 		fmt.Fprintf(&b, "turn_outcome: %s\n", e.Outcome)
+		if e.RunID != "" && (e.Outcome == "waiting_user" || e.Outcome == "interrupted" || e.Outcome == "blocked" || strings.HasPrefix(e.Outcome, "incomplete:")) {
+			fmt.Fprintf(&b, "resume_hint: if the user's current message continues this work, call work_select(action=\"resume\", run_id=%q) first before running commands or skills\n", e.RunID)
+		}
 	}
 	if e.WorkspaceID != "" {
 		fmt.Fprintf(&b, "workspace_id: %s\n", e.WorkspaceID)
@@ -138,6 +150,12 @@ func (e spineEntry) toMessages() []llm.Message {
 	}
 	if e.Source != "" {
 		fmt.Fprintf(&b, "source: %s\n", e.Source)
+	}
+	if e.FoldedTurns > 0 {
+		fmt.Fprintf(&b, "folded_prior_turns: %d (recorded resume edges; inspect full history for omitted details)\n", e.FoldedTurns)
+		if e.EarlierUser != "" && e.EarlierUser != e.User {
+			fmt.Fprintf(&b, "earlier_request: %s observed_at=%q\n", strconv.Quote(textutil.TruncateBytes(e.EarlierUser, defaultHistoryUserBytes)), e.EarlierObservedAt)
+		}
 	}
 	if user != "" {
 		fmt.Fprintf(&b, "previous_user: %s\n", strconv.Quote(user))
@@ -150,7 +168,7 @@ func (e spineEntry) toMessages() []llm.Message {
 	if len(e.Files) > 0 {
 		fmt.Fprintf(&b, "files: %s\n", strings.Join(e.Files, ", "))
 	}
-	return []llm.Message{{Role: "assistant", Content: strings.TrimSpace(b.String())}}
+	return []llm.Message{{Role: "assistant", Content: strings.TrimSpace(b.String()), ContextOrigin: llm.MessageOriginWorkSpine}}
 }
 
 // stripInjectedContextBlocks removes the gateway's prepended decoration blocks
@@ -184,6 +202,31 @@ func stripInjectedContextBlocks(input string) string {
 		out = trimmed[idx+len(closing):]
 	}
 	return strings.TrimRight(out, " \t\r\n")
+}
+
+// spineRequestKey carries the person's request a continuation turn serves.
+type spineRequestKey struct{}
+
+// WithSpineRequest records the person's own request for this turn's spine
+// entry. A turn the daemon starts to continue parked work runs on scheduling
+// text; the person-level work record keeps what they asked for instead.
+func WithSpineRequest(ctx context.Context, request string) context.Context {
+	request = strings.TrimSpace(request)
+	if request == "" {
+		return ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, spineRequestKey{}, request)
+}
+
+func spineRequestFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	request, _ := ctx.Value(spineRequestKey{}).(string)
+	return request
 }
 
 // turnSourceKey carries an optional origin tag for non-interactive turns.

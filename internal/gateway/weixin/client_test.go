@@ -274,6 +274,24 @@ func TestPushConfidence(t *testing.T) {
 	if !c.PushConfidence("peer@im.wechat") {
 		t.Fatal("fresh token → confident push")
 	}
+	c.tokens.mu.Lock()
+	c.tokens.cache[c.tokens.key("acct", "peer@im.wechat")] = tokenEntry{
+		Token:   "tok",
+		SavedAt: time.Now().Add(-45 * time.Minute).Unix(),
+	}
+	c.tokens.mu.Unlock()
+	if !c.PushConfidence("peer@im.wechat") {
+		t.Fatal("45m-old token within active run/approval window should remain confident")
+	}
+	c.tokens.mu.Lock()
+	c.tokens.cache[c.tokens.key("acct", "peer@im.wechat")] = tokenEntry{
+		Token:   "tok",
+		SavedAt: time.Now().Add(-2 * time.Hour).Unix(),
+	}
+	c.tokens.mu.Unlock()
+	if c.PushConfidence("peer@im.wechat") {
+		t.Fatal("2h-old token beyond fresh window should be unconfirmed")
+	}
 }
 
 func TestGetUpdatesDetectsSessionExpiry(t *testing.T) {

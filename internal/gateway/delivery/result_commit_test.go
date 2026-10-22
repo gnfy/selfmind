@@ -21,6 +21,9 @@ func TestNotificationFailurePreservesCommittedRunAndToolOutcome(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wx-local", "phone"); err != nil {
+				t.Fatal(err)
+			}
 			// Only fixture construction uses the legacy grouping API. Execution,
 			// result and delivery assertions below are all keyed to this exact Run.
 			task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "delivery boundary", Channel: "cli"})

@@ -1,0 +1,56 @@
+{
+  "plan_binding_version": 1,
+  "method": "stream",
+  "events": [
+    {
+      "content": "I am listing the workspace directory to see if there are any related existing files or templates."
+    },
+    {
+      "usage": {
+        "input_tokens": 12203,
+        "output_tokens": 18,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 16,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 1359,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_3302964",
+          "Function": "ls_r",
+          "Args": "{\"path\":\".\"}",
+          "replay_metadata": {
+            "google": {
+              "thought_signature": "ErcICrQIAWkUfRPT6KTrlDvwaWc9oWya3qLphtj0DZgt4udNomtocmzUhZsBf84GsgDOa/QK6o6SGVimRJtHvjc1X5GlcvYGY+9R4q8MJgmDmXVYvsrwvRNgSOuFpjFE5Px52SI67joRKtfJ5aH9/CikSXvX5+mWMq1dIJ9fyqRsmw1Hja+bnYwSpb44eQEt8iQ67VGhvJSKe5LI/X6Hfx6lkFJu8+24tYHMPf/V7EsN3BAuRXxzpSUAyMYwGlypO3P8Tnneq1njCL9sI8hi0QTuIBLSxtmOxYgXtAtMt5gFeDIoQPffCPz2wGjhNiop7NhvwbpVorOxutVmVMJi55iIGrGUBHRE+VdBvKoO6rCWAH1y38XiFD/xkC1nG+il1ZsuD0pnv0qD6l0bNU3TKbnRYUT4siRSnMC9QyOLzDoruweh3b8bqf1QTDHxGhc2RA2YkSQBvBkpyYQQRSIyYbtD8mgVEjkRqxPYolXypQ23l5Vmq9Mk/hFWtxuZTX3rICIY3zMCnfUZNlVBGJZaG/bd7xsW2Qv12jJHkPo96Bg8DBsHzxgg22nFuT9Ta3urX/8dwziGyDuicAf/OaWBYS1hheFoBkaVGZnAgQiOTnMWvqV/JTiR2vt5cAgZcSJwBKIjvCwmRuPoAhw5dH3DVyQrOeNI0kj+tdtBEGGGnUsqvSiFykmtmxnYz3Em9zSHLyebTHEEtve7z1Jp6mRUvO2oDOLBqs8VFU/wZJyPtzOjs9ZDQVwcqkQmG1kkqNf4KLk798WJwFztpnZk+OvlgbcRvnNtx7r36BBzzlKWjrqEjSjH9loZ9+GAEqu2/4frosQYHM5QpIHBgyWXhsHDXWSZ4hvfRl6kEleFTv9aMa7t86HXZ7npMQ+mMqjFguX3kPUQPRdr3bQFvlatLv8cqEcV/1iUY/19eroKfhXhG2ti7qa5tG/5YIY+w8qExDqisOxaNFCBhqfl37HeCRx0eAJpghUOoWqw083JXNHCOG+h0e87LDVKhoxvkmb2o56D+D+30y2Q9nmavbjpFkk25I44T1tnt4VoWBAuK2tmXNhE7FjdhAYSwW1SPT96hFKvcOWTq+6tzwMCx0SlCADBensZPodxjeFBZj6fZfwu4sJ/uKYSyfKsNVNr9VHXDpzPOurnmxqhG+8/DpZf5k3LHsrZB2qgWRYpvReJOfa8dSvIO7at/WZyFe0Ow5Uh+ZJQEBYeoAqWlfc8SYZMKlyodFGxs352D7J+3oxUfvOqsmdg0xDuczJIERg/3S/drqBzbyO034MK16zrLl4WpThKjdxyWXYGBTXsq2N9V90lTzh0yUO2SJRGpo7nv/vgCW8D/q1bDz3TRh7Vve4g9w7L972gZV6eymVehbFan8vbwtSirDg8XJ6cLlvVxuQKzksAPetDxkjyMVK1C0WIRjWiPOvP00V2Tv59XNM="
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

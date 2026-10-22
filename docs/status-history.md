@@ -6,6 +6,320 @@ snapshot. The text is unchanged. Versions, case counts, and schema numbers
 describe the moment each record was written; current state, open gates, and
 priorities live only in `STATUS.md`.
 
+## Exact-continuation progress and finish correction (2026-10-15)
+
+A Run answered an approval ten times and, at every answer, its continuation
+started the Plan over: the verified steps came back pending and the earliest
+verification-required step was re-selected, because the import treated the
+parent's Plan as a first plan. An exact continuation (the runtime's own resume
+edges) now carries the parent's verified progress: each completed required step
+is adopted from its source with a runtime-written reason while the same
+provenance, scope and freshness validation passes, over multiple hops (a saved
+direct reference shortens the walk; every skipped Run is still checked for
+changes and for scope). Only a step whose source no longer validates reopens,
+alone. A person's turn and a Main-selected continuation keep the conservative
+import. The same Run's `finish_run` was refused for citing an earlier Run's
+check id and then could not be corrected: the refusal lacked the corrected-input
+contract, so the single attempt was spent and the tool hidden. Input refusals now
+carry it, and the refusal for an evidence reference names the citeable checks
+and, for an imported step's observation, the step and whether it can be adopted.
+
+Validation: focused control, tools, verification and gateway tests, including a
+real approval answer that resumes a parked Run with a verified plan and a real
+Run that corrects a refused finish; full Go/doc checks. No model-backed eval case
+was recorded for either path, no migration is needed, and historical Runs are
+unchanged. Not changed: holding a parked approval open longer while a client is
+attached, and recognizing a wrapper script that needs network (a command that
+does not name its remote service still runs offline unless it asks).
+
+## Condition judgment and completion (2026-10-15)
+
+Optional `finish_run.assessments` separates Main's condition judgment from raw
+process/check results and goal completion. The model supplies result, evidence
+references and reason; one shared resolver binds runtime identity and rejects
+unavailable, stale, mixed-scope, unknown-dispatch or unsupported-version facts.
+Judgments and finish decisions share the existing outcome event. Prior negative
+findings survive unrelated successes and omitted later judgments. They appear
+through typed inherited evidence, and source adoption cannot turn a zero-exit
+negative finding into positive verification. Required Plan gates and unresolved
+external effects remain blocking. Evidence/outcome write failures now reach the
+existing failed-finalization path; stream drainage avoids abandoned producers.
+Historical rows without judgments remain unassessed; no migration or new model
+call is required.
+
+Paired investigation/required-condition live probes passed on Qwen, DeepSeek
+and Gemini with semantic recall disabled. One DeepSeek run recovered from a
+provider 503. Default-path Gemini recordings passed both strict cases, including
+unchanged-file assertions, and were selected as release replay evidence. Extra
+Qwen default-path probes were not clean: an inspection attempt had a provider
+timeout and invalid references, while a required-condition attempt preserved
+the correct negative/blocked result but failed the zero-reference-error gate.
+Those failed recordings were not promoted. This establishes the shared runtime
+behavior, not error-free model behavior or measured production speedup.
+
+Validation: full selfcheck passed all 118 offline cases, the Go build and test
+suite, and the 52-document contract. Focused race tests, vet and diff checks
+passed. Fault injection covers failure to save execution evidence or the outcome;
+other regressions cover stale and foreign references, unknown effects,
+independent failures, source adoption, and per-turn/watcher verdict isolation.
+The package and running daemon were not updated.
+
+## Verification interface simplification (2026-10-15)
+
+Normal Plan checks use `command` plus `step_id`; corrected methods use
+`command`, `replaces` and `reason` in the same working directory. The existing
+resolver inherits established condition, target, step and dependency identity.
+No inference, new permission, provider-specific repair or storage migration was
+added. Missing standalone fields now name the missing input, and Bash's strict
+failure behavior is described where the model chooses its command.
+
+The existing result envelope gives the model plain failure facts and specific
+guidance while retaining typed recovery fields and raw diagnostics. Negative
+checks no longer prescribe Plan transitions or another attempt. User decisions,
+non-dispatch and uncertain effects remain explicit; captured output and external
+error fields are not filtered as framework metadata. Tests exercise minimal
+inputs through the production durable resolver and reject changed criterion,
+target, working directory and foreign-step replacement before execution.
+
+Live adoption cases passed for Qwen, DeepSeek and Gemini with zero tool errors.
+Changed-criterion cases passed for DeepSeek and Gemini. Two Qwen probes failed
+the original raw-verification assertion. Reinspection distinguishes them: the
+first changed the criterion to confirming the mismatch and closed as done; the
+second correctly reported a negative condition, kept the required step unfinished
+and closed as blocked, but its conditional command exited zero and the legacy
+check projection said passed. The second had zero tool errors. Attributing both
+to model judgment was incorrect: the second exposed the shared projection's
+conflation of process success and condition truth. Neither case justifies a
+model-specific parser or a general model-quality claim.
+DeepSeek probes also encountered transient provider 503s; those recordings were
+not promoted. The default-path Gemini recording and offline replay retain genuine
+tool failures; the case separately forbids argument/reference repair errors.
+No controlled performance improvement or production rollout is claimed.
+
+Validation: full selfcheck passed all 117 offline cases, documentation contract,
+build and Go tests. Focused kernel/tools/httpapi race tests and vet passed.
+
+## Shared tool contract economy (2026-10-15)
+
+Argument preparation now collects up to eight independent schema errors before
+dispatch, through one shared walker. No model-name repair path was introduced.
+`finish_run` requires explicit status and accepts a complete final body without
+duplicated summary/list fields; summary-only callers remain supported. Completion
+and permission checks are unchanged. New step references use a compact stable
+Run namespace and sequence, reserve historical IDs, and preserve legacy/imported
+identities. Claim, retarget and old/new cassette binding regressions passed.
+
+Registered schemas and unchanged response arguments passed native OpenAI Chat,
+Anthropic and Responses transport round trips. Qwen, DeepSeek and Gemini live
+adoption cases passed with zero tool errors. All three changed-criterion cases
+also passed their safety/result assertions; they were not error-free: Qwen had
+two failed observations and two verification-contract refusals, DeepSeek one
+expected failed observation, and Gemini a failed observation plus a sandbox
+process-inspection refusal. An earlier draft DeepSeek attempt failed the strict
+zero-error adoption gate after a plan-boundary hold; the gate was not relaxed.
+Reasoning settings differ across routes, so durations do not establish a speed
+comparison. Verification retry friction remains a separate improvement candidate.
+
+The strengthened adoption case has a genuine default-config DeepSeek recording
+and passing offline replay; no extra release-case ID was added. Full selfcheck
+passed 117/117 offline cases, Go tests and 52-document governance. Focused race
+checks and independent Spec/Standards reviews passed. This batch was not installed
+or deployed; production throughput improvement remains unproven.
+
+## Pre-Run recovery write failures (2026-10-11)
+
+Fault injection reproduced two gaps after the previous batch: returning a
+confirmed non-dispatch claim could fail and strand its started/unbound row,
+and a queued worker could fail before Run insertion yet silently settle done
+without a saved answer. Exact-token cleanup now retries through the production
+watch-worker's existing drain path. Pre-Run failures retain the original input
+and notify their originating session instead of assuming a finalizer ran.
+
+Independent review added scheduler-wiring, source-fairness and failed-notice
+regressions. A bounded pass holds the failed source and admits others; the store
+also holds a source behind an unbound started claim. The caller receives a
+startup refusal after the slot is released. Failed notice enqueue retries the
+existing keyed outbox without an execution slot. User channel messages are
+recorded after Run insertion so startup retries cannot duplicate them.
+
+A competing exact continuation and a failed claim return are also distinguished
+from a human wait. The unstarted correction remains retryable instead of
+settling done; after recovery it follows the same resolved lineage once. A
+changed token exits as stale ownership without settling another worker's row.
+An ambiguous continuation transfers input through one control-store transaction
+for its pending choice, scoped question event, exact-token queue handoff and
+prepared outbox parts. A failed write rolls all of these back and retains the
+queued request. Restart cannot duplicate the choice or lose its notification
+intent. CLI replay reaches only the source session; a preferred IM endpoint uses
+explicit `/choose` without widening bare-reply authority. Sending rechecks the
+exact choice and supersedes answered or expired questions.
+
+Production-tick fault tests cover capacity one and two, concurrent creation and
+return-write faults, same-source order, expired live claims, bound/cancelled and
+reassigned rows, full-capacity notification recovery and CLI audience filtering.
+Focused race tests passed three repetitions, including choice write, event,
+handoff and outbox failures, exact ownership changes, pending/answered/expired
+cross-endpoint notices and CLI replay. Independent Spec and Standards reviews
+passed after their fault probes were reproduced and repaired. Fast and full
+selfcheck passed all Go tests, 52 documents and all 116 offline release cases,
+with no CI deferrals; the corpus is unchanged.
+
+The local working-tree package
+`v0.1.0-beta.28-local.concurrency-closure.13`, built at
+`2026-10-11T03:30:09Z`, passed npm install and isolated daemon lifecycle smoke.
+It was installed globally and the launchd daemon restarted safely; its binary
+SHA-256 matches the staged build. The production queue counts and both historical
+uncertain effect claims were preserved, with no active or queued work at restart.
+Schema remains v26. Real IM acceptance, provider-independent performance
+improvement and sustained throughput remain unproven.
+
+## Queue refusals and durable recovery notices (2026-10-11)
+
+Two independently reproduced boundaries are fixed without a new queue, schema
+or permission policy. A synchronous pre-worker refusal returns the exact
+unbound claim to its original input for a later periodic drain. Started
+workers retain their finalizer; no immediate retry loop or second input is
+created. The regression recovers the same row and executes it once.
+
+Obsolete-continuation events project to the existing background notice on
+both live delivery and durable replay, even before settlement succeeds. The
+CLI deduplicates their event IDs without changing its active Run. A late
+client may skip an already-saved event, so presence alone no longer suppresses
+the one keyed outbox fallback. Injected event, outbox and settlement failures,
+late attachment, repeated drains, HTTP replay and stranger isolation exercise
+these boundaries. Tests use an isolated fake IM sender, not real messages.
+
+The first full-package pass exposed an existing test false positive: a
+four-digit sensitive marker matched a random hexadecimal Skill reference.
+The fixture and leak assertion now use a complete marker; the other text and
+input-ID leak assertions are retained. Runtime projection is unchanged.
+
+Final full selfcheck passed all Go tests, 52 documents and 116 offline cases
+with no CI deferrals. Focused race regressions passed three runs; independent
+Spec and Standards reviews found no remaining actionable issue in this batch.
+These are mechanical production-stream and queue tests; the release corpus
+remains unchanged. The macOS arm64 packed artifact passed isolated install,
+start, restart/persistence and stop smoke. Local npm and launchd now run
+`v0.1.0-beta.28-local.concurrency-closure.12`, matching that binary's SHA256.
+Restart occurred with zero active or queued work; both historical uncertain
+claims remain unchanged. Installed `.11` packages are backed up for rollback.
+Real IM acceptance and the 24-hour soak remain open.
+
+## Prompt prefixes and continuation recovery (2026-10-10)
+
+Tool contracts and freshly read project instructions now precede selected Run
+state in the same system message. A regression first failed on the old order,
+then retained an 8,635-byte prefix across changed Run IDs and user corrections;
+changed project instructions invalidate that prefix immediately. Roles,
+permissions, required-context budgets and paired tool history are unchanged.
+This is a prefix-layout improvement, not evidence of a provider cache hit rate
+or a full resumed-ledger cache guarantee.
+
+Foreign-effect notices distinguish unknown target scope from a named conflict
+and point to existing settlement controls. Unknown claims remain unresolved.
+A missing current verification now offers explicit prior-check adoption when
+the existing provenance/input validator finds it legal. Main supplies the
+judgment and reason; explanation alone never adopts evidence. Changed inputs,
+criteria or scope and unknown mutations cannot offer that option.
+
+Full selfcheck passed all Go tests, 52 documents and 116 offline cases. Focused
+race regressions passed three runs. The macOS arm64 npm package passed isolated
+install and daemon start/restart/persistence/stop smoke. No new release case
+was added; existing cases gained scope and source-evidence assertions.
+
+Gemini's first live continuation case passed in 50.3s with nine tool calls and
+zero errors. Qwen's first attempt took 113.8s and repeated verification after
+omitting explicit adoption. After recovery feedback improved, a 133.4s attempt
+kept one check and completed, but failed the zero-error gate through an invalid
+cancellation and a post-finish tool attempt. These are retained negative
+behavioral evidence, not a clean cross-model or speed acceptance claim.
+The final Gemini recording passed in 65.4s with eight tool calls and zero
+errors; its updated cassette replays offline in 340ms and passes corpus
+validation. Local npm and launchd now run
+`v0.1.0-beta.28-local.concurrency-closure.11`; the installed binary matches the
+smoke-tested build. Restart occurred with no active or queued Run. The two
+historical unknown-target claims remain unchanged, and the prior package
+archives were retained for rollback.
+
+## Exact queued continuations and mandatory approvals (2026-10-10)
+
+An obsolete exact daemon wakeup is now a terminal scheduling refusal, rather
+than a capacity retry or new work. The unbound row retires after an idempotent
+work event and configured outbox receipt; notice failures retain the input.
+Claim-token and Run-binding checks protect later attempts. The parent-claim
+race at atomic child creation uses the same path. Human decisions and
+unfinished Runs remain intact, and person-authored replies still follow their
+owned lineage. Historical queue classes use their existing exact trigger keys.
+
+Known foreign uncertain effects skip automatic triage and reusable grants,
+joining the mandatory one-time human decision. Current restrictions and the
+hard floor still apply; dispatch checks again for a new conflict. No claim is
+settled by age or approval, no model/scenario branch or schema was introduced.
+The existing bound-observation replay adds zero-human-ask assertions.
+
+Full selfcheck passed all Go tests, 52 documents and 116 offline cases, with
+no CI deferrals. Focused race regressions passed three runs; additional human
+rejection cases pass in read-only, smart and full-auto modes. The macOS arm64
+npm package passed isolated install, start, authenticated status, persistence
+across restart and stop smoke. This does not replace live IM, sustained
+throughput, cross-platform runtime or daily-driver effectiveness gates.
+
+## Frozen verification windows and corpus consolidation (2026-10-10)
+
+Continuation references, completion and freshness now share the existing Work
+Unit evidence window. A later check in another unit cannot replace an earlier
+proof or hide changes to its inputs. Every effective check is revalidated;
+older journal references outside the window remain unusable. Open-window saved
+observations and legacy bindings still work. Standalone verification replacement
+keeps its original criterion, target and cwd even when a Plan exists, unless Main
+explicitly selects an owned step. No schema or model-specific policy was added.
+
+The duplicate `/diag execution` cases now share their assertions and Linux/macOS
+CI ownership. The obsolete pre-label attachment case and cassette are retired;
+the release corpus has 116 cases. The standalone-target case asserts the actual
+binding, including absence of any Plan-bound observation for that other target,
+so a later requested failure cannot mask an incorrect earlier pass. The same
+real-provider trace passes the current implementation and fails the former
+binding implementation. Gemini and Qwen observations are recorded independently;
+this narrow evidence does not establish general model quality. Mechanical tests
+cover changed inputs, unrelated writes, multiple effective checks, later failures,
+legacy/malformed references, unchanged rejected Plans and standalone replacements.
+
+## Verification continuity and runtime result facts (2026-10-10)
+
+`verify` accepts an exact pending Plan step without a preparatory state change.
+Named checks without a step remain standalone; matching wording or the active
+position cannot attach them to an unrelated obligation. Replacements keep their
+original binding unless Main explicitly chooses a current step. Plans retain
+outcome milestones rather than reads, approvals and retry attempts.
+
+Plan inheritance atomically records original check references in the existing
+event journal. Repeated waits no longer consume the bounded legacy lineage
+search. A saved successful observation can be explicitly adopted after an
+interruption before Plan bookkeeping, subject to frozen evidence, unchanged
+criteria, execution scope and declared inputs. Unknown changes remain blocking.
+Prompt evidence is bounded and prioritizes observations; `work_inspect` pages
+the remaining Plan and its source evidence. Historical missing proof is not
+retroactively rebound or treated as successful.
+
+Typed context distinguishes external-effect blockers from Plan milestones.
+Final results expose unresolved claims associated with their exact lineage or
+typed observation/approval references, including a factual availability warning
+if selection fails. Another action's approval or a foreign observation does not
+settle the original effect. Schema, capacity, model choice and settlement
+authority are unchanged.
+
+Validation: full selfcheck passed all 118 offline cases, all Go tests, build and
+documentation checks. Focused control, tool, kernel and HTTP race tests passed.
+Three new cases and twelve refreshed cases passed live Gemini recordings and
+offline replay. Qwen passed the pending-step case on retry; its standalone and
+effect cases still exposed protocol/close-out failures, so general live quality
+across models is not claimed. Mechanical regressions cover 24 continuations,
+saved evidence before close-out, changed criteria/scope/inputs, unrelated writes,
+16-step paging, journal-write rollback and foreign effects that remain unresolved.
+Actual approval/call reductions need daily-driver observation; real IM and the
+24-hour mixed soak remain open.
+
 ## Daily-driver closure (2026-09-18)
 
 Daily-driver closure update (2026-09-18): artifact readback carries trusted

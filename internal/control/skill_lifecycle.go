@@ -462,10 +462,14 @@ func finalizeRunSkillLifecycleTx(ctx context.Context, tx *sql.Tx, input RunFinal
 		fallbackReason = "run was cancelled"
 	}
 	refs, _ := json.Marshal(input.VerificationRefs)
+	cursor, err := maxRunEventCursorTx(ctx, tx, input.RunID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE run_work_units SET status=?, outcome_summary=?,
-		verification_state=?, verification_refs_json=?, finished_at=?
+		verification_state=?, verification_refs_json=?, finished_at=?, finished_cursor=?
 		WHERE identity_tenant_id=? AND run_id=? AND status IN ('pending','active')`,
-		unitState, strings.TrimSpace(input.Summary), verification, string(refs), now.Unix(),
+		unitState, strings.TrimSpace(input.Summary), verification, string(refs), now.Unix(), cursor,
 		normalizeTenant(input.Identity.TenantID), input.RunID); err != nil {
 		return err
 	}

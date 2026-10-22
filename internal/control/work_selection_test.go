@@ -87,6 +87,31 @@ func TestRunSelectionEffectBoundaryIgnoresProvenObservation(t *testing.T) {
 	}
 }
 
+func TestRunSelectionEffectBoundaryUsesBookkeepingFactNotToolName(t *testing.T) {
+	for _, tc := range []struct {
+		effect  string
+		blocked bool
+	}{
+		{"run_bookkeeping", false}, {"side_effect", true}, {"", true},
+	} {
+		t.Run("effect="+tc.effect, func(t *testing.T) {
+			ctx := context.Background()
+			store, identity, _, run := newRecoveryFixture(t)
+			_, err := store.ClaimToolDispatch(ctx, identity.TenantID, ToolLedgerEntry{RunID: run.ID, ToolCallID: "activate", ToolName: "another_runtime_tool", ArgsHash: "a", RetryClass: "side_effect", EffectClass: tc.effect})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.RecordToolOutcome(ctx, identity.TenantID, run.ID, "activate", true); err != nil {
+				t.Fatal(err)
+			}
+			blocked, reason, err := store.RunSelectionEffectBoundary(ctx, identity.TenantID, identity.PersonID, run.ID)
+			if err != nil || blocked != tc.blocked {
+				t.Fatalf("blocked=%t reason=%s err=%v", blocked, reason, err)
+			}
+		})
+	}
+}
+
 func TestProjectInteractionTaskHidesOnlySingleRunLabel(t *testing.T) {
 	ctx := context.Background()
 	store, identity, task, run := newRecoveryFixture(t)

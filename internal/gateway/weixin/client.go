@@ -16,18 +16,23 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/skip2/go-qrcode"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/platform/atomicfile"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
@@ -259,6 +264,14 @@ func (c *Client) Send(ctx context.Context, chatID, content string) error {
 		return fmt.Errorf("weixin chat id is required")
 	}
 
+	emitted := false
+	partialFailure := func(err error) error {
+		var uncertain *delivery.UnconfirmedSendError
+		if !emitted || errors.As(err, &uncertain) {
+			return err
+		}
+		return &delivery.UnconfirmedSendError{Cause: fmt.Errorf("message was partially sent before failure: %w", err)}
+	}
 	mediaPaths, cleaned := extractMediaPaths(content)
 	text := strings.TrimSpace(cleaned)
 	if text != "" {
@@ -268,12 +281,13 @@ func (c *Client) Send(ctx context.Context, chatID, content string) error {
 				continue
 			}
 			if err := c.sendTextChunk(ctx, chatID, chunk); err != nil {
-				return err
+				return partialFailure(err)
 			}
+			emitted = true
 			if i < len(chunks)-1 && c.cfg.SendChunkDelay > 0 {
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					return partialFailure(ctx.Err())
 				case <-time.After(c.cfg.SendChunkDelay):
 				}
 			}
@@ -281,8 +295,9 @@ func (c *Client) Send(ctx context.Context, chatID, content string) error {
 	}
 	for _, path := range mediaPaths {
 		if err := c.SendFile(ctx, chatID, path, ""); err != nil {
-			return err
+			return partialFailure(err)
 		}
+		emitted = true
 	}
 	return nil
 }
@@ -291,9 +306,13 @@ func (c *Client) sendTextChunk(ctx context.Context, chatID, text string) error {
 	var lastErr error
 	contextToken := c.tokens.Get(c.cfg.AccountID, chatID)
 	retriedWithoutToken := false
+	clientID := "selfmind-weixin-" + uuid.NewString()
 	for attempt := 0; attempt <= c.cfg.SendChunkRetries; attempt++ {
-		clientID := "selfmind-weixin-" + uuid.NewString()
 		resp, err := c.sendTextOnce(ctx, chatID, text, contextToken, clientID)
+		var uncertain *delivery.UnconfirmedSendError
+		if errors.As(err, &uncertain) {
+			return err
+		}
 		if err == nil {
 			ret, errcode := intFromMap(resp, "ret"), intFromMap(resp, "errcode")
 			if isOKCode(ret) && isOKCode(errcode) {
@@ -560,21 +579,59 @@ func (c *Client) apiPost(ctx context.Context, endpoint string, payload map[strin
 	for key, value := range ilinkHeaders(token, body) {
 		req.Header.Set(key, value)
 	}
+
+	var wrote atomic.Bool
+	if endpoint == epSendMessage {
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{WroteHeaders: func() { wrote.Store(true) }}))
+	}
+	sendFailure := func(err error) error {
+		if endpoint == epSendMessage && wrote.Load() {
+			return &delivery.UnconfirmedSendError{Cause: err}
+		}
+		return err
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sendFailure(err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, err
+		return nil, sendFailure(err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("iLink POST %s failed: %s %s", endpoint, resp.Status, tools.RedactSensitive(string(data)))
+		return nil, sendFailure(fmt.Errorf("iLink POST %s failed: %s %s", endpoint, resp.Status, tools.RedactSensitive(string(data))))
 	}
 	var out map[string]interface{}
 	if err := json.Unmarshal(data, &out); err != nil {
-		return nil, err
+		return nil, sendFailure(err)
+	}
+	if endpoint == epSendMessage {
+		if out == nil {
+			return nil, sendFailure(fmt.Errorf("sendmessage response has no acceptance verdict"))
+		}
+		_, hasRet := out["ret"]
+		_, hasCode := out["errcode"]
+		if !hasRet && !hasCode && stringFromMap(out, "errmsg") != "" {
+			return nil, sendFailure(fmt.Errorf("sendmessage response has errmsg without acceptance code"))
+		}
+		for _, key := range []string{"ret", "errcode"} {
+			value, present := out[key]
+			if !present {
+				continue
+			}
+			valid := false
+			switch v := value.(type) {
+			case float64:
+				valid = v == float64(int64(v))
+			case string:
+				_, parseErr := strconv.ParseInt(v, 10, 64)
+				valid = parseErr == nil
+			}
+			if !valid {
+				return nil, sendFailure(fmt.Errorf("sendmessage response has an invalid acceptance verdict"))
+			}
+		}
 	}
 	return out, nil
 }
@@ -699,11 +756,8 @@ func SaveCredentials(homeDir string, cred *Credentials) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// The bot token: a fresh exclusive temporary file, never `<path>.tmp`.
+	return atomicfile.Write(path, data, 0600)
 }
 
 func LoadCredentials(homeDir, accountID string) (*Credentials, error) {
@@ -729,6 +783,12 @@ func SyncBufFilePath(homeDir, accountID string) string {
 
 func accountFile(homeDir, accountID string) string {
 	return filepath.Join(accountDir(homeDir), safeFileName(accountID)+".json")
+}
+
+// AccountDir is the directory that holds every account's credentials, sync
+// cursor and context tokens under homeDir.
+func AccountDir(homeDir string) string {
+	return accountDir(homeDir)
 }
 
 func accountDir(homeDir string) string {
@@ -843,18 +903,17 @@ func (s *ContextTokenStore) persistLocked(accountID string) {
 	data, _ := json.MarshalIndent(payload, "", "  ")
 	_ = os.MkdirAll(s.root, 0700)
 	path := filepath.Join(s.root, safeFileName(accountID)+".context-tokens.json")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err == nil {
-		_ = os.Rename(tmp, path)
-	}
+	_ = atomicfile.Write(path, data, 0600)
 }
 
 // pushSessionFreshWindow is how young a peer's context_token must be for a
 // proactive push to be considered deliverable. Empirical bounds from live use
-// (2026-07-04): minutes-old tokens delivered, a ~4.7h-old token was accepted
-// by the API but never arrived. The true iLink window is undocumented; 30m is
-// a conservative cut — an "unconfirmed" push may still arrive.
-const pushSessionFreshWindow = 30 * time.Minute
+// (2026-07-04): tokens up to ~1h during active runs/approvals delivered, while
+// a ~4.7h-old token was accepted by the API but never arrived. Using 90m covers
+// a full multi-step run and approval window without false sent_unconfirmed
+// duplicate catch-up pushes, while still treating multi-hour idle tokens as
+// unconfirmed.
+const pushSessionFreshWindow = 90 * time.Minute
 
 // PushConfidence reports whether a proactive push to chatID is expected to
 // actually deliver (fresh context_token), as opposed to accepted-but-dropped.

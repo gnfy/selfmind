@@ -9,7 +9,6 @@ package httpapi
 import (
 	"context"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -117,6 +116,7 @@ func newDetachedRunServer(t *testing.T, provider *slowLLMProvider) (*Server, *co
 	daemon := &Server{Control: store, Gateway: gw, DefaultTenantID: "default"}
 	sender := &syncedSender{}
 	daemon.Delivery = delivery.NewService(store, sender, delivery.Options{})
+	daemon.ExecutionRuntime = newTestExecutionRuntime(t)
 	return daemon, store, sender
 }
 
@@ -152,7 +152,7 @@ func TestSyncRunSurvivesClientDisconnect(t *testing.T) {
 		t.Fatalf("bind: %v", err)
 	}
 
-	ts := httptest.NewServer(daemon.Handler())
+	ts := newLocalCLIServer(daemon.Handler())
 	defer ts.Close()
 
 	reqCtx, cancelReq := context.WithCancel(context.Background())
@@ -162,6 +162,7 @@ func TestSyncRunSurvivesClientDisconnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	httpReq.Header.Set("Content-Type", "application/json")
 	clientErr := make(chan error, 1)
 	go func() {
 		resp, err := ts.Client().Do(httpReq)

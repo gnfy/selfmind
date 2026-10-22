@@ -100,7 +100,7 @@ func TestModelChangeDrainLeavesNewWorkQueuedForNextDaemon(t *testing.T) {
 	}
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	daemon.beginDraining("model_change:model_123")
-	response := daemon.enqueueDuringModelChange(ctx, identity, api.MessageRequest{
+	response, _ := daemon.enqueueDuringModelChange(ctx, identity, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "use the new route",
 	})
 	if !response.Accepted || response.Turn == nil || response.Turn.Status != "queued" {
@@ -166,6 +166,7 @@ func TestIncompleteModelReadinessStillSteersActiveContinuation(t *testing.T) {
 	}
 	if !daemon.coordinator().beginActive(identity.PersonID, &activeRun{
 		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Platform: "cli", PlatformUserID: "local",
 		RunID: "run_active", TaskID: "task_active", Channel: "cli", Steer: steer, StartedAt: time.Now(),
 	}) {
 		t.Fatal("active run registration failed")
@@ -211,7 +212,7 @@ func TestExplicitSafeBoundaryShutdownNeverInterruptsActiveRun(t *testing.T) {
 		t.Fatal("active run registration failed")
 	}
 	body := bytes.NewBufferString(`{"reason":"service_reconcile","wait_for_safe_boundary":true}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/gateway/shutdown", body)
+	request := asLocalCLI(httptest.NewRequest(http.MethodPost, "/v1/gateway/shutdown", body))
 	response := httptest.NewRecorder()
 	server.handleGatewayShutdown(response, request)
 	if response.Code != http.StatusAccepted {
@@ -386,7 +387,7 @@ func TestModelChangeShutdownCommitsCandidateOnlyAtDrainBoundary(t *testing.T) {
 	shutdown := make(chan struct{}, 1)
 	server := &Server{ModelChanges: service, ShutdownFunc: func() { shutdown <- struct{}{} }}
 	body, _ := json.Marshal(map[string]string{"reason": "model_change:" + prepared.Change.ID})
-	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/shutdown", bytes.NewReader(body))
+	req := asLocalCLI(httptest.NewRequest(http.MethodPost, "/v1/gateway/shutdown", bytes.NewReader(body)))
 	recorder := httptest.NewRecorder()
 	server.handleGatewayShutdown(recorder, req)
 	if recorder.Code != http.StatusAccepted {

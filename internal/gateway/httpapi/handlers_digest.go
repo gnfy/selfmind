@@ -61,7 +61,7 @@ func (d *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 	}
 	identity, err := d.identityFromQuery(r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeIdentityError(w, err)
 		return
 	}
 	digest, err := d.buildDigest(r.Context(), identity)
@@ -142,7 +142,13 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 	// Executing and monitoring Runs have their own sections. Fresh disruptions
 	// already have the stronger event line, so they are suppressed here rather
 	// than mislabelled as a new event in the away window.
-	attention, err := control.NewWorkTimeline(d.Control).Attention(ctx, identity.TenantID, identity.PersonID, maxDigestTasks*2)
+	timeline := control.NewWorkTimeline(d.Control)
+	resumableCount, err := timeline.ResumableRunCount(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return out, err
+	}
+	out.ResumableRunCount = &resumableCount
+	attention, err := timeline.Attention(ctx, identity.TenantID, identity.PersonID, maxDigestTasks*2)
 	if err != nil {
 		return out, err
 	}
@@ -198,10 +204,15 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 	if err != nil {
 		return out, err
 	}
+	now := time.Now()
 	for _, clarify := range clarifies {
 		out.PendingClarifies = append(out.PendingClarifies, api.DigestClarify{
-			ID:   clarify.ID,
-			Line: clarifySummaryLine(clarify),
+			ID:              clarify.ID,
+			Line:            clarifySummaryLine(clarify),
+			Channel:         clarify.Channel,
+			AskedAgoSeconds: max(0, int64(now.Sub(clarify.CreatedAt).Seconds())),
+			// An empty reply channel asks what any OTHER session may do.
+			NumberedReplyOnly: !d.clarifyAnswersImplicitly(identity, "", clarify, now),
 		})
 	}
 
@@ -233,8 +244,8 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 			}
 			// Bind progress to this exact Run; a shared Thread can have another
 			// continuation whose latest task event belongs elsewhere.
-			run.PlanSteps = digestPlanLines(d.latestPlanForRun(ctx, identity.TenantID, identity.PersonID, active.TaskID, active.RunID))
 			run.PlanJSON = d.latestPlanPayloadForRun(ctx, identity, active.TaskID, active.RunID)
+			run.PlanSteps = digestPlanLines(taskPlanStepsFromPayload(run.PlanJSON))
 			run.LatestActivity = d.latestActivityForRun(ctx, identity, control.Run{ID: active.RunID, TaskID: active.TaskID})
 		}
 		out.ActiveRuns = append(out.ActiveRuns, *run)

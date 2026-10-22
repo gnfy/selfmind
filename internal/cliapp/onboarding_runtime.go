@@ -236,7 +236,7 @@ func (a *App) readOnboardingGatewayStatus() (api.GatewayStatusResponse, error) {
 	}
 	ctx, cancel := contextWithTimeout(a.ctx, 3*time.Second)
 	defer cancel()
-	data, statusCode, err := gatewayrt.RequestStatus(ctx, a.gatewayURL())
+	data, statusCode, err := a.requestGatewayStatus(ctx)
 	if err != nil {
 		return api.GatewayStatusResponse{}, err
 	}
@@ -281,8 +281,7 @@ func (a *App) verifyOnboardingModelsFromDaemon(auxiliaryDegraded bool) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		a.attachGatewayAuth(req)
-		a.attachLocalControlAuth(req)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := a.gatewayHTTPClient().Do(req)
 		if err != nil {
 			return err
 		}
@@ -292,7 +291,7 @@ func (a *App) verifyOnboardingModelsFromDaemon(auxiliaryDegraded bool) error {
 			return readErr
 		}
 		if resp.StatusCode >= http.StatusBadRequest {
-			return fmt.Errorf("%s", gatewayErrorLine(resp.Status, data))
+			return fmt.Errorf("%s", a.gatewayErrorLine(resp.Status, data))
 		}
 		var result api.ModelProbeResponse
 		if err := json.Unmarshal(data, &result); err != nil {
@@ -319,15 +318,14 @@ func (a *App) registerOnboardingWorkspace(path string) (onboardingWorkspace, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		return onboardingWorkspace{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
 		data, _ := io.ReadAll(resp.Body)
-		return onboardingWorkspace{}, fmt.Errorf("%s", gatewayErrorLine(resp.Status, data))
+		return onboardingWorkspace{}, fmt.Errorf("%s", a.gatewayErrorLine(resp.Status, data))
 	}
 	var payload struct {
 		Workspace struct {
@@ -358,15 +356,14 @@ func (a *App) setOnboardingApprovalMode(mode, workspaceID string) error {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
-	a.attachLocalControlAuth(httpReq)
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.gatewayHTTPClient().Do(httpReq)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
 		data, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("%s", gatewayErrorLine(resp.Status, data))
+		return fmt.Errorf("%s", a.gatewayErrorLine(resp.Status, data))
 	}
 	return nil
 }

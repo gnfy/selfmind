@@ -84,3 +84,17 @@ func TestTaskRuntimeContextPromptIncludesDurableSlices(t *testing.T) {
 		}
 	}
 }
+
+func TestPriorConditionFindingRemainsHistoricalContext(t *testing.T) {
+	runtime := TaskRuntimeContext{InheritedEvidence: []InheritedEvidenceItem{{
+		StepID: "step", SourceRunID: "prior", SourceCriterion: "marker is READY", Target: "marker.txt",
+		PriorVerification: "passed", LatestCheck: "succeeded", PriorConditionResult: "not_met",
+		PriorConditionReason: "The observed marker was WAITING.", ReuseBlockedReason: "The recorded condition is not met.",
+	}}}
+	prompt := runtime.Prompt(10000)
+	for _, want := range []string{"Historical observations, not automatic current verification", "source_run_id=prior", "prior_main_finding=not_met", "The observed marker was WAITING.", "reuse_blocked="} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("missing %q: %s", want, prompt)
+		}
+	}
+}

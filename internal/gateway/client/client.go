@@ -31,10 +31,11 @@ import (
 
 // Client talks to a gateway daemon over HTTP.
 type Client struct {
-	BaseURL           string
-	Token             string
-	LocalControlToken string
-	HTTP              *http.Client
+	BaseURL string
+	Token   string
+	// HTTP is the transport. The person's CLI passes the local control socket
+	// client; the URL's host is then only a label.
+	HTTP *http.Client
 }
 
 // New builds a Client. A nil http.Client falls back to a sensible default with
@@ -59,18 +60,6 @@ func (c *Client) auth(req *http.Request) {
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	if c.LocalControlToken != "" {
-		req.Header.Set(api.LocalControlTokenHeader, c.LocalControlToken)
-	}
-}
-
-// SetLocalControlToken marks requests as coming from the authenticated local
-// CLI. Callers must never load or send this token to a non-loopback gateway.
-func (c *Client) SetLocalControlToken(token string) {
-	if c == nil {
-		return
-	}
-	c.LocalControlToken = strings.TrimSpace(token)
 }
 
 // ProcessMessage implements the cli.MessageProcessor signature against a remote
@@ -428,6 +417,8 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 				"choices":    p["choices"],
 			},
 		}, true
+	case ev.Type == "clarify.answered" || ev.Type == "clarify.expired":
+		return llm.StreamEvent{EventType: ev.Type, Payload: map[string]interface{}{"clarify_id": str(p["clarify_id"])}}, true
 	case strings.HasPrefix(ev.Type, "learning."):
 		return llm.StreamEvent{EventType: "learning.review", Content: str(p["message"])}, true
 	case ev.Type == "external_watch.completed":
@@ -517,18 +508,19 @@ func (c *Client) Digest(ctx context.Context) (*api.DigestResponse, error) {
 // for older daemons and exceptional finalization paths).
 // Returns the finished run's outcome summary when one is available.
 func (c *Client) WatchActiveRun(ctx context.Context, observer httpapi.StreamObserver) string {
-	return c.watchRun(ctx, "", observer)
+	result, _ := c.watchRun(ctx, "", observer)
+	return result.Summary
 }
 
 // WatchRun follows one explicit daemon run: the daemon sends an attached run's
 // events whichever session started it. Person-level event streams may carry
 // activity from a newly queued run before the old stream connection is torn
 // down, so both terminal detection and rendering are filtered by run ID.
-func (c *Client) WatchRun(ctx context.Context, runID string, observer httpapi.StreamObserver) string {
+func (c *Client) WatchRun(ctx context.Context, runID string, observer httpapi.StreamObserver) (api.RunObservation, error) {
 	return c.watchRun(ctx, strings.TrimSpace(runID), observer)
 }
 
-func (c *Client) watchRun(ctx context.Context, runID string, observer httpapi.StreamObserver) string {
+func (c *Client) watchRun(ctx context.Context, runID string, observer httpapi.StreamObserver) (api.RunObservation, error) {
 	req := api.MessageRequest{Platform: "cli", PlatformUserID: clientUserID()}
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -564,16 +556,16 @@ func (c *Client) watchRun(ctx context.Context, runID string, observer httpapi.St
 	for {
 		select {
 		case <-ctx.Done():
-			return ""
+			return api.RunObservation{RunID: runID}, ctx.Err()
 		case event := <-terminal:
-			return runEventOutcomeSummary(event)
+			return observedRunEvent(event)
 		case <-probeNow:
 			if gone, ok := c.activeRunGone(ctx, req, runID); ok && gone {
-				return ""
+				return c.observedRunState(ctx, runID)
 			}
 		case <-ticker.C:
 			if gone, ok := c.activeRunGone(ctx, req, runID); ok && gone {
-				return ""
+				return c.observedRunState(ctx, runID)
 			}
 		}
 	}
@@ -605,10 +597,22 @@ func (c *Client) activeRunGone(ctx context.Context, req api.MessageRequest, runI
 		return false, false
 	}
 	var payload struct {
-		ActiveRun *api.ActiveRunStatus `json:"active_run"`
+		ActiveRun  *api.ActiveRunStatus  `json:"active_run"`
+		ActiveRuns []api.ActiveRunStatus `json:"active_runs"`
 	}
 	if json.NewDecoder(httpResp.Body).Decode(&payload) != nil {
 		return false, false
+	}
+	if len(payload.ActiveRuns) > 0 {
+		if runID == "" {
+			return false, true
+		}
+		for _, active := range payload.ActiveRuns {
+			if active.RunID == runID {
+				return false, true
+			}
+		}
+		return true, true
 	}
 	if payload.ActiveRun == nil {
 		return true, true
@@ -617,20 +621,6 @@ func (c *Client) activeRunGone(ctx context.Context, req api.MessageRequest, runI
 		return true, true
 	}
 	return false, true
-}
-
-// runOutcomeSummary extracts the outcome summary a run.finished event carries
-// (payload {"outcome": api.RunOutcome, ...}); empty when absent.
-func runOutcomeSummary(ev control.Event) string {
-	p := decodePayload(ev.Payload)
-	if outcome, ok := p["outcome"].(map[string]interface{}); ok {
-		return str(outcome["summary"])
-	}
-	return ""
-}
-
-func runEventOutcomeSummary(event api.RunEvent) string {
-	return runOutcomeSummary(control.Event{Type: event.Type, Payload: event.Payload})
 }
 
 // PingPresence marks this CLI endpoint attached on the daemon (GET
@@ -755,13 +745,14 @@ var (
 // (POST /v1/runs/steer). In client mode the run executes inside the daemon
 // process, so the TUI's local steering channel can never reach it — this call
 // is the only path by which mid-run input reaches the agent loop.
-func (c *Client) SteerRun(runID, channel, text string) error {
+func (c *Client) SteerRun(runID, channel, text, approvalMode string) error {
 	req := api.RunSteerRequest{
 		Platform:       "cli",
 		PlatformUserID: clientUserID(),
 		Channel:        channel,
 		RunID:          runID,
 		Text:           text,
+		ApprovalMode:   approvalMode,
 	}
 	body, _ := json.Marshal(req)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

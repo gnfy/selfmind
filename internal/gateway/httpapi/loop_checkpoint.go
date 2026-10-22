@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/runpool"
 )
 
 type controlLoopCheckpointSink struct {
@@ -50,7 +51,7 @@ func (s *controlLoopCheckpointSink) SaveLoopCheckpoint(ctx context.Context, chec
 		TenantID: s.tenantID, PersonID: s.personID, TaskID: s.taskID, RunID: s.runID,
 		ContractVersion: recovery.ContractVersion, Recovery: recoveryJSON,
 		Iteration: checkpoint.Iteration, Outcome: string(checkpoint.Outcome), Detail: checkpoint.Detail,
-		Snapshot: snapshot,
+		Snapshot: snapshot, WaitKind: checkpoint.WaitKind, WaitRef: checkpoint.WaitRef, WaitToolCallID: checkpoint.WaitToolCallID,
 	})
 }
 
@@ -63,7 +64,7 @@ func (c *RunCoordinator) withLoopCheckpointResume(ctx context.Context, identity 
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || parent == nil {
 		return ctx
 	}
-	if parent.TaskID != task.ID {
+	if parent.TaskID != task.ID || parent.PersonID != identity.PersonID {
 		return ctx
 	}
 	record, err := c.srv.Control.IncompleteLoopCheckpointForRun(ctx, identity.TenantID, parent.ID)
@@ -79,5 +80,52 @@ func (c *RunCoordinator) withLoopCheckpointResume(ctx context.Context, identity 
 		log.Warn("loop checkpoint decode failed", "task_id", task.ID, "run_id", record.RunID, "error", err)
 		return ctx
 	}
-	return kernel.WithLoopResumeMessages(ctx, messages)
+	ctx = kernel.WithLoopResumeMessages(ctx, messages)
+	if record.Outcome != "await_human" || record.WaitToolCallID == "" {
+		return ctx
+	}
+	resume := kernel.HumanWaitResume{ToolCallID: record.WaitToolCallID}
+	switch record.WaitKind {
+	case control.LoopCheckpointWaitApproval:
+		approval, lookupErr := c.srv.Control.GetApprovalRequest(ctx, identity.TenantID, record.WaitRef)
+		if lookupErr != nil || approval == nil || approval.PersonID != identity.PersonID || approval.RunID != parent.ID || (approval.Status != "approved" && approval.Status != "rejected") {
+			return ctx
+		}
+		resume.Denied = approval.Status == "rejected"
+	case control.LoopCheckpointWaitClarification:
+		clarify, lookupErr := c.srv.Control.GetClarifyRequest(ctx, identity.TenantID, record.WaitRef)
+		if lookupErr != nil || clarify == nil || clarify.PersonID != identity.PersonID || clarify.RunID != parent.ID || clarify.Status != "answered" {
+			return ctx
+		}
+		var choices []string
+		_ = json.Unmarshal(clarify.Options, &choices)
+		result, _ := json.Marshal(map[string]interface{}{"question": clarify.Question, "choices_offered": choices, "user_response": clarify.Answer})
+		resume.Result = &llm.Message{Role: "tool", ToolCallID: record.WaitToolCallID, Content: string(result)}
+	default:
+		return ctx
+	}
+	if !resume.Denied {
+		resume.RecheckReason = c.humanResumeRecheckReason(ctx, identity, parent, record)
+	}
+	return kernel.WithHumanWaitResume(ctx, resume)
+}
+
+func (c *RunCoordinator) humanResumeRecheckReason(ctx context.Context, identity *control.IdentityContext, parent *control.Run, record *control.LoopCheckpointRecord) string {
+	scope, _ := kernel.ToolInvocationScopeFromContext(ctx)
+	activity, err := c.srv.Control.ListRunRootActivitySince(ctx, identity.TenantID, identity.PersonID, parent.ID, scope.RunID, record.UpdatedAt)
+	if err != nil {
+		log.Warn("human resume cannot establish workspace stability", "run_id", parent.ID, "error", err)
+		return "Workspace activity during the human wait could not be established; revalidate before acting."
+	}
+	paths := writableRootPaths(parent.ExecutionRoots)
+	for _, other := range activity {
+		otherPaths := writableRootPaths(other.ExecutionRoots)
+		if len(other.ExecutionRoots) > 0 && len(otherPaths) == 0 {
+			continue
+		}
+		if len(paths) == 0 || len(otherPaths) == 0 || runpool.PathsConflict(paths, otherPaths) {
+			return "Another Run used overlapping writable execution roots during the human wait; revalidate before acting."
+		}
+	}
+	return ""
 }

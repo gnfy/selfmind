@@ -59,6 +59,14 @@ func TestTaskSkillBindingRequiresDeterministicAttachAndHonorsFailureGuard(t *tes
 	if explicit.Active == nil || explicit.Active.Key != key || len(explicit.Candidates) != 0 {
 		t.Fatalf("deterministic attach did not load exactly one bound Skill: %+v", explicit)
 	}
+	for _, reason := range []taskAttachReason{taskAttachReplyToRun, taskAttachApprovalResume, taskAttachClarifyResume} {
+		attach := newTaskAttach(reason, "", false, false)
+		attach.resumesRunID = "exact-parent"
+		continued := coordinator.selectSkillRuntimeContext(runCtx, identity, task, run, attach, "inspect build")
+		if continued.Active == nil || continued.Active.Key != key || len(continued.Candidates) != 0 {
+			t.Fatalf("exact %s continuation lost bound Skill: %+v", reason, continued)
+		}
+	}
 	if _, err := store.FallbackCurrentSkill(ctx, control.SkillFallbackInput{
 		IdentityTenantID: identity.TenantID, RunID: run.ID, WorkUnitID: run.WorkUnitID,
 		Reason: "known stale step", FailureSignature: "known-stale", FailedStepID: "inspect",

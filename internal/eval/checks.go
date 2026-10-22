@@ -16,6 +16,7 @@ type RunSnapshot struct {
 	ActionToolCalls   int
 	ProgressUpdates   int
 	ToolErrors        int
+	InvokedToolErrors int
 	Errors            []string
 	ErrorCategories   map[string]int
 	TaskIDs           []string
@@ -28,6 +29,7 @@ type RunSnapshot struct {
 	CompletionReason  string
 	Resumable         bool
 	VerificationState string
+	ConditionState    string
 }
 
 type CheckResult struct {
@@ -82,6 +84,9 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	if c.Expect.MaxToolErrors != nil && *c.Expect.MaxToolErrors >= 0 {
 		add("max_tool_errors", snap.ToolErrors <= *c.Expect.MaxToolErrors, "too many tool errors")
 	}
+	if c.Expect.MaxInvokedToolErrors != nil && *c.Expect.MaxInvokedToolErrors >= 0 {
+		add("max_invoked_tool_errors", snap.InvokedToolErrors <= *c.Expect.MaxInvokedToolErrors, "too many attempted or uncertain tool failures")
+	}
 	if c.Expect.MaxDurationSeconds > 0 {
 		add("max_duration_seconds", snap.DurationSeconds <= float64(c.Expect.MaxDurationSeconds), "case exceeded duration budget")
 	}
@@ -119,6 +124,10 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	if want := strings.TrimSpace(c.Expect.VerificationState); want != "" {
 		got := strings.TrimSpace(snap.VerificationState)
 		add("verification_state:"+want, got == want, "verification state should match expectation; got "+firstNonEmpty(got, "<empty>"))
+	}
+	if want := strings.TrimSpace(c.Expect.ConditionState); want != "" {
+		got := strings.TrimSpace(snap.ConditionState)
+		add("condition_state:"+want, got == want, "condition state should match expectation; got "+firstNonEmpty(got, "<empty>"))
 	}
 	if c.Expect.RequireWorkspaceMatch || c.Checks.WorkspaceShouldMatch {
 		want := strings.TrimSpace(snap.ExpectedWorkspace)

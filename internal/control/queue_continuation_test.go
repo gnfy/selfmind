@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -36,7 +37,8 @@ func TestQueuedReplyFollowsClaimedParentWithoutLosingInput(t *testing.T) {
 	system.IdempotencyKey = "run-recovery:" + parent.ID + ":continue"
 	system.Class = QueueClassRecovery
 	resolvedSystem, systemWait, systemErr := store.ResolveQueuedContinuation(ctx, system)
-	if systemErr != nil || systemWait || resolvedSystem.ReplyToRunID != parent.ID {
+	var obsolete *QueuedContinuationObsolete
+	if !errors.As(systemErr, &obsolete) || obsolete.ChildRunID != child.ID || systemWait || resolvedSystem.ReplyToRunID != parent.ID {
 		t.Fatalf("system recovery was retargeted after its parent was claimed: resolved=%+v wait=%v err=%v", resolvedSystem, systemWait, systemErr)
 	}
 	if err := store.FinishRun(ctx, "default", child.ID, "interrupted"); err != nil {
@@ -56,6 +58,15 @@ func TestQueuedReplyFollowsClaimedParentWithoutLosingInput(t *testing.T) {
 	resolved, wait, err = store.ResolveQueuedContinuation(ctx, queued)
 	if err != nil || wait || resolved.ReplyToRunID != "" || resolved.TaskID != task.ID || resolved.Content != queued.Content {
 		t.Fatalf("settled work: resolved=%+v wait=%v err=%v", resolved, wait, err)
+	}
+	system.ReplyToRunID = grandchild.ID
+	for _, prefix := range []string{"approval-resume:", "clarify-resume:", "provider-wait:", "execution-lane:", "external-resource:", "external-watch:", "run-recovery:"} {
+		system.Class = QueueClassForeground // older rows need not have a class
+		system.IdempotencyKey = prefix + "exact-trigger"
+		_, wait, err = store.ResolveQueuedContinuation(ctx, system)
+		if !errors.As(err, &obsolete) || wait || obsolete.Status != "done" || obsolete.ChildRunID != "" {
+			t.Fatalf("settled %s wakeup was treated as new work: wait=%v err=%v", prefix, wait, err)
+		}
 	}
 }
 

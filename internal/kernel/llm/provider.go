@@ -54,7 +54,19 @@ type Message struct {
 	Name             string
 	ToolCallID       string
 	ToolCalls        []ToolCall
+	// ContextOrigin is local checkpoint provenance, never a provider wire field.
+	// Empty legacy entries retain conservative user-instruction protection.
+	ContextOrigin    MessageContextOrigin `json:",omitempty"`
+	ControlCondition string               `json:",omitempty"`
 }
+
+type MessageContextOrigin string
+
+const (
+	MessageOriginRuntimeControl MessageContextOrigin = "runtime_control.v1"
+	MessageOriginWorkSpine      MessageContextOrigin = "work_spine.v1"
+	MessageOriginCompaction     MessageContextOrigin = "compaction.v1"
+)
 
 // ContentPart is one multimodal content block.
 type ContentPart struct {

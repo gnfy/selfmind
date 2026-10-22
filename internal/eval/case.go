@@ -12,6 +12,9 @@ import (
 )
 
 type Case struct {
+	// Captured drafts have no reconstructed world yet. Review and seed that
+	// world before removing this guard; replay really executes tools.
+	CaptureReviewRequired bool `yaml:"capture_review_required,omitempty" json:"capture_review_required,omitempty"`
 	// Smart cases exercise the production judge; existing cases retain full-auto.
 	ApprovalMode  string `yaml:"approval_mode,omitempty" json:"approval_mode,omitempty"`
 	ID            string `yaml:"id" json:"id"`
@@ -50,6 +53,10 @@ type Case struct {
 	Turns      []Turn        `yaml:"turns" json:"turns"`
 	Expect     Expectations  `yaml:"expect" json:"expect,omitempty"`
 	Checks     CheckSettings `yaml:"checks" json:"checks,omitempty"`
+
+	// Runtime declares the daemon runtime the case runs on. Omitted, a case
+	// gets one Run and one agent worker, without the cron tool or MCP stubs.
+	Runtime *RuntimeSettings `yaml:"runtime,omitempty" json:"runtime,omitempty"`
 
 	// State-oracle additions (v1): initial world, world-state assertions, and
 	// sampling controls for non-deterministic real-model runs.
@@ -111,6 +118,9 @@ type Turn struct {
 	// to this input (1-based). It exercises Run-ID controls without hardcoding
 	// an evaluation database's generated identifier.
 	SeededRunOrdinal int `yaml:"seeded_run_ordinal,omitempty" json:"seeded_run_ordinal,omitempty"`
+	// SeededEffectOrdinal appends the claim id of the unresolved_effect seeded
+	// on that setup.task.parked_runs entry (1-based), in any later state.
+	SeededEffectOrdinal int `yaml:"seeded_effect_ordinal,omitempty" json:"seeded_effect_ordinal,omitempty"`
 	// NativeReplyMessageID simulates adapter-proven reply metadata for the
 	// deterministic invalid-edge path. Successful platform receipts are covered
 	// by sender/store/gateway integration tests, not synthetic eval fixtures.
@@ -125,26 +135,89 @@ type Turn struct {
 	// Opt-in daemon worker execution in an isolated case, including its queued
 	// continuation and real tools. The turn budget bounds the wait.
 	WaitForExternalWatches bool `yaml:"wait_for_external_watches,omitempty" json:"wait_for_external_watches,omitempty"`
+	// Platform sends the turn from another endpoint (cli, weixin, telegram, ...)
+	// instead of the eval account. The case user on any platform is the case
+	// person's own account; a different platform_user_id stays a stranger unless
+	// setup.accounts binds it.
+	Platform string `yaml:"platform,omitempty" json:"platform,omitempty"`
+	// CWD runs a CLI turn from this subdirectory of the isolated workspace,
+	// created if missing. The turn binds its workspace from that directory, as
+	// the terminal client does, instead of using the case workspace.
+	CWD string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
+	// HoldWorker submits the turn without waiting for it and keeps its Run on
+	// the agent worker it leased until the Run is stopped, without a model
+	// call. The next turn starts once the Run holds a worker.
+	HoldWorker bool `yaml:"hold_worker,omitempty" json:"hold_worker,omitempty"`
+	// TurnRunOrdinal appends the exact id of the Run that an earlier turn
+	// started (1-based) to this input, such as `/stop <run_id>`.
+	TurnRunOrdinal int `yaml:"turn_run_ordinal,omitempty" json:"turn_run_ordinal,omitempty"`
+	// Scheduled fires the input as the prompt of a scheduled job of the
+	// turn's account, through the daemon's cron executor, instead of sending
+	// it as the person. Its answer is what the executor delivers.
+	Scheduled bool `yaml:"scheduled,omitempty" json:"scheduled,omitempty"`
+}
+
+// RuntimeSettings shape the daemon runtime the harness builds through
+// app.InitGateway: the same worker pool, admission ceiling, cron tool and MCP
+// connections, with fixtures in place of operator services.
+type RuntimeSettings struct {
+	// MaxActiveWorkRuns is gateway.max_active_work_runs for the case (1-3).
+	MaxActiveWorkRuns int `yaml:"max_active_work_runs,omitempty" json:"max_active_work_runs,omitempty"`
+	// Workers is the agent worker count. It defaults to the capacity, as in
+	// the daemon, and may not be lower than it.
+	Workers int `yaml:"workers,omitempty" json:"workers,omitempty"`
+	// Cron builds the cron scheduler so that every worker offers the cron tool.
+	// The scheduler loop never starts, so no job runs during the case.
+	Cron bool `yaml:"cron,omitempty" json:"cron,omitempty"`
+	// MCPStubs are stdio MCP servers backed by the internal/tools/mcptest stub.
+	MCPStubs []MCPStub `yaml:"mcp_stubs,omitempty" json:"mcp_stubs,omitempty"`
+}
+
+// MCPStub names one stub server. Its tools are registered as
+// mcp_<name>_<tool>_<hash>; predicates address them as mcp:<name>/<tool>.
+type MCPStub struct {
+	Name string `yaml:"name" json:"name"`
+}
+
+// maxEvalWorkers matches the daemon's cap on agent workers.
+const maxEvalWorkers = 16
+
+// capacity is the case's Run admission ceiling.
+func (r *RuntimeSettings) capacity() int {
+	if r == nil || r.MaxActiveWorkRuns < 1 {
+		return 1
+	}
+	return r.MaxActiveWorkRuns
+}
+
+// workers is the case's agent worker count.
+func (r *RuntimeSettings) workers() int {
+	if r == nil || r.Workers < 1 {
+		return r.capacity()
+	}
+	return r.Workers
 }
 
 type Expectations struct {
-	Status              string   `yaml:"status" json:"status,omitempty"`
-	HTTPStatus          int      `yaml:"http_status" json:"http_status,omitempty"`
-	CompletionReason    string   `yaml:"completion_reason" json:"completion_reason,omitempty"`
-	Resumable           *bool    `yaml:"resumable" json:"resumable,omitempty"`
-	VerificationState   string   `yaml:"verification_state" json:"verification_state,omitempty"`
-	Contains            []string `yaml:"contains" json:"contains,omitempty"`
-	MustNotContain      []string `yaml:"must_not_contain" json:"must_not_contain,omitempty"`
-	MaxDurationSeconds  int      `yaml:"max_duration_seconds" json:"max_duration_seconds,omitempty"`
-	MaxToolErrors       *int     `yaml:"max_tool_errors" json:"max_tool_errors,omitempty"`
-	MaxToolCalls        *int     `yaml:"max_tool_calls" json:"max_tool_calls,omitempty"`
-	RequireToolEvents   bool     `yaml:"require_tool_events" json:"require_tool_events,omitempty"`
-	MinToolCalls        int      `yaml:"min_tool_calls" json:"min_tool_calls,omitempty"`
-	MinProgressUpdates  int      `yaml:"min_progress_updates" json:"min_progress_updates,omitempty"`
-	RequireSameTask     bool     `yaml:"require_same_task" json:"require_same_task,omitempty"`
-	RequireContinuation bool     `yaml:"require_continuation" json:"require_continuation,omitempty"`
-	RequireNoTask       bool     `yaml:"require_no_task" json:"require_no_task,omitempty"`
-	RequireNoRun        bool     `yaml:"require_no_run" json:"require_no_run,omitempty"`
+	Status               string   `yaml:"status" json:"status,omitempty"`
+	HTTPStatus           int      `yaml:"http_status" json:"http_status,omitempty"`
+	CompletionReason     string   `yaml:"completion_reason" json:"completion_reason,omitempty"`
+	Resumable            *bool    `yaml:"resumable" json:"resumable,omitempty"`
+	VerificationState    string   `yaml:"verification_state" json:"verification_state,omitempty"`
+	ConditionState       string   `yaml:"condition_state" json:"condition_state,omitempty"`
+	Contains             []string `yaml:"contains" json:"contains,omitempty"`
+	MustNotContain       []string `yaml:"must_not_contain" json:"must_not_contain,omitempty"`
+	MaxDurationSeconds   int      `yaml:"max_duration_seconds" json:"max_duration_seconds,omitempty"`
+	MaxToolErrors        *int     `yaml:"max_tool_errors" json:"max_tool_errors,omitempty"`
+	MaxInvokedToolErrors *int     `yaml:"max_invoked_tool_errors" json:"max_invoked_tool_errors,omitempty"`
+	MaxToolCalls         *int     `yaml:"max_tool_calls" json:"max_tool_calls,omitempty"`
+	RequireToolEvents    bool     `yaml:"require_tool_events" json:"require_tool_events,omitempty"`
+	MinToolCalls         int      `yaml:"min_tool_calls" json:"min_tool_calls,omitempty"`
+	MinProgressUpdates   int      `yaml:"min_progress_updates" json:"min_progress_updates,omitempty"`
+	RequireSameTask      bool     `yaml:"require_same_task" json:"require_same_task,omitempty"`
+	RequireContinuation  bool     `yaml:"require_continuation" json:"require_continuation,omitempty"`
+	RequireNoTask        bool     `yaml:"require_no_task" json:"require_no_task,omitempty"`
+	RequireNoRun         bool     `yaml:"require_no_run" json:"require_no_run,omitempty"`
 	// RequireTaskSwitch is the inverse of RequireSameTask: a multi-turn case
 	// must use MORE than one task ID. It asserts the task-attach semantics —
 	// a new request without continuation evidence creates its own task
@@ -229,6 +302,10 @@ func (c *Case) normalize() error {
 		if turn.SeededRunOrdinal < 0 || (turn.SeededRunOrdinal > 0 && (c.Setup == nil || c.Setup.Task == nil || turn.SeededRunOrdinal > len(c.Setup.Task.ParkedRuns))) {
 			return fmt.Errorf("turn %d: seeded_run_ordinal must name a setup.task.parked_runs entry", i+1)
 		}
+		if turn.SeededEffectOrdinal < 0 || (turn.SeededEffectOrdinal > 0 && (c.Setup == nil || c.Setup.Task == nil ||
+			turn.SeededEffectOrdinal > len(c.Setup.Task.ParkedRuns) || c.Setup.Task.ParkedRuns[turn.SeededEffectOrdinal-1].UnresolvedEffect == nil)) {
+			return fmt.Errorf("turn %d: seeded_effect_ordinal must name a setup.task.parked_runs entry with an unresolved_effect", i+1)
+		}
 	}
 	if !c.RequiresModel() && c.RequireCassette {
 		return fmt.Errorf("model_required: false cannot be combined with require_cassette: true")
@@ -247,6 +324,9 @@ func (c *Case) normalize() error {
 		return fmt.Errorf("approval_mode must be smart or full-auto")
 	}
 	if err := c.normalizeRequirements(); err != nil {
+		return err
+	}
+	if err := c.normalizeMultiRun(); err != nil {
 		return err
 	}
 	if !c.Checks.NoMojibake && !c.Checks.NoRawJSONLeak && !c.Checks.NoToolXMLLeak &&

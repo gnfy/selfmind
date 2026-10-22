@@ -226,7 +226,11 @@ Legacy `skill:<name>` dispatch addresses remain registered with hidden exposure
 as a rollback surface. They do not enter provider catalogs and must gain no new
 callers. Removal requires explicit telemetry evidence and a release decision.
 Their loader keeps single-level enumeration; it is a rollback surface and gains
-no new capability.
+no new capability. A disabled Skill has no address, and an address stays inside
+the `skill:` namespace whatever the front matter declares, so a Skill cannot
+replace another tool. Every agent worker holds the same addresses: a Skill
+change made through any worker or management dispatch reloads them in all
+workers at once ([`worker-pool-design.md`](worker-pool-design.md)).
 
 ## Work Units, Binding, and Activation
 
@@ -243,6 +247,14 @@ Explicit task ids, `/resume`, and deterministic continuation may inherit it. A
 weak display pre-label does not. Resolution rechecks root, scope, source, path,
 trust, state, and precedence before every new activation. Failure returns to
 ordinary planning rather than silently loading a same-named replacement.
+
+Activation, bounded viewing and fallback record runtime bookkeeping separately
+from the procedure's execution effects. They do not block a later exact
+historical selection in the same interaction. Plan import rechecks activation
+membership: only a still-active package in the current Work Unit retains its
+instructions. Replaced units keep their audit records while their instructions
+and viewed pages expire; Main must select again for a new unit. Approval and
+replay policy are unchanged, and historical effects are never reclassified.
 
 Selection references bind work-unit identity to the selected package and
 description hashes. Description drift invalidates routing. Package drift with

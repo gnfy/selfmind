@@ -48,9 +48,9 @@ func (d *Server) smartTriageDiagLines(ctx context.Context, identity *control.Ide
 			stats.Contained, stats.GrantHits, stats.ExactRunHits, stats.BundleHits, stats.Approved, stats.Denied, stats.Escalated, stats.Unavailable, stats.HumanAsks)
 	}
 	if human.Requested > 0 {
-		fmt.Fprintf(&sb, "- human requests %d; statuses %s; choices %s; avg response %s; tools %s\n",
+		fmt.Fprintf(&sb, "- human requests %d; statuses %s; choices %s; avg response %s (%d measured, %d unavailable); total response wait %s (unclipped); tools %s\n",
 			human.Requested, formatCountMap(human.Statuses), formatCountMap(human.DecisionChoices),
-			time.Duration(human.AverageResponseMS)*time.Millisecond, formatCountMap(human.Tools))
+			time.Duration(human.AverageResponseMS)*time.Millisecond, human.MeasuredResponses, human.ResponseUnavailable, time.Duration(human.ResponseMS)*time.Millisecond, formatCountMap(human.Tools))
 	}
 	// An unavailable-only window is the actionable case: the funnel is not
 	// strict, it is off, so every dangerous op becomes a human ask.

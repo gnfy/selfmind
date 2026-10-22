@@ -55,14 +55,17 @@ func (d *Server) scheduleAutomaticRunRecovery(ctx context.Context, item control.
 	item.Channel = fallback(item.Channel, run.Channel)
 	key := fmt.Sprintf("run-recovery:%s:%s", run.ID, decision.Mode)
 	route := d.routeIdentityForPerson(ctx, item.TenantID, item.PersonID, item.Channel, "", nil)
-	queued, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
+	row := control.QueuedTask{
 		TenantID: item.TenantID, PersonID: item.PersonID,
 		Platform: route.Platform, PlatformUserID: route.PlatformUserID,
 		Channel: fallback(item.Channel, route.Platform), Content: automaticRecoveryContent(decision.Mode),
 		WorkspaceID: recoveryWorkspaceID(run, task), ExecutionRoots: executionenv.CloneRootBindings(run.ExecutionRoots),
 		TaskID: task.ID, ReplyToRunID: run.ID, IdempotencyKey: key,
 		Class: control.QueueClassRecovery,
-	})
+	}
+	// The interrupted Run's authority, narrowed by the recovery mode.
+	row.Admission = d.enqueueContinuationAdmission(ctx, row)
+	queued, err := d.Control.EnqueueQueued(ctx, row)
 	if err != nil || queued == nil {
 		return false, err
 	}

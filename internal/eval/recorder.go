@@ -14,54 +14,58 @@ import (
 )
 
 type JSONLEvent struct {
-	Time            string                 `json:"time"`
-	Type            string                 `json:"type"`
-	CaseID          string                 `json:"case_id,omitempty"`
-	TurnIndex       int                    `json:"turn_index,omitempty"`
-	Channel         string                 `json:"channel,omitempty"`
-	Provider        string                 `json:"provider,omitempty"`
-	Model           string                 `json:"model,omitempty"`
-	Workspace       string                 `json:"workspace,omitempty"`
-	Status          string                 `json:"status,omitempty"`
-	HTTPStatus      int                    `json:"http_status,omitempty"`
-	DurationMS      int64                  `json:"duration_ms,omitempty"`
-	ElapsedMS       int64                  `json:"elapsed_ms,omitempty"`
-	Tool            string                 `json:"tool,omitempty"`
-	ToolCallID      string                 `json:"tool_call_id,omitempty"`
-	OK              *bool                  `json:"ok,omitempty"`
-	Error           string                 `json:"error,omitempty"`
-	ErrorCategory   string                 `json:"error_category,omitempty"`
-	Message         string                 `json:"message,omitempty"`
-	Chars           int                    `json:"chars,omitempty"`
-	InputHash       string                 `json:"input_hash,omitempty"`
-	InputPreview    string                 `json:"input_preview,omitempty"`
-	OutputPreview   string                 `json:"output_preview,omitempty"`
-	InputTokens     int                    `json:"input_tokens,omitempty"`
-	OutputTokens    int                    `json:"output_tokens,omitempty"`
-	ToolCalls       int                    `json:"tool_calls,omitempty"`
-	ActionToolCalls int                    `json:"action_tool_calls,omitempty"`
-	ProgressUpdates int                    `json:"progress_updates,omitempty"`
-	ToolErrors      int                    `json:"tool_errors,omitempty"`
-	CheckResults    []CheckResult          `json:"check_results,omitempty"`
-	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	Time              string                 `json:"time"`
+	Type              string                 `json:"type"`
+	RunID             string                 `json:"run_id,omitempty"`
+	Provenance        *RunProvenance         `json:"provenance,omitempty"`
+	CaseID            string                 `json:"case_id,omitempty"`
+	TurnIndex         int                    `json:"turn_index,omitempty"`
+	Channel           string                 `json:"channel,omitempty"`
+	Provider          string                 `json:"provider,omitempty"`
+	Model             string                 `json:"model,omitempty"`
+	Workspace         string                 `json:"workspace,omitempty"`
+	Status            string                 `json:"status,omitempty"`
+	HTTPStatus        int                    `json:"http_status,omitempty"`
+	DurationMS        int64                  `json:"duration_ms,omitempty"`
+	ElapsedMS         int64                  `json:"elapsed_ms,omitempty"`
+	Tool              string                 `json:"tool,omitempty"`
+	ToolCallID        string                 `json:"tool_call_id,omitempty"`
+	OK                *bool                  `json:"ok,omitempty"`
+	Error             string                 `json:"error,omitempty"`
+	ErrorCategory     string                 `json:"error_category,omitempty"`
+	Message           string                 `json:"message,omitempty"`
+	Chars             int                    `json:"chars,omitempty"`
+	InputHash         string                 `json:"input_hash,omitempty"`
+	InputPreview      string                 `json:"input_preview,omitempty"`
+	OutputPreview     string                 `json:"output_preview,omitempty"`
+	InputTokens       int                    `json:"input_tokens,omitempty"`
+	OutputTokens      int                    `json:"output_tokens,omitempty"`
+	ToolCalls         int                    `json:"tool_calls,omitempty"`
+	ActionToolCalls   int                    `json:"action_tool_calls,omitempty"`
+	ProgressUpdates   int                    `json:"progress_updates,omitempty"`
+	ToolErrors        int                    `json:"tool_errors,omitempty"`
+	InvokedToolErrors *int                   `json:"invoked_tool_errors,omitempty"`
+	CheckResults      []CheckResult          `json:"check_results,omitempty"`
+	Metadata          map[string]interface{} `json:"metadata,omitempty"`
 }
 
 type Recorder struct {
-	mu              sync.Mutex
-	file            *os.File
-	caseID          string
-	start           time.Time
-	turnStart       time.Time
-	firstToken      bool
-	output          strings.Builder
-	toolCalls       int
-	actionToolCalls int
-	toolErrors      int
-	progressUpdates int
-	pendingProgress strings.Builder
-	errors          []string
-	errorCategory   map[string]int
-	recordContent   bool
+	mu                sync.Mutex
+	file              *os.File
+	caseID            string
+	start             time.Time
+	turnStart         time.Time
+	firstToken        bool
+	output            strings.Builder
+	toolCalls         int
+	actionToolCalls   int
+	toolErrors        int
+	invokedToolErrors int
+	progressUpdates   int
+	pendingProgress   strings.Builder
+	errors            []string
+	errorCategory     map[string]int
+	recordContent     bool
 }
 
 func NewRecorder(path string, recordContent bool) (*Recorder, error) {
@@ -93,6 +97,7 @@ func (r *Recorder) StartCase(c *Case, provider, model, workspace string) {
 	r.toolCalls = 0
 	r.actionToolCalls = 0
 	r.toolErrors = 0
+	r.invokedToolErrors = 0
 	r.progressUpdates = 0
 	r.pendingProgress.Reset()
 	r.errors = nil
@@ -120,7 +125,7 @@ func (r *Recorder) StartTurn(index int, input, channel string) {
 		TurnIndex:    index,
 		Channel:      channel,
 		InputHash:    hashText(input),
-		InputPreview: preview(input, 180),
+		InputPreview: preview(tools.RedactSensitive(input), 180),
 	})
 }
 
@@ -159,7 +164,8 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 			CaseID:     r.caseID,
 			Tool:       event.ToolName,
 			ToolCallID: event.ToolCallID,
-			Message:    tools.RedactSensitive(preview(event.ToolArgs, 300)),
+			RunID:      event.RunID,
+			Message:    preview(tools.RedactSensitive(event.ToolArgs), 300),
 		})
 	case "tool.completed":
 		ok := event.Err == nil
@@ -168,9 +174,10 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 			CaseID:     r.caseID,
 			Tool:       event.ToolName,
 			ToolCallID: event.ToolCallID,
+			RunID:      event.RunID,
 			OK:         &ok,
 			DurationMS: int64(event.DurationSeconds * 1000),
-			Message:    tools.RedactSensitive(preview(event.ToolResult, 500)),
+			Message:    preview(tools.RedactSensitive(event.ToolResult), 500),
 		}
 		if event.Err != nil {
 			e.Type = "tool_failed"
@@ -182,7 +189,9 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 			if event.Payload != nil {
 				e.Metadata = event.Payload
 			}
-			r.recordError(e.Error, e.ErrorCategory)
+			invoked, known := event.Payload["invoked"].(bool)
+			notDispatched := known && !invoked && event.Payload["effect_state"] == "not_dispatched"
+			r.recordError(e.Error, e.ErrorCategory, notDispatched)
 		}
 		r.Write(e)
 	case "token.updated":
@@ -193,7 +202,7 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 		if event.Err != nil {
 			msg := event.Err.Error()
 			cat := classifyError(msg)
-			r.recordError(msg, cat)
+			r.recordError(msg, cat, false)
 			r.Write(JSONLEvent{Type: "stream_error", CaseID: r.caseID, Error: tools.RedactSensitive(msg), ErrorCategory: cat})
 			return
 		}
@@ -203,7 +212,8 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 				CaseID:     r.caseID,
 				Tool:       event.ToolName,
 				ToolCallID: event.ToolCallID,
-				Message:    tools.RedactSensitive(preview(event.Content, 500)),
+				RunID:      event.RunID,
+				Message:    preview(tools.RedactSensitive(event.Content), 500),
 				Metadata:   event.Payload,
 			})
 		}
@@ -211,6 +221,16 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 }
 
 func (r *Recorder) FinishTurn(index, httpStatus int, content, errText string, inputTokens, outputTokens int, started time.Time) {
+	r.finishTurn(index, httpStatus, "", content, errText, inputTokens, outputTokens, started)
+}
+
+// FinishStoppedTurn records a held turn whose Run the case stopped. Stopping
+// it was the case's own decision, so its cancellation is not an error.
+func (r *Recorder) FinishStoppedTurn(index, httpStatus int, content string, inputTokens, outputTokens int, started time.Time) {
+	r.finishTurn(index, httpStatus, "cancelled", content, "", inputTokens, outputTokens, started)
+}
+
+func (r *Recorder) finishTurn(index, httpStatus int, status, content, errText string, inputTokens, outputTokens int, started time.Time) {
 	if content != "" {
 		r.mu.Lock()
 		current := r.output.String()
@@ -232,20 +252,23 @@ func (r *Recorder) FinishTurn(index, httpStatus int, content, errText string, in
 		HTTPStatus:    httpStatus,
 		DurationMS:    time.Since(started).Milliseconds(),
 		Chars:         len([]rune(content)),
-		OutputPreview: preview(content, 400),
+		OutputPreview: preview(tools.RedactSensitive(content), 400),
 		InputTokens:   inputTokens,
 		OutputTokens:  outputTokens,
 	}
-	if errText != "" {
+	switch {
+	case errText != "":
 		e.Status = "failed"
 		e.Error = tools.RedactSensitive(errText)
 		e.ErrorCategory = classifyError(errText)
-		r.recordError(e.Error, e.ErrorCategory)
-	} else {
+		r.recordError(e.Error, e.ErrorCategory, false)
+	case status != "":
+		e.Status = status
+	default:
 		e.Status = "completed"
 	}
 	if r.recordContent {
-		e.Metadata = map[string]interface{}{"content": content}
+		e.Metadata = map[string]interface{}{"content": tools.RedactSensitive(content)}
 	}
 	r.Write(e)
 }
@@ -255,21 +278,23 @@ func (r *Recorder) FinishCase(status string, checks []CheckResult, inputTokens, 
 	toolCalls := r.toolCalls
 	actionToolCalls := r.actionToolCalls
 	toolErrors := r.toolErrors
+	invokedToolErrors := r.invokedToolErrors
 	progressUpdates := r.progressUpdates
 	duration := time.Since(r.start).Milliseconds()
 	r.mu.Unlock()
 	r.Write(JSONLEvent{
-		Type:            "case_finished",
-		CaseID:          r.caseID,
-		Status:          status,
-		DurationMS:      duration,
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
-		ToolCalls:       toolCalls,
-		ActionToolCalls: actionToolCalls,
-		ProgressUpdates: progressUpdates,
-		ToolErrors:      toolErrors,
-		CheckResults:    checks,
+		Type:              "case_finished",
+		CaseID:            r.caseID,
+		Status:            status,
+		DurationMS:        duration,
+		InputTokens:       inputTokens,
+		OutputTokens:      outputTokens,
+		ToolCalls:         toolCalls,
+		ActionToolCalls:   actionToolCalls,
+		ProgressUpdates:   progressUpdates,
+		ToolErrors:        toolErrors,
+		InvokedToolErrors: &invokedToolErrors,
+		CheckResults:      checks,
 	})
 }
 
@@ -281,13 +306,14 @@ func (r *Recorder) Snapshot() RunSnapshot {
 		cats[k] = v
 	}
 	return RunSnapshot{
-		Output:          r.output.String(),
-		ToolCalls:       r.toolCalls,
-		ActionToolCalls: r.actionToolCalls,
-		ToolErrors:      r.toolErrors,
-		ProgressUpdates: r.progressUpdates,
-		Errors:          append([]string(nil), r.errors...),
-		ErrorCategories: cats,
+		Output:            r.output.String(),
+		ToolCalls:         r.toolCalls,
+		ActionToolCalls:   r.actionToolCalls,
+		ToolErrors:        r.toolErrors,
+		InvokedToolErrors: r.invokedToolErrors,
+		ProgressUpdates:   r.progressUpdates,
+		Errors:            append([]string(nil), r.errors...),
+		ErrorCategories:   cats,
 	}
 }
 
@@ -317,10 +343,13 @@ func (r *Recorder) Write(event JSONLEvent) {
 	_, _ = r.file.Write(append(data, '\n'))
 }
 
-func (r *Recorder) recordError(message, category string) {
+func (r *Recorder) recordError(message, category string, notDispatched bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.toolErrors++
+	if !notDispatched {
+		r.invokedToolErrors++
+	}
 	r.errors = append(r.errors, message)
 	if category == "" {
 		category = "unknown"

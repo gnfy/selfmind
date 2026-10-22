@@ -26,8 +26,16 @@ import (
 // space, which is the only place that knows the full boundary.
 
 // execMaterialForArgs builds the writable view, scratch space, and child
-// environment for one tool call.
+// environment for one tool call, with mount-backed tool state in its mounted
+// form.
 func execMaterialForArgs(args map[string]interface{}, cwd string) execMaterial {
+	return execMaterialForArgsInState(args, cwd, false)
+}
+
+// execMaterialForArgsInState is execMaterialForArgs for the backend that will
+// enforce the call: inPlaceState prepares mount-backed tool state as in-place
+// writes on its declared host subpaths, for a backend that cannot mount.
+func execMaterialForArgsInState(args map[string]interface{}, cwd string, inPlaceState bool) execMaterial {
 	material := execMaterial{Env: leaseProcessEnv(args)}
 	scope, hasScope := currentExecutionScopeAny(args)
 	if snapshot := resolvedSnapshotForArgs(args); snapshot != nil {
@@ -76,7 +84,7 @@ func execMaterialForArgs(args map[string]interface{}, cwd string) execMaterial {
 		}
 	}
 
-	applied, profileErr := applyEnvProfiles(args, scope, scratch, &material)
+	applied, profileErr := applyEnvProfiles(args, scope, scratch, &material, inPlaceState)
 	if profileErr != nil {
 		// A profile failure is diagnosable and must not be swallowed: the
 		// command would otherwise run with a half-prepared state overlay and
@@ -97,9 +105,9 @@ func applyEnvProfiles(
 	scope ExecutionScope,
 	scratch executionenv.LeaseScratch,
 	material *execMaterial,
+	inPlaceState bool,
 ) ([]string, error) {
 	toolName := stringArg(args, "_tool_name")
-	programs, opaque := execCommandProgramSet(toolName, args)
 	toolchainRoot := ""
 	if root, err := executionenv.ToolchainDir(scope.PersonID, "."); err == nil {
 		toolchainRoot = root
@@ -112,31 +120,10 @@ func applyEnvProfiles(
 			return nil, fmt.Errorf("prepare fallback toolchain cache: %w", mkdirErr)
 		}
 	}
-	snapshotEnv := material.Env
-	applyCtx := envprofiles.ApplyContext{
-		Home:              envValue(snapshotEnv, "HOME"),
-		StateRoot:         scratch.StateDir,
-		ScratchTmp:        scratch.TmpDir,
-		ToolchainRoot:     toolchainRoot,
-		Lookup:            func(name string) (string, bool) { return lookupEnv(snapshotEnv, name) },
-		Trust:             scope.TrustLevel,
-		HasCredentialRead: credentialReadAllowed(scope, args),
-	}
-	// The command's own program set, plus — ONLY when the payload hides what it
-	// will run — every operator profile this host actually has.
-	//
-	// The narrow case must stay narrow: a non-GKE kubectl deliberately does not
-	// receive Google credentials, because that widens the credential surface for
-	// commands that never touch Google. But when the payload carries a script
-	// (`python3 - <<'PY' … subprocess.run(['gcloud', …])`, `./deploy.sh`, `make
-	// release`), the program set is not decidable at all — that is precisely the
-	// live failure — and preparing the host's inventory is the only thing that
-	// can work. So: decidable payload → exactly what it names; undecidable
-	// payload → what the host has.
-	profiles := envprofiles.Match(programs)
-	if opaque {
-		profiles = envprofiles.Union(profiles, envprofiles.AvailableOnHost(applyCtx))
-	}
+	selection := profilePreparation(toolName, args, scope, material.Env, scratch, toolchainRoot)
+	applyCtx := selection.ctx
+	applyCtx.InPlaceState = inPlaceState
+	profiles := selection.profiles
 	if len(profiles) == 0 {
 		return nil, nil
 	}
@@ -144,18 +131,156 @@ func applyEnvProfiles(
 	// uses depends on the tool's own configuration, which can change within a
 	// lease.
 	profiles = envprofiles.Resolve(profiles, applyCtx)
-	material.ProfilesFromInventory = profileIDsNotMatched(profiles, programs)
-	if cached, ok := lookupPreparedProfiles(scratch.StateDir, profiles, applyCtx); ok {
-		applyPreparedResult(material, cached)
-		return cached.Applied, nil
+	material.ProfilesFromInventory = profileIDsNotMatched(profiles, selection.programs)
+	result, cached := lookupPreparedProfiles(scratch.StateDir, profiles, applyCtx)
+	if !cached {
+		var err error
+		if result, err = envprofiles.Apply(profiles, applyCtx); err != nil {
+			return nil, err
+		}
+		storePreparedProfiles(scratch.StateDir, profiles, applyCtx, result)
 	}
-	result, err := envprofiles.Apply(profiles, applyCtx)
-	if err != nil {
-		return nil, err
-	}
-	storePreparedProfiles(scratch.StateDir, profiles, applyCtx, result)
 	applyPreparedResult(material, result)
+	if inPlaceState {
+		// Planned and created on every command, never cached: the host path is
+		// re-validated against its declared root each time it becomes writable.
+		plan, err := envprofiles.PlanHostStateWrites(profiles, applyCtx)
+		if err != nil {
+			return nil, err
+		}
+		// The approval covered the in-place writes it was shown, not whatever
+		// the host's configuration says by dispatch time; nothing is created
+		// for writes it did not cover.
+		if err := approvedHostWritesCover(args, plan.Paths()); err != nil {
+			return nil, err
+		}
+		if err := envprofiles.MaterializeHostStateWrites(plan); err != nil {
+			return nil, err
+		}
+		material.HostStateWrites = plan.Paths()
+		material.HostStatePlan = plan
+		material.ProfileNotes = append(material.ProfileNotes, plan.Notes...)
+	}
 	return result.Applied, nil
+}
+
+// profileSelection is the profile decision for one call and the context it is
+// applied under.
+type profileSelection struct {
+	profiles []*envprofiles.EnvProfile
+	programs []string
+	ctx      envprofiles.ApplyContext
+}
+
+// profilePreparation is the one derivation of a call's profile selection and
+// apply context: the run's environment, its scratch, the trust decision, and
+// what the command text says about its programs, their arguments and inline
+// configuration overrides. Preparation applies it; the containment assessment
+// and the pre-approval boundary preview read it.
+func profilePreparation(toolName string, args map[string]interface{}, scope ExecutionScope, env []string, scratch executionenv.LeaseScratch, toolchainRoot string) profileSelection {
+	programs, arguments, opaque := execCommandAnalysis(toolName, args)
+	ctx := profileApplyContext(args, scope, env, scratch, toolchainRoot)
+	ctx.ProgramArguments = arguments
+	ctx.OpaquePrograms = opaque
+	ctx.EnvironmentOverrides = execEnvironmentOverrides(execCommandPayload(toolName, args))
+	return profileSelection{profiles: envProfileSelection(programs, opaque, ctx), programs: programs, ctx: ctx}
+}
+
+// leaseProfileSelection makes preparation's profile decision for a call
+// without preparing anything: profiles are prepared only inside a run lease,
+// over the lease's environment snapshot. ok is false when nothing would be
+// prepared.
+func leaseProfileSelection(toolName string, args map[string]interface{}) (profileSelection, bool) {
+	scope, ok := currentExecutionScopeAny(args)
+	if !ok || strings.TrimSpace(scope.LeaseID) == "" {
+		return profileSelection{}, false
+	}
+	scratch, err := executionenv.LeaseScratchPaths(scope.LeaseID)
+	if err != nil {
+		return profileSelection{}, false
+	}
+	// Preparation always has a toolchain root — the person's cache, else this
+	// lease's own directory — so the inventory never drops a profile for lack of
+	// one. The lease path stands in here without creating anything.
+	return profilePreparation(toolName, args, scope, mergeEnv(leaseProcessEnv(args), scratch.EnvOverrides()),
+		scratch, filepath.Join(scratch.Root, "toolchain")), true
+}
+
+// previewHostStateWrites is the in-place state the call's preparation would
+// grant on a backend that cannot mount, planned without creating anything.
+// assumeGrantable plans as if a pending credential:read ask for a credential
+// CLI the call names were granted: feasibility is decided before that ask.
+func previewHostStateWrites(toolName string, args map[string]interface{}, assumeGrantable bool) (envprofiles.HostStatePlan, error) {
+	selection, ok := leaseProfileSelection(toolName, args)
+	if !ok || len(selection.profiles) == 0 {
+		return envprofiles.HostStatePlan{}, nil
+	}
+	ctx := selection.ctx
+	ctx.InPlaceState = true
+	if assumeGrantable && commandNeedsOperatorCredentials(toolName, args) {
+		ctx.HasCredentialRead = true
+	}
+	return envprofiles.PlanHostStateWrites(selection.profiles, ctx)
+}
+
+// profileApplyContext is the context profiles are selected and applied under:
+// the run's environment snapshot, its scratch, and the trust decision.
+func profileApplyContext(args map[string]interface{}, scope ExecutionScope, env []string, scratch executionenv.LeaseScratch, toolchainRoot string) envprofiles.ApplyContext {
+	return envprofiles.ApplyContext{
+		Home:              envValue(env, "HOME"),
+		StateRoot:         scratch.StateDir,
+		ScratchTmp:        scratch.TmpDir,
+		ToolchainRoot:     toolchainRoot,
+		Lookup:            func(name string) (string, bool) { return lookupEnv(env, name) },
+		Trust:             scope.TrustLevel,
+		HasCredentialRead: credentialReadAllowed(scope, args),
+	}
+}
+
+// envProfileSelection is the one decision about which tool environment
+// profiles a command is prepared with: the command's own program set, plus —
+// ONLY when the payload hides what it will run — every operator profile this
+// host actually has. Preparation applies it and the containment assessment
+// reads it (receivesOperatorCredentials), so a call is never described with
+// less credential state than its sandbox carries.
+//
+// The narrow case must stay narrow: a non-GKE kubectl deliberately does not
+// receive Google credentials, because that widens the credential surface for
+// commands that never touch Google. But when the payload carries a script
+// (`python3 - <<'PY' … subprocess.run(['gcloud', …])`, `./deploy.sh`, `make
+// release`), the program set is not decidable at all — that is precisely the
+// live failure — and preparing the host's inventory is the only thing that can
+// work. So: decidable payload → exactly what it names; undecidable payload →
+// what the host has.
+func envProfileSelection(programs []string, opaque bool, ctx envprofiles.ApplyContext) []*envprofiles.EnvProfile {
+	profiles := envprofiles.Match(programs)
+	if opaque {
+		profiles = envprofiles.Union(profiles, envprofiles.AvailableOnHost(ctx))
+	}
+	return profiles
+}
+
+// receivesOperatorCredentials reports whether preparing this call hands it
+// operator credential state, by making preparation's own decision rather than a
+// second one: profiles are prepared only inside a run lease, the selection is
+// envProfileSelection over the lease's environment snapshot, and whether an
+// operator profile's state is handed over is envprofiles' trust decision.
+//
+// The credential:read ask only ever looked at the programs a command names, so
+// `npm run build` in a trusted workspace was assessed credential-free while the
+// host inventory gave it the operator's gcloud and AWS state, and smart mode
+// released it as contained.
+func receivesOperatorCredentials(toolName string, args map[string]interface{}) bool {
+	selection, ok := leaseProfileSelection(toolName, args)
+	if !ok || !selection.ctx.OperatorCredentialsAllowed() {
+		return false
+	}
+	for _, profile := range selection.profiles {
+		if profile != nil && profile.CredentialAccess == envprofiles.CredentialAccessOperator {
+			return true
+		}
+	}
+	return false
 }
 
 // applyPreparedResult folds a prepared profile result into the command's
@@ -199,8 +324,8 @@ func profileIDsNotMatched(profiles []*envprofiles.EnvProfile, programs []string)
 
 // execCommandPrograms returns every real program a command will run, skipping
 // shell builtins and control keywords. It reuses the same segmentation the
-// safety floor uses, so profile matching and approval classification can never
-// disagree about what a command actually invokes.
+// safety floor uses. Dependency-only interpreter optimizations do not change
+// the independent read-only proof or approval classification.
 func execCommandPrograms(toolName string, args map[string]interface{}) []string {
 	programs, _ := execCommandProgramSet(toolName, args)
 	return programs
@@ -217,9 +342,14 @@ func execCommandPrograms(toolName string, args map[string]interface{}) []string 
 // the truth is what left gcloud without credential state in a durable check
 // that had no way to recover.
 func execCommandProgramSet(toolName string, args map[string]interface{}) ([]string, bool) {
+	programs, _, opaque := execCommandAnalysis(toolName, args)
+	return programs, opaque
+}
+
+func execCommandAnalysis(toolName string, args map[string]interface{}) ([]string, map[string][][]string, bool) {
 	if strings.EqualFold(strings.TrimSpace(toolName), "execute_code") {
 		// Arbitrary Python: it can invoke anything, by construction.
-		return []string{"python3"}, true
+		return []string{"python3"}, nil, true
 	}
 	payload := strings.TrimSpace(execCommandPayload(toolName, args))
 	if payload == "" {
@@ -228,26 +358,28 @@ func execCommandProgramSet(toolName string, args map[string]interface{}) ([]stri
 		payload = strings.TrimSpace(stringArg(args, "command"))
 	}
 	if payload == "" {
-		return nil, false
+		return nil, nil, false
 	}
-	segments, unparsed := expandCommandSegments(payload, 0)
+	segments, unparsed := expandEnvironmentSegments(payload, 0)
 	seen := map[string]bool{}
 	programs := make([]string, 0, len(segments))
 	opaque := unparsed
 	for _, fields := range segments {
 		base := segmentRealProgram(fields)
-		if base == "" || seen[base] {
+		if base == "" {
 			continue
 		}
-		seen[base] = true
-		programs = append(programs, base)
-		if scriptCarryingPrograms[base] {
+		if !seen[base] {
+			seen[base] = true
+			programs = append(programs, base)
+		}
+		if scriptCarryingPrograms[base] && !nonExecutingProgram(fields) {
 			opaque = true
 		}
 		// A script path is opaque only when executed. Data paths such as
 		// `go test ./...` or `cat ./notes.py` do not execute those files.
 		for _, token := range fields {
-			if strings.EqualFold(filepath.Base(token), base) {
+			if programName(token) == base {
 				if isScriptFileToken(token) {
 					opaque = true
 				}
@@ -266,7 +398,8 @@ func execCommandProgramSet(toolName string, args map[string]interface{}) ([]stri
 			}
 		}
 	}
-	return programs, opaque
+	arguments, unknownArguments := execLiteralProgramArguments(payload, 0)
+	return programs, arguments, opaque || unknownArguments
 }
 
 // scriptCarryingPrograms run a script (or an arbitrary command) supplied as
@@ -321,7 +454,7 @@ func segmentRealProgram(fields []string) string {
 		if token == "" || strings.HasPrefix(token, "-") {
 			continue
 		}
-		base := strings.ToLower(filepath.Base(token))
+		base := programName(token)
 		if base == "" {
 			continue
 		}
@@ -469,9 +602,9 @@ func emitProfilePreparation(ctx context.Context, toolName, toolCallID string, ma
 }
 
 // durableExecMaterial prepares execution material for a daemon-owned check.
-// It mirrors execMaterialForArgs but takes its identity from the durable record
-// instead of an ExecutionScope, because no agent run is live.
-func durableExecMaterial(ctx context.Context, command, cwd string, durable DurableExecutionScope) (execMaterial, error) {
+// It mirrors execMaterialForArgsInState but takes its identity from the
+// durable record instead of an ExecutionScope, because no agent run is live.
+func durableExecMaterial(ctx context.Context, command, cwd string, durable DurableExecutionScope, inPlaceState bool) (execMaterial, error) {
 	material := execMaterial{}
 	if durable.Binding.Version > 0 {
 		snapshot, err := executionenv.ResolveBinding(executionenv.DefaultRegistry(), durable.Binding)
@@ -524,8 +657,15 @@ func durableExecMaterial(ctx context.Context, command, cwd string, durable Durab
 		scope.TrustLevel = durable.Binding.TrustLevel
 		scope.Capabilities = append([]string{}, durable.Binding.ExecutionCapabilities...)
 	}
-	args := map[string]interface{}{"_tool_name": "terminal", "command": command}
-	applied, profileErr := applyEnvProfiles(args, scope, scratch, &material)
+	// No approval funnel runs at poll time. The registration's approval is the
+	// record: a poll may write in place only what it covered, and a row that
+	// recorded nothing (including one that predates bindings) covers nothing.
+	args := map[string]interface{}{
+		"_tool_name":          "terminal",
+		"command":             command,
+		approvedHostWritesArg: append([]string{}, durable.Binding.HostStateWrites...),
+	}
+	applied, profileErr := applyEnvProfiles(args, scope, scratch, &material, inPlaceState)
 	if profileErr != nil {
 		return material, fmt.Errorf("prepare durable execution environment: %w", profileErr)
 	}
@@ -568,16 +708,17 @@ func shouldRecoverExecution(decision SandboxDecision, material execMaterial, exi
 
 // execMaterialForRequest is the request-shaped entry to material preparation.
 // The writable view comes from the REQUEST's workspace roots, so the engine no
-// longer depends on re-deriving them from the argument map.
-func execMaterialForRequest(req ExecutionRequest, args map[string]interface{}) execMaterial {
+// longer depends on re-deriving them from the argument map. inPlaceState
+// follows the backend that will enforce the call's resolved boundary.
+func execMaterialForRequest(req ExecutionRequest, args map[string]interface{}, inPlaceState bool) execMaterial {
 	if req.Durable != nil {
-		material, err := durableExecMaterial(contextFromArgs(args), req.Payload, req.CWD, *req.Durable)
+		material, err := durableExecMaterial(contextFromArgs(args), req.Payload, req.CWD, *req.Durable, inPlaceState)
 		if err != nil {
 			material.ProfileError = err
 		}
 		return material
 	}
-	material := execMaterialForArgs(args, absoluteCWD(req.CWD))
+	material := execMaterialForArgsInState(args, absoluteCWD(req.CWD), inPlaceState)
 	for _, root := range req.WorkspaceRoots {
 		if strings.TrimSpace(root) != "" {
 			material.WritableRoots = append(material.WritableRoots, root)

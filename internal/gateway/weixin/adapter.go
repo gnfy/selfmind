@@ -29,9 +29,55 @@ type Adapter struct {
 
 	clientMu                  sync.RWMutex
 	credentialRefreshInterval time.Duration
-	cancel                    context.CancelFunc
-	done                      chan struct{}
+	// retryDelay is the first wait before a batch that was not accepted is
+	// fetched again from the retained cursor; it doubles up to maxRetryDelay.
+	retryDelay time.Duration
+	cancel     context.CancelFunc
+	done       chan struct{}
+
+	// noticesMu guards notices: messages whose sender was already told the
+	// gateway refused, rejected, or held them. The retained cursor redelivers
+	// a refused message until it is admitted, and a replayed batch redelivers
+	// the others; each notice is sent once.
+	noticesMu sync.Mutex
+	notices   map[inboundNotice]time.Time
 }
+
+// inboundNotice keys one notice per message and kind: "not started, will be
+// retried", "rejected, will not be retried", and "answer recorded, request
+// not started" say different things.
+type inboundNotice struct {
+	msgID string
+	kind  noticeKind
+}
+
+type noticeKind int
+
+const (
+	noticeRefused noticeKind = iota
+	noticeRejected
+	noticeHeld
+)
+
+// noticeFor reports the one-time notice an inbound error calls for. Only
+// these outcomes carry a response error written for the sender; any other
+// failure may carry an internal error, which never reaches the chat.
+func noticeFor(err error) (noticeKind, bool) {
+	switch {
+	case errors.Is(err, api.ErrInboundRejected):
+		return noticeRejected, true
+	case errors.Is(err, api.ErrInboundNotDispatched):
+		return noticeRefused, true
+	case errors.Is(err, api.ErrInboundHeld):
+		return noticeHeld, true
+	}
+	return 0, false
+}
+
+const (
+	defaultRetryDelay = 500 * time.Millisecond
+	maxRetryDelay     = 30 * time.Second
+)
 
 func NewAdapter(cfg RuntimeConfig, handler InboundHandler) *Adapter {
 	return &Adapter{
@@ -127,6 +173,7 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 	defer close(a.done)
 	syncBuf := a.loadSyncBuf()
 	backoff := time.Second
+	retry := a.firstRetryDelay()
 	sessionExpiredLogged := false
 	for {
 		select {
@@ -176,12 +223,23 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 					log.Error("weixin inbound effect uncertain; receipt retained for inspection", "error", tools.RedactSensitive(err.Error()))
 					continue
 				}
-				log.Warn("weixin message processing failed; sync cursor retained", "error", tools.RedactSensitive(err.Error()))
+				if errors.Is(err, api.ErrInboundRejected) {
+					// No redelivery can be admitted; holding the cursor would block
+					// every later message behind it.
+					log.Error("weixin message rejected for good; moving past it", "error", tools.RedactSensitive(err.Error()))
+					continue
+				}
+				if errors.Is(err, api.ErrInboundNotDispatched) {
+					log.Warn("weixin message refused before admission; sync cursor retained for redelivery", "error", tools.RedactSensitive(err.Error()))
+				} else {
+					log.Warn("weixin message processing failed; sync cursor retained", "error", tools.RedactSensitive(err.Error()))
+				}
 				batchAccepted = false
 				break
 			}
 		}
 		if batchAccepted {
+			retry = a.firstRetryDelay()
 			if next := firstNonEmpty(stringFromMap(resp, "get_updates_buf"), stringFromMap(resp, "sync_buf")); next != "" {
 				if err := a.saveSyncBuf(next); err != nil {
 					log.Warn("weixin sync cursor could not be saved; batch will be replayed", "error", err)
@@ -191,10 +249,17 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 			}
 		}
 		if !batchAccepted || len(messages) == 0 {
+			wait := defaultRetryDelay
+			if !batchAccepted {
+				wait = retry
+				if retry = 2 * retry; retry > maxRetryDelay {
+					retry = maxRetryDelay
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(500 * time.Millisecond):
+			case <-time.After(wait):
 			}
 		}
 	}
@@ -202,7 +267,7 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 
 func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}) error {
 	msg := normalizeRawMessage(raw)
-	if msg == nil {
+	if msg == nil || botAuthored(msg, a.cfg.AccountID) {
 		return nil
 	}
 	msgID := messageID(msg)
@@ -263,7 +328,14 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 	}
 	resp, status, err := a.handler(ctx, api.DurableInbound{
 		Request: req, MessageID: msgID, RawPayload: payload, OwnerPersonID: ownerPersonID,
+		Essential: a.essentialMessage,
 	})
+	if kind, ok := noticeFor(err); ok {
+		a.noticeOnce(client, chatID, inboundNotice{msgID: msgID, kind: kind},
+			firstNonEmpty(resp.Error, fmt.Sprintf("weixin request was not started: HTTP %d", status)))
+		return err
+	}
+	a.forgetNotices(msgID)
 	if err != nil {
 		return err
 	}
@@ -272,13 +344,105 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		_ = client.Send(context.Background(), chatID, "SelfMind error: "+errText)
 		return nil
 	}
+	if resp.DeliveryEnqueued {
+		return nil
+	}
 	if strings.TrimSpace(resp.Content) != "" {
-		return client.Send(context.Background(), chatID, resp.Content)
+		if sendErr := client.Send(context.Background(), chatID, resp.Content); sendErr != nil {
+			log.Warn("weixin reply send failed after inbound acceptance", "msg_id", msgID, "error", tools.RedactSensitive(sendErr.Error()))
+		}
+		return nil
 	}
 	if resp.Accepted {
-		return client.Send(context.Background(), chatID, router.WorkingNotice("weixin"))
+		if sendErr := client.Send(context.Background(), chatID, router.WorkingNotice("weixin")); sendErr != nil {
+			log.Warn("weixin working notice send failed after inbound acceptance", "msg_id", msgID, "error", tools.RedactSensitive(sendErr.Error()))
+		}
+		return nil
 	}
 	return nil
+}
+
+// noticeOnce tells the sender, once per message and kind, why the gateway
+// did not start it. A refused message comes back on every retry while the
+// cursor stays put, and a rejected or held one comes back when a batch is
+// replayed; repeating the notice each time would flood the chat.
+func (a *Adapter) noticeOnce(client *Client, chatID string, notice inboundNotice, text string) {
+	a.noticesMu.Lock()
+	now := time.Now()
+	for key, at := range a.notices {
+		if now.Sub(at) > 24*time.Hour {
+			delete(a.notices, key)
+		}
+	}
+	_, told := a.notices[notice]
+	a.noticesMu.Unlock()
+	if told {
+		return
+	}
+	if err := client.Send(context.Background(), chatID, "SelfMind error: "+text); err != nil {
+		log.Warn("weixin inbound notice was not sent", "kind", int(notice.kind), "error", tools.RedactSensitive(err.Error()))
+		return
+	}
+	a.noticesMu.Lock()
+	if a.notices == nil {
+		a.notices = map[inboundNotice]time.Time{}
+	}
+	a.notices[notice] = now
+	a.noticesMu.Unlock()
+}
+
+func (a *Adapter) forgetNotices(msgID string) {
+	a.noticesMu.Lock()
+	for _, kind := range []noticeKind{noticeRefused, noticeRejected, noticeHeld} {
+		delete(a.notices, inboundNotice{msgID: msgID, kind: kind})
+	}
+	a.noticesMu.Unlock()
+}
+
+// essentialMessage identifies a getupdates entry by its message id, sender,
+// chat, text (including voice transcripts), routing edges, and each media
+// item's kind, file name, and content key. The content key identifies the
+// media object, so two images differ though neither has a name. Context
+// tokens, typing tickets, server timestamps, and media download parameters
+// may be re-issued when iLink delivers the same message again, so they do not
+// make it a different message; without a content key, the download reference
+// is the only identity a media item has.
+func (a *Adapter) essentialMessage(raw []byte) ([]byte, error) {
+	var entry map[string]interface{}
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return nil, err
+	}
+	msg := normalizeRawMessage(entry)
+	sender := senderID(msg, a.cfg.AccountID)
+	items := interfaceSlice(msg["item_list"])
+	if len(items) == 0 {
+		items = interfaceSlice(msg["items"])
+	}
+	media := []string{}
+	for _, itemValue := range items {
+		item, _ := itemValue.(map[string]interface{})
+		if kind, ref := mediaReference(item); ref != nil {
+			media = append(media, kind+":"+ref.Filename+":"+firstNonEmpty(ref.AESKey, ref.FullURL, ref.EncryptedQueryParam))
+		}
+	}
+	return json.Marshal(struct {
+		ID           string   `json:"id"`
+		Sender       string   `json:"sender"`
+		Chat         string   `json:"chat"`
+		Text         string   `json:"text"`
+		Media        []string `json:"media"`
+		ReplyToRunID string   `json:"reply_to_run_id"`
+		ApprovalID   string   `json:"approval_id"`
+		ClarifyID    string   `json:"clarify_id"`
+	}{messageID(msg), sender, chatID(msg, sender, a.cfg.AccountID), extractMessageText(msg), media,
+		stringFromMap(msg, "reply_to_run_id"), stringFromMap(msg, "approval_id"), stringFromMap(msg, "clarify_id")})
+}
+
+func (a *Adapter) firstRetryDelay() time.Duration {
+	if a.retryDelay > 0 {
+		return a.retryDelay
+	}
+	return defaultRetryDelay
 }
 
 // ownerBindingAllowed is deliberately stricter than message admission. Open
@@ -474,6 +638,18 @@ func messageID(msg map[string]interface{}) string {
 		stringFromMap(msg, "message_id"),
 		stringFromMap(msg, "client_id"),
 	)
+}
+
+// botAuthored reports a message this bot account wrote: iLink types it as a
+// bot message, or its sender is the bot itself. It is the bot's own output
+// coming back, never a person's input, whichever conversation fields name the
+// person it was sent to.
+func botAuthored(msg map[string]interface{}, accountID string) bool {
+	if intFromMap(msg, "message_type") == msgTypeBot {
+		return true
+	}
+	from := firstNonEmpty(stringFromMap(msg, "from_user_id"), stringFromMap(msg, "sender"), stringFromMap(msg, "sender_id"))
+	return from != "" && from == accountID
 }
 
 func senderID(msg map[string]interface{}, accountID string) string {
